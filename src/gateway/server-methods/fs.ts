@@ -67,10 +67,17 @@ export const fsHandlers: GatewayRequestHandlers = {
           params: params.path ? { path: params.path } : {},
         });
         if (!result.ok) {
+          // Keep node request errors (missing or non-directory paths) as request errors so the
+          // picker can fall back to the device home; transport failures stay unavailable.
           respond(
             false,
             undefined,
-            errorShape(ErrorCodes.UNAVAILABLE, result.error?.message ?? "node browse failed"),
+            errorShape(
+              result.error?.code === "INVALID_REQUEST"
+                ? ErrorCodes.INVALID_REQUEST
+                : ErrorCodes.UNAVAILABLE,
+              result.error?.message ?? "node browse failed",
+            ),
           );
           return;
         }

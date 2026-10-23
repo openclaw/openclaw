@@ -1,11 +1,89 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { hasRestartRecoveryTerminalRun } from "../../config/sessions/restart-recovery-state.js";
 import { applySessionEntryReplacements } from "../../config/sessions/session-accessor.js";
+import {
+  GatewayOperatorRecoveryAuthorizationError,
+  GatewayOperatorRecoveryOwnershipError,
+} from "../../infra/restart-recovery-errors.js";
 import { buildMainSessionRecoverySettlementPatch } from "./main-session-recovery-clear.js";
 import type { MainSessionRecoveryReservation } from "./main-session-recovery-state.js";
-import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
+import {
+  commitMainSessionRecovery,
+  type MainSessionRecoveryStoreTarget,
+} from "./main-session-recovery-store.js";
 import type { RestartRecoveryTerminalStatus } from "./main-session-restart-dispatch-start.js";
+import type { ResumeMainSessionParams } from "./main-session-restart-dispatch.types.js";
+import { finishDelegatedRestartRecovery } from "./main-session-restart-recovery-failure.js";
+
+export async function rollbackRestartRecoveryReservation(
+  params: MainSessionRecoveryStoreTarget & {
+    kind: "abandon_reservation" | "cancel_reservation";
+    reservation: MainSessionRecoveryReservation;
+  },
+) {
+  return await commitMainSessionRecovery({
+    command: { kind: params.kind, reservation: params.reservation },
+    requireWriteSuccess: true,
+    target: params,
+  });
+}
+
+/** A definitive pre-admission denial settles locally without dropping other recovery custody. */
+export async function settleRejectedRestartRecovery(
+  params: Pick<
+    ResumeMainSessionParams,
+    "agentId" | "sessionKey" | "storePath" | "cfg" | "gatewayRuntime" | "shouldContinue"
+  > & {
+    error: unknown;
+    dispatchAccepted: boolean;
+    rollback: Awaited<ReturnType<typeof rollbackRestartRecoveryReservation>> | undefined;
+  },
+): Promise<"settled" | "skipped" | "failed" | undefined> {
+  const { error, rollback } = params;
+  const entry = rollback?.entry;
+  if (
+    (!(error instanceof GatewayOperatorRecoveryAuthorizationError) &&
+      !(error instanceof GatewayOperatorRecoveryOwnershipError)) ||
+    params.dispatchAccepted ||
+    rollback?.transition.kind !== "applied" ||
+    !entry?.mainRestartRecovery
+  ) {
+    return undefined;
+  }
+  const result = await finishDelegatedRestartRecovery({
+    ...params,
+    entry,
+    observation: {
+      sessionId: entry.sessionId,
+      cycleId: entry.mainRestartRecovery.cycleId,
+      revision: entry.mainRestartRecovery.revision,
+    },
+    assertCurrent: () => {
+      if (params.shouldContinue?.() === false) {
+        throw new Error("Restart recovery admission is no longer current.", { cause: error });
+      }
+    },
+    reason: error.message,
+  });
+  return result === "settled" || result === "tombstoned"
+    ? "settled"
+    : result === "skipped"
+      ? "skipped"
+      : "failed";
+}
+
+// The run's own post-run cleanup can release its claim before this settlement. A run
+// that never started then leaves its admitted lifecycle identity without a status.
+function isReleasedRecoveryRun(entry: SessionEntry, runId: string): boolean {
+  return (
+    entry.status === undefined &&
+    normalizeOptionalString(entry.restartRecoveryDeliveryRunId) === undefined &&
+    entry.lifecycleRunId === runId &&
+    hasRestartRecoveryTerminalRun(entry, runId)
+  );
+}
 
 async function settleRestartRecoveryDispatch(params: {
   agentId?: string;
@@ -29,10 +107,12 @@ async function settleRestartRecoveryDispatch(params: {
         .filter(
           ({ entry }) =>
             entry.sessionId === params.expectedSessionId &&
-            normalizeOptionalString(entry.restartRecoveryDeliveryRunId) ===
+            ((normalizeOptionalString(entry.restartRecoveryDeliveryRunId) ===
               params.expectedRecoveryRunId &&
-            normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) ===
-              params.expectedRecoverySourceRunId,
+              normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) ===
+                params.expectedRecoverySourceRunId) ||
+              (params.terminalStatus !== undefined &&
+                isReleasedRecoveryRun(entry, params.expectedRecoveryRunId))),
         )
         .toSorted((a, b) => (b.entry.updatedAt ?? 0) - (a.entry.updatedAt ?? 0))[0];
       if (!current) {
@@ -46,7 +126,9 @@ async function settleRestartRecoveryDispatch(params: {
             ? "done"
             : params.terminalStatus === "timeout"
               ? "timeout"
-              : "failed";
+              : params.terminalStatus === "cancelled"
+                ? "killed"
+                : "failed";
         entry.endedAt = now;
         const startedAt = asFiniteNumber(entry.startedAt);
         if (startedAt !== undefined) {
@@ -83,16 +165,18 @@ function isExactRestartRecoveryDispatchAdmission(params: {
   const entry = params.admission.entry;
   return (
     entry?.sessionId === params.sessionId &&
-    ((entry.abortedLastRun === false &&
-      normalizeOptionalString(entry.restartRecoveryDeliveryRunId) === params.recoveryRunId &&
-      entry.restartRecoveryRuns?.some(
-        (run) =>
-          run.runId === params.recoveryRunId &&
-          run.lifecycleGeneration === params.lifecycleGeneration,
-      ) === true) ||
+    ((params.terminalStatus !== undefined && isReleasedRecoveryRun(entry, params.recoveryRunId)) ||
+      (entry.abortedLastRun === false &&
+        normalizeOptionalString(entry.restartRecoveryDeliveryRunId) === params.recoveryRunId &&
+        entry.restartRecoveryRuns?.some(
+          (run) =>
+            run.runId === params.recoveryRunId &&
+            run.lifecycleGeneration === params.lifecycleGeneration,
+        ) === true) ||
       (hasRestartRecoveryTerminalRun(entry, params.recoveryRunId) &&
         ((params.terminalStatus === "ok" && entry.status === "done") ||
           (params.terminalStatus === "error" && entry.status === "failed") ||
+          (params.terminalStatus === "cancelled" && entry.status === "killed") ||
           (params.terminalStatus === "timeout" && entry.status === "timeout"))))
   );
 }

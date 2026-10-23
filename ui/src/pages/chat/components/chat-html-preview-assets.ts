@@ -1,11 +1,11 @@
 import type { SessionsFilesAssetsResult } from "@openclaw/gateway-protocol";
 import { defaultTreeAdapter, html, parse, type DefaultTreeAdapterTypes } from "parse5";
-import { SESSIONS_FILES_ASSETS_MAX_REFS } from "../../../../../packages/gateway-protocol/src/schema/sessions.js";
+import { SESSIONS_FILES_ASSETS_MAX_REFS } from "../../../../../packages/gateway-protocol/src/session-limits.js";
 import { base64ToBytes } from "../../../lib/bytes-base64.ts";
+import { applyHtmlPreviewEdits, type HtmlPreviewEdit } from "./chat-html-preview-source.ts";
 
 type Asset = SessionsFilesAssetsResult["assets"][number];
 type LoadedAsset = Extract<Asset, { content: string }>;
-type Edit = { start: number; end: number; text: string };
 type Reference = { start: number; end: number; ref: string };
 type TextAssets = {
   start: number;
@@ -29,26 +29,6 @@ function relativeRef(value: string): string | undefined {
   }
   const ref = value.slice(start, end);
   return ref && !/^(?:[a-z][a-z\d+.-]*:|[/\\#])/i.test(ref) ? ref : undefined;
-}
-
-function applyEdits(source: string, edits: Edit[]): string {
-  let position = 0;
-  const parts: string[] = [];
-  // Recovery can duplicate elements; whole-element edits supersede their attributes.
-  const unique = new Map(edits.map((edit) => [edit.start, edit]));
-  for (const edit of [...unique.values()].toSorted((a, b) => a.start - b.start)) {
-    if (edit.start < position) {
-      continue;
-    }
-    parts.push(source.slice(position, edit.start), edit.text);
-    position = edit.end;
-  }
-  parts.push(source.slice(position));
-  return parts.join("");
-}
-
-function escapeAttribute(value: string): string {
-  return value.replaceAll("&", "&amp;").replaceAll('"', "&quot;");
 }
 
 function srcsetRefs(value: string): Reference[] {
@@ -304,7 +284,7 @@ export async function prepareHtmlPreviewAssets(
   }
   await fetch(nested);
   const inline = (text: string, refs: Reference[], css: boolean) =>
-    applyEdits(
+    applyHtmlPreviewEdits(
       text,
       refs.flatMap((ref) => {
         const asset = loaded.get(ref.ref);
@@ -314,7 +294,7 @@ export async function prepareHtmlPreviewAssets(
           : [];
       }),
     );
-  const edits: Edit[] = texts.flatMap((text) => {
+  const edits: HtmlPreviewEdit[] = texts.flatMap((text) => {
     const content = inline(text.source, text.refs, !text.attribute || text.attribute === "style");
     return content === text.source
       ? []
@@ -322,7 +302,9 @@ export async function prepareHtmlPreviewAssets(
           {
             start: text.start,
             end: text.end,
-            text: text.attribute ? `${text.attribute}="${escapeAttribute(content)}"` : content,
+            text: text.attribute
+              ? `${text.attribute}="${content.replaceAll("&", "&amp;").replaceAll('"', "&quot;")}"`
+              : content,
           },
         ];
   });
@@ -387,5 +369,5 @@ export async function prepareHtmlPreviewAssets(
       text: content,
     });
   }
-  return { html: applyEdits(source, edits), omitted: omitted.size };
+  return { html: applyHtmlPreviewEdits(source, edits), omitted: omitted.size };
 }

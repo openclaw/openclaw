@@ -1,7 +1,6 @@
 import type { MSTeamsSdkCloudOptions } from "./cloud.js";
 import { extractMSTeamsConversationMessageId, normalizeMSTeamsConversationId } from "./inbound.js";
 import {
-  deleteMSTeamsActivityWithReference,
   sendMSTeamsActivityWithReference,
   updateMSTeamsActivityWithReference,
 } from "./sdk-proactive.js";
@@ -12,6 +11,7 @@ export function createMSTeamsReplayContext(
   activity: MSTeamsTurnContext["activity"],
   app: MSTeamsApp,
   serviceUrlBoundary: MSTeamsSdkCloudOptions,
+  accountId?: string,
 ): MSTeamsTurnContext {
   const rawConversationId = activity.conversation?.id ?? "";
   const conversationId = normalizeMSTeamsConversationId(rawConversationId);
@@ -42,6 +42,7 @@ export function createMSTeamsReplayContext(
     ...(activity.from?.aadObjectId ? { aadObjectId: activity.from.aadObjectId } : {}),
   };
   const proactiveOptions = {
+    accountId,
     ...(quoteActivityId ? { quoteActivityId } : {}),
     ...(threadActivityId ? { threadActivityId } : {}),
     serviceUrlBoundary,
@@ -51,13 +52,6 @@ export function createMSTeamsReplayContext(
   return {
     activity,
     sendActivity,
-    sendActivities: async (activities) => {
-      const results: unknown[] = [];
-      for (const outbound of activities) {
-        results.push(await sendActivity(outbound));
-      }
-      return results;
-    },
     updateActivity: async (outbound) => {
       const result = await updateMSTeamsActivityWithReference(
         app,
@@ -68,9 +62,6 @@ export function createMSTeamsReplayContext(
       );
       // SAFETY: the SDK update result exposes only the optional activity id used by this adapter.
       return result as { id?: string } | void;
-    },
-    deleteActivity: async (activityId) => {
-      await deleteMSTeamsActivityWithReference(app, reference, activityId, proactiveOptions);
     },
     getTeamDetails: (teamId) => app.api.teams.getById(teamId),
   };

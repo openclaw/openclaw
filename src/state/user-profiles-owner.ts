@@ -1,6 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
-import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
+import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { publishUserProfilesChange } from "./user-profile-list.js";
 import type { UserProfileMutationContext } from "./user-profile-mutation.js";
 import { type UserProfileRow, userProfilesDb } from "./user-profiles-internal.js";
@@ -11,29 +11,37 @@ const OWNER_PROVIDER = "gateway.local";
 const OWNER_SUBJECT = "owner";
 
 /** Read raw rows: the shared owner must never inherit a person through a merge. */
-export function readGatewayOwnerProfileRows(db: DatabaseSync) {
+export function readGatewayOwnerProfileRows(db: EngineConnection) {
   const kysely = userProfilesDb(db);
-  const owner = executeSqliteQueryTakeFirstSync(
-    db,
-    kysely.selectFrom("user_profiles").selectAll().where("id", "=", GATEWAY_OWNER_PROFILE_ID),
-  );
-  const identified = executeSqliteQueryTakeFirstSync(
+  const rows = executeSqliteQuerySync(
     db,
     kysely
       .selectFrom("user_profiles")
-      .innerJoin(
-        "user_profile_identities",
-        "user_profile_identities.profile_id",
-        "user_profiles.id",
-      )
-      .selectAll("user_profiles")
-      .where("provider", "=", OWNER_PROVIDER)
-      .where("subject", "=", OWNER_SUBJECT),
-  );
-  return { owner, identified };
+      .selectAll()
+      .select((eb) => eb.val<"owner" | "identified">("owner").as("origin"))
+      .where("id", "=", GATEWAY_OWNER_PROFILE_ID)
+      .unionAll(
+        kysely
+          .selectFrom("user_profiles")
+          .innerJoin(
+            "user_profile_identities",
+            "user_profile_identities.profile_id",
+            "user_profiles.id",
+          )
+          .selectAll("user_profiles")
+          .select((eb) => eb.val<"owner" | "identified">("identified").as("origin"))
+          .where("provider", "=", OWNER_PROVIDER)
+          .where("subject", "=", OWNER_SUBJECT),
+      ),
+  ).rows;
+  const result: { owner?: UserProfileRow; identified?: UserProfileRow } = {};
+  for (const { origin, ...row } of rows) {
+    result[origin] = row;
+  }
+  return result;
 }
 
-export function readGatewayOwnerProfileForEnsure(db: DatabaseSync) {
+export function readGatewayOwnerProfileForEnsure(db: EngineConnection) {
   const { owner, identified } = readGatewayOwnerProfileRows(db);
   if (
     owner?.merged_into ||
@@ -47,7 +55,7 @@ export function readGatewayOwnerProfileForEnsure(db: DatabaseSync) {
 
 /** Queue roster invalidation only for actual changes, after the owning transaction commits. */
 export function ensureGatewayOwnerProfileRow(
-  db: DatabaseSync,
+  db: EngineConnection,
   displayName: string | null,
   mutation?: UserProfileMutationContext,
 ): UserProfileRow {
@@ -83,19 +91,21 @@ export function ensureGatewayOwnerProfileRow(
         .where("id", "=", row.id),
     );
   }
-  executeSqliteQuerySync(
-    db,
-    kysely
-      .insertInto("user_profile_identities")
-      .values({
-        provider: OWNER_PROVIDER,
-        subject: OWNER_SUBJECT,
-        profile_id: row.id,
-        canonical_login: null,
-        created_at: now,
-      })
-      .onConflict((conflict) => conflict.columns(["provider", "subject"]).doNothing()),
-  );
+  if (!identified) {
+    executeSqliteQuerySync(
+      db,
+      kysely
+        .insertInto("user_profile_identities")
+        .values({
+          provider: OWNER_PROVIDER,
+          subject: OWNER_SUBJECT,
+          profile_id: row.id,
+          canonical_login: null,
+          created_at: now,
+        })
+        .onConflict((conflict) => conflict.columns(["provider", "subject"]).doNothing()),
+    );
+  }
   if (!existing || row.display_name !== existing.display_name || !identified) {
     mutation?.publish(row.id);
     publishUserProfilesChange(db, row.id);

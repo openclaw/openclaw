@@ -1,17 +1,21 @@
-import { render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AgentSelect } from "../../components/agent-select.ts";
-import "../../components/web-awesome.ts";
+import type { AgentSelectElement } from "../../components/agent-select.tsx";
+import "../../components/agent-select-registration.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import "../../test-helpers/load-styles.ts";
 import "../../styles/model-setup.css";
-import { duringElementAnimation } from "../../test-helpers/web-awesome-animation.ts";
-import { renderManualProviderPicker } from "./provider-picker.ts";
-import "@awesome.me/webawesome/dist/styles/themes/default.css";
+import { ManualProviderPicker } from "./provider-picker.tsx";
 
-class SelectedAgentPicker extends AgentSelect {}
-customElements.define("test-selected-agent-picker", SelectedAgentPicker);
+const disposals: (() => void)[] = [];
 
-afterEach(() => document.body.replaceChildren());
+afterEach(() => {
+  for (const dispose of disposals.splice(0)) {
+    dispose();
+  }
+  document.body.replaceChildren();
+});
 
 describe.runIf("__vitest_browser__" in globalThis)("selected dropdown opening", () => {
   it.each(["provider", "agent"] as const)(
@@ -26,59 +30,79 @@ describe.runIf("__vitest_browser__" in globalThis)("selected dropdown opening", 
       }));
       if (kind === "provider") {
         const providers = options.map(({ value, label }) => ({ id: value, label }));
-        render(
-          renderManualProviderPicker(
-            {
-              manualProviderId: "selected",
-              actionsDisabled: false,
-              iconUrls: {},
-              onIconError: vi.fn(),
-              onManualProviderChange: selected,
-            },
-            { manualProviders: providers },
-            providers[28],
-          ),
-          host,
+        disposals.push(
+          mountSolid(
+            () =>
+              createComponent(ManualProviderPicker, {
+                manualProviderId: "selected",
+                actionsDisabled: false,
+                iconUrls: {},
+                onIconError: vi.fn(),
+                onManualProviderChange: selected,
+                result: { manualProviders: providers },
+                provider: providers[28],
+              }),
+            { container: host },
+          ).unmount,
         );
       } else {
-        const picker = new SelectedAgentPicker();
+        const picker = document.createElement("openclaw-agent-select");
         picker.options = options;
         picker.value = "selected";
         picker.onSelect = selected;
         host.append(picker);
       }
       document.body.append(host);
-      const agentPicker = host.querySelector<AgentSelect>("test-selected-agent-picker");
+      const agentPicker = host.querySelector<AgentSelectElement>("openclaw-agent-select");
       await agentPicker?.updateComplete;
-      const dropdown = host.querySelector("wa-dropdown")!;
-      await dropdown.updateComplete;
-      const items = Array.from(dropdown.querySelectorAll("wa-dropdown-item"));
-      await Promise.all(items.map((item) => item.updateComplete));
-      const menu = dropdown.shadowRoot!.querySelector<HTMLElement>('[part="menu"]')!;
+      if (kind === "agent") {
+        const trigger = host.querySelector<HTMLButtonElement>(".agent-select__trigger")!;
+        const items = [...host.querySelectorAll<HTMLElement>("[data-agent-option]")];
+        await page.elementLocator(trigger).click();
+        await expect.poll(() => document.activeElement).toBe(items[28]);
+        await userEvent.keyboard("{End}");
+        expect(document.activeElement).toBe(items[29]);
+        await userEvent.keyboard("{Enter}");
+        expect(selected).toHaveBeenCalledExactlyOnceWith("last");
+        return;
+      }
+      const items = [...host.querySelectorAll<HTMLElement>("[data-manual-provider]")];
+      const menu = host.querySelector<HTMLElement>('[role="menu"]')!;
       menu.style.maxHeight = "160px";
       menu.style.overflow = "auto";
-      const trigger = dropdown.querySelector<HTMLButtonElement>('[slot="trigger"]')!;
+      const trigger = host.querySelector<HTMLButtonElement>(
+        ".model-setup-provider-select__trigger",
+      )!;
       const shown = new Promise<void>((resolve) => {
-        dropdown.addEventListener("wa-after-show", () => resolve(), { once: true });
+        menu.addEventListener("overlay-after-show", () => resolve(), { once: true });
       });
-      await duringElementAnimation(
-        menu,
-        "show",
-        () => page.elementLocator(trigger).click(),
-        async () => {
-          expect.soft(document.activeElement).toBe(items[28]);
-          const selectedBounds = items[28]!.getBoundingClientRect();
-          const menuBounds = menu.getBoundingClientRect();
-          expect.soft(selectedBounds.top).toBeGreaterThanOrEqual(menuBounds.top);
-          expect.soft(selectedBounds.bottom).toBeLessThanOrEqual(menuBounds.bottom);
-          await userEvent.keyboard("{End}");
-          expect(document.activeElement).toBe(items[29]);
-        },
-      );
+      const pageScroll = { x: scrollX, y: scrollY };
+      const navigateDuringOpening = async () => {
+        expect.soft(document.activeElement).toBe(items[28]);
+        const selectedBounds = items[28]!.getBoundingClientRect();
+        const menuBounds = menu.getBoundingClientRect();
+        expect.soft(selectedBounds.top).toBeGreaterThanOrEqual(menuBounds.top);
+        expect.soft(selectedBounds.bottom).toBeLessThanOrEqual(menuBounds.bottom);
+        expect({ x: scrollX, y: scrollY }).toEqual(pageScroll);
+        await userEvent.keyboard("{End}");
+        expect(document.activeElement).toBe(items[29]);
+      };
+      menu.style.setProperty("--oc-overlay-show-duration", "30s");
+      await page.elementLocator(trigger).click();
+      await expect.poll(() => menu.getAnimations().length).toBeGreaterThan(0);
+      const animations = menu.getAnimations();
+      for (const animation of animations) {
+        animation.pause();
+      }
+      expect(menu.dataset.phase).toBe("opening");
+      await navigateDuringOpening();
+      for (const animation of animations) {
+        animation.finish();
+      }
       await shown;
       expect.soft(document.activeElement).toBe(items[29]);
       await userEvent.keyboard("{Enter}");
-      expect(selected).toHaveBeenCalledExactlyOnceWith("last");
+      await waitForSolid(() => expect(selected).toHaveBeenCalledExactlyOnceWith("last"));
     },
   );
 });

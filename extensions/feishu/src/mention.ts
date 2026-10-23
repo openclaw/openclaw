@@ -1,3 +1,4 @@
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { FeishuMessageEvent } from "./event-types.js";
 import type { MentionTarget } from "./mention-target.types.js";
 import { isFeishuGroupChatType } from "./types.js";
@@ -11,6 +12,38 @@ type FeishuMentionLike = {
   };
   name?: string;
 };
+
+export type FeishuTextMention = {
+  key: string;
+  id: string | { open_id?: string };
+  name: string;
+};
+
+export function normalizeMentions(
+  text: string,
+  mentions?: ReadonlyArray<FeishuTextMention>,
+  botStripId?: string,
+): string {
+  if (!mentions || mentions.length === 0) {
+    return text;
+  }
+  const escapeName = (value: string) => value.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const replacements = new Map<string, string>();
+  for (const mention of mentions) {
+    // Events nest open_id; message get/list return the selected identifier directly.
+    const mentionId = typeof mention.id === "string" ? mention.id : mention.id.open_id;
+    const replacement =
+      botStripId && mentionId === botStripId
+        ? ""
+        : mentionId
+          ? `<at user_id="${mentionId}">${escapeName(mention.name)}</at>`
+          : `@${mention.name}`;
+    replacements.set(mention.key, replacement);
+  }
+  // Longest keys win; a single pass keeps placeholder-like display names literal.
+  const keys = [...replacements.keys()].toSorted((a, b) => b.length - a.length).map(escapeRegExp);
+  return text.replace(new RegExp(keys.join("|"), "g"), (key) => replacements.get(key)!).trim();
+}
 
 export function isFeishuBroadcastMention(mention: FeishuMentionLike): boolean {
   const normalizedKey = mention.key?.trim().toLowerCase();

@@ -1,4 +1,3 @@
-// Commander registration for device pairing and auth-token commands.
 import { Option, type Command } from "commander";
 import { createLazyRuntimeMethodBinder } from "../shared/lazy-runtime.js";
 import { isDevicesMachineOutput } from "./devices-output-mode.js";
@@ -9,6 +8,7 @@ const DEFAULT_DEVICES_TIMEOUT_MS = 10_000;
 
 // Keep device-pairing crypto/table dependencies out of root help startup.
 const deviceAction = createLazyRuntimeMethodBinder(() => import("./devices-cli.runtime.js"));
+const joinAction = createLazyRuntimeMethodBinder(() => import("./devices-cli-join.js"));
 
 export function registerDevicesCli(program: Command) {
   const devices = program
@@ -27,13 +27,13 @@ export function registerDevicesCli(program: Command) {
     .description(
       "Mint a single-use node onboarding URL (not a mobile app setup code; use `openclaw qr` for that)",
     )
-    .action(deviceAction((runtime) => runtime.runDevicesJoinCodeCommand));
+    .action(joinAction((runtime) => runtime.runDevicesJoinCodeCommand));
 
   devices
     .command("remove")
     .description("Remove a paired device entry")
     .argument("<deviceId>", "Paired device id")
-    .action(deviceAction((runtime) => runtime.runDevicesRemoveCommand));
+    .action(deviceAction((runtime) => runtime.runDevicesDeleteCommand.bind(null, "remove")));
 
   devices
     .command("clear")
@@ -53,7 +53,7 @@ export function registerDevicesCli(program: Command) {
     .command("reject")
     .description("Reject a pending device pairing request")
     .argument("<requestId>", "Pending request id")
-    .action(deviceAction((runtime) => runtime.runDevicesRejectCommand));
+    .action(deviceAction((runtime) => runtime.runDevicesDeleteCommand.bind(null, "reject")));
 
   devices
     .command("rename")
@@ -69,14 +69,14 @@ export function registerDevicesCli(program: Command) {
     .requiredOption("--role <role>", "Role name")
     .option("--scope <scope...>", "Scopes to attach to the token (repeatable)")
     .addOption(new Option("--no-scopes", "Rotate with an empty scope set").conflicts("scope"))
-    .action(deviceAction((runtime) => runtime.runDevicesRotateCommand));
+    .action(deviceAction((runtime) => runtime.runDevicesTokenCommand.bind(null, "rotate")));
 
   devices
     .command("revoke")
     .description("Revoke a device token for a role")
     .requiredOption("--device <id>", "Device id")
     .requiredOption("--role <role>", "Role name")
-    .action(deviceAction((runtime) => runtime.runDevicesRevokeCommand));
+    .action(deviceAction((runtime) => runtime.runDevicesTokenCommand.bind(null, "revoke")));
 
   for (const command of devices.commands) {
     command

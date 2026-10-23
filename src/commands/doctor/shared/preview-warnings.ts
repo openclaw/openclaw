@@ -3,28 +3,100 @@ import {
   isRecord as hasRecord,
 } from "@openclaw/normalization-core/record-coerce";
 import {
+  listAgentEntries,
   listAgentEntriesWithSource,
   resolveAgentConfig,
 } from "../../../agents/agent-scope-config.js";
+import { resolveDefaultModelForAgent } from "../../../agents/model-selection-config.js";
 import {
   normalizeToolProviderPolicyKey,
   resolveProviderToolPolicy,
   resolveProviderToolPolicyEntry,
 } from "../../../agents/provider-tool-policy.js";
-import { isToolAllowedByPolicyName } from "../../../agents/tool-policy-match.js";
+import { pickSandboxToolPolicy } from "../../../agents/sandbox-tool-policy.js";
+import {
+  isToolAllowedByPolicies,
+  isToolAllowedByPolicyName,
+} from "../../../agents/tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../../agents/tool-policy.js";
 import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import type { ToolPolicyConfig } from "../../../config/types.tools.js";
+import type {
+  AgentToolsConfig,
+  ToolPolicyConfig,
+  ToolsConfig,
+} from "../../../config/types.tools.js";
+import { VERSION_BOUND_RUNTIME_PLUGIN_POLICY_IDS_BY_SURFACE } from "../../../plugins/official-runtime-plugins.js";
 import { collectChannelRouteTargets } from "../../../routing/channel-route-targets.js";
-import { VERSION_BOUND_RUNTIME_PLUGIN_POLICY_IDS_BY_SURFACE } from "./configured-runtime-plugin-installs.js";
 import type { BlockedLegacyOpenAICodexProviderPlan } from "./legacy-config-migrations.runtime.models.js";
-import {
-  collectUnavailableSourceReplyTargets,
-  resolveMessageToolAvailability,
-  SOURCE_REPLY_RUNTIME_MESSAGE_ALLOW,
-} from "./preview-message-tool-policy.js";
-import { resolveDoctorPrimaryModelRef } from "./primary-model-ref.js";
+
+function resolveMessageToolAvailability(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  globalTools?: ToolsConfig;
+  agentTools?: AgentToolsConfig;
+  runtimeAlsoAllow?: string[];
+}): boolean {
+  const modelRef = resolveDefaultModelForAgent({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    allowPluginNormalization: false,
+  });
+  const [providerPolicy, agentProviderPolicy] = [
+    params.globalTools?.byProvider,
+    params.agentTools?.byProvider,
+  ].map((byProvider) =>
+    resolveProviderToolPolicy({
+      byProvider,
+      modelProvider: modelRef.provider,
+      modelId: modelRef.model,
+    }),
+  );
+  const profilePolicy = (global?: ToolPolicyConfig, agent?: ToolPolicyConfig) => {
+    const alsoAllow = Array.isArray(agent?.alsoAllow)
+      ? agent.alsoAllow
+      : Array.isArray(global?.alsoAllow)
+        ? global.alsoAllow
+        : [];
+    return mergeAlsoAllowPolicy(resolveToolProfilePolicy(agent?.profile ?? global?.profile), [
+      ...alsoAllow,
+      ...(params.runtimeAlsoAllow ?? []),
+    ]);
+  };
+  return isToolAllowedByPolicies("message", [
+    profilePolicy(params.globalTools, params.agentTools),
+    profilePolicy(providerPolicy, agentProviderPolicy),
+    pickSandboxToolPolicy(providerPolicy),
+    pickSandboxToolPolicy(agentProviderPolicy),
+    pickSandboxToolPolicy(params.globalTools),
+    pickSandboxToolPolicy(params.agentTools),
+  ]);
+}
+
+const SOURCE_REPLY_RUNTIME_MESSAGE_ALLOW = ["message"];
+
+function collectUnavailableSourceReplyTargets(cfg: OpenClawConfig): string[] {
+  const agents = listAgentEntries(cfg).filter(hasRecord);
+  if (agents.length === 0) {
+    const available = resolveMessageToolAvailability({
+      cfg,
+      globalTools: cfg.tools,
+      runtimeAlsoAllow: SOURCE_REPLY_RUNTIME_MESSAGE_ALLOW,
+    });
+    return available ? [] : ["default tool policy"];
+  }
+  return agents.flatMap((agent) => {
+    const agentId = typeof agent.id === "string" ? agent.id : "unknown";
+    const available = resolveMessageToolAvailability({
+      cfg,
+      agentId,
+      globalTools: cfg.tools,
+      agentTools: agent.tools,
+      runtimeAlsoAllow: SOURCE_REPLY_RUNTIME_MESSAGE_ALLOW,
+    });
+    return available ? [] : [`agent "${agentId}"`];
+  });
+}
 
 function listAgentRecords(cfg: OpenClawConfig) {
   return listAgentEntriesWithSource(cfg).map(({ entry }) => entry);
@@ -40,7 +112,7 @@ function hasSubagentAllowlistConfig(cfg: OpenClawConfig): boolean {
     return true;
   }
   return listAgentRecords(cfg).some((agent) => {
-    const subagents = hasRecord(agent.subagents) ? agent.subagents : undefined;
+    const subagents = asOptionalRecord(agent.subagents);
     return Array.isArray(subagents?.allowAgents);
   });
 }
@@ -128,16 +200,11 @@ function collectConfiguredToolSectionGrantEntries(params: {
   tools?: Record<string, unknown> | null;
   pathLabel: string;
 }): ConfiguredToolSectionGrantEntry[] {
-  const entries: ConfiguredToolSectionGrantEntry[] = [];
-  for (const section of PROFILE_CONFIGURED_TOOL_SECTIONS) {
-    if (hasRecord(params.tools?.[section.key])) {
-      entries.push({
-        label: `${params.pathLabel}.${section.key}`,
-        grants: [...section.grants],
-      });
-    }
-  }
-  return entries;
+  return PROFILE_CONFIGURED_TOOL_SECTIONS.flatMap((section) =>
+    hasRecord(params.tools?.[section.key])
+      ? [{ label: `${params.pathLabel}.${section.key}`, grants: [...section.grants] }]
+      : [],
+  );
 }
 
 function readPreviewStringList(value: unknown): string[] | undefined {
@@ -229,15 +296,13 @@ function collectByProviderConfiguredToolSectionWarnings(params: {
   pathLabel: string;
   configuredEntries: ConfiguredToolSectionGrantEntry[];
 }): string[] {
-  const byProvider = hasRecord(params.tools?.byProvider) ? params.tools.byProvider : undefined;
+  const byProvider = asOptionalRecord(params.tools?.byProvider);
   if (!byProvider || params.configuredEntries.length === 0) {
     return [];
   }
-  const inheritedByProvider = hasRecord(params.inheritedTools?.byProvider)
-    ? params.inheritedTools.byProvider
-    : undefined;
+  const inheritedByProvider = asOptionalRecord(params.inheritedTools?.byProvider);
   return Object.entries(byProvider).flatMap(([providerKey, policyValue]) => {
-    const policy = hasRecord(policyValue) ? policyValue : undefined;
+    const policy = asOptionalRecord(policyValue);
     const profile = policy?.profile;
     if (typeof profile !== "string" || !profile) {
       return [];
@@ -274,118 +339,6 @@ function resolveInheritedProviderPolicyForPreview(
     modelId,
   });
   return policy && hasRecord(policy) ? policy : undefined;
-}
-
-function collectInheritedByProviderConfiguredToolSectionWarnings(params: {
-  inheritedTools?: Record<string, unknown> | null;
-  overridingTools?: Record<string, unknown> | null;
-  overridingPathLabel: string;
-  configuredEntries: ConfiguredToolSectionGrantEntry[];
-  modelProvider?: string;
-  modelId?: string;
-}): string[] {
-  const inheritedByProvider = hasRecord(params.inheritedTools?.byProvider)
-    ? params.inheritedTools.byProvider
-    : undefined;
-  if (!inheritedByProvider || params.configuredEntries.length === 0) {
-    return [];
-  }
-  const overridingByProvider = hasRecord(params.overridingTools?.byProvider)
-    ? params.overridingTools.byProvider
-    : undefined;
-  const inheritedEntryForModel = resolveProviderToolPolicyEntry({
-    byProvider: inheritedByProvider,
-    modelProvider: params.modelProvider,
-    modelId: params.modelId,
-  });
-  return Object.entries(inheritedByProvider).flatMap(([providerKey, policyValue]) => {
-    if (params.modelProvider && inheritedEntryForModel?.key !== providerKey) {
-      return [];
-    }
-    const inheritedPolicy = hasRecord(policyValue) ? policyValue : undefined;
-    const profile = inheritedPolicy?.profile;
-    if (typeof profile !== "string" || !profile) {
-      return [];
-    }
-    const overridingEntry =
-      resolveProviderToolPolicyEntry({
-        byProvider: overridingByProvider,
-        modelProvider: params.modelProvider,
-        modelId: params.modelId,
-      }) ??
-      (hasRecord(overridingByProvider?.[providerKey])
-        ? { key: providerKey, policy: overridingByProvider[providerKey] }
-        : undefined);
-    const overridingPolicy = overridingEntry?.policy;
-    if (typeof overridingPolicy?.profile === "string") {
-      return [];
-    }
-    return collectProfileConfiguredSectionWarnings({
-      configuredEntries: params.configuredEntries,
-      policy: overridingPolicy,
-      inheritedPolicy,
-      profile,
-      profilePath: `tools.byProvider.${providerKey}`,
-      advicePath: `${params.overridingPathLabel}.byProvider.${overridingEntry?.key ?? providerKey}`,
-      profileKind: "inherited provider",
-    });
-  });
-}
-
-function collectProfileConfiguredToolSectionWarnings(cfg: OpenClawConfig): string[] {
-  const warnings: string[] = [];
-  const globalTools = hasRecord(cfg.tools) ? cfg.tools : undefined;
-  const globalConfiguredEntries = collectConfiguredToolSectionGrantEntries({
-    tools: globalTools,
-    pathLabel: "tools",
-  });
-
-  warnings.push(
-    ...collectProfileConfiguredToolSectionScopeWarnings({
-      tools: globalTools,
-      pathLabel: "tools",
-    }),
-    ...collectByProviderConfiguredToolSectionWarnings({
-      tools: globalTools,
-      pathLabel: "tools",
-      configuredEntries: globalConfiguredEntries,
-    }),
-  );
-
-  for (const { entry: agent, source } of listAgentEntriesWithSource(cfg)) {
-    const agentTools = hasRecord(agent.tools) ? agent.tools : undefined;
-    const agentId = typeof agent.id === "string" ? agent.id : undefined;
-    const agentConfig = agentId ? resolveAgentConfig(cfg, agentId) : undefined;
-    const modelRef = resolveDoctorPrimaryModelRef(cfg, agentConfig?.model);
-    const agentPath = `agents.${source.kind === "entries" ? `entries.${source.key}` : `list[${source.index}]`}.tools`;
-    const ownAgentConfiguredEntries = collectConfiguredToolSectionGrantEntries({
-      tools: agentTools,
-      pathLabel: agentPath,
-    });
-    const agentConfiguredEntries = [...globalConfiguredEntries, ...ownAgentConfiguredEntries];
-    warnings.push(
-      ...collectProfileConfiguredToolSectionScopeWarnings({
-        tools: agentTools,
-        inheritedTools: globalTools,
-        pathLabel: agentPath,
-      }),
-      ...collectByProviderConfiguredToolSectionWarnings({
-        tools: agentTools,
-        inheritedTools: globalTools,
-        pathLabel: agentPath,
-        configuredEntries: agentConfiguredEntries,
-      }),
-      ...collectInheritedByProviderConfiguredToolSectionWarnings({
-        inheritedTools: globalTools,
-        overridingTools: agentTools,
-        overridingPathLabel: agentPath,
-        configuredEntries: ownAgentConfiguredEntries,
-        modelProvider: modelRef.provider,
-        modelId: modelRef.model,
-      }),
-    );
-  }
-  return warnings;
 }
 
 type DoctorPreviewNotes = { infoNotes: string[]; warningNotes: string[] };
@@ -443,7 +396,94 @@ export async function collectDoctorPreviewNotes(params: {
 
   warnings.push(...collectVisibleReplyToolPolicyWarnings(params.cfg));
   warnings.push(...collectChannelBoundMessageToolPolicyWarnings(params.cfg));
-  warnings.push(...collectProfileConfiguredToolSectionWarnings(params.cfg));
+  const cfg = params.cfg;
+  const globalTools = asOptionalRecord(cfg.tools);
+  const globalConfiguredEntries = collectConfiguredToolSectionGrantEntries({
+    tools: globalTools,
+    pathLabel: "tools",
+  });
+
+  warnings.push(
+    ...collectProfileConfiguredToolSectionScopeWarnings({
+      tools: globalTools,
+      pathLabel: "tools",
+    }),
+    ...collectByProviderConfiguredToolSectionWarnings({
+      tools: globalTools,
+      pathLabel: "tools",
+      configuredEntries: globalConfiguredEntries,
+    }),
+  );
+
+  for (const { entry: agent, source } of listAgentEntriesWithSource(cfg)) {
+    const agentTools = asOptionalRecord(agent.tools);
+    const agentId = typeof agent.id === "string" ? agent.id : undefined;
+    const modelRef = resolveDefaultModelForAgent({ cfg, agentId, allowPluginNormalization: false });
+    const agentPath = `agents.${source.kind === "entries" ? `entries.${source.key}` : `list[${source.index}]`}.tools`;
+    const ownAgentConfiguredEntries = collectConfiguredToolSectionGrantEntries({
+      tools: agentTools,
+      pathLabel: agentPath,
+    });
+    const agentConfiguredEntries = [...globalConfiguredEntries, ...ownAgentConfiguredEntries];
+    warnings.push(
+      ...collectProfileConfiguredToolSectionScopeWarnings({
+        tools: agentTools,
+        inheritedTools: globalTools,
+        pathLabel: agentPath,
+      }),
+      ...collectByProviderConfiguredToolSectionWarnings({
+        tools: agentTools,
+        inheritedTools: globalTools,
+        pathLabel: agentPath,
+        configuredEntries: agentConfiguredEntries,
+      }),
+    );
+    const modelProvider = modelRef.provider;
+    const modelId = modelRef.model;
+    const inheritedByProvider = asOptionalRecord(globalTools?.byProvider);
+    if (inheritedByProvider && ownAgentConfiguredEntries.length > 0) {
+      const overridingByProvider = asOptionalRecord(agentTools?.byProvider);
+      const inheritedEntryForModel = resolveProviderToolPolicyEntry({
+        byProvider: inheritedByProvider,
+        modelProvider,
+        modelId,
+      });
+      warnings.push(
+        ...Object.entries(inheritedByProvider).flatMap(([providerKey, policyValue]) => {
+          if (modelProvider && inheritedEntryForModel?.key !== providerKey) {
+            return [];
+          }
+          const inheritedPolicy = asOptionalRecord(policyValue);
+          const profile = inheritedPolicy?.profile;
+          if (typeof profile !== "string" || !profile) {
+            return [];
+          }
+          const overridingEntry =
+            resolveProviderToolPolicyEntry({
+              byProvider: overridingByProvider,
+              modelProvider,
+              modelId,
+            }) ??
+            (hasRecord(overridingByProvider?.[providerKey])
+              ? { key: providerKey, policy: overridingByProvider[providerKey] }
+              : undefined);
+          const overridingPolicy = overridingEntry?.policy;
+          if (typeof overridingPolicy?.profile === "string") {
+            return [];
+          }
+          return collectProfileConfiguredSectionWarnings({
+            configuredEntries: ownAgentConfiguredEntries,
+            policy: overridingPolicy,
+            inheritedPolicy,
+            profile,
+            profilePath: `tools.byProvider.${providerKey}`,
+            advicePath: `${agentPath}.byProvider.${overridingEntry?.key ?? providerKey}`,
+            profileKind: "inherited provider",
+          });
+        }),
+      );
+    }
+  }
 
   const channelPluginRuntime = await import("./channel-plugin-blockers.js");
   const channelPluginBlockerHits = channelPluginRuntime.scanConfiguredChannelPluginBlockers(
@@ -508,6 +548,15 @@ export async function collectDoctorPreviewNotes(params: {
         warnings.push(stalePluginWarnings.join("\n"));
       }
     }
+    const { collectContextEnginePluginIdSelectorWarnings } =
+      await import("./context-engine-plugin-id-selector.js");
+    warnings.push(
+      ...collectContextEnginePluginIdSelectorWarnings({
+        cfg: params.cfg,
+        doctorFixCommand: params.doctorFixCommand,
+        env,
+      }),
+    );
   }
 
   const { collectCodexRouteWarnings } = await import("./codex-route-warnings.js");
@@ -588,11 +637,13 @@ export async function collectDoctorPreviewNotes(params: {
 
   const { collectStaleOAuthProfileShadowWarnings, scanStaleOAuthProfileShadows } =
     await import("./stale-oauth-profile-shadows.js");
-  const staleOAuthProfileShadows = await scanStaleOAuthProfileShadows({
-    cfg: params.cfg,
-    env,
-  });
+  const { hits: staleOAuthProfileShadows, warnings: staleOAuthWarnings } =
+    await scanStaleOAuthProfileShadows({
+      cfg: params.cfg,
+      env,
+    });
   appendScanWarnings(staleOAuthProfileShadows, collectStaleOAuthProfileShadowWarnings);
+  warnings.push(...staleOAuthWarnings);
 
   const { collectStaleConfiguredAuthOrderWarnings } = await import("./stale-auth-order.js");
   warnings.push(

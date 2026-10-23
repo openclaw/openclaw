@@ -45,6 +45,7 @@ import {
   preparePostCorePluginConfig,
   persistValidatedDowngradeConfig,
   readPostCorePreUpdateSourceConfig,
+  readUpdateConfigFileSnapshot,
 } from "./update-command-config.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import {
@@ -180,6 +181,7 @@ export async function resumePostCoreUpdate(params: ResumePostCoreUpdateParams): 
               run: {
                 runId,
                 env,
+                busyTimeoutMs: params.timeoutMs,
                 executorFence: fence,
                 ...(requesterAuthority ? { requesterAuthority } : {}),
               },
@@ -274,7 +276,7 @@ async function resumePostCoreUpdateInternal(
       defaultRuntime.error(`[update resume] ${JSON.stringify(diagnostic)}`);
       if (runId) {
         try {
-          recordUpdateRunStep(runId, diagnostic, { env: params.opts.run?.env ?? process.env });
+          recordUpdateRunStep(runId, diagnostic, params.opts.run ?? { env: process.env });
         } catch (error) {
           defaultRuntime.error(
             `Post-core Doctor evidence could not be saved: ${formatErrorMessage(error)}`,
@@ -361,7 +363,7 @@ async function resumePostCoreUpdateInternal(
           }
         }
 
-        const configSnapshot = await readConfigFileSnapshot({
+        const configSnapshot = await readUpdateConfigFileSnapshot({
           skipPluginValidation: true,
           suppressFutureVersionWarning: true,
           observe: false,

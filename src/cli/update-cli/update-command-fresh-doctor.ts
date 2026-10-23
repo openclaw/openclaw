@@ -3,7 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveOpenClawCliInvocation } from "../../../cli-invocation.mjs";
 import {
+  isUpdateDoctorInspectionReportMode,
   UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV,
   UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV,
   UPDATE_POST_CORE_CONVERGENCE_ENV,
@@ -12,7 +14,10 @@ import { readConfigFileSnapshot } from "../../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../../config/paths.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
-import { readDeferredPluginMigrationsAsync } from "../../infra/deferred-plugin-migrations.js";
+import {
+  formatDeferredPluginMigration,
+  readDeferredPluginMigrationsAsync,
+} from "../../infra/deferred-plugin-migrations.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveAggregateSqliteInspectionTimeoutMs } from "../../infra/sqlite-readonly-worker.js";
 import { collectStateDatabasePaths } from "../../infra/update-candidate-state.js";
@@ -25,37 +30,37 @@ import {
   consumeUpdatePostInstallDoctorResult,
   createUpdatePostInstallDoctorResultPath,
   DoctorMaintenanceRefusalError,
+  PACKAGE_POST_INSTALL_DOCTOR_ADVISORY,
   UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   UpdateDoctorError,
+  UpdateDoctorDeferredInspectionCheckIdsSchema,
   type UpdatePostInstallDoctorResult,
 } from "../../infra/update-doctor-result.js";
-import {
-  createUpdateFailureFact,
-  normalizeUpdateFailureFacts,
-  parseConfigFailureFacts,
-} from "../../infra/update-failure-facts.js";
+import { UPDATE_DOCTOR_HISTORICAL_SCANS_ENV } from "../../infra/update-doctor-scan-receipts.js";
+import { createUpdateDoctorSectionTiming } from "../../infra/update-doctor-section-timing.js";
+import { createUpdateFailureFact } from "../../infra/update-failure-facts.js";
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
 import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
 import { buildUpdateDoctorEnv } from "../../infra/update-runner-doctor.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
-import {
-  redactPublicSupportDiagnosticLine,
-  redactSupportString,
-} from "../../logging/diagnostic-support-redaction.js";
+import { redactSupportString } from "../../logging/diagnostic-support-redaction.js";
 import { formatCommandOutput } from "../../process/command-error.js";
 import {
   CommandProcessCleanupError,
-  createSanitizedCommandError,
   hasCommandProcessCleanupError,
 } from "../../process/exec-result.js";
-import { isPlainCommandExitFailure, runExec, type CommandOptions } from "../../process/exec.js";
+import { isPlainCommandExitFailure, type CommandOptions } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { truncateUtf8Prefix, truncateUtf8Suffix } from "../../utils/utf8-truncate.js";
 import { parseUpdateTimeoutMs, resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
 import { createUpdateCommandAuthority } from "./update-command-authority.js";
+import { readUpdateTargetCliOptions } from "./update-command-cli-options.js";
 import { readUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
-import { recordUpdateDatabaseWrites } from "./update-command-database-receipts.js";
+import {
+  consumeUpdateDoctorHistoricalScans,
+  recordUpdateDatabaseWrites,
+} from "./update-command-database-receipts.js";
 import {
   assertUpdateDoctorChildSucceeded,
   inspectUpdateDoctorChildSupport,
@@ -64,11 +69,11 @@ import {
 } from "./update-command-doctor-child.js";
 import type { PluginUpdateWarning } from "./update-command-plugins-internals.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
+import { validatePostPluginConfigInFreshProcess } from "./update-command-post-plugin-config-check.js";
 import { applyPostPluginUpdateReadiness } from "./update-command-post-plugin-readiness.js";
 import {
   applyPostPluginConfigValidation,
   POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON,
-  POST_PLUGIN_CONFIG_VALIDATION_EXECUTION_FAILED_REASON,
   type PostPluginConfigValidation,
 } from "./update-command-post-plugin-validation.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
@@ -136,6 +141,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
   ];
   const baseEnv = stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env));
   delete baseEnv[UPDATE_POST_CORE_CONVERGENCE_ENV];
+  delete baseEnv[UPDATE_DOCTOR_HISTORICAL_SCANS_ENV];
   const doctorResultPath = createUpdatePostInstallDoctorResultPath();
   let doctorResult: UpdatePostInstallDoctorResult | null | undefined;
   let doctorSettled = true;
@@ -143,13 +149,14 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
   let result: { stdout?: unknown; stderr?: unknown } | undefined;
   let warning: PluginUpdateWarning | undefined;
   let failure: { error: unknown } | undefined;
+  const sectionTiming = createUpdateDoctorSectionTiming();
+  let doctorStep: UpdateStepResult | undefined;
+  let doctorStartedAt: number | undefined;
   assertCurrent();
   try {
     const commandOptions: CommandOptions = {
       cwd: params.root,
-      // Normal updates also carry a default step allowance. Only operator opts
-      // may impose a Doctor deadline; standalone finalization supplies its own.
-      timeoutMs: params.opts ? parseUpdateTimeoutMs(params.opts.timeout) : params.timeoutMs,
+      timeoutMs: parseUpdateTimeoutMs(params.opts?.timeout) ?? params.timeoutMs,
       maxOutputBytes: 4 * 1024 * 1024,
       terminateOnOutputLimit: true,
       onOutputChunk: captureUpdateFinalizationDoctorOutput(params.phase),
@@ -168,6 +175,20 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
         ...(params.phase === "post-plugin" ? { [UPDATE_POST_CORE_CONVERGENCE_ENV]: "1" } : {}),
       },
     };
+    const reusableScans =
+      params.phase === "post-plugin" && params.databaseBackup
+        ? consumeUpdateDoctorHistoricalScans(params.databaseBackup, {
+            ...baseEnv,
+            ...commandOptions.env,
+            ...sectionTiming.env,
+          })
+        : undefined;
+    if (reusableScans) {
+      commandOptions.env = {
+        ...commandOptions.env,
+        [UPDATE_DOCTOR_HISTORICAL_SCANS_ENV]: reusableScans,
+      };
+    }
     const workerCommand = [
       params.nodeRunner ?? resolveNodeRunner(),
       path.join(
@@ -189,7 +210,47 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
           },
           assertCurrent,
         )));
+    // The capability check above stays untraced; only the Doctor reports its sections.
+    const doctorOptions: CommandOptions = {
+      ...commandOptions,
+      env: { ...commandOptions.env, ...sectionTiming.env },
+    };
+    let doctorArgv: string[];
+    if (doctorConfigWrites && executorFence && runId) {
+      doctorArgv = [...workerCommand, "--doctor"];
+    } else {
+      if (
+        params.opts?.fullIntegrityCheck &&
+        (
+          await readUpdateTargetCliOptions(
+            {
+              nodeRunner: params.nodeRunner ?? resolveNodeRunner(),
+              entryPath,
+              command: "doctor",
+            },
+            { cwd: params.root, baseEnv, timeoutMs: params.timeoutMs },
+          )
+        ).has("--full-integrity-check")
+      ) {
+        args.push("--full-integrity-check");
+      }
+      const invocation = resolveOpenClawCliInvocation({
+        execPath: params.nodeRunner ?? resolveNodeRunner(),
+        entryPath,
+        execArgv: [],
+        args: args.slice(1),
+      });
+      doctorArgv = [invocation.command, ...invocation.args];
+    }
     assertCurrent();
+    doctorStartedAt = Date.now();
+    doctorStep = {
+      name: `${params.phase} doctor`,
+      command: doctorArgv.join(" "),
+      cwd: params.root,
+      durationMs: 0,
+      exitCode: null,
+    };
     let child: Awaited<ReturnType<typeof runUpdateDoctorProcess>>;
     if (doctorConfigWrites && executorFence && runId) {
       const snapshot = await readUpdateConfigSnapshot(resolveConfigPath());
@@ -210,8 +271,10 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
             configInputHash: snapshot.hash,
             originalRecoveryCapture: run?.originalRecoveryCapture,
             repair: true,
+            fullIntegrityCheck: params.opts?.fullIntegrityCheck,
             databaseGenerations:
               params.databaseBackup?.migration?.to ?? params.databaseBackup?.sourceGenerations,
+            databasePluginOwners: params.databaseBackup?.pluginOwners,
             yes: params.yes,
             workspaceSuggestions: params.workspaceSuggestions === true,
             ...(params.phase === "post-plugin" && process.env[POST_CORE_UPDATE_ENV] === "1"
@@ -219,28 +282,38 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
               : {}),
           },
         },
-        (runCommand) => runCommand([...workerCommand, "--doctor"], commandOptions),
+        (runCommand) => sectionTiming.wrap(runCommand)(doctorArgv, doctorOptions),
       );
     } else {
       // A valid legacy target contract retains its shipped CLI Doctor. This is
       // capability selection, never recovery from missing or refused authority.
-      child = await runUpdateDoctorProcess(
-        {
-          root: params.root,
-          runId: runId ?? params.runId ?? "",
-          onProcessSettlement: (step) => {
-            processSettlement = step;
+      child = await sectionTiming.wrap((argv, options) =>
+        runUpdateDoctorProcess(
+          {
+            root: params.root,
+            runId: runId ?? params.runId ?? "",
+            onProcessSettlement: (step) => {
+              processSettlement = step;
+            },
           },
-        },
-        [params.nodeRunner ?? resolveNodeRunner(), ...args],
-        commandOptions,
-      );
+          argv,
+          options,
+        ),
+      )(doctorArgv, doctorOptions);
     }
     result = child;
+    doctorStep.exitCode = child.code;
     assertUpdateDoctorChildSucceeded(child);
     assertCurrent();
   } catch (error) {
     failure = { error };
+    if (doctorStep && isRecord(error) && typeof error.exitCode === "number") {
+      doctorStep.exitCode = error.exitCode;
+    }
+  } finally {
+    if (doctorStep && doctorStartedAt !== undefined) {
+      doctorStep.durationMs = Date.now() - doctorStartedAt;
+    }
   }
   const commandFailure = failure;
   if (failure) {
@@ -272,7 +345,12 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
         refuseAuthority(error);
       }
       if (isRecord(error)) {
-        result = error;
+        result = {
+          ...error,
+          ...(typeof error.stderr === "string"
+            ? { stderr: sectionTiming.stripTrace(error.stderr) }
+            : {}),
+        };
       }
       // The existing result channel identifies a settled deferred repair. Plugin
       // convergence still owns that repair; other exits retain their failure.
@@ -285,6 +363,9 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
           cause: error.cause,
         }) &&
         doctorResult?.status === "advisory";
+      if (deferred && doctorStep) {
+        doctorStep.advisory = PACKAGE_POST_INSTALL_DOCTOR_ADVISORY;
+      }
       if (!deferred) {
         const exitCode =
           isRecord(error) && typeof error.exitCode === "number" ? error.exitCode : null;
@@ -355,6 +436,9 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
             message: `Post-update plugin Doctor did not complete${exitCode == null ? "" : ` (exit ${exitCode})`}: ${message}`,
             guidance: ["Run `openclaw update repair` to retry post-update plugin repair."],
           };
+          if (doctorStep) {
+            doctorStep.advisory = { kind: "recoverable-maintenance", message: warning.message };
+          }
         } else {
           throw new UpdateDoctorError(message, failureFacts, { cause: error, exitCode });
         }
@@ -385,16 +469,19 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
     if (processSettlement) {
       params.onDoctorStep?.(processSettlement);
     }
+    // Missing reports must replace earlier selector facts, including from older Doctors.
+    if (doctorStep) {
+      sectionTiming.annotate(doctorStep);
+      doctorStep.deferredInspectionCheckIds = doctorResult?.deferredInspectionCheckIds ?? null;
+      params.onDoctorStep?.(doctorStep);
+    }
     if (params.databaseBackup) {
-      const step: UpdateStepResult = {
-        name: "database migration writes",
-        command: "record Doctor database write fingerprints",
-        cwd: params.root,
-        durationMs: 0,
-        exitCode: 0,
-      };
-      recordUpdateDatabaseWrites(params.databaseBackup, doctorResult?.databaseWrites, step);
-      params.onDoctorStep?.(step);
+      const receipt = recordUpdateDatabaseWrites(
+        params.databaseBackup,
+        doctorResult?.databaseWrites,
+        { name: `${params.phase} doctor` },
+      );
+      params.onDoctorStep?.(receipt);
     }
     if (doctorResult?.warnings?.length) {
       params.onWarnings?.(doctorResult.warnings);
@@ -420,81 +507,6 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
     throw failure.error;
   }
   return warning;
-}
-
-async function validatePostPluginConfigInFreshProcess(params: {
-  root: string;
-  timeoutMs: number;
-  entryPath: string;
-  nodeRunner?: string;
-}): Promise<PostPluginConfigValidation> {
-  try {
-    await runExec(
-      params.nodeRunner ?? resolveNodeRunner(),
-      [params.entryPath, "config", "validate", "--json"],
-      {
-        cwd: params.root,
-        timeoutMs: params.timeoutMs,
-        maxBuffer: 4 * 1024 * 1024,
-        logOutput: false,
-        baseEnv: stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env)),
-        env: { OPENCLAW_UPDATE_IN_PROGRESS: "0" },
-      },
-    );
-    return { status: "valid" };
-  } catch (error) {
-    const result = isRecord(error) ? error : {};
-    const cleanupUncertain = result.cleanup === "uncertain" || hasCommandProcessCleanupError(error);
-    // The CLI also emits valid:false for runtime exceptions. Only an ordinary
-    // completed failure with actual issues establishes invalid authored config.
-    const issues =
-      !cleanupUncertain &&
-      isPlainCommandExitFailure({
-        ...result,
-        failed: result.failed === true,
-        cause: result.cause,
-      }) &&
-      typeof result.stdout === "string"
-        ? parseConfigFailureFacts(result.stdout, process.env)
-        : [];
-    if (issues.length) {
-      return { status: "invalid", failureFacts: issues };
-    }
-    const summary = [
-      createSanitizedCommandError(result).message,
-      ...(typeof result.signal === "string" ? [`signal=${result.signal}`] : []),
-      ...(cleanupUncertain ? ["cleanup=uncertain"] : []),
-    ].join("; ");
-    return {
-      status: "execution-failed",
-      failureFacts: normalizeUpdateFailureFacts([
-        {
-          check: "config",
-          code: POST_PLUGIN_CONFIG_VALIDATION_EXECUTION_FAILED_REASON,
-          message: summary,
-        },
-        ...(["stderr", "stdout"] as const).flatMap((stream) => {
-          const output = result[stream];
-          if (typeof output !== "string" || !output.trim()) {
-            return [];
-          }
-          // Node may print a location or source frame before the actual error.
-          // Extract known public causes before single-line fact normalization loses them.
-          const diagnostic = redactPublicSupportDiagnosticLine(output, {
-            env: process.env,
-            stateDir: resolveStateDir(),
-          });
-          return [
-            {
-              check: "config",
-              code: "command-failed",
-              message: `${stream}: ${diagnostic === "[redacted-diagnostic]" ? output : diagnostic}`,
-            },
-          ];
-        }),
-      ]),
-    };
-  }
 }
 
 export async function completePostCorePluginUpdate(
@@ -523,6 +535,7 @@ export async function completePostCorePluginUpdate(
   let pluginUpdate = params.pluginUpdate;
   let entryPath: string | undefined;
   let freshConfigValidation: PostPluginConfigValidation | undefined;
+  let includeOptionalInspections = false;
   if (pluginUpdate.status !== "error") {
     try {
       entryPath = await resolveGatewayInstallEntrypoint(params.root);
@@ -540,8 +553,15 @@ export async function completePostCorePluginUpdate(
       assertCurrent();
       if (freshDoctorRequired) {
         await params.beforeDoctor?.();
+        let inspectionCheckIds: string[] | null | undefined;
         const warning = await runUpdateFinalizationDoctorInFreshProcess({
           ...params,
+          onDoctorStep: (step) => {
+            if (step.deferredInspectionCheckIds !== undefined) {
+              inspectionCheckIds = step.deferredInspectionCheckIds;
+            }
+            params.onDoctorStep?.(step);
+          },
           assertCurrent,
           onAuthorityRefused: () => {
             authorityFailed = true;
@@ -549,12 +569,36 @@ export async function completePostCorePluginUpdate(
           entryPath,
           phase: "post-plugin",
         });
+        // A child without usable selectors cannot leave diagnostics for after ready.
+        includeOptionalInspections =
+          isUpdateDoctorInspectionReportMode(process.env) &&
+          !UpdateDoctorDeferredInspectionCheckIdsSchema.safeParse(inspectionCheckIds).success;
         if (warning) {
           pluginUpdate = {
             ...pluginUpdate,
             status: "warning",
             reason: POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON,
             warnings: [...(pluginUpdate.warnings ?? []), warning],
+          };
+        }
+        const pending = await readDeferredPluginMigrationsAsync();
+        assertCurrent();
+        if (pending.length > 0) {
+          pluginUpdate = {
+            ...pluginUpdate,
+            status: "warning",
+            warnings: [
+              ...(pluginUpdate.warnings ?? []),
+              ...pending.map((migration) => ({
+                pluginId: migration.pluginId,
+                reason: "doctor-advisory",
+                // This is the final outcome, so do not tell operators to wait for this update.
+                message: formatDeferredPluginMigration(migration, {}),
+                guidance: [
+                  `Run "${migration.command}" to finish the plugin data/settings upgrade.`,
+                ],
+              })),
+            ],
           };
         }
       }
@@ -633,6 +677,7 @@ export async function completePostCorePluginUpdate(
         entryPath,
         pluginUpdate,
         timeoutMs: checkTimeoutMs,
+        includeOptionalInspections,
         ...(params.nodeRunner ? { nodeRunner: params.nodeRunner } : {}),
       });
     }

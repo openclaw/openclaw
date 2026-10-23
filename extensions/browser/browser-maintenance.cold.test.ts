@@ -1,9 +1,8 @@
-import {
-  createPluginStateKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, it, vi } from "vitest";
+import { setupMaintenance } from "./browser-maintenance.test-support.js";
+import { durableOwnership } from "./src/browser/session-tab-registry.sqlite.test-helpers.js";
 
 const runtime = vi.hoisted(() => ({
   loaded: [] as string[],
@@ -47,95 +46,60 @@ vi.mock("./src/browser-control-state.js", async () => {
 
 it("loads browser close runtimes only for owned tabs", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    await state.writeConfig({
-      browser: {
-        profiles: {
-          remote: {
-            driver: "existing-session",
-            cdpUrl: "http://127.0.0.1:9222",
-          },
-        },
-      },
-    });
-    const { initializeBrowserSessionTabStore, getBrowserSessionTabStore } =
-      await import("./src/browser/session-tab-store.js");
-    initializeBrowserSessionTabStore({
-      state: {
-        openKeyedStore: (options) => createPluginStateKeyedStoreForTests("browser", options),
-      },
-    });
+    const { store } = await setupMaintenance(state, "http://127.0.0.1:9222");
     const { closeTrackedBrowserTabsForSessions } = await import("./browser-maintenance.js");
     const { trackSessionBrowserTab, untrackSessionBrowserTab } =
       await import("./src/browser/session-tab-registry.js");
     const sessionKey = "agent:main:browser-cleanup";
+    const close = () => closeTrackedBrowserTabsForSessions({ sessionKeys: [sessionKey] });
+    const tabDefaults = { sessionKey, profile: "remote", now: 1_000 };
+    const controlUrl = "http://127.0.0.1:9999";
     try {
-      await expect(closeTrackedBrowserTabsForSessions({ sessionKeys: [sessionKey] })).resolves.toBe(
-        0,
-      );
+      await expect(close()).resolves.toBe(0);
       expect.soft(runtime.loaded).toEqual([]);
       expect.soft(runtime.coldImports).toEqual([]);
 
-      const volatileTab = {
-        sessionKey,
-        targetId: "volatile-tab",
-        profile: "remote",
-        route: { kind: "browser-control" as const, baseUrl: "http://127.0.0.1:9999" },
-      };
-      await trackSessionBrowserTab({ ...volatileTab, now: 1_000 });
-      runtime.onClientLoad = async () => {
-        await untrackSessionBrowserTab(volatileTab);
-        await trackSessionBrowserTab({ ...volatileTab, now: 1_000 });
-      };
-      await expect(closeTrackedBrowserTabsForSessions({ sessionKeys: [sessionKey] })).resolves.toBe(
-        0,
-      );
-      expect(runtime.closeVolatile).not.toHaveBeenCalled();
-      await expect(closeTrackedBrowserTabsForSessions({ sessionKeys: [sessionKey] })).resolves.toBe(
-        1,
-      );
-      expect.soft(runtime.loaded).toEqual(["client"]);
-      expect(runtime.closeVolatile).toHaveBeenCalledWith("http://127.0.0.1:9999", "volatile-tab", {
-        profile: "remote",
-      });
-
-      const durableTab = {
-        sessionKey,
-        targetId: "durable-tab",
-        profile: "remote",
-        ownership: {
-          status: "durable" as const,
-          nativeTargetId: "native-tab",
-          profileFingerprint: "profile-fingerprint",
-          browserInstanceFingerprint: "browser-fingerprint",
-        },
-      };
-      await trackSessionBrowserTab({ ...durableTab, now: 1_000 });
-      runtime.onControlLoad = async () => {
-        await trackSessionBrowserTab({ ...durableTab, now: 2_000 });
-      };
-      await expect(closeTrackedBrowserTabsForSessions({ sessionKeys: [sessionKey] })).resolves.toBe(
-        0,
-      );
-      expect(runtime.closeDurable).not.toHaveBeenCalled();
-      expect(await getBrowserSessionTabStore().entries()).toHaveLength(1);
-      await expect(closeTrackedBrowserTabsForSessions({ sessionKeys: [sessionKey] })).resolves.toBe(
-        1,
-      );
+      for (const durable of [false, true]) {
+        const tab = {
+          ...tabDefaults,
+          targetId: durable ? "durable-tab" : "volatile-tab",
+          ...(durable
+            ? { ownership: durableOwnership("native-tab", "p", "b") }
+            : { route: { kind: "browser-control" as const, baseUrl: controlUrl } }),
+        };
+        await trackSessionBrowserTab(tab);
+        runtime[durable ? "onControlLoad" : "onClientLoad"] = async () => {
+          if (!durable) {
+            await untrackSessionBrowserTab(tab);
+          }
+          await trackSessionBrowserTab({ ...tab, now: durable ? 2_000 : 1_000 });
+        };
+        await expect(close()).resolves.toBe(0);
+        expect(durable ? runtime.closeDurable : runtime.closeVolatile).not.toHaveBeenCalled();
+        if (durable) {
+          expect(await store.entries()).toHaveLength(1);
+        }
+        await expect(close()).resolves.toBe(1);
+        if (!durable) {
+          expect.soft(runtime.loaded).toEqual(["client"]);
+          expect(runtime.closeVolatile).toHaveBeenCalledWith(controlUrl, "volatile-tab", {
+            profile: "remote",
+          });
+        }
+      }
       expect(runtime.loaded.toSorted()).toEqual(["cdp", "client", "control"]);
       expect(runtime.coldImports).toContain("browser-config-resolution");
       expect(runtime.closeDurable).toHaveBeenCalledWith(
         expect.objectContaining({
           profileName: "remote",
           nativeTargetId: "native-tab",
-          expectedProfileFingerprint: "profile-fingerprint",
-          expectedBrowserInstanceFingerprint: "browser-fingerprint",
+          expectedProfileFingerprint: "p",
+          expectedBrowserInstanceFingerprint: "b",
           closeIfCurrent: expect.any(Function),
         }),
       );
-      expect(await getBrowserSessionTabStore().entries()).toEqual([]);
-      await expect(closeTrackedBrowserTabsForSessions({ sessionKeys: [sessionKey] })).resolves.toBe(
-        0,
-      );
+      expect(await store.entries()).toEqual([]);
+      await expect(close()).resolves.toBe(0);
       expect(runtime.closeVolatile).toHaveBeenCalledOnce();
       expect(runtime.closeDurable).toHaveBeenCalledOnce();
     } finally {

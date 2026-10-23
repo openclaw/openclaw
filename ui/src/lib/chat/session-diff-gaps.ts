@@ -16,14 +16,6 @@ function fileMatchesPatch(lines: readonly DiffLine[], fileLines: readonly string
   );
 }
 
-function contextRows(fileLines: readonly string[], start: number, count: number): DiffLine[] {
-  return Array.from({ length: count }, (_, index) => ({
-    kind: "ctx" as const,
-    lineNo: start + index,
-    text: fileLines[start + index - 1]!,
-  }));
-}
-
 /** Replaces part or all of one unchanged-lines marker with working-tree context. */
 export function expandSessionDiffGap(
   lines: readonly DiffLine[],
@@ -50,25 +42,23 @@ export function expandSessionDiffGap(
       : Math.min(GAP_CHUNK_SIZE, target.count);
   const remainingCount = target.count - revealCount;
   const revealStart = direction === "up" ? target.newStart + remainingCount : target.newStart;
-  const revealed = contextRows(fileLines, revealStart, revealCount);
-  const replacement: DiffLine[] = [];
-  if (direction === "up" && remainingCount > 0) {
-    replacement.push({
+  const replacement: DiffLine[] = Array.from({ length: revealCount }, (_, offset) => ({
+    kind: "ctx",
+    lineNo: revealStart + offset,
+    text: fileLines[revealStart + offset - 1]!,
+  }));
+  if (remainingCount > 0) {
+    replacement.splice(direction === "up" ? 0 : replacement.length, 0, {
       kind: "skip",
       text: formatGap(remainingCount),
-      gap: { ...target, count: remainingCount },
-    });
-  }
-  replacement.push(...revealed);
-  if (direction !== "up" && remainingCount > 0) {
-    replacement.push({
-      kind: "skip",
-      text: formatGap(remainingCount),
-      gap: {
-        oldStart: target.oldStart + revealCount,
-        newStart: target.newStart + revealCount,
-        count: remainingCount,
-      },
+      gap:
+        direction === "up"
+          ? { ...target, count: remainingCount }
+          : {
+              oldStart: target.oldStart + revealCount,
+              newStart: target.newStart + revealCount,
+              count: remainingCount,
+            },
     });
   }
   return [...lines.slice(0, index), ...replacement, ...lines.slice(index + 1)];

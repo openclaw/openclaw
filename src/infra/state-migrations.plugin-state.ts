@@ -5,7 +5,7 @@ import {
   createPluginStateKeyedStore,
   registerMigratedPluginStateEntry,
 } from "../plugin-state/plugin-state-store.js";
-import { migrationFileExists } from "./state-migrations.fs.js";
+import { safeStatSync } from "./path-guards.js";
 import { archiveLegacyImportSource } from "./state-migrations.storage.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
@@ -154,16 +154,8 @@ export async function runLegacyMigrationPlans(
               createdAtMs: params.createdAtMs,
             });
           };
-          const restoreExistingEntry = async (key: string) => {
-            const existing = existingEntriesByKey.get(key);
-            await registerPreservingCreatedAt({
-              key,
-              value: existing?.value,
-              createdAtMs: existing?.createdAt,
-            });
-          };
+          // Offline migration assumes no same-destination writes after capacity preflight.
           let imported = 0;
-          const changedKeys = new Set<string>();
           for (const entry of [...replacementEntries, ...newEntries]) {
             try {
               await registerPreservingCreatedAt({
@@ -172,40 +164,7 @@ export async function runLegacyMigrationPlans(
                 ...(entry.ttlMs != null ? { ttlMs: entry.ttlMs } : {}),
                 ...(entry.timestamp !== undefined ? { createdAtMs: entry.timestamp } : {}),
               });
-              const liveKeys = new Set((await store.entries()).map(({ key }) => key));
-              const missingKey = [...expectedKeys, entry.targetKey].find(
-                (key) => !liveKeys.has(key),
-              );
-              if (missingKey) {
-                // A concurrent write pushed the store over a cap and evicted a row. Roll back
-                // only the entry whose write triggered the eviction, restore the evicted live
-                // row when we still hold its value, and keep everything imported so far —
-                // deferred entries stay in the legacy source for the next startup.
-                if (existingEntriesByKey.has(entry.targetKey)) {
-                  await restoreExistingEntry(entry.targetKey);
-                } else {
-                  await store.delete(entry.targetKey);
-                }
-                if (changedKeys.has(missingKey)) {
-                  changedKeys.delete(missingKey);
-                  expectedKeys.delete(missingKey);
-                  imported = Math.max(0, imported - 1);
-                } else if (existingEntriesByKey.has(missingKey)) {
-                  try {
-                    await restoreExistingEntry(missingKey);
-                  } catch (restoreErr) {
-                    recordIncomplete(
-                      `Failed restoring ${plan.label} entry ${missingKey} after cap eviction: ${String(restoreErr)}`,
-                    );
-                  }
-                }
-                recordIncomplete(
-                  `Paused migrating ${plan.label} because plugin state cap evicted ${missingKey}; imported ${imported} of ${missingEntryCount} missing entries and deferred the rest in the legacy source`,
-                );
-                break;
-              }
               expectedKeys.add(entry.targetKey);
-              changedKeys.add(entry.targetKey);
               imported++;
             } catch (err) {
               recordIncomplete(`Failed migrating ${plan.label} entry ${entry.key}: ${String(err)}`);
@@ -232,7 +191,7 @@ export async function runLegacyMigrationPlans(
             try {
               // Deferred callbacks may open stores implicitly; re-enter the import's owner scope.
               await withPluginStateImportEnv(stateDir, async () => {
-                if (plan.cleanupSource === "rename" && migrationFileExists(plan.sourcePath)) {
+                if (plan.cleanupSource === "rename" && safeStatSync(plan.sourcePath)?.isFile()) {
                   archiveLegacyImportSource({
                     sourcePath: plan.sourcePath,
                     label: plan.label,
@@ -240,7 +199,7 @@ export async function runLegacyMigrationPlans(
                     warnings: cleanupWarnings,
                   });
                 }
-                if (plan.cleanupSource === "remove" && migrationFileExists(plan.sourcePath)) {
+                if (plan.cleanupSource === "remove" && safeStatSync(plan.sourcePath)?.isFile()) {
                   try {
                     fs.unlinkSync(plan.sourcePath);
                     changes.push(`Removed ${plan.label} legacy source (${plan.sourcePath})`);
@@ -280,7 +239,7 @@ export async function runLegacyMigrationPlans(
         });
         continue;
       }
-      if (migrationFileExists(plan.targetPath)) {
+      if (safeStatSync(plan.targetPath)?.isFile()) {
         continue;
       }
       fs.mkdirSync(path.dirname(plan.targetPath), { recursive: true });

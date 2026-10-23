@@ -3,9 +3,11 @@ import { classifySessionKind } from "../../../../../src/sessions/classify-sessio
 import {
   normalizeRoleForGrouping,
   resolveMessageRole,
-  resolveMessageSender,
 } from "../../../lib/chat/message-normalizer.ts";
-import { sessionParticipantIdentityKey } from "../../../lib/chat/sender-label.ts";
+import {
+  resolveMessageSender,
+  sessionParticipantIdentityKey,
+} from "../../../lib/chat/sender-label.ts";
 import {
   isSubagentSessionKey,
   isUiGlobalScopeConfigured,
@@ -20,14 +22,17 @@ import { createTranscriptMemo } from "./chat-transcript-memo.ts";
 
 const participants = createTranscriptMemo<{
   showOwnSenderName: boolean;
-  sessionPeople: Set<string>;
+  replyPeople: readonly string[];
 }>();
 const forwardedGroups = createTranscriptMemo<boolean>();
 
 export function resolveTranscriptParticipants(
-  props: Pick<ChatThreadProps, "selectedSession" | "userId" | "messages" | "pendingInputs">,
+  props: Pick<
+    ChatThreadProps,
+    "selectedSession" | "transcriptMetadata" | "userId" | "messages" | "pendingInputs"
+  >,
 ) {
-  const activeSession = props.selectedSession;
+  const activeSession = props.transcriptMetadata ?? props.selectedSession;
   const sessionParticipants = activeSession?.expandedParticipants ?? activeSession?.participants;
   // Pending-input lists are freshly filtered by renderChat; their immutable
   // records, not that temporary array, identify the unfiltered inputs.
@@ -72,31 +77,27 @@ export function resolveTranscriptParticipants(
           identity && identity.type !== "agent" ? [sessionParticipantIdentityKey(identity)] : [],
         ),
       );
-      return { showOwnSenderName, sessionPeople };
+      return { showOwnSenderName, replyPeople: [...sessionPeople].toSorted() };
     },
   );
 }
 
-export function isTranscriptGlobalAlias(
-  props: Pick<ChatThreadProps, "sessionHost" | "sessionKey">,
-): boolean {
+export function resolveTranscriptAvatarPlacement(
+  props: Pick<
+    ChatThreadProps,
+    "selectedSession" | "transcriptMetadata" | "sessionKey" | "sessionHost" | "userId"
+  >,
+  chatItems: ReturnType<typeof buildCachedChatItems>,
+): { isDirectThread: boolean; avatarPlacement: "none" | "footer" | "gutter" } {
   const sessionHost = props.sessionHost ?? null;
   // Global-alias routing ignores the capped session list, which may omit the
   // canonical row. The scope gate keeps per-sender main threads direct.
-  return (
+  const isGlobalAliasKey =
     parseAgentSessionKey(props.sessionKey)?.rest === "global" ||
     (sessionHost !== null &&
       isUiGlobalScopeConfigured(sessionHost) &&
-      resolveUiGlobalAliasAgentId(sessionHost, props.sessionKey) !== null)
-  );
-}
-
-export function resolveTranscriptAvatarPlacement(
-  props: Pick<ChatThreadProps, "selectedSession" | "sessionKey" | "userId">,
-  chatItems: ReturnType<typeof buildCachedChatItems>,
-  isGlobalAliasKey: boolean,
-): { isDirectThread: boolean; avatarPlacement: "none" | "footer" | "gutter" } {
-  const activeSession = props.selectedSession;
+      resolveUiGlobalAliasAgentId(sessionHost, props.sessionKey) !== null);
+  const activeSession = props.transcriptMetadata ?? props.selectedSession;
   // 1:1 exchanges do not need an avatar gutter; group threads keep it to identify
   // multiple voices. The capped sessions list may omit the selected row, so absent
   // or unknown rows classify by key, with global aliases taking precedence.
@@ -120,10 +121,10 @@ export function resolveTranscriptAvatarPlacement(
       !hasForwardedGroups,
     props.userId,
   );
-  const isDirectThread = defaultAvatarPlacement === "footer";
   const avatarPlacement =
     activeSession?.classification === "subagent" || isSubagentSessionKey(props.sessionKey)
       ? "none"
       : defaultAvatarPlacement;
-  return { isDirectThread, avatarPlacement };
+  // Hidden subagent avatars must not leave the group layout reserving their columns.
+  return { isDirectThread: avatarPlacement !== "gutter", avatarPlacement };
 }

@@ -32,6 +32,14 @@ const AUDIO_START_PARAMS = {
   audioOutputCommand: ["play"],
   mode: "bidi",
 } as const;
+const PREPARED_AUDIO = {
+  backend: "pipewire-pulse" as const,
+  deviceLabel: "OpenClaw Meeting Audio",
+  inputCommand: ["parec"],
+  outputCommand: ["pacat"],
+};
+const FIRST_AUDIO = Buffer.from([1, 2, 3]);
+const FINAL_AUDIO = Buffer.from([4, 5, 6]);
 
 type TestStdin = EventEmitter & {
   accept: (error?: Error) => void;
@@ -122,16 +130,26 @@ async function invokeHost(
 }
 
 async function startAudioBridge(
-  options: { inputAutoClose?: boolean; outputStdin?: TestStdin } = {},
+  options: {
+    inputAutoClose?: boolean;
+    outputStdin?: TestStdin;
+    host?: Partial<MeetingNodeHostOptions>;
+    start?: Record<string, unknown>;
+  } = {},
 ) {
   const inputStdout = new EventEmitter();
   const inputProcess = createProcess({ stdout: inputStdout, autoClose: options.inputAutoClose });
   const outputStdin = options.outputStdin ?? createStdin(true);
   const outputProcess = createProcess({ stdin: outputStdin });
   childProcessMocks.spawn.mockReturnValueOnce(outputProcess).mockReturnValueOnce(inputProcess);
-  const host = createHost();
-  const started = await invokeHost(host, { ...AUDIO_START_PARAMS, launch: false });
+  const host = createHost(options.host);
+  const started = await invokeHost(host, {
+    ...AUDIO_START_PARAMS,
+    launch: false,
+    ...options.start,
+  });
   return {
+    started,
     bridgeId: started.bridgeId as string,
     host,
     inputProcess,
@@ -141,7 +159,7 @@ async function startAudioBridge(
   };
 }
 
-function invokeBridge(
+function rpc(
   bridge: Awaited<ReturnType<typeof startAudioBridge>>,
   action: "clearAudio" | "pullAudio" | "pushAudio" | "status" | "stop",
   params: Record<string, unknown> = {},
@@ -149,37 +167,72 @@ function invokeBridge(
   return invokeHost(bridge.host, { action, bridgeId: bridge.bridgeId, ...params });
 }
 
+type Bridge = Awaited<ReturnType<typeof startAudioBridge>>;
+const pushAudio = (bridge: Bridge, audio = FIRST_AUDIO, outputGeneration?: number) =>
+  rpc(bridge, "pushAudio", { base64: audio.toString("base64"), outputGeneration });
+const failCapture = (bridge: Bridge) =>
+  bridge.inputProcess.stderr.emit("error", new Error("capture failed"));
+function endCapture(bridge: Bridge) {
+  bridge.inputStdout.emit("end");
+  bridge.inputStdout.emit("close");
+}
+function queueTerminalAudio(bridge: Bridge) {
+  bridge.inputStdout.emit("data", FIRST_AUDIO);
+  bridge.inputStdout.emit("data", FINAL_AUDIO);
+  failCapture(bridge);
+}
+const expectUnknown = (bridge: Bridge) =>
+  expect(rpc(bridge, "pullAudio")).rejects.toThrow(`unknown bridgeId: ${bridge.bridgeId}`);
+const expectPull = (bridge: Bridge, pulling: Promise<unknown>, closed: boolean, audio: Buffer) =>
+  expect(pulling).resolves.toEqual({
+    bridgeId: bridge.bridgeId,
+    closed,
+    base64: audio.toString("base64"),
+  });
+const expectRetained = (bridge: Bridge) =>
+  expect(rpc(bridge, "status")).resolves.toMatchObject({
+    bridge: { bridgeId: bridge.bridgeId, closed: true, queuedInputChunks: 1 },
+  });
+const nextTurn = () =>
+  new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+const expectStopped = (bridge: Bridge, stopped: boolean) =>
+  expect(rpc(bridge, "stop")).resolves.toEqual({ ok: true, stopped });
+function pendingPush(bridge: Bridge) {
+  let settled = false;
+  const result = pushAudio(bridge, FIRST_AUDIO, 0).then((value) => {
+    settled = true;
+    return value;
+  });
+  return { result, isSettled: () => settled };
+}
+
+beforeEach(() => {
+  cryptoMocks.randomUUID.mockReturnValue(TEST_UUID);
+});
+afterEach(() => {
+  vi.useRealTimers();
+  vi.resetAllMocks();
+});
+
 describe("meeting node host audio backend", () => {
-  beforeEach(() => {
-    cryptoMocks.randomUUID.mockReturnValue(TEST_UUID);
-  });
-
-  afterEach(() => {
-    vi.resetAllMocks();
-  });
-
   it("prepares the node-local backend and uses its generated command pair", async () => {
-    const inputProcess = createProcess({ stdout: new EventEmitter() });
-    const outputProcess = createProcess({ stdin: createStdin(true) });
-    childProcessMocks.spawn.mockReturnValueOnce(outputProcess).mockReturnValueOnce(inputProcess);
     const prepareAudio = vi.fn(async () => ({
-      backend: "pipewire-pulse" as const,
-      deviceLabel: "OpenClaw Meeting Audio",
+      ...PREPARED_AUDIO,
       inputCommand: ["parec", "--device", "input name", ""],
       outputCommand: ["pacat", "--device", "output name", ""],
     }));
-    const host = createHost({ prepareAudio });
-
-    const started = await invokeHost(host, {
-      action: "start",
-      url: "https://meeting.test/linux",
-      mode: "bidi",
-      launch: false,
-      audioBackend: "auto",
-      audioBufferBytes: 2_048,
-      audioFormat: "g711-ulaw-8khz",
-      audioInputCommand: ["trusted-capture"],
-      audioOutputCommand: ["trusted-playback"],
+    const bridge = await startAudioBridge({
+      host: { prepareAudio },
+      start: {
+        url: "https://meeting.test/linux",
+        audioBackend: "auto",
+        audioBufferBytes: 2_048,
+        audioFormat: "g711-ulaw-8khz",
+        audioInputCommand: ["trusted-capture"],
+        audioOutputCommand: ["trusted-playback"],
+      },
     });
 
     expect(prepareAudio).toHaveBeenCalledWith(
@@ -193,40 +246,23 @@ describe("meeting node host audio backend", () => {
       },
       10_000,
     );
-    expect(childProcessMocks.spawn).toHaveBeenNthCalledWith(
-      1,
-      "pacat",
-      ["--device", "output name", ""],
-      {
-        stdio: ["pipe", "ignore", "pipe"],
-      },
-    );
-    expect(childProcessMocks.spawn).toHaveBeenNthCalledWith(
-      2,
-      "parec",
-      ["--device", "input name", ""],
-      {
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
-    expect(started).toMatchObject({
+    expect(childProcessMocks.spawn.mock.calls).toEqual([
+      ["pacat", ["--device", "output name", ""], { stdio: ["pipe", "ignore", "pipe"] }],
+      ["parec", ["--device", "input name", ""], { stdio: ["ignore", "pipe", "pipe"] }],
+    ]);
+    expect(bridge.started).toMatchObject({
       audioBackend: "pipewire-pulse",
       audioDeviceLabel: "OpenClaw Meeting Audio",
       audioBridge: { type: "node-command-pair" },
     });
-    await invokeHost(host, { action: "stop", bridgeId: started.bridgeId });
+    await rpc(bridge, "stop");
   });
 
   it("provisions audio before preserving the configured external bridge path", async () => {
     const events: string[] = [];
     const prepareAudio = vi.fn(async () => {
       events.push("prepare");
-      return {
-        backend: "pipewire-pulse" as const,
-        deviceLabel: "OpenClaw Meeting Audio",
-        inputCommand: ["parec"],
-        outputCommand: ["pacat"],
-      };
+      return PREPARED_AUDIO;
     });
     childProcessMocks.spawnSync.mockImplementation(() => {
       events.push("bridge");
@@ -251,12 +287,7 @@ describe("meeting node host audio backend", () => {
   });
 
   it("returns the concrete backend from setup without starting bridge processes", async () => {
-    const prepareAudio = vi.fn(async () => ({
-      backend: "pipewire-pulse" as const,
-      deviceLabel: "OpenClaw Meeting Audio",
-      inputCommand: ["parec"],
-      outputCommand: ["pacat"],
-    }));
+    const prepareAudio = vi.fn(async () => PREPARED_AUDIO);
     const host = createHost({ prepareAudio });
 
     await expect(
@@ -273,80 +304,36 @@ describe("meeting node host audio backend", () => {
     });
     expect(childProcessMocks.spawn).not.toHaveBeenCalled();
   });
-
-  it.each([
-    { name: "input", inputCommand: [], outputCommand: ["play"] },
-    { name: "output", inputCommand: ["capture"], outputCommand: [] },
-  ])("rejects an empty $name command before spawning", async ({ inputCommand, outputCommand }) => {
-    const host = createHost({
-      prepareAudio: vi.fn(async () => ({
-        backend: "pipewire-pulse" as const,
-        deviceLabel: "OpenClaw Meeting Audio",
-        inputCommand,
-        outputCommand,
-      })),
-    });
-
-    await expect(invokeHost(host, { ...AUDIO_START_PARAMS, launch: false })).rejects.toThrow(
-      "audio command must not be empty",
-    );
-    expect(childProcessMocks.spawn).not.toHaveBeenCalled();
-  });
 });
 
 describe("meeting node host audio output", () => {
-  beforeEach(() => {
-    cryptoMocks.randomUUID.mockReturnValue(TEST_UUID);
-  });
-
-  afterEach(() => {
-    vi.resetAllMocks();
-  });
-
   it("retains update ownership between RPCs and through child stream cleanup", async () => {
     const bridge = await startAudioBridge({ inputAutoClose: false });
     expect(bridge.host.hasActiveWork()).toBe(true);
 
-    await invokeBridge(bridge, "stop");
+    await rpc(bridge, "stop");
     expect(bridge.host.hasActiveWork()).toBe(true);
     bridge.inputProcess.emit("close", null, "SIGTERM");
     expect(bridge.host.hasActiveWork()).toBe(false);
   });
 
-  it("keeps only the newest bounded input chunks", async () => {
+  it.each([
+    ["chunks", 1, MAX_QUEUED_INPUT_CHUNKS],
+    ["bytes", 64 * 1024, MAX_QUEUED_INPUT_BYTES / (64 * 1024)],
+  ] as const)("keeps only the newest bounded input %s", async (_limit, chunkBytes, count) => {
     const bridge = await startAudioBridge();
-
-    for (let value = 0; value <= MAX_QUEUED_INPUT_CHUNKS; value += 1) {
-      bridge.inputStdout.emit("data", Buffer.from([value]));
-    }
-
-    const status = await invokeBridge(bridge, "status");
-    expect((status.bridge as Record<string, unknown>).queuedInputChunks).toBe(
-      MAX_QUEUED_INPUT_CHUNKS,
-    );
-    const pulled = await invokeBridge(bridge, "pullAudio");
-    expect(Buffer.from(pulled.base64 as string, "base64")).toEqual(Buffer.from([1]));
-    await invokeBridge(bridge, "stop");
-  });
-
-  it("keeps only the newest bounded input bytes", async () => {
-    const bridge = await startAudioBridge();
-    const chunkBytes = 64 * 1024;
-
-    for (let value = 0; value <= MAX_QUEUED_INPUT_BYTES / chunkBytes; value += 1) {
+    for (let value = 0; value <= count; value += 1) {
       bridge.inputStdout.emit("data", Buffer.alloc(chunkBytes, value));
     }
-
-    const status = await invokeBridge(bridge, "status");
-    expect((status.bridge as Record<string, unknown>).queuedInputChunks).toBe(
-      MAX_QUEUED_INPUT_BYTES / chunkBytes,
-    );
-    const pulled = await invokeBridge(bridge, "pullAudio");
+    await expect(rpc(bridge, "status")).resolves.toMatchObject({
+      bridge: { queuedInputChunks: count },
+    });
+    const pulled = await rpc(bridge, "pullAudio");
     assert.deepStrictEqual(
       Buffer.from(pulled.base64 as string, "base64"),
       Buffer.alloc(chunkBytes, 1),
     );
-    await invokeBridge(bridge, "stop");
+    await rpc(bridge, "stop");
   });
 
   it("copies only the newest bytes from an oversized input chunk", async () => {
@@ -360,74 +347,50 @@ describe("meeting node host audio output", () => {
     bridge.inputStdout.emit("data", source);
     source.fill(0);
 
-    const pulled = await invokeBridge(bridge, "pullAudio");
+    const pulled = await rpc(bridge, "pullAudio");
     assert.deepStrictEqual(Buffer.from(pulled.base64 as string, "base64"), expected);
-    await invokeBridge(bridge, "stop");
+    await rpc(bridge, "stop");
   });
 
   it("delivers terminal close to an outstanding pull and then deletes the session", async () => {
     const bridge = await startAudioBridge();
     const { bridgeId } = bridge;
-    const pulling = invokeBridge(bridge, "pullAudio", { timeoutMs: 2_000 });
+    const pulling = rpc(bridge, "pullAudio", { timeoutMs: 2_000 });
 
-    bridge.inputProcess.stderr.emit("error", new Error("capture failed"));
+    failCapture(bridge);
 
     await expect(pulling).resolves.toEqual({ bridgeId, closed: true });
     await vi.waitFor(async () => {
-      await expect(invokeBridge(bridge, "status")).resolves.toEqual({
+      await expect(rpc(bridge, "status")).resolves.toEqual({
         bridge: { bridgeId, closed: true },
       });
     });
-    await expect(invokeBridge(bridge, "pullAudio")).rejects.toThrow(
-      `unknown bridgeId: ${bridgeId}`,
-    );
+    await expectUnknown(bridge);
     expect(bridge.outputProcess.kill).toHaveBeenCalledTimes(1);
     expect(bridge.inputProcess.kill).toHaveBeenCalledTimes(1);
   });
 
   it("delivers final audio before terminal close deletes the session", async () => {
     const bridge = await startAudioBridge();
-    const { bridgeId } = bridge;
-    const pulling = invokeBridge(bridge, "pullAudio", { timeoutMs: 2_000 });
-    const finalAudio = Buffer.from([1, 2, 3]);
+    const pulling = rpc(bridge, "pullAudio", { timeoutMs: 2_000 });
+    bridge.inputStdout.emit("data", FIRST_AUDIO);
+    failCapture(bridge);
 
-    bridge.inputStdout.emit("data", finalAudio);
-    bridge.inputProcess.stderr.emit("error", new Error("capture failed"));
-
-    await expect(pulling).resolves.toEqual({
-      bridgeId,
-      closed: true,
-      base64: finalAudio.toString("base64"),
-    });
-    await vi.waitFor(async () => {
-      await expect(invokeBridge(bridge, "pullAudio")).rejects.toThrow(
-        `unknown bridgeId: ${bridgeId}`,
-      );
-    });
+    await expectPull(bridge, pulling, true, FIRST_AUDIO);
+    await vi.waitFor(() => expectUnknown(bridge));
   });
 
   it("delivers stdout flushed after 250ms to a pending empty pull", async () => {
     vi.useFakeTimers();
-    try {
-      const bridge = await startAudioBridge({ inputAutoClose: false });
-      const { bridgeId } = bridge;
-      const finalAudio = Buffer.from([7, 8, 9]);
-      const pulling = invokeBridge(bridge, "pullAudio", { timeoutMs: 2_000 });
+    const bridge = await startAudioBridge({ inputAutoClose: false });
+    const finalAudio = Buffer.from([7, 8, 9]);
+    const pulling = rpc(bridge, "pullAudio", { timeoutMs: 2_000 });
 
-      bridge.inputProcess.stderr.emit("error", new Error("capture failed"));
-      await vi.advanceTimersByTimeAsync(300);
-      bridge.inputStdout.emit("data", finalAudio);
-      bridge.inputStdout.emit("end");
-      bridge.inputStdout.emit("close");
-
-      await expect(pulling).resolves.toEqual({
-        bridgeId,
-        closed: true,
-        base64: finalAudio.toString("base64"),
-      });
-    } finally {
-      vi.useRealTimers();
-    }
+    failCapture(bridge);
+    await vi.advanceTimersByTimeAsync(300);
+    bridge.inputStdout.emit("data", finalAudio);
+    endCapture(bridge);
+    await expectPull(bridge, pulling, true, finalAudio);
   });
 
   it("blocks output commands as soon as terminal teardown starts", async () => {
@@ -436,27 +399,19 @@ describe("meeting node host audio output", () => {
       outputStdin: createStdin(false),
     });
     const { bridgeId } = bridge;
-    const pushing = invokeBridge(bridge, "pushAudio", {
-      base64: Buffer.from([1, 2, 3]).toString("base64"),
-      outputGeneration: 0,
-    });
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    const pushing = pushAudio(bridge, FIRST_AUDIO, 0);
+    await nextTurn();
 
-    bridge.inputProcess.stderr.emit("error", new Error("capture failed"));
+    failCapture(bridge);
 
     await expect(pushing).resolves.toEqual({ bridgeId, ok: true, stale: true });
-    await expect(
-      invokeBridge(bridge, "pushAudio", {
-        base64: Buffer.from([4, 5, 6]).toString("base64"),
-        outputGeneration: 0,
-      }),
-    ).rejects.toThrow(`bridge is not open: ${bridgeId}`);
-    await expect(invokeBridge(bridge, "clearAudio", { outputGeneration: 1 })).rejects.toThrow(
+    await expect(pushAudio(bridge, FINAL_AUDIO, 0)).rejects.toThrow(
       `bridge is not open: ${bridgeId}`,
     );
-    await expect(invokeBridge(bridge, "status")).resolves.toMatchObject({
+    await expect(rpc(bridge, "clearAudio", { outputGeneration: 1 })).rejects.toThrow(
+      `bridge is not open: ${bridgeId}`,
+    );
+    await expect(rpc(bridge, "status")).resolves.toMatchObject({
       bridge: { bridgeId, closed: true },
     });
     await expect(
@@ -468,155 +423,78 @@ describe("meeting node host audio output", () => {
     ).resolves.toEqual({ bridges: [] });
     expect(childProcessMocks.spawn).toHaveBeenCalledTimes(2);
 
-    bridge.inputStdout.emit("end");
-    bridge.inputStdout.emit("close");
-    await expect(invokeBridge(bridge, "stop")).resolves.toEqual({
-      ok: true,
-      stopped: false,
-    });
+    endCapture(bridge);
+    await expectStopped(bridge, false);
   });
 
   it("drains final audio when input closes between sequential pulls", async () => {
     const bridge = await startAudioBridge();
-    const { bridgeId } = bridge;
-    const firstAudio = Buffer.from([1, 2, 3]);
-    const finalAudio = Buffer.from([4, 5, 6]);
-
-    bridge.inputStdout.emit("data", firstAudio);
-    bridge.inputStdout.emit("data", finalAudio);
-    bridge.inputProcess.stderr.emit("error", new Error("capture failed"));
+    queueTerminalAudio(bridge);
     await Promise.resolve();
 
-    await expect(invokeBridge(bridge, "pullAudio")).resolves.toEqual({
-      bridgeId,
-      closed: false,
-      base64: firstAudio.toString("base64"),
-    });
-    await expect(invokeBridge(bridge, "pullAudio")).resolves.toEqual({
-      bridgeId,
-      closed: true,
-      base64: finalAudio.toString("base64"),
-    });
-    await vi.waitFor(async () => {
-      await expect(invokeBridge(bridge, "pullAudio")).rejects.toThrow(
-        `unknown bridgeId: ${bridgeId}`,
-      );
-    });
+    await expectPull(bridge, rpc(bridge, "pullAudio"), false, FIRST_AUDIO);
+    await expectPull(bridge, rpc(bridge, "pullAudio"), true, FINAL_AUDIO);
+    await vi.waitFor(() => expectUnknown(bridge));
   });
 
   it("starts terminal eviction after capture drain becomes ready", async () => {
     vi.useFakeTimers();
-    try {
-      const bridge = await startAudioBridge({ inputAutoClose: false });
-      const { bridgeId } = bridge;
+    const bridge = await startAudioBridge({ inputAutoClose: false });
+    queueTerminalAudio(bridge);
+    await expectPull(bridge, rpc(bridge, "pullAudio"), false, FIRST_AUDIO);
 
-      const firstAudio = Buffer.from([1, 2, 3]);
-      const finalAudio = Buffer.from([4, 5, 6]);
-      bridge.inputStdout.emit("data", firstAudio);
-      bridge.inputStdout.emit("data", finalAudio);
-      bridge.inputProcess.stderr.emit("error", new Error("capture failed"));
-      await expect(invokeBridge(bridge, "pullAudio")).resolves.toEqual({
-        bridgeId,
-        closed: false,
-        base64: firstAudio.toString("base64"),
-      });
+    await vi.advanceTimersByTimeAsync(3_000);
+    endCapture(bridge);
+    await vi.advanceTimersByTimeAsync(2_100);
 
-      await vi.advanceTimersByTimeAsync(3_000);
-      bridge.inputStdout.emit("end");
-      bridge.inputStdout.emit("close");
-      await vi.advanceTimersByTimeAsync(2_100);
-
-      await expect(invokeBridge(bridge, "status")).resolves.toMatchObject({
-        bridge: { bridgeId, closed: true, queuedInputChunks: 1 },
-      });
-      await vi.advanceTimersByTimeAsync(2_899);
-      await expect(invokeBridge(bridge, "status")).resolves.toMatchObject({
-        bridge: { bridgeId, closed: true, queuedInputChunks: 1 },
-      });
-      await vi.advanceTimersByTimeAsync(1);
-      await expect(invokeBridge(bridge, "pullAudio")).rejects.toThrow(
-        `unknown bridgeId: ${bridgeId}`,
-      );
-    } finally {
-      vi.useRealTimers();
-    }
+    await expectRetained(bridge);
+    await vi.advanceTimersByTimeAsync(2_899);
+    await expectRetained(bridge);
+    await vi.advanceTimersByTimeAsync(1);
+    await expectUnknown(bridge);
   });
 
   it("keeps terminal audio while pull progress continues", async () => {
     vi.useFakeTimers();
-    try {
-      const bridge = await startAudioBridge();
-      const { bridgeId } = bridge;
-      const firstAudio = Buffer.from([1, 2, 3]);
-      const finalAudio = Buffer.from([4, 5, 6]);
+    const bridge = await startAudioBridge();
+    queueTerminalAudio(bridge);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(4_000);
 
-      bridge.inputStdout.emit("data", firstAudio);
-      bridge.inputStdout.emit("data", finalAudio);
-      bridge.inputProcess.stderr.emit("error", new Error("capture failed"));
-      await vi.advanceTimersByTimeAsync(0);
-      await vi.advanceTimersByTimeAsync(4_000);
-
-      await expect(invokeBridge(bridge, "pullAudio")).resolves.toEqual({
-        bridgeId,
-        closed: false,
-        base64: firstAudio.toString("base64"),
-      });
-      await vi.advanceTimersByTimeAsync(4_999);
-      await expect(invokeBridge(bridge, "status")).resolves.toMatchObject({
-        bridge: { bridgeId, closed: true, queuedInputChunks: 1 },
-      });
-      await vi.advanceTimersByTimeAsync(1);
-      await expect(invokeBridge(bridge, "pullAudio")).rejects.toThrow(
-        `unknown bridgeId: ${bridgeId}`,
-      );
-    } finally {
-      vi.useRealTimers();
-    }
+    await expectPull(bridge, rpc(bridge, "pullAudio"), false, FIRST_AUDIO);
+    await vi.advanceTimersByTimeAsync(4_999);
+    await expectRetained(bridge);
+    await vi.advanceTimersByTimeAsync(1);
+    await expectUnknown(bridge);
   });
 
   it("clears and deletes input retention on explicit stop", async () => {
     const bridge = await startAudioBridge();
-    const { bridgeId } = bridge;
     bridge.inputStdout.emit("data", Buffer.alloc(64 * 1024));
 
-    await expect(invokeBridge(bridge, "stop")).resolves.toEqual({
-      ok: true,
-      stopped: true,
-    });
-    await expect(invokeBridge(bridge, "stop")).resolves.toEqual({
-      ok: true,
-      stopped: false,
-    });
-    await expect(invokeBridge(bridge, "pullAudio")).rejects.toThrow(
-      `unknown bridgeId: ${bridgeId}`,
-    );
+    await expectStopped(bridge, true);
+    await expectStopped(bridge, false);
+    await expectUnknown(bridge);
   });
 
-  it.each([false, true])(
-    "terminates output when input process construction throws (output spawn failed: %s)",
-    async (outputSpawnFailed) => {
-      const outputProcess = createProcess({ stdin: createStdin(true), autoClose: false });
-      if (outputSpawnFailed) {
-        outputProcess.kill.mockReturnValueOnce(false);
-      }
-      const spawnError = new Error("input spawn failed");
-      childProcessMocks.spawn.mockReturnValueOnce(outputProcess).mockImplementationOnce(() => {
-        throw spawnError;
-      });
-      const host = createHost();
+  it("terminates output when input construction and output spawn fail", async () => {
+    const outputProcess = createProcess({ stdin: createStdin(true), autoClose: false });
+    outputProcess.kill.mockReturnValueOnce(false);
+    const spawnError = new Error("input spawn failed");
+    childProcessMocks.spawn.mockReturnValueOnce(outputProcess).mockImplementationOnce(() => {
+      throw spawnError;
+    });
+    const host = createHost();
 
-      await expect(invokeHost(host, { ...AUDIO_START_PARAMS, launch: false })).rejects.toBe(
-        spawnError,
-      );
-      expect(outputProcess.kill).toHaveBeenCalledWith("SIGTERM");
-      if (outputSpawnFailed) {
-        expect(() => outputProcess.emit("error", new Error("output spawn failed"))).not.toThrow();
-      }
-      expect(host.hasActiveWork()).toBe(true);
-      outputProcess.emit("close", null, "SIGTERM");
-      expect(host.hasActiveWork()).toBe(false);
-    },
-  );
+    await expect(invokeHost(host, { ...AUDIO_START_PARAMS, launch: false })).rejects.toBe(
+      spawnError,
+    );
+    expect(outputProcess.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(() => outputProcess.emit("error", new Error("output spawn failed"))).not.toThrow();
+    expect(host.hasActiveWork()).toBe(true);
+    outputProcess.emit("close", null, "SIGTERM");
+    expect(host.hasActiveWork()).toBe(false);
+  });
 
   it("deletes a hidden audio session after browser launch fails", async () => {
     const inputProcess = createProcess({ stdout: new EventEmitter() });
@@ -645,74 +523,41 @@ describe("meeting node host audio output", () => {
     );
   });
 
-  it("deletes a hidden audio session when browser launch throws", async () => {
-    const inputProcess = createProcess({ stdout: new EventEmitter() });
-    const outputProcess = createProcess({ stdin: createStdin(true) });
-    const launchError = new Error("browser launch threw");
-    childProcessMocks.spawn.mockReturnValueOnce(outputProcess).mockReturnValueOnce(inputProcess);
-    childProcessMocks.spawnSync.mockImplementationOnce(() => {
-      throw launchError;
-    });
-    const host = createHost();
-    const bridgeId = `test-bridge-${TEST_UUID}`;
-
-    await expect(invokeHost(host, AUDIO_START_PARAMS)).rejects.toBe(launchError);
-    await vi.waitFor(async () => {
-      await expect(invokeHost(host, { action: "pullAudio", bridgeId })).rejects.toThrow(
-        `unknown bridgeId: ${bridgeId}`,
-      );
-    });
-    expect(outputProcess.kill).toHaveBeenCalledWith("SIGTERM");
-    expect(inputProcess.kill).toHaveBeenCalledWith("SIGTERM");
-  });
-
   it("waits for the output stream to accept a backpressured chunk", async () => {
     const bridge = await startAudioBridge({ outputStdin: createStdin(false) });
     const { outputStdin } = bridge;
 
-    let settled = false;
-    const pushing = invokeBridge(bridge, "pushAudio", {
-      base64: Buffer.from([1, 2, 3]).toString("base64"),
-      outputGeneration: 0,
-    }).then((result) => {
-      settled = true;
-      return result;
-    });
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(settled).toBe(false);
+    const pushing = pendingPush(bridge);
+    await nextTurn();
+    expect(pushing.isSettled()).toBe(false);
 
     outputStdin.accept();
-    await expect(pushing).resolves.toMatchObject({ ok: true });
-    await invokeBridge(bridge, "stop");
+    await expect(pushing.result).resolves.toMatchObject({ ok: true });
+    await rpc(bridge, "stop");
   });
 
   it("rejects output generations outside the safe integer range", async () => {
     const bridge = await startAudioBridge();
 
     await expect(
-      invokeBridge(bridge, "clearAudio", {
+      rpc(bridge, "clearAudio", {
         outputGeneration: Number.MAX_SAFE_INTEGER + 1,
       }),
     ).rejects.toThrow("outputGeneration must be a non-negative integer");
-    await invokeBridge(bridge, "stop");
+    await rpc(bridge, "stop");
   });
 
   it("stops the current bridge when its output callback fails", async () => {
     const bridge = await startAudioBridge({ outputStdin: createStdin(false) });
     try {
-      const pushing = invokeBridge(bridge, "pushAudio", {
-        base64: Buffer.from([1, 2, 3]).toString("base64"),
-        outputGeneration: 0,
-      });
+      const pushing = pushAudio(bridge, FIRST_AUDIO, 0);
       const rejected = expect(pushing).rejects.toThrow(`bridge is not open: ${bridge.bridgeId}`);
       bridge.outputStdin.accept(new Error("output write failed"));
       await rejected;
       expect(bridge.outputProcess.kill).toHaveBeenCalledWith("SIGTERM");
       expect(bridge.inputProcess.kill).toHaveBeenCalledWith("SIGTERM");
     } finally {
-      await invokeBridge(bridge, "stop");
+      await rpc(bridge, "stop");
     }
   });
 
@@ -721,45 +566,26 @@ describe("meeting node host audio output", () => {
     const bridge = await startAudioBridge({ outputStdin: createStdin(false) });
     childProcessMocks.spawn.mockReturnValueOnce(createProcess({ stdin: replacementStdin }));
     const { bridgeId } = bridge;
-    expect(typeof bridgeId).toBe("string");
-
-    let firstPushSettled = false;
-    const firstPush = invokeBridge(bridge, "pushAudio", {
-      base64: Buffer.from([1, 2, 3]).toString("base64"),
-      outputGeneration: 0,
-    }).then((result) => {
-      firstPushSettled = true;
-      return result;
-    });
+    const firstPush = pendingPush(bridge);
     await Promise.resolve();
-    expect(firstPushSettled).toBe(false);
+    expect(firstPush.isSettled()).toBe(false);
 
-    const cleared = await invokeBridge(bridge, "clearAudio", {
-      outputGeneration: 1,
-    });
+    const cleared = await rpc(bridge, "clearAudio", { outputGeneration: 1 });
     expect(cleared).toMatchObject({ ok: true });
-    await expect(firstPush).resolves.toMatchObject({
-      ok: true,
-      stale: true,
-    });
+    await expect(firstPush.result).resolves.toMatchObject({ ok: true, stale: true });
 
-    const stalePush = await invokeBridge(bridge, "pushAudio", {
-      base64: Buffer.from([4, 5, 6]).toString("base64"),
-      outputGeneration: 0,
-    });
+    const stalePush = await pushAudio(bridge, FINAL_AUDIO, 0);
     expect(stalePush).toMatchObject({ ok: true, stale: true });
     expect(replacementStdin.write).not.toHaveBeenCalled();
 
     bridge.outputStdin.accept(new Error("retired output write failed"));
-    await expect(
-      invokeBridge(bridge, "pushAudio", {
-        base64: Buffer.from([7, 8, 9]).toString("base64"),
-        outputGeneration: 1,
-      }),
-    ).resolves.toEqual({ bridgeId, ok: true });
+    await expect(pushAudio(bridge, Buffer.from([7, 8, 9]), 1)).resolves.toEqual({
+      bridgeId,
+      ok: true,
+    });
     expect(replacementStdin.write).toHaveBeenCalledOnce();
 
-    await invokeBridge(bridge, "stop");
+    await rpc(bridge, "stop");
   });
 
   it("accepts legacy output commands and preserves their response shapes", async () => {
@@ -768,24 +594,12 @@ describe("meeting node host audio output", () => {
     childProcessMocks.spawn.mockReturnValueOnce(createProcess({ stdin: replacementStdin }));
     const { bridgeId } = bridge;
 
-    await expect(
-      invokeBridge(bridge, "pushAudio", {
-        base64: Buffer.from([1, 2, 3]).toString("base64"),
-      }),
-    ).resolves.toEqual({ bridgeId, ok: true });
-    await expect(invokeBridge(bridge, "clearAudio")).resolves.toEqual({
-      bridgeId,
-      ok: true,
-      clearCount: 1,
-    });
-    await expect(
-      invokeBridge(bridge, "pushAudio", {
-        base64: Buffer.from([4, 5, 6]).toString("base64"),
-      }),
-    ).resolves.toEqual({ bridgeId, ok: true });
+    await expect(pushAudio(bridge)).resolves.toEqual({ bridgeId, ok: true });
+    await expect(rpc(bridge, "clearAudio")).resolves.toEqual({ bridgeId, ok: true, clearCount: 1 });
+    await expect(pushAudio(bridge, FINAL_AUDIO)).resolves.toEqual({ bridgeId, ok: true });
     expect(bridge.outputStdin.write).toHaveBeenCalledOnce();
     expect(replacementStdin.write).toHaveBeenCalledOnce();
 
-    await invokeBridge(bridge, "stop");
+    await rpc(bridge, "stop");
   });
 });

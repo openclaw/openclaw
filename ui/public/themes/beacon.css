@@ -96,7 +96,6 @@
   --destructive-hover: #ffc4c4;
   --destructive-foreground: #000000;
   --warn: #ffc233;
-  --warn-muted: rgba(255, 194, 51, 0.85);
   --warn-subtle: rgba(255, 255, 255, 0.1);
   --danger: #ffabab;
   --danger-muted: rgba(255, 171, 171, 0.85);
@@ -151,7 +150,6 @@
   --popover: #ffffff;
   --popover-foreground: #000000;
   --session-hovercard-surface: var(--card);
-  --session-hovercard-progress-surface: var(--bg-accent);
 
   --panel: #ffffff;
   --panel-strong: #f4f4f4;
@@ -184,7 +182,6 @@
   --destructive: #8c0f0f;
   --destructive-foreground: #ffffff;
   --warn: #613d00;
-  --warn-muted: rgba(97, 61, 0, 0.85);
   --warn-subtle: rgba(0, 0, 0, 0.07);
   --danger: #8c0f0f;
   --danger-muted: rgba(140, 15, 15, 0.85);

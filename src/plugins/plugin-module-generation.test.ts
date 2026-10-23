@@ -942,14 +942,11 @@ describe("plugin module generations", () => {
     expect(await (load(root, "index.ts").value as typeof first).read()).toEqual([true, 1]);
   });
 
-  // Enable under Bun after oven-sh/bun#35690 ships node:module.registerHooks.
-  it.runIf(!process.versions.bun)(
-    "preserves native custom loader startup without replaying registration",
-    async () => {
-      const root = temp.make("plugin-native-hooks-");
-      fs.writeFileSync(
-        path.join(root, "index.cjs"),
-        `const { registerHooks } = require('node:module');
+  it("preserves native custom loader startup without replaying registration", async () => {
+    const root = temp.make("plugin-native-hooks-");
+    fs.writeFileSync(
+      path.join(root, "index.cjs"),
+      `const { registerHooks } = require('node:module');
        const hooks = registerHooks({ resolve(specifier, context, nextResolve) {
          return specifier === 'fixture:answer'
            ? { url: 'data:text/javascript,export default 42', shortCircuit: true }
@@ -957,18 +954,17 @@ describe("plugin module generations", () => {
        }});
        exports.read = async () => (await import('fixture:answer')).default;
        exports.close = () => hooks.deregister();`,
-      );
-      const { instance, value } = load(root, "index.cjs");
-      const plugin = value as { read(): Promise<number>; close(): void };
-      try {
-        expect(await plugin.read()).toBe(42);
-      } finally {
-        plugin.close();
-        await instance.dispose();
-      }
-      expect(() => plugin.read()).toThrow("reloaded or disabled");
-    },
-  );
+    );
+    const { instance, value } = load(root, "index.cjs");
+    const plugin = value as { read(): Promise<number>; close(): void };
+    try {
+      expect(await plugin.read()).toBe(42);
+    } finally {
+      plugin.close();
+      await instance.dispose();
+    }
+    expect(() => plugin.read()).toThrow("reloaded or disabled");
+  });
 
   it.each(["cjs", "ts"])("does not reevaluate a failing module through a %s entry", (extension) => {
     const root = temp.make("plugin-failed-native-");

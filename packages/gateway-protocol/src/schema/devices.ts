@@ -2,6 +2,7 @@ import type { Static, TSchema } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import { stringLiteralUnion } from "./string-literal-union.js";
 
 // Feature handlers own authorization; schemas keep request and device identities explicit.
 export const DevicePairListParamsSchema = closedObject({});
@@ -136,7 +137,7 @@ export const DevicePairSetupCompletedEventSchema = closedObject({
   setupId: SetupIdSchema,
   deviceId: NonEmptyString,
   deviceName: Type.Optional(NonEmptyString),
-  access: Type.Union([Type.Literal("full"), Type.Literal("limited"), Type.Literal("node")]),
+  access: stringLiteralUnion(["full", "limited", "node"]),
   ts: Type.Integer({ minimum: 0 }),
 });
 
@@ -197,20 +198,18 @@ export const DevicePairSetupCodeResultSchema = closedObject({
   setupId: Type.Optional(SetupIdSchema),
   setupCode: NonEmptyString,
   joinUrl: Type.Optional(NonEmptyString),
+  command: Type.Optional(NonEmptyString),
+  serviceCommand: Type.Optional(NonEmptyString),
+  installedCommand: Type.Optional(NonEmptyString),
+  versionNote: Type.Optional(NonEmptyString),
   qrDataUrl: Type.Optional(SetupCodeQrDataUrlSchema),
   gatewayUrl: NonEmptyString,
   gatewayUrls: Type.Optional(
     Type.Array(NonEmptyString, { minItems: 2, maxItems: 8, uniqueItems: true }),
   ),
-  auth: Type.Union([
-    Type.Literal("token"),
-    Type.Literal("password"),
-    Type.Literal("trusted-proxy"),
-  ]),
+  auth: stringLiteralUnion(["token", "password", "trusted-proxy"]),
   urlSource: NonEmptyString,
-  access: Type.Optional(
-    Type.Union([Type.Literal("full"), Type.Literal("limited"), Type.Literal("node")]),
-  ),
+  access: Type.Optional(stringLiteralUnion(["full", "limited", "node"])),
   accessDowngraded: Type.Optional(Type.Boolean()),
   expiresAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
 });

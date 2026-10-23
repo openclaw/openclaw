@@ -1,4 +1,3 @@
-// Builds platform shell argv for Node-driven command execution.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 // Node shell command construction keeps platform shell flags centralized for

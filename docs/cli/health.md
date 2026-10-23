@@ -43,7 +43,9 @@ openclaw health --debug
 - Once ready, `--json` returns the full snapshot: channels, per-account checks, plugin load state, context-engine quarantine state, model-pricing cache state, event-loop health, delivery-queue warnings, and per-agent session stores.
 - Config read failures report the unreadable path and underlying error instead of a missing-credentials diagnostic. This also applies to `openclaw gateway health`.
 - Session ages in text and JSON use the Gateway's clock.
-- Heartbeat intervals in text show the resolved cadence without rounding away milliseconds. Week units are retained for long intervals.
+- Namespaces whose agent deletion has committed are omitted from session summaries while cleanup drains. Undeleted namespaces in shared stores remain visible, and unexpected store errors still fail the refresh.
+- If the configured default is omitted during deletion, plain output shows the first surviving agent's heartbeat and session store in roster order. This display choice does not change runtime or System Agent ownership.
+- The compatibility heartbeat summary reads the persisted migrated/default proactive job. Intervals show its cadence without rounding away milliseconds; week units remain visible for long intervals. Edit the job in Automations to change its schedule or delivery.
 - Top-level `ok: true` means the health RPC succeeded and the Gateway produced a snapshot. Queue and plugin warnings do not change it to `false`.
 - When outbound or session deliveries, or inbound channel events, are dead-lettered, text output reports their counts and oldest failure age. Inbound counts are grouped by channel account. Inspect or recover individual events with [`openclaw channels dead-letters`](/cli/channels#inbound-dead-letters).
 - Optional `deliveryQueues.ingressPressure` summarizes durable inbound lanes that may be blocking later events. It is grouped by channel account and never exposes event, lane, payload, error, owner, token, session, or target identifiers. See [Gateway health](/gateway/health#queue-warnings) for the exact qualification and counting semantics.

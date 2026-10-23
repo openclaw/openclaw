@@ -9,24 +9,18 @@ import { stripThoughtSignatures } from "./bootstrap.js";
 type ContentBlock = AgentToolResult<unknown>["content"][number];
 const EMPTY_CONTENT_PLACEHOLDER = "[empty content omitted]";
 
-function dropEmptyTextBlocks<T>(content: T[]): T[] {
+function dropEmptyTextBlocks<T>(content: T[], preserveSignedText = false): T[] {
   return content.filter((block) => {
-    const rec = block as { type?: unknown; text?: unknown };
+    const rec = block as { type?: unknown; text?: unknown; textSignature?: unknown };
     return (
       !block ||
       typeof block !== "object" ||
       rec.type !== "text" ||
       typeof rec.text !== "string" ||
-      rec.text.trim().length > 0
+      rec.text.trim().length > 0 ||
+      (preserveSignedText && typeof rec.textSignature === "string" && rec.textSignature.length > 0)
     );
   });
-}
-
-function ensureNonEmptyContent<T>(content: T[]): T[] {
-  if (content.length > 0) {
-    return content;
-  }
-  return [{ type: "text", text: EMPTY_CONTENT_PLACEHOLDER }] as T[];
 }
 
 export async function sanitizeSessionMessagesImages(
@@ -53,16 +47,18 @@ export async function sanitizeSessionMessagesImages(
   const imageSanitization = {
     maxDimensionPx: options?.maxDimensionPx,
     maxBytes: options?.maxBytes,
+    // Replay does not rewrite stored images, even after a successful reply.
+    verifyDecodability: true,
   };
-  const shouldSanitizeToolCallIds = options?.sanitizeToolCallIds === true;
-  // We sanitize historical session messages because Anthropic can reject a request
-  // if the transcript contains oversized base64 images (default max side 1200px).
-  const sanitizedIds = shouldSanitizeToolCallIds
-    ? sanitizeToolCallIdsForCloudCodeAssist(messages, options.toolCallIdMode, {
-        preserveNativeAnthropicToolUseIds: options?.preserveNativeAnthropicToolUseIds,
-        duplicateToolCallIdStyle: options?.duplicateToolCallIdStyle,
-      })
-    : messages;
+  const sanitizeImages = (content: ContentBlock[]) =>
+    sanitizeContentBlocksImages(content, label, imageSanitization);
+  const sanitizedIds =
+    options?.sanitizeToolCallIds === true
+      ? sanitizeToolCallIdsForCloudCodeAssist(messages, options.toolCallIdMode, {
+          preserveNativeAnthropicToolUseIds: options?.preserveNativeAnthropicToolUseIds,
+          duplicateToolCallIdStyle: options?.duplicateToolCallIdStyle,
+        })
+      : messages;
   const out: AgentMessage[] = [];
   for (const msg of sanitizedIds) {
     if (!msg || typeof msg !== "object") {
@@ -75,14 +71,14 @@ export async function sanitizeSessionMessagesImages(
       const contentMsg = msg as Extract<AgentMessage, { role: "toolResult" | "user" }>;
       const content = contentMsg.content;
       if (Array.isArray(content) || role === "toolResult") {
-        const nextContent = await sanitizeContentBlocksImages(
-          Array.isArray(content) ? content : [],
-          label,
-          imageSanitization,
+        const nextContent = dropEmptyTextBlocks(
+          await sanitizeImages(Array.isArray(content) ? content : []),
         );
         out.push({
           ...contentMsg,
-          content: ensureNonEmptyContent(dropEmptyTextBlocks(nextContent)),
+          content: nextContent.length
+            ? nextContent
+            : [{ type: "text", text: EMPTY_CONTENT_PLACEHOLDER }],
         });
         continue;
       }
@@ -96,10 +92,10 @@ export async function sanitizeSessionMessagesImages(
           assistantMsg.stopReason === "error" || options?.preserveSignatures
             ? content // Keep signatures for Antigravity Claude
             : stripThoughtSignatures(content, options?.sanitizeThoughtSignatures); // Strip for Gemini
-        const finalContent = (await sanitizeContentBlocksImages(
-          dropEmptyTextBlocks(strippedContent) as unknown as ContentBlock[],
-          label,
-          imageSanitization,
+        const finalContent = (await sanitizeImages(
+          // A signed empty Responses message still occupies an ordered provider input item.
+          // Dropping it rewrites the cached prefix ahead of subsequent encrypted reasoning.
+          dropEmptyTextBlocks(strippedContent, true) as unknown as ContentBlock[],
         )) as unknown as typeof assistantMsg.content;
         if (finalContent.length > 0 || assistantMsg.providerReplay) {
           out.push(replaceCompactionReplayOwnerContent(assistantMsg, finalContent));

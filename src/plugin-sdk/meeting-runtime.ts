@@ -1,7 +1,3 @@
-/**
- * Public SDK subpath for shared browser-meeting audio transports and realtime engines.
- */
-
 export {
   startMeetingRealtimeEngine,
   type MeetingAgentConsultParams,

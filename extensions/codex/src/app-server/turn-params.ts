@@ -71,7 +71,7 @@ export function buildCodexHistoryProvenancePrefix(
     : undefined;
 }
 
-export function buildTurnStartParams(
+export async function buildTurnStartParams(
   params: EmbeddedRunAttemptParams,
   options: {
     threadId: string;
@@ -92,10 +92,10 @@ export function buildTurnStartParams(
     requireExplicitMessageTarget?: boolean;
     historyProvenancePrefix?: string;
   },
-): CodexTurnStartParams {
+): Promise<CodexTurnStartParams> {
   const modelSelection = options.preserveNativeTurnSettings
     ? undefined
-    : resolveCodexAppServerRequestModelSelection({
+    : await resolveCodexAppServerRequestModelSelection({
         homeScope: options.appServer.start.homeScope,
         model: options.model ?? params.modelId,
         modelProvider: options.modelProvider,
@@ -135,7 +135,14 @@ export function buildTurnStartParams(
         buildHarnessVisibleReplyGuidance({
           sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
           messageToolAvailable: options.messageToolAvailable === true,
+          currentConversation: {
+            agentSessionKey: params.sessionKey,
+            currentChannelProvider: params.messageChannel ?? params.messageProvider,
+            currentChannelId: params.currentChannelId,
+            currentMessagingTarget: params.currentMessagingTarget,
+          },
           requireExplicitMessageTarget: options.requireExplicitMessageTarget,
+          messageToolFinalByDefault: params.messageToolFinalByDefault,
         }),
       ].join("\n"),
     },

@@ -1,14 +1,9 @@
-import { html, nothing } from "lit";
 import "./chat-attribution.css";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
-import { icons } from "../../../components/icons.ts";
-import { t } from "../../../i18n/index.ts";
 import type { MessageGroup, NormalizedMessage } from "../../../lib/chat/chat-types.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { formatSenderLabel, type SenderIdentity } from "../../../lib/chat/sender-label.ts";
-import { persistedMessageEntryId } from "../chat-thread.ts";
-import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
-import { renderReplyConnector } from "./chat-reply-connector.ts";
+import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import type { ReplyPreview, ReplyPreviewLookup } from "./chat-reply-preview.types.ts";
 
 /**
@@ -192,74 +187,4 @@ export function resolveGroupReplyLine(
   return group.replyToSender
     ? resolveSource(group.replyToMessage?.message, group.replyToSender, lookup)
     : NO_REPLY_LINE;
-}
-
-type ReplyLineActions = {
-  onOpenReply?: (id: string) => void;
-  replyNavigationId?: string | null;
-};
-
-/**
- * `inline` renders inside the message bubble; otherwise the line sits above
- * the message beside its avatar. The name navigates to any known original,
- * loaded or not; a missing one stays plain text.
- */
-export function renderReplyLine(
-  line: ReplyLine,
-  { onOpenReply, replyNavigationId }: ReplyLineActions,
-  inline = false,
-) {
-  if (line.state === "hidden") {
-    return nothing;
-  }
-  const rowClass = `chat-reply-attribution chat-reply-attribution--${inline ? "inline" : "reply"}`;
-  const label = html`<span class="chat-reply-attribution__label"
-    >${inline ? nothing : html`<span class="chat-reply-attribution__mobile-icon" aria-hidden="true">${icons.cornerUpLeft}</span>`}${t("chat.messages.replyingToLabel")}</span
-  >`;
-  // An in-flight lookup keeps the row so the answer fills it in place.
-  if (line.state === "reserved") {
-    return html`<div class="${rowClass} chat-reply-attribution--pending" aria-hidden="true">
-      ${label}
-    </div>`;
-  }
-  const { name = "", openId } = line;
-  const named = line.state === "named";
-  const loading = Boolean(openId) && replyNavigationId === openId;
-  const person = html`
-    ${named ? renderChatAuthorAvatar(line.sender, undefined, line.agentAvatar) : nothing}
-    <span class="chat-reply-attribution__name" title=${name}>${name}</span>
-  `;
-  return html`<div class=${rowClass}>
-    ${label}
-    ${
-      named && openId && onOpenReply
-        ? html`<button
-            class="chat-reply-attribution__person chat-reply-attribution__target"
-            type="button"
-            aria-label=${t("chat.messages.replyingTo", { name })}
-            ?disabled=${loading}
-            aria-busy=${loading ? "true" : "false"}
-            @click=${() => onOpenReply(openId)}
-          >
-            ${person}
-          </button>`
-        : name
-          ? html`<span class="chat-reply-attribution__person">${person}</span>`
-          : nothing
-    }
-    ${
-      named
-        ? nothing
-        : html`<span class="chat-reply-attribution__unavailable"
-            >${t("chat.messages.replyOriginalUnavailable")}</span
-          >`
-    }
-  </div>`;
-}
-
-/** Beside an avatar, a shown line draws a connector from it. */
-export function renderReplyLineConnector(line: ReplyLine, avatar: unknown) {
-  return avatar !== nothing && (line.state === "named" || line.state === "unavailable")
-    ? renderReplyConnector()
-    : nothing;
 }

@@ -114,9 +114,8 @@ function sameDirectory(left: Stats, right: Stats): boolean {
 
 type CachedDirectory = {
   watcher: FSWatcher;
-  revision: number;
+  dirty: boolean;
   armAt: number;
-  scannedRevision?: number;
   stat: Stats;
   files: Map<string, CodexCatalogRolloutFingerprint>;
 };
@@ -125,25 +124,21 @@ type CachedDirectory = {
 export class CodexCatalogRolloutScanner {
   private readonly directories = new Map<string, CachedDirectory>();
   private cachedFiles = 0;
-  private running: Promise<CodexCatalogRolloutScan> | undefined;
   private closed = false;
 
   constructor(private readonly sessionsRoot: string) {}
 
-  scan(trackedPaths: ReadonlySet<string>): Promise<CodexCatalogRolloutScan> {
-    const previous = this.running;
-    const running = (async () => {
-      await previous?.catch(() => undefined);
-      // Deliver pending watcher notifications before consulting a cached fingerprint.
-      await nextTurn();
-      return this.walk(trackedPaths);
-    })();
-    this.running = running;
-    return running.finally(() => {
-      if (this.running === running) {
-        this.running = undefined;
+  async scan(trackedPaths: ReadonlySet<string>): Promise<CodexCatalogRolloutScan> {
+    // The catalog index serializes scans. Deliver pending watcher notifications first.
+    await nextTurn();
+    try {
+      return await this.walk(trackedPaths);
+    } catch (error) {
+      for (const cached of this.directories.values()) {
+        cached.dirty = true;
       }
-    });
+      throw error;
+    }
   }
 
   private forget(directory: string): void {
@@ -168,13 +163,13 @@ export class CodexCatalogRolloutScanner {
       const cached: CachedDirectory = {
         watcher,
         stat,
-        revision: 0,
+        dirty: true,
         // FSEvents attaches asynchronously; a scan started after this window closes the gap.
         armAt: process.platform === "darwin" ? performance.now() + DARWIN_WATCH_ARM_MS : 0,
         files: new Map(),
       };
       watcher.on("change", () => {
-        cached.revision++;
+        cached.dirty = true;
       });
       // A failed watch cannot certify freshness, even when directory mtimes match.
       const withdraw = () => {
@@ -187,22 +182,18 @@ export class CodexCatalogRolloutScanner {
       this.directories.set(directory, cached);
       return cached;
     } catch {
+      // Unwatchable directories use full scans instead of cached fingerprints.
       return undefined;
     }
   }
 
-  private async walk(
-    trackedPaths: ReadonlySet<string>,
-    reuseCache = true,
-  ): Promise<CodexCatalogRolloutScan> {
+  private async walk(trackedPaths: ReadonlySet<string>): Promise<CodexCatalogRolloutScan> {
     if (this.closed) {
       throw new Error("Codex catalog rollout scanner is closed");
     }
     const present = new Set<string>();
     const unvisited = new Set(this.directories.keys());
     const candidates = new NewestRolloutCandidates();
-    const reused = new Map<string, { cached: CachedDirectory; revision: number }>();
-    let cacheWithdrawn = false;
     let processed = 0;
     const offer = (file: string, fingerprint: CodexCatalogRolloutFingerprint) => {
       if (trackedPaths.has(codexCatalogRolloutLogicalPath(file))) {
@@ -231,17 +222,11 @@ export class CodexCatalogRolloutScanner {
           this.forget(directory);
           cached = undefined;
         }
-        if (reuseCache && cached && cached.scannedRevision === cached.revision) {
-          const revision = cached.revision;
-          reused.set(directory, { cached, revision });
+        if (cached && !cached.dirty) {
           for (const [file, fingerprint] of cached.files) {
             offer(file, fingerprint);
             if (++processed % SCAN_BATCH_SIZE === 0) {
               await nextTurn();
-              if (this.directories.get(directory) !== cached || cached.revision !== revision) {
-                cacheWithdrawn = true;
-                return;
-              }
             }
           }
           return;
@@ -249,11 +234,9 @@ export class CodexCatalogRolloutScanner {
         cached ??= this.watch(directory, stat);
       }
       if (cached) {
-        // An interrupted full read retains watch identity, never an older freshness certificate.
-        cached.scannedRevision = undefined;
+        // A change during this read schedules a fresh scan on the next reconciliation.
+        cached.dirty = performance.now() < cached.armAt;
       }
-      const revision = cached?.revision;
-      const armed = cached && performance.now() >= cached.armAt;
       const retained = cached ? new Map<string, CodexCatalogRolloutFingerprint>() : undefined;
       let cacheable = true;
       const entries = await unlessMissing(fs.opendir(directory));
@@ -262,9 +245,6 @@ export class CodexCatalogRolloutScanner {
         return;
       }
       for await (const entry of entries) {
-        if (cacheWithdrawn) {
-          return;
-        }
         if (this.closed) {
           throw new Error("Codex catalog rollout scanner is closed");
         }
@@ -308,19 +288,10 @@ export class CodexCatalogRolloutScanner {
         }
       }
       if (cached && retained && stat) {
-        const current = await unlessMissing(fs.lstat(directory));
-        if (
-          cacheable &&
-          !this.closed &&
-          this.directories.get(directory) === cached &&
-          current?.isDirectory() &&
-          sameDirectory(stat, current)
-        ) {
+        if (cacheable && !this.closed && this.directories.get(directory) === cached) {
           this.cachedFiles += retained.size - cached.files.size;
           cached.files = retained;
           cached.stat = stat;
-          // Keep the watch through unarmed or interrupted reads; a later full scan certifies it.
-          cached.scannedRevision = armed && cached.revision === revision ? revision : undefined;
         } else {
           this.forget(directory);
         }
@@ -332,16 +303,6 @@ export class CodexCatalogRolloutScanner {
       if (rootReal) {
         await scan(rootReal, 0, rootReal);
       }
-    }
-    if (
-      cacheWithdrawn ||
-      [...reused].some(
-        ([directory, { cached, revision }]) =>
-          this.directories.get(directory) !== cached || cached.revision !== revision,
-      )
-    ) {
-      // Discard partially offered cached candidates and retry once using only current file stats.
-      return this.walk(trackedPaths, false);
     }
     for (const directory of unvisited) {
       this.forget(directory);

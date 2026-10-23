@@ -1,6 +1,5 @@
-// Telegram tests cover monotonic update-offset persistence and retry.
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createTelegramUpdateOffsetPersistence } from "./update-offset-persistence.js";
 
 async function flushMicrotasks() {
@@ -8,103 +7,83 @@ async function flushMicrotasks() {
   await Promise.resolve();
 }
 
-afterEach(() => {
-  vi.useRealTimers();
-});
+function createPersistence(
+  writeUpdateId: (id: number) => Promise<void> = async () => {},
+  abortSignal?: AbortSignal,
+) {
+  const writes: number[] = [];
+  const onError = vi.fn();
+  const onInvalidUpdateId = vi.fn();
+  const persistence = createTelegramUpdateOffsetPersistence({
+    initialUpdateId: 100,
+    writeUpdateId: (id) => {
+      writes.push(id);
+      return writeUpdateId(id);
+    },
+    onError,
+    onInvalidUpdateId,
+    abortSignal,
+  });
+  const checkpoint = () => [writes, persistence.getCommittedUpdateId()];
+  return { persistence, writes, checkpoint, onError, onInvalidUpdateId };
+}
 
 describe("createTelegramUpdateOffsetPersistence", () => {
-  it("retries a failed write and coalesces the highest pending update", async () => {
-    vi.useFakeTimers();
-    const writes: number[] = [];
-    let failFirstWrite = true;
-    const onRetry = vi.fn();
-    const persistence = createTelegramUpdateOffsetPersistence({
-      initialUpdateId: 100,
-      writeUpdateId: async (updateId) => {
-        writes.push(updateId);
-        if (failFirstWrite) {
-          failFirstWrite = false;
-          throw new Error("offset store unavailable");
-        }
-      },
-      onInvalidUpdateId: vi.fn(),
-      onRetry,
-    });
+  it.each([false, true])("handles a failed checkpoint (abort=%s)", async (abort) => {
+    const controller = new AbortController();
+    const writeUpdateId = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("offset store unavailable"))
+      .mockResolvedValue(undefined);
+    const { persistence, checkpoint, onError } = createPersistence(
+      writeUpdateId,
+      abort ? controller.signal : undefined,
+    );
 
     persistence.persistUpdateId(101);
     await flushMicrotasks();
+    expect(checkpoint()).toEqual([[101], 100]);
+    if (abort) {
+      controller.abort();
+    }
     persistence.persistUpdateId(103);
     persistence.persistUpdateId(102);
 
-    expect(writes).toEqual([101]);
-    expect(persistence.getCommittedUpdateId()).toBe(100);
-    expect(onRetry).toHaveBeenCalledWith(expect.objectContaining({ attempt: 1, updateId: 101 }));
-
-    await vi.advanceTimersByTimeAsync(5_000);
     await flushMicrotasks();
-
-    expect(writes).toEqual([101, 103]);
-    expect(persistence.getCommittedUpdateId()).toBe(103);
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ updateId: 101 }));
+    expect(checkpoint()).toEqual(abort ? [[101], 100] : [[101, 103], 103]);
     await persistence.stop();
   });
 
-  it("never regresses when a lower update arrives during a higher write", async () => {
+  it.each([
+    { timing: "during write", first: 103, next: 102, expected: [103] },
+    { timing: "during teardown", first: 101, next: 102, expected: [101, 102] },
+  ])("checkpoints a new offset arriving $timing", async ({ timing, first, next, expected }) => {
     const write = createDeferred<void>();
-    const writes: number[] = [];
-    const persistence = createTelegramUpdateOffsetPersistence({
-      initialUpdateId: 100,
-      writeUpdateId: async (updateId) => {
-        writes.push(updateId);
+    const { persistence, writes, checkpoint } = createPersistence(async (id) => {
+      if (id === first) {
         await write.promise;
-      },
-      onInvalidUpdateId: vi.fn(),
-      onRetry: vi.fn(),
+      }
     });
-
-    persistence.persistUpdateId(103);
-    persistence.persistUpdateId(102);
+    persistence.persistUpdateId(first);
+    if (timing === "during write") {
+      persistence.persistUpdateId(next);
+    }
     await flushMicrotasks();
     write.resolve();
-    await flushMicrotasks();
-
-    expect(writes).toEqual([103]);
-    expect(persistence.getCommittedUpdateId()).toBe(103);
-    await persistence.stop();
-  });
-
-  it("restarts the drain when a higher update arrives during teardown", async () => {
-    const firstWrite = createDeferred<void>();
-    const writes: number[] = [];
-    const persistence = createTelegramUpdateOffsetPersistence({
-      initialUpdateId: 100,
-      writeUpdateId: async (updateId) => {
-        writes.push(updateId);
-        if (updateId === 101) {
-          await firstWrite.promise;
-        }
-      },
-      onInvalidUpdateId: vi.fn(),
-      onRetry: vi.fn(),
-    });
-
-    persistence.persistUpdateId(101);
-    await flushMicrotasks();
-    firstWrite.resolve();
-    queueMicrotask(() => persistence.persistUpdateId(102));
-    await vi.waitFor(() => expect(writes).toEqual([101, 102]));
-
-    expect(persistence.getCommittedUpdateId()).toBe(102);
+    if (timing === "during teardown") {
+      queueMicrotask(() => persistence.persistUpdateId(next));
+      await vi.waitFor(() => expect(writes).toEqual(expected));
+    } else {
+      await flushMicrotasks();
+    }
+    expect(checkpoint()).toEqual([expected, expected.at(-1)]);
     await persistence.stop();
   });
 
   it("fences an in-flight write before stop resolves", async () => {
     const write = createDeferred<void>();
-    const persistence = createTelegramUpdateOffsetPersistence({
-      initialUpdateId: 100,
-      writeUpdateId: async () => await write.promise,
-      onInvalidUpdateId: vi.fn(),
-      onRetry: vi.fn(),
-    });
+    const { persistence } = createPersistence(async () => await write.promise);
 
     persistence.persistUpdateId(101);
     await flushMicrotasks();
@@ -121,70 +100,15 @@ describe("createTelegramUpdateOffsetPersistence", () => {
     expect(persistence.getCommittedUpdateId()).toBe(101);
   });
 
-  it("cancels a scheduled retry when stopped", async () => {
-    vi.useFakeTimers();
-    const writeUpdateId = vi.fn(async () => {
-      throw new Error("offset store unavailable");
-    });
-    const persistence = createTelegramUpdateOffsetPersistence({
-      initialUpdateId: 100,
-      writeUpdateId,
-      onInvalidUpdateId: vi.fn(),
-      onRetry: vi.fn(),
-    });
-
-    persistence.persistUpdateId(101);
-    await flushMicrotasks();
-    await persistence.stop();
-    await vi.advanceTimersByTimeAsync(60_000);
-
-    expect(writeUpdateId).toHaveBeenCalledTimes(1);
-    expect(persistence.getCommittedUpdateId()).toBe(100);
-  });
-
-  it("does not rearm a failed write after the supplied signal aborts", async () => {
-    vi.useFakeTimers();
-    const abortController = new AbortController();
-    const writeUpdateId = vi.fn(async () => {
-      throw new Error("offset store unavailable");
-    });
-    const persistence = createTelegramUpdateOffsetPersistence({
-      initialUpdateId: 100,
-      writeUpdateId,
-      onInvalidUpdateId: vi.fn(),
-      onRetry: vi.fn(),
-      abortSignal: abortController.signal,
-    });
-
-    persistence.persistUpdateId(101);
-    await flushMicrotasks();
-    abortController.abort();
-    await vi.advanceTimersByTimeAsync(60_000);
-
-    expect(writeUpdateId).toHaveBeenCalledTimes(1);
-    expect(persistence.getCommittedUpdateId()).toBe(100);
-    await persistence.stop();
-  });
-
   it("ignores a malformed update ID without blocking the next valid write", async () => {
-    const writes: number[] = [];
-    const onInvalidUpdateId = vi.fn();
-    const persistence = createTelegramUpdateOffsetPersistence({
-      initialUpdateId: 100,
-      writeUpdateId: async (updateId) => {
-        writes.push(updateId);
-      },
-      onInvalidUpdateId,
-      onRetry: vi.fn(),
-    });
+    const { persistence, checkpoint, onInvalidUpdateId } = createPersistence();
 
     persistence.persistUpdateId(Number.NaN);
     persistence.persistUpdateId(101);
     await flushMicrotasks();
 
     expect(onInvalidUpdateId).toHaveBeenCalledWith(Number.NaN);
-    expect(writes).toEqual([101]);
-    expect(persistence.getCommittedUpdateId()).toBe(101);
+    expect(checkpoint()).toEqual([[101], 101]);
     await persistence.stop();
   });
 });

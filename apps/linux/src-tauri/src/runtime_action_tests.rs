@@ -127,9 +127,11 @@ impl Drop for Fixture {
 }
 
 #[test]
-fn fresh_install_carries_null_definition_and_bundled_path() {
+fn fresh_install_with_unknown_mutation_capability_carries_null_definition_and_bundled_path() {
     let fixture = Fixture::new();
-    fixture.write_state(&fixture.absent());
+    let mut absent = fixture.absent();
+    absent["service"]["definitionMutation"] = "unknown".into();
+    fixture.write_state(&absent);
     fresh(&fixture.cli(), &fixture.runtime(), &|| true).unwrap();
     assert_eq!(fixture.installs(), 1);
     assert_eq!(
@@ -186,17 +188,11 @@ fn fresh_install_marks_a_preexisting_canonical_launcher_after_health() {
 }
 
 #[test]
-fn fresh_install_does_not_mark_an_existing_launcher_after_health_failure() {
+fn fresh_install_does_not_mark_an_existing_launcher_after_health_inspection_failure() {
     let fixture = Fixture::new();
     let wrapper = fixture.canonical_launcher();
     let original = fs::read(&wrapper).unwrap();
-    let mut failed = fixture.healthy();
-    failed["service"]["runtime"]["status"] = "stopped".into();
-    fs::write(
-        fixture.0.join("healthy.json"),
-        serde_json::to_vec(&failed).unwrap(),
-    )
-    .unwrap();
+    fs::write(fixture.0.join("healthy.json"), "invalid JSON").unwrap();
     fixture.write_state(&fixture.absent());
     assert!(fresh(&fixture.cli(), &fixture.runtime(), &|| true).is_err());
     assert_eq!(fs::read(wrapper).unwrap(), original);
@@ -430,12 +426,33 @@ fn health_requires_the_intended_service_and_its_listener_not_the_inspecting_cli_
 }
 
 #[test]
+fn fresh_activation_waits_for_service_start_but_existing_activation_respects_stop() {
+    let fixture = Fixture::new();
+    let runtime = fixture.runtime();
+    for pointer in ["/service/loaded", "/service/runtime/status"] {
+        let mut starting = fixture.healthy();
+        *starting.pointer_mut(pointer).unwrap() = if pointer.ends_with("loaded") {
+            false.into()
+        } else {
+            "stopped".into()
+        };
+        let observation = Observation(starting);
+        assert_eq!(observation.check_health(&runtime, true), Ok(false));
+        assert_eq!(observation.check_health(&runtime, false), Err(UNHEALTHY));
+    }
+    assert_eq!(
+        Observation(fixture.healthy()).check_health(&runtime, true),
+        Ok(true)
+    );
+}
+
+#[test]
 fn read_only_inspection_offers_current_runtime_without_installing() {
     let fixture = Fixture::new();
     let cli = fixture.cli();
     let before = inspect(&cli).unwrap();
     assert!(before.current_runtime().contains("/operator/node"));
-    assert!(!before.is_current(&fixture.runtime()));
+    assert!(!before.uses_runtime_path(&fixture.runtime().bun));
     fixture.write_state(&fixture.healthy());
     assert!(inspect(&cli)
         .unwrap()
@@ -522,4 +539,70 @@ fn detached_runtime_action_delivers_the_complete_error_to_its_presenter() {
             panic!("runtime guidance reached the generic error presenter")
         }
     }
+}
+
+#[test]
+fn healthy_activation_persists_previous_selection_and_failure_keeps_it() {
+    const CHILD: &str = "OPENCLAW_RETENTION_ACTIVATION_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", std::thread::current().name().unwrap()])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let fixture = Fixture::new();
+    let wrapper = fixture.canonical_launcher();
+    assert!(Command::new("/bin/cp")
+        .arg(Fixture::script())
+        .arg(&fixture.runtime().bun)
+        .status()
+        .unwrap()
+        .success());
+    fs::set_permissions(&fixture.runtime().bun, fs::Permissions::from_mode(0o700)).unwrap();
+    let cli = fixture.cli();
+    bind_runtime(&cli, &fixture.runtime(), Purpose::Gateway).unwrap();
+    fixture.write_state(&fixture.healthy());
+    let second = fixture.0.join("second-bun");
+    let third = fixture.0.join("third-bun");
+    for (index, path) in [&second, &third, &third].into_iter().enumerate() {
+        if index == 1 {
+            let mut wrapped = inspect(&cli).unwrap().0;
+            wrapped["service"]["command"]["programArguments"][0] =
+                serde_json::json!(fixture.runtime().bun);
+            fixture.write_state(&wrapped);
+        }
+        fs::write(path, "synthetic runtime").unwrap();
+        let runtime = BundledRuntime {
+            bun: path.clone(),
+            sqlite: None,
+        };
+        let mut healthy = fixture.healthy();
+        healthy["service"]["command"]["programArguments"][0] = serde_json::json!(path);
+        healthy["service"]["runtimeIntent"]["pin"]["path"] = serde_json::json!(path);
+        fs::write(fixture.0.join("healthy.json"), healthy.to_string()).unwrap();
+        activate(&cli, &runtime, &inspect(&cli).unwrap(), &|| true).unwrap();
+    }
+    let bytes = fs::read(&wrapper).unwrap();
+    let text = std::str::from_utf8(&bytes).unwrap();
+    let marker: Value =
+        serde_json::from_str(text.lines().nth(1).unwrap().strip_prefix(MARKER).unwrap()).unwrap();
+    assert_eq!(
+        marker.pointer("/retention/current"),
+        Some(&serde_json::json!(&third))
+    );
+    assert_eq!(
+        marker.pointer("/retention/previous"),
+        Some(&serde_json::json!(&second))
+    );
+    fs::write(fixture.0.join("healthy.json"), "invalid status").unwrap();
+    assert!(activate(&cli, &fixture.runtime(), &inspect(&cli).unwrap(), &|| true).is_err());
+    assert_eq!(fs::read(wrapper).unwrap(), bytes);
 }

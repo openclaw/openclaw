@@ -1,8 +1,3 @@
-/**
- * Dynamic live-model candidate expansion.
- * Adds prioritized plugin-discovered live models to static catalog candidates
- * while keeping the hot catalog path provider-agnostic.
- */
 import {
   findNormalizedProviderValue,
   normalizeProviderId,
@@ -34,7 +29,9 @@ const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
   "anthropic/claude-sonnet-5",
   "anthropic/claude-sonnet-4-6",
   "anthropic/claude-opus-4-7",
+  "google/gemini-4-argon",
   "google/gemini-3.1-pro-preview",
+  "google/gemini-3.8-flash",
   "google/gemini-3.5-flash",
   "cohere/command-a-plus-05-2026",
   "moonshot/kimi-k3",
@@ -43,10 +40,9 @@ const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
   "deepseek/deepseek-v4-pro",
   "minimax/minimax-m3",
   "openai/gpt-5.6-luna",
-  "openrouter/openai/gpt-5.2-chat",
+  "openrouter/openai/gpt-5.6-luna",
   "openrouter/minimax/minimax-m2.7",
-  "opencode-go/glm-5",
-  "openrouter/ai21/jamba-large-1.7",
+  "opencode-go/glm-5.3",
   "xai/grok-4.7",
   "xai/grok-4.6",
   "xai/grok-4.5",
@@ -73,9 +69,7 @@ export const DEFAULT_SMALL_LIVE_MODEL_LIMIT = SMALL_LIVE_MODEL_PRIORITY.length;
 const highSignalPriorityIndex = new Map<string, number>(
   HIGH_SIGNAL_LIVE_MODEL_PRIORITY.map((ref, index) => [ref, index] as const),
 );
-const smallPriorityIndex = new Map<string, number>(
-  SMALL_LIVE_MODEL_PRIORITY.map((ref, index) => [ref, index] as const),
-);
+const smallPriorityRefs = new Set<string>(SMALL_LIVE_MODEL_PRIORITY);
 const excludedProviders = new Set(["codex", "codex-cli"]);
 const curatedProviders = new Set(["fireworks", "google", "openrouter", "xai"]);
 const directOpenAiModels = new Set(["gpt-5.6-terra", "gpt-5.6-luna"]);
@@ -107,13 +101,12 @@ export function getHighSignalLiveModelPriorityIndex(ref: ModelRef): number | nul
 }
 
 export function isPrioritizedHighSignalLiveModelRef(ref: ModelRef): boolean {
-  const key = canonicalLiveModelRef(ref);
-  return key !== undefined && highSignalPriorityIndex.has(key);
+  return getHighSignalLiveModelPriorityIndex(ref) !== null;
 }
 
 export function isSmallLiveModelRef(ref: ModelRef): boolean {
   const key = canonicalLiveModelRef(ref);
-  return key !== undefined && smallPriorityIndex.has(key);
+  return key !== undefined && smallPriorityRefs.has(key);
 }
 
 export function isModernModelRef(ref: LiveModelPolicyRef): boolean {
@@ -215,77 +208,57 @@ export function shouldExcludeProviderFromDefaultHighSignalLiveSweep(params: {
   return true;
 }
 
-function selectPrioritizedLiveItems<T>(
-  items: T[],
-  maxItems: number,
-  refOf: (item: T) => ModelRef,
-  providerOf: (item: T) => string,
-  priority: readonly string[],
-): T[] {
-  if (maxItems <= 0 || items.length <= maxItems) {
-    return items;
-  }
-  const remaining = [...items];
-  const selected: T[] = [];
-  for (const ref of priority) {
-    const index = remaining.findIndex((item) => canonicalLiveModelRef(refOf(item)) === ref);
-    if (index >= 0) {
-      selected.push(...remaining.splice(index, 1));
+function createLiveItemSelector(priority: readonly string[]) {
+  return function selectPrioritizedLiveItems<T>(
+    items: T[],
+    maxItems: number,
+    refOf: (item: T) => ModelRef,
+    providerOf: (item: T) => string,
+  ): T[] {
+    if (maxItems <= 0 || items.length <= maxItems) {
+      return items;
     }
-    if (selected.length >= maxItems) {
-      return selected;
-    }
-  }
-  const grouped = new Map<string, T[]>();
-  for (const item of remaining) {
-    const provider = providerOf(item);
-    const group = grouped.get(provider);
-    if (group) {
-      group.push(item);
-    } else {
-      grouped.set(provider, [item]);
-    }
-  }
-  while (selected.length < maxItems && grouped.size > 0) {
-    for (const [provider, group] of grouped) {
-      const item = group.shift();
-      if (item) {
-        selected.push(item);
-      }
-      if (group.length === 0) {
-        grouped.delete(provider);
+    const remaining = [...items];
+    const selected: T[] = [];
+    for (const ref of priority) {
+      const index = remaining.findIndex((item) => canonicalLiveModelRef(refOf(item)) === ref);
+      if (index >= 0) {
+        selected.push(...remaining.splice(index, 1));
       }
       if (selected.length >= maxItems) {
-        break;
+        return selected;
       }
     }
-  }
-  return selected;
+    const grouped = new Map<string, T[]>();
+    for (const item of remaining) {
+      const provider = providerOf(item);
+      const group = grouped.get(provider);
+      if (group) {
+        group.push(item);
+      } else {
+        grouped.set(provider, [item]);
+      }
+    }
+    while (selected.length < maxItems && grouped.size > 0) {
+      for (const [provider, group] of grouped) {
+        const item = group.shift();
+        if (item) {
+          selected.push(item);
+        }
+        if (group.length === 0) {
+          grouped.delete(provider);
+        }
+        if (selected.length >= maxItems) {
+          break;
+        }
+      }
+    }
+    return selected;
+  };
 }
 
-export function selectHighSignalLiveItems<T>(
-  items: T[],
-  maxItems: number,
-  refOf: (item: T) => ModelRef,
-  providerOf: (item: T) => string,
-): T[] {
-  return selectPrioritizedLiveItems(
-    items,
-    maxItems,
-    refOf,
-    providerOf,
-    HIGH_SIGNAL_LIVE_MODEL_PRIORITY,
-  );
-}
-
-export function selectSmallLiveItems<T>(
-  items: T[],
-  maxItems: number,
-  refOf: (item: T) => ModelRef,
-  providerOf: (item: T) => string,
-): T[] {
-  return selectPrioritizedLiveItems(items, maxItems, refOf, providerOf, SMALL_LIVE_MODEL_PRIORITY);
-}
+export const selectHighSignalLiveItems = createLiveItemSelector(HIGH_SIGNAL_LIVE_MODEL_PRIORITY);
+export const selectSmallLiveItems = createLiveItemSelector(SMALL_LIVE_MODEL_PRIORITY);
 
 export function resolveHighSignalLiveModelLimit(params: {
   rawMaxModels?: string;
@@ -300,7 +273,6 @@ export function resolveHighSignalLiveModelLimit(params: {
       : (params.defaultLimit ?? DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT);
 }
 
-type ProviderRuntimeModule = typeof import("../../plugins/provider-runtime.js");
 type DynamicModelResolver = typeof runProviderDynamicModel;
 type DynamicModelPreparer = typeof prepareProviderDynamicModel;
 type DynamicModelNormalizer = (model: Model, agentDir: string) => Model | Promise<Model>;
@@ -312,38 +284,9 @@ const modelResolutionLoader = createLazyImportLoader(
   () => import("../embedded-agent-runner/model.js"),
 );
 
-const providerRuntimeLoader = createLazyImportLoader<ProviderRuntimeModule>(
+const providerRuntimeLoader = createLazyImportLoader(
   () => import("../../plugins/provider-runtime.js"),
 );
-
-async function prepareProviderDynamicModelDefault(
-  params: Parameters<DynamicModelPreparer>[0],
-): ReturnType<DynamicModelPreparer> {
-  const { prepareProviderDynamicModel } = await providerRuntimeLoader.load();
-  return await prepareProviderDynamicModel(params);
-}
-
-async function runProviderDynamicModelDefault(
-  params: Parameters<DynamicModelResolver>[0],
-): Promise<ReturnType<DynamicModelResolver>> {
-  const { runProviderDynamicModel } = await providerRuntimeLoader.load();
-  return runProviderDynamicModel(params);
-}
-
-async function normalizeDynamicModelDefault(
-  model: Model,
-  agentDir: string,
-  options: { config?: OpenClawConfig; workspaceDir?: string },
-): Promise<Model> {
-  const { normalizeDiscoveredAgentModel } = await import("../model-discovery-normalize.js");
-  return normalizeDiscoveredAgentModel(model, agentDir, options);
-}
-
-function liveModelKey(provider: string, id: string): string | null {
-  const normalizedProvider = normalizeProviderId(provider);
-  const normalizedId = normalizeLowercaseStringOrEmpty(id);
-  return normalizedProvider && normalizedId ? `${normalizedProvider}/${normalizedId}` : null;
-}
 
 export function resolveLiveProviderDiscoveryProviderIds(params: {
   providerFilter: ReadonlySet<string> | null;
@@ -357,10 +300,7 @@ export function resolveLiveProviderDiscoveryProviderIds(params: {
       providers.add(normalized);
     }
   }
-  for (const ref of params.explicitRefs) {
-    providers.add(ref.provider);
-  }
-  for (const ref of params.priorityRefs ?? []) {
+  for (const ref of [...params.explicitRefs, ...(params.priorityRefs ?? [])]) {
     providers.add(ref.provider);
   }
   return providers.size > 0
@@ -381,11 +321,7 @@ export function applyLiveProviderPluginDiscoveryCompat(params: {
         config: params.config,
         env: params.env,
       }) ?? [];
-    if (owners.length === 0) {
-      pluginIds.add(provider);
-      continue;
-    }
-    for (const owner of owners) {
+    for (const owner of owners.length ? owners : [provider]) {
       pluginIds.add(owner);
     }
   }
@@ -435,12 +371,19 @@ export async function appendLiveModelCandidates(params: {
   normalizeModel?: DynamicModelNormalizer;
   refs?: Array<{ provider: string; id: string }>;
 }): Promise<{ models: Model[]; added: Model[] }> {
-  const resolveDynamicModel = params.resolveDynamicModel ?? runProviderDynamicModelDefault;
-  const prepareDynamicModel = params.prepareDynamicModel ?? prepareProviderDynamicModelDefault;
+  const { config, agentDir, workspaceDir, env, modelRegistry } = params;
+  const resolveDynamicModel =
+    params.resolveDynamicModel ??
+    (async (request: Parameters<DynamicModelResolver>[0]) =>
+      (await providerRuntimeLoader.load()).runProviderDynamicModel(request));
+  const prepareDynamicModel =
+    params.prepareDynamicModel ??
+    (async (request: Parameters<DynamicModelPreparer>[0]) =>
+      (await providerRuntimeLoader.load()).prepareProviderDynamicModel(request));
   const refs = params.refs ?? listPrioritizedHighSignalLiveModelRefs();
   const seen = new Set<string>();
   for (const model of params.models) {
-    const key = liveModelKey(model.provider, model.id);
+    const key = canonicalLiveModelRef(model);
     if (key) {
       seen.add(key);
     }
@@ -450,7 +393,7 @@ export async function appendLiveModelCandidates(params: {
   const added: Model[] = [];
   let discoveryStores: Promise<LiveModelDiscoveryStores> | undefined;
   for (const ref of refs) {
-    const requestedKey = liveModelKey(ref.provider, ref.id);
+    const requestedKey = canonicalLiveModelRef(ref);
     if (!requestedKey || seen.has(requestedKey)) {
       continue;
     }
@@ -458,58 +401,49 @@ export async function appendLiveModelCandidates(params: {
     if (params.resolution?.kind === "explicit") {
       const stores = await (discoveryStores ??= params.resolution.getDiscoveryStores());
       const { resolveModelAsync } = await modelResolutionLoader.load();
-      const result = await resolveModelAsync(ref.provider, ref.id, params.agentDir, params.config, {
+      const result = await resolveModelAsync(ref.provider, ref.id, agentDir, config, {
         ...stores,
-        workspaceDir: params.workspaceDir,
+        workspaceDir,
         allowBundledStaticCatalogFallback: true,
       });
       model = result.model;
     } else {
-      const providerConfig = findNormalizedProviderValue(
-        params.config?.models?.providers,
-        ref.provider,
-      );
       // Dynamic model hooks receive the originally requested provider/id so they
       // can map aliases or live service identifiers before returning a catalog row.
       const context = {
-        config: params.config,
-        agentDir: params.agentDir,
-        workspaceDir: params.workspaceDir,
+        config,
+        agentDir,
+        workspaceDir,
         provider: ref.provider,
         modelId: ref.id,
-        modelRegistry: params.modelRegistry,
-        providerConfig,
+        modelRegistry,
+        providerConfig: findNormalizedProviderValue(config?.models?.providers, ref.provider),
       };
-      const prepared = await prepareDynamicModel({
+      const request = {
         provider: ref.provider,
-        config: params.config,
-        workspaceDir: params.workspaceDir,
-        env: params.env,
+        config,
+        workspaceDir,
+        env,
         context,
-      });
-      const resolved =
-        prepared ??
-        (await resolveDynamicModel({
-          provider: ref.provider,
-          config: params.config,
-          workspaceDir: params.workspaceDir,
-          env: params.env,
-          context,
-        }));
+      };
+      const resolved = (await prepareDynamicModel(request)) ?? (await resolveDynamicModel(request));
       if (!resolved) {
         continue;
       }
-      model = params.normalizeModel
-        ? await params.normalizeModel(resolved as Model, params.agentDir)
-        : await normalizeDynamicModelDefault(resolved as Model, params.agentDir, {
-            config: params.config,
-            workspaceDir: params.workspaceDir,
-          });
+      const normalizeModel =
+        params.normalizeModel ??
+        (async (entry: Model) =>
+          (await import("../model-discovery-normalize.js")).normalizeDiscoveredAgentModel(
+            entry,
+            agentDir,
+            { config, workspaceDir },
+          ));
+      model = await normalizeModel(resolved as Model, agentDir);
     }
     if (!model) {
       continue;
     }
-    const resolvedKey = liveModelKey(model.provider, model.id);
+    const resolvedKey = canonicalLiveModelRef(model);
     // De-dupe against the resolved identity as well as the requested ref; hooks
     // may canonicalize provider ids or return aliases.
     if (!resolvedKey || seen.has(resolvedKey)) {

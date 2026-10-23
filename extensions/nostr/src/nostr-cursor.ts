@@ -6,12 +6,7 @@ const CURSOR_WRITE_RETRY_MS = [0, 100, 300] as const;
 const CURSOR_RECOVERY_RETRY_MS = 1_000;
 
 /** Tracks the largest EOSE-safe Nostr timestamp without skipping undurable relay events. */
-export function createNostrDurableCursor(options: {
-  since: number;
-  replayOverlapSec: number;
-  nowSec?: () => number;
-}) {
-  const nowSec = options.nowSec ?? (() => Math.floor(Date.now() / 1000));
+export function createNostrDurableCursor(options: { since: number; replayOverlapSec: number }) {
   let durableCandidate: number | undefined;
   let transientReplayCeiling: number | undefined;
   let backfillComplete = false;
@@ -29,7 +24,8 @@ export function createNostrDurableCursor(options: {
         return undefined;
       }
       const previousSafeCandidate = safeCandidate();
-      durableCandidate = Math.max(durableCandidate ?? 0, Math.min(event.created_at, nowSec()));
+      const nowSec = Math.floor(Date.now() / 1000);
+      durableCandidate = Math.max(durableCandidate ?? 0, Math.min(event.created_at, nowSec));
       const nextSafeCandidate = safeCandidate();
       return backfillComplete && nextSafeCandidate !== previousSafeCandidate
         ? nextSafeCandidate
@@ -92,10 +88,8 @@ export function createNostrCursorStateWriter(options: {
   };
 
   const clearTimer = (): void => {
-    if (timer) {
-      clearTimeout(timer);
-      timer = undefined;
-    }
+    clearTimeout(timer);
+    timer = undefined;
   };
 
   const runFlush = async (): Promise<void> => {
@@ -122,13 +116,10 @@ export function createNostrCursorStateWriter(options: {
     if (activeFlush) {
       return activeFlush;
     }
-    const tracked = runFlush().finally(() => {
-      if (activeFlush === tracked) {
-        activeFlush = undefined;
-      }
+    activeFlush = runFlush().finally(() => {
+      activeFlush = undefined;
     });
-    activeFlush = tracked;
-    return tracked;
+    return activeFlush;
   };
 
   const setDesiredCursor = (cursor: number): void => {

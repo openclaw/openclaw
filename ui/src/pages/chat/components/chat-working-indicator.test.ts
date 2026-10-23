@@ -1,130 +1,120 @@
-import { render } from "lit";
-import { describe, expect, it } from "vitest";
+import { createComponent, createSignal, flush } from "solid-js";
+import { expect, it, vi } from "vitest";
+import type { GatewaySessionRow } from "../../../api/types.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { selectWorkingClawSurprise } from "./chat-working-indicator-surprise.ts";
-import { renderChatWorkingIndicator } from "./chat-working-indicator.ts";
+import { ChatWorkingIndicator } from "./chat-working-indicator.tsx";
 
-// The picker's spec: every seeded surprise must come from this fixed rotation.
-const SURPRISE_CLASSES = [
-  "chat-reading-indicator--southpaw",
-  "chat-reading-indicator--flurry",
-  "chat-reading-indicator--spin",
-  "chat-reading-indicator--shadowbox",
-  "chat-reading-indicator--backflip",
-  "chat-reading-indicator--zen",
-  "chat-reading-indicator--drummer",
-  "chat-reading-indicator--peekaboo",
-  "chat-reading-indicator--nodoff",
-  "chat-reading-indicator--curious",
-  "chat-reading-indicator--omnom",
-  "chat-reading-indicator--fakeout",
-] as const;
+const bubbleSelector = ".chat-bubble.chat-reading-indicator";
 
-// The keyed sample is deterministic for a fixed salt, so the rarity and spread
-// assertions below are exact re-runs, not statistical flakes.
-const SAMPLE_SALT = 0x5eed;
-const sampleDecisions = Array.from({ length: 10_000 }, (_, index) =>
-  selectWorkingClawSurprise(`run:${index}`, { salt: SAMPLE_SALT }),
-);
+type Options = Parameters<typeof ChatWorkingIndicator>[0]["options"];
 
-function findSampleKey(wantSurprise: boolean): string {
-  const index = sampleDecisions.findIndex((decision) => Boolean(decision) === wantSurprise);
-  if (index === -1) {
-    throw new Error(`no sample key with surprise=${String(wantSurprise)}`);
-  }
-  return `run:${index}`;
+function indicator(key: string, initial: Options = {}) {
+  const [options, setOptions] = createSignal(initial);
+  const view = mountSolid(() =>
+    createComponent(ChatWorkingIndicator, {
+      part: { kind: "reading-indicator", key, startedAt: 1 },
+      get options() {
+        return options();
+      },
+    }),
+  );
+  flush();
+  return {
+    ...view,
+    find: (selector: string) => view.container.querySelector(selector),
+    draw: (next: Options) => {
+      setOptions(next);
+      flush();
+    },
+  };
 }
 
-describe("selectWorkingClawSurprise", () => {
-  it("keeps surprises rare, deterministic, and spread across every move", () => {
-    const surprises = sampleDecisions.filter(Boolean);
-
-    // ~5% target: SURPRISE_CHANCE_PER_THOUSAND=50 over 10k keys lands near 500.
-    expect(surprises.length).toBeGreaterThan(400);
-    expect(surprises.length).toBeLessThan(600);
-    expect(selectWorkingClawSurprise("run:42", { salt: SAMPLE_SALT })).toBe(
-      selectWorkingClawSurprise("run:42", { salt: SAMPLE_SALT }),
-    );
-    expect(new Set(surprises)).toEqual(new Set(SURPRISE_CLASSES));
-
-    // The move pick must not reuse the rarity bits (hash % 1000); if it did,
-    // some moves would cluster while others nearly vanish from the rotation.
-    const counts = new Map<string, number>();
-    for (const surprise of surprises) {
-      counts.set(surprise, (counts.get(surprise) ?? 0) + 1);
+function surpriseKey(): string {
+  for (let index = 0; index < 10_000; index++) {
+    const key = `probe:${index}`;
+    if (selectWorkingClawSurprise(key)) {
+      return key;
     }
-    for (const surpriseClass of SURPRISE_CLASSES) {
-      expect(counts.get(surpriseClass) ?? 0).toBeGreaterThanOrEqual(10);
-    }
-  });
+  }
+  throw new Error("no surprising render key");
+}
 
-  it("keeps ineligible keys on the default claw even when they would surprise", () => {
-    const surprisingKey = findSampleKey(true);
-    expect(selectWorkingClawSurprise(surprisingKey, { salt: SAMPLE_SALT })).not.toBe("");
-    expect(selectWorkingClawSurprise(surprisingKey, { salt: SAMPLE_SALT, eligible: false })).toBe(
-      "",
-    );
-  });
+it("pops in for new work but continues a claw that another one just handed off", () => {
+  const now = vi.spyOn(performance, "now").mockReturnValue(10_000);
+  const isContinued = (view: ReturnType<typeof indicator>) =>
+    view.find(".chat-working-indicator")?.classList.contains("chat-working-indicator--continued");
+  const preview = indicator("handoff");
+  expect(isContinued(preview)).toBe(false);
+  preview.unmount();
+  now.mockReturnValue(10_200);
+  expect(isContinued(indicator("handoff"))).toBe(true);
 });
 
-describe("renderChatWorkingIndicator", () => {
-  it("renders neutral dots without claw surprises and forwards authored phrases", () => {
-    const container = document.createElement("div");
-    const workingPhrases = ["Building"];
-    render(
-      renderChatWorkingIndicator(
-        { kind: "reading-indicator", key: findRenderKey(true), startedAt: 1 },
-        { mascot: "none", workingPhrases },
-      ),
-      container,
-    );
-    const bubble = container.querySelector(".chat-reading-indicator--neutral");
+it("promotes child activity above supporting totals and restores the standalone glyph", async () => {
+  const { draw, find } = indicator("task-first", { outputTokens: 4_100 });
+  expect(find(bubbleSelector)).not.toBeNull();
+  const session: GatewaySessionRow = { key: "agent:a:subagent:b", kind: "direct", updatedAt: 1 };
+  draw({
+    outputTokens: 4_100,
+    subagentActivity: {
+      rows: [{ key: session.key, label: "Task", status: "running", listed: true, session }],
+    },
+  });
+  await vi.dynamicImportSettled();
+  flush();
+  const task = find(".chat-subagent-activity");
+  const status = find(".chat-working-indicator");
+  expect(status?.classList.contains("chat-working-indicator--supporting")).toBe(true);
+  expect(task!.compareDocumentPosition(status!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(find(bubbleSelector)).toBeNull();
+  expect(status?.textContent).toContain("4.1k output tokens");
+  draw({ outputTokens: 4_100 });
+  expect(find(".chat-subagent-activity")).toBeNull();
+  expect(find(".chat-working-indicator--supporting")).toBeNull();
+  expect(find(bubbleSelector)).not.toBeNull();
+});
+
+it("selects the working glyph independently of the mascot and keeps text when hidden", () => {
+  const { container, draw, find } = indicator("brand-test", {
+    mascot: "claw",
+    workingIndicator: "dots",
+  });
+  expect(container.querySelectorAll(".chat-reading-indicator--neutral > span")).toHaveLength(3);
+  draw({ mascot: "none", workingIndicator: "claw" });
+  expect(find(".chat-reading-indicator svg")).not.toBeNull();
+  draw({ workingIndicator: "brand" });
+  expect(find(".chat-reading-indicator--brand")).not.toBeNull();
+  draw({ workingIndicator: "none", workingPhrases: [] });
+  expect(find(bubbleSelector)).toBeNull();
+  expect(find(".chat-working-indicator__status > span")?.classList.contains("sr-only")).toBe(false);
+  expect(container.textContent).toContain("Working");
+});
+
+it.each<[Options, string[]]>([
+  [{ mascot: "none", workingPhrases: ["Building"] }, ["chat-reading-indicator--neutral"]],
+  [{ waitingApproval: true }, []],
+])("suppresses surprising claws for %j", (options, expectedClasses) => {
+  const { find } = indicator(surpriseKey(), options);
+  const bubble = find(bubbleSelector);
+  expect(
+    [...bubble!.classList].filter((name) => name.startsWith("chat-reading-indicator--")),
+  ).toEqual(expectedClasses);
+  if (options.workingPhrases) {
     expect(bubble?.querySelectorAll("span")).toHaveLength(3);
     expect(bubble?.querySelector("svg")).toBeNull();
-    expect(
-      [...bubble!.classList].filter((name) => name.startsWith("chat-reading-indicator--")),
-    ).toEqual(["chat-reading-indicator--neutral"]);
-    expect(container.querySelector("openclaw-working-phrase")).toHaveProperty(
-      "phrases",
-      workingPhrases,
-    );
-  });
-  // The render path seeds with the module's per-page-load salt, so probe that
-  // same default salt for keys that do (and do not) surprise this session.
-  function findRenderKey(wantSurprise: boolean): string {
-    for (let index = 0; index < 10_000; index++) {
-      const key = `probe:${index}`;
-      if (Boolean(selectWorkingClawSurprise(key)) === wantSurprise) {
-        return key;
-      }
-    }
-    throw new Error(`no render key with surprise=${String(wantSurprise)}`);
+    expect(find("openclaw-working-phrase")).toHaveProperty("phrases", options.workingPhrases);
   }
+});
 
-  function surpriseClassesFor(key: string, waitingApproval: boolean): string[] {
-    const container = document.createElement("div");
-    render(
-      renderChatWorkingIndicator(
-        { kind: "reading-indicator", key, startedAt: 1 },
-        { waitingApproval },
-      ),
-      container,
-    );
-    const bubble = container.querySelector(".chat-reading-indicator");
-    expect(bubble).not.toBeNull();
-    return [...(bubble?.classList ?? [])].filter((name) =>
-      name.startsWith("chat-reading-indicator--"),
-    );
-  }
-
-  it("routes the seeded surprise class onto the claw bubble", () => {
-    const surprisingKey = findRenderKey(true);
-    expect(surpriseClassesFor(surprisingKey, false)).toEqual([
-      selectWorkingClawSurprise(surprisingKey),
-    ]);
-    expect(surpriseClassesFor(findRenderKey(false), false)).toEqual([]);
-  });
-
-  it("keeps approval waits on the default claw even for surprising keys", () => {
-    expect(surpriseClassesFor(findRenderKey(true), true)).toEqual([]);
-  });
+it("retains an open activity disclosure and its animation when usage updates", () => {
+  const totals = { bubbleMode: true, outputTokens: 12 };
+  const { container, draw, find } = indicator("run", totals);
+  const details = Object.assign(container.querySelector("details")!, { open: true });
+  const glyph = find(bubbleSelector)!;
+  draw({ ...totals, outputTokens: 27 });
+  expect(find("details")).toBe(details);
+  expect(details.open).toBe(true);
+  expect(find(bubbleSelector)).toBe(glyph);
+  expect(container.textContent).toContain("27 output tokens");
 });

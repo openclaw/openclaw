@@ -24,6 +24,27 @@ cache writes, and every completed model call in the side thread's native tool
 loop; replayed response IDs are counted once. The visible reply still contains
 only the last answer, and the main session's usage and context snapshot stay unchanged.
 
+Read-only session forks reuse the parent's prepared thread and turn settings.
+On managed inference routes, they replay the last model request's exact
+instructions, tool schemas, and input prefix, followed by the completed parent
+response and the side question. Further fork continuations retain their tool-denial
+outcomes. If the reconstructed history no longer matches the recorded prefix,
+native history takes precedence without guaranteed prompt-cache reuse.
+These request snapshots stay in process memory after parent settlement, within
+a shared 32 MiB least-recently-used budget. An evicted or oversized snapshot,
+or a WebSocket continuation that references prior server-side context, falls
+back to native thread reconstruction without guaranteed prompt-cache reuse.
+When the prepared request remains in the snapshot budget, native reconstruction retains
+the parent's exact instructions and tool schemas, including the code-mode catalog. Tool choice
+remains `none` and native hosted search stays disabled.
+The separately retained OpenClaw instruction text is limited to 256 KiB per
+thread and 256 threads per route. Thread retirement or client shutdown removes
+the retained context. None of these snapshots extends the parent's authority:
+each fork uses the current side request's authorization and cancellation lifetime.
+Native tools are denied through the required PreToolUse relay. Hosted web search
+is disabled in Codex, and replayed requests use `tool_choice: "none"` so retaining
+the parent's exact tool schemas cannot enable hosted execution.
+
 For native connected apps, Codex also owns the final per-thread app and tool
 policy. OpenClaw caches a runtime-and-workspace-scoped `plugin/installed`
 snapshot, reads exact configured plugin details, provisionally admits only
@@ -62,14 +83,19 @@ OpenClaw developer instructions cover OpenClaw runtime concerns: source-channel
 delivery, OpenClaw dynamic tools, ACP delegation, adapter context, and the
 active agent workspace profile files. With an OpenClaw-managed direct stdio
 app-server, including a Desktop executable selected for Computer Use, skill
-catalogs, persona files, memory-provider instructions, and tool-routed `MEMORY.md` guidance
+catalogs, persona files, memory-provider instructions, plugin-injected system
+context, and tool-routed `MEMORY.md` guidance
 are appended to the parent model request instructions by a private inference
 relay. Native base and catalog instructions remain unchanged; this new context
 is not written to native conversation history or automatically inherited by
 native subagents. Connections without that relay carry eligible skills, persona, and memory
 in thread developer instructions instead, preserving delivery when the model
 owns collaboration-mode instructions. Native children can inherit that fallback context; selected personal `users/<profile-id>/USER.md` overlays are excluded and require the managed parent-only relay. See [workspace bootstrap files](/plugins/codex-harness-reference/workspace-bootstrap-files)
-for fallback refresh and inheritance semantics. Active `BOOTSTRAP.md` and, when memory tools are unavailable,
+for fallback refresh and inheritance semantics. Plugin `before_prompt_build`
+system context is prepared for each turn; changing recall results does not reload
+the managed thread or block follow-up messages while a background command runs.
+It follows stable parent context and shares the relay's 256 KiB context limit.
+Plugin `systemPrompt` replacements remain thread policy. Active `BOOTSTRAP.md` and, when memory tools are unavailable,
 bounded `MEMORY.md` content travel as plain turn input references. They are
 introduced on a new native thread, after a cold resume or native compaction,
 and when their rendered content changes. Consecutive warm turns omit unchanged
@@ -157,7 +183,7 @@ nine child pages below. The anchors from the single-page version still resolve h
 
 [Codex replies and final answers](/plugins/codex-harness-runtime/replies) — Visible reply delivery, heartbeat turns, and bounded final-answer recovery.
 
-- <a id="visible-replies-and-heartbeats"></a>[Visible replies and heartbeats](/plugins/codex-harness-runtime/replies#visible-replies-and-heartbeats)
+- <a id="visible-replies-and-heartbeats"></a>[Visible replies and scheduled turns](/plugins/codex-harness-runtime/replies#visible-replies-and-heartbeats)
 - <a id="final-answers-after-settled-tool-work"></a>[Final answers after settled tool work](/plugins/codex-harness-runtime/replies#final-answers-after-settled-tool-work)
 
 ### Codex hook boundaries

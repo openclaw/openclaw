@@ -37,6 +37,7 @@ const CHAT_TEMPLATE_THINKING_MODEL_IDS = new Set([
 const BASE_COMPAT: ModelCompatConfig = {
   supportsStore: false,
   supportsDeveloperRole: false,
+  supportsReasoningEffort: false,
   supportsUsageInStreaming: true,
   supportsStrictMode: true,
   supportsTools: true,
@@ -55,7 +56,7 @@ export function usesBasetenChatTemplateThinking(modelId: string): boolean {
 export function buildBasetenModelCompat(modelId: string): ModelCompatConfig {
   return {
     ...BASE_COMPAT,
-    ...structuredClone(BASETEN_MODEL_COMPAT.get(modelId)),
+    ...BASETEN_MODEL_COMPAT.get(modelId),
   };
 }
 
@@ -74,20 +75,6 @@ function readPerTokenPrice(value: unknown): number | undefined {
   return Number.isFinite(number) && number >= 0
     ? Number((number * 1_000_000).toFixed(9))
     : undefined;
-}
-
-function applyLiveReasoningEffortCompat(
-  fallbackCompat: ModelCompatConfig,
-  supportsReasoningEffort: boolean,
-): ModelCompatConfig {
-  if (supportsReasoningEffort) {
-    return { ...fallbackCompat, supportsReasoningEffort: true };
-  }
-  const compat = { ...fallbackCompat };
-  delete compat.supportsReasoningEffort;
-  delete compat.supportedReasoningEfforts;
-  delete compat.reasoningEffortMap;
-  return compat;
 }
 
 function projectLiveModel(
@@ -118,9 +105,14 @@ function projectLiveModel(
   const supportsReasoningEffort =
     features.has("reasoning_effort") ||
     (hasDocumentedSparseFeatures && fallbackCompat.supportsReasoningEffort === true);
-  const compat = hasLiveFeatures
-    ? applyLiveReasoningEffortCompat(fallbackCompat, supportsReasoningEffort)
-    : fallbackCompat;
+  let compat = fallbackCompat;
+  if (hasLiveFeatures) {
+    compat = { ...fallbackCompat, supportsReasoningEffort };
+    if (!supportsReasoningEffort) {
+      delete compat.supportedReasoningEfforts;
+      delete compat.reasoningEffortMap;
+    }
+  }
 
   return {
     id,

@@ -6,17 +6,27 @@ import { isBundledProviderCompatPlugin } from "./bundled-provider-compat.js";
 import {
   createPluginActivationSource,
   normalizePluginsConfig,
+  resolveEffectiveEnableState,
   resolveEffectivePluginActivationState,
   type PluginActivationConfigSource,
 } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
+import { hasConfigPathActivationMetadataMigration } from "./installed-plugin-index-config-path-scope.js";
+import { hashJson } from "./installed-plugin-index-hash.js";
+import {
+  isInstalledPluginIndexInstallOwnerAmbiguous,
+  resolveInstalledPluginIndexInstallOwner,
+} from "./installed-plugin-index-install-owner.js";
 import { normalizeInstallRecordMap } from "./installed-plugin-index-install-records.js";
 import {
   resolveCompatRegistryVersion,
   resolveInstalledPluginIndexPolicyHash,
 } from "./installed-plugin-index-policy.js";
-import { buildInstalledPluginIndexRecords } from "./installed-plugin-index-record-builder.js";
+import {
+  buildInstalledPluginIndexRecords,
+  type InstalledPluginIndexInventoryRecord,
+} from "./installed-plugin-index-record-builder.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import { resolveInstalledPluginIndexStorePath } from "./installed-plugin-index-store-path.js";
 import {
@@ -48,7 +58,6 @@ export type {
   RefreshInstalledPluginIndexParams,
 } from "./installed-plugin-index-types.js";
 export { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index-install-records.js";
-export { diffInstalledPluginIndexInvalidationReasons } from "./installed-plugin-index-invalidation.js";
 export { hasMissingConfigPathActivationMetadata } from "./installed-plugin-index-config-path-scope.js";
 export { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 
@@ -99,20 +108,17 @@ function buildInstalledPluginIndex(
   });
   const diagnostics = [...(registry.diagnostics ?? [])];
   const generatedAtMs = (params.now?.() ?? new Date()).getTime();
-  const activationConfig = withBundledPluginEnablementCompat({
+  const plugins = projectInstalledPluginIndexPolicy({
+    plugins: buildInstalledPluginIndexRecords({
+      candidates: discovery.candidates,
+      registry,
+      env,
+      diagnostics,
+      installRecords,
+    }),
     config: params.config,
     env,
-    pluginIds: registry.plugins.filter(isBundledProviderCompatPlugin).map((plugin) => plugin.id),
-    activation: "defaults",
     artifactPreservingReadOnly: params.artifactPreservingReadOnly,
-  });
-  const plugins = buildInstalledPluginIndexRecords({
-    candidates: discovery.candidates,
-    registry,
-    config: activationConfig,
-    env,
-    diagnostics,
-    installRecords,
   });
 
   return {
@@ -135,6 +141,37 @@ function buildInstalledPluginIndex(
     discovery: params.candidates ? undefined : discovery,
     manifestRegistry: registry,
   };
+}
+
+/**
+ * Activation is the only config-owned index fact. A policy change re-projects the
+ * same disk inventory in memory; only install, uninstall or source changes rescan.
+ */
+export function projectInstalledPluginIndexPolicy(params: {
+  plugins: readonly InstalledPluginIndexInventoryRecord[];
+  config?: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  artifactPreservingReadOnly?: boolean;
+}): InstalledPluginIndexRecord[] {
+  const activationConfig = withBundledPluginEnablementCompat({
+    config: params.config,
+    env: params.env,
+    pluginIds: params.plugins.filter(isInstalledBundledProvider).map((plugin) => plugin.pluginId),
+    activation: "defaults",
+    artifactPreservingReadOnly: params.artifactPreservingReadOnly,
+  });
+  const normalizedConfig = normalizePluginsConfig(activationConfig?.plugins);
+  return params.plugins.map((plugin) => ({
+    ...plugin,
+    enabled: resolveEffectiveEnableState({
+      id: plugin.pluginId,
+      origin: plugin.origin,
+      channelIds: plugin.contributions?.channels,
+      config: normalizedConfig,
+      rootConfig: activationConfig,
+      enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin),
+    }).enabled,
+  }));
 }
 
 export function loadInstalledPluginIndex(
@@ -186,7 +223,7 @@ export function isInstalledPluginEnabled(
   return createInstalledPluginEnabledPredicate([record], config, env)(pluginId);
 }
 
-function isInstalledBundledProvider(record: InstalledPluginIndexRecord): boolean {
+function isInstalledBundledProvider(record: InstalledPluginIndexInventoryRecord): boolean {
   return isBundledProviderCompatPlugin({
     origin: record.origin,
     providers: record.contributions?.providers,
@@ -246,4 +283,83 @@ export function createInstalledPluginEnabledPredicate(
       enabledByDefault: isPluginEnabledByDefaultForPlatform(record),
     }).enabled;
   };
+}
+
+export function diffInstalledPluginIndexInvalidationReasons(
+  previous: InstalledPluginIndex,
+  current: InstalledPluginIndex,
+): readonly InstalledPluginIndexRefreshReason[] {
+  const reasons = new Set<InstalledPluginIndexRefreshReason>();
+  if (previous.version !== current.version) {
+    reasons.add("missing");
+  }
+  if (previous.hostContractVersion !== current.hostContractVersion) {
+    reasons.add("host-contract-changed");
+  }
+  if (previous.compatRegistryVersion !== current.compatRegistryVersion) {
+    reasons.add("compat-registry-changed");
+  }
+  if (previous.migrationVersion !== current.migrationVersion) {
+    reasons.add("migration");
+  }
+  if (previous.policyHash !== current.policyHash) {
+    reasons.add("policy-changed");
+  }
+  if (hashJson(previous.installRecords ?? {}) !== hashJson(current.installRecords ?? {})) {
+    reasons.add("source-changed");
+  }
+
+  const previousByPluginId = new Map(previous.plugins.map((plugin) => [plugin.pluginId, plugin]));
+  const currentByPluginId = new Map(current.plugins.map((plugin) => [plugin.pluginId, plugin]));
+  for (const [pluginId, previousPlugin] of previousByPluginId) {
+    const currentPlugin = currentByPluginId.get(pluginId);
+    if (!currentPlugin) {
+      reasons.add("source-changed");
+      continue;
+    }
+    if (
+      previousPlugin.rootDir !== currentPlugin.rootDir ||
+      previousPlugin.manifestPath !== currentPlugin.manifestPath ||
+      previousPlugin.source !== currentPlugin.source ||
+      previousPlugin.setupSource !== currentPlugin.setupSource ||
+      resolveInstalledPluginIndexInstallOwner(previousPlugin) !==
+        resolveInstalledPluginIndexInstallOwner(currentPlugin) ||
+      isInstalledPluginIndexInstallOwnerAmbiguous(previousPlugin) !==
+        isInstalledPluginIndexInstallOwnerAmbiguous(currentPlugin) ||
+      previousPlugin.installRecordHash !== currentPlugin.installRecordHash
+    ) {
+      reasons.add("source-changed");
+    }
+    if (previousPlugin.enabled !== currentPlugin.enabled) {
+      reasons.add("policy-changed");
+    }
+    if (
+      hasConfigPathActivationMetadataMigration({
+        previous: previousPlugin,
+        current: currentPlugin,
+      })
+    ) {
+      reasons.add("migration");
+    }
+    if (
+      previousPlugin.manifestHash !== currentPlugin.manifestHash ||
+      previousPlugin.doctorContractHash !== currentPlugin.doctorContractHash
+    ) {
+      reasons.add("stale-manifest");
+    }
+    if (
+      previousPlugin.packageVersion !== currentPlugin.packageVersion ||
+      previousPlugin.packageJson?.path !== currentPlugin.packageJson?.path ||
+      previousPlugin.packageJson?.hash !== currentPlugin.packageJson?.hash
+    ) {
+      reasons.add("stale-package");
+    }
+  }
+  for (const [pluginId, plugin] of currentByPluginId) {
+    if (!previousByPluginId.has(pluginId) && plugin.enabled) {
+      reasons.add("source-changed");
+    }
+  }
+
+  return Array.from(reasons).toSorted((left, right) => left.localeCompare(right));
 }

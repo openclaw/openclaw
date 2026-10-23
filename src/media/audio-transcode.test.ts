@@ -1,8 +1,7 @@
 // Audio transcode tests cover ffmpeg-backed audio conversion behavior.
-import { existsSync, realpathSync } from "node:fs";
+import syncFs, { existsSync, realpathSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 
@@ -46,6 +45,7 @@ describe("transcodeAudioBufferToOpus", () => {
   });
 
   it("writes input audio, runs ffmpeg for 48k mono Opus, and cleans temp files", async () => {
+    using sync = vi.spyOn(syncFs, "fsyncSync");
     let capturedInputPath: string | undefined;
     let capturedOutputPath: string | undefined;
     runFfmpegMock.mockImplementationOnce(async (args: string[]) => {
@@ -101,6 +101,7 @@ describe("transcodeAudioBufferToOpus", () => {
     expect(capturedInputPath?.startsWith(path.join(tempRoot, "tts-test-"))).toBe(true);
     expect(capturedInputPath ? existsSync(capturedInputPath) : true).toBe(false);
     expect(capturedOutputPath ? existsSync(capturedOutputPath) : true).toBe(false);
+    expect(sync).not.toHaveBeenCalled();
   });
 
   it("sanitizes unsafe input extensions", async () => {
@@ -195,7 +196,6 @@ describe("transcodeAudioBufferToOpus", () => {
 
 describe("transcodeAudioBuffer", () => {
   afterEach(() => {
-    __setFsSafeTestHooksForTest(undefined);
     vi.restoreAllMocks();
     runCommandWithTimeoutMock.mockReset();
     runFfmpegMock.mockReset();
@@ -204,11 +204,14 @@ describe("transcodeAudioBuffer", () => {
   it("returns a failure and cleans its workspace when input staging fails", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
     let workspaceDir: string | undefined;
-    __setFsSafeTestHooksForTest({
-      beforeFileStoreSyncPrivateWrite: (filePath) => {
+    const lstat = syncFs.lstatSync;
+    vi.spyOn(syncFs, "lstatSync").mockImplementation((...args) => {
+      const [filePath] = args;
+      if (typeof filePath === "string" && path.basename(filePath) === "in.mp3") {
         workspaceDir = path.dirname(filePath);
         throw Object.assign(new Error("input exceeds bounded staging limit"), { code: "EFBIG" });
-      },
+      }
+      return lstat(...args);
     });
 
     const result = await transcodeAudioBuffer({

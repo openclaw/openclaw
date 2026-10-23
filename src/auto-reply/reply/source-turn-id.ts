@@ -29,6 +29,16 @@ export function shouldMintChannelSourceTurnId(ingressProvider: string | undefine
   return !isInternalMessageChannel(ingressProvider);
 }
 
+/** Uses the same short-id-first identity as durable reply admission. */
+export function resolveReplyAdmissionRunId(context: {
+  MessageSid?: unknown;
+  MessageSidFull?: unknown;
+}): string | undefined {
+  return (
+    normalizeOptionalString(context.MessageSid) ?? normalizeOptionalString(context.MessageSidFull)
+  );
+}
+
 /** Preserve the admitted input identity when a queued or recovered turn gets a new run ID. */
 export function resolveReplySourceTurnId(params: {
   sourceTurnId?: string;
@@ -104,4 +114,10 @@ export function setChannelSourceTurnSameThreadRequired(
 
 export function readChannelSourceTurnSameThreadRequired(context: object): boolean {
   return (context as ChannelSourceTurnContext)[CHANNEL_SOURCE_TURN_SAME_THREAD_REQUIRED] === true;
+}
+
+/** Keep input identity and its narrowed channel scope together across execution handoffs. */
+export function copyChannelSourceTurnContext(target: object, source: object): void {
+  setChannelSourceTurnId(target, readChannelSourceTurnId(source));
+  setChannelSourceTurnSameThreadRequired(target, readChannelSourceTurnSameThreadRequired(source));
 }

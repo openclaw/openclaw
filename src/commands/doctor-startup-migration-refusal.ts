@@ -1,4 +1,3 @@
-// Gateway startup-migration readiness refusals shared by doctor config preflight.
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isTerminalSqliteIntegrityError } from "../infra/sqlite-integrity.js";
@@ -43,12 +42,6 @@ function throwStartupMigrationRefusal(message: string, cause?: unknown): never {
 export function throwStartupMigrationGuardRejected(): never {
   throw new Error(
     "OpenClaw startup migrations were skipped because the selected config changed during startup; refusing to report the gateway ready. Retry startup so the new config can be validated.",
-  );
-}
-
-export function throwStartupMigrationIdentityChanged(reason?: string): never {
-  throwStartupMigrationRefusal(
-    `OpenClaw migration inputs changed during startup${reason ? ` (${reason})` : ""}; refusing to report the gateway ready. Restart OpenClaw so state migrations run against the final config and plugin inventory.`,
   );
 }
 

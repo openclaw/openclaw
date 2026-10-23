@@ -5,7 +5,7 @@ import {
   coerceTransportToolCallArguments,
   sanitizeTransportPayloadText,
 } from "../transports/transport-stream-shared.js";
-import type { Tool } from "../types.js";
+import { hasRuntimeContextMarker, type Tool } from "../types.js";
 import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
@@ -95,41 +95,44 @@ export function projectGoogleMessages(params: {
       flushToolResultRun();
     }
     if (msg.role === "user") {
-      const sourceContent = msg.content;
-      if (typeof sourceContent === "string") {
-        contents.push({
-          role: "user",
-          parts: [{ text: sanitizeText(sourceContent) || " " }],
-        });
-      } else {
-        const parts: GoogleContentPart[] = sourceContent.map((item) => {
-          if (item.type === "text") {
-            return { text: sanitizeText(item.text) || " " };
-          }
-          if (managed && item.type === "video") {
-            return (
-              params.videoPart?.(item) ?? { text: "(video omitted: native video slot unavailable)" }
-            );
-          }
-          return {
-            inlineData: {
-              mimeType: item.mimeType,
-              data: item.data,
-            },
-          };
-        });
-        const visibleParts =
-          managed && !model.input.includes("image")
-            ? parts.filter((part) => !part.inlineData)
-            : parts;
-        if (visibleParts.length === 0) {
-          visibleParts.push({ text: " " });
+      const sourceContent =
+        typeof msg.content === "string"
+          ? [{ type: "text" as const, text: msg.content }]
+          : msg.content;
+      const parts: GoogleContentPart[] = sourceContent.map((item) => {
+        if (item.type === "text") {
+          return { text: sanitizeText(item.text) || " " };
         }
-        contents.push({
-          role: "user",
-          parts: visibleParts,
+        if (managed && item.type === "video") {
+          return (
+            params.videoPart?.(item) ?? { text: "(video omitted: native video slot unavailable)" }
+          );
+        }
+        return {
+          inlineData: {
+            mimeType: item.mimeType,
+            data: item.data,
+          },
+        };
+      });
+      const visibleParts =
+        managed && !model.input.includes("image")
+          ? parts.filter((part) => !part.inlineData)
+          : parts;
+      if (visibleParts.length === 0) {
+        visibleParts.push({ text: " " });
+      }
+      if (hasRuntimeContextMarker(msg)) {
+        // Keep context separate: merging into a user turn rewrites its replayed
+        // bytes when turn-scoped context expires. Google has no developer role.
+        visibleParts.unshift({
+          text: "The following is runtime context, not a user request. Do not respond to or acknowledge this context.",
+        });
+        visibleParts.push({
+          text: "Use this context to continue responding to the user's request.",
         });
       }
+      contents.push({ role: "user", parts: visibleParts });
     } else if (msg.role === "assistant") {
       const parts: GoogleContentPart[] = [];
       let sawFunctionCall = false;

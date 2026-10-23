@@ -7,6 +7,7 @@ import {
   unregisterAcpRuntimeBackend,
 } from "../../acp/runtime/registry.js";
 import * as embeddedAgent from "../../agents/embedded-agent.js";
+import { expectPendingQuestionAnswerClaimable } from "../../agents/harness/gateway-question-claim.test-support.js";
 import { registerPendingAgentQuestion } from "../../agents/harness/gateway-question.js";
 import {
   listSessionPendingInputs,
@@ -104,6 +105,7 @@ it.each(scenarios)(
       let turns = 0;
       let recorder: UserTurnTranscriptRecorder | undefined;
       let sourceCommittedBeforeEffect = false;
+      let sourceCommittedBeforeStart = false;
       const recordProcessed = vi.fn();
       const markIdle = vi.fn();
       const binding: SessionBindingRecord = {
@@ -261,6 +263,9 @@ it.each(scenarios)(
           shouldRouteToOriginating: false,
           bypassForCommand: false,
           userTurnTranscriptRecorder: recorder,
+          onAgentRunStart: () => {
+            sourceCommittedBeforeStart = recorder?.hasPersisted() === true;
+          },
           recordProcessed,
           markIdle,
         });
@@ -269,6 +274,9 @@ it.each(scenarios)(
         expect(result).not.toBeNull();
         expect(turns).toBe(pendingQuestion || bindingRefused ? 0 : 1);
         expect(sourceCommittedBeforeEffect).toBe(!bindingRefused);
+        if (!pendingQuestion) {
+          expect(sourceCommittedBeforeStart).toBe(true);
+        }
         expect(persistApproved).toHaveBeenCalledOnce();
         expect(recordProcessed).toHaveBeenCalledOnce();
         expect(markIdle).toHaveBeenCalledOnce();
@@ -299,7 +307,9 @@ it.each(scenarios)(
               reason: pendingQuestion ? "acp_question_answer_refused" : "acp_error:acp_turn_failed",
             }),
           );
-          expect(claim?.isResolving() ?? false).toBe(false);
+          if (claim) {
+            await expectPendingQuestionAnswerClaimable(sessionKey, true);
+          }
         } else if (confirmedQuestion) {
           expect(resolveQuestion).toHaveBeenCalledOnce();
           expect(delivered).toEqual([]);

@@ -1,7 +1,6 @@
 import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
 import type { DesktopHostConfig } from "../config/types.desktop.js";
 import { createExecApprovalPolicySnapshot } from "../infra/exec-approvals.js";
-import type { scanInstalledApps } from "../infra/installed-apps.js";
 import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
 import type { OpenClawPluginNodeHostCommandContext } from "../plugins/types.node-host.js";
 import type { NodeHostClient, NodeInvokeResponder } from "./client.js";
@@ -13,17 +12,15 @@ import {
 import { runClaudeCliNodeCommand } from "./invoke-agent-cli-claude.js";
 import { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
 import { handleSystemRunInvoke, resolveEffectiveSystemRunExecPolicy } from "./invoke-system-run.js";
-import type { NodeInvokeRequestPayload, RunResult, SkillBinsProvider } from "./invoke-types.js";
+import type { NodeInvokeRequestPayload, RunResult } from "./invoke-types.js";
+import type { SkillBinsProvider } from "./runtime-skill-bins.js";
 
 export type NodeHostInvokeRuntime = {
   claudePath?: string;
-  handleSystemRun?: typeof handleSystemRunInvoke;
   signal?: AbortSignal;
   pluginCommandIo?: OpenClawPluginNodeHostCommandIo;
   pluginCommandContext?: OpenClawPluginNodeHostCommandContext;
   installedAppsSharingEnabled?: boolean;
-  installedAppsPlatform?: NodeJS.Platform;
-  scanInstalledApps?: typeof scanInstalledApps;
   gatewayUrl?: string;
   gatewayTlsFingerprint?: string;
   gatewayCloudflareAccess?: CloudflareAccessCredentials;
@@ -119,7 +116,7 @@ export async function handleClaudeCliNodeInvoke(params: {
     }),
   };
   let runResult: RunResult | undefined;
-  await (params.runtime.handleSystemRun ?? handleSystemRunInvoke)({
+  await handleSystemRunInvoke({
     // The command-specific validator is the execution boundary. Approval sees
     // every caller-supplied executable argument. The node adds its own prompt,
     // verified resources, and invocation-only MCP proxy after approval.

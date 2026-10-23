@@ -1,5 +1,6 @@
 import {
   resolveCommandAuthorization,
+  resolveCommandAuthorizationAsync,
   resolveCommandAuthorizedFromAuthorizers,
 } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -47,7 +48,7 @@ export function resolveDiscordNativePolicyReader(
   );
 }
 
-export function createDiscordNativeCommandAuthority(params: {
+export async function createDiscordNativeCommandAuthority(params: {
   cfg: OpenClawConfig;
   ctx: MsgContext;
   commandAuthorized: boolean;
@@ -59,7 +60,7 @@ export function createDiscordNativeCommandAuthority(params: {
   commandName: string;
   pluginCommand: boolean;
 }) {
-  const assertAdmittedOwner = resolveCommandAuthorization(params).assertOwnerCurrent;
+  const assertAdmittedOwner = (await resolveCommandAuthorizationAsync(params)).assertOwnerCurrent;
   const readAuthorization = () => {
     const cfg = getRuntimeConfigSnapshot() ?? params.cfg;
     const owners = resolveDiscordCommandOwnerAllowFrom(cfg);
@@ -183,7 +184,7 @@ export function resolveDiscordNativeCommandAccessContext(params: {
   });
   const guildInfo = resolveDiscordGuildEntry({
     guild: guild ?? undefined,
-    guildId: guild?.id ?? undefined,
+    guildId: guild?.id,
     guildEntries: params.discordConfig?.guilds,
   });
   const channelConfig = guild
@@ -241,13 +242,7 @@ export async function resolveDiscordGuildNativeCommandAuthorized(params: {
   if (!policyAuthorizer.allowed) {
     return false;
   }
-  const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState({
-    channelConfig: params.channelConfig,
-    guildInfo: params.guildInfo,
-    memberRoleIds: params.memberRoleIds,
-    sender: params.sender,
-    allowNameMatching: params.allowNameMatching,
-  });
+  const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState(params);
   const ownerAuthorizer = {
     configured: params.ownerAllowListConfigured,
     allowed: params.ownerAllowed,
@@ -316,27 +311,12 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
     return false;
   }
   const sender = resolveDiscordSenderIdentity({ author: user, pluralkitInfo: null });
-  const channelContext = await resolveDiscordNativeInteractionChannelContext({
-    channel: interaction.channel,
-    client: interaction.client,
-    hasGuild: Boolean(interaction.guild),
-    channelIdFallback: interaction.rawData.channel_id ?? "",
-  });
-  const {
-    isDirectMessage,
-    isGroupDm,
-    isThreadChannel,
-    channelName,
-    channelSlug,
-    rawChannelId,
-    threadParentId,
-  } = channelContext;
+  const channelContext = await resolveDiscordNativeInteractionChannelContext(interaction, "");
+  const { isDirectMessage, isGroupDm, channelName, channelSlug, rawChannelId, memberRoleIds } =
+    channelContext;
   if (params.isPolicyCurrent?.() === false) {
     return false;
   }
-  const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
-    ? interaction.rawData.member.roles.map((roleId: string) => roleId)
-    : [];
   const channelAccess = resolveDiscordNativeCommandAccessContext({
     cfg,
     accountId,
@@ -405,18 +385,12 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
     const routeState = resolveDiscordNativeInteractionRouteState({
       cfg,
       accountId,
-      guildId: interaction.guild?.id,
-      memberRoleIds,
-      isDirectMessage,
-      isGroupDm,
-      directUserId: user.id,
-      conversationId: rawChannelId,
-      parentConversationId: threadParentId,
-      threadBinding: isThreadChannel
-        ? params.threadBindings?.getByThreadId(rawChannelId)
-        : undefined,
+      interaction,
+      channelContext,
+      threadBindings: params.threadBindings,
     });
     const { ctxPayload } = await buildDiscordNativeInteractionContext({
+      cfg,
       buildContext: params.buildContext,
       interaction,
       channelContext,
@@ -433,7 +407,8 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
       commandArgs: {},
     });
     if (
-      !resolveCommandAuthorization({ ctx: ctxPayload, cfg, commandAuthorized: true }).senderIsOwner
+      !(await resolveCommandAuthorizationAsync({ ctx: ctxPayload, cfg, commandAuthorized: true }))
+        .senderIsOwner
     ) {
       return false;
     }

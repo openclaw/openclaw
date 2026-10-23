@@ -1,6 +1,7 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { t } from "../../i18n/index.ts";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
+import { BROWSER_ANNOTATION_EVENT } from "./browser-annotation-event.ts";
 import type { BrowserInspectedNode } from "./browser-client.ts";
 import type { BrowserTabTarget } from "./browser-target.ts";
 
@@ -33,8 +34,6 @@ export type BrowserAnnotationEvent = CustomEvent<BrowserAnnotationDraft> & {
   /** Synchronous consumer rejection keeps capture state retryable in the browser panel. */
   rejection?: "limit";
 };
-
-export const BROWSER_ANNOTATION_EVENT = "openclaw:browser-annotation";
 
 /**
  * Hands an annotation to whichever chat pane is active. The result distinguishes
@@ -235,17 +234,14 @@ export function paintAnnotations(
       const y = clamp01(point.y) * params.height;
       if (index === 0) {
         ctx.moveTo(x, y);
+        if (stroke.points.length === 1) {
+          // A click without movement still deserves a visible dot.
+          ctx.lineTo(x + 0.1, y);
+        }
       } else {
         ctx.lineTo(x, y);
       }
     });
-    if (stroke.points.length === 1) {
-      // A click without movement still deserves a visible dot.
-      const point = stroke.points[0];
-      if (point) {
-        ctx.lineTo(clamp01(point.x) * params.width + 0.1, clamp01(point.y) * params.height);
-      }
-    }
     ctx.stroke();
   }
   if (params.highlight) {

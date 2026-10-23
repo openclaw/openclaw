@@ -1,6 +1,5 @@
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage, type SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { assertChromeMcpCdpTransportAllowed } from "./cdp-reachability-policy.js";
 import { fetchOk, normalizeCdpHttpBaseForJsonEndpoints } from "./cdp.helpers.js";
 import { appendCdpPath } from "./cdp.js";
@@ -106,11 +105,7 @@ export function createProfileSelectionOps({
     const candidateTabs = (tabs: BrowserTab[]) =>
       capabilities.supportsPerTabWs ? tabs.filter((tab) => Boolean(tab.wsUrl)) : tabs;
     const canResolveSelection = (tabs: BrowserTab[]) => {
-      const desiredTargetId =
-        targetId ??
-        openedTab?.targetId ??
-        normalizeOptionalString(runtime.lastTargetId) ??
-        undefined;
+      const desiredTargetId = targetId ?? openedTab?.targetId ?? runtime.lastTargetId ?? undefined;
       if (!desiredTargetId) {
         return tabs.length > 0;
       }
@@ -169,7 +164,7 @@ export function createProfileSelectionOps({
         : new Error(formatErrorMessage(lastListError));
     }
 
-    const stickyTargetId = normalizeOptionalString(runtime.lastTargetId);
+    const stickyTargetId = runtime.lastTargetId ?? undefined;
     // Sticky selection is an identity promise: a missing target requires a fresh
     // explicit choice. Without one, prefer page tabs over background targets.
     const chosen = targetId
@@ -193,72 +188,63 @@ export function createProfileSelectionOps({
     return resolveBrowserTabOrThrow(targetId, tabs, options?.exactTargetId).targetId;
   };
 
-  const focusTab = async (targetId: string, options?: BrowserTabTargetOptions): Promise<void> => {
-    const resolvedTargetId = await resolveTargetIdOrThrow(targetId, options);
-
+  const prepareTabOperation = async (
+    action: "focus" | "close",
+    resolvedTargetId: string,
+    options?: BrowserTabTargetOptions,
+  ): Promise<() => Promise<void>> => {
     if (capabilities.usesChromeMcp) {
       assertChromeMcpCdpTransportAllowed(profile, getCdpControlPolicy());
-      const { focusChromeMcpTab } = await getChromeMcpModule();
-      options?.signal?.throwIfAborted();
-      await focusChromeMcpTab(profile.name, resolvedTargetId, profile, options);
-      runtime.lastTargetId = resolvedTargetId;
-      return;
+      const mod = await getChromeMcpModule();
+      const run = action === "focus" ? mod.focusChromeMcpTab : mod.closeChromeMcpTab;
+      return () => run(profile.name, resolvedTargetId, profile, options);
     }
 
-    if (capabilities.usesPersistentPlaywright || options?.assertCurrent) {
+    const assertCurrent = action === "focus" ? options?.assertCurrent : undefined;
+    if (capabilities.usesPersistentPlaywright || assertCurrent) {
       const mod = await getPwAiModule({ mode: "strict" });
       if (mod) {
-        options?.signal?.throwIfAborted();
-        await mod.focusPageByTargetIdViaPlaywright({
-          cdpUrl: profile.cdpUrl,
-          targetId: resolvedTargetId,
-          ssrfPolicy: getCdpControlPolicy(),
-          ...(options?.signal ? { signal: options.signal } : {}),
-          ...(options?.assertCurrent ? { assertCurrent: options.assertCurrent } : {}),
-        });
-        runtime.lastTargetId = resolvedTargetId;
-        return;
+        const run =
+          action === "focus"
+            ? mod.focusPageByTargetIdViaPlaywright
+            : mod.closePageByTargetIdViaPlaywright;
+        return () =>
+          run({
+            cdpUrl: profile.cdpUrl,
+            targetId: resolvedTargetId,
+            ssrfPolicy: getCdpControlPolicy(),
+            ...(options?.signal ? { signal: options.signal } : {}),
+            ...(assertCurrent ? { assertCurrent } : {}),
+          });
       }
-      if (options?.assertCurrent) {
+      if (assertCurrent) {
         throw new Error("Playwright focus is unavailable for this dashboard tab");
       }
     }
 
+    return () =>
+      fetchOk(
+        appendCdpPath(
+          cdpHttpBase,
+          `/json/${action === "focus" ? "activate" : "close"}/${resolvedTargetId}`,
+        ),
+        undefined,
+        options?.signal ? { signal: options.signal } : undefined,
+        getCdpControlPolicy(),
+      );
+  };
+
+  const focusTab = async (targetId: string, options?: BrowserTabTargetOptions): Promise<void> => {
+    const resolvedTargetId = await resolveTargetIdOrThrow(targetId, options);
+    const focus = await prepareTabOperation("focus", resolvedTargetId, options);
     options?.signal?.throwIfAborted();
-    await fetchOk(
-      appendCdpPath(cdpHttpBase, `/json/activate/${resolvedTargetId}`),
-      undefined,
-      options?.signal ? { signal: options.signal } : undefined,
-      getCdpControlPolicy(),
-    );
+    await focus();
     runtime.lastTargetId = resolvedTargetId;
   };
 
   const closeTab = async (targetId: string, options?: BrowserTabTargetOptions): Promise<string> => {
     const resolvedTargetId = await resolveTargetIdOrThrow(targetId, options);
-    let close = () =>
-      fetchOk(
-        appendCdpPath(cdpHttpBase, `/json/close/${resolvedTargetId}`),
-        undefined,
-        options?.signal ? { signal: options.signal } : undefined,
-        getCdpControlPolicy(),
-      );
-    if (capabilities.usesChromeMcp) {
-      assertChromeMcpCdpTransportAllowed(profile, getCdpControlPolicy());
-      const { closeChromeMcpTab } = await getChromeMcpModule();
-      close = () => closeChromeMcpTab(profile.name, resolvedTargetId, profile, options);
-    } else if (capabilities.usesPersistentPlaywright) {
-      const mod = await getPwAiModule({ mode: "strict" });
-      if (mod) {
-        close = () =>
-          mod.closePageByTargetIdViaPlaywright({
-            cdpUrl: profile.cdpUrl,
-            targetId: resolvedTargetId,
-            ssrfPolicy: getCdpControlPolicy(),
-            ...(options?.signal ? { signal: options.signal } : {}),
-          });
-      }
-    }
+    const close = await prepareTabOperation("close", resolvedTargetId, options);
     options?.signal?.throwIfAborted();
     await dispatchBrowserTabClose(resolvedTargetId, profile.name, () => {
       options?.signal?.throwIfAborted();

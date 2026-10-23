@@ -4,8 +4,8 @@ services:
   lightpanda:
     # Optional external AGPL-3.0-or-later engine, not an MIT-only image.
     # See README.md before mirroring, bundling, or modifying this distribution.
-    # Official 0.4.1 multi-platform index: linux/amd64 and linux/arm64.
-    image: docker.io/lightpanda/browser:0.4.1@sha256:73f67d2dc0bc243f3a8c87065c9871c98b121197baf7b650df5da91b33b98f02
+    # Official 1.0.2 multi-platform index: linux/amd64 and linux/arm64.
+    image: docker.io/lightpanda/browser:1.0.2@sha256:5d1d724c476957d8c2f8393a51fd089477523b0e5aa9c783c48688785d934fb9
     environment:
       LIGHTPANDA_DISABLE_TELEMETRY: "1"
       LIGHTPANDA_DISABLE_CORE_DUMP: "1"

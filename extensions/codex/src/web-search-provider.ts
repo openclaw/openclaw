@@ -2,7 +2,6 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { WebSearchProviderPlugin } from "openclaw/plugin-sdk/provider-web-search-contract";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { CodexAppServerClientFactory } from "./app-server/shared-client.js";
 import { createCodexWebSearchProviderBase } from "./web-search-provider.shared.js";
 
 const loadCodexWebSearchRuntime = createLazyRuntimeModule(
@@ -23,7 +22,6 @@ const CodexWebSearchSchema = {
 
 type CodexWebSearchProviderOptions = {
   resolvePluginConfig?: () => unknown;
-  clientFactory?: CodexAppServerClientFactory;
 };
 
 export function createCodexWebSearchProvider(
@@ -41,10 +39,11 @@ export function createCodexWebSearchProvider(
         parameters: CodexWebSearchSchema,
         execute: async (args, executionContext) => {
           const { executeCodexWebSearchProviderTool } = await loadCodexWebSearchRuntime();
+          const { readCodexPluginConfig } = await import("./app-server/config-parsing.js");
           return await executeCodexWebSearchProviderTool(ctx, args, executionContext, {
-            pluginConfig:
+            pluginConfig: readCodexPluginConfig(
               options.resolvePluginConfig?.() ?? resolvePluginConfigObject(ctx.config, "codex"),
-            clientFactory: options.clientFactory,
+            ),
           });
         },
       };

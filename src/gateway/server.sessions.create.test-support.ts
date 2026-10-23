@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, vi } from "vitest";
-import { managedWorktrees } from "../agents/worktrees/service.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 import { testState } from "./test-helpers.js";
 import { resetPersistentGatewaySessionStore } from "./test/persistent-session-store.test-support.js";
 import {
@@ -50,11 +50,11 @@ vi.mock("../sessions/session-diff.js", async (importOriginal) => {
 
 vi.mock("../sessions/session-diff-baseline.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../sessions/session-diff-baseline.js")>();
-  sessionDiffBaselineMocks.ensure.mockImplementation(async (params) => {
-    return sessionDiffBaselineMocks.useReal
+  sessionDiffBaselineMocks.ensure.mockImplementation(async (params) =>
+    sessionDiffBaselineMocks.useReal
       ? await actual.ensureSessionDiffBaseline(params)
-      : params.entry;
-  });
+      : params.entry,
+  );
   return { ...actual, ensureSessionDiffBaseline: sessionDiffBaselineMocks.ensure };
 });
 
@@ -68,13 +68,10 @@ vi.mock("./server-methods/chat-send-background.js", async (importOriginal) => {
 });
 
 // Shared Gateway helpers must register dispatch and lifecycle mocks before this graph loads.
-const chatSendOwner = await import("./server-methods/chat-send-external-entry.js");
+export const chatSendOwner = await import("./server-methods/chat-send-external-entry.js");
 
-// Read the real implementations back here rather than capturing them inside the
-// mock factories: Vitest runs a factory on first import of the mocked module, and
-// this project is `isolate: false`, so on a warm module graph a factory can still
-// be unrun when the first `beforeEach` fires.
-async function actualDashboardTitleScheduler(): Promise<ScheduleChatDashboardSessionTitle> {
+// With isolate:false a warm graph can reach beforeEach before the mock factory runs.
+export async function actualDashboardTitleScheduler(): Promise<ScheduleChatDashboardSessionTitle> {
   const actual = await vi.importActual<typeof import("./server-methods/chat-send-background.js")>(
     "./server-methods/chat-send-background.js",
   );
@@ -84,7 +81,11 @@ async function actualDashboardTitleScheduler(): Promise<ScheduleChatDashboardSes
 export function setupSessionCreateTestHarness(
   setup?: Parameters<typeof setupGatewaySessionsTestHarness>[0],
 ) {
-  const fixture = setupGatewaySessionsTestHarness(setup);
+  const fixture = setupGatewaySessionsTestHarness(async (makeTempDir) => {
+    await setup?.(makeTempDir);
+    // Load the lazy creation family before wire requests start their response deadline.
+    await import("./server-methods/sessions-create.js");
+  });
   installSessionCreateTestMocks();
   return fixture;
 }
@@ -104,12 +105,13 @@ function installSessionCreateTestMocks() {
     sessionDiffBaselineMocks.captureStarted = undefined;
     sessionDiffBaselineMocks.capture.mockClear();
     sessionDiffBaselineMocks.ensure.mockClear();
-    // The worktree suite exercises real baseline capture through authenticated requests.
     sessionDiffBaselineMocks.useReal = false;
-    dashboardTitleGenerationMocks.generate.mockReset();
-    dashboardTitleGenerationMocks.generate.mockResolvedValue("Generated Dashboard Title");
-    dashboardTitleScheduleMocks.schedule.mockReset();
-    dashboardTitleScheduleMocks.schedule.mockImplementation(await actualDashboardTitleScheduler());
+    dashboardTitleGenerationMocks.generate
+      .mockReset()
+      .mockResolvedValue("Generated Dashboard Title");
+    dashboardTitleScheduleMocks.schedule
+      .mockReset()
+      .mockImplementation(await actualDashboardTitleScheduler());
   });
 }
 
@@ -120,10 +122,9 @@ export function setupPersistentSessionCreateTestHarness() {
     dir = await fs.realpath(makeTempDir("openclaw-session-create-persistent-"));
   });
   afterEach(async () => {
-    if (!dir) {
-      return;
+    if (dir) {
+      await resetPersistentGatewaySessionStore(dir);
     }
-    await resetPersistentGatewaySessionStore(dir);
   });
   return {
     openClient,
@@ -139,25 +140,20 @@ export function setupPersistentSessionCreateTestHarness() {
   };
 }
 
-function requireNonEmptyString(value: string | undefined, label: string): string {
+export function requireNonEmptyString(value: string | undefined, label: string): string {
   if (!value) {
     throw new Error(`expected ${label}`);
   }
   return value;
 }
 
-async function removeSessionWorktree(key: string | undefined) {
-  const worktree = key ? await managedWorktrees.findLiveByOwner("session", key) : undefined;
-  if (worktree) {
-    await managedWorktrees.remove({
-      id: worktree.id,
-      reason: "test-cleanup",
-      allowSnapshotLoss: true,
-    });
-  }
+export async function removeSessionWorktree(key: string | undefined) {
+  const { removeOwnedSessionWorktree } =
+    await import("./server.sessions.create.projects.test-support.js");
+  await removeOwnedSessionWorktree(key);
 }
 
-async function withFixedOwnerSessionStore(
+export async function withFixedOwnerSessionStore(
   createSessionStoreDir: ReturnType<
     typeof setupGatewaySessionsTestHarness
   >["createSessionStoreDir"],
@@ -196,6 +192,7 @@ async function withFixedOwnerSessionStore(
     testState.agentsConfig = { ownership: "explicit", entries: { main: {}, ops: {} } };
     testState.agentConfig = { sessionStore: { agentId: "main" } };
     testState.sessionConfig = { scope };
+    config.setRuntimeConfigSnapshot(loadGatewayTestConfig());
     await run({ storePath, cfg: config.getRuntimeConfig() });
   } finally {
     Object.assign(testState, previous);
@@ -215,13 +212,4 @@ async function withFixedOwnerSessionStore(
   }
 }
 
-export {
-  sessionDiffBaselineMocks,
-  dashboardTitleGenerationMocks,
-  dashboardTitleScheduleMocks,
-  chatSendOwner,
-  actualDashboardTitleScheduler,
-  requireNonEmptyString,
-  removeSessionWorktree,
-  withFixedOwnerSessionStore,
-};
+export { sessionDiffBaselineMocks, dashboardTitleGenerationMocks, dashboardTitleScheduleMocks };

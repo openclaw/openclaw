@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { cp, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer, type ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -8,13 +8,18 @@ import { chromium, webkit, type Browser, type Page } from "playwright";
 import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
-  buildProductionControlUiE2e,
+  waitForControlUiGatewayReady,
+  waitForControlUiTerminalReady,
+} from "../test-helpers/control-ui-e2e-readiness.ts";
+import {
   createControlUiMockBootstrapConfig,
   canRunPlaywrightChromium,
   captureControlUiE2eFailureDiagnostics,
   controlUiE2eWaitTimeoutMs,
   installMockGateway,
+  refreshProductionControlUiE2e,
   resolvePlaywrightChromiumExecutablePath,
   startProductionControlUiE2eServer,
   type ControlUiE2eProductionServer,
@@ -48,16 +53,13 @@ type InstallGate = {
 let browser: Browser;
 let outDir: string;
 let server: ControlUiE2eProductionServer;
-let buildBPromise: Promise<void> | undefined;
 
 async function stageBuildB(destination: string): Promise<void> {
-  const pristineDir = `${outDir}-build-b`;
-  buildBPromise ??= buildProductionControlUiE2e(pristineDir, buildB);
-  await buildBPromise;
   await rm(destination, { force: true, recursive: true });
   try {
     // Each deployment owns its bytes; the terminal case modifies its worker.
-    await cp(pristineDir, destination, { recursive: true, dereference: true });
+    await cp(outDir, destination, { recursive: true, dereference: true });
+    await refreshProductionControlUiE2e(destination, buildB);
   } catch (error) {
     await rm(destination, { force: true, recursive: true });
     throw error;
@@ -65,20 +67,17 @@ async function stageBuildB(destination: string): Promise<void> {
 }
 
 async function findBuildAsset(buildId: string, buildDir = outDir): Promise<BuildAsset> {
-  const assetsDir = path.join(buildDir, "assets");
-  for (const fileName of await readdir(assetsDir)) {
-    if (!fileName.endsWith(".js")) {
-      continue;
-    }
-    const source = await readFile(path.join(assetsDir, fileName));
-    if (source.includes(Buffer.from(buildId))) {
-      return {
-        path: `assets/${fileName}`,
-        sha256: createHash("sha256").update(source).digest("hex"),
-      };
-    }
+  const html = await readFile(path.join(buildDir, "index.html"), "utf8");
+  expect(html).toContain(`"buildId":${JSON.stringify(buildId)}`);
+  const assetPath = html.match(/<script\b[^>]*\bsrc="\.\/(assets\/[^"?]+\.js)"/u)?.[1];
+  if (!assetPath) {
+    throw new Error(`Production Control UI output has no entry script for ${buildId}`);
   }
-  throw new Error(`Production Control UI output did not contain build id ${buildId}`);
+  const source = await readFile(path.join(buildDir, assetPath));
+  return {
+    path: assetPath,
+    sha256: createHash("sha256").update(source).digest("hex"),
+  };
 }
 
 async function readBuildCacheName(buildId: string, buildDir = outDir): Promise<string> {
@@ -315,9 +314,13 @@ describe("Control UI service-worker production update E2E", () => {
     });
     try {
       expect((await page.goto(`${server.baseUrl}chat/research`))?.status()).toBe(200);
-      await page.waitForFunction(() => Boolean(customElements.get("openclaw-app")), undefined, {
-        timeout: controlUiE2eWaitTimeoutMs,
-      });
+      await page.waitForFunction(
+        () => window.openclawControlUi?.snapshot().ready === true,
+        undefined,
+        {
+          timeout: controlUiE2eWaitTimeoutMs,
+        },
+      );
     } catch (error) {
       if (error instanceof Error) {
         await captureControlUiE2eFailureDiagnostics(page, {
@@ -361,7 +364,7 @@ describe("Control UI service-worker production update E2E", () => {
       } finally {
         if (outDir) {
           await Promise.all(
-            ["", "-build-b", "-next", "-previous", "-foreground", "-sleeping"].map((suffix) =>
+            ["", "-next", "-previous", "-foreground", "-sleeping"].map((suffix) =>
               rm(`${outDir}${suffix}`, { force: true, recursive: true }),
             ),
           );
@@ -472,10 +475,25 @@ describe("Control UI service-worker production update E2E", () => {
           expect((await gateway.getRequests("connect")).at(-1)?.params).toMatchObject({
             client: { buildId: buildA },
           });
-          await page.getByRole("button", { name: "Discard", exact: true }).click();
         }
         const reloaded = page.waitForEvent("domcontentloaded");
-        await resume();
+        if (mode === "config") {
+          await page.getByRole("button", { name: "Discard", exact: true }).click();
+        }
+        try {
+          await resume();
+        } catch (error) {
+          // Discard can let the first foreground check reload before this trigger returns.
+          if (
+            mode !== "config" ||
+            !(error instanceof Error) ||
+            !error.message.includes(
+              "Execution context was destroyed, most likely because of a navigation",
+            )
+          ) {
+            throw error;
+          }
+        }
         await reloaded;
         await expect
           .poll(async () => (await gateway.getRequests("connect")).at(-1)?.params)
@@ -551,33 +569,21 @@ describe("Control UI service-worker production update E2E", () => {
       await expect
         .poll(
           async () =>
-            page.evaluate(() => {
-              const panel = document.querySelector("openclaw-terminal-panel") as
-                | (HTMLElement & { available: boolean })
-                | null;
-              const shell = document.querySelector("openclaw-app-shell") as HTMLElement & {
-                runtime?: {
-                  context?: {
-                    config: { current: { terminalEnabled: boolean } };
-                    gateway: { snapshot: { phase: string; hello: unknown } };
-                  };
-                };
-              };
+            evaluateControlUiContext(page, (application) => {
               return {
-                available: panel?.available ?? null,
-                phase: shell?.runtime?.context?.gateway.snapshot.phase ?? null,
-                terminalEnabled: shell?.runtime?.context?.config.current.terminalEnabled ?? null,
-                hasHello: shell?.runtime?.context?.gateway.snapshot.hello != null,
+                phase: application.gateway.snapshot.phase,
+                terminalEnabled: application.config.current.terminalEnabled,
+                hasHello: application.gateway.snapshot.hello !== null,
               };
             }),
           { timeout: controlUiE2eWaitTimeoutMs },
         )
         .toMatchObject({
-          available: true,
           phase: "connected",
           terminalEnabled: true,
           hasHello: true,
         });
+      await waitForControlUiTerminalReady(page);
 
       const assetA = await findBuildAsset(buildA);
       const cacheA = await readBuildCacheName(buildA);
@@ -595,22 +601,15 @@ describe("Control UI service-worker production update E2E", () => {
       await holdReplacementWorkerInstalling(nextOutDir, installGate.url);
       const cacheB = await readBuildCacheName(buildB, nextOutDir);
       const assetB = await findBuildAsset(buildB, nextOutDir);
-      expect(assetB.path).not.toBe(assetA.path);
-      expect(assetB.sha256).not.toBe(assetA.sha256);
+      expect(assetB).toEqual(assetA);
 
-      await page.evaluate(() => {
-        localStorage.setItem(
-          "openclaw.terminal.panel.v1",
-          JSON.stringify({ open: true, dock: "bottom", height: 320, width: 520 }),
-        );
-      });
       await gateway.setOnline(false);
-      await page.waitForFunction(() => {
-        const panel = document.querySelector("openclaw-terminal-panel") as
-          | (HTMLElement & { available: boolean })
-          | null;
-        return panel?.available === false;
-      });
+      await expect
+        .poll(
+          () => evaluateControlUiContext(page, (application) => application.gateway.snapshot.phase),
+          { timeout: controlUiE2eWaitTimeoutMs },
+        )
+        .not.toBe("connected");
       await server.replaceBuild(nextOutDir, previousOutDir);
       await rm(previousOutDir, { force: true, recursive: true });
       // Assets and Gateway identity advance together in a deployment. Publish
@@ -626,12 +625,8 @@ describe("Control UI service-worker production update E2E", () => {
         const registration = await navigator.serviceWorker.getRegistration();
         return registration?.installing?.state === "installing";
       });
-      await page.waitForFunction(() => {
-        const panel = document.querySelector("openclaw-terminal-panel") as
-          | (HTMLElement & { available: boolean; terminalPanelOpen: boolean })
-          | null;
-        return panel?.available === true && panel.terminalPanelOpen;
-      });
+      await waitForControlUiGatewayReady(page);
+      await waitForControlUiTerminalReady(page);
       await page.evaluate(() => {
         window.dispatchEvent(
           new CustomEvent("openclaw:terminal-toggle", {
@@ -695,11 +690,11 @@ describe("Control UI service-worker production update E2E", () => {
         controllerState: "activated",
         sha256: assetB.sha256,
       });
-      expect(refreshedAsset.sha256).not.toBe(initialAsset.sha256);
+      expect(refreshedAsset.sha256).toBe(initialAsset.sha256);
       await expect
         .poll(() =>
           page.evaluate(
-            async ({ assetPath, previousAssetPath, cacheName }) => {
+            async ({ assetPath, currentBuildId, previousBuildId, cacheName }) => {
               const registration = await navigator.serviceWorker.getRegistration();
               if (!registration) {
                 return null;
@@ -710,16 +705,27 @@ describe("Control UI service-worker production update E2E", () => {
               const html = shell ? await shell.text() : "";
               return {
                 currentAsset: html.includes(assetPath),
-                previousAsset: html.includes(previousAssetPath),
+                currentBuild: html.includes(`"buildId":${JSON.stringify(currentBuildId)}`),
+                previousBuild: html.includes(`"buildId":${JSON.stringify(previousBuildId)}`),
                 documentRootCached: Boolean(
                   await caches.match(new URL("./", registration.scope), { cacheName }),
                 ),
               };
             },
-            { assetPath: assetB.path, previousAssetPath: assetA.path, cacheName: cacheB },
+            {
+              assetPath: assetB.path,
+              currentBuildId: buildB,
+              previousBuildId: buildA,
+              cacheName: cacheB,
+            },
           ),
         )
-        .toEqual({ currentAsset: true, previousAsset: false, documentRootCached: false });
+        .toEqual({
+          currentAsset: true,
+          currentBuild: true,
+          previousBuild: false,
+          documentRootCached: false,
+        });
 
       if (captureUiProof) {
         await page.screenshot({

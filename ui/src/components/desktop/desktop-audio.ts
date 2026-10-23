@@ -1,118 +1,99 @@
 import type { DesktopObserveResult } from "@openclaw/gateway-protocol";
-import type { ReactiveController, ReactiveControllerHost } from "lit";
+import { onSettled } from "solid-js";
 import { resolveGatewayWebSocketUrl } from "../../lib/gateway-websocket-url.ts";
-import {
-  renderDesktopAudioControl,
-  renderDesktopAudioNotice,
-  type DesktopAudioState,
-} from "./desktop-audio-view.ts";
+import { listen } from "../../lib/reactive/listener.ts";
+import { projectSource } from "../../lib/reactive/projection.ts";
+import type { DesktopAudioState } from "./desktop-audio-view.tsx";
 import { DesktopPcmQueue } from "./desktop-pcm-queue.ts";
-
-type DesktopAudioHost = ReactiveControllerHost & {
-  ownerDocument: Document;
-  embedded: boolean;
-  presented: boolean;
-  documentMode: boolean;
-};
 
 const SAMPLE_RATE = 48_000;
 
 /** One desktop observation's receive-only audio socket and playback intent. */
-export class DesktopAudio implements ReactiveController {
-  state: DesktopAudioState = "unavailable";
-  private socket: WebSocket | null = null;
-  private removeSocketListeners: (() => void) | null = null;
-  private visibilityDocument: Document | null = null;
-  private context: AudioContext | null = null;
-  private queue: DesktopPcmQueue | null = null;
-  private generation = 0;
-  private intent = 0;
-  private pendingStops = 0;
-  private startReady = false;
-  private startRequested = false;
-
-  private readonly onVisibilityChange = () => {
-    if (this.host.ownerDocument.hidden) {
-      this.retire();
-    }
-  };
-
-  constructor(
-    private readonly host: DesktopAudioHost,
-    private readonly connected: () => boolean,
-    private readonly reconnect: () => void,
-  ) {
-    host.addController(this);
-  }
-
-  hostConnected(): void {
-    this.visibilityDocument = this.host.ownerDocument;
-    this.visibilityDocument.addEventListener("visibilitychange", this.onVisibilityChange);
-  }
-
-  hostDisconnected(): void {
-    this.visibilityDocument?.removeEventListener("visibilitychange", this.onVisibilityChange);
-    this.visibilityDocument = null;
-    this.close();
-  }
-
-  private get visible(): boolean {
-    return !this.host.ownerDocument.hidden && (!this.host.embedded || this.host.presented);
-  }
-
-  renderButton() {
-    return renderDesktopAudioControl({
-      state: this.state,
-      connected: this.connected(),
-      documentMode: this.host.documentMode,
-      onToggle: () => {
-        if (this.state === "playing" || this.state === "starting") {
-          this.mute();
-        } else if (this.state === "retired") {
-          this.reconnect();
-        } else if (this.connected() && this.visible) {
-          this.unmute();
-        }
-      },
+export function createDesktopAudio(
+  host: Pick<HTMLElement, "ownerDocument" | "isConnected"> & {
+    embedded: boolean;
+    presented: boolean;
+  },
+  target: () => { connected: boolean; reconnect: () => void },
+) {
+  // Protocol admission is synchronous; the view reads through its projection.
+  let playbackState: DesktopAudioState = "unavailable";
+  let changed: (() => void) | undefined;
+  const presentation = projectSource(() => playbackState, {
+    read: (read) => read(),
+    subscribe: (_read, notify) => {
+      changed = notify;
+      return () => {
+        changed = undefined;
+      };
+    },
+    equality: Object.is,
+  });
+  let activeSocket: WebSocket | null = null;
+  let removeSocketListeners: (() => void) | null = null;
+  let activeContext: AudioContext | null = null;
+  let queue: DesktopPcmQueue | null = null;
+  let generation = 0;
+  let intent = 0;
+  let pendingStops = 0;
+  let startReady = false;
+  let startRequested = false;
+  const visible = () => !host.ownerDocument.hidden && (!host.embedded || host.presented);
+  onSettled(() => {
+    const stopVisibility = listen(host.ownerDocument, "visibilitychange", () => {
+      if (host.ownerDocument.hidden) {
+        retire();
+      }
     });
+    return () => {
+      stopVisibility();
+      changed = undefined;
+      close();
+    };
+  });
+
+  function toggle(): void {
+    if (playbackState === "playing" || playbackState === "starting") {
+      stop("muted");
+    } else if (playbackState === "retired") {
+      target().reconnect();
+    } else if (target().connected && visible()) {
+      unmute();
+    }
   }
 
-  renderNotice() {
-    return renderDesktopAudioNotice(this.state);
-  }
-
-  connect(
+  function connect(
     observation: Pick<DesktopObserveResult, "audio" | "audioUnavailableReason">,
     gatewayUrl: string,
   ): void {
-    this.close();
+    close();
     const stream = observation.audio;
     if (!stream) {
       if (observation.audioUnavailableReason === "setup-unavailable") {
-        this.setState("setup-unavailable");
+        setState("setup-unavailable");
       }
       return;
     }
-    if (!this.visible) {
+    if (!visible()) {
       // An observation may settle after hiding, before audio was advertised.
       // Keep explicit recovery without attaching a hidden socket.
-      this.retire(true);
+      retire(true);
       return;
     }
     if (typeof AudioContext !== "function") {
-      this.setState("unsupported");
+      setState("unsupported");
       return;
     }
-    const generation = this.generation;
-    this.pendingStops = 0;
+    const connection = generation;
+    pendingStops = 0;
     try {
       const socket = new WebSocket(resolveGatewayWebSocketUrl(stream.wsPath, gatewayUrl));
-      this.socket = socket;
+      activeSocket = socket;
       socket.binaryType = "arraybuffer";
-      const current = () => generation === this.generation && this.socket === socket;
+      const current = () => connection === generation && activeSocket === socket;
       const opened = () => {
         if (current()) {
-          this.setState("muted");
+          setState("muted");
         }
       };
       const message = (event: MessageEvent<unknown>) => {
@@ -120,152 +101,144 @@ export class DesktopAudio implements ReactiveController {
           return;
         }
         if (typeof event.data === "string") {
-          this.handleStatus(event.data);
-        } else if (event.data instanceof ArrayBuffer && this.state === "playing") {
-          if (this.context?.state !== "running") {
-            this.stop("blocked");
+          handleStatus(event.data);
+        } else if (event.data instanceof ArrayBuffer && playbackState === "playing") {
+          if (activeContext?.state !== "running") {
+            stop("blocked");
             return;
           }
           try {
-            this.queue?.play(new Uint8Array(event.data));
+            queue?.play(new Uint8Array(event.data));
           } catch {
-            this.stop("error");
+            stop("error");
           }
         }
       };
       const failed = () => {
         if (current()) {
-          this.close();
-          this.setState("error");
+          close();
+          setState("error");
         }
       };
-      this.removeSocketListeners = () => {
-        socket.removeEventListener("open", opened);
-        socket.removeEventListener("message", message);
-        socket.removeEventListener("error", failed);
-        socket.removeEventListener("close", failed);
-      };
-      socket.addEventListener("open", opened);
-      socket.addEventListener("message", message);
-      socket.addEventListener("error", failed);
-      socket.addEventListener("close", failed);
-      this.setState("connecting");
+      const stops = [
+        listen(socket, "open", opened),
+        // SAFETY: WebSocket message events are MessageEvent; listen accepts EventListener.
+        listen(socket, "message", message as EventListener),
+        listen(socket, "error", failed),
+        listen(socket, "close", failed),
+      ];
+      removeSocketListeners = () => stops.forEach((dispose) => dispose());
+      setState("connecting");
     } catch {
-      this.close();
-      this.setState("error");
+      close();
+      setState("error");
     }
   }
 
   /** Called directly by the button handler: resume must retain user activation. */
-  unmute(): void {
-    const socket = this.socket;
+  function unmute(): void {
+    const socket = activeSocket;
     if (
       !socket ||
       socket.readyState !== WebSocket.OPEN ||
-      this.state === "starting" ||
-      this.state === "playing"
+      playbackState === "starting" ||
+      playbackState === "playing"
     ) {
       return;
     }
-    const generation = this.generation;
-    const intent = ++this.intent;
+    const connection = generation;
+    const playback = ++intent;
     try {
       const context = new AudioContext({ latencyHint: "interactive", sampleRate: SAMPLE_RATE });
-      this.context = context;
+      activeContext = context;
       const resumed = context.resume();
-      this.setState("starting");
+      setState("starting");
       void resumed.then(
         () => {
-          if (
-            generation !== this.generation ||
-            intent !== this.intent ||
-            this.context !== context
-          ) {
+          if (connection !== generation || playback !== intent || activeContext !== context) {
             return;
           }
           if (context.state !== "running") {
-            this.stop("blocked");
+            stop("blocked");
             return;
           }
-          this.startReady = true;
-          this.startCapture();
+          startReady = true;
+          startCapture();
         },
         () => {
-          if (generation === this.generation && intent === this.intent) {
-            this.stop("blocked");
+          if (connection === generation && playback === intent) {
+            stop("blocked");
           }
         },
       );
     } catch {
-      this.stop("blocked");
+      stop("blocked");
     }
   }
 
-  mute(): void {
-    this.stop("muted");
-  }
-
-  retire(advertised = this.state !== "unavailable" && this.state !== "setup-unavailable"): void {
-    const setupUnavailable = this.state === "setup-unavailable";
-    this.close();
+  function retire(
+    advertised = playbackState !== "unavailable" && playbackState !== "setup-unavailable",
+  ): void {
+    const setupUnavailable = playbackState === "setup-unavailable";
+    close();
     if (setupUnavailable && !advertised) {
-      this.setState("setup-unavailable");
+      setState("setup-unavailable");
     }
     if (advertised) {
-      this.setState("retired");
+      setState("retired");
     }
   }
 
-  close(): void {
-    ++this.generation;
-    this.stop("unavailable");
-    const socket = this.socket;
-    this.socket = null;
-    this.removeSocketListeners?.();
-    this.removeSocketListeners = null;
+  function close(): void {
+    ++generation;
+    stop("unavailable");
+    const socket = activeSocket;
+    activeSocket = null;
+    removeSocketListeners?.();
+    removeSocketListeners = null;
     socket?.close();
   }
 
-  private stop(state: DesktopAudioState): void {
-    ++this.intent;
-    this.startReady = false;
-    this.startRequested = false;
-    this.queue?.stop();
-    this.queue = null;
-    const context = this.context;
-    this.context = null;
+  function stop(state: DesktopAudioState): void {
+    ++intent;
+    startReady = false;
+    startRequested = false;
+    queue?.stop();
+    queue = null;
+    const context = activeContext;
+    activeContext = null;
     if (context) {
       void context.close().catch(() => undefined);
     }
-    if (this.socket?.readyState === WebSocket.OPEN) {
+    if (activeSocket?.readyState === WebSocket.OPEN) {
       try {
-        this.pendingStops += 1;
-        this.socket.send(JSON.stringify({ action: "stop" }));
+        pendingStops += 1;
+        activeSocket.send(JSON.stringify({ action: "stop" }));
       } catch {
         // Local teardown must still silence playback after a transport failure.
       }
     }
-    this.setState(state);
+    setState(state);
   }
 
-  private startCapture(): void {
+  function startCapture(): void {
     // A stopped acknowledgment is the ordered barrier for the old capture.
     // Do not send the new start until every prior stop has crossed that barrier:
     // a superseded start may still acknowledge, or be canceled without an ack.
-    const socket = this.socket;
-    if (!socket || !this.startReady || this.pendingStops > 0) {
+    const socket = activeSocket;
+    if (!socket || !startReady || pendingStops > 0) {
       return;
     }
-    this.startReady = false;
-    this.startRequested = true;
+    startReady = false;
+    startRequested = true;
     try {
       socket.send(JSON.stringify({ action: "start" }));
     } catch {
-      this.stop("error");
+      stop("error");
     }
   }
 
-  private handleStatus(text: string): void {
+  function handleStatus(text: string): void {
     let message: unknown;
     try {
       message = JSON.parse(text);
@@ -275,33 +248,39 @@ export class DesktopAudio implements ReactiveController {
     if (typeof message !== "object" || message === null || !("state" in message)) {
       return;
     }
-    if (this.pendingStops > 0) {
+    if (pendingStops > 0) {
       if (message.state === "stopped") {
-        this.pendingStops -= 1;
-        this.startCapture();
+        pendingStops -= 1;
+        startCapture();
       }
       return;
     }
-    if (message.state === "started" && this.state === "starting" && this.startRequested) {
-      this.startRequested = false;
-      if (this.context?.state !== "running") {
-        this.stop("blocked");
+    if (message.state === "started" && playbackState === "starting" && startRequested) {
+      startRequested = false;
+      if (activeContext?.state !== "running") {
+        stop("blocked");
         return;
       }
       // PCM before this acknowledgment belongs to an old capture. Start with a
       // fresh stereo-frame remainder exactly at the accepted capture boundary.
-      this.queue = new DesktopPcmQueue(this.context);
-      this.setState("playing");
+      queue = new DesktopPcmQueue(activeContext);
+      setState("playing");
     } else if (
-      (this.state === "starting" || this.state === "playing") &&
+      (playbackState === "starting" || playbackState === "playing") &&
       (message.state === "error" || message.state === "stopped")
     ) {
-      this.stop("error");
+      stop("error");
     }
   }
 
-  private setState(state: DesktopAudioState): void {
-    this.state = state;
-    this.host.requestUpdate();
+  function setState(state: DesktopAudioState): void {
+    playbackState = state;
+    if (host.isConnected) {
+      changed?.();
+    }
   }
+
+  return { state: presentation.read, toggle, connect, retire, close };
 }
+
+export type DesktopAudio = ReturnType<typeof createDesktopAudio>;

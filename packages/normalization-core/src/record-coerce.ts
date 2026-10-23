@@ -3,6 +3,10 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+export function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+}
+
 /** Coerces object-like values to records, falling back to an empty record. */
 export function asRecord(value: unknown): Record<string, unknown> {
   return asOptionalObjectRecord(value) ?? {};
@@ -27,6 +31,16 @@ export function asNonArrayRecord(value: unknown): Record<string, unknown> {
   return asOptionalRecord(value) ?? {};
 }
 
+export function ensureRecord(root: Record<string, unknown>, key: string): Record<string, unknown> {
+  const current = asOptionalRecord(root[key]);
+  if (current) {
+    return current;
+  }
+  const next: Record<string, unknown> = {};
+  root[key] = next;
+  return next;
+}
+
 /** Returns a non-array record or null. */
 export function asNullableRecord(value: unknown): Record<string, unknown> | null {
   return isRecord(value) ? value : null;
@@ -45,6 +59,16 @@ export function asNullableObjectRecord(value: unknown): Record<string, unknown> 
 /** Checks that every enumerable own value in a non-array record is a string. */
 export function isStringRecord(value: unknown): value is Record<string, string> {
   return isRecord(value) && Object.values(value).every((entry) => typeof entry === "string");
+}
+
+/** Removes undefined fields from a fresh projection in place, retaining its identity. */
+export function omitUndefinedFields<T extends object>(fields: T): T {
+  for (const key in fields) {
+    if (fields[key] === undefined) {
+      delete fields[key];
+    }
+  }
+  return fields;
 }
 
 /** Retains string-valued own enumerable entries from a non-array record. */

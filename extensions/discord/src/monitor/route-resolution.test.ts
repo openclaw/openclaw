@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildDiscordConversationRouteContext,
   buildDiscordRoutePeer,
-  resolveDiscordBoundConversationRoute,
+  resolveDiscordConversationRoute,
   resolveDiscordEffectiveRoute,
   shouldIgnoreStaleDiscordRouteBinding,
 } from "./route-resolution.js";
@@ -62,46 +62,16 @@ describe("discord route resolution helpers", () => {
     });
   });
 
-  it("falls back to configured route when no bound session exists", () => {
-    const route: ResolvedAgentRoute = {
-      agentId: "main",
-      channel: "discord",
-      accountId: "default",
-      sessionKey: "agent:main:discord:channel:c1",
-      mainSessionKey: "agent:main:main",
-      lastRoutePolicy: "session",
-      matchedBy: "default",
-    };
-    const configuredRoute = {
-      route: {
-        ...route,
-        agentId: "worker",
-        sessionKey: "agent:worker:discord:channel:c1",
-        mainSessionKey: "agent:worker:main",
-        lastRoutePolicy: "session" as const,
-        matchedBy: "binding.peer" as const,
-      },
-    };
-
-    expect(
-      resolveDiscordEffectiveRoute({
-        route,
-        configuredRoute,
-      }),
-    ).toEqual(configuredRoute.route);
-  });
-
-  it("composes route building with effective-route overrides", () => {
+  it("applies effective-route overrides to a routed direct conversation", () => {
     const cfg = buildWorkerBindingConfig({ kind: "direct", id: "user-1" });
 
     expect(
-      resolveDiscordBoundConversationRoute({
-        cfg,
-        accountId: "default",
-        isDirectMessage: true,
-        isGroupDm: false,
-        directUserId: "user-1",
-        conversationId: "dm-1",
+      resolveDiscordEffectiveRoute({
+        route: resolveDiscordConversationRoute({
+          cfg,
+          accountId: "default",
+          peer: { kind: "direct", id: "user-1" },
+        }),
         boundSessionKey: "agent:worker:discord:direct:user-1",
         matchedBy: "binding.channel",
       }),

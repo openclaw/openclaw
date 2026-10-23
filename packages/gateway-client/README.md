@@ -31,7 +31,7 @@ Use the verified stable release with exact pins:
 npm install --save-exact @openclaw/gateway-client@2026.8.1 @openclaw/gateway-protocol@2026.8.1
 ```
 
-See the canonical [installation guide](https://docs.openclaw.ai/gateway/clients#install-the-packages)
+See the [installation guide](https://docs.openclaw.ai/gateway/clients#install-the-packages)
 for package/wire-version rules and recovery from reserved `0.0.0` artifacts.
 Test it with the Gateway version you deploy; the root `openclaw` CLI has its own
 package versions and dist-tags.
@@ -162,7 +162,7 @@ transport timeouts return `false`. Both entries use the same implementation.
 
 ## Defaults and reconnect behavior
 
-The Node client starts with a 30 second request timeout, a 15 second
+The Node client starts with a 30 second request timeout, a 30 second
 connect-challenge timeout, and exponential reconnect backoff from 1 second to 30
 seconds with a multiplier of 2. Reconnects use randomized delays: the first waits
 1–1.2 seconds, and sustained failures spread retries across 25–30 seconds.
@@ -181,7 +181,14 @@ first so its authoritative outcome can settle the run. Other gapped frames and
 subsequent frames from that socket are not delivered. Reconnect restores a fresh live-text baseline; applications should
 also refresh durable state and restore their session subscriptions.
 
-The canonical defaults table and the server policy fields that can replace
+Session subscription requests time out without compensating RPCs. If the Gateway
+applied a subscribe or unsubscribe but its acknowledgment was lost, observation
+may remain stale until a fresh subscription or reconnect. In particular, a
+retained handle may miss updates after an unacknowledged unsubscribe. The caller
+still receives the timeout; ordinary acknowledged leases and release retries
+retain their ownership and ordering.
+
+The defaults table and the server policy fields that can replace
 pre-handshake values are documented in the
 [Gateway protocol specification](https://docs.openclaw.ai/gateway/protocol#client-constants).
 
@@ -277,6 +284,11 @@ from `@openclaw/gateway-protocol`, not from bundled implementation paths.
   the socket; `stop()` closes it and rejects pending requests.
 - A request uses `request(method, params)` after `hello-ok`. Passing
   `timeoutMs: null` creates an intentionally unbounded request.
+- `signal` normally stops observing a request immediately on abort. A write
+  caller that must reconcile a sent request can opt into
+  `retainSentResultOnAbort: true`: abort still cancels unsent work and retries,
+  while a sent request retains its response and original deadline. A later
+  pre-dispatch refusal rejects as aborted instead of retrying.
 - Finite request deadlines reject with `GatewayProtocolRequestTimeoutError`,
   whose `CLIENT_TIMEOUT` code, method, deadline, and send-boundary flag remain
   distinct from authoritative Gateway response errors.

@@ -35,6 +35,7 @@ export function createProviderReplayNodeTunnel() {
     })),
     stop: vi.fn(async () => {}),
     stopAll: vi.fn(async () => {}),
+    beginClose: vi.fn(),
   } satisfies WorkerEnvironmentNodeTunnel;
   return { nodeTunnelManager, syncWorkspace };
 }
@@ -66,7 +67,8 @@ export function bindProviderReplayNodeAvailability(
 type DispatchOptions = Parameters<typeof createWorkerPlacementDispatchService>[0];
 
 export function createProviderReplayDispatch(
-  options: Pick<DispatchOptions, "placements" | "environments"> & Partial<DispatchOptions>,
+  options: Pick<DispatchOptions, "placements" | "environments" | "initialPlacements"> &
+    Partial<DispatchOptions>,
 ) {
   return createWorkerPlacementDispatchService({
     runnerAvailability: { read: () => undefined, version: () => 0 },

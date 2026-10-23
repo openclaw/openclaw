@@ -22,6 +22,9 @@ Tail Gateway file logs over RPC. Works in remote mode.
 - `--local-time`: render timestamps in your local timezone (default)
 - `--utc`: render timestamps in UTC
 
+`--local-time` and `--utc` are mutually exclusive. Passing both fails before a log
+query; omitting both keeps local timestamps.
+
 Polling intervals larger than 2,147,000,000 ms are capped at that value to avoid timer overflow.
 
 ## Shared Gateway RPC options
@@ -29,10 +32,11 @@ Polling intervals larger than 2,147,000,000 ms are capped at that value to avoid
 - `--url <url>`: Gateway WebSocket URL
 - `--port <port>`: select a local Gateway port, overriding the configured remote URL and `OPENCLAW_GATEWAY_URL`; cannot be combined with `--url`
 - `--token <token>`: Gateway token
+- `--password <password>`: Gateway password
 - `--timeout <ms>`: timeout in ms (default `30000`)
 - `--expect-final`: wait for a final response when the Gateway call is agent-backed
 
-Passing `--url` skips auto-applied config credentials; include `--token` explicitly if the target Gateway requires auth.
+Passing `--url` skips auto-applied config credentials; include `--token` or `--password` explicitly if the target Gateway requires auth.
 
 `--port` requires an integer from `1` to `65535`; empty or whitespace-only values are invalid. Omit the option to use the configured or environment target.
 
@@ -52,6 +56,7 @@ openclaw logs --utc
 openclaw logs --follow --local-time
 openclaw logs --port 19083 --json
 openclaw logs --url ws://127.0.0.1:18789 --token "$OPENCLAW_GATEWAY_TOKEN"
+openclaw logs --url ws://127.0.0.1:18789 --password "$OPENCLAW_GATEWAY_PASSWORD"
 ```
 
 The selected root profile matches the Gateway's rolling file: the default
@@ -66,6 +71,7 @@ profile uses `openclaw-YYYY-MM-DD.log`, while named profiles use
 - `--follow` does not fall back to that configured file after an implicit local Gateway RPC failure — a stale side-by-side file could mislead a live tail. On Linux it instead uses the active user-systemd Gateway journal by PID when available (prints the selected source); otherwise it keeps retrying the live Gateway.
 - During `--follow`, transient disconnects (WebSocket close, timeout, connection drop) trigger automatic reconnection with exponential backoff: up to 8 retries, capped at 30s between attempts. A warning prints to stderr on each retry, and a `[logs] gateway reconnected` notice prints once a poll succeeds. In `--json` mode both are emitted as `{"type":"notice"}` records on stderr. Authentication and invalid target errors still exit immediately.
 - In `--follow --json` mode, log-source transitions are emitted as `{"type":"meta"}` records. Track cursors per `sourceKind`: a stream can move from Gateway file output (`sourceKind: "file"`) to local journal fallback (`sourceKind: "journal"`, `localFallback: true`, with `service.pid`/`service.unit`) and back to Gateway file output after recovery. Do not assume one stable source or cursor for the whole session, and tolerate overlapping lines when recovery replays the Gateway file cursor.
+- When the Gateway reports a different log file path, `--follow` rereads the new file without the old byte cursor before printing its lines. The new tail still respects `--limit` and `--max-bytes`.
 
 In `--json` mode, invalid `--port`, `--limit`, `--interval`, or `--max-bytes` values and conflicting `--url`/`--port` options produce the standard CLI failure envelope on stdout: `{"ok":false,"error":{"type":"cli_error","message":"..."}}`. Terminal log-fetch failures instead emit `{"type":"error",...}` on stderr. Both exit with status `1`.
 

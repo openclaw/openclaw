@@ -1,4 +1,5 @@
 import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
+import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
@@ -26,11 +27,7 @@ function resolveMatrixSetupAccountId(params: { accountId?: string; name?: string
 export function createMatrixSetupWizardProxy(
   loadWizardModule: () => Promise<MatrixSetupWizardModule>,
 ): ChannelSetupWizardAdapter {
-  let wizardPromise: Promise<ChannelSetupWizardAdapter> | null = null;
-  const loadWizard = () => {
-    wizardPromise ??= loadWizardModule().then((module) => module.matrixSetupWizard);
-    return wizardPromise;
-  };
+  const loadWizard = createLazyRuntimeNamedExport(loadWizardModule, "matrixSetupWizard");
   return {
     channel,
     getStatus: async (ctx) => await (await loadWizard()).getStatus(ctx),
@@ -56,7 +53,19 @@ export function createMatrixSetupWizardProxy(
   };
 }
 
-export const matrixSetupAdapter: ChannelSetupAdapter = {
+export const finishMatrixSetupAfterConfigWrite: NonNullable<
+  ChannelSetupWizardAdapter["afterConfigWritten"]
+> = async ({ previousCfg, cfg, accountId, runtime }) => {
+  const { runMatrixSetupBootstrapAfterConfigWrite } = await import("./setup-bootstrap.js");
+  await runMatrixSetupBootstrapAfterConfigWrite({
+    previousCfg: previousCfg as CoreConfig,
+    cfg: cfg as CoreConfig,
+    accountId,
+    runtime,
+  });
+};
+
+export const matrixSetupAdapter = {
   singleAccountKeysToMove,
   namedAccountPromotionKeys,
   resolveSingleAccountPromotionTarget,
@@ -84,16 +93,8 @@ export const matrixSetupAdapter: ChannelSetupAdapter = {
       accountId,
       input,
     }),
-  afterAccountConfigWritten: async ({ previousCfg, cfg, accountId, runtime }) => {
-    const { runMatrixSetupBootstrapAfterConfigWrite } = await import("./setup-bootstrap.js");
-    await runMatrixSetupBootstrapAfterConfigWrite({
-      previousCfg: previousCfg as CoreConfig,
-      cfg: cfg as CoreConfig,
-      accountId,
-      runtime,
-    });
-  },
-};
+  afterAccountConfigWritten: finishMatrixSetupAfterConfigWrite,
+} satisfies ChannelSetupAdapter;
 
 export const matrixSetupContract = defineChannelSetupContract({
   fields: {

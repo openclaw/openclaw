@@ -1,8 +1,12 @@
+import fs from "node:fs";
+import path from "node:path";
 import { isGatewayLoopbackHost } from "../../packages/gateway-client/src/websocket-transport.js";
 import {
   WORKER_LINEAGE_START_PROTOCOL_FEATURE,
   WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { NODE_WORKER_INFERENCE_SETUP_ERROR } from "../infra/node-runner-inventory.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { resolveRuntimeArgs } from "../infra/runtime-worker-url.js";
 import {
   createChildAdapter,
@@ -12,6 +16,7 @@ import { assertProcessGroupControl } from "../process/supervisor/service-child-g
 import { supportsNodeWorkerProcessOwner } from "../process/supervisor/service-child-protocol.js";
 import { createServiceChildRelayAdapter } from "../process/supervisor/service-child-relay-host.js";
 import type { SpawnSecretInput } from "../process/supervisor/types.js";
+import { WORKER_BUNDLE_ENTRY_PATH } from "../shared/worker-bundle-hash.js";
 import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
 import {
   WORKER_NATIVE_INFERENCE_STARTUP_ARG,
@@ -31,7 +36,6 @@ import {
   type NodeWorkerContainerEngine,
 } from "./node-worker-container-engine.js";
 import type { NodeWorkerContainerLifecycle } from "./node-worker-container-lifecycle.js";
-import { resolveNodeWorkerEntry } from "./node-worker-entry.js";
 import type { NodeWorkerCleanupMode } from "./node-worker-launch-receipt.js";
 import type {
   NodeWorkerContainerIdentity,
@@ -39,7 +43,6 @@ import type {
   NodeWorkerLaunchStore,
 } from "./node-worker-launch-store.js";
 import {
-  NODE_WORKER_INFERENCE_SETUP_ERROR,
   projectNodeWorkerNativeInference,
   type NodeWorkerNativeInferenceSnapshot,
 } from "./node-worker-native-inference.js";
@@ -56,6 +59,7 @@ export type NodeWorkerChildAdapter = AwaitedStdoutChildAdapter & {
 type NodeWorkerLaunchTransportOptions = {
   bundleRoot: string;
   workerEnv: NodeJS.ProcessEnv;
+  homeDir?: string;
   nativeInferenceSnapshot?: NodeWorkerNativeInferenceSnapshot;
   engineEnv: NodeJS.ProcessEnv;
   input: NodeWorkerLaunchInput;
@@ -78,6 +82,26 @@ type NodeWorkerLaunchTransport =
       cleanupMode: NodeWorkerCleanupMode | null;
       container?: NodeWorkerContainerIdentity;
     };
+
+/** Resolves one exact Gateway-managed worker bundle from its isolated namespace. */
+function resolveNodeWorkerEntry(params: {
+  bundleRoot: string;
+  expectedBundleHash: string;
+  gatewayNamespace: string;
+}): string {
+  const root = fs.realpathSync.native(params.bundleRoot);
+  const bundle = fs.realpathSync.native(
+    path.join(root, params.gatewayNamespace, "bundles", params.expectedBundleHash),
+  );
+  if (!isPathInside(root, bundle)) {
+    throw new Error("node worker bundle resolves outside its configured root");
+  }
+  const entry = fs.realpathSync.native(path.join(bundle, WORKER_BUNDLE_ENTRY_PATH));
+  if (!isPathInside(bundle, entry) || !fs.statSync(entry).isFile()) {
+    throw new Error("node worker entry must be a regular file inside its bundle");
+  }
+  return entry;
+}
 
 /** Keep local IPC and container stdio as transport choices of one launch state machine. */
 export async function prepareNodeWorkerLaunchTransport(
@@ -207,6 +231,7 @@ export async function prepareNodeWorkerLaunchTransport(
       bundleRoot: options.bundleRoot,
       bundleEntry: entry,
       workspaceDir: options.descriptor.assignment.workspaceDir,
+      homeDir: options.homeDir,
       gatewayNamespace: options.input.gatewayNamespace,
       launchId: options.input.launchId,
       env: workerEnv,

@@ -11,6 +11,34 @@ import {
 
 const fixture = useTranscriptStatusFixture();
 
+function blockAppends(
+  f: ReturnType<typeof fixture>,
+  options: {
+    text?: string;
+    otherwise?: Promise<void>;
+    failure?: Error;
+    recorded?: (text: string) => void;
+  } = {},
+) {
+  const entered = createDeferred();
+  const release = createDeferred();
+  const append = f.store.appendUtteranceForSession.bind(f.store);
+  vi.spyOn(f.store, "appendUtteranceForSession").mockImplementation(async (...args) => {
+    if (options.text === undefined || args[1].text === options.text) {
+      entered.resolve();
+      await release.promise;
+    } else if (options.otherwise) {
+      await options.otherwise;
+    }
+    if (options.failure) {
+      throw options.failure;
+    }
+    await append(...args);
+    options.recorded?.(args[1].text);
+  });
+  return { entered: entered.promise, release: release.resolve };
+}
+
 async function startCapture(sessionId: string) {
   const f = fixture();
   const started = createDeferred<TranscriptStartRequest>();
@@ -25,17 +53,12 @@ async function startCapture(sessionId: string) {
 describe("transcript capture accepted append drainage", () => {
   it("rejects unserializable speech promptly and drains accepted speech before terminal notes", async () => {
     const { f, request } = await startCapture("terminal-drain");
-    const appendEntered = createDeferred();
-    const releaseAppend = createDeferred();
+    const { session } = request;
+    const [firstText, secondText] = ["First accepted speech", "Second accepted speech"] as const;
     const events: string[] = [];
-    const append = f.store.appendUtteranceForSession.bind(f.store);
-    vi.spyOn(f.store, "appendUtteranceForSession").mockImplementation(async (...args) => {
-      if (args[1].text === "First accepted speech") {
-        appendEntered.resolve();
-        await releaseAppend.promise;
-      }
-      await append(...args);
-      events.push(args[1].text);
+    const appends = blockAppends(f, {
+      text: firstText,
+      recorded: (text) => events.push(text),
     });
     const writeSession = f.store.writeSession.bind(f.store);
     vi.spyOn(f.store, "writeSession").mockImplementation(async (...args) => {
@@ -50,7 +73,7 @@ describe("transcript capture accepted append drainage", () => {
       return writeSummary(...args);
     });
 
-    const first = Promise.resolve(request.onUtterance({ text: "First accepted speech" }));
+    const first = Promise.resolve(request.onUtterance({ text: firstText }));
     const failure = new Error("Metadata cannot be serialized");
     const toJSON = vi.fn(() => {
       throw failure;
@@ -58,58 +81,44 @@ describe("transcript capture accepted append drainage", () => {
     const rejected = Promise.resolve(
       request.onUtterance({ text: "Unserializable speech", metadata: { toJSON } }),
     );
-    const second = Promise.resolve(request.onUtterance({ text: "Second accepted speech" }));
+    const second = Promise.resolve(request.onUtterance({ text: secondText }));
     let terminal: Promise<void> | undefined;
     try {
-      await appendEntered.promise;
+      await appends.entered;
       await expect(rejected).rejects.toBe(failure);
-      expect.soft(await f.store.readUtterancesForSession(request.session)).toEqual([]);
+      expect.soft(await f.store.readUtterancesForSession(session)).toEqual([]);
       terminal = Promise.resolve(request.onStatus?.({ active: false }));
       // Allow the terminal callback to reach storage while the accepted append is held.
       await setImmediate();
       expect.soft(events).toEqual([]);
     } finally {
-      releaseAppend.resolve();
+      appends.release();
       await Promise.allSettled([first, rejected, second, terminal]);
     }
     await Promise.all([first, second, terminal]);
     expect(toJSON).toHaveBeenCalledOnce();
-    expect((await f.store.readSession(request.session.sessionId))?.stoppedAt).toEqual(
-      expect.any(String),
-    );
+    expect((await f.store.readSession(session.sessionId))?.stoppedAt).toEqual(expect.any(String));
+    expect.soft(events).toEqual([firstText, secondText, "stopped metadata", "summary"]);
     expect
-      .soft(events)
-      .toEqual(["First accepted speech", "Second accepted speech", "stopped metadata", "summary"]);
-    expect
-      .soft((await f.store.readUtterancesForSession(request.session)).map((row) => row.text))
-      .toEqual(["First accepted speech", "Second accepted speech"]);
-    expect.soft(await f.store.readSummary(request.session)).toMatchObject({
-      summary: {
-        utteranceCount: 2,
-        transcript: ["First accepted speech", "Second accepted speech"],
-      },
+      .soft((await f.store.readUtterancesForSession(session)).map((row) => row.text))
+      .toEqual([firstText, secondText]);
+    expect.soft(await f.store.readSummary(session)).toMatchObject({
+      summary: { utteranceCount: 2, transcript: [firstText, secondText] },
     });
     await request.onUtterance({ text: "Retired callback" });
-    expect(await f.store.readUtterancesForSession(request.session)).toHaveLength(2);
+    expect(await f.store.readUtterancesForSession(session)).toHaveLength(2);
   });
 
   it("fences new speech before draining failed post-start setup and retains cleanup retry", async () => {
     const f = fixture();
+    const speech = "Accepted before title failure";
     const started = createDeferred<TranscriptStartRequest>();
-    const firstEntered = createDeferred();
-    const releaseFirst = createDeferred();
     const releaseLate = createDeferred();
     const titleFailed = createDeferred();
     const stopAttempted = createDeferred();
-    const append = f.store.appendUtteranceForSession.bind(f.store);
-    vi.spyOn(f.store, "appendUtteranceForSession").mockImplementation(async (...args) => {
-      if (args[1].text === "Accepted before title failure") {
-        firstEntered.resolve();
-        await releaseFirst.promise;
-      } else {
-        await releaseLate.promise;
-      }
-      await append(...args);
+    const appends = blockAppends(f, {
+      text: speech,
+      otherwise: releaseLate.promise,
     });
     const writeSession = f.store.writeSession.bind(f.store);
     vi.spyOn(f.store, "writeSession").mockImplementation(async (...args) => {
@@ -117,13 +126,13 @@ describe("transcript capture accepted append drainage", () => {
         titleFailed.resolve();
         throw new Error("Title write unavailable");
       }
-      await writeSession(...args);
+      return writeSession(...args);
     });
     let first: Promise<void> | undefined;
     let late: Promise<void> | undefined;
     f.provider.start = async (request) => {
       started.resolve(request);
-      first = Promise.resolve(request.onUtterance({ text: "Accepted before title failure" }));
+      first = Promise.resolve(request.onUtterance({ text: speech }));
       void first.catch(() => undefined);
       return { ok: true, session: { ...request.session, title: "Provider title" } };
     };
@@ -136,42 +145,32 @@ describe("transcript capture accepted append drainage", () => {
         ? { ok: true, sessionId }
         : { ok: false, error: "Provider cleanup unavailable" };
     };
-    let startupSettled = false;
-    let lateSettled = false;
-    const startup = f.start({ ...room, sessionId: "failed-title-drain" }).then(
-      () => {
-        startupSettled = true;
-        return undefined;
-      },
-      (error: unknown) => {
-        startupSettled = true;
+    const startupSettled = vi.fn();
+    const lateSettled = vi.fn();
+    const startup = f
+      .start({ ...room, sessionId: "failed-title-drain" })
+      .then(startupSettled, (error: unknown) => {
+        startupSettled();
         return error;
-      },
-    );
+      });
     const request = await started.promise;
+    const { session } = request;
     try {
-      await Promise.all([firstEntered.promise, titleFailed.promise]);
+      await Promise.all([appends.entered, titleFailed.promise]);
       // Let the failed-start catch reach its drain while accepted speech remains held.
       await setImmediate();
       late = Promise.resolve(request.onUtterance({ text: "Speech after title failure" }));
-      void late.then(
-        () => {
-          lateSettled = true;
-        },
-        () => {
-          lateSettled = true;
-        },
-      );
+      void late.then(lateSettled, lateSettled);
       await setImmediate();
-      expect.soft(lateSettled).toBe(true);
-      releaseFirst.resolve();
+      expect.soft(lateSettled).toHaveBeenCalledOnce();
+      appends.release();
       await first;
       await stopAttempted.promise;
       await setImmediate();
-      expect.soft(startupSettled).toBe(true);
-      expect.soft(lateSettled).toBe(true);
+      expect.soft(startupSettled).toHaveBeenCalledOnce();
+      expect.soft(lateSettled).toHaveBeenCalledOnce();
     } finally {
-      releaseFirst.resolve();
+      appends.release();
       releaseLate.resolve();
       await Promise.allSettled([first, late, startup]);
     }
@@ -188,20 +187,18 @@ describe("transcript capture accepted append drainage", () => {
     });
     expect.soft(stopCalls).toBe(1);
     expect
-      .soft((await f.store.readUtterancesForSession(request.session)).map((row) => row.text))
-      .toEqual(["Accepted before title failure"]);
+      .soft((await f.store.readUtterancesForSession(session)).map((row) => row.text))
+      .toEqual([speech]);
     cleanupSucceeds = true;
     await expect(
-      f.tool.execute("cleanup-retry", { action: "stop", sessionId: request.session.sessionId }),
+      f.tool.execute("cleanup-retry", { action: "stop", sessionId: session.sessionId }),
     ).resolves.toMatchObject({
       details: {
-        sessionId: request.session.sessionId,
-        summary: { transcript: ["Accepted before title failure"] },
+        sessionId: session.sessionId,
+        summary: { transcript: [speech] },
       },
     });
-    expect((await f.store.readSession(request.session.sessionId))?.stoppedAt).toEqual(
-      expect.any(String),
-    );
+    expect((await f.store.readSession(session.sessionId))?.stoppedAt).toEqual(expect.any(String));
     expect(stopCalls).toBe(2);
   });
 
@@ -224,36 +221,25 @@ describe("transcript capture accepted append drainage", () => {
         await f.store.appendUtteranceForSession(original, { text: "Previously saved speech" });
       }
       const revision = original && (await f.store.readSummaryInputRevision(original));
-      const appendEntered = createDeferred();
-      const releaseAppend = createDeferred();
       const failStart = createDeferred();
       const providerFailed = createDeferred();
       const started = createDeferred<TranscriptStartRequest>();
       const appendFailure = new Error("Accepted append failed before writing");
       const providerFailure = new Error("Provider startup failed");
       const events: string[] = [];
-      const append = f.store.appendUtteranceForSession.bind(f.store);
-      vi.spyOn(f.store, "appendUtteranceForSession").mockImplementation(async (...args) => {
-        appendEntered.resolve();
-        await releaseAppend.promise;
-        if (reopened) {
-          throw appendFailure;
-        }
-        await append(...args);
-        events.push("accepted speech");
+      const appends = blockAppends(f, {
+        failure: reopened ? appendFailure : undefined,
+        recorded: () => events.push("accepted speech"),
       });
       const writeSession = f.store.writeSession.bind(f.store);
       vi.spyOn(f.store, "writeSession").mockImplementation(async (...args) => {
+        const receipt = await writeSession(...args);
         if (args[0].stoppedAt) {
-          events.push("restored stop state");
+          events.push("restored stop state and revision");
         }
-        return writeSession(...args);
+        return receipt;
       });
       const readRevision = f.store.readSummaryInputRevision.bind(f.store);
-      vi.spyOn(f.store, "readSummaryInputRevision").mockImplementation(async (...args) => {
-        events.push("retry revision");
-        return readRevision(...args);
-      });
       let accepted: Promise<void> | undefined;
       f.provider.start = async (request) => {
         started.resolve(request);
@@ -281,22 +267,23 @@ describe("transcript capture accepted append drainage", () => {
         },
       );
       const request = await started.promise;
+      const { session } = request;
       try {
-        await appendEntered.promise;
+        await appends.entered;
         failStart.resolve();
         await providerFailed.promise;
         await setImmediate();
         expect.soft(events).toEqual([]);
-        const reserved = isTranscriptSessionStarting(request.session.sessionId);
+        const reserved = isTranscriptSessionStarting(session.sessionId);
         expect.soft(reserved).toBe(true);
         if (reserved) {
-          await expect(
-            f.start({ ...room, sessionId: request.session.sessionId }),
-          ).rejects.toMatchObject({ code: "id-conflict" });
+          await expect(f.start({ ...room, sessionId: session.sessionId })).rejects.toMatchObject({
+            code: "id-conflict",
+          });
         }
       } finally {
         failStart.resolve();
-        releaseAppend.resolve();
+        appends.release();
         await Promise.allSettled([accepted, startup]);
       }
       if (reopened) {
@@ -313,14 +300,13 @@ describe("transcript capture accepted append drainage", () => {
         .soft(events)
         .toEqual([
           ...(reopened ? [] : ["accepted speech"]),
-          "restored stop state",
-          "retry revision",
+          "restored stop state and revision",
           "start rejected",
         ]);
-      expect(failure.retry?.revision).toBe(await readRevision(request.session));
+      expect(failure.retry?.revision).toBe(await readRevision(session));
       expect(failure.retry?.session.stoppedAt).toEqual(expect.any(String));
-      expect(isTranscriptSessionStarting(request.session.sessionId)).toBe(false);
-      expect(await f.store.readUtterancesForSession(request.session)).toMatchObject([
+      expect(isTranscriptSessionStarting(session.sessionId)).toBe(false);
+      expect(await f.store.readUtterancesForSession(session)).toMatchObject([
         { text: reopened ? "Previously saved speech" : "Speech before startup failed" },
       ]);
       if (original) {
@@ -328,6 +314,7 @@ describe("transcript capture accepted append drainage", () => {
         expect(failure.retry).toEqual({
           session: original,
           revision: await readRevision(original),
+          discardOnAbandon: false,
         });
         expect(failure.cause).toBeInstanceOf(AggregateError);
         expect(failure.cause).toMatchObject({ errors: [providerFailure, appendFailure] });
@@ -338,6 +325,8 @@ describe("transcript capture accepted append drainage", () => {
 
   it("drains an accepted append when its metadata serialization ends the capture", async () => {
     const { f, request } = await startCapture("serialization-terminal");
+    const { session } = request;
+    const speech = "Speech that ends capture";
     const terminal = createDeferred();
     const toJSON = vi.fn(() => {
       // Provider metadata can synchronously end capture while this speech is being prepared.
@@ -347,22 +336,18 @@ describe("transcript capture accepted append drainage", () => {
       );
       return { caption: "final" };
     });
-    const accepted = Promise.resolve(
-      request.onUtterance({ text: "Speech that ends capture", metadata: { toJSON } }),
-    );
+    const accepted = Promise.resolve(request.onUtterance({ text: speech, metadata: { toJSON } }));
     await Promise.all([accepted, terminal.promise]);
 
     expect(toJSON).toHaveBeenCalledOnce();
-    expect(await f.store.readUtterancesForSession(request.session)).toMatchObject([
-      { text: "Speech that ends capture", metadata: { caption: "final" } },
+    expect(await f.store.readUtterancesForSession(session)).toMatchObject([
+      { text: speech, metadata: { caption: "final" } },
     ]);
-    expect(await f.store.readSummary(request.session)).toMatchObject({
-      summary: { utteranceCount: 1, transcript: ["Speech that ends capture"] },
+    expect(await f.store.readSummary(session)).toMatchObject({
+      summary: { utteranceCount: 1, transcript: [speech] },
     });
-    expect((await f.store.readSession(request.session.sessionId))?.stoppedAt).toEqual(
-      expect.any(String),
-    );
+    expect((await f.store.readSession(session.sessionId))?.stoppedAt).toEqual(expect.any(String));
     await request.onUtterance({ text: "Retired callback" });
-    expect(await f.store.readUtterancesForSession(request.session)).toHaveLength(1);
+    expect(await f.store.readUtterancesForSession(session)).toHaveLength(1);
   });
 });

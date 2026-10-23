@@ -1,11 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
-  bindBrowserRequestClient,
-  captureBrowserScreenshot,
-  fetchBrowserScreenshotDataUrl,
-} from "../../components/browser/browser-client.ts";
-import {
   browserTabKey,
   type BrowserTabTarget,
   type BrowserTabSelection,
@@ -98,6 +93,8 @@ export function loadBrowserTabThumbnail(params: {
   // must capture after the older flight, and failures count as an attempt.
   const pending = (entry.pending ?? Promise.resolve()).then(async () => {
     try {
+      const { bindBrowserRequestClient, captureBrowserScreenshot, fetchBrowserScreenshotDataUrl } =
+        await import("../../components/browser/browser-client.ts");
       const capture = await captureBrowserScreenshot(
         bindBrowserRequestClient(params.client, params.tab),
         params.tab.targetId,

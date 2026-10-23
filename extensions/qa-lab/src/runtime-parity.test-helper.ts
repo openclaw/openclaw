@@ -1,10 +1,7 @@
 import path from "node:path";
 import { resolveStorePath, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import {
-  appendSqliteTrajectoryRuntimeEvents,
-  formatSqliteSessionFileMarker,
-} from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { appendSqliteTrajectoryRuntimeEvents } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 export function createRuntimeParityTranscriptHarness() {
@@ -32,11 +29,6 @@ export function createRuntimeParityTranscriptHarness() {
       storePath,
       entry: {
         sessionId: params.sessionId,
-        sessionFile: formatSqliteSessionFileMarker({
-          agentId: "qa",
-          sessionId: params.sessionId,
-          storePath,
-        }),
         updatedAt: params.updatedAt ?? 100,
         ...(params.heartbeatIsolatedBaseSessionKey
           ? { heartbeatIsolatedBaseSessionKey: params.heartbeatIsolatedBaseSessionKey }

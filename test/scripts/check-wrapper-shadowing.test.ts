@@ -1,10 +1,9 @@
 import { spawnSync } from "node:child_process";
-import fs from "node:fs/promises";
-import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { collectRepositoryWrapperShadowing } from "../../scripts/check-wrapper-shadowing.mts";
 import { withTempDir } from "../../src/test-utils/temp-dir.js";
+import { writeFixtureFiles } from "./z0632-fixtures.test-support.js";
 
 const guardScriptPath = fileURLToPath(
   new URL("../../scripts/check-wrapper-shadowing.mts", import.meta.url),
@@ -14,43 +13,39 @@ type GuardFixture = Record<string, string>;
 
 async function runFixture(files: GuardFixture) {
   return await withTempDir("openclaw-wrapper-shadowing-", async (repoRoot) => {
-    await Promise.all(
-      Object.entries(files).map(async ([repoPath, content]) => {
-        const filePath = path.join(repoRoot, repoPath);
-        await fs.mkdir(path.dirname(filePath), { recursive: true });
-        await fs.writeFile(filePath, content);
-      }),
-    );
+    writeFixtureFiles(repoRoot, files);
     return await collectRepositoryWrapperShadowing(repoRoot);
   });
 }
 
-const directViolation: GuardFixture = {
-  "src/inner.js": "export function runTask() { return 'inner'; }\n",
-  "src/outer.ts": [
-    'import { runTask as runTaskInner } from "./inner.js";',
-    "export function runTask() {",
-    "  prepareTask();",
-    "  return runTaskInner();",
-    "}",
-  ].join("\n"),
-};
+const inner = "export function runTask() { return 'inner'; }\n";
+const imported = (declaration: string) =>
+  `import { runTask as runTaskInner } from "./inner.js"; ${declaration}`;
+const identity = imported("export const runTask: () => string = runTaskInner;");
+const namespaceIdentity =
+  'import * as bridge from "./bridge.js"; export const runTask = bridge.runTask;';
+function wrapperFixture(module: string, extension = "ts"): GuardFixture {
+  return {
+    [`src/inner.${extension}`]: inner,
+    "src/outer.ts": `import { runTask as implementation } from "./${module}.js";
+export function runTask() {
+  prepareTask();
+  return implementation();
+}`,
+  };
+}
 
-const wrapperThroughFacade: GuardFixture = {
-  "src/inner.ts": "export function runTask() { return 'inner'; }\n",
-  "src/outer.ts": [
-    'import { runTask as runTaskFacade } from "./facade.js";',
-    "export function runTask() {",
-    "  prepareTask();",
-    "  return runTaskFacade();",
-    "}",
-  ].join("\n"),
-};
+function origin(name: string, files: GuardFixture, wrapped: string | null = "src/inner.ts") {
+  return { name, files, wrapped };
+}
+function violation(wrapped: string, via?: string) {
+  return { name: "runTask", wrapped, wrapper: "src/outer.ts", ...(via ? { via } : {}) };
+}
 
 describe("wrapper shadowing guard", () => {
   it("fails for a same-name wrapper around an imported implementation", async () => {
     const result = await runFixture({
-      ...directViolation,
+      ...wrapperFixture("inner", "js"),
       ...Object.fromEntries(
         Array.from({ length: 40 }, (_, index) => [
           `src/module-${String(index).padStart(2, "0")}.ts`,
@@ -59,26 +54,20 @@ describe("wrapper shadowing guard", () => {
       ),
     });
 
-    expect(result).toEqual([{ name: "runTask", wrapped: "src/inner.js", wrapper: "src/outer.ts" }]);
+    expect(result).toEqual([violation("src/inner.js")]);
   });
 
   it.each([
     ["pure re-export", 'export { runTask } from "./inner.js";'],
-    [
-      "untyped identity alias",
-      'import { runTask as runTaskInner } from "./inner.js"; export const runTask = runTaskInner;',
-    ],
-    [
-      "typed identity alias",
-      'import { runTask as runTaskInner } from "./inner.js"; export const runTask: () => string = runTaskInner;',
-    ],
+    ["untyped identity alias", imported("export const runTask = runTaskInner;")],
+    ["typed identity alias", identity],
     [
       "namespace identity alias",
       'import * as runtime from "./inner.js"; export const runTask = runtime.runTask;',
     ],
   ])("passes for a %s", async (_name, content) => {
     const result = await runFixture({
-      "src/inner.ts": "export function runTask() { return 'inner'; }\n",
+      "src/inner.ts": inner,
       "src/outer.ts": content,
     });
 
@@ -93,97 +82,60 @@ describe("wrapper shadowing guard", () => {
     const result = await runFixture({
       "src/inner.ts":
         "export const runTask = Object.assign(() => 'inner', { runTask: () => 'nested' });",
-      "src/outer.ts": `import { runTask as runTaskInner } from "./inner.js";\n${declaration}`,
+      "src/outer.ts": imported(declaration),
     });
 
-    expect(result).toEqual([{ name: "runTask", wrapped: "src/inner.ts", wrapper: "src/outer.ts" }]);
+    expect(result).toEqual([violation("src/inner.ts")]);
   });
 
-  it.each<{ name: string; files: GuardFixture; wrapped: string | undefined }>([
-    {
-      name: "typed identity re-export",
-      files: {
-        "src/facade.ts":
-          'import { runTask as inner } from "./inner.js"; export const runTask: () => string = inner;',
-      },
-      wrapped: "src/inner.ts",
-    },
+  it.each([
+    origin("typed identity re-export", { "src/facade.ts": identity }),
     ...(
       [
-        [
-          "two identity aliases",
-          'import * as bridge from "./bridge.js"; export const runTask = bridge.runTask;',
-        ],
+        ["two identity aliases", namespaceIdentity],
         ["named barrel and identity alias", 'export { runTask } from "./bridge.js";'],
         ["star barrel and identity alias", 'export * from "./bridge.js";'],
       ] as const
-    ).map(([name, facade]) => ({
-      name,
-      files: {
-        "src/bridge.ts":
-          'import { runTask as inner } from "./inner.js"; export const runTask: () => string = inner;',
-        "src/facade.ts": facade,
-      },
-      wrapped: "src/inner.ts",
-    })),
-    {
-      name: "cycle with an alternate definition",
-      files: {
-        "src/facade.ts": 'export * from "./cycle.js"; export * from "./inner.js";',
-        "src/cycle.ts": 'export * from "./facade.js";',
-      },
-      wrapped: "src/inner.ts",
-    },
-    ...[false, true].map((distinct) => ({
-      name: distinct ? "ambiguous star origins" : "duplicate paths to one origin",
-      files: {
-        "src/facade.ts": 'export * from "./left.js"; export * from "./right.js";',
-        "src/left.ts": 'export { runTask } from "./inner.js";',
-        "src/right.ts": `export { runTask } from "./${distinct ? "other" : "inner"}.js";`,
-        "src/other.ts": "export function runTask() { return 'other'; }",
-      },
-      wrapped: distinct ? undefined : "src/inner.ts",
-    })),
+    ).map(([name, facade]) => origin(name, { "src/bridge.ts": identity, "src/facade.ts": facade })),
+    origin("cycle with an alternate definition", {
+      "src/facade.ts": 'export * from "./cycle.js"; export * from "./inner.js";',
+      "src/cycle.ts": 'export * from "./facade.js";',
+    }),
+    ...[false, true].map((distinct) =>
+      origin(
+        distinct ? "ambiguous star origins" : "duplicate paths to one origin",
+        {
+          "src/facade.ts": 'export * from "./left.js"; export * from "./right.js";',
+          "src/left.ts": 'export { runTask } from "./inner.js";',
+          "src/right.ts": `export { runTask } from "./${distinct ? "other" : "inner"}.js";`,
+          "src/other.ts": "export function runTask() { return 'other'; }",
+        },
+        distinct ? null : "src/inner.ts",
+      ),
+    ),
     ...(
       [
         ["local", "export function runTask() { return 'local'; }", "src/facade.ts"],
         ["named", 'export { runTask } from "./inner.js";', "src/inner.ts"],
-        ["renamed", 'export { otherTask as runTask } from "./other.js";', undefined],
+        ["renamed", 'export { otherTask as runTask } from "./other.js";', null],
       ] as const
-    ).map(([name, binding, wrapped]) => ({
-      name: `${name} binding shadows stars`,
-      files: {
-        "src/facade.ts": `${binding}\nexport * from "./${name === "renamed" ? "inner" : "other"}.js";`,
-        "src/other.ts":
-          "export function runTask() { return 'other'; } export function otherTask() { return 'other'; }",
-      },
-      wrapped,
-    })),
+    ).map(([name, binding, wrapped]) =>
+      origin(
+        `${name} binding shadows stars`,
+        {
+          "src/facade.ts": `${binding}\nexport * from "./${name === "renamed" ? "inner" : "other"}.js";`,
+          "src/other.ts":
+            "export function runTask() { return 'other'; } export function otherTask() { return 'other'; }",
+        },
+        wrapped,
+      ),
+    ),
   ])("resolves the wrapper origin through $name", async ({ files, wrapped }) => {
-    expect(await runFixture({ ...wrapperThroughFacade, ...files })).toEqual(
+    expect(await runFixture({ ...wrapperFixture("facade"), ...files })).toEqual(
       wrapped
-        ? [
-            {
-              name: "runTask",
-              wrapped,
-              wrapper: "src/outer.ts",
-              ...(wrapped === "src/facade.ts" ? {} : { via: "src/facade.ts" }),
-            },
-          ]
+        ? [violation(wrapped, wrapped === "src/facade.ts" ? undefined : "src/facade.ts")]
         : [],
     );
-  });
-
-  it("keeps a chain of identity-only facades exempt", async () => {
-    expect(
-      await runFixture({
-        "src/inner.ts": "export function runTask() { return 'inner'; }",
-        "src/bridge.ts":
-          'import { runTask as inner } from "./inner.js"; export const runTask: () => string = inner;',
-        "src/facade.ts":
-          'import * as bridge from "./bridge.js"; export const runTask = bridge.runTask;',
-      }),
-    ).toEqual([]);
   });
 
   it("rejects debt-baseline updates with the wrapper trailer", () => {

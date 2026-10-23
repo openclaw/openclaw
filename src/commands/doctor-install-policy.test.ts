@@ -105,16 +105,27 @@ describe("collectInstallPolicyHealthLines", () => {
   );
 
   it("reports unavailable enabled policy as fail-closed", async () => {
-    const lines = await collectInstallPolicyHealthLines({
-      security: {
-        installPolicy: {
-          enabled: true,
+    const onFinding = vi.fn();
+    await noteInstallPolicyHealth(
+      {
+        security: {
+          installPolicy: {
+            enabled: true,
+          },
         },
       },
-    });
-
-    expect(lines.join("\n")).toContain("security.installPolicy.exec is not configured");
-    expect(lines.join("\n")).toContain("will fail closed");
+      { onFinding },
+    );
+    expect(onFinding).toHaveBeenCalledWith(
+      expect.objectContaining({
+        category: "fix-now",
+        severity: "error",
+        message: expect.stringContaining("security.installPolicy.exec is not configured"),
+        fixHint: expect.stringContaining("remain blocked"),
+        docsUrl: expect.stringContaining("tool-permissions#plugins"),
+      }),
+    );
+    expect(noteMock.mock.calls.at(-1)?.[0]).not.toContain("ERROR");
   });
 
   it("keeps static validation errors on one terminal line", async () => {

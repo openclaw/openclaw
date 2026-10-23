@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { CLI_PARENT_BOUND_PRELOAD } from "../../cli-parent-lifetime.mjs";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as runtimePaths from "../daemon/runtime-paths.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
@@ -13,6 +14,40 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("managed handoff Node selection", () => {
+  it.each([
+    ["node", "openclaw"],
+    ["bun", "openclaw"],
+    ["openclaw-wrapper", path.resolve("fixture", "openclaw-wrapper")],
+  ])("keeps the no-entry recovery command for %s", (name, command) => {
+    expect(
+      resolveManagedServiceCliArgv({ execPath: path.resolve("fixture", name) }, [
+        "gateway",
+        "restart",
+      ]),
+    ).toEqual([command, "gateway", "restart"]);
+  });
+
+  it("keeps a manifest-qualified standalone executable without an entry", async () => {
+    const root = tempDirs.make("openclaw-handoff-standalone-");
+    const execPath = path.join(root, "node");
+    await fs.writeFile(
+      path.join(root, "manifest.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        mode: "jit",
+        executable: { path: "node" },
+        runtime: { path: "runtime" },
+        openclaw: { version: "2026.10.3" },
+        bun: { version: "1.4.3" },
+      }),
+    );
+    expect(resolveManagedServiceCliArgv({ execPath }, ["gateway", "restart"])).toEqual([
+      execPath,
+      "gateway",
+      "restart",
+    ]);
+  });
+
   it.each(["node", "bun"])(
     "keeps %s runtime flags outside foreground CLI respawn policy",
     (runtime) => {
@@ -30,6 +65,33 @@ describe("managed handoff Node selection", () => {
       ]);
     },
   );
+
+  it("keeps respawn flags and readiness when preparing a one-shot handoff", () => {
+    const execPath = path.resolve("fixture", "node");
+    const argv1 = path.resolve("fixture", "openclaw.mjs");
+    const command = [execPath, argv1, "doctor"];
+    const prepared = prepareManagedHandoffCliRuntime(
+      command,
+      {
+        NODE_EXTRA_CA_CERTS: "/fixture/ca.pem",
+      },
+      execPath,
+    );
+    expect(prepared).toEqual({
+      nodeExecArgv: [
+        "--import",
+        CLI_PARENT_BOUND_PRELOAD,
+        process.platform === "win32"
+          ? "--stack-size=8192"
+          : "--disable-warning=ExperimentalWarning",
+      ],
+      readyEnv: {
+        NODE_EXTRA_CA_CERTS: "/fixture/ca.pem",
+        ...(process.platform === "win32" ? {} : { OPENCLAW_NODE_OPTIONS_READY: "1" }),
+      },
+    });
+    expect(command).toEqual([execPath, argv1, "doctor"]);
+  });
 
   it.runIf(process.platform !== "win32")(
     "skips an unusable PATH Node and launches a compatible replacement",

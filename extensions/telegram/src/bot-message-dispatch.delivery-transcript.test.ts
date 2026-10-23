@@ -1,11 +1,20 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import { createStructuredOutboundPayloadPlan } from "openclaw/plugin-sdk/channel-outbound";
 import { closeQaRuntimeStores } from "openclaw/plugin-sdk/qa-runtime";
-import { patchSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { dispatchReplyWithBufferedBlockDispatcher as dispatchThroughSharedOwner } from "openclaw/plugin-sdk/reply-dispatch-runtime";
+import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
 import type * as SessionStoreRuntime from "openclaw/plugin-sdk/session-store-runtime";
+import { patchSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import type * as SessionTranscriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
+import {
+  drainSessionDiskBudgetWorkers,
+  withSessionHistoryBudgetSweepsForTest,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { makeAgentAssistantMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it, vi } from "vitest";
 import {
   appendAssistantMirrorMessageByIdentity,
@@ -20,32 +29,68 @@ import {
   readLatestAssistantTextByIdentity,
   telegramDepsForTest,
   type TelegramMessageContext,
+  deliverInboundReplyWithMessageSendContext,
+  expectDeliveredReply,
+  expectDraftStreamParams,
+  mockDefaultSessionEntry,
+  setupDraftStreams,
 } from "./bot-message-dispatch.test-harness.js";
 import type * as TelegramDelivery from "./bot/delivery.replies.js";
-import type { TelegramDraftStream } from "./draft-stream.js";
 import type * as TelegramDraft from "./draft-stream.js";
+import type { TelegramDraftStream } from "./draft-stream.js";
 import type * as TelegramSendEdit from "./send-edit.js";
 
-describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
-  it.each(["same-millisecond turns", "tool exclusion"] as const)(
-    "stores only accepted final text with scoped transcript identities (%s)",
-    async (scenario) => {
-      const root = await fs.mkdtemp(path.join(os.tmpdir(), "telegram-dispatch-transcript-"));
-      const repeated = scenario === "same-millisecond turns";
-      const scope = {
-        agentId: "default",
-        sessionId: "dispatch-transcript",
-        sessionKey: "agent:default:telegram:direct:123",
-        storePath: path.join(root, "sessions.json"),
-      };
+const assistant = (text: string) =>
+  makeAgentAssistantMessage({ content: [{ type: "text", text }] });
+const identity = { agentId: "default", sessionKey: "agent:default:telegram:direct:123" };
+const sessionScope = (root: string, sessionId: string) => ({
+  ...identity,
+  sessionId,
+  storePath: path.join(root, "sessions.json"),
+});
+const user = (content: string) => ({ role: "user" as const, content, timestamp: Date.now() });
+async function transcriptFixture(sessionId: string) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "telegram-transcript-"));
+  const scope = sessionScope(root, sessionId);
+  const entry = { sessionId, updatedAt: Date.now() };
+  const transcript = await vi.importActual<typeof SessionTranscriptRuntime>(
+    "openclaw/plugin-sdk/session-transcript-runtime",
+  );
+  readLatestAssistantTextByIdentity.mockImplementation(
+    transcript.readLatestAssistantTextByIdentity,
+  );
+  const cleanup = async () => {
+    await closeQaRuntimeStores(root);
+    await fs.rm(root, { recursive: true, force: true });
+  };
+  return { root, scope, entry, transcript, cleanup };
+}
+function recoveryDraft() {
+  const context = createContext();
+  context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
+  context.ctxPayload.MessageSid = "456";
+  return { context, ...setupDraftStreams({ answerMessageId: 2001 }) };
+}
+function expectInboundPayload(payload: Record<string, unknown>, params = {}) {
+  expect(deliverInboundReplyWithMessageSendContext).toHaveBeenCalledWith(
+    expect.objectContaining({ ...params, payload: expect.objectContaining(payload) }),
+  );
+}
+const visibleDelivery = () => ({
+  status: "handled_visible" as const,
+  delivery: { messageIds: ["2002"], visibleReplySent: true },
+});
+
+describeTelegramDispatch("dispatchTelegramMessage transcript delivery", () => {
+  it.each(["ordinary", "command"] as const)(
+    "stores accepted %s finals without competing mirrors",
+    async (kind) => {
+      const { root, scope, transcript, cleanup } = await transcriptFixture("dispatch-transcript");
       const otherScope = {
         ...scope,
         sessionId: "unrelated-session",
         sessionKey: "agent:default:telegram:direct:999",
       };
-      const transcript = await vi.importActual<typeof SessionTranscriptRuntime>(
-        "openclaw/plugin-sdk/session-transcript-runtime",
-      );
       const store = await vi.importActual<typeof SessionStoreRuntime>(
         "openclaw/plugin-sdk/session-store-runtime",
       );
@@ -62,9 +107,6 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
         pendingMirrors.push(pending);
         return pending;
       });
-      readLatestAssistantTextByIdentity.mockImplementation(
-        transcript.readLatestAssistantTextByIdentity,
-      );
       editMessageTelegram.mockImplementation(actualEdit.editMessageTelegram);
       let answer: TelegramDraftStream | undefined;
       createTelegramDraftStream.mockImplementation((params) => {
@@ -82,9 +124,7 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
         return { chat, message_id, text, date: 1 };
       });
       vi.spyOn(bot.api, "editMessageText").mockImplementation(async (_chatId, messageId, text) => {
-        if (typeof text !== "string") {
-          throw new Error("Expected a text edit, not a rich-message edit");
-        }
+        assert(typeof text === "string", "Expected a text edit, not a rich-message edit");
         visible.set(messageId, text);
         return { chat, message_id: messageId, text, date: 1, edit_date: 2 };
       });
@@ -92,62 +132,72 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
         visible.delete(messageId);
         return true;
       });
-      let restoreClock: (() => void) | undefined;
+      const clock = vi.spyOn(Date, "now");
+      const sourceMessageIds: string[] = [];
       try {
         for (const session of [scope, otherScope]) {
           const entry = { sessionId: session.sessionId, updatedAt: Date.now() };
           await patchSessionEntry({ ...session, fallbackEntry: entry, update: () => entry });
         }
-        if (repeated) {
-          const timestamp = Date.now();
-          const clock = vi.spyOn(Date, "now").mockReturnValue(timestamp);
-          restoreClock = () => clock.mockRestore();
-        }
-        dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
-          async ({ dispatcherOptions, replyOptions }) => {
-            if (repeated) {
-              await replyOptions?.onPartialReply?.({ text: "Final answer" });
-              await answer?.flush();
-            } else {
-              await dispatcherOptions.deliver(
-                { text: "Tool output must not become a final mirror" },
-                { kind: "tool" },
-              );
-            }
-            await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
-            await dispatcherOptions.deliver(
-              { text: "Tool output must not become a final mirror" },
-              { kind: "tool" },
-            );
-            return { queuedFinal: true, counts: { block: 0, final: 1, tool: 1 } };
-          },
-        );
-        for (const inboundId of repeated ? [456, 457] : [456]) {
-          SessionManager.open(scope, root).appendMessage({
-            role: "user",
-            content: "Repeat the answer",
-            timestamp: Date.now(),
-          });
+        clock.mockReturnValue(Date.now());
+        dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async (params) => {
+          const { dispatcherOptions, replyOptions } = params;
+          await replyOptions?.onPartialReply?.({ text: "Final answer" });
+          await answer?.flush();
+          if (kind === "command") {
+            return dispatchThroughSharedOwner({
+              ...params,
+              replyResolver: async () => ({ text: "Final answer" }),
+            });
+          }
+          const runId = `run-${sourceMessageIds.length}`;
+          replyOptions?.onPreparedAgentRunStart?.({ runId, transcriptStart: null });
+          const manager = SessionManager.open(scope, root);
+          const sourceAssistant = { ...assistant("Final answer"), __openclaw: { runId } };
+          sourceMessageIds.push(manager.appendMessage(sourceAssistant));
+          manager.appendMessage(user("Queued input"));
+          await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
+          await dispatcherOptions.deliver(
+            { text: "Tool output must not become a final mirror" },
+            { kind: "tool" },
+          );
+          return { queuedFinal: true, counts: { block: 0, final: 1, tool: 1 } };
+        });
+        for (const inboundId of [456, 457]) {
+          SessionManager.open(scope, root).appendMessage(user("Repeat the answer"));
           answer = undefined;
           await dispatchWithContext({
+            cfg:
+              kind === "command"
+                ? { session: { store: scope.storePath }, agents: { entries: { default: {} } } }
+                : undefined,
             context: createContext({
-              chatId: chat.id,
-              isGroup: false,
               msg: { chat, message_id: inboundId } as TelegramMessageContext["msg"],
               threadSpec: { scope: "none", id: undefined },
               replyThreadId: undefined,
               ctxPayload: {
-                SessionKey: scope.sessionKey,
+                SessionKey: identity.sessionKey,
                 MessageSid: String(inboundId),
                 ChatType: "direct",
+                ...(kind === "command"
+                  ? {
+                      Body: "/status",
+                      BodyForCommands: "/status",
+                      Provider: "telegram",
+                      Surface: "telegram",
+                      OriginatingChannel: "telegram",
+                      From: "telegram:123",
+                      To: "telegram:123",
+                    }
+                  : {}),
               } as TelegramMessageContext["ctxPayload"],
             }),
             bot,
-            streamMode: repeated ? "partial" : "off",
-            telegramDeps: {
+            streamMode: "partial",
+            moduleMocks: {
               ...telegramDepsForTest,
               resolveStorePath: () => scope.storePath,
-              getSessionEntry: store.getSessionEntry,
+              getSessionEntryAsync: store.getSessionEntryAsync,
               deliverReplies: actualDelivery.deliverReplies,
               deliverStructuredReplies: actualDelivery.deliverStructuredReplies,
             },
@@ -163,35 +213,196 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
           } => entry.message.role === "assistant" && entry.message.model === "delivery-mirror",
         );
         expect(mirrors.map(({ message }) => message.content)).toEqual(
-          repeated
-            ? [[{ type: "text", text: "Final answer" }], [{ type: "text", text: "Final answer" }]]
-            : [[{ type: "text", text: "Final answer" }]],
+          kind === "command"
+            ? []
+            : [[{ type: "text", text: "Final answer" }], [{ type: "text", text: "Final answer" }]],
         );
         expect(await transcript.readVisibleSessionTranscriptMessageEntries(otherScope)).toEqual([]);
-        if (repeated) {
+        if (kind === "ordinary") {
           expect(mirrors[0]?.idempotencyKey).not.toBe(mirrors[1]?.idempotencyKey);
-          expect([...visible.values()]).toEqual(["Final answer", "Final answer"]);
-          const finalHooks = emitTelegramMessageSentHooks.mock.calls.filter(
-            ([event]) => event.content === "Final answer",
+          expect(mirrors.map(({ message }) => message)).toMatchObject(
+            sourceMessageIds.map((sourceAssistantMessageId) => ({
+              openclawDeliveryMirror: { sourceAssistantMessageId },
+            })),
           );
-          expect(finalHooks).toHaveLength(2);
-          expect(finalHooks[0]?.[0]).toMatchObject({
-            content: "Final answer",
-            success: true,
-            sessionKeyForInternalHooks: scope.sessionKey,
-          });
         } else {
-          expect([...visible.values()]).toEqual([
-            "Tool output must not become a final mirror",
-            "Final answer",
-          ]);
+          expect(entries.filter((entry) => entry.message.role === "assistant")).toHaveLength(2);
+          expect(
+            entries.filter((entry) => JSON.stringify(entry.message).includes("/status")),
+          ).toHaveLength(2);
         }
+        expect([...visible.values()]).toEqual(["Final answer", "Final answer"]);
+        const finalHooks = emitTelegramMessageSentHooks.mock.calls.filter(
+          ([event]) => event.content === "Final answer",
+        );
+        expect(finalHooks).toHaveLength(2);
+        expect(finalHooks[0]?.[0]).toMatchObject({
+          content: "Final answer",
+          success: true,
+          sessionKeyForInternalHooks: scope.sessionKey,
+        });
       } finally {
-        restoreClock?.();
+        clock.mockRestore();
         await Promise.all(pendingMirrors);
-        await closeQaRuntimeStores(root);
-        await fs.rm(root, { recursive: true, force: true });
+        await cleanup();
       }
     },
   );
+  it("recovers persisted delivery facts without replacing the current-message target", async () => {
+    const { root, scope, entry, cleanup } = await transcriptFixture("persisted-recovery");
+    const prefix = "The persisted answer continues after this sufficiently long stable opening";
+    const fullText = `${prefix} paragraph with the remaining explanation and its voice attachment.`;
+    const aliasRecord = {
+      filePath: "/tmp/source-note.txt",
+      name: "Displayed attachment.txt",
+      mimeType: "text/plain",
+    };
+    const mediaUrls = ["/tmp/lead.txt", aliasRecord.filePath];
+    const recordedMedia = "/tmp/recorded.ogg";
+    try {
+      await withSessionHistoryBudgetSweepsForTest(() =>
+        patchSessionEntry({ ...scope, fallbackEntry: entry, update: () => entry }),
+      );
+      const manager = SessionManager.open(scope, root);
+      const { context, answerDraftStream } = recoveryDraft();
+      deliverInboundReplyWithMessageSendContext.mockResolvedValue(visibleDelivery());
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+        async ({ dispatcherOptions, replyOptions }) => {
+          await replyOptions?.onPartialReply?.({ text: prefix });
+          manager.appendMessage({
+            ...assistant(`${fullText} [[reply_to:999]] [[audio_as_voice]]`),
+            timestamp: Date.now(),
+            openclawDelivery: { mediaUrls: [recordedMedia] },
+          });
+          const payload = setReplyPayloadMetadata(
+            {
+              text: `${prefix}...`,
+              mediaUrls,
+              mediaUrl: aliasRecord.filePath,
+              attachments: [aliasRecord],
+              replyToCurrent: true,
+            },
+            {
+              nonTerminalToolErrorWarning: true,
+              tts: { tagged: true, text: "Host-owned spoken answer" },
+            },
+          );
+          const [plan] = createStructuredOutboundPayloadPlan([payload]);
+          assert(plan && dispatcherOptions.deliverPrepared, "Prepared delivery missing");
+          await dispatcherOptions.deliverPrepared(plan, { kind: "final" });
+          return { queuedFinal: true };
+        },
+      );
+      await dispatchWithContext({
+        context,
+        replyToMode: "off",
+        streamMode: "partial",
+        moduleMocks: {
+          ...telegramDepsForTest,
+          resolveStorePath: () => scope.storePath,
+          getSessionEntryAsync: async () => entry,
+        },
+      });
+      expectInboundPayload({
+        text: fullText,
+        replyToId: "456",
+        replyToCurrent: true,
+        replyToTag: true,
+        audioAsVoice: true,
+        mediaUrls: [...mediaUrls, recordedMedia],
+        attachments: [{}, aliasRecord, {}],
+      });
+      expect(answerDraftStream.update).not.toHaveBeenCalledWith(fullText);
+    } finally {
+      await drainSessionDiskBudgetWorkers();
+      await cleanup();
+    }
+  });
+
+  it("does not recover hidden transcript text into a truncated public final", async () => {
+    const { root, scope, entry, cleanup } = await transcriptFixture("hidden-recovery");
+    const prefix = "The visible answer starts with this sufficiently long shared introduction";
+    const publicText = `${prefix}...`;
+    try {
+      await patchSessionEntry({ ...scope, fallbackEntry: entry, update: () => entry });
+      const manager = SessionManager.open(scope, root);
+      const { context } = recoveryDraft();
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+        manager.appendMessage(assistant(publicText));
+        const hiddenAssistant = {
+          ...assistant(`${prefix} followed by internal notes that must remain private.`),
+          display: false,
+        };
+        manager.appendMessage(hiddenAssistant);
+        await dispatcherOptions.deliver({ text: publicText }, { kind: "final" });
+        return { queuedFinal: true };
+      });
+      await dispatchWithContext({
+        context,
+        streamMode: "off",
+        moduleMocks: {
+          ...telegramDepsForTest,
+          resolveStorePath: () => scope.storePath,
+          getSessionEntryAsync: async () => entry,
+        },
+      });
+      expectDeliveredReply(0, { text: publicText });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it.each([
+    "longer preview",
+    "recovered current-message target",
+    "initial current-message target",
+  ] as const)("retains delivery intent with %s", async (recovery) => {
+    const current = recovery !== "longer preview";
+    const initialTarget = recovery === "initial current-message target";
+    const { context, answerDraftStream } = recoveryDraft();
+    mockDefaultSessionEntry();
+    const prefix = "The recovered answer includes the remaining explanation after this opening";
+    const fullText = `${prefix} paragraph with the complete explanation.`;
+    const previewText = current ? prefix : `${fullText} The preview also includes the last step.`;
+    readLatestAssistantTextByIdentity.mockResolvedValueOnce(undefined).mockResolvedValue({
+      text: current
+        ? `${fullText} [[reply_to_current]]`
+        : `${fullText} [[reply_to:999]] [[audio_as_voice]]\nMEDIA:https://example.invalid/note.ogg`,
+      timestamp: Date.now() + 1_000,
+    });
+    if (current) {
+      deliverInboundReplyWithMessageSendContext.mockResolvedValue(visibleDelivery());
+    }
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: previewText });
+        const [plan] = createStructuredOutboundPayloadPlan([
+          initialTarget
+            ? { text: fullText, replyToId: "456", replyToTag: true, replyToCurrent: true }
+            : { text: `${prefix}...` },
+        ]);
+        assert(plan && dispatcherOptions.deliverPrepared, "Prepared delivery missing");
+        await dispatcherOptions.deliverPrepared(plan, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    await dispatchWithContext({ context, replyToMode: current ? "off" : "all" });
+    expect(answerDraftStream.update).toHaveBeenCalledWith(previewText);
+    if (current) {
+      expectDraftStreamParams({ replyToMessageId: undefined, replyToMode: "off" });
+      expectInboundPayload(
+        { text: fullText, replyToId: "456", replyToTag: true, replyToCurrent: true },
+        { replyToMode: "off" },
+      );
+      expect(answerDraftStream.update).not.toHaveBeenCalledWith(fullText);
+    } else {
+      expectDeliveredReply(0, {
+        text: previewText,
+        mediaUrls: ["https://example.invalid/note.ogg"],
+        audioAsVoice: true,
+        replyToId: "999",
+        replyToTag: true,
+      });
+    }
+  });
 });

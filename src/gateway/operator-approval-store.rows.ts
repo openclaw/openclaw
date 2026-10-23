@@ -8,15 +8,9 @@ import {
   buildApprovalResolutionRef,
   isApprovalResolutionRef,
 } from "../infra/approval-resolution-ref.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../infra/kysely-sync.js";
-import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
+import { getOpenClawStateFeatureSchemaSql } from "../state/openclaw-state-feature-schema.js";
 import type {
   NewOperatorApproval,
-  OperatorApprovalDatabase,
   OperatorApprovalDecision,
   OperatorApprovalHistoryCursor,
   OperatorApprovalKind,
@@ -30,7 +24,6 @@ export const OPERATOR_APPROVAL_TERMINAL_RETENTION_MS = 30 * 24 * 60 * 60_000;
 export const OPERATOR_APPROVAL_RECEIPT_SUMMARY_MAX_ROWS = 128;
 export const OPERATOR_APPROVAL_RECEIPT_MAX_PAYLOAD_BYTES = 64 * 1024;
 export const OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS = 64;
-export const OPERATOR_APPROVAL_PENDING_SCAN_PAGE_SIZE = 256;
 export const OPERATOR_APPROVAL_MAX_LIST_LIMIT = 1_001;
 export const OPERATOR_APPROVAL_HISTORY_DEFAULT_LIMIT = 50;
 export const OPERATOR_APPROVAL_HISTORY_MAX_LIMIT = 100;
@@ -62,18 +55,9 @@ export function parseOperatorApprovalKind(value: string): OperatorApprovalKind |
   return value === "exec" || value === "plugin" || value === "system-agent" ? value : null;
 }
 
-export const OPERATOR_APPROVAL_EXECUTION_IDENTITY_SCHEMA_SQL = `
-CREATE TABLE IF NOT EXISTS operator_approval_execution_identities (
-  approval_id TEXT NOT NULL PRIMARY KEY
-    REFERENCES operator_approvals(approval_id) ON DELETE CASCADE,
-  source_context_id TEXT NOT NULL CHECK (
-    length(source_context_id) BETWEEN 1 AND 256 AND source_context_id = trim(source_context_id)
-  ),
-  source_execution_id TEXT NOT NULL CHECK (
-    length(source_execution_id) BETWEEN 1 AND 256 AND source_execution_id = trim(source_execution_id)
-  )
-) STRICT;
-`;
+export const OPERATOR_APPROVAL_EXECUTION_IDENTITY_SCHEMA_SQL = getOpenClawStateFeatureSchemaSql(
+  "operator_approval_execution_identities",
+);
 
 export function normalizeExecutionIdentityBinding(input: NewOperatorApproval) {
   const binding = input.executionIdentityToken;
@@ -244,10 +228,25 @@ function hasValidLifecycleTuple(params: {
   );
 }
 
-export function decodeOperatorApprovalRow(row: OperatorApprovalRow): OperatorApprovalRecord | null {
-  const presentation = parseApprovalPresentation(row.presentation_json);
+/** Validate bounded audience and reviewer metadata before hydrating retained payloads. */
+export function decodeOperatorApprovalBindings(
+  row: Pick<OperatorApprovalRow, "reviewer_device_ids_json" | "audience_session_keys_json">,
+): Pick<OperatorApprovalRecord, "reviewerDeviceIds" | "audienceSessionKeys"> | null {
   const reviewerDeviceIds = parseStringArray(row.reviewer_device_ids_json);
   const audienceSessionKeys = parseStringArray(row.audience_session_keys_json);
+  if (
+    !reviewerDeviceIds ||
+    !audienceSessionKeys ||
+    audienceSessionKeys.length > OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS
+  ) {
+    return null;
+  }
+  return { reviewerDeviceIds, audienceSessionKeys };
+}
+
+export function decodeOperatorApprovalRow(row: OperatorApprovalRow): OperatorApprovalRecord | null {
+  const presentation = parseApprovalPresentation(row.presentation_json);
+  const bindings = decodeOperatorApprovalBindings(row);
   const kind = parseOperatorApprovalKind(row.kind);
   const status = row.status;
   const decision = row.decision;
@@ -257,9 +256,7 @@ export function decodeOperatorApprovalRow(row: OperatorApprovalRow): OperatorApp
     !presentation ||
     !isWellFormedApprovalId(row.approval_id) ||
     !isApprovalResolutionRef(row.resolution_ref) ||
-    !reviewerDeviceIds ||
-    !audienceSessionKeys ||
-    audienceSessionKeys.length > OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS ||
+    !bindings ||
     !kind ||
     (status !== "pending" &&
       status !== "allowed" &&
@@ -323,7 +320,7 @@ export function decodeOperatorApprovalRow(row: OperatorApprovalRow): OperatorApp
       clientId: row.requested_by_client_id,
       deviceTokenAuth: row.requested_by_device_token_auth === 1,
     },
-    reviewerDeviceIds,
+    reviewerDeviceIds: bindings.reviewerDeviceIds,
     source: {
       agentId: row.source_agent_id,
       sessionKey: row.source_session_key,
@@ -332,7 +329,7 @@ export function decodeOperatorApprovalRow(row: OperatorApprovalRow): OperatorApp
       toolCallId: row.source_tool_call_id,
       toolName: row.source_tool_name,
     },
-    audienceSessionKeys,
+    audienceSessionKeys: bindings.audienceSessionKeys,
     runtimeEpoch: row.runtime_epoch,
     createdAtMs: row.created_at_ms,
     expiresAtMs: row.expires_at_ms,
@@ -352,52 +349,6 @@ export function decodeOperatorApprovalRow(row: OperatorApprovalRow): OperatorApp
   };
 }
 
-export function selectOperatorApprovalRow(
-  database: OpenClawStateDatabase,
-  id: string,
-): OperatorApprovalRow | undefined {
-  const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);
-  return executeSqliteQueryTakeFirstSync(
-    database.db,
-    stateDb.selectFrom("operator_approvals").selectAll().where("approval_id", "=", id),
-  );
-}
-
-export function selectOperatorApprovalRowByLocator(
-  database: OpenClawStateDatabase,
-  locator: string,
-): OperatorApprovalRow | undefined {
-  const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);
-  const rows = executeSqliteQuerySync(
-    database.db,
-    stateDb
-      .selectFrom("operator_approvals")
-      .selectAll()
-      .where((eb) => eb.or([eb("approval_id", "=", locator), eb("resolution_ref", "=", locator)]))
-      .limit(2),
-  ).rows;
-  return rows.length === 1 ? rows[0] : undefined;
-}
-
-export function hasApprovalLocatorNamespaceConflict(params: {
-  database: OpenClawStateDatabase;
-  id: string;
-  resolutionRef: string;
-}): boolean {
-  const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(params.database.db);
-  const row = executeSqliteQueryTakeFirstSync(
-    params.database.db,
-    stateDb
-      .selectFrom("operator_approvals")
-      .select("approval_id")
-      .where((eb) =>
-        eb.or([eb("approval_id", "=", params.resolutionRef), eb("resolution_ref", "=", params.id)]),
-      )
-      .where("approval_id", "!=", params.id),
-  );
-  return row !== undefined;
-}
-
 export function matchesExpectedApprovalOwner(params: {
   row: OperatorApprovalRow;
   expectedKind?: OperatorApprovalKind;
@@ -407,60 +358,6 @@ export function matchesExpectedApprovalOwner(params: {
     (params.expectedKind === undefined || params.row.kind === params.expectedKind) &&
     (params.runtimeEpoch === undefined || params.row.runtime_epoch === params.runtimeEpoch)
   );
-}
-
-export function denyCorruptPendingRow(params: {
-  database: OpenClawStateDatabase;
-  id: string;
-  nowMs: number;
-  createdAtMs: number;
-}): void {
-  const auditTimestampMs = clampAuditTimestamp(params.nowMs, params.createdAtMs);
-  const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(params.database.db);
-  executeSqliteQuerySync(
-    params.database.db,
-    stateDb
-      .updateTable("operator_approvals")
-      .set({
-        status: "denied",
-        decision: "deny",
-        terminal_reason: "storage-corrupt",
-        resolved_at_ms: auditTimestampMs,
-        resolver_kind: "system",
-        resolver_id: null,
-        updated_at_ms: auditTimestampMs,
-      })
-      .where("approval_id", "=", params.id)
-      .where("status", "=", "pending"),
-  );
-}
-
-export function expirePendingRow(params: {
-  database: OpenClawStateDatabase;
-  id: string;
-  nowMs: number;
-  createdAtMs: number;
-}): OperatorApprovalRow | undefined {
-  const auditTimestampMs = clampAuditTimestamp(params.nowMs, params.createdAtMs);
-  const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(params.database.db);
-  executeSqliteQuerySync(
-    params.database.db,
-    stateDb
-      .updateTable("operator_approvals")
-      .set({
-        status: "expired",
-        decision: "deny",
-        terminal_reason: "timeout",
-        resolved_at_ms: auditTimestampMs,
-        resolver_kind: "system",
-        resolver_id: null,
-        updated_at_ms: auditTimestampMs,
-      })
-      .where("approval_id", "=", params.id)
-      .where("status", "=", "pending")
-      .where("expires_at_ms", "<=", params.nowMs),
-  );
-  return selectOperatorApprovalRow(params.database, params.id);
 }
 
 export function requireDecodedRecord(row: OperatorApprovalRow): OperatorApprovalRecord {

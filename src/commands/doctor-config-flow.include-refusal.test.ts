@@ -7,7 +7,7 @@ import { readConfigFileSnapshot, transformConfigFile } from "../config/config.js
 import { hashConfigRaw } from "../config/io.read-helpers.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { runWriteConfigHealth } from "../flows/doctor-health-contribution-runners.config.js";
-import { recordGatewayBootStart } from "../infra/gateway-boot-lifecycle.js";
+import { beginGatewayBootLifecycle } from "../infra/gateway-boot-lifecycle.js";
 import { captureUpdateDoctorConfigWrites } from "../infra/update-doctor-result.js";
 import { UpdateRequesterRevokedError } from "../infra/update-requester-authority.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -108,7 +108,10 @@ describe("doctor config persistence", () => {
         const backupBytes = '{"gateway":{"mode":"local"}}\n';
         await fs.writeFile(`${configPath}.bak`, backupBytes);
         const failure = await prepareDoctorContext(configPath).then(
-          () => null,
+          async (ctx) => {
+            await ctx[Symbol.asyncDispose]();
+            return null;
+          },
           (error: unknown) => error,
         );
         expect(failure).toBeInstanceOf(Error);
@@ -159,7 +162,7 @@ describe("doctor config persistence", () => {
         gateway: { mode: "local" },
         plugins: { enabled: false },
       });
-      const ctx = await prepareDoctorContext(configPath);
+      await using ctx = await prepareDoctorContext(configPath);
       expect(ctx.cfg.channels).toMatchObject(channels);
     });
   });
@@ -183,8 +186,10 @@ describe("doctor config persistence", () => {
           );
           await fs.writeFile(includePath, includeRaw);
           const rootRaw = await fs.readFile(configPath, "utf8");
-          expect(recordGatewayBootStart(process.env, 1_800_000_000_000)).toBeDefined();
-          const ctx = await prepareDoctorContext(configPath);
+          expect(
+            (await beginGatewayBootLifecycle(process.env, 1_800_000_000_000)).id,
+          ).toBeDefined();
+          await using ctx = await prepareDoctorContext(configPath);
           expect(ctx.configResult.shouldWriteConfig).toBe(true);
           const transform = configModule.transformConfigFile;
           let firstCommit = false;
@@ -281,6 +286,7 @@ describe("doctor config persistence", () => {
           const configPath = await writeOpenClawConfig(home, {
             agents: { entries: { main: {} } },
             browser: { $include: "./browser.json" },
+            messages: { queue: { allowCollaborativeSteering: true } },
             gateway: { mode: "local" },
             plugins: { enabled: false },
             meta: { migrations: { webhookListeners: true } },
@@ -293,7 +299,7 @@ describe("doctor config persistence", () => {
           });
           await fs.writeFile(includePath, includeRaw);
           const rootRaw = await fs.readFile(configPath, "utf8");
-          const ctx = await prepareDoctorContext(configPath);
+          await using ctx = await prepareDoctorContext(configPath);
           expect(ctx.configResult.shouldWriteConfig).toBe(true);
           expect(ctx.configResult.skipWizardMetadataForIncludeWrite).toBe(true);
           expect(ctx.cfg.browser).toEqual({
@@ -368,6 +374,7 @@ describe("doctor config persistence", () => {
         await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
           const configPath = await writeOpenClawConfig(home, {
             agents: { $include: "./agents.json5" },
+            messages: { queue: { allowCollaborativeSteering: true } },
             gateway: { mode: "local" },
             plugins: { enabled: false },
             meta: { migrations: { webhookListeners: true } },
@@ -395,7 +402,7 @@ describe("doctor config persistence", () => {
             await fs.writeFile(defaultsPath, JSON.stringify(defaults));
           }
           const rootRaw = await fs.readFile(configPath, "utf8");
-          const ctx = await prepareDoctorContext(configPath);
+          await using ctx = await prepareDoctorContext(configPath);
           await captureUpdateDoctorConfigWrites(
             configPath,
             () => runWriteConfigHealth(ctx, { runPostWriteRepairs: false }),
@@ -420,9 +427,8 @@ describe("doctor config persistence", () => {
               search: { enabled: false, query: { maxResults: 7 } },
             });
           }
-          expect((await prepareDoctorContext(configPath)).configResult.shouldWriteConfig).toBe(
-            false,
-          );
+          await using repeated = await prepareDoctorContext(configPath);
+          expect(repeated.configResult.shouldWriteConfig).toBe(false);
 
           await transformConfigFile({
             transform: (current) => {
@@ -502,6 +508,7 @@ describe("doctor config persistence", () => {
         await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
           const configPath = await writeOpenClawConfig(home, {
             agents: { entries: { main: { $include: "./config/main-parent.json5" } } },
+            messages: { queue: { allowCollaborativeSteering: true } },
             gateway: { mode: "local" },
             plugins: { enabled: false },
             meta: { migrations: { webhookListeners: true } },
@@ -516,7 +523,7 @@ describe("doctor config persistence", () => {
           await fs.writeFile(fragmentPath, fragmentRaw);
           const rootRaw = await fs.readFile(configPath, "utf-8");
 
-          const ctx = await prepareDoctorContext(configPath);
+          await using ctx = await prepareDoctorContext(configPath);
           expect(ctx.configResult.shouldWriteConfig).toBe(true);
           expect(ctx.configResult.skipWizardMetadataForIncludeWrite).toBe(true);
           const writing = captureUpdateDoctorConfigWrites(
@@ -570,7 +577,7 @@ describe("doctor config persistence", () => {
       await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
         const configPath = await writeOpenClawConfig(home, {});
         await fs.unlink(configPath);
-        const ctx = await prepareDoctorContext(configPath);
+        await using ctx = await prepareDoctorContext(configPath);
         expect(ctx.configResult.referenceSource).toBeUndefined();
         expect(ctx.configResult.confirmedConfigSource).toEqual({
           path: configPath,
@@ -606,7 +613,7 @@ describe("doctor config persistence", () => {
                 }
               : {
                   gatway: { port: 12345 },
-                  agents: { defaults: { heartbeat: { every: 5 } } },
+                  agents: { defaults: { timeoutSeconds: "invalid" } },
                   plugins: { enabled: false },
                 },
           );
@@ -616,7 +623,7 @@ describe("doctor config persistence", () => {
             await fs.writeFile(includePath, includeRaw);
           }
           const rootRaw = await fs.readFile(configPath, "utf8");
-          const ctx = await prepareDoctorContext(configPath);
+          await using ctx = await prepareDoctorContext(configPath);
           expect(ctx.configResult.shouldWriteConfig).toBe(true);
           if (included) {
             expect(ctx.configResult.persistCanonicalAgentRoster).toBe(true);
@@ -633,7 +640,7 @@ describe("doctor config persistence", () => {
             if (included) {
               const text = panels.map(([message]) => message).join("\n");
               expect(text).not.toContain("retired runtime tuning knobs");
-              expect(text).not.toContain("canonical agent roster");
+              expect(text).not.toContain("agent roster");
             } else {
               expect(panels).toEqual([]);
             }
@@ -653,7 +660,7 @@ describe("doctor config persistence", () => {
             expect(warning?.[0]).toContain("the included file ./browser.json");
             await expect(fs.readFile(includePath, "utf8")).resolves.toBe(includeRaw);
           } else {
-            expect(warning?.[0]).toContain("agents.defaults.heartbeat.every");
+            expect(warning?.[0]).toContain("agents.defaults.timeoutSeconds");
           }
           await expect(fs.readFile(configPath, "utf8")).resolves.toBe(rootRaw);
         });

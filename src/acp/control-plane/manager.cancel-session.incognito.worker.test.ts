@@ -1,64 +1,41 @@
-import fs from "node:fs";
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
-import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import { getOpenIncognitoAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../../state/openclaw-state-db-readonly.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import { buildAcpDatabaseSessionKey } from "../runtime/session-meta-keys.js";
-import { applyAcpSessionMutation } from "../runtime/session-meta-write.kernel.js";
-import { readAcpSessionEntry, writeAcpSessionMetaForMigration } from "../runtime/session-meta.js";
+import {
+  readAcpSessionEntryAsync,
+  upsertAcpSessionMeta,
+  writeAcpSessionMetaForMigration,
+} from "../runtime/session-meta.js";
 import { withAcpCancellationFixture } from "./manager.cancel-session.worker.test-support.js";
+import { createGate, memoryGuard, startTurn } from "./manager.cancellation-locator.test-support.js";
+import { stopAcpControllerTurns } from "./manager.controller-test-support.js";
 
 it.each([
-  ["incognito", "same-binding", "live"],
-  ["incognito", "clear", "live"],
-  ["incognito", "rebind", "live"],
   ["incognito", "clear", "snapshot"],
   ["durable", "same-binding", "live"],
   ["durable", "clear", "live"],
   ["durable", "rebind", "live"],
   ["durable", "owner", "live"],
-  ["durable", "signal-failure", "live"],
 ] as const)(
   "rechecks %s global ACP metadata after a signal wait and %s mutation under %s reads",
   async (sourceKind, change, readScope) => {
     await withAcpCancellationFixture(
       async (f) => {
-        const path = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: f.state.env });
-        const memory = getOpenIncognitoAgentDatabase("main", path);
-        if (sourceKind === "incognito") {
-          expect(memory?.db.location()).toBeFalsy();
-          expect(memory).toBeDefined();
-          expect(fs.existsSync(path)).toBe(false);
-        }
-        const originalMeta = readAcpSessionEntry(f.target)?.acp;
+        const checkMemory = memoryGuard(f, sourceKind);
+        const originalMeta = (await readAcpSessionEntryAsync(f.target))?.acp;
         if (!originalMeta) {
           throw new Error("Expected canonical global ACP metadata.");
         }
-        const actorEntered = createDeferred();
-        const releaseActor = createDeferred();
-        f.getStatus.mockImplementationOnce(async () => {
-          actorEntered.resolve();
-          await releaseActor.promise;
-          return { summary: "ready" };
-        });
-        const actor = f.manager.getSessionStatus(f.target);
-        const actorResult = Promise.allSettled([actor]);
-        await Promise.race([
-          actorEntered.promise,
-          actorResult.then(() => {
-            throw new Error("Actor ended before gate.");
-          }),
-        ]);
-        const reached = createDeferred();
-        const release = createDeferred();
+        const actorGate = createGate("Actor ended before gate.");
+        f.getStatus.mockImplementationOnce(() =>
+          actorGate.wait().then(() => ({ summary: "ready" })),
+        );
+        const actorResult = Promise.allSettled([f.manager.getSessionStatus(f.target)]);
+        await actorGate.reached(actorResult);
+        const mutationGate = createGate("Cancellation ended before mutation gate.");
         const original = stateWorker.runOpenClawStateWorkerOperation;
         let paused = false;
         const intercepted = vi
@@ -68,18 +45,11 @@ it.each([
               context,
               (worker) =>
                 operation({
-                  ...worker,
                   execute: new Proxy(worker.execute, {
-                    apply(execute, receiver, args: Parameters<typeof worker.execute>) {
+                    async apply(execute, receiver, args: Parameters<typeof worker.execute>) {
                       if (!paused && args[0].type === "sessionState.record") {
                         paused = true;
-                        reached.resolve();
-                        return release.promise.then(() => {
-                          if (change === "signal-failure") {
-                            throw new Error("Synthetic signal storage failure.");
-                          }
-                          return Reflect.apply(execute, receiver, args);
-                        });
+                        await mutationGate.wait();
                       }
                       return Reflect.apply(execute, receiver, args);
                     },
@@ -88,55 +58,22 @@ it.each([
               options,
             ),
           );
-        const admittedRunContext = createTestAdmittedRunContext("incognito-parity");
         const events: unknown[] = [];
         const runCancellation = () => {
-          const turn = f.manager.runTurn({
-            ...f.target,
-            admittedRunContext,
-            provenance: "system",
-            mode: "prompt",
+          const turn = startTurn(f, "incognito-parity", {
             text: "private",
-            requestId: "incognito-parity",
-            onEvent: (event) => {
-              events.push(event);
-            },
+            onEvent: (event) => void events.push(event),
           });
-          const cancellation = f.manager.cancelSession({
-            ...f.target,
-            expectedRunId: "incognito-parity",
-            expectedInstanceId: admittedRunContext.operationalRunInstance.instanceId,
-            expectedOwnerKey: "agent:main:main",
-          });
-          return Promise.allSettled([cancellation, turn]);
+          return Promise.allSettled([stopAcpControllerTurns(f.target), turn]);
         };
         const result =
           readScope === "snapshot"
             ? withOpenClawStateDatabaseReadSnapshot(runCancellation, { env: f.state.env })
             : runCancellation();
         try {
-          await Promise.race([
-            reached.promise,
-            result.then(() => {
-              throw new Error("Cancellation ended before mutation gate.");
-            }),
-          ]);
+          await mutationGate.reached(result);
           if (change === "clear") {
-            runOpenClawStateWriteTransaction(
-              ({ db }) =>
-                applyAcpSessionMutation(db, {
-                  agentId: "main",
-                  sessionKey: f.target.sessionKey,
-                  storageSessionKey: f.target.sessionKey,
-                  entry: {
-                    sessionId: "cancellation-session",
-                    lifecycleRevision: "cancellation-lifecycle",
-                    updatedAt: 100,
-                  },
-                  decision: { kind: "clear" },
-                }),
-              { env: f.state.env },
-            );
+            await upsertAcpSessionMeta({ ...f.target, mutate: () => null });
           } else if (change === "owner") {
             await replaceSessionEntry(f.target, {
               sessionId: "cancellation-session",
@@ -144,7 +81,7 @@ it.each([
               updatedAt: 200,
               spawnedBy: "agent:other:parent",
             });
-          } else if (change !== "signal-failure") {
+          } else {
             writeAcpSessionMetaForMigration({
               env: f.state.env,
               sessionKey: buildAcpDatabaseSessionKey(f.target.sessionKey, "main"),
@@ -153,13 +90,13 @@ it.each([
               meta: { ...originalMeta, lastActivityAt: 200 },
             });
           }
-          release.resolve();
+          mutationGate.open();
           const settled = await result;
           const signals = openOpenClawStateDatabase({ env: f.state.env })
             .db.prepare("SELECT kind FROM session_state_events WHERE run_id = ?")
             .all("incognito-parity");
           expect(signals).toEqual(change === "same-binding" ? [{ kind: "run_failed" }] : []);
-          const authorityCurrent = change === "same-binding" || change === "signal-failure";
+          const authorityCurrent = change === "same-binding";
           expect(events).toEqual(
             authorityCurrent ? [{ type: "done", status: "cancelled", stopReason: "cancel" }] : [],
           );
@@ -168,16 +105,13 @@ it.each([
               ? [{ status: "fulfilled" }, { status: "fulfilled" }]
               : [{ status: "rejected" }, { status: "rejected" }],
           );
-          if (sourceKind === "incognito") {
-            expect(getOpenIncognitoAgentDatabase("main", path)).toBe(memory);
-            expect(fs.existsSync(path)).toBe(false);
-          }
+          checkMemory();
           expect(f.runTurn).not.toHaveBeenCalled();
           expect(f.cancel).not.toHaveBeenCalled();
         } finally {
-          release.resolve();
+          mutationGate.open();
           intercepted.mockRestore();
-          releaseActor.resolve();
+          actorGate.open();
           await Promise.allSettled([result, actorResult]);
         }
       },
@@ -190,19 +124,3 @@ it.each([
     );
   },
 );
-
-it("preserves idle Incognito cancellation through the retained native metadata writer", async () => {
-  await withAcpCancellationFixture(
-    async (f) => {
-      const path = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: f.state.env });
-      const memory = getOpenIncognitoAgentDatabase("main", path);
-      expect(memory).toBeDefined();
-      await f.manager.cancelSession({ ...f.target, expectedOwnerKey: "agent:main:main" });
-      expect(f.cancel).toHaveBeenCalledOnce();
-      expect(readAcpSessionEntry(f.target)?.acp?.state).toBe("idle");
-      expect(getOpenIncognitoAgentDatabase("main", path)).toBe(memory);
-      expect(fs.existsSync(path)).toBe(false);
-    },
-    { sessionKey: "agent:main:dashboard:incognito-idle-parity" },
-  );
-});

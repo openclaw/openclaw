@@ -9,7 +9,10 @@ import {
   type Page,
 } from "playwright";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, inject, vi } from "vitest";
-import { getActiveGatewayRootWorkCount } from "../../../src/process/gateway-work-admission.js";
+import {
+  getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
+} from "../../../src/process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../src/shared/deferred.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
@@ -20,6 +23,7 @@ import {
 import { controlUiE2eWaitTimeoutMs } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installControlUiE2eRendererStallProbe } from "../test-helpers/control-ui-e2e-renderer-stall.ts";
 import type { ControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiPaneRuntimeTestAdapterScript } from "../test-helpers/control-ui-pane-runtime.test-support.ts";
 
 declare module "vitest" {
   export interface ProvidedContext {
@@ -105,8 +109,19 @@ export function tooltipTitleText(item: Locator) {
 
 type HeldModuleContext = {
   closing: boolean;
-  pages: Map<Page, Array<{ close: () => void; installed: ReturnType<Page["route"]> }>>;
+  pages: Map<Page, Array<{ close: () => Promise<void>; installed: ReturnType<Page["route"]> }>>;
 };
+
+const waitForGatewayWorkToSettle = () =>
+  vi.waitFor(
+    () =>
+      expect(
+        getActiveGatewayRootWorkCount(),
+        `Unsettled Gateway roots: ${getActiveGatewayRootWorkHolders().join(", ")}`,
+      ).toBe(0),
+    { interval: 100, timeout: 15_000 },
+  );
+
 const heldModuleContexts = new WeakMap<BrowserContext, HeldModuleContext>();
 
 function getHeldModuleContext(context: BrowserContext): HeldModuleContext {
@@ -128,26 +143,78 @@ export async function holdModuleResponse(page: Page, module: RegExp) {
   // Cleanup can cancel an unused hold; callers still receive the original rejection.
   void request.promise.catch(() => {});
   const release = () => gate.resolve();
+  const callbacks = new Set<Promise<void>>();
+  const failures: unknown[] = [];
   let requests = 0;
-  const installed = page.route(module, async (route) => {
-    requests += 1;
-    try {
-      const response = await route.fetch();
-      expect(response.status()).toBe(200);
-      request.resolve(route.request().url());
-      await gate.promise;
-      await route.fulfill({ response });
-    } catch (error) {
-      request.reject(error);
-      throw error;
+  const installed = page.route(module, (route) => {
+    if (held.closing) {
+      return route.fallback();
     }
+    const callback = (async () => {
+      const requestNumber = ++requests;
+      const closingAtStart = held.closing;
+      let phase = "fetch";
+      try {
+        // A reset while fetching a local asset is transport noise; HTTP failures still surface.
+        const response = await route.fetch({ maxRetries: 1 });
+        expect(response.status()).toBe(200);
+        request.resolve(route.request().url());
+        phase = "held";
+        await gate.promise;
+        phase = "fulfill";
+        await route.fulfill({ response });
+      } catch (error) {
+        request.reject(error);
+        try {
+          writeSync(
+            2,
+            `[control-ui-e2e] held response failed: ${JSON.stringify({
+              path: new URL(route.request().url()).pathname,
+              resourceType: route.request().resourceType(),
+              requestNumber,
+              totalRequests: requests,
+              phase,
+              closingAtStart,
+              closing: held.closing,
+              pageClosed: page.isClosed(),
+            })}\n`,
+          );
+        } catch {
+          // Preserve the route failure if diagnostics cannot be written.
+        }
+        try {
+          await route.abort("failed");
+        } catch (abortError) {
+          throw new AggregateError(
+            [error, abortError],
+            "Held module fetch failed and its route could not be aborted",
+            { cause: abortError },
+          );
+        }
+        throw error;
+      }
+    })();
+    const owned: Promise<void> = callback.then(
+      () => {
+        callbacks.delete(owned);
+      },
+      (error: unknown) => {
+        callbacks.delete(owned);
+        failures.push(error);
+      },
+    );
+    callbacks.add(owned);
+    return owned;
   });
   // Register before awaiting installation so teardown also owns a pending route().
   const registrations = held.pages.get(page) ?? [];
   registrations.push({
-    close: () => {
+    close: async () => {
       release();
       request.reject(new Error("Browser context cleanup canceled the held module request"));
+      // unrouteAll(wait) can auto-continue a sibling before its held fetch completes.
+      await settleControlUiCleanup([...callbacks]);
+      throwControlUiCleanupErrors(failures);
     },
     installed,
   });
@@ -312,10 +379,8 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
             }
           },
           async () => {
-            for (const registration of registrations) {
-              registration.close();
-            }
-            // Release all gates before joining active page/context callbacks.
+            // Release every gate before joining callbacks, then remove interception.
+            await settleControlUiCleanup(registrations.map(({ close }) => close()));
             await settleControlUiCleanup(registrations.map(({ installed }) => installed));
           },
           () =>
@@ -326,12 +391,6 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
           () => context.close(),
         );
         held.pages.clear();
-        // Requests outlive sockets; pending handlers must release their admission
-        // roots before fixture cleanup. waitFor also works in afterAll.
-        await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0), {
-          interval: 100,
-          timeout: 15_000,
-        });
         openBrowserContexts.delete(context);
       });
       contextClosures.set(context, closing);
@@ -380,12 +439,14 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
       const context = await currentBrowser.newContext(contextOptions);
       openBrowserContexts.set(context, owner);
       contextDiagnostics.set(context, { test });
+      await context.addInitScript({ content: createControlUiPaneRuntimeTestAdapterScript() });
       if (stopping || owner?.signal.aborted) {
         await closeBrowserContext(context);
         throw new ControlUiE2eAcquisitionClosedError(
           "Control UI E2E context arrived after teardown began",
         );
       }
+      context.on("page", installControlUiRpcDiagnostics);
       context.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
       return context;
     });
@@ -452,6 +513,10 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
               closeOpenBrowserContexts(owner),
               Promise.resolve().then(scenario.close),
             ]);
+            // Requests can outlive sockets and settle only when their Gateway closes.
+            if (scenario.close) {
+              await waitForGatewayWorkToSettle();
+            }
             // A close can settle after the cleanup deadline retired this fork.
             assertControlUiForkActive();
             await scenario.release?.();
@@ -576,6 +641,7 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
               () => browser?.close(),
               () => resources?.close?.(),
               () => server?.close(),
+              waitForGatewayWorkToSettle,
             ]) {
               try {
                 await close();
@@ -620,7 +686,6 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
           async () => {
             const page = await context.newPage();
             fixture = { context, page };
-            installControlUiRpcDiagnostics(page);
             // A CDP session attached after a test's own session clears that session's
             // emulation overrides (such as safe-area insets) on the next navigation.
             await installControlUiE2eRendererStallProbe(page);

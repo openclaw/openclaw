@@ -1,4 +1,4 @@
-import type { Stats } from "node:fs";
+import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
@@ -23,7 +23,7 @@ const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 export type SnapshotArtifactDigest = {
   sha256: string;
   sizeBytes: number;
-  stat: Stats;
+  identity: Pick<BigIntStats, "dev" | "ino">;
 };
 
 type OpenFileHandle = Awaited<ReturnType<typeof fs.open>>;
@@ -35,7 +35,10 @@ export async function hashSnapshotArtifact(snapshotDir: string): Promise<Snapsho
     symlinks: "reject",
   });
   try {
-    return { ...(await hashFileHandle(opened.handle)), stat: opened.stat };
+    return {
+      ...(await hashFileHandle(opened.handle)),
+      identity: opened.exactIdentity,
+    };
   } finally {
     await opened.handle.close();
   }
@@ -51,26 +54,26 @@ export async function copySnapshotArtifact(
     symlinks: "reject",
   });
   let target: OpenFileHandle | undefined;
-  let targetIdentity: Stats | undefined;
+  let targetIdentity: BigIntStats | undefined;
   try {
     target = await fs.open(targetPath, "wx+", 0o600);
-    targetIdentity = await target.stat();
+    targetIdentity = await target.stat({ bigint: true });
     const digest = await hashFileHandle(source.handle, target);
     await target.sync();
-    const finalIdentity = await target.stat();
-    const currentIdentity = await fs.lstat(targetPath);
+    const finalIdentity = await target.stat({ bigint: true });
+    const currentIdentity = await fs.lstat(targetPath, { bigint: true });
     if (
       !sameFileIdentity(targetIdentity, finalIdentity) ||
       !sameFileIdentity(targetIdentity, currentIdentity)
     ) {
       throw new Error(`Snapshot restore staging file changed during copy: ${targetPath}`);
     }
-    return { ...digest, stat: finalIdentity };
+    return { ...digest, identity: finalIdentity };
   } catch (error) {
     await target?.close().catch(() => undefined);
     target = undefined;
     if (targetIdentity) {
-      const currentIdentity = await fs.lstat(targetPath).catch(() => undefined);
+      const currentIdentity = await fs.lstat(targetPath, { bigint: true }).catch(() => undefined);
       if (currentIdentity && sameFileIdentity(targetIdentity, currentIdentity)) {
         await fs.unlink(targetPath).catch(() => undefined);
       }
@@ -85,7 +88,7 @@ export async function copySnapshotArtifact(
 async function hashFileHandle(
   source: OpenFileHandle,
   target?: OpenFileHandle,
-): Promise<Omit<SnapshotArtifactDigest, "stat">> {
+): Promise<Omit<SnapshotArtifactDigest, "identity">> {
   const initialStat = await source.stat({ bigint: true });
   let sizeBytes = 0;
   if (target) {
@@ -116,10 +119,7 @@ export async function writeSnapshotManifest(
   }
 }
 
-export async function readSnapshotManifest(
-  snapshotDir: string,
-  expectedSnapshotId = path.basename(snapshotDir),
-): Promise<SnapshotManifest> {
+export async function readSnapshotManifest(snapshotDir: string): Promise<SnapshotManifest> {
   const snapshotRoot = await root(snapshotDir);
   const manifestPath = path.join(snapshotDir, SNAPSHOT_MANIFEST_FILENAME);
   const result = await snapshotRoot.read(SNAPSHOT_MANIFEST_FILENAME, {
@@ -133,10 +133,10 @@ export async function readSnapshotManifest(
   } catch (error) {
     throw new Error(`Snapshot manifest is not valid JSON: ${manifestPath}`, { cause: error });
   }
-  return parseSnapshotManifest(parsed, manifestPath, expectedSnapshotId);
+  return parseSnapshotManifest(parsed, manifestPath, path.basename(snapshotDir));
 }
 
-function parseSnapshotManifest(
+export function parseSnapshotManifest(
   value: unknown,
   manifestPath: string,
   expectedSnapshotId: string,

@@ -90,17 +90,12 @@ async function withDockerProbeTimeout<T>(
   let timeout: ReturnType<typeof setNodeTimeout> | undefined;
   const timeoutPromise = new Promise<never>((_, reject) => {
     timeout = setNodeTimeout(() => {
-      controller.abort();
       reject(new DockerProbeTimeoutError(timeoutMs));
+      controller.abort();
     }, timeoutMs);
   });
   try {
     return await Promise.race([run(controller.signal), timeoutPromise]);
-  } catch (err) {
-    if (controller.signal.aborted) {
-      throw new DockerProbeTimeoutError(timeoutMs);
-    }
-    throw err;
   } finally {
     clearNodeTimeout(timeout);
   }
@@ -318,53 +313,35 @@ export async function collectIncludeFilePermFindings(params: {
     return findings;
   }
 
-  const { formatPermissionDetail, formatPermissionRemediation, inspectPathPermissions } =
-    await loadAuditFsModule();
+  const { createPermissionAuditor } = await loadAuditFsModule();
+  const auditPermissions = createPermissionAuditor(findings, params);
 
   for (const p of includePaths) {
-    const perms = await inspectPathPermissions(p, {
-      env: params.env,
-      platform: params.platform,
-      exec: params.execIcacls,
+    await auditPermissions(p, false, (perms) => {
+      if (perms.worldWritable || perms.groupWritable) {
+        return {
+          checkId: "fs.config_include.perms_writable",
+          severity: "critical",
+          title: "Config include file is writable by others",
+          detail: "another user could influence your effective config.",
+        };
+      } else if (perms.worldReadable) {
+        return {
+          checkId: "fs.config_include.perms_world_readable",
+          severity: "critical",
+          title: "Config include file is world-readable",
+          detail: "include files can contain tokens and private settings.",
+        };
+      } else if (perms.groupReadable) {
+        return {
+          checkId: "fs.config_include.perms_group_readable",
+          severity: "warn",
+          title: "Config include file is group-readable",
+          detail: "include files can contain tokens and private settings.",
+        };
+      }
+      return undefined;
     });
-    if (!perms.ok) {
-      continue;
-    }
-    let finding: SecurityAuditFinding | undefined;
-    if (perms.worldWritable || perms.groupWritable) {
-      finding = {
-        checkId: "fs.config_include.perms_writable",
-        severity: "critical",
-        title: "Config include file is writable by others",
-        detail: `${formatPermissionDetail(p, perms)}; another user could influence your effective config.`,
-      };
-    } else if (perms.worldReadable) {
-      finding = {
-        checkId: "fs.config_include.perms_world_readable",
-        severity: "critical",
-        title: "Config include file is world-readable",
-        detail: `${formatPermissionDetail(p, perms)}; include files can contain tokens and private settings.`,
-      };
-    } else if (perms.groupReadable) {
-      finding = {
-        checkId: "fs.config_include.perms_group_readable",
-        severity: "warn",
-        title: "Config include file is group-readable",
-        detail: `${formatPermissionDetail(p, perms)}; include files can contain tokens and private settings.`,
-      };
-    }
-    if (finding) {
-      findings.push({
-        ...finding,
-        remediation: formatPermissionRemediation({
-          targetPath: p,
-          perms,
-          isDir: false,
-          posixMode: 0o600,
-          env: params.env,
-        }),
-      });
-    }
   }
 
   return findings;
@@ -379,44 +356,30 @@ export async function collectStateDeepFilesystemFindings(params: {
 }): Promise<SecurityAuditFinding[]> {
   const findings: SecurityAuditFinding[] = [];
   const oauthDir = resolveOAuthDir(params.env, params.stateDir);
-  const { formatPermissionDetail, formatPermissionRemediation, inspectPathPermissions } =
-    await loadAuditFsModule();
+  const { createPermissionAuditor } = await loadAuditFsModule();
+  const auditPermissions = createPermissionAuditor(findings, params);
 
-  const oauthPerms = await inspectPathPermissions(oauthDir, {
-    env: params.env,
-    platform: params.platform,
-    exec: params.execIcacls,
-  });
-  if (oauthPerms.ok && oauthPerms.isDir) {
-    let finding: SecurityAuditFinding | undefined;
+  await auditPermissions(oauthDir, true, (oauthPerms) => {
+    if (!oauthPerms.isDir) {
+      return undefined;
+    }
     if (oauthPerms.worldWritable || oauthPerms.groupWritable) {
-      finding = {
+      return {
         checkId: "fs.credentials_dir.perms_writable",
         severity: "critical",
         title: "Credentials dir is writable by others",
-        detail: `${formatPermissionDetail(oauthDir, oauthPerms)}; another user could drop/modify credential files.`,
+        detail: "another user could drop/modify credential files.",
       };
     } else if (oauthPerms.groupReadable || oauthPerms.worldReadable) {
-      finding = {
+      return {
         checkId: "fs.credentials_dir.perms_readable",
         severity: "warn",
         title: "Credentials dir is readable by others",
-        detail: `${formatPermissionDetail(oauthDir, oauthPerms)}; credentials and allowlists can be sensitive.`,
+        detail: "credentials and allowlists can be sensitive.",
       };
     }
-    if (finding) {
-      findings.push({
-        ...finding,
-        remediation: formatPermissionRemediation({
-          targetPath: oauthDir,
-          perms: oauthPerms,
-          isDir: true,
-          posixMode: 0o700,
-          env: params.env,
-        }),
-      });
-    }
-  }
+    return undefined;
+  });
 
   const agentScope = await loadAgentScopeModule();
   const agentIds = agentScope.listAgentEntries(params.cfg).map((agent) => agent.id);
@@ -445,66 +408,38 @@ export async function collectStateDeepFilesystemFindings(params: {
       })),
     ];
     for (const authTarget of authTargets) {
-      const authPerms = await inspectPathPermissions(authTarget.path, {
-        env: params.env,
-        platform: params.platform,
-        exec: params.execIcacls,
-      });
-      if (authPerms.ok) {
-        let finding: SecurityAuditFinding | undefined;
+      await auditPermissions(authTarget.path, false, (authPerms) => {
         if (authPerms.worldWritable || authPerms.groupWritable) {
-          finding = {
+          return {
             checkId: "fs.auth_profiles.perms_writable",
             severity: "critical",
             title: `${authTarget.label} is writable by others`,
-            detail: `${formatPermissionDetail(authTarget.path, authPerms)}; another user could inject credentials.`,
+            detail: "another user could inject credentials.",
           };
         } else if (authPerms.worldReadable || authPerms.groupReadable) {
-          finding = {
+          return {
             checkId: "fs.auth_profiles.perms_readable",
             severity: "warn",
             title: `${authTarget.label} is readable by others`,
-            detail: `${formatPermissionDetail(authTarget.path, authPerms)}; auth profile storage contains API keys and OAuth tokens.`,
+            detail: "auth profile storage contains API keys and OAuth tokens.",
           };
         }
-        if (finding) {
-          findings.push({
-            ...finding,
-            remediation: formatPermissionRemediation({
-              targetPath: authTarget.path,
-              perms: authPerms,
-              isDir: false,
-              posixMode: 0o600,
-              env: params.env,
-            }),
-          });
-        }
-      }
+        return undefined;
+      });
     }
 
     const storePath = path.join(params.stateDir, "agents", agentId, "sessions", "sessions.json");
-    const storePerms = await inspectPathPermissions(storePath, {
-      env: params.env,
-      platform: params.platform,
-      exec: params.execIcacls,
-    });
-    if (storePerms.ok) {
+    await auditPermissions(storePath, false, (storePerms) => {
       if (storePerms.worldReadable || storePerms.groupReadable) {
-        findings.push({
+        return {
           checkId: "fs.sessions_store.perms_readable",
           severity: "warn",
           title: "sessions.json is readable by others",
-          detail: `${formatPermissionDetail(storePath, storePerms)}; routing and transcript metadata can be sensitive.`,
-          remediation: formatPermissionRemediation({
-            targetPath: storePath,
-            perms: storePerms,
-            isDir: false,
-            posixMode: 0o600,
-            env: params.env,
-          }),
-        });
+          detail: "routing and transcript metadata can be sensitive.",
+        };
       }
-    }
+      return undefined;
+    });
   }
 
   const logFile = normalizeOptionalString(params.cfg.logging?.file) ?? "";
@@ -512,28 +447,17 @@ export async function collectStateDeepFilesystemFindings(params: {
     const expanded = logFile.startsWith("~") ? expandTilde(logFile, params.env) : logFile;
     if (expanded) {
       const logPath = path.resolve(expanded);
-      const logPerms = await inspectPathPermissions(logPath, {
-        env: params.env,
-        platform: params.platform,
-        exec: params.execIcacls,
-      });
-      if (logPerms.ok) {
+      await auditPermissions(logPath, false, (logPerms) => {
         if (logPerms.worldReadable || logPerms.groupReadable) {
-          findings.push({
+          return {
             checkId: "fs.log_file.perms_readable",
             severity: "warn",
             title: "Log file is readable by others",
-            detail: `${formatPermissionDetail(logPath, logPerms)}; logs can contain private messages and tool output.`,
-            remediation: formatPermissionRemediation({
-              targetPath: logPath,
-              perms: logPerms,
-              isDir: false,
-              posixMode: 0o600,
-              env: params.env,
-            }),
-          });
+            detail: "logs can contain private messages and tool output.",
+          };
         }
-      }
+        return undefined;
+      });
     }
   }
 

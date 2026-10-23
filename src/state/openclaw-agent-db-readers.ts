@@ -4,6 +4,7 @@ import {
   encodeAgentDatabaseReaderRequest,
   type AgentDatabaseReaderRequest,
 } from "../infra/agent-database-readers.js";
+import { retireSqliteDatabaseAdmissionForPath } from "../infra/sqlite-database-admission.js";
 import { closeWorkerTaskPoolResources } from "../infra/worker-task-pool-registry.js";
 
 async function applyAcrossProcess(request: AgentDatabaseReaderRequest): Promise<void> {
@@ -11,19 +12,24 @@ async function applyAcrossProcess(request: AgentDatabaseReaderRequest): Promise<
   await closeWorkerTaskPoolResources(encodeAgentDatabaseReaderRequest(request));
 }
 
-function resolveUnique(pathnames: readonly string[]): string[] {
-  return [...new Set(pathnames.map((pathname) => path.resolve(pathname)))];
-}
-
 /** Deletion closes the databases everywhere and refuses reopening them until the agent returns. */
 export async function closeDeletedAgentDatabases(
   agentId: string,
   databasePaths: readonly string[],
+  authority: { assertCurrentFinal(): void; assertCurrentAsync(): Promise<void> },
 ): Promise<void> {
-  const candidates = resolveUnique(databasePaths).map((pathname) => ({ path: pathname }));
+  await authority.assertCurrentAsync();
+  const candidates = [...new Set(databasePaths.map((pathname) => path.resolve(pathname)))].map(
+    (pathname) => ({ path: pathname }),
+  );
   if (candidates.length > 0) {
     await applyAcrossProcess({ kind: "close", candidates, deleted: true, agentId });
+    for (const candidate of candidates) {
+      authority.assertCurrentFinal();
+      retireSqliteDatabaseAdmissionForPath(candidate.path);
+    }
   }
+  await authority.assertCurrentAsync();
 }
 
 /** Re-admission revives only the physical paths captured for these deleted owners. */

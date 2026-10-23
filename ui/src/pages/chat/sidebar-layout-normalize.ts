@@ -163,7 +163,7 @@ export function normalizeSidebarLayout(value: unknown): SidebarLayout {
     ...(value.expanded === true &&
     value.expandedSide === true &&
     value.open !== false &&
-    activeSidePanel
+    (activeSidePanel || columnId)
       ? { expandedSide: true }
       : {}),
     ...(value.resourceAutoOpenDismissed === true ? { resourceAutoOpenDismissed: true } : {}),

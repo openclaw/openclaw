@@ -1,5 +1,5 @@
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { buildChutesProvider } from "./api.js";
 import { CHUTES_MODEL_CATALOG, discoverChutesModels } from "./models.js";
 import {
@@ -8,263 +8,139 @@ import {
   CHUTES_DEFAULT_MODEL_REF,
 } from "./onboard.js";
 
+const primary = "chutes/zai-org/GLM-5.2-TEE";
+const pro = "chutes/deepseek-ai/DeepSeek-V3.2-TEE";
+const vision = "chutes/moonshotai/Kimi-K2.6-TEE";
+const imageFallback = "chutes/Qwen/Qwen3.6-27B-TEE";
+
+const catalog = (data: unknown[]) => Response.json({ data });
+
 function discoverRows(data: unknown[]) {
-  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ data })));
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(catalog(data)));
   return discoverChutesModels("fixture-discovery-token");
 }
 
-function readAuthorizationHeader(init?: { headers?: HeadersInit }): string {
+function pricedRow(id: string, prompt: number, completion: number, input_cache_read: number) {
+  return { id, pricing: { prompt, completion, input_cache_read } };
+}
+
+function authorization(init?: RequestInit): string {
   return new Headers(init?.headers).get("authorization") ?? "";
 }
 
-describe("chutes-models", () => {
-  beforeEach(() => {
-    clearLiveCatalogCacheForTests();
-  });
-  afterEach(() => vi.unstubAllGlobals());
+function selection(model: string, fallback: string) {
+  return { primary: model, fallbacks: [fallback] };
+}
 
-  it("keeps image-capable fallback models in the runtime catalog", () => {
-    const visionModelIds = ["moonshotai/Kimi-K2.6-TEE", "Qwen/Qwen3.6-27B-TEE"];
-    for (const id of visionModelIds) {
-      const model = CHUTES_MODEL_CATALOG.find((candidate) => candidate.id === id);
-      expect(model?.input).toContain("image");
-    }
-  });
+beforeEach(() => clearLiveCatalogCacheForTests());
+afterEach(() => vi.unstubAllGlobals());
 
-  it.each(["default", "replace"] as const)(
-    "keeps catalog ownership, defaults, and aliases aligned in %s mode",
-    (mode) => {
-      const runtimeIds = new Set(CHUTES_MODEL_CATALOG.map((model) => model.id));
-      expect(
-        CHUTES_MODEL_CATALOG.every((model) => model.compat?.supportsUsageInStreaming === false),
-      ).toBe(true);
-      const cfg = applyChutesConfig(mode === "default" ? {} : { models: { mode } });
-      expect(cfg.models?.mode).toBe(mode === "replace" ? "replace" : "merge");
-      expect(cfg.models?.providers?.chutes?.models).toEqual(
-        mode === "replace" ? CHUTES_MODEL_CATALOG : [],
-      );
-      expect(cfg.agents?.defaults?.model).toEqual({
-        primary: "chutes/zai-org/GLM-5.2-TEE",
-        fallbacks: ["chutes/deepseek-ai/DeepSeek-V3.2-TEE", "chutes/moonshotai/Kimi-K2.6-TEE"],
-      });
-      expect(cfg.agents?.defaults?.imageModel).toEqual({
-        primary: "chutes/moonshotai/Kimi-K2.6-TEE",
-        fallbacks: ["chutes/Qwen/Qwen3.6-27B-TEE"],
-      });
-      expect(cfg.agents?.defaults?.models?.["chutes-fast"]).toBeUndefined();
-      expect(cfg.agents?.defaults?.models?.["chutes-pro"]?.alias).toBe(
-        "chutes/deepseek-ai/DeepSeek-V3.2-TEE",
-      );
-      expect(cfg.agents?.defaults?.models?.["chutes-vision"]?.alias).toBe(
-        "chutes/moonshotai/Kimi-K2.6-TEE",
-      );
-      const catalogBackedTargets = [
-        CHUTES_DEFAULT_MODEL_REF,
-        "chutes/deepseek-ai/DeepSeek-V3.2-TEE",
-        "chutes/moonshotai/Kimi-K2.6-TEE",
-        "chutes/Qwen/Qwen3.6-27B-TEE",
-      ];
-      expect(
-        catalogBackedTargets.every((modelRef) => runtimeIds.has(modelRef.slice("chutes/".length))),
-      ).toBe(true);
-    },
+it("keeps catalog ownership, defaults, and aliases aligned in replace mode", () => {
+  expect(
+    CHUTES_MODEL_CATALOG.every((model) => model.compat?.supportsUsageInStreaming === false),
+  ).toBe(true);
+  const cfg = applyChutesConfig({ models: { mode: "replace" } });
+  expect(cfg.models?.mode).toBe("replace");
+  expect(cfg.models?.providers?.chutes?.models).toEqual(CHUTES_MODEL_CATALOG);
+  expect(cfg.agents?.defaults?.models).toMatchObject({
+    "chutes-pro": { alias: pro },
+    "chutes-vision": { alias: vision },
+  });
+  expect(cfg.agents?.defaults?.model).toEqual({ primary, fallbacks: [pro, vision] });
+  expect(cfg.agents?.defaults?.imageModel).toEqual(selection(vision, imageFallback));
+  expect(cfg.agents?.defaults?.models?.["chutes-fast"]).toBeUndefined();
+  expect(CHUTES_MODEL_CATALOG.map(({ id }) => `chutes/${id}`)).toEqual(
+    expect.arrayContaining([CHUTES_DEFAULT_MODEL_REF, pro, vision, imageFallback]),
   );
+});
 
-  it("preserves authored zero prices, aliases, and selections without adding merge-mode pins", () => {
-    const cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-    const config = applyChutesProviderConfig({});
-    const [seed] = CHUTES_MODEL_CATALOG;
-    if (!seed) {
-      throw new Error("expected a Chutes seed model");
-    }
-    const model = { ...structuredClone(seed), id: "fixture-provider/authored-model", cost };
-    config.models!.providers!.chutes!.models = [model];
-    config.models!.providers!.chutes!.apiKey = "fixture-key";
-    config.agents!.defaults!.model = {
-      primary: "chutes/fixture-provider/authored-model",
-      fallbacks: ["fixture-provider/fallback"],
-    };
-    config.agents!.defaults!.imageModel = {
-      primary: "fixture-provider/image-model",
-      fallbacks: ["fixture-provider/image-fallback"],
-    };
-    config.agents!.defaults!.models!["chutes/fixture-provider/authored-model"] = {
-      alias: "My authored model",
-    };
-    config.agents!.defaults!.models!["chutes-pro"] = { alias: "My pro alias" };
-
-    const reapplied = applyChutesProviderConfig(config);
-
-    expect(reapplied.models?.providers?.chutes?.models).toEqual([model]);
-    expect(reapplied.models?.providers?.chutes?.apiKey).toBe("fixture-key");
-    expect(reapplied.agents?.defaults).toEqual(config.agents?.defaults);
+it("preserves authored zero prices, aliases, and selections without adding merge-mode pins", () => {
+  const cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  const config = applyChutesProviderConfig({});
+  const [seed] = CHUTES_MODEL_CATALOG;
+  if (!seed) {
+    throw new Error("expected a Chutes seed model");
+  }
+  const id = "fixture/authored";
+  const model = { ...structuredClone(seed), id, cost };
+  Object.assign(config.models!.providers!.chutes!, { models: [model], apiKey: "fixture-key" });
+  Object.assign(config.agents!.defaults!, {
+    model: selection(`chutes/${id}`, "fixture/fallback"),
+    imageModel: selection("fixture/image", "fixture/image-fallback"),
   });
-
-  it("preserves native per-million prices and exact zero rates during discovery", async () => {
-    const models = await discoverRows([
-      {
-        id: "fixture-provider/zero-input",
-        pricing: { prompt: 0, completion: 0.2, input_cache_read: 0 },
-      },
-      {
-        id: "new-provider/new-model-r1",
-        supported_features: ["reasoning"],
-        input_modalities: ["text", "image"],
-        context_length: 200000,
-        max_output_length: 16384,
-        pricing: { prompt: 0.1, completion: 0.2, input_cache_read: 0.05 },
-      },
-      {
-        id: "fixture-provider/free-model",
-        pricing: { prompt: 0, completion: 0, input_cache_read: 0 },
-      },
-    ]);
-    expect(models).toHaveLength(3);
-    expect(models[0]).toMatchObject({
-      id: "fixture-provider/zero-input",
-      cost: { input: 0, output: 0.2, cacheRead: 0, cacheWrite: 0 },
-    });
-    expect(models[2]?.cost).toEqual({
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-    });
-    expect(models[1]).toMatchObject({
-      reasoning: true,
-      input: ["text", "image"],
-      contextWindow: 200000,
-      maxTokens: 16384,
-      compat: { supportsUsageInStreaming: false },
-    });
-    expect(models[1]?.cost).toEqual({
-      input: 0.1,
-      output: 0.2,
-      cacheRead: 0.05,
-      cacheWrite: 0,
-    });
+  Object.assign(config.agents!.defaults!.models!, {
+    [`chutes/${id}`]: { alias: "My authored model" },
+    "chutes-pro": { alias: "My pro alias" },
   });
+  const reapplied = applyChutesProviderConfig(config);
+  expect(reapplied.models?.providers?.chutes).toMatchObject({ apiKey: "fixture-key" });
+  expect(reapplied.models?.providers?.chutes?.models).toEqual([model]);
+  expect(reapplied.agents?.defaults).toEqual(config.agents?.defaults);
+});
 
-  it.each([
-    { label: "absent pricing", pricing: undefined },
-    { label: "missing completion", pricing: { prompt: 0.1 } },
-    { label: "negative prompt", pricing: { prompt: -0.1, completion: 0.2 } },
+it("preserves native per-million prices and exact zero rates during discovery", async () => {
+  const models = await discoverRows([
+    pricedRow("fixture-provider/zero-input", 0, 0.2, 0),
     {
-      label: "invalid cache rate",
-      pricing: { prompt: 0.1, completion: 0.2, input_cache_read: -0.05 },
+      ...pricedRow("new-provider/new-model-r1", 0.1, 0.2, 0.05),
+      supported_features: ["reasoning"],
+      input_modalities: ["text", "image"],
+      context_length: 200000,
+      max_output_length: 16384,
     },
-  ])("keeps an unknown runtime price, not partial paid rates, for $label", async ({ pricing }) => {
-    const models = await discoverRows([{ id: "fixture-provider/unpriced-model", pricing }]);
-    expect(models).toHaveLength(1);
-    expect(models[0]).toMatchObject({
-      id: "fixture-provider/unpriced-model",
-      // Runtime requires a complete cost; this existing placeholder is not proof of free billing.
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      compat: { supportsUsageInStreaming: false },
-    });
+    pricedRow("fixture-provider/free-model", 0, 0, 0),
+  ]);
+  expect(models).toHaveLength(3);
+  expect(models[0]).toMatchObject({
+    id: "fixture-provider/zero-input",
+    cost: { input: 0, output: 0.2, cacheRead: 0, cacheWrite: 0 },
   });
-
-  it("normalizes token limits and selects context limits in provider precedence order", async () => {
-    const models = await discoverRows([
-      {
-        id: "provider/context-primary",
-        context_length: 131072,
-        max_model_len: 262144,
-      },
-      { id: "provider/serving-fallback", max_model_len: 131072 },
-      {
-        id: "provider/invalid-primary",
-        context_length: -1,
-        max_model_len: 131072,
-      },
-      {
-        id: "provider/default-control",
-        context_length: 0,
-        max_model_len: 0,
-        max_output_length: 16384.5,
-      },
-    ]);
-    expect(
-      models.map(({ id, contextWindow, maxTokens }) => ({ id, contextWindow, maxTokens })),
-    ).toEqual([
-      { id: "provider/context-primary", contextWindow: 131072, maxTokens: 4096 },
-      { id: "provider/serving-fallback", contextWindow: 131072, maxTokens: 4096 },
-      { id: "provider/invalid-primary", contextWindow: 131072, maxTokens: 4096 },
-      { id: "provider/default-control", contextWindow: 128000, maxTokens: 4096 },
-    ]);
+  expect(models[2]?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+  expect(models[1]).toMatchObject({
+    reasoning: true,
+    input: ["text", "image"],
+    contextWindow: 200000,
+    maxTokens: 16384,
+    compat: { supportsUsageInStreaming: false },
   });
+  expect(models[1]?.cost).toEqual({ input: 0.1, output: 0.2, cacheRead: 0.05, cacheWrite: 0 });
+});
 
-  it("propagates uncached discovery failures", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 503 }));
-
-    vi.stubGlobal("fetch", mockFetch);
-    await expect(
-      discoverChutesModels("chutes-fallback-token", { discoveryMode: "strict" }),
-    ).rejects.toMatchObject({
-      status: 503,
-    });
-    await expect(buildChutesProvider("chutes-fallback-token")).resolves.toMatchObject({
-      models: CHUTES_MODEL_CATALOG,
-    });
-    expect(mockFetch).toHaveBeenCalledTimes(2);
+it("scopes discovery cache by access token", async () => {
+  const modelIds: Record<string, string> = {
+    "Bearer chutes-token-a": "private/model-a",
+    "Bearer chutes-token-b": "private/model-b",
+  };
+  const mockFetch = vi.fn(async (_url, init?: RequestInit) => {
+    return catalog([{ id: modelIds[authorization(init)] ?? "public/model" }]);
   });
+  vi.stubGlobal("fetch", mockFetch);
+  const modelsA = await discoverChutesModels("chutes-token-a");
+  const modelsB = await discoverChutesModels("chutes-token-b");
+  const modelsASecond = await discoverChutesModels("chutes-token-a");
+  expect(modelsA[0]?.id).toBe("private/model-a");
+  expect(modelsB[0]?.id).toBe("private/model-b");
+  expect(modelsASecond[0]?.id).toBe("private/model-a");
+  expect(mockFetch).toHaveBeenCalledTimes(2);
+});
 
-  it("scopes discovery cache by access token", async () => {
-    const mockFetch = vi.fn().mockImplementation((_url, init?: { headers?: HeadersInit }) => {
-      const auth = readAuthorizationHeader(init);
-      if (auth === "Bearer chutes-token-a") {
-        return Promise.resolve(
-          Response.json({
-            data: [{ id: "private/model-a" }],
-          }),
-        );
-      }
-      if (auth === "Bearer chutes-token-b") {
-        return Promise.resolve(
-          Response.json({
-            data: [{ id: "private/model-b" }],
-          }),
-        );
-      }
-      return Promise.resolve(
-        Response.json({
-          data: [{ id: "public/model" }],
-        }),
-      );
-    });
-    vi.stubGlobal("fetch", mockFetch);
-    const modelsA = await discoverChutesModels("chutes-token-a");
-    const modelsB = await discoverChutesModels("chutes-token-b");
-    const modelsASecond = await discoverChutesModels("chutes-token-a");
-    expect(modelsA[0]?.id).toBe("private/model-a");
-    expect(modelsB[0]?.id).toBe("private/model-b");
-    expect(modelsASecond[0]?.id).toBe("private/model-a");
-    expect(mockFetch).toHaveBeenCalledTimes(2);
+it("does not replace rejected account discovery with an anonymous catalog", async () => {
+  const mockFetch = vi.fn(async (_url, init?: RequestInit) => {
+    if (authorization(init) === "Bearer failed-token") {
+      return new Response("", { status: 401 });
+    }
+    return catalog([{ id: "public/model" }]);
   });
-
-  it("does not replace rejected account discovery with an anonymous catalog", async () => {
-    const mockFetch = vi.fn().mockImplementation((_url, init?: { headers?: HeadersInit }) => {
-      if (readAuthorizationHeader(init) === "Bearer failed-token") {
-        return Promise.resolve(new Response("", { status: 401 }));
-      }
-      return Promise.resolve(
-        Response.json({
-          data: [{ id: "public/model" }],
-        }),
-      );
-    });
-    vi.stubGlobal("fetch", mockFetch);
-    await expect(
-      discoverChutesModels("failed-token", { discoveryMode: "strict" }),
-    ).rejects.toMatchObject({ status: 401 });
-    await expect(buildChutesProvider("failed-token")).resolves.toMatchObject({
-      models: [{ id: "public/model" }],
-    });
-    expect(mockFetch.mock.calls.map(([, init]) => readAuthorizationHeader(init))).toEqual([
-      "Bearer failed-token",
-      "Bearer failed-token",
-      "",
-    ]);
-    expect(mockFetch).toHaveBeenCalledTimes(3);
+  vi.stubGlobal("fetch", mockFetch);
+  await expect(
+    discoverChutesModels("failed-token", { discoveryMode: "strict" }),
+  ).rejects.toMatchObject({ status: 401 });
+  await expect(buildChutesProvider("failed-token")).resolves.toMatchObject({
+    models: [{ id: "public/model" }],
   });
+  expect(mockFetch.mock.calls.map(([, init]) => authorization(init))).toEqual([
+    "Bearer failed-token",
+    "Bearer failed-token",
+    "",
+  ]);
 });

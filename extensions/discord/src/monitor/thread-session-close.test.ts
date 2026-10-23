@@ -1,30 +1,24 @@
-// Discord tests cover thread session close plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { closeDiscordThreadSessions } from "./thread-session-close.js";
 
 type ResolveStorePath = typeof import("openclaw/plugin-sdk/session-store-runtime").resolveStorePath;
 
-const hoisted = vi.hoisted(() => {
-  const deleteSessionEntry = vi.fn();
-  const listSessionEntries = vi.fn();
-  const resolveStorePath = vi.fn<ResolveStorePath>(() => "/tmp/openclaw-sessions.json");
-  return { deleteSessionEntry, listSessionEntries, resolveStorePath };
-});
+const hoisted = vi.hoisted(() => ({
+  deleteSessionEntry: vi.fn(),
+  listSessionEntriesAsync: vi.fn(),
+  resolveStorePath: vi.fn<ResolveStorePath>(() => "/tmp/openclaw-sessions.json"),
+}));
 
 vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/session-store-runtime")>(
     "openclaw/plugin-sdk/session-store-runtime",
   );
-  return {
-    ...actual,
-    deleteSessionEntry: hoisted.deleteSessionEntry,
-    listSessionEntries: hoisted.listSessionEntries,
-    resolveStorePath: hoisted.resolveStorePath,
-  };
+  return { ...actual, ...hoisted };
 });
 
 function setupStore(store: Record<string, { sessionId?: string; updatedAt: number }>) {
-  hoisted.listSessionEntries.mockImplementation(() =>
+  hoisted.listSessionEntriesAsync.mockImplementation(async () =>
     Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry })),
   );
   hoisted.deleteSessionEntry.mockImplementation(
@@ -51,43 +45,30 @@ function setupStore(store: Record<string, { sessionId?: string; updatedAt: numbe
 
 const THREAD_ID = "999";
 const OTHER_ID = "111";
-
 const MATCHED_KEY = `agent:main:discord:channel:${THREAD_ID}`;
 const UNMATCHED_KEY = `agent:main:discord:channel:${OTHER_ID}`;
+const close = (threadId = THREAD_ID, cfg: OpenClawConfig = {}) =>
+  closeDiscordThreadSessions({ cfg, threadId });
 
 describe("closeDiscordThreadSessions", () => {
   beforeEach(() => {
     hoisted.deleteSessionEntry.mockReset();
-    hoisted.listSessionEntries.mockReset();
-    hoisted.resolveStorePath.mockClear();
-    hoisted.resolveStorePath.mockReturnValue("/tmp/openclaw-sessions.json");
+    hoisted.listSessionEntriesAsync.mockReset();
+    hoisted.resolveStorePath.mockReset().mockReturnValue("/tmp/openclaw-sessions.json");
   });
 
   it("does not match a key that contains the threadId as a substring of a longer snowflake", async () => {
-    const longerSnowflake = `${THREAD_ID}00`;
-    const noMatchKey = `agent:main:discord:channel:${longerSnowflake}`;
-    const store = {
-      [noMatchKey]: { updatedAt: 9_999 },
-    };
+    const noMatchKey = `${MATCHED_KEY}00`;
+    const store = { [noMatchKey]: { updatedAt: 9_999 } };
     setupStore(store);
 
-    const count = await closeDiscordThreadSessions({
-      cfg: {},
-      threadId: THREAD_ID,
-    });
-
-    expect(count).toBe(0);
+    expect(await close()).toBe(0);
     expect(store[noMatchKey].updatedAt).toBe(9_999);
   });
 
   it("returns 0 immediately when threadId is empty without touching the store", async () => {
-    const count = await closeDiscordThreadSessions({
-      cfg: {},
-      threadId: "   ",
-    });
-
-    expect(count).toBe(0);
-    expect(hoisted.listSessionEntries).not.toHaveBeenCalled();
+    expect(await close("   ")).toBe(0);
+    expect(hoisted.listSessionEntriesAsync).not.toHaveBeenCalled();
     expect(hoisted.deleteSessionEntry).not.toHaveBeenCalled();
   });
 
@@ -98,60 +79,37 @@ describe("closeDiscordThreadSessions", () => {
     };
     setupStore(store);
 
-    const firstCount = await closeDiscordThreadSessions({
-      cfg: {},
-      threadId: THREAD_ID,
-    });
-    const secondCount = await closeDiscordThreadSessions({
-      cfg: {},
-      threadId: THREAD_ID,
-    });
-
-    expect(firstCount).toBe(1);
-    expect(secondCount).toBe(0);
+    expect(await close()).toBe(1);
+    expect(await close()).toBe(0);
     expect(store[MATCHED_KEY]).toBeUndefined();
     expect(store[UNMATCHED_KEY].updatedAt).toBe(1_700_000_000_001);
   });
 
   it("does not delete a matching session that changed after the list snapshot", async () => {
     const store = {
-      [MATCHED_KEY]: {
-        sessionId: "fresh-session",
-        updatedAt: 2_000,
-      },
+      [MATCHED_KEY]: { sessionId: "fresh-session", updatedAt: 2_000 },
     };
     setupStore(store);
-    hoisted.listSessionEntries.mockReturnValue([
+    hoisted.listSessionEntriesAsync.mockResolvedValue([
       {
         sessionKey: MATCHED_KEY,
-        entry: {
-          sessionId: "old-session",
-          updatedAt: 1_000,
-        },
+        entry: { sessionId: "old-session", updatedAt: 1_000 },
       },
     ]);
 
-    const count = await closeDiscordThreadSessions({
-      cfg: {},
-      threadId: THREAD_ID,
-    });
-
-    expect(count).toBe(0);
-    expect(store[MATCHED_KEY].updatedAt).toBe(2_000);
-    expect(store[MATCHED_KEY].sessionId).toBe("fresh-session");
+    expect(await close()).toBe(0);
+    expect(store[MATCHED_KEY]).toEqual({ updatedAt: 2_000, sessionId: "fresh-session" });
   });
 
   it("scopes each read by agent id and never opens agent databases writably", async () => {
-    // With a fixed custom store every agent resolves the same storePath, so the
-    // agentId is what selects the owner DB — without it the scan re-reads the
-    // default owner and leaves the other agent's thread session open.
+    // A fixed store path still needs each agent's owner DB, not repeated reads of main.
     const fixedStorePath = "/custom/path/sessions.json";
     const entriesByAgent: Record<string, Record<string, { updatedAt: number }>> = {
       main: { [`agent:main:discord:channel:${THREAD_ID}`]: { updatedAt: 1_000 } },
       work: { [`agent:work:discord:channel:${THREAD_ID}`]: { updatedAt: 2_000 } },
     };
     hoisted.resolveStorePath.mockReturnValue(fixedStorePath);
-    hoisted.listSessionEntries.mockImplementation(({ agentId }: { agentId?: string }) =>
+    hoisted.listSessionEntriesAsync.mockImplementation(async ({ agentId }: { agentId?: string }) =>
       Object.entries(agentId ? (entriesByAgent[agentId] ?? {}) : {}).map(([sessionKey, entry]) => ({
         sessionKey,
         entry,
@@ -159,18 +117,15 @@ describe("closeDiscordThreadSessions", () => {
     );
     hoisted.deleteSessionEntry.mockResolvedValue(true);
 
-    const count = await closeDiscordThreadSessions({
-      cfg: {
-        session: { store: fixedStorePath },
-        agents: { entries: { main: {}, work: {} } },
-      },
-      threadId: THREAD_ID,
+    const count = await close(THREAD_ID, {
+      session: { store: fixedStorePath },
+      agents: { entries: { main: {}, work: {} } },
     });
 
     expect(count).toBe(2);
     for (const agentId of ["main", "work"]) {
-      expect(hoisted.listSessionEntries).toHaveBeenCalledWith(
-        expect.objectContaining({ agentId, storePath: fixedStorePath, readOnly: true }),
+      expect(hoisted.listSessionEntriesAsync).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId, storePath: fixedStorePath }),
       );
     }
   });

@@ -1,12 +1,16 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
+import { createDreamingViewState } from "./dreaming.ts";
 import {
+  renderDreamingView,
   fullDreamingViewAccess,
   installDreamingViewTestTranslations,
 } from "./view.test-helpers.ts";
-import { createDreamingViewState, renderDreaming } from "./view.ts";
+import { renderDreaming } from "./view.tsx";
+
+afterEach(() => cleanupSolid());
 
 type DreamingProps = Parameters<typeof renderDreaming>[0];
 
@@ -27,28 +31,33 @@ function buildBoundedDashboardProps(tab: "insights" | "wiki"): DreamingProps {
   // Count every returned item while rendering only the small selected cluster.
   viewState.diaryPage = 1;
   const clusterSizes = [2_499, 1];
-  return {
+  const props: DreamingProps = {
     access: fullDreamingViewAccess,
     viewState,
     active: true,
     selectedAgentId: "main",
-    shortTermCount: 0,
-    promotedCount: 0,
-    shortTermEntries: [],
-    promotedEntries: [],
-    nextCycle: null,
-    timezone: null,
     statusError: null,
+    readStatus: () => null,
+    readStatusData: () => ({
+      shortTermCount: 0,
+      promotedCount: 0,
+      shortTermEntries: [],
+      promotedEntries: [],
+      phases: undefined,
+      nextCycle: null,
+      timezone: null,
+    }),
+    readDiary: () => props.dreamDiaryContent,
+    readImports: () => props.wikiImportInsights,
+    readOverview: () => props.wikiOverview,
     modeSaving: false,
     dreamDiaryLoading: false,
     dreamDiaryActionLoading: false,
     dreamDiaryActionMessage: null,
     dreamDiaryActionArchivePath: null,
-    dreamDiaryError: null,
     dreamDiaryContent: null,
     memoryWikiEnabled: true,
     wikiImportInsightsLoading: false,
-    wikiImportInsightsError: null,
     wikiImportInsights:
       tab === "insights"
         ? {
@@ -84,7 +93,6 @@ function buildBoundedDashboardProps(tab: "insights" | "wiki"): DreamingProps {
           }
         : null,
     wikiOverviewLoading: false,
-    wikiOverviewError: null,
     wikiOverview:
       tab === "wiki"
         ? {
@@ -119,22 +127,25 @@ function buildBoundedDashboardProps(tab: "insights" | "wiki"): DreamingProps {
     onRefreshDiary: () => {},
     onRefreshImports: () => {},
     onRefreshWikiOverview: () => {},
-    onOpenConfig: () => {},
-    onOpenWikiPage: async () => null,
+    onOpenConfig: async () => {},
+    onOpenWikiPage: async () => {},
+    onCloseWikiPreview: () => {},
+    wikiPreview: null,
     onBackfillDiary: () => {},
     onCopyDreamingArchivePath: () => {},
     onDedupeDreamDiary: () => {},
     onResetDiary: () => {},
     onResetGroundedShortTerm: () => {},
     onRepairDreamingArtifacts: () => {},
-    onViewStateChange: () => {},
+    onViewStateChange: (update) => update(viewState),
   };
+  return props;
 }
 
 describe("bounded Memory Wiki dashboard results", () => {
   it.each(["insights", "wiki"] as const)("discloses returned and total %s item counts", (tab) => {
     const container = document.createElement("div");
-    render(renderDreaming(buildBoundedDashboardProps(tab)), container);
+    renderDreamingView(buildBoundedDashboardProps(tab), container);
 
     expect(container.querySelector(".dreams-diary__bounded-result")?.textContent?.trim()).toBe(
       "Showing the newest 2,500 of 2,501 items.",

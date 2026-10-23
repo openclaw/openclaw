@@ -1,12 +1,15 @@
-import { types } from "node:util";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { Value } from "typebox/value";
-import { AgentActivityItemSchema } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
+import {
+  AgentActivityItemSchema,
+  ChatRunStartupPhaseSchema,
+} from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { isCompleteAgentPreamble } from "../agents/agent-activity-presentation.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { deepFreezeDiagnosticValue } from "../infra/diagnostic-event-snapshot.js";
 import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 
+const STARTUP_PHASES = new Set<string>(ChatRunStartupPhaseSchema.anyOf.map((phase) => phase.const));
 const CHAT_RUN_PROGRESS_MAX_EVENTS = 50;
 const CHAT_RUN_PROGRESS_MAX_BYTES = 128 * 1024;
 const CHAT_RUN_PROGRESS_MAX_EVENT_BYTES = 64 * 1024;
@@ -36,17 +39,9 @@ function stringifyProgressEvent(event: AgentEventPayload): string {
 
   // Native traversal owns getters and toJSON. Only already-observed primitives
   // are measured separately, so producer callbacks execute exactly once.
-  return JSON.stringify(event, function (this: object, key: string, input: unknown) {
-    let value = input;
-    if (types.isNumberObject(value)) {
-      // JSON's ToNumber rejects BigInt from custom coercion; Number() would accept it.
-      // Reflect.apply preserves the boxed input for Math.max's native ToNumber operation.
-      value = Reflect.apply(Math.max, undefined, [value]);
-    } else if (types.isStringObject(value)) {
-      value = String(value);
-    } else if (types.isBooleanObject(value)) {
-      value = Boolean.prototype.valueOf.call(value);
-    }
+  // Boxed primitives use native coercion and the final size check; ordinary
+  // tool payloads retain early budget rejection without per-value type probes.
+  return JSON.stringify(event, function (this: object, key: string, value: unknown) {
     const parent = containers.get(this);
     const omitted = value === undefined || typeof value === "function" || typeof value === "symbol";
     if (parent && (parent.array || !omitted)) {
@@ -121,23 +116,29 @@ export function updateChatRunProgressSnapshot(
   const toolCallId = typeof data.toolCallId === "string" ? data.toolCallId.trim() : "";
   const review = asNullableRecord(data.review) ?? undefined;
   const reviewId = typeof review?.id === "string" ? review.id.trim() : "";
-  const isStartupStatus =
+  const isStartupStatus = event.stream === "run_status" && STARTUP_PHASES.has(phase);
+  const isModelWait =
     event.stream === "run_status" &&
-    [
-      "waiting_for_state",
-      "preparing_workspace",
-      "naming_worktree",
-      "creating_worktree",
-      "running_setup",
-      "provisioning_environment",
-      "preparing_context",
-      "memory_flushing",
-      "starting_model",
-    ].includes(phase);
+    (phase === "waiting_for_model" ||
+      (phase === "starting_model" &&
+        snapshot?.events.some(
+          (candidate) =>
+            candidate.stream === "run_status" && candidate.data.phase === "waiting_for_model",
+        )));
   const isRetryStatus = event.stream === "run_status" && phase === "retrying";
+  const isFallbackStatus = event.stream === "lifecycle" && phase === "fallback_step";
+  const isFinishing = event.stream === "lifecycle" && phase === "finishing";
+  const isCompaction = event.stream === "compaction" && (phase === "start" || phase === "end");
   const isAssistant =
     event.stream === "assistant" &&
-    Boolean(snapshot?.events.some((candidate) => candidate.stream === "run_status"));
+    Boolean(
+      snapshot?.events.some(
+        (candidate) =>
+          candidate.stream === "run_status" ||
+          (candidate.stream === "lifecycle" &&
+            (candidate.data.phase === "fallback_step" || candidate.data.phase === "finishing")),
+      ),
+    );
   const preambleItemId =
     typeof data.itemId === "string" && data.itemId.trim()
       ? data.itemId.trim()
@@ -179,19 +180,20 @@ export function updateChatRunProgressSnapshot(
         candidate.data.phase === "strict_review_required" &&
         candidate.data.reviewId === data.reviewId,
     );
-  if (mode === "summary" && !isTool && !isItem && !isUsage && !isRetryStatus && !isAssistant) {
-    return snapshot;
-  }
+  const isSummaryProgress =
+    isModelWait ||
+    isTool ||
+    isItem ||
+    isUsage ||
+    isRetryStatus ||
+    isFallbackStatus ||
+    isFinishing ||
+    isCompaction ||
+    isAssistant ||
+    isNotice;
   if (
-    !isTool &&
-    !isItem &&
-    !isUsage &&
-    !isStartupStatus &&
-    !isRetryStatus &&
-    !isAssistant &&
-    !isStandaloneGuardian &&
-    !isNotice &&
-    !resolvesStrictReview
+    !isSummaryProgress &&
+    (mode === "summary" || (!isStartupStatus && !isStandaloneGuardian && !resolvesStrictReview))
   ) {
     return snapshot;
   }
@@ -240,6 +242,7 @@ export function updateChatRunProgressSnapshot(
 
   if (
     isStartupStatus &&
+    !isModelWait &&
     next.events.some((candidate) => candidate.stream === "tool" || candidate.stream === "item")
   ) {
     return next;
@@ -248,10 +251,25 @@ export function updateChatRunProgressSnapshot(
   if (isUsage) {
     // Context-only updates must retain the run total already reported by completed responses.
     removeWhere((candidate) => candidate.stream === "usage");
-  } else if (isStartupStatus || isRetryStatus || isAssistant || isTool || isItem) {
+  } else if (
+    isStartupStatus ||
+    isRetryStatus ||
+    isFallbackStatus ||
+    isFinishing ||
+    isCompaction ||
+    isAssistant ||
+    isTool ||
+    isItem
+  ) {
     // Progress clears transient statuses; retry waits may begin after tools completed.
     removeWhere((candidate) => {
-      if (candidate.stream === "run_status" || candidate.stream === "assistant") {
+      if (
+        candidate.stream === "run_status" ||
+        candidate.stream === "assistant" ||
+        (isCompaction && candidate.stream === "compaction") ||
+        (candidate.stream === "lifecycle" &&
+          (candidate.data.phase === "fallback_step" || candidate.data.phase === "finishing"))
+      ) {
         return true;
       }
       if (isPreamble) {

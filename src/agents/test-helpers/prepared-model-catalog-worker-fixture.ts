@@ -32,13 +32,39 @@ import type {
   PreparedModelRuntimeSnapshot,
 } from "../prepared-model-runtime.types.js";
 
+export function writeCodexAuth(codexHome: string, marker: string): void {
+  const authPath = path.join(codexHome, "auth.json");
+  const payload = Buffer.from(
+    JSON.stringify({
+      exp: Math.floor(Date.now() / 1000) + 3600,
+      ...(marker ? { marker } : {}),
+    }),
+  ).toString("base64url");
+  fs.writeFileSync(
+    authPath,
+    JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: {
+        access_token: `header.${payload}.signature`,
+        refresh_token: `refresh-${marker}-not-real`,
+      },
+    }),
+    "utf8",
+  );
+  const future = new Date(Date.now() + 2_000);
+  fs.utimesSync(authPath, future, future);
+}
+
 const waitTimeoutMs = 30_000;
+const catalogStartCount = (marker: string) =>
+  fs.existsSync(marker) ? fs.readFileSync(marker, "utf8").split("start\n").length - 1 : 0;
 
 export function usePreparedCatalogWorkerFixtures(
   fixtureOptions: { observeCatalogWork?: boolean } = {},
 ) {
   const retirements = new Set<() => void | Promise<void>>();
   const workers = new Set<Worker>();
+  const workerObservers = new Set<(worker: Worker) => void>();
   const catalogSettlements = new Map<string, (operation: PromiseLike<unknown>) => void>();
   let restoreCatalogWorkerFactory: (() => void) | undefined;
   let restoreWorkerFactory: (() => void) | undefined;
@@ -63,6 +89,9 @@ export function usePreparedCatalogWorkerFixtures(
       // Compiler services also use Worker threads; this fixture owns only catalog computation.
       if (String(args[0]) === catalogWorkerUrl) {
         workers.add(worker);
+        for (const observe of workerObservers) {
+          observe(worker);
+        }
       }
       return worker;
     });
@@ -104,6 +133,7 @@ export function usePreparedCatalogWorkerFixtures(
         restoreWorkerFactory?.();
         restoreWorkerFactory = undefined;
         workers.clear();
+        workerObservers.clear();
         restoreCatalogWorkerFactory?.();
         restoreCatalogWorkerFactory = undefined;
         catalogSettlements.clear();
@@ -119,14 +149,33 @@ export function usePreparedCatalogWorkerFixtures(
   });
   return {
     readCatalogWorkers: (): readonly Worker[] => [...workers],
+    observeWorkers: (onWorker?: (worker: Worker) => void) => {
+      const spawned: Worker[] = [];
+      let peakWorkers = 0;
+      const recordWorker = (worker: Worker) => {
+        spawned.push(worker);
+        onWorker?.(worker);
+        peakWorkers = Math.max(
+          peakWorkers,
+          spawned.filter((entry) => entry.threadId !== -1).length,
+        );
+      };
+      return {
+        spawned,
+        get peakWorkers() {
+          return peakWorkers;
+        },
+        subscribe: () => workerObservers.add(recordWorker),
+        close: () => workerObservers.delete(recordWorker),
+      };
+    },
     makeTempDir: (prefix: string) => tempDirs.make(prefix),
     observeCatalogEntry: (
       receipts: FixtureReceiptChannel,
       fixture: { marker: string; agentDir: string },
     ) => {
       const { marker, agentDir } = fixture;
-      const before = fs.existsSync(marker) ? fs.readFileSync(marker, "utf8") : "";
-      const count = before.split("start\n").length;
+      const count = catalogStartCount(marker) + 1;
       const completed = createDeferredCore<unknown>();
       catalogSettlements.set(agentDir, completed.resolve);
       return (operation: PromiseLike<unknown>, signal: AbortSignal) =>
@@ -154,8 +203,7 @@ async function catalogFixtureEventBeforeSettlement(
   operation: PromiseLike<unknown>,
   count = 1,
 ): Promise<void> {
-  const recorded = () =>
-    fs.existsSync(marker) && fs.readFileSync(marker, "utf8").split("start\n").length - 1 >= count;
+  const recorded = () => catalogStartCount(marker) >= count;
   const settled = Promise.resolve(operation).then(
     () => {
       expect(recorded(), `Catalog task settled before start reached ${marker}`).toBe(true);
@@ -332,18 +380,14 @@ export async function loadCompletedFullCatalog(
   await expect
     .poll(
       () => {
-        const catalog = snapshot.readFullModelCatalog!();
-        if (
-          catalog &&
-          isPreparedModelCatalogFull(catalog) &&
-          !catalog.pendingProviders?.length &&
-          !catalog.refreshFailed &&
-          (!options?.refresh || catalog !== previous)
-        ) {
-          completed = catalog;
-          return true;
-        }
-        return false;
+        completed = snapshot.readFullModelCatalog!();
+        return Boolean(
+          completed &&
+          isPreparedModelCatalogFull(completed) &&
+          !completed.pendingProviders?.length &&
+          !completed.refreshFailed &&
+          (!options?.refresh || completed !== previous),
+        );
       },
       { timeout: waitTimeoutMs },
     )

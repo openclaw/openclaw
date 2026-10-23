@@ -1,29 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  slackRequest as request,
+  slackResponse as response,
+} from "./slack-capture.test-helpers.js";
+import {
   getSlackQaMessageWriteCursor,
   readSlackQaNativeWrites,
   readSlackQaMessageWrites,
 } from "./slack-live.capture.js";
-
-function request(id: number, method: string, fields: Record<string, string> = {}) {
-  return {
-    id,
-    flowId: String(id),
-    host: "slack.com",
-    kind: "request",
-    method: "POST",
-    path: `/api/${method}`,
-    dataText: new URLSearchParams({ channel: "C123", ...fields }).toString(),
-  };
-}
-function response(id: number, fields: Record<string, unknown> = {}) {
-  return {
-    flowId: String(id),
-    kind: "response",
-    status: 200,
-    dataText: JSON.stringify({ channel: "C123", ok: true, ts: "2.000000", ...fields }),
-  };
-}
 
 describe("Slack QA debug capture", () => {
   it("reads successful inline and blob-backed writes in request order", async () => {
@@ -41,6 +25,8 @@ describe("Slack QA debug capture", () => {
       ["response", posted.dataText],
     ]);
     const events = [
+      { ...response(6), status: 500, dataText: undefined, dataBlobId: "failed-response" },
+      request(6, "chat.postMessage", { text: "FAILED" }),
       response(4),
       request(4, "chat.update", { text: "receipt", ts: "2.000000" }),
       { ...posted, dataText: undefined, dataBlobId: "response" },
@@ -56,7 +42,12 @@ describe("Slack QA debug capture", () => {
         sessionId: "qa-slack",
         store: {
           getSessionEvents: async () => events,
-          readBlob: async (id: string) => blobs.get(id) ?? null,
+          readBlob: async (id: string) => {
+            if (id === "failed-response") {
+              throw new Error("Failed responses are not message evidence");
+            }
+            return blobs.get(id) ?? null;
+          },
         },
       }),
     ).resolves.toEqual([
@@ -64,7 +55,6 @@ describe("Slack QA debug capture", () => {
         blockText: ["Update", "COMMENTARY"],
         channelId: "C123",
         text: "fallback",
-        threadTs: "1.000000",
         ts: "2.000000",
       },
       { channelId: "C123", text: "receipt", ts: "2.000000" },
@@ -135,30 +125,30 @@ describe("Slack QA debug capture", () => {
     expect(writes[1]).toMatchObject({ messageId: "2.000000", emoji: "eyes" });
     expect(writes[3]).toMatchObject({ fileIds: ["F_NEW"], threadId: "1.000000" });
     expect(writes[4]).toMatchObject({ fileIds: ["F_DELETED"] });
-    expect(writes.slice(5)).toEqual([
-      expect.objectContaining({
+    expect(writes.slice(5)).toMatchObject([
+      {
         requestEventId: 7,
         method: "chat.postMessage",
         evidence: "uncertain",
         reason: "response-not-captured",
         channelId: "C123",
         threadId: "1.000000",
-      }),
-      expect.objectContaining({
+      },
+      {
         requestEventId: 8,
         method: "chat.update",
         evidence: "uncertain",
         reason: "transport-error",
         messageId: "3.000000",
-      }),
-      expect.objectContaining({
+      },
+      {
         requestEventId: 11,
         evidence: "uncertain",
         reason: "response-undecodable",
-      }),
+      },
     ]);
     expect(JSON.stringify(writes)).not.toContain("private-");
-    events.push(response(7));
+    events.push(response(7), response(8), { flowId: "8", kind: "error" });
     const settled = await readSlackQaNativeWrites(params);
     expect(settled.find((write) => write.requestEventId === 7)).toMatchObject({
       evidence: "api-accepted",
@@ -166,10 +156,13 @@ describe("Slack QA debug capture", () => {
       threadId: "1.000000",
     });
     expect(settled.find((write) => write.requestEventId === 7)).not.toHaveProperty("reason");
+    expect(settled.find((write) => write.requestEventId === 8)).toMatchObject({
+      evidence: "api-accepted",
+    });
     expect(
       settled
         .filter((write) => write.evidence === "uncertain")
         .map((write) => write.requestEventId),
-    ).toEqual([8, 11]);
+    ).toEqual([11]);
   });
 });

@@ -55,7 +55,4 @@ export type PluginHeartbeatPromptContributionEvent = {
 };
 
 /** Plugin contribution to heartbeat prompt context. */
-export type PluginHeartbeatPromptContributionResult = {
-  prependContext?: string;
-  appendContext?: string;
-};
+export type PluginHeartbeatPromptContributionResult = PluginAgentTurnPrepareResult;

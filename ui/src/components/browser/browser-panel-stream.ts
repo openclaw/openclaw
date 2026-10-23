@@ -1,11 +1,12 @@
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
-import type { BrowserPanelTab, BrowserRequestClient } from "./browser-client.ts";
+import type { BrowserRequestClient } from "./browser-client.ts";
 import { isBrowserScreencastUnsupportedError, requestBrowserScreencast } from "./browser-client.ts";
 import type {
-  BrowserPanelControllerHost,
-  BrowserPanelOperationOwnership,
+  BrowserPanelHost,
+  BrowserPanelOperations,
 } from "./browser-panel-operation-ownership.ts";
-import { loadBrowserPanelImage, type BrowserPanelView } from "./browser-panel-surface.ts";
+import type { BrowserPanelStateWriter } from "./browser-panel-state.ts";
+import { loadBrowserPanelImage } from "./browser-panel-surface.ts";
 import {
   BrowserScreencastClient,
   type BrowserScreencastFrame,
@@ -16,22 +17,17 @@ import { browserRouteKey } from "./browser-target.ts";
 const RETRY_DELAY_MS = 10_000;
 const RESIZE_RESTART_DEBOUNCE_MS = 500;
 
-type StreamState = {
-  activeTargetId: string | null;
-  view: BrowserPanelView | null;
-  tabs: BrowserPanelTab[];
-  loading: boolean;
-};
-
-interface BrowserPanelStreamHost extends StreamState {
-  readonly host: BrowserPanelControllerHost;
+interface BrowserPanelStreamHost extends BrowserPanelStateWriter<
+  "activeTargetId" | "view" | "tabs" | "loading"
+> {
+  readonly host: BrowserPanelHost;
   readonly mode: "interact" | "annotate" | "inspect";
+  readonly input: { elements: { stage?: HTMLElement; viewport?: HTMLElement } };
   readonly operations: Pick<
-    BrowserPanelOperationOwnership,
+    BrowserPanelOperations,
     "epoch" | "route" | "isLive" | "hasPendingCapture" | "capturedTabs" | "forgetNavigation"
   >;
   readonly observedViewportSize: { width: number; height: number } | null;
-  setState<Key extends keyof StreamState>(key: Key, value: StreamState[Key]): void;
   syncUrlDraft(url: string): void;
   clearUnavailableView(): boolean;
   refreshView(targetId: string): Promise<void>;
@@ -60,7 +56,7 @@ type Attempt = {
 export class BrowserPanelStream {
   private attempt?: Attempt;
   frameRevision = 0;
-  private scope?: { client: BrowserPanelControllerHost["client"]; route: string };
+  private scope?: { client: BrowserPanelHost["client"]; route: string };
   private unsupported = false;
   private readonly lastFailures = new Map<string, number>();
   private objectUrl?: string;
@@ -87,8 +83,7 @@ export class BrowserPanelStream {
   }
 
   private dimensions() {
-    const stage = this.host.host.renderRoot.querySelector<HTMLElement>(".bp-stage");
-    const viewport = this.host.host.renderRoot.querySelector<HTMLElement>(".bp-viewport");
+    const { stage, viewport } = this.host.input.elements;
     const width =
       stage?.clientWidth || viewport?.clientWidth || this.host.observedViewportSize?.width || 1280;
     const height = viewport?.clientHeight || this.host.observedViewportSize?.height || width;
@@ -119,20 +114,18 @@ export class BrowserPanelStream {
     }
     this.close(false);
     const dimensions = this.dimensions();
-    let settle!: Attempt["settle"];
-    const firstFrame = new Promise<boolean>((resolve) => {
-      const timeout = setTimeout(() => {
-        if (this.current(attempt)) {
-          this.recover(attempt);
-        } else if (this.attempt === attempt) {
-          this.close(false);
-        }
-      }, DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
-      settle = (received) => {
-        clearTimeout(timeout);
-        resolve(received);
-      };
-    });
+    const { promise: firstFrame, resolve } = Promise.withResolvers<boolean>();
+    const timeout = setTimeout(() => {
+      if (this.current(attempt)) {
+        this.recover(attempt);
+      } else if (this.attempt === attempt) {
+        this.close(false);
+      }
+    }, DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
+    const settle = (received: boolean) => {
+      clearTimeout(timeout);
+      resolve(received);
+    };
     const attempt: Attempt = {
       targetId,
       client,
@@ -155,7 +148,7 @@ export class BrowserPanelStream {
     dimensions: { maxWidth: number; maxHeight: number },
   ): Promise<void> {
     try {
-      const response = await requestBrowserScreencast(
+      const wsPath = await requestBrowserScreencast(
         attempt.client,
         { targetId: attempt.targetId, ...dimensions },
         { signal: attempt.controller.signal },
@@ -165,7 +158,7 @@ export class BrowserPanelStream {
       }
       attempt.connection = new BrowserScreencastClient({
         gatewayUrl: this.host.host.client!.gatewayUrl,
-        wsPath: response.wsPath,
+        wsPath,
         onReady: ({ url, title }) => this.updateMetadata(attempt, { url, title }),
         onMeta: (meta) => this.updateMetadata(attempt, meta),
         onFrame: (frame) => {

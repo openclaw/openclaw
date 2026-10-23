@@ -36,7 +36,7 @@ import {
 } from "./pw-session.js";
 import {
   markBackendDomRefsOnPage,
-  readMainFrameDocumentIdentityForPage,
+  readDocumentIdentitiesForPage,
   withPageScopedCdpClient,
 } from "./pw-session.page-cdp.js";
 import {
@@ -132,7 +132,7 @@ export async function storeSnapshotRefsViaPlaywright(opts: {
     run: async (assertCurrent) => {
       if (
         opts.expectedDocumentIdentity &&
-        (await readMainFrameDocumentIdentityForPage(page)) !== opts.expectedDocumentIdentity
+        (await readDocumentIdentitiesForPage(page)).mainFrame !== opts.expectedDocumentIdentity
       ) {
         throw new Error(
           "Frame changed while its browser snapshot refs were being published; retry.",
@@ -216,6 +216,7 @@ export async function navigateViaPlaywright(opts: {
   relayReference?: RelayOperationReference;
   url: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
   ssrfPolicy?: SsrFPolicy;
   browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
 }): Promise<{ url: string; targetId?: string; download?: BrowserDownloadResult }> {
@@ -242,6 +243,7 @@ export async function navigateViaPlaywright(opts: {
   await assertBrowserNavigationAllowed({
     url,
     ...navigationPolicy,
+    ...(opts.signal ? { signal: opts.signal } : {}),
   });
   const timeout = resolveBrowserNavigationTimeoutMs(opts.timeoutMs);
   let currentTargetId = opts.targetId;
@@ -256,6 +258,7 @@ export async function navigateViaPlaywright(opts: {
       ssrfPolicy: opts.ssrfPolicy,
       browserProxyMode: opts.browserProxyMode,
       targetId: currentTargetId,
+      ...(opts.signal ? { signal: opts.signal } : {}),
       ...(opts.resolveOperationTarget
         ? {
             assertPageCurrent: async () => {
@@ -362,6 +365,7 @@ export async function navigateViaPlaywright(opts: {
         ssrfPolicy: opts.ssrfPolicy,
         browserProxyMode: opts.browserProxyMode,
         targetId: currentTargetId,
+        ...(opts.signal ? { signal: opts.signal } : {}),
       });
     }
   } catch (err) {

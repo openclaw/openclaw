@@ -1,96 +1,39 @@
-// Signal tests cover event handler.mention gating plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
-import { buildDispatchInboundCaptureMock } from "openclaw/plugin-sdk/channel-contract-testing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { HistoryMediaEntry } from "openclaw/plugin-sdk/reply-history";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { formatSignalMediaText } from "../media-text.js";
+import type { SignalDataMessage, SignalEventHandlerDeps } from "./event-handler.types.js";
 
-const internalHookMocks = vi.hoisted(() => ({
-  createInternalHookEvent: vi.fn(
-    (type: string, action: string, sessionKey: string, context: Record<string, unknown>) => ({
-      type,
-      action,
-      sessionKey,
-      context,
-      timestamp: new Date(),
-      messages: [],
-    }),
-  ),
-  triggerInternalHook: vi.fn(async () => undefined),
+const hooks = vi.hoisted(() => ({
+  create: vi.fn<typeof import("openclaw/plugin-sdk/hook-runtime").createInternalHookEvent>(),
+  trigger: vi.fn(async () => undefined),
 }));
-
-vi.mock("openclaw/plugin-sdk/hook-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/hook-runtime")>(
-    "openclaw/plugin-sdk/hook-runtime",
-  );
+vi.mock("openclaw/plugin-sdk/hook-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/hook-runtime")>();
   return {
     ...actual,
-    createInternalHookEvent: internalHookMocks.createInternalHookEvent,
-    triggerInternalHook: internalHookMocks.triggerInternalHook,
+    createInternalHookEvent: hooks.create.mockImplementation(actual.createInternalHookEvent),
+    triggerInternalHook: hooks.trigger,
   };
 });
 
-type SignalMsgContext = Pick<MsgContext, "Body" | "WasMentioned"> & {
-  Body?: string;
-  WasMentioned?: boolean;
-};
+let capturedCtx: MsgContext | undefined;
+const getCapturedCtx = () => expectDefined(capturedCtx, "Signal MsgContext");
 
-let capturedCtx: SignalMsgContext | undefined;
-
-function getCapturedCtx() {
-  if (!capturedCtx) {
-    throw new Error("expected captured Signal MsgContext");
-  }
-  return capturedCtx;
-}
-
-function getGroupHistoryEntries(
-  groupHistories: Map<
-    string,
-    Array<{
-      sender?: string;
-      body?: string;
-      media?: HistoryMediaEntry[];
-      timestamp?: number;
-      messageId?: string;
-    }>
-  >,
-  groupId = "g1",
-) {
-  const entries = groupHistories.get(groupId);
-  if (!entries) {
-    throw new Error(`expected pending history for ${groupId}`);
-  }
-  return entries;
-}
-
-vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/reply-runtime")>(
-    "openclaw/plugin-sdk/reply-runtime",
+// mock-isolation: Shared helper preserves real exports while isolating worker-backed dispatch.
+vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
+  const { signalInboundTestModule } =
+    await import("./event-handler.inbound-context.test-support.js");
+  return signalInboundTestModule(
+    await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>(),
+    async () => {},
+    async (resolved) => {
+      capturedCtx = resolved.ctxPayload;
+      return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+    },
+    false,
   );
-  return buildDispatchInboundCaptureMock(actual, (ctx) => {
-    capturedCtx = ctx as SignalMsgContext;
-  });
-});
-
-vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
-    "openclaw/plugin-sdk/channel-inbound",
-  );
-  const { createSignalPreparedDispatchRunner } = await import("./event-handler.test-harness.js");
-  return {
-    ...actual,
-    runChannelInboundEvent: createSignalPreparedDispatchRunner(
-      actual.runChannelInboundEvent,
-      async () => {},
-      async (resolved) => {
-        capturedCtx = resolved.ctxPayload as SignalMsgContext;
-        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
-      },
-    ),
-  };
 });
 
 const [
@@ -105,85 +48,89 @@ const [
   import("../reply-authors.js"),
 ]);
 
-type GroupEventOpts = {
-  message?: string;
-  attachments?: unknown[];
+type GroupEventOpts = Pick<
+  SignalDataMessage,
+  "message" | "attachments" | "mentions" | "groupInfo"
+> & {
   quoteText?: string;
   timestamp?: number;
-  mentions?: Array<{
-    uuid?: string;
-    number?: string;
-    start?: number;
-    length?: number;
-  }> | null;
+  editTarget?: number;
 };
-
 function makeGroupEvent(opts: GroupEventOpts) {
+  const dataMessage = {
+    message: opts.message ?? "",
+    attachments: opts.attachments ?? [],
+    quote: opts.quoteText ? { text: opts.quoteText } : undefined,
+    mentions: opts.mentions ?? undefined,
+    groupInfo: opts.groupInfo ?? { groupId: "g1", groupName: "Test Group" },
+  };
   return createSignalReceiveEvent({
     ...(opts.timestamp !== undefined ? { timestamp: opts.timestamp } : {}),
-    dataMessage: {
-      message: opts.message ?? "",
-      attachments: opts.attachments ?? [],
-      quote: opts.quoteText ? { text: opts.quoteText } : undefined,
-      mentions: opts.mentions ?? undefined,
-      groupInfo: { groupId: "g1", groupName: "Test Group" },
-    },
+    ...(opts.editTarget === undefined
+      ? { dataMessage }
+      : {
+          editMessage: {
+            targetSentTimestamp: opts.editTarget,
+            dataMessage: { ...dataMessage, timestamp: opts.timestamp },
+          },
+        }),
   });
 }
-
-function createMentionHandler(params: {
-  requireMention: boolean;
+function createMentionHandler({
+  mentionPattern,
+  ...deps
+}: Partial<
+  Pick<SignalEventHandlerDeps, "historyLimit" | "groupHistories" | "account" | "accountUuid">
+> & {
   mentionPattern?: string | null;
-  historyLimit?: number;
-  groupHistories?: ReturnType<typeof createBaseSignalEventHandlerDeps>["groupHistories"];
-  account?: string;
-  accountUuid?: string;
-}) {
+} = {}) {
   return createSignalEventHandler(
     createBaseSignalEventHandlerDeps({
-      cfg: createSignalConfig({
-        requireMention: params.requireMention,
-        mentionPattern: params.mentionPattern,
-      }),
-      ...(typeof params.historyLimit === "number" ? { historyLimit: params.historyLimit } : {}),
-      ...(params.groupHistories ? { groupHistories: params.groupHistories } : {}),
-      ...(params.account ? { account: params.account } : {}),
-      ...(params.accountUuid ? { accountUuid: params.accountUuid } : {}),
+      cfg: groupConfig(
+        { "*": { requireMention: true } },
+        mentionPattern === null ? [] : [mentionPattern ?? "@bot"],
+      ),
+      ...deps,
     }),
   );
 }
-
-function createMentionGatedHistoryHandler() {
-  const groupHistories = new Map();
-  const handler = createMentionHandler({ requireMention: true, historyLimit: 5, groupHistories });
-  return { handler, groupHistories };
+async function expectStoredReply(replyToId: string, expected: unknown) {
+  await expect(
+    resolveSignalReplyContextWithPersistence({
+      accountId: "default",
+      to: "group:g1",
+      replyToId,
+    }),
+  ).resolves.toEqual(expected);
 }
 
-function createSignalConfig(params: { requireMention: boolean; mentionPattern?: string | null }) {
-  const mentionPatterns = params.mentionPattern === null ? [] : [params.mentionPattern ?? "@bot"];
+function groupConfig(
+  groups: NonNullable<NonNullable<OpenClawConfig["channels"]>["signal"]>["groups"],
+  mentionPatterns = ["@bot"],
+  signal: NonNullable<NonNullable<OpenClawConfig["channels"]>["signal"]> = {},
+): OpenClawConfig {
   return {
-    messages: {
-      inbound: { debounceMs: 0 },
-      groupChat: { mentionPatterns },
-    },
-    channels: {
-      signal: {
-        groups: { "*": { requireMention: params.requireMention } },
-      },
-    },
-  } as unknown as OpenClawConfig;
+    messages: { inbound: { debounceMs: 0 }, groupChat: { mentionPatterns } },
+    channels: { signal: { groups, ...signal } },
+  };
 }
 
 async function expectSkippedGroupHistory(
   opts: GroupEventOpts,
   expectedBody: string,
   expectedMediaText = "",
+  mentionOptions: Partial<Parameters<typeof createMentionHandler>[0]> = {},
 ) {
   capturedCtx = undefined;
-  const { handler, groupHistories } = createMentionGatedHistoryHandler();
+  const groupHistories = new Map();
+  const handler = createMentionHandler({
+    historyLimit: 5,
+    groupHistories,
+    ...mentionOptions,
+  });
   await handler(makeGroupEvent(opts));
   expect(capturedCtx).toBeUndefined();
-  const entries = getGroupHistoryEntries(groupHistories);
+  const entries = expectDefined(groupHistories.get("g1"), "pending group history");
   expect(entries).toHaveLength(1);
   const entry = expectDefined(entries[0], "Signal group history entry");
   expect(entry.body).toBe(expectedBody);
@@ -235,19 +182,10 @@ describe("signal mention gating", () => {
   it("allows explicitly configured Signal groups by group id without a mention", async () => {
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: {
-            inbound: { debounceMs: 0 },
-            groupChat: { mentionPatterns: ["@bot"] },
-          },
-          channels: {
-            signal: {
-              groupPolicy: "allowlist",
-              groupAllowFrom: ["group:g1"],
-              groups: { g1: {} },
-            },
-          },
-        } as unknown as OpenClawConfig,
+        cfg: groupConfig({ g1: {} }, ["@bot"], {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["group:g1"],
+        }),
         groupPolicy: "allowlist",
         groupAllowFrom: ["group:g1"],
       }),
@@ -258,31 +196,21 @@ describe("signal mention gating", () => {
   });
 
   it("records edited target reply authors for skipped group messages", async () => {
-    const { handler } = createMentionGatedHistoryHandler();
+    const handler = createMentionHandler();
 
     await handler(
-      createSignalReceiveEvent({
+      makeGroupEvent({
         timestamp: 1700000000999,
-        editMessage: {
-          targetSentTimestamp: 1700000000000,
-          dataMessage: {
-            timestamp: 1700000000999,
-            message: "edited without mention",
-            attachments: [],
-            groupInfo: { groupId: "g1", groupName: "Test Group" },
-          },
-        },
+        editTarget: 1700000000000,
+        message: "edited without mention",
       }),
     );
 
     expect(capturedCtx).toBeUndefined();
-    await expect(
-      resolveSignalReplyContextWithPersistence({
-        accountId: "default",
-        to: "group:g1",
-        replyToId: "1700000000000",
-      }),
-    ).resolves.toEqual({ author: "+15550001111", body: "edited without mention" });
+    await expectStoredReply("1700000000000", {
+      author: "+15550001111",
+      body: "edited without mention",
+    });
   });
 
   it("records a structured fact for skipped attachment-only group messages", async () => {
@@ -291,264 +219,124 @@ describe("signal mention gating", () => {
       "",
       "<media:attachment>",
     );
-    await expect(
-      resolveSignalReplyContextWithPersistence({
-        accountId: "default",
-        to: "group:g1",
-        replyToId: "1700000000123",
-      }),
-    ).resolves.toEqual({
+    await expectStoredReply("1700000000123", {
       author: "+15550001111",
       media: [{ contentType: undefined, kind: "unknown" }],
     });
   });
 
   it("summarizes multiple skipped attachments with stable file count wording", async () => {
-    const groupHistories = new Map();
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: createSignalConfig({ requireMention: true }),
-        historyLimit: 5,
-        groupHistories,
-        ignoreAttachments: false,
-        fetchAttachment: async ({ attachment }) => ({
-          path: `/tmp/${String(attachment.id)}.bin`,
-        }),
-      }),
+    await expectSkippedGroupHistory(
+      { message: "", attachments: [{ id: "a1" }, { id: "a2" }] },
+      "",
+      "[2 files attached]",
     );
-
-    await handler(
-      makeGroupEvent({
-        message: "",
-        attachments: [{ id: "a1" }, { id: "a2" }],
-      }),
-    );
-
-    expect(capturedCtx).toBeUndefined();
-    const entries = getGroupHistoryEntries(groupHistories);
-    expect(entries).toHaveLength(1);
-    const entry = expectDefined(entries[0], "Signal attachment history entry");
-    expect(entry.body).toBe("");
-    expect(formatSignalMediaText(entry.media ?? [])).toBe("[2 files attached]");
   });
 
   it("records quote text in pending history for skipped quote-only group messages", async () => {
     await expectSkippedGroupHistory({ message: "", quoteText: "quoted context" }, "quoted context");
   });
 
-  it("allows native bot UUID mentions without a text mention pattern", async () => {
+  it.each([
+    [{ accountUuid: "bot-uuid" }, "Hi X!", { uuid: "bot-uuid", start: 3, length: 1 }, "Hi X!"],
+    [
+      { account: "+15550002222" },
+      "please \uFFFC",
+      { number: "1 (555) 000-2222", start: 7, length: 1 },
+      "@1 (555) 000-2222",
+    ],
+  ] as const)("allows native bot mentions: %j", async (account, message, mention, body) => {
     const handler = createMentionHandler({
-      requireMention: true,
       mentionPattern: null,
-      accountUuid: "bot-uuid",
+      ...account,
     });
-    await handler(
-      makeGroupEvent({
-        message: "Hi X!",
-        mentions: [{ uuid: "bot-uuid", start: 3, length: 1 }],
-      }),
-    );
-
-    expect(getCapturedCtx()?.Body).toContain("Hi X!");
-    expect(getCapturedCtx().WasMentioned).toBe(true);
+    await handler(makeGroupEvent({ message, mentions: [mention] }));
+    expect(getCapturedCtx()).toMatchObject({
+      Body: expect.stringContaining(body),
+      WasMentioned: true,
+    });
   });
 
-  it("allows native bot phone mentions after E.164 normalization", async () => {
-    const handler = createMentionHandler({
-      requireMention: true,
-      mentionPattern: null,
-      account: "+15550002222",
-    });
-    const placeholder = "\uFFFC";
-
-    await handler(
-      makeGroupEvent({
-        message: `please ${placeholder}`,
-        mentions: [{ number: "1 (555) 000-2222", start: 7, length: placeholder.length }],
-      }),
-    );
-
-    expect(getCapturedCtx()?.Body ?? "").toContain("@1 (555) 000-2222");
-    expect(getCapturedCtx().WasMentioned).toBe(true);
-  });
-
-  it("does not let an authorized command bypass a native mention of another participant", async () => {
-    const groupHistories = new Map();
-    const handler = createMentionHandler({
-      requireMention: true,
-      mentionPattern: null,
-      accountUuid: "bot-uuid",
-      groupHistories,
-    });
-    const placeholder = "\uFFFC";
-
-    await handler(
-      makeGroupEvent({
-        message: `/help ${placeholder}`,
-        mentions: [{ uuid: "other-user", start: 6, length: placeholder.length }],
-      }),
-    );
-
-    expect(capturedCtx).toBeUndefined();
-    const entries = getGroupHistoryEntries(groupHistories);
-    expect(entries).toHaveLength(1);
-    expect(expectDefined(entries[0], "Signal command mention history entry").body).toBe(
-      "/help @other-user",
-    );
-  });
-
-  it("does not accept malformed matching native mention metadata as a bot mention", async () => {
-    const groupHistories = new Map();
-    const handler = createMentionHandler({
-      requireMention: true,
-      mentionPattern: null,
-      accountUuid: "bot-uuid",
-      groupHistories,
-    });
-
-    await handler(
-      makeGroupEvent({
-        message: "plain ping",
-        mentions: [{ uuid: "bot-uuid", start: 99, length: 1 }],
-      }),
-    );
-
-    expect(capturedCtx).toBeUndefined();
-    const entries = getGroupHistoryEntries(groupHistories);
-    expect(entries).toHaveLength(1);
-    expect(expectDefined(entries[0], "Signal malformed mention history entry").body).toBe(
-      "plain ping",
-    );
-  });
+  it.each([
+    ["/help \uFFFC", { uuid: "other-user", start: 6, length: 1 }, "/help @other-user"],
+    ["plain ping", { uuid: "bot-uuid", start: 99, length: 1 }, "plain ping"],
+  ] as const)(
+    "rejects a non-bot or malformed native mention: %s",
+    async (message, mention, expected) => {
+      await expectSkippedGroupHistory({ message, mentions: [mention] }, expected, "", {
+        mentionPattern: null,
+        accountUuid: "bot-uuid",
+      });
+    },
+  );
 });
 
-describe("renderSignalMentions", () => {
-  const PLACEHOLDER = "\uFFFC";
+it("renderSignalMentions skips missing identifiers and out-of-bounds spans", () => {
+  const normalized = renderSignalMentions("\uFFFC hi", [
+    { name: "ignored" },
+    { uuid: "valid", start: 0, length: 1 },
+    { number: "+1555", start: 999, length: 1 },
+  ]);
 
-  it("skips mentions that lack identifiers or out-of-bounds spans", () => {
-    const message = `${PLACEHOLDER} hi`;
-    const normalized = renderSignalMentions(message, [
-      { name: "ignored" },
-      { uuid: "valid", start: 0, length: 1 },
-      { number: "+1555", start: 999, length: 1 },
-    ]);
-
-    expect(normalized).toBe("@valid hi");
-  });
+  expect(normalized).toBe("@valid hi");
 });
 
-function requireInternalHookEventCall() {
-  const [call] = internalHookMocks.createInternalHookEvent.mock.calls;
-  if (!call) {
-    throw new Error("expected internal hook event call");
-  }
-  return call;
+async function receiveSilentIngest(overrideGroup = false) {
+  hooks.create.mockClear();
+  hooks.trigger.mockClear();
+  const handler = createSignalEventHandler(
+    createBaseSignalEventHandlerDeps({
+      cfg: groupConfig({
+        "*": { requireMention: true, ingest: true },
+        ...(overrideGroup ? { "group-123": { requireMention: true, ingest: false } } : {}),
+      }),
+    }),
+  );
+  await handler(
+    makeGroupEvent({
+      message: "hello without mention",
+      groupInfo: { groupId: "group-123", groupName: "Ops" },
+    }),
+  );
 }
 
 describe("signal mention-skip silent ingest", () => {
   it("emits internal message:received when ingest is enabled", async () => {
-    internalHookMocks.createInternalHookEvent.mockClear();
-    internalHookMocks.triggerInternalHook.mockClear();
-
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: {
-            groupChat: { mentionPatterns: ["@bot"] },
-          },
-          channels: {
-            signal: {
-              groups: {
-                "*": {
-                  requireMention: true,
-                  ingest: true,
-                },
-              },
-            },
-          },
-        } as never,
-      }),
-    );
-
-    await handler(
-      createSignalReceiveEvent({
-        dataMessage: {
-          message: "hello without mention",
-          attachments: [],
-          groupInfo: { groupId: "group-123", groupName: "Ops" },
+    await receiveSilentIngest();
+    expect(hooks.create).toHaveBeenCalledTimes(1);
+    expect(hooks.create).toHaveBeenCalledWith(
+      "message",
+      "received",
+      expect.stringContaining("signal"),
+      {
+        from: "group:group-123",
+        content: "hello without mention",
+        timestamp: 1700000000000,
+        channelId: "signal",
+        accountId: "default",
+        conversationId: "group:group-123",
+        messageId: "1700000000000",
+        metadata: {
+          to: "group:group-123",
+          provider: "signal",
+          surface: "signal",
+          threadId: undefined,
+          senderId: "+15550001111",
+          senderName: "Alice",
+          senderUsername: undefined,
+          senderE164: undefined,
+          guildId: undefined,
+          channelName: undefined,
+          topicName: undefined,
         },
-      }),
-    );
-
-    expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledTimes(1);
-    const [type, action, sessionKey, context] = requireInternalHookEventCall();
-    expect(type).toBe("message");
-    expect(action).toBe("received");
-    expect(sessionKey).toContain("signal");
-    expect(context).toEqual({
-      from: "group:group-123",
-      content: "hello without mention",
-      timestamp: 1700000000000,
-      channelId: "signal",
-      accountId: "default",
-      conversationId: "group:group-123",
-      messageId: "1700000000000",
-      metadata: {
-        to: "group:group-123",
-        provider: "signal",
-        surface: "signal",
-        threadId: undefined,
-        senderId: "+15550001111",
-        senderName: "Alice",
-        senderUsername: undefined,
-        senderE164: undefined,
-        guildId: undefined,
-        channelName: undefined,
-        topicName: undefined,
       },
-    });
-    expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
+    );
+    expect(hooks.trigger).toHaveBeenCalledTimes(1);
   });
 
   it("does not emit when group ingest is false and wildcard ingest is true", async () => {
-    internalHookMocks.createInternalHookEvent.mockClear();
-    internalHookMocks.triggerInternalHook.mockClear();
-
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: {
-            groupChat: { mentionPatterns: ["@bot"] },
-          },
-          channels: {
-            signal: {
-              groups: {
-                "group-123": {
-                  requireMention: true,
-                  ingest: false,
-                },
-                "*": {
-                  requireMention: true,
-                  ingest: true,
-                },
-              },
-            },
-          },
-        } as never,
-      }),
-    );
-
-    await handler(
-      createSignalReceiveEvent({
-        dataMessage: {
-          message: "hello without mention",
-          attachments: [],
-          groupInfo: { groupId: "group-123", groupName: "Ops" },
-        },
-      }),
-    );
-
-    expect(internalHookMocks.createInternalHookEvent).not.toHaveBeenCalled();
-    expect(internalHookMocks.triggerInternalHook).not.toHaveBeenCalled();
+    await receiveSilentIngest(true);
+    expect(hooks.create).not.toHaveBeenCalled();
+    expect(hooks.trigger).not.toHaveBeenCalled();
   });
 });

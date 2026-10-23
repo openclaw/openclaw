@@ -5,9 +5,11 @@ import {
   addSessionMember,
   removeSessionMember,
 } from "../../config/sessions/session-sharing-store.native.js";
-import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
+import { captureSessionControllerSettlement } from "../../sessions/session-controller.lifecycle.js";
+import { getRpcSource } from "../../sessions/session-controller.rpc-sources.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { useUserProfileCatalogForTest } from "../../test-utils/user-profile-catalog.js";
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { sharingPolicyClient } from "../session-sharing.test-utils.js";
@@ -20,24 +22,26 @@ import {
 } from "../test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
+const prepareProfiles = useUserProfileCatalogForTest();
 
 test.each(["membership", "identity"] as const)(
   "recovery continuation replays one active/completed turn but rejects changed destination %s",
   async (change) => {
     const { storePath } = await createSessionStoreDir();
+    await prepareProfiles();
     const { launchSessionRecoveryContinuation } =
       await import("./session-recovery-continuation.js");
     const sessionKey = "agent:main:dashboard:recovery-retry-authority";
     const sessionId = "recovery-retry-destination";
     const member = ensureProfileForEmail("recovery-retry-member@example.test");
     const scope = { agentId: "main", sessionKey, storePath };
+    const entry = (id: string) =>
+      sessionStoreEntry(id, {
+        visibility: "read-only",
+        createdActor: { type: "human", source: "profile", id: "recovery-owner" },
+      });
     await writeSessionStore({
-      entries: {
-        [sessionKey]: sessionStoreEntry(sessionId, {
-          visibility: "read-only",
-          createdActor: { type: "human", source: "profile", id: "recovery-owner" },
-        }),
-      },
+      entries: { [sessionKey]: entry(sessionId) },
     });
     addSessionMember(scope, {
       identityId: member.id,
@@ -49,6 +53,14 @@ test.each(["membership", "identity"] as const)(
     const context = createDirectChatContext({ getRuntimeConfig });
     const entered = createDeferredCore();
     const release = createDeferredCore();
+    const settle = async () => {
+      const settled = captureSessionControllerSettlement({
+        scope: storePath,
+        identities: [sessionKey, sessionId],
+      });
+      release.resolve();
+      await settled;
+    };
     dispatchInboundMessageMock.mockImplementation(async () => {
       entered.resolve();
       await release.promise;
@@ -68,18 +80,12 @@ test.each(["membership", "identity"] as const)(
     try {
       expect(await launch()).toEqual({ status: "started", runId: idempotencyKey });
       await entered.promise;
-      expect(context.chatAbortControllers.has(idempotencyKey)).toBe(true);
+      expect(getRpcSource(idempotencyKey)).toBeDefined();
       expect(await launch()).toEqual({ status: "started", runId: idempotencyKey });
       expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
 
-      const settled = getSessionWorkAdmissionRelease({
-        scope: storePath,
-        identities: [sessionKey, sessionId],
-      });
-      expect(settled).toBeDefined();
-      release.resolve();
-      await settled;
-      expect(context.chatAbortControllers.has(idempotencyKey)).toBe(false);
+      await settle();
+      expect(getRpcSource(idempotencyKey)).toBeUndefined();
       expect(context.dedupe.get(`chat:${idempotencyKey}`)).toMatchObject({
         ok: true,
         payload: { runId: idempotencyKey, status: "ok" },
@@ -100,13 +106,7 @@ test.each(["membership", "identity"] as const)(
             if (change === "membership") {
               removeSessionMember(scope, member.id);
             } else {
-              await replaceSessionEntry(
-                scope,
-                sessionStoreEntry("replacement-recovery-destination", {
-                  visibility: "read-only",
-                  createdActor: { type: "human", source: "profile", id: "recovery-owner" },
-                }),
-              );
+              await replaceSessionEntry(scope, entry("replacement-recovery-destination"));
             }
           }
           throw new GatewaySessionFactsChangedDuringReadError();
@@ -117,12 +117,7 @@ test.each(["membership", "identity"] as const)(
       expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
     } finally {
       restoreRead?.();
-      const settled = getSessionWorkAdmissionRelease({
-        scope: storePath,
-        identities: [sessionKey, sessionId],
-      });
-      release.resolve();
-      await settled;
+      await settle();
       dispatchInboundMessageMock.mockReset();
     }
   },

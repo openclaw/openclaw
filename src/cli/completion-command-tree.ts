@@ -1,10 +1,5 @@
 import type { Command, Option } from "commander";
-
-type ShellCompletionValueChoice = {
-  flags: string[];
-  choices: string[];
-  requiresValue: boolean;
-};
+import { consumeRootOptionToken } from "../infra/cli-root-options.js";
 
 export type ShellCompletionContext = {
   command: Command;
@@ -12,13 +7,39 @@ export type ShellCompletionContext = {
   completions: string[];
   valueOptions: string[];
   requiredValueOptions: string[];
-  valueChoices: ShellCompletionValueChoice[];
+  valueChoices: { flags: string[]; choices: string[]; requiresValue: boolean }[];
 };
 
 export type ShellCompletionCommandTree = ReturnType<typeof collectShellCompletionCommandTree>;
 
-export function completionFlags(option: Option): string[] {
+function completionFlags(option: Option): string[] {
   return [option.short, option.long].filter((flag): flag is string => Boolean(flag));
+}
+
+export function completionOptions(command: Command): { option: Option; flags: string[] }[] {
+  const options = command.options.map((option) => ({ option, flags: completionFlags(option) }));
+  const shadowedFlags = new Set(options.flatMap(({ flags }) => flags));
+  let root = command;
+  while (root.parent) {
+    if (root !== command) {
+      for (const flag of root.options.flatMap(completionFlags)) {
+        shadowedFlags.add(flag);
+      }
+    }
+    root = root.parent;
+  }
+  if (root !== command) {
+    // Only root-preprocessed flags work after positional subcommands. Keep local owners.
+    for (const option of root.options) {
+      const flags = completionFlags(option).filter(
+        (flag) => !shadowedFlags.has(flag) && consumeRootOptionToken([flag], 0) > 0,
+      );
+      if (flags.length > 0) {
+        options.push({ option, flags });
+      }
+    }
+  }
+  return options;
 }
 
 // Aliases are typeable command words; every completion surface must offer them
@@ -49,7 +70,9 @@ export function collectShellCompletionCommandTree(program: Command) {
       pathVariants,
       completions: [
         ...visibleCompletionCommands(command).flatMap(commandNameVariants),
-        ...command.options.filter((option) => !option.hidden).flatMap(completionFlags),
+        ...completionOptions(command)
+          .filter(({ option }) => !option.hidden)
+          .flatMap(({ flags }) => flags),
       ],
       valueOptions: [
         ...new Set([

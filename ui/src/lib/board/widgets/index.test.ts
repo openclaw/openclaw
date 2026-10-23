@@ -16,7 +16,6 @@ describe("plugin board widget registry", () => {
     expect(getPluginWidgetKindContribution("session:progress", active)).toMatchObject({
       kind: "session:progress",
       tagName: "openclaw-session-progress-widget",
-      loadModule: expect.any(Function),
     });
     expect(getPluginWidgetKindContribution("session:progress", [])).toBeNull();
     expect(

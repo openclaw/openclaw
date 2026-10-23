@@ -31,10 +31,6 @@ const PROXY_SSE_STREAM_MAX_BYTES = 16 * 1024 * 1024;
 const PROXY_SSE_PENDING_BUFFER_MAX_BYTES = PROXY_SSE_STREAM_MAX_BYTES;
 const PROXY_SSE_READ_IDLE_TIMEOUT_MS = 120_000;
 
-type StreamingToolCall = ToolCall & {
-  partialJson: string;
-};
-
 /**
  * Proxy event types - server sends these with partial field stripped to reduce bandwidth.
  */
@@ -67,6 +63,7 @@ type ProxySerializableStreamOptions = Pick<
   | "maxTokens"
   | "reasoning"
   | "cacheRetention"
+  | "promptCacheTtl"
   | "sessionId"
   | "promptCacheKey"
   | "metadata"
@@ -110,6 +107,7 @@ function buildProxyRequestOptions(options: ProxyStreamOptions): ProxySerializabl
     maxTokens: options.maxTokens,
     reasoning: options.reasoning,
     cacheRetention: options.cacheRetention,
+    promptCacheTtl: options.promptCacheTtl,
     sessionId: options.sessionId,
     promptCacheKey: options.promptCacheKey,
     metadata: options.metadata,
@@ -144,19 +142,6 @@ function buildProxyRequestAbort(callerSignal: AbortSignal | undefined, timeoutMs
       clearTimeout(timeoutId);
     },
   };
-}
-
-async function readProxyErrorData(
-  response: Response,
-  readIdleTimeoutMs: number,
-): Promise<{ error?: string } | undefined> {
-  const bytes = await readResponseWithLimit(response, PROXY_ERROR_BODY_MAX_BYTES, {
-    onOverflow: ({ maxBytes }) => new Error(`Proxy error body exceeded ${maxBytes} bytes`),
-    chunkTimeoutMs: readIdleTimeoutMs,
-    onIdleTimeout: ({ chunkTimeoutMs }) =>
-      new Error(`Proxy error body stalled: no data received for ${chunkTimeoutMs}ms`),
-  });
-  return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as { error?: string };
 }
 
 function assertProxySsePendingBufferWithinLimit(buffer: string): void {
@@ -236,7 +221,15 @@ export function streamProxy(
       if (!response.ok) {
         let errorMessage = `Proxy error: ${response.status} ${response.statusText}`;
         try {
-          const errorData = await readProxyErrorData(response, readIdleTimeoutMs);
+          const bytes = await readResponseWithLimit(response, PROXY_ERROR_BODY_MAX_BYTES, {
+            onOverflow: ({ maxBytes }) => new Error(`Proxy error body exceeded ${maxBytes} bytes`),
+            chunkTimeoutMs: readIdleTimeoutMs,
+            onIdleTimeout: ({ chunkTimeoutMs }) =>
+              new Error(`Proxy error body stalled: no data received for ${chunkTimeoutMs}ms`),
+          });
+          const errorData = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as {
+            error?: string;
+          };
           if (errorData?.error) {
             errorMessage = `Proxy error: ${errorData.error}`;
           }
@@ -373,67 +366,68 @@ function processProxyEvent(
       };
       return { type: "text_start", contentIndex: proxyEvent.contentIndex, partial };
 
-    case "text_delta": {
+    case "text_delta":
+    case "thinking_delta":
+    case "toolcall_delta": {
       const content = partial.content[proxyEvent.contentIndex];
-      if (content?.type === "text") {
-        content.text += proxyEvent.delta;
-        return {
-          type: "text_delta",
-          contentIndex: proxyEvent.contentIndex,
-          delta: proxyEvent.delta,
-          partial,
-        };
+      const expectedType =
+        proxyEvent.type === "text_delta"
+          ? "text"
+          : proxyEvent.type === "thinking_delta"
+            ? "thinking"
+            : "toolCall";
+      if (content?.type !== expectedType) {
+        throw new Error(`Received ${proxyEvent.type} for non-${expectedType} content`);
       }
-      throw new Error("Received text_delta for non-text content");
+      if (content.type === "text") {
+        content.text += proxyEvent.delta;
+      } else if (content.type === "thinking") {
+        content.thinking += proxyEvent.delta;
+      } else {
+        const partialJson = (content.partialJson ?? "") + proxyEvent.delta;
+        content.partialJson = partialJson;
+        const previewSchedule = toolArgumentPreviewSchedules.get(proxyEvent.contentIndex);
+        if (!previewSchedule) {
+          throw new Error("Received toolcall_delta without a preview schedule");
+        }
+        if (previewSchedule(partialJson.length)) {
+          content.arguments = parseStreamingJson(partialJson);
+        }
+        partial.content[proxyEvent.contentIndex] = { ...content }; // Trigger reactivity
+      }
+      return {
+        type: proxyEvent.type,
+        contentIndex: proxyEvent.contentIndex,
+        delta: proxyEvent.delta,
+        partial,
+      };
     }
 
-    case "text_end": {
+    case "text_end":
+    case "thinking_end": {
       const content = partial.content[proxyEvent.contentIndex];
-      if (content?.type === "text") {
+      const expectedType = proxyEvent.type === "text_end" ? "text" : "thinking";
+      if (content?.type !== expectedType) {
+        throw new Error(`Received ${proxyEvent.type} for non-${expectedType} content`);
+      }
+      if (content.type === "text") {
         if (proxyEvent.contentSignature !== undefined) {
           content.textSignature = proxyEvent.contentSignature;
         }
-        return {
-          type: "text_end",
-          contentIndex: proxyEvent.contentIndex,
-          content: content.text,
-          partial,
-        };
+      } else {
+        content.thinkingSignature = proxyEvent.contentSignature;
       }
-      throw new Error("Received text_end for non-text content");
+      return {
+        type: proxyEvent.type,
+        contentIndex: proxyEvent.contentIndex,
+        content: content.type === "text" ? content.text : content.thinking,
+        partial,
+      };
     }
 
     case "thinking_start":
       partial.content[proxyEvent.contentIndex] = { type: "thinking", thinking: "" };
       return { type: "thinking_start", contentIndex: proxyEvent.contentIndex, partial };
-
-    case "thinking_delta": {
-      const content = partial.content[proxyEvent.contentIndex];
-      if (content?.type === "thinking") {
-        content.thinking += proxyEvent.delta;
-        return {
-          type: "thinking_delta",
-          contentIndex: proxyEvent.contentIndex,
-          delta: proxyEvent.delta,
-          partial,
-        };
-      }
-      throw new Error("Received thinking_delta for non-thinking content");
-    }
-
-    case "thinking_end": {
-      const content = partial.content[proxyEvent.contentIndex];
-      if (content?.type === "thinking") {
-        content.thinkingSignature = proxyEvent.contentSignature;
-        return {
-          type: "thinking_end",
-          contentIndex: proxyEvent.contentIndex,
-          content: content.thinking,
-          partial,
-        };
-      }
-      throw new Error("Received thinking_end for non-thinking content");
-    }
 
     case "toolcall_start": {
       const content = {
@@ -442,7 +436,7 @@ function processProxyEvent(
         name: proxyEvent.toolName,
         arguments: {},
         partialJson: "",
-      } satisfies StreamingToolCall;
+      } satisfies ToolCall;
       partial.content[proxyEvent.contentIndex] = content;
       toolArgumentPreviewSchedules.set(
         proxyEvent.contentIndex,
@@ -451,38 +445,14 @@ function processProxyEvent(
       return { type: "toolcall_start", contentIndex: proxyEvent.contentIndex, partial };
     }
 
-    case "toolcall_delta": {
-      const content = partial.content[proxyEvent.contentIndex];
-      if (content?.type === "toolCall") {
-        const streamingContent = content as StreamingToolCall;
-        streamingContent.partialJson += proxyEvent.delta;
-        const previewSchedule = toolArgumentPreviewSchedules.get(proxyEvent.contentIndex);
-        if (!previewSchedule) {
-          throw new Error("Received toolcall_delta without a preview schedule");
-        }
-        if (previewSchedule(streamingContent.partialJson.length)) {
-          content.arguments = parseStreamingJson(streamingContent.partialJson);
-        }
-        partial.content[proxyEvent.contentIndex] = { ...content }; // Trigger reactivity
-        return {
-          type: "toolcall_delta",
-          contentIndex: proxyEvent.contentIndex,
-          delta: proxyEvent.delta,
-          partial,
-        };
-      }
-      throw new Error("Received toolcall_delta for non-toolCall content");
-    }
-
     case "toolcall_end": {
       const content = partial.content[proxyEvent.contentIndex];
       if (content?.type === "toolCall") {
-        const streamingContent = content as StreamingToolCall;
-        content.arguments = streamingContent.partialJson
-          ? parseTerminalToolCallArguments(streamingContent.partialJson)
+        content.arguments = content.partialJson
+          ? parseTerminalToolCallArguments(content.partialJson)
           : {};
         toolArgumentPreviewSchedules.delete(proxyEvent.contentIndex);
-        delete (content as Partial<StreamingToolCall>).partialJson;
+        delete content.partialJson;
         return {
           type: "toolcall_end",
           contentIndex: proxyEvent.contentIndex,

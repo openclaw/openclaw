@@ -1,28 +1,23 @@
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import type { PublicationSessionIdentity } from "./github-publication-availability.js";
-import {
-  digestGitHubPublicationRequest,
-  ensureGitHubPublicationStore,
-  insertGitHubPublicationRequest,
-} from "./github-publication-store.js";
+import { digestGitHubPublicationRequest } from "./github-publication-receipt.js";
+import { ensureGitHubPublicationStoreFixture } from "./github-publication-store.test-support.js";
+import { insertGitHubPublicationRequest } from "./github-publication-store.worker.js";
 import {
   BRANCH,
   OLD_HEAD,
   SESSION_ID,
   SESSION_KEY,
   WORKSPACE_TREE,
-  createTestGitHubPublicationCoordinator,
   githubPublicationTestMocks,
   systemPublicationRequester,
 } from "./github-publication.test-support.js";
 import { repositoryGitHubPublicationDigest } from "./github-repository-publication-store.js";
-import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+
+export { createTestGitHubPublicationCoordinator as sharedPublicationCoordinator } from "./github-publication.test-support.js";
 
 export const sharedPublicationSession: PublicationSessionIdentity = {
   sessionId: SESSION_ID,
@@ -30,12 +25,6 @@ export const sharedPublicationSession: PublicationSessionIdentity = {
   agentId: "main",
   lifecycleRevision: null,
 };
-
-export function sharedPublicationCoordinator() {
-  return createTestGitHubPublicationCoordinator({
-    placements: createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() }),
-  });
-}
 
 export function insertSharedWorktreeReceipt(
   requestId: string,
@@ -48,12 +37,13 @@ export function insertSharedWorktreeReceipt(
     repositoryFingerprint?: string;
   } = {},
 ) {
-  ensureGitHubPublicationStore();
+  ensureGitHubPublicationStoreFixture();
   const session = options.session ?? sharedPublicationSession;
   const request = {
     sessionKey: session.sessionKey,
     agentId: session.agentId,
     idempotencyKey: options.idempotencyKey ?? requestId,
+    draft: false,
   };
   return runOpenClawStateWriteTransaction(({ db }) =>
     insertGitHubPublicationRequest(db, {
@@ -135,6 +125,7 @@ export function repositoryReceipt(
     identity_login: "fixture-bot",
     title: null,
     body: null,
+    draft: null,
     push_repository: "owner/repository",
     repository: "owner/repository",
     base_branch: "main",

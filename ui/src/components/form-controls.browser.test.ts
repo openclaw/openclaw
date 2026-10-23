@@ -24,6 +24,7 @@ function readUiCss(): string {
     "ui/src/styles/components.css",
     "ui/src/styles/settings-controls.css",
     "ui/src/styles/settings.css",
+    "ui/src/styles/agents.css",
     "ui/src/styles/config.css",
     "ui/src/styles/usage.css",
     "ui/src/styles/chat/startup-layout.css",
@@ -662,16 +663,9 @@ describeBrowserLayout("form controls and app chrome styles", () => {
         await setFixture(
           page,
           `<div class="shell shell--mobile-nav ${merged ? "shell--merged-chat-chrome" : ""}">
-            <div class="sidebar-brand">
-              <div class="sidebar-brand__actions">
-                <button
-                  class="sidebar-brand__icon sidebar-brand__header-control sidebar-brand__desktop-control sidebar-brand__collapse"
-                ></button>
-                <button
-                  class="sidebar-brand__icon sidebar-brand__header-control sidebar-brand__desktop-control sidebar-brand__search"
-                ></button>
-              </div>
-            </div>
+            <nav class="sidebar-rail">
+              <button class="sidebar-rail__button sidebar-brand__desktop-control sidebar-brand__search"></button>
+            </nav>
           </div>`,
           `class="${nativeClass}"`,
           `<meta name="viewport" content="width=device-width, initial-scale=1.0" />`,
@@ -686,13 +680,10 @@ describeBrowserLayout("form controls and app chrome styles", () => {
             return getComputedStyle(node).display;
           };
           return {
-            collapse: read(".sidebar-brand__collapse"),
             search: read(".sidebar-brand__search"),
           };
         });
 
-        // The drawer has no collapsed state, so the collapse toggle always goes.
-        expect(display.collapse).toBe("none");
         // Merged chat chrome hides the topbar, leaving the drawer as the only
         // surface that can carry search. Everywhere else - including every native
         // host, which never merges - the topbar keeps its own, so a drawer copy
@@ -724,7 +715,7 @@ describeBrowserLayout("form controls and app chrome styles", () => {
           <div class="settings-card">App chrome tile</div>
           <div style="height: 200px"></div>
         </main>
-        <section class="chat-thread" style="height: 100px">Selectable transcript</section>
+        <section class="chat-thread" style="height: 100px"><div class="chat-text">Selectable transcript</div></section>
         <div class="board-tabs__track">Hidden horizontal rail</div>`,
       );
 
@@ -745,6 +736,7 @@ describeBrowserLayout("form controls and app chrome styles", () => {
         };
         return {
           chatSelection: style(".chat-thread").userSelect,
+          chatTextSelection: style(".chat-text").userSelect,
           chromeSelection: style(".settings-card").userSelect,
           contentScrollbar: scrollbarWidth(".content"),
           inputSelection: style(".settings-sidebar__search-input").userSelect,
@@ -761,7 +753,8 @@ describeBrowserLayout("form controls and app chrome styles", () => {
       });
 
       expect(metrics).toEqual({
-        chatSelection: "text",
+        chatSelection: "none",
+        chatTextSelection: "text",
         chromeSelection: "auto",
         contentScrollbar: "12px",
         hiddenRailScrollbarWidth: "none",

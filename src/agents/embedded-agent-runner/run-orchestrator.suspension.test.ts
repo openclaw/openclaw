@@ -1,9 +1,14 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createAssistantMessageEventStream, type Context } from "openclaw/plugin-sdk/llm";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   loadSessionEntryReadOnly as loadSessionEntry,
@@ -38,11 +43,16 @@ import {
   installEmbeddedRunnerBaseE2eMocks,
   installEmbeddedRunnerFastRunE2eMocks,
 } from "../test-helpers/embedded-agent-runner-e2e-mocks.js";
+import { withTestAdmission } from "./run-orchestrator.test-support.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./run/types.js";
 
 const tempRoots = createTempDirTracker();
 const runAttempt = vi.fn<(params: EmbeddedRunAttemptParams) => Promise<EmbeddedRunAttemptResult>>();
 const summaryStream = vi.fn();
+const assistant = (text: string) =>
+  buildEmbeddedRunnerAssistant({ content: [{ type: "text", text }] });
+const verified = { payloads: [{ text: "Verified." }] };
+const billingFailure = { reason: "billing", suspend: true };
 type ProductionRun = typeof import("./run.js").runEmbeddedAgent;
 let runEmbeddedAgent: ProductionRun;
 let acquireRuntime: typeof import("../prepared-model-runtime.js").acquireAgentRunPreparedModelRuntime;
@@ -71,19 +81,7 @@ beforeAll(async () => {
     await import("../prepared-model-runtime.js"));
   const { runEmbeddedAgent: run } = await import("./run.js");
   const { prepareSystemAgentRunAdmission } = await import("../admitted-run-context.js");
-  runEmbeddedAgent = async (params) => {
-    const admission = prepareSystemAgentRunAdmission(
-      params.config ?? {},
-      params.runId,
-      params.agentId ?? "main",
-      "suspension-test",
-    );
-    try {
-      return await run({ ...params, preparedRunAdmission: admission });
-    } finally {
-      admission.close();
-    }
-  };
+  runEmbeddedAgent = withTestAdmission(run, prepareSystemAgentRunAdmission, "suspension-test");
   ({ runWithModelFallback } = await import("../model-fallback-runner.js"));
 });
 
@@ -108,17 +106,24 @@ async function joinSuspensionWrites() {
   });
 }
 
+async function closeAgentDatabases() {
+  await closeOpenClawAgentDatabasesAsync();
+  closeOpenClawAgentDatabasesForTest();
+}
+
+const expectAbsent = async (file: string) => expect(fs.access(file)).rejects.toThrow();
+
 afterEach(async () => {
   await joinSuspensionWrites();
   // Worker lease release still needs the fixture's shared-state database.
-  await closeOpenClawAgentDatabasesAsync();
-  closeOpenClawAgentDatabasesForTest();
+  await closeAgentDatabases();
   for (const root of tempRoots.dirs) {
     await closeOpenClawStateDatabaseByPathAsync(
       resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: path.join(root, "final") }),
     );
   }
   closeOpenClawStateDatabaseForTest();
+  clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   expect(
@@ -133,7 +138,7 @@ afterAll(async () => {
   await closeOpenClawStateDatabaseAsync();
 });
 
-async function createRun(agentId: string, sessionPersistence?: "durable" | "detached") {
+async function createRun(sessionPersistence?: "durable" | "detached", agentId = "research") {
   const root = tempRoots.make("openclaw-suspension-boundary-");
   const stateDir = path.join(root, "final");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
@@ -147,6 +152,7 @@ async function createRun(agentId: string, sessionPersistence?: "durable" | "deta
     entries: { main: {}, research: {} },
     defaults: { model: { primary: "openai/mock-1", fallbacks: ["openai/mock-2"] } },
   };
+  setRuntimeConfigSnapshot(config);
   const sessionId = "setup-inference-probe";
   const sessionKey = `agent:${agentId}:setup-inference:incognito-probe`;
   const params = {
@@ -173,8 +179,12 @@ async function createRun(agentId: string, sessionPersistence?: "durable" | "deta
   return {
     params,
     scope,
-    stateDir,
     database: path.join(stateDir, "agents", agentId, "agent", "openclaw-agent.sqlite"),
+    seed: (entry: Parameters<typeof upsertSessionEntryCore>[1] = {}) =>
+      upsertSessionEntryCore(scope, { sessionId, updatedAt: 1, ...entry }),
+    expectNoAgent: () => expectAbsent(path.join(stateDir, "agents")),
+    run: (overrides: Partial<Parameters<ProductionRun>[0]> = {}) =>
+      runEmbeddedAgent({ ...params, ...overrides }),
   };
 }
 
@@ -182,9 +192,15 @@ function successfulAttempt(sessionId: string, text = "Verified.") {
   return makeEmbeddedRunnerAttempt({
     sessionIdUsed: sessionId,
     assistantTexts: [text],
-    lastAssistant: buildEmbeddedRunnerAssistant({ content: [{ type: "text", text }] }),
+    lastAssistant: assistant(text),
   });
 }
+
+const pendingSwitch = (modelOverride = "mock-2") => ({
+  providerOverride: "openai",
+  modelOverride,
+  liveModelSwitchPending: true,
+});
 
 function failAttempt(stage: "prompt" | "assistant", sessionId: string) {
   const message = stage === "prompt" ? "rate limit exceeded" : "insufficient credits";
@@ -206,7 +222,7 @@ function failAttempt(stage: "prompt" | "assistant", sessionId: string) {
 
 describe("embedded run detached session metadata", () => {
   it("preserves caller ownership and fills only missing failure-suspension agent ids", async () => {
-    const { params } = await createRun("research");
+    const { params } = await createRun();
     const requests: SessionSuspensionParams[] = [];
     const runtime = await import("./run/prepared-runtime-context.js");
     const bind = runtime.bindRunToPreparedModelRuntime;
@@ -218,9 +234,7 @@ describe("embedded run detached session metadata", () => {
     });
     const loop = await import("./run-loop.js");
     vi.spyOn(loop, "runPreparedEmbeddedLoop").mockImplementation(async (_refresh, input) => {
-      if (!boundParams) {
-        throw new Error("Expected the run's prepared identity");
-      }
+      assert(boundParams, "Expected the run's prepared identity");
       const suspension: SessionSuspensionParams = {
         cfg: undefined,
         sessionId: params.sessionId,
@@ -246,16 +260,13 @@ describe("embedded run detached session metadata", () => {
       (request) => requests.push(request),
     );
 
-    expect(requests).toHaveLength(3);
-    expect(requests[0]?.agentId).toBe("research");
+    expect(requests.map(({ agentId }) => agentId)).toEqual(["research", "explicit", undefined]);
     expect(requests[0]?.agentDir).toBe("/state/agents/work/agent");
     expect(requests[0]).not.toHaveProperty("laneId");
-    expect(requests[1]?.agentId).toBe("explicit");
-    expect(requests[2]?.agentId).toBeUndefined();
   });
 
   it("suspends the canonical agent selected during prepared-runtime acquisition", async () => {
-    const { params, scope } = await createRun("main");
+    const { params, scope } = await createRun(undefined, "main");
     // Global keys have an explicit owner but no agent prefix to contradict a rebind.
     params.sessionKey = scope.sessionKey = "global";
     const researchScope = {
@@ -267,9 +278,7 @@ describe("embedded run detached session metadata", () => {
       await upsertSessionEntryCore(target, { sessionId: params.sessionId, updatedAt: 1 });
     }
     const acquire = vi.mocked(acquireRuntime).getMockImplementation();
-    if (!acquire) {
-      throw new Error("Expected the prepared-runtime fixture");
-    }
+    assert(acquire, "Expected the prepared-runtime fixture");
     vi.mocked(acquireRuntime).mockImplementationOnce(async (...args) => {
       const lease = await acquire(...args);
       return { ...lease, snapshot: { ...lease.snapshot, agentId: "research" } };
@@ -288,9 +297,9 @@ describe("embedded run detached session metadata", () => {
   it.each(["detached", "durable"] as const)(
     "preserves %s persistence when the outer fallback exhausts after deferral",
     async (persistence) => {
-      const { params, scope, database } = await createRun("research", persistence);
+      const { params, scope, database, seed } = await createRun(persistence);
       if (persistence === "durable") {
-        await upsertSessionEntryCore(scope, { sessionId: params.sessionId, updatedAt: 1 });
+        await seed();
       }
       failAttempt("prompt", params.sessionId);
       const candidates: string[] = [];
@@ -318,7 +327,7 @@ describe("embedded run detached session metadata", () => {
       expect(candidates).toEqual(["mock-1", "mock-2"]);
       expect(runAttempt).toHaveBeenCalledOnce();
       if (persistence === "detached") {
-        await expect(fs.access(database)).rejects.toThrow();
+        await expectAbsent(database);
       } else {
         expect(loadSessionEntry(scope)?.quotaSuspension).toMatchObject({
           state: "suspended",
@@ -333,62 +342,42 @@ describe("embedded run detached session metadata", () => {
   it.each(["success", "assistant", "aborted"] as const)(
     "keeps a detached %s out of an absent final agent root, including key backfill",
     async (outcome) => {
-      const { params, stateDir } = await createRun("research", "detached");
+      const { params, run, expectNoAgent } = await createRun("detached");
       if (outcome === "assistant") {
         failAttempt(outcome, params.sessionId);
       } else {
-        runAttempt.mockResolvedValue(
-          makeEmbeddedRunnerAttempt({
-            sessionIdUsed: params.sessionId,
-            terminal:
-              outcome === "aborted" ? { kind: "aborted", source: "external" } : { kind: "ok" },
-            assistantTexts: ["Verified."],
-            lastAssistant: buildEmbeddedRunnerAssistant({
-              content: [{ type: "text", text: "Verified." }],
-            }),
-          }),
-        );
-      }
-      const run = runEmbeddedAgent({ ...params, sessionKey: undefined });
-      if (outcome === "assistant") {
-        await expect(run).rejects.toMatchObject({
-          reason: "billing",
-          suspend: true,
+        runAttempt.mockResolvedValue({
+          ...successfulAttempt(params.sessionId),
+          terminal:
+            outcome === "aborted" ? { kind: "aborted", source: "external" } : { kind: "ok" },
         });
+      }
+      const pending = run({ sessionKey: undefined });
+      if (outcome === "assistant") {
+        await expect(pending).rejects.toMatchObject(billingFailure);
       } else {
-        const result = await run;
+        const result = await pending;
         expect(result.meta.agentMeta?.sessionId).toBe(params.sessionId);
       }
       await joinSuspensionWrites();
       expect(runAttempt).toHaveBeenCalledOnce();
       // Global operational state may exist; no durable session owner may be created.
-      await expect(fs.access(path.join(stateDir, "agents"))).rejects.toThrow();
+      await expectNoAgent();
     },
   );
 
   it.each(["success", "assistant"] as const)(
     "does not spend a durable pending switch during detached %s",
     async (outcome) => {
-      const { params, scope } = await createRun("research", "detached");
-      await upsertSessionEntryCore(scope, {
-        sessionId: params.sessionId,
-        updatedAt: 1,
-        providerOverride: "openai",
-        modelOverride: "mock-2",
-        liveModelSwitchPending: true,
-      });
+      const { params, scope, seed, run } = await createRun("detached");
+      await seed(pendingSwitch());
       const before = loadSessionEntry(scope);
       if (outcome === "success") {
         runAttempt.mockResolvedValue(successfulAttempt(params.sessionId));
-        await expect(runEmbeddedAgent(params)).resolves.toMatchObject({
-          payloads: [{ text: "Verified." }],
-        });
+        await expect(run()).resolves.toMatchObject(verified);
       } else {
         failAttempt(outcome, params.sessionId);
-        await expect(runEmbeddedAgent(params)).rejects.toMatchObject({
-          reason: "billing",
-          suspend: true,
-        });
+        await expect(run()).rejects.toMatchObject(billingFailure);
       }
       await joinSuspensionWrites();
       expect(runAttempt).toHaveBeenCalledOnce();
@@ -397,16 +386,10 @@ describe("embedded run detached session metadata", () => {
   );
 
   it("still applies and eagerly clears live switches for durable turns", async () => {
-    const { params, scope } = await createRun("research", "durable");
-    await upsertSessionEntryCore(scope, {
-      sessionId: params.sessionId,
-      updatedAt: 1,
-      providerOverride: "openai",
-      modelOverride: "mock-2",
-      liveModelSwitchPending: true,
-    });
+    const { params, scope, seed, run } = await createRun("durable");
+    await seed(pendingSwitch());
     failAttempt("prompt", params.sessionId);
-    await expect(runEmbeddedAgent(params)).rejects.toMatchObject({
+    await expect(run()).rejects.toMatchObject({
       name: "LiveSessionModelSwitchError",
       provider: "openai",
       model: "mock-2",
@@ -416,7 +399,7 @@ describe("embedded run detached session metadata", () => {
       ...loadSessionEntry(scope)!,
       liveModelSwitchPending: true,
     });
-    await expect(runEmbeddedAgent({ ...params, model: "mock-2" })).rejects.toMatchObject({
+    await expect(run({ model: "mock-2" })).rejects.toMatchObject({
       reason: "rate_limit",
       suspend: true,
     });
@@ -427,29 +410,20 @@ describe("embedded run detached session metadata", () => {
   it.each([false, true])(
     "reads bootstrap state from the detached manager (has messages: %s)",
     async (hasMessages) => {
-      const { params, stateDir } = await createRun("research", "detached");
+      const { params, run, expectNoAgent } = await createRun("detached");
       const { resolveExistingAttemptTranscriptState } =
         await import("./run/attempt-transcript-helpers.js");
       if (hasMessages) {
-        params.sessionManager.appendMessage({
-          role: "user",
-          content: "in-memory history",
-          timestamp: 1,
-        });
+        params.sessionManager.appendMessage(makeUserMessage("in-memory history", 1));
       }
       runAttempt.mockImplementationOnce(async (attempt) => {
         expect(
-          await resolveExistingAttemptTranscriptState({
-            ...attempt,
-            agentId: "research",
-          }),
+          await resolveExistingAttemptTranscriptState({ ...attempt, agentId: "research" }),
         ).toEqual({ hasBootstrapTranscriptState: hasMessages });
         return successfulAttempt(params.sessionId);
       });
-      await expect(runEmbeddedAgent(params)).resolves.toMatchObject({
-        payloads: [{ text: "Verified." }],
-      });
-      await expect(fs.access(path.join(stateDir, "agents"))).rejects.toThrow();
+      await expect(run()).resolves.toMatchObject(verified);
+      await expectNoAgent();
     },
   );
 
@@ -460,31 +434,21 @@ describe("embedded run detached session metadata", () => {
   ] as const)(
     "compacts the caller's buffer for outer %s recovery without durable access (existing row: %s, owner: %s)",
     async (trigger, existing, owner) => {
-      const { params, scope, stateDir, database } = await createRun("research", "detached");
+      const { params, scope, database, seed, expectNoAgent, run } = await createRun("detached");
       params.config.agents!.defaults!.compaction = { mode: "default", keepRecentTokens: 1 };
+      setRuntimeConfigSnapshot(params.config);
       const manager = params.sessionManager;
       manager.appendMessage(makeUserMessage("Remember the memory-only project.", 1));
-      manager.appendMessage(
-        buildEmbeddedRunnerAssistant({
-          content: [{ type: "text", text: "The project is called Blue Heron." }],
-        }),
-      );
-      manager.appendMessage({ role: "user", content: "What is the project called?", timestamp: 3 });
+      manager.appendMessage(assistant("The project is called Blue Heron."));
+      manager.appendMessage(makeUserMessage("What is the project called?", 3));
       if (existing) {
-        await upsertSessionEntryCore(scope, {
-          sessionId: params.sessionId,
-          updatedAt: 1,
-          liveModelSwitchPending: true,
-          providerOverride: "openai",
-          modelOverride: "mock-1",
-        });
+        await seed(pendingSwitch("mock-1"));
         SessionManager.open({ ...scope, sessionId: params.sessionId }).appendMessage(
           makeUserMessage("BORROWED DURABLE HISTORY MUST NOT BE READ", 1),
         );
       }
       const before = loadSessionEntry(scope);
-      await closeOpenClawAgentDatabasesAsync();
-      closeOpenClawAgentDatabasesForTest();
+      await closeAgentDatabases();
       const databaseBefore = existing ? await fs.readFile(database) : undefined;
       const open = vi.spyOn(SessionManager, "open");
       const targetResolver =
@@ -508,9 +472,7 @@ describe("embedded run detached session metadata", () => {
           await replacement.admit("embedded");
         }
         const stream = createAssistantMessageEventStream();
-        const message = buildEmbeddedRunnerAssistant({
-          content: [{ type: "text", text: "The memory-only project is Blue Heron." }],
-        });
+        const message = assistant("The memory-only project is Blue Heron.");
         stream.push({ type: "done", reason: "stop", message });
         stream.end();
         return stream;
@@ -550,12 +512,12 @@ describe("embedded run detached session metadata", () => {
           return successfulAttempt(params.sessionId, "Blue Heron.");
         });
       try {
-        const run = runEmbeddedAgent(params);
+        const pending = run();
         if (owner === "replaced") {
-          await expect(run).rejects.toBeInstanceOf(Error);
+          await expect(pending).rejects.toBeInstanceOf(Error);
           expect(manager.getEntries()).toEqual(historyAtSummary);
         } else {
-          await expect(run).resolves.toMatchObject({ payloads: [{ text: "Blue Heron." }] });
+          await expect(pending).resolves.toMatchObject({ payloads: [{ text: "Blue Heron." }] });
           const compaction = await compact.mock.results[0]?.value;
           expect(compaction, compaction?.reason).toMatchObject({ ok: true, compacted: true });
         }
@@ -568,24 +530,23 @@ describe("embedded run detached session metadata", () => {
       expect(open).not.toHaveBeenCalled();
       expect(resolveTarget).not.toHaveBeenCalled();
       expect.soft(loadSessionEntry(scope)).toEqual(before);
-      await closeOpenClawAgentDatabasesAsync();
-      closeOpenClawAgentDatabasesForTest();
+      await closeAgentDatabases();
       if (existing) {
         expect(await fs.readFile(database)).toEqual(databaseBefore);
       } else {
-        await expect(fs.access(path.join(stateDir, "agents"))).rejects.toThrow();
+        await expectNoAgent();
       }
     },
   );
 
   it("retains one detached transcript manager through a real attempt retry", async () => {
-    const { params, stateDir } = await createRun("research", "detached");
+    const { params, run, expectNoAgent } = await createRun("detached");
     let firstManager: EmbeddedRunAttemptParams["sessionManager"];
     runAttempt
       .mockImplementationOnce(async (attempt) => {
         firstManager = attempt.sessionManager;
         expect(firstManager).toBeDefined();
-        firstManager!.appendMessage({ role: "user", content: "retained history", timestamp: 1 });
+        firstManager!.appendMessage(makeUserMessage("retained history", 1));
         return makeEmbeddedRunnerAttempt({
           sessionIdUsed: params.sessionId,
           terminal: {
@@ -605,11 +566,9 @@ describe("embedded run detached session metadata", () => {
         );
         return successfulAttempt(params.sessionId);
       });
-    await expect(runEmbeddedAgent({ ...params, sessionManager: undefined })).resolves.toMatchObject(
-      { payloads: [{ text: "Verified." }] },
-    );
+    await expect(run({ sessionManager: undefined })).resolves.toMatchObject(verified);
     expect(runAttempt).toHaveBeenCalledTimes(2);
-    await expect(fs.access(path.join(stateDir, "agents"))).rejects.toThrow();
+    await expectNoAgent();
   });
 
   it.each([
@@ -620,7 +579,7 @@ describe("embedded run detached session metadata", () => {
   ] as const)(
     "does not persist detached %s trajectory metadata (caller manager: %s)",
     async (harness, suppliedManager) => {
-      const { params, stateDir } = await createRun("research", "detached");
+      const { params, run, expectNoAgent } = await createRun("detached");
       const { prepareEmbeddedAttemptTrajectory } = await import("./run/attempt-trajectory.js");
       runAttempt.mockImplementationOnce(async (attempt) => {
         const recorder = await prepareEmbeddedAttemptTrajectory({
@@ -636,30 +595,28 @@ describe("embedded run detached session metadata", () => {
         return successfulAttempt(params.sessionId);
       });
       await expect(
-        runEmbeddedAgent({
-          ...params,
+        run({
           agentHarnessRuntimeOverride: harness,
           sessionManager: suppliedManager ? params.sessionManager : undefined,
         }),
-      ).resolves.toMatchObject({ payloads: [{ text: "Verified." }] });
-      await expect(fs.access(path.join(stateDir, "agents"))).rejects.toThrow();
+      ).resolves.toMatchObject(verified);
+      await expectNoAgent();
     },
   );
 
   it("does not spend the candidate deferral on a detached run before durable runs", async () => {
-    const { params, scope, database } = await createRun("research", "detached");
+    const { params, scope, database, seed, run } = await createRun("detached");
     const deferred: SessionSuspensionParams[] = [];
     failAttempt("prompt", params.sessionId);
     await runWithDeferredSessionSuspension(
       async () => {
-        await expect(runEmbeddedAgent(params)).rejects.toMatchObject({ reason: "rate_limit" });
+        await expect(run()).rejects.toMatchObject({ reason: "rate_limit" });
         await joinSuspensionWrites();
         expect.soft(deferred).toEqual([]);
-        await expect(fs.access(database)).rejects.toThrow();
+        await expectAbsent(database);
 
-        await upsertSessionEntryCore(scope, { sessionId: params.sessionId, updatedAt: 1 });
-        const durableParams = { ...params, sessionPersistence: "durable" as const };
-        await expect(runEmbeddedAgent(durableParams)).rejects.toMatchObject({
+        await seed();
+        await expect(run({ sessionPersistence: "durable" })).rejects.toMatchObject({
           reason: "rate_limit",
         });
         await joinSuspensionWrites();
@@ -668,7 +625,7 @@ describe("embedded run detached session metadata", () => {
 
         // Only one durable run inherits deferral; subsequent direct work still suspends.
         await expect(
-          runEmbeddedAgent({ ...durableParams, runId: "later-direct-run" }),
+          run({ sessionPersistence: "durable", runId: "later-direct-run" }),
         ).rejects.toMatchObject({ reason: "rate_limit" });
         await joinSuspensionWrites();
         expect(loadSessionEntry(scope)?.quotaSuspension?.state).toBe("suspended");

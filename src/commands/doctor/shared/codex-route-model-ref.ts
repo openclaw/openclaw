@@ -90,7 +90,7 @@ export function isBlockedLegacyCodexModelPair(params: {
   );
 }
 
-function readLegacyCodexModelId(model: unknown): string | undefined {
+export function toOpenAIModelId(model: unknown): string | undefined {
   if (typeof model !== "string") {
     return undefined;
   }
@@ -104,7 +104,7 @@ function readLegacyCodexModelId(model: unknown): string | undefined {
 }
 
 export function isOpenAICodexModelRef(model: string | undefined): model is string {
-  return readLegacyCodexModelId(model) !== undefined;
+  return toOpenAIModelId(model) !== undefined;
 }
 
 export function isOpenAICodexAuthProfileRef(profile: unknown): boolean {
@@ -119,31 +119,17 @@ export function isProviderlessModelRef(model: unknown): model is string {
 }
 
 export function toCanonicalOpenAIModelRef(model: string): string | undefined {
-  const modelId = readLegacyCodexModelId(model);
+  const modelId = toOpenAIModelId(model);
   return modelId ? `openai/${modelId}` : undefined;
 }
 
-export function toOpenAIModelId(model: string): string | undefined {
-  return readLegacyCodexModelId(model);
-}
-
 export function readModelConfigPrimaryRef(value: unknown): string | undefined {
-  if (typeof value === "string") {
-    return value.trim() || undefined;
-  }
-  const record = asMutableRecord(value);
-  if (typeof record?.primary === "string") {
-    return record.primary.trim() || undefined;
-  }
-  return undefined;
+  const primary = typeof value === "string" ? value : asMutableRecord(value)?.primary;
+  return typeof primary === "string" ? primary.trim() || undefined : undefined;
 }
 
 export function readAgentPrimaryModelRef(agent: unknown, fallback?: string): string | undefined {
-  const record = asMutableRecord(agent);
-  if (!record) {
-    return fallback;
-  }
-  return readModelConfigPrimaryRef(record.model) ?? fallback;
+  return readModelConfigPrimaryRef(asMutableRecord(agent)?.model) ?? fallback;
 }
 
 export function modelRefUsesCodexRuntime(params: {
@@ -313,15 +299,12 @@ function resolveConfiguredBareModelRef(params: {
     return undefined;
   }
   const matches = new Set<string>();
-  const pushModelMapMatches = (models: MutableRecord | undefined) => {
-    for (const key of Object.keys(models ?? {})) {
-      const parsed = parseCodexRouteModelRef(key);
-      if (parsed?.modelId === modelId) {
-        matches.add(`${parsed.provider}/${parsed.modelId}`);
-      }
+  for (const key of Object.keys(asMutableRecord(params.cfg.agents?.defaults?.models) ?? {})) {
+    const parsed = parseCodexRouteModelRef(key);
+    if (parsed?.modelId === modelId) {
+      matches.add(`${parsed.provider}/${parsed.modelId}`);
     }
-  };
-  pushModelMapMatches(asMutableRecord(params.cfg.agents?.defaults?.models));
+  }
   for (const [provider, providerConfig] of Object.entries(params.cfg.models?.providers ?? {})) {
     for (const model of providerConfig?.models ?? []) {
       if (providerCatalogModelMatches(provider, model?.id, modelId)) {

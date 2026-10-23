@@ -7,6 +7,8 @@ import ai.openclaw.app.chat.OUTBOX_BRANCH_CHANGED_ERROR
 import ai.openclaw.app.chat.chatOutboxDisplayError
 import ai.openclaw.app.chat.normalizeVisibleChatMessageRole
 import ai.openclaw.app.gateway.GatewayLoadedImage
+import ai.openclaw.app.gateway.GatewayLoadedMedia
+import ai.openclaw.app.gateway.GatewayMediaKind
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.nativeStringResource
 import ai.openclaw.app.ui.design.ClawTheme
@@ -463,6 +465,7 @@ internal fun ChatMessageAttachmentGroup(
   imagePage: Int,
   resolverReady: Boolean,
   loadImage: suspend (String) -> GatewayLoadedImage?,
+  loadMedia: suspend (String, GatewayMediaKind, Boolean) -> GatewayLoadedMedia?,
 ) {
   val compact = parts.count { it.type == "image" } > 1
   var imageIndex = firstImageIndex
@@ -489,6 +492,10 @@ internal fun ChatMessageAttachmentGroup(
                   loadImage = loadImage,
                   compact = compact,
                 )
+              }
+
+              part.type == "file" -> {
+                ChatFileAttachment(content = part, resolverReady = resolverReady, loadMedia = loadMedia)
               }
 
               else -> {
@@ -561,24 +568,19 @@ internal fun ChatManagedImage(
         color = ClawTheme.colors.surfaceRaised,
         modifier = Modifier.fillMaxWidth(),
       ) {
-        Text(
-          nativeString("Image unavailable · Tap to retry"),
-          modifier = Modifier.padding(12.dp),
-          style = ClawTheme.type.caption,
-          color = ClawTheme.colors.textMuted,
-        )
+        ChatImageStatus(nativeString("Image unavailable · Tap to retry"))
       }
     }
 
     else -> {
-      Text(
-        nativeString("Loading image…"),
-        modifier = Modifier.padding(12.dp),
-        style = ClawTheme.type.caption,
-        color = ClawTheme.colors.textMuted,
-      )
+      ChatImageStatus(nativeString("Loading image…"))
     }
   }
+}
+
+@Composable
+private fun ChatImageStatus(text: String) {
+  Text(text, modifier = Modifier.padding(12.dp), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
 }
 
 @Composable

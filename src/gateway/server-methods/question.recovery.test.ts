@@ -7,17 +7,17 @@ import {
 } from "../../agents/admitted-run-context.js";
 import {
   abortAndDrainEmbeddedAgentRun,
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
   type EmbeddedAgentQueueHandle,
 } from "../../agents/embedded-agent-runner/runs.js";
-import { testing as embeddedRunTesting } from "../../agents/embedded-agent-runner/runs.test-support.js";
+import {
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+  testing as embeddedRunTesting,
+} from "../../agents/embedded-agent-runner/runs.test-support.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../../agents/tools/gateway-caller-context.js";
-import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
-import { isReplyRunEvidenceStale } from "../../auto-reply/reply/reply-run-registry.state.js";
 import { admitReplyTurn } from "../../auto-reply/reply/reply-turn-admission.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -32,10 +32,17 @@ import {
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
+  waitForDiagnosticEventsDrained,
 } from "../../infra/diagnostic-events.js";
+import { requestStuckSessionRecovery } from "../../logging/diagnostic-session-recovery-coordinator.js";
 import { recoverStuckDiagnosticSession } from "../../logging/diagnostic-stuck-session-recovery.runtime.js";
 import { startGatewayDiagnosticHeartbeat } from "../../logging/diagnostic.js";
 import { resetDiagnosticStateForTest } from "../../logging/diagnostic.test-support.js";
+import { createReplyOperation, type ReplyOperation } from "../../sessions/session-controller.js";
+import {
+  assertSessionControllerOperation,
+  isReplyRunEvidenceStale,
+} from "../../sessions/session-controller.state.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -62,6 +69,7 @@ let requesterActive: boolean;
 let validateAuthority: ReturnType<typeof createAgentRuntimeApprovalAuthorityValidator>;
 const abort = vi.fn();
 let handle: EmbeddedAgentQueueHandle;
+let operation: ReplyOperation;
 
 beforeEach(async () => {
   handle = {
@@ -84,6 +92,7 @@ beforeEach(async () => {
   admission = prepareSystemAgentRunAdmission({}, ref.runId, "main", "question-recovery-test");
   const admitted = await admission.admit("embedded");
   authority = getAdmittedRunDelegatedAuthority(admitted)!;
+  operation = createReplyOperation({ ...ref, resetTriggered: false });
   unregister = registerAgentRunDelegatedAuthorityClosedHandler(() =>
     manager.cancelClosedAuthorities(),
   );
@@ -107,14 +116,41 @@ beforeEach(async () => {
   abort.mockReset().mockImplementation(() => {
     releaseAgentRunDelegatedAuthority(authority);
     clearActiveEmbeddedRun(ref.sessionId, handle, ref.sessionKey);
+    operation.complete();
+  });
+  const caller = createAdmittedGatewayToolCallerIdentity({
+    admittedRunContext: admitted,
+    agentId: "main",
+    sessionKey: ref.sessionKey,
+  });
+  if (!caller) {
+    throw new Error("question recovery fixture requires an admitted Gateway caller");
+  }
+  const watchdogAttempt = operation.watchdog.attachAttempt({
+    assertCurrent: () => assertSessionControllerOperation(operation),
   });
   await withGatewayToolCallerIdentity(
-    createAdmittedGatewayToolCallerIdentity({
-      admittedRunContext: admitted,
-      agentId: "main",
-      sessionKey: ref.sessionKey,
-    }),
-    () => setActiveEmbeddedRun(ref.sessionId, handle, ref.sessionKey),
+    {
+      ...caller,
+      watchdogAttempt,
+      embeddedRunToolAuthorityBinding: (registration) => ({
+        source: "reply",
+        acceptsRequesterOrigin: () => false,
+        operation,
+        watchdogAttempt,
+        project: () => undefined,
+        projectAsync: async () => undefined,
+        assertRegistrationActive: () => assertSessionControllerOperation(operation),
+        assertActive: () => {
+          assertSessionControllerOperation(operation);
+          if (registration.handle !== handle) {
+            throw new Error("question recovery fixture handle changed");
+          }
+        },
+      }),
+    },
+    () =>
+      setActiveEmbeddedRun(ref.sessionId, handle, ref.sessionKey, undefined, undefined, operation),
   );
 });
 
@@ -126,6 +162,7 @@ afterEach(async () => {
   releaseAgentRunDelegatedAuthority(authority);
   unregister();
   clearAgentRunContext(ref.runId);
+  operation.complete();
   embeddedRunTesting.resetActiveEmbeddedRuns();
   resetDiagnosticEventsForTest();
   vi.useRealTimers();
@@ -201,8 +238,9 @@ it("keeps an accepted one-hour question alive through default diagnostic recover
     await vi.advanceTimersByTimeAsync(10_000);
     const id = await request();
     await vi.advanceTimersByTimeAsync(920_000);
-    expect(recovery).toHaveBeenCalledWith(
-      expect.objectContaining({ allowActiveAbort: true, queueDepth: 0 }),
+    expect(recovery).not.toHaveBeenCalled();
+    expect(operation.watchdog.snapshot().waits).toContainEqual(
+      expect.objectContaining({ kind: "human_question" }),
     );
     expect(abort).not.toHaveBeenCalled();
     expect(manager.get(id)?.status).toBe("pending");
@@ -227,13 +265,18 @@ it("keeps an accepted one-hour question alive through default diagnostic recover
     expect(abort).not.toHaveBeenCalled();
     // Resolution is real progress, but a tool that stays hung is still recovered.
     await vi.advanceTimersByTimeAsync(900_000);
+    // Diagnostic callbacks may only observe recovery already started by the owner timer.
+    await operation.ownerSettlement;
+    await Promise.all(recovery.mock.results.map((result) => result.value));
     expect(abort).toHaveBeenCalledTimes(1);
   });
 });
 
 function recover() {
+  vi.setSystemTime(Date.now() + 930_000);
   return recoverStuckDiagnosticSession({
     ...ref,
+    operation,
     ageMs: 930_000,
     queueDepth: 0,
     allowActiveAbort: true,
@@ -314,15 +357,11 @@ it("keeps resumed question work alive when attention reporting settles the quest
     try {
       await vi.advanceTimersByTimeAsync(900_000);
       expect(manager.observe(id)?.record.status).toBe("cancelled");
-      const outcomes = await Promise.all(recovery.mock.results.map((result) => result.value));
+      await Promise.all(recovery.mock.results.map((result) => result.value));
 
       await expect(answer).resolves.toEqual({ status: "cancelled" });
-      expect(recovery).toHaveBeenCalledWith(
-        expect.objectContaining({ allowActiveAbort: true, ageMs: 900_000 }),
-      );
-      expect(outcomes).toContainEqual(
-        expect.objectContaining({ status: "skipped", reason: "stale_session_state" }),
-      );
+      expect(recovery).not.toHaveBeenCalled();
+      expect(operation.watchdog.snapshot().semanticProgressAtMs).toBe(Date.now());
       expect(abort).not.toHaveBeenCalled();
     } finally {
       unsubscribe();
@@ -408,7 +447,10 @@ it("does not let operator questions or public diagnostic text suppress unrelated
 
 it("keeps explicit user abort authoritative during human input", async () => {
   const id = await request();
-  await expect(recover()).resolves.toMatchObject({ reason: "human_input_wait" });
+  expect(operation.watchdog.snapshot().waits).toContainEqual(
+    expect.objectContaining({ kind: "human_question" }),
+  );
+  await expect(recover()).resolves.toMatchObject({ reason: "active_reply_work" });
   await expect(
     abortAndDrainEmbeddedAgentRun({ ...ref, reason: "user_abort" }),
   ).resolves.toMatchObject({
@@ -419,55 +461,44 @@ it("keeps explicit user abort authoritative during human input", async () => {
 });
 
 it("accepts late human input through reply admission instead of treating its owner as stale", async () => {
-  const operation = createReplyOperation({
-    sessionKey: ref.sessionKey,
-    sessionId: ref.sessionId,
-    resetTriggered: false,
-  });
-  operation.attachBackend(Object.assign(handle, { kind: "embedded" as const, cancel: abort }));
   operation.bindToolAuthoritySnapshot({
     fingerprint: () => "human-wait-surface",
     project: () => "human-wait-surface",
   });
-  operation.setPhase("running");
-  try {
-    await request();
-    startQuestionTool("late-answer-call");
-    await vi.advanceTimersByTimeAsync(930_000);
-    expect(isReplyRunEvidenceStale(operation)).toBe(false);
-    await expect(
-      admitReplyTurn({
-        sessionKey: ref.sessionKey,
-        sessionId: ref.sessionId,
-        kind: "visible",
-        resetTriggered: false,
-        waitForActive: false,
-      }),
-    ).resolves.toMatchObject({
-      status: "skipped",
-      reason: "active-run",
-      activeOperation: operation,
-    });
-  } finally {
-    operation.complete();
-  }
+  await request();
+  startQuestionTool("late-answer-call");
+  await vi.advanceTimersByTimeAsync(930_000);
+  expect(isReplyRunEvidenceStale(operation)).toBe(false);
+  await expect(
+    admitReplyTurn({
+      sessionKey: ref.sessionKey,
+      sessionId: ref.sessionId,
+      kind: "visible",
+      resetTriggered: false,
+      waitForActive: false,
+    }),
+  ).resolves.toMatchObject({
+    status: "skipped",
+    reason: "active-run",
+    activeOperation: operation,
+  });
 });
 
 it("does not protect an unrelated reply backend that copies the waiting run's IDs", async () => {
-  const operation = createReplyOperation({
-    sessionKey: ref.sessionKey,
+  const unrelatedOperation = createReplyOperation({
+    sessionKey: "agent:main:unrelated",
     sessionId: ref.sessionId,
     resetTriggered: false,
   });
-  operation.attachBackend({ ...handle, kind: "embedded", cancel: () => {} });
-  operation.setPhase("running");
+  unrelatedOperation.attachBackend({ ...handle, kind: "embedded", cancel: () => {} });
+  unrelatedOperation.setPhase("running");
+  await request();
   try {
-    await request();
     startQuestionTool("unrelated-call");
-    await vi.advanceTimersByTimeAsync(930_000);
-    expect(isReplyRunEvidenceStale(operation)).toBe(true);
+    vi.setSystemTime(Date.now() + 930_000);
+    expect(isReplyRunEvidenceStale(unrelatedOperation)).toBe(true);
   } finally {
-    operation.complete();
+    unrelatedOperation.complete();
   }
 });
 
@@ -475,9 +506,12 @@ it("does not transfer a pending question to a replacement handle with the same r
   await request();
   const replacement = {
     ...handle,
-    abort: vi.fn(() => clearActiveEmbeddedRun(ref.sessionId, replacement, ref.sessionKey)),
+    abort: vi.fn(() => {
+      clearActiveEmbeddedRun(ref.sessionId, replacement, ref.sessionKey);
+      operation.complete();
+    }),
   };
-  setActiveEmbeddedRun(ref.sessionId, replacement, ref.sessionKey);
+  setActiveEmbeddedRun(ref.sessionId, replacement, ref.sessionKey, undefined, undefined, operation);
   await expect(recover()).resolves.toMatchObject({ status: "aborted" });
   expect(replacement.abort).toHaveBeenCalledTimes(1);
   expect(abort).not.toHaveBeenCalled();
@@ -511,19 +545,35 @@ it.each(["pending", "requester-inactive"] as const)(
   "rechecks a question accepted after recovery was queued (%s)",
   async (terminal) => {
     const { promise: gate, resolve: release } = createDeferred();
+    const preRecoveryWait = operation.watchdog.beginWait({
+      kind: "runtime_owned",
+      isCurrent: () => true,
+    });
     const recovery = vi.fn(async (params: Parameters<typeof recoverStuckDiagnosticSession>[0]) => {
       await gate;
       return recoverStuckDiagnosticSession(params);
     });
-    startGatewayDiagnosticHeartbeat(
-      createTestGatewayScheduler("fake-timers"),
-      {},
-      { recoverStuckSession: recovery },
-    );
     startQuestionTool("queued-call");
-    await vi.advanceTimersByTimeAsync(930_000);
-    expect(recovery).toHaveBeenCalledTimes(1);
+    await waitForDiagnosticEventsDrained();
+    // Queue an actually eligible captured stop before the question arrives. Do not
+    // ask diagnostics to override the runtime wait merely to exercise this race.
+    vi.setSystemTime(Date.now() + 930_000);
+    preRecoveryWait.close();
+    expect(operation.watchdog.decide().action).toBe("stop");
+    requestStuckSessionRecovery({
+      recover: recovery,
+      classification: {
+        eventType: "session.stalled",
+        classification: "stalled_agent_run",
+        reason: "active_work_without_progress",
+      },
+      request: { ...ref, operation, ageMs: 930_000, queueDepth: 0 },
+    });
+    expect(recovery).toHaveBeenCalledOnce();
     await request();
+    expect(operation.watchdog.snapshot().waits).toContainEqual(
+      expect.objectContaining({ kind: "human_question" }),
+    );
     if (terminal === "requester-inactive") {
       // Worker placement or turn capability can close while the local run claim survives.
       requesterActive = false;
@@ -538,7 +588,7 @@ it.each(["pending", "requester-inactive"] as const)(
     }
     expect(outcome).toMatchObject({
       status: "skipped",
-      reason: "human_input_wait",
+      reason: "active_reply_work",
     });
     expect(abort).not.toHaveBeenCalled();
   },
@@ -548,24 +598,66 @@ it("keeps the run protected until its last pending human question settles", asyn
   const first = await request();
   const second = await request(true, 3_600_000, "second-question");
   manager.cancel(first);
-  await expect(recover()).resolves.toMatchObject({ reason: "human_input_wait" });
+  expect(operation.watchdog.snapshot().waits).toContainEqual(
+    expect.objectContaining({ kind: "human_question" }),
+  );
+  await expect(recover()).resolves.toMatchObject({ reason: "active_reply_work" });
   manager.cancel(second);
   await expect(recover()).resolves.toMatchObject({ status: "aborted" });
 });
 
 it("does not abort a replacement installed synchronously by question expiry", async () => {
-  await request(true, 900_000);
+  const id = await request(true, 900_000);
+  const expiringOperation = operation;
   const replacement = { ...handle, abort: vi.fn() };
-  onBroadcast = (event) => {
-    if (event === "question.resolved") {
-      setActiveEmbeddedRun(ref.sessionId, replacement, ref.sessionKey);
+  const installReplacement = () => {
+    if (operation === expiringOperation) {
+      expiringOperation.complete();
+      operation = createReplyOperation({ ...ref, resetTriggered: false });
+      setActiveEmbeddedRun(
+        ref.sessionId,
+        replacement,
+        ref.sessionKey,
+        undefined,
+        undefined,
+        operation,
+      );
     }
   };
-  vi.setSystemTime(Date.now() + 900_000);
-  await expect(recover()).resolves.toMatchObject({
-    status: "skipped",
-    reason: "stale_session_state",
+  onBroadcast = (event) => {
+    if (event === "question.resolved") {
+      installReplacement();
+    }
+  };
+  const installOnExpiry = expiringOperation.watchdog.beginWait({
+    kind: "runtime_owned",
+    isCurrent: () => {
+      const expired = manager.observe(id)?.record.status === "expired";
+      if (expired) {
+        installReplacement();
+      }
+      return !expired;
+    },
   });
+  vi.setSystemTime(Date.now() + 900_000);
+  try {
+    await expect(
+      recoverStuckDiagnosticSession({
+        ...ref,
+        operation: expiringOperation,
+        ageMs: 930_000,
+        queueDepth: 0,
+        allowActiveAbort: true,
+      }),
+    ).resolves.toMatchObject({
+      status: "skipped",
+      reason: "stale_session_state",
+    });
+    expect(operation).not.toBe(expiringOperation);
+  } finally {
+    installOnExpiry.close();
+    await manager.drain();
+  }
   expect(abort).not.toHaveBeenCalled();
   expect(replacement.abort).not.toHaveBeenCalled();
 });

@@ -1,6 +1,6 @@
 // Matrix tests cover device health plugin behavior.
 import { describe, expect, it } from "vitest";
-import { summarizeMatrixDeviceHealth } from "./device-health.js";
+import { listStaleOpenClawMatrixDevices } from "./device-health.js";
 
 describe("matrix device health", () => {
   it("summarizes stale OpenClaw-managed devices separately from the current device", () => {
@@ -28,10 +28,6 @@ describe("matrix device health", () => {
       { deviceId: "unnamed", displayName: null, current: false },
     ];
 
-    expect(summarizeMatrixDeviceHealth(devices)).toEqual({
-      currentDeviceId: "du314Zpw3A",
-      currentOpenClawDevices: [devices[0]],
-      staleOpenClawDevices: [devices[1], devices[2]],
-    });
+    expect(listStaleOpenClawMatrixDevices(devices)).toEqual([devices[1], devices[2]]);
   });
 });

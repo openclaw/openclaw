@@ -1,20 +1,15 @@
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import type {
-  ProviderAppGuidedSetupContext,
-  ProviderCatalogResult,
-} from "openclaw/plugin-sdk/plugin-entry";
+import type { ProviderAppGuidedSetupContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   buildApiKeyCredential,
   ensureApiKeyFromEnvOrPrompt,
   hasConfiguredSecretInput,
-  isNonSecretApiKeyMarker,
   normalizeOptionalSecretInput,
   type OpenClawConfig,
   type SecretInput,
   type SecretInputMode,
 } from "openclaw/plugin-sdk/provider-auth";
 import { removeProviderAuthProfilesWithLock } from "openclaw/plugin-sdk/provider-auth-runtime";
-import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import {
   selectPreferredLocalModelId,
   type ModelDefinitionConfig,
@@ -26,7 +21,6 @@ import {
   configureOpenAICompatibleSelfHostedProviderNonInteractive,
   type ProviderAuthMethodNonInteractiveContext,
   type ProviderAuthResult,
-  type ProviderCatalogContext,
   type ProviderPrepareDynamicModelContext,
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/provider-setup";
@@ -55,10 +49,10 @@ import {
 import {
   hasLmstudioAuthorizationHeader,
   resolveLmstudioProviderAuthMode,
+  resolvePersistedLmstudioApiKey,
   shouldUseLmstudioApiKeyPlaceholder,
 } from "./provider-auth.js";
 import {
-  LmstudioConfigResolutionError,
   resolveLmstudioConfiguredApiKey,
   resolveLmstudioProviderHeaders,
   resolveLmstudioRequestContext,
@@ -236,32 +230,6 @@ function resolveLmstudioDiscoveryFailure(params: {
     };
   }
   return null;
-}
-
-function resolvePersistedLmstudioApiKey(params: {
-  currentApiKey: ModelProviderConfig["apiKey"] | undefined;
-  explicitAuth: ModelProviderConfig["auth"] | undefined;
-  fallbackApiKey: ModelProviderConfig["apiKey"] | undefined;
-  preferFallbackApiKey?: boolean;
-  hasModels: boolean;
-  hasAuthorizationHeader?: boolean;
-}): ModelProviderConfig["apiKey"] | undefined {
-  if (params.explicitAuth === "api-key") {
-    if (params.preferFallbackApiKey && params.fallbackApiKey !== undefined) {
-      return params.fallbackApiKey;
-    }
-    if (resolveLmstudioProviderAuthMode(params.currentApiKey)) {
-      return params.currentApiKey;
-    }
-    return params.fallbackApiKey;
-  }
-  return shouldUseLmstudioApiKeyPlaceholder({
-    hasModels: params.hasModels,
-    resolvedApiKey: params.currentApiKey,
-    hasAuthorizationHeader: params.hasAuthorizationHeader,
-  })
-    ? LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER
-    : undefined;
 }
 
 function selectDefaultLmstudioModelId(
@@ -463,11 +431,11 @@ export async function promptAndConfigureLmstudioInteractive(params: {
     ? (params.config.models?.providers?.[PROVIDER_ID]?.baseUrl ?? defaultBaseUrl)
     : await promptText({
         message: `${LMSTUDIO_PROVIDER_LABEL} base URL`,
-        initialValue: defaultBaseUrl,
+        // Prefilling the default makes typed input append to it; hint it and use it for blank input.
         placeholder: defaultBaseUrl,
         validate: validateLmstudioSetupUrl,
       });
-  const baseUrl = resolveLmstudioInferenceBase(baseUrlRaw ?? defaultBaseUrl);
+  const baseUrl = resolveLmstudioInferenceBase(baseUrlRaw?.trim() || defaultBaseUrl);
   let credentialInput: SecretInput | undefined = params.suppliedApiKey;
   let credentialMode: SecretInputMode | undefined;
   const implicitRefMode = params.allowSecretRefPrompt === false && !params.secretInputMode;
@@ -786,22 +754,13 @@ export async function configureLmstudioNonInteractive(
     setupDiscoveryApiKey,
     useHeaderOnlyAuth,
   } = validated;
-  const normalizedCtx = customBaseUrl
-    ? {
-        ...ctx,
-        opts: {
-          ...ctx.opts,
-          customBaseUrl: baseUrl,
-        },
-      }
-    : ctx;
   if (useHeaderOnlyAuth) {
     await removeProviderAuthProfilesWithLock({
-      cfg: normalizedCtx.config,
+      cfg: ctx.config,
       provider: PROVIDER_ID,
-      agentDir: normalizedCtx.agentDir,
+      agentDir: ctx.agentDir,
     });
-    const configWithoutStoredLmstudioAuth = stripLmstudioStoredAuthConfig(normalizedCtx.config);
+    const configWithoutStoredLmstudioAuth = stripLmstudioStoredAuthConfig(ctx.config);
     return applyProviderDefaultModel(
       {
         ...configWithoutStoredLmstudioAuth,
@@ -837,9 +796,10 @@ export async function configureLmstudioNonInteractive(
   // Reuse the verified key without prompting again; the shared owner persists credentials.
   const configured = await configureOpenAICompatibleSelfHostedProviderNonInteractive({
     ctx: {
-      ...normalizedCtx,
+      ...ctx,
       opts: {
-        ...normalizedCtx.opts,
+        ...ctx.opts,
+        ...(customBaseUrl ? { customBaseUrl: baseUrl } : {}),
         customModelId: selectedModelId,
       },
       resolveApiKey: async () => resolvedOrSynthetic,
@@ -886,103 +846,7 @@ export async function configureLmstudioNonInteractive(
   };
 }
 
-/** Discovers provider settings, merging explicit config with live model discovery. */
-// The published helper stays advisory; the registered catalog opts into strict acquisition.
-export function discoverLmstudioProvider(ctx: ProviderCatalogContext): Promise<{
-  provider: ModelProviderConfig;
-} | null>;
-export function discoverLmstudioProvider(
-  ctx: ProviderCatalogContext,
-  options: { discoveryMode: "strict" },
-): Promise<ProviderCatalogResult>;
-export async function discoverLmstudioProvider(
-  ctx: ProviderCatalogContext,
-  options?: { discoveryMode: "strict" },
-): Promise<ProviderCatalogResult> {
-  if (ctx.providerIds && !ctx.providerIds.includes(PROVIDER_ID)) {
-    return null;
-  }
-  const explicit = ctx.config.models?.providers?.[PROVIDER_ID];
-  const {
-    headers: _headers,
-    auth: explicitAuth,
-    apiKey: _apiKey,
-    ...explicitWithoutHeaders
-  } = explicit ?? {};
-  const hasExplicitModels = Array.isArray(explicit?.models) && explicit.models.length > 0;
-  const { apiKey, discoveryApiKey, profileId } = ctx.resolveProviderApiKey(PROVIDER_ID);
-  let resolvedHeaders: Record<string, string> | undefined;
-  let hasAuthorizationHeader: boolean;
-  let configuredDiscoveryApiKey: string | undefined;
-  try {
-    resolvedHeaders = await resolveLmstudioProviderHeaders({
-      config: ctx.config,
-      env: ctx.env,
-      headers: explicit?.headers,
-    });
-    hasAuthorizationHeader = hasLmstudioAuthorizationHeader(resolvedHeaders);
-    configuredDiscoveryApiKey = await resolveLmstudioConfiguredApiKey({
-      config: ctx.config,
-      env: ctx.env,
-      allowUnresolved: hasAuthorizationHeader || Boolean(discoveryApiKey),
-    });
-  } catch (error) {
-    if (error instanceof LmstudioConfigResolutionError) {
-      return null;
-    }
-    throw error;
-  }
-  const resolvedDiscoveryApiKey = hasAuthorizationHeader
-    ? undefined
-    : (discoveryApiKey ?? configuredDiscoveryApiKey);
-  // CLI/runtime-resolved key takes precedence over static provider config key.
-  const resolvedApiKey = apiKey ?? explicit?.apiKey;
-  const baseUrl = resolveLmstudioInferenceBase(explicit?.baseUrl);
-  const quiet = !apiKey && !explicit && !resolvedDiscoveryApiKey;
-  const run = async () => {
-    const models = hasExplicitModels
-      ? explicit.models
-      : await discoverLmstudioModels({
-          baseUrl,
-          apiKey: resolvedDiscoveryApiKey ?? "",
-          headers: resolvedHeaders,
-          quiet,
-          ...(!quiet && options ? options : {}),
-        });
-    if (models.length === 0 && (options ? quiet : !apiKey && !explicit?.apiKey)) {
-      return null;
-    }
-    const persistedApiKey = resolvePersistedLmstudioApiKey({
-      currentApiKey: resolvedApiKey,
-      explicitAuth,
-      fallbackApiKey: LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
-      hasModels: models.length > 0,
-      hasAuthorizationHeader,
-    });
-    const persistedAuth = resolveLmstudioProviderAuthMode(persistedApiKey);
-    return {
-      provider: {
-        ...explicitWithoutHeaders,
-        baseUrl,
-        api: explicit?.api ?? "openai-completions",
-        ...(resolvedHeaders ? { headers: resolvedHeaders } : {}),
-        ...(persistedApiKey ? { apiKey: persistedApiKey } : {}),
-        ...(persistedAuth ? { auth: persistedAuth } : {}),
-        models,
-      },
-    };
-  };
-  return options && !hasExplicitModels
-    ? await runLiveProviderCatalog({
-        providerId: PROVIDER_ID,
-        profileId:
-          !hasAuthorizationHeader && discoveryApiKey && !isNonSecretApiKeyMarker(discoveryApiKey)
-            ? profileId
-            : undefined,
-        run,
-      })
-    : await run();
-}
+export { discoverLmstudioProvider } from "./catalog.js";
 
 export async function prepareLmstudioDynamicModel(
   ctx: ProviderPrepareDynamicModelContext,

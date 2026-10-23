@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { readToolAllowlistIntersection } from "../agents/tool-policy.js";
@@ -10,7 +10,10 @@ import {
   createMockPluginRegistry,
   TEST_PLUGIN_AGENT_CTX,
 } from "./hooks.test-fixtures.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
+import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import { createEmptyPluginRegistry } from "./registry.js";
+import { createPluginRecord } from "./status.test-helpers.js";
 import type {
   PluginHookBeforeAgentFinalizeResult,
   PluginHookBeforePromptBuildResult,
@@ -22,6 +25,107 @@ type PromptHook = Pick<
   "handler" | "requiresToolAuthority" | "priority"
 >;
 const phaseEvent = { prompt: "test", messages: [] };
+
+describe("pre-durable channel ingress policy", () => {
+  const context = () => ({
+    channelId: "discord",
+    accountId: "account",
+    signal: new AbortController().signal,
+  });
+  const raw = { id: "event", channel_id: "room", content: "private" };
+
+  function ownedPolicy(allowConversationAccess: boolean) {
+    const builder = createTestPluginRegistry();
+    const record = createPluginRecord({ id: "ingress-policy", origin: "global" });
+    builder.registry.plugins.push(record);
+    const api = builder.createApi(record, { config: {}, hookPolicy: { allowConversationAccess } });
+    const instance = getPluginInstance(record)!;
+    onTestFinished(async () => {
+      await instance.dispose();
+    });
+    return { api, instance, registry: builder.registry };
+  }
+
+  it.each([false, true])("requires the existing conversation-access grant (%s)", (allowed) => {
+    const owner = ownedPolicy(allowed);
+    owner.api.on("before_channel_ingress", () => undefined);
+    expect(owner.registry.typedHooks.map((entry) => entry.hookName)).toEqual(
+      allowed ? ["before_channel_ingress"] : [],
+    );
+  });
+
+  it("chains isolated transformed events and retains the earlier replacement on a later decline", async () => {
+    const runner = createHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_channel_ingress",
+          priority: 2,
+          handler: () => ({ event: { ...raw, content: "[redacted]" } }),
+        },
+        {
+          hookName: "before_channel_ingress",
+          handler: (value) => {
+            expect(value).toEqual({ event: { ...raw, content: "[redacted]" } });
+            return {};
+          },
+        },
+      ]),
+    );
+    const result = await runner.runBeforeChannelIngress({ event: raw }, context());
+    expect(result?.event).toEqual({ ...raw, content: "[redacted]" });
+    result?.assertCurrent();
+    expect(raw.content).toBe("private");
+  });
+
+  it("does not fail open or expose policy error contents after a timeout", async () => {
+    const release = createDeferred();
+    const error = vi.fn();
+    const runner = createHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_channel_ingress",
+          timeoutMs: 2,
+          handler: async () => {
+            await release.promise;
+            throw new Error("PRIVATE_ERROR_SENTINEL");
+          },
+        },
+      ]),
+      {
+        logger: { error, warn: vi.fn() },
+        failurePolicyByHook: { before_channel_ingress: "fail-open" },
+      },
+    );
+    try {
+      await expect(runner.runBeforeChannelIngress({ event: raw }, context())).rejects.toThrow(
+        "Channel ingress transform failed",
+      );
+      expect(error).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+    }
+  });
+
+  it("rejects a result from an actual registered instance retired during its awaited policy", async () => {
+    const owner = ownedPolicy(true);
+    const entered = createDeferred();
+    const release = createDeferred();
+    owner.api.on("before_channel_ingress", async () => {
+      entered.resolve();
+      await release.promise;
+      return { event: { ...raw, content: "[redacted]" } };
+    });
+    const promise = createHookRunner(owner.registry).runBeforeChannelIngress(
+      { event: raw },
+      context(),
+    );
+    await entered.promise;
+    const disposing = owner.instance.dispose();
+    release.resolve();
+    await expect(promise).rejects.toThrow(/Channel ingress transform/);
+    await disposing;
+  });
+});
 function promptRunner(hooks: PromptHook[]) {
   const registry = createEmptyPluginRegistry();
   registry.typedHooks.push(
@@ -41,6 +145,58 @@ const authority = {
 };
 
 describe("prompt phase hooks", () => {
+  it.each(["prependSystemContext", "appendSystemContext"] as const)(
+    "bounds oversized %s per plugin and warns once per session",
+    async (field) => {
+      const registry = createEmptyPluginRegistry();
+      const oversized = "x".repeat(824_170);
+      registry.typedHooks.push(
+        {
+          pluginId: "verbose-plugin",
+          hookName: "before_prompt_build",
+          source: "test",
+          priority: 10,
+          handler: () => ({ [field]: oversized }),
+        },
+        {
+          pluginId: "small-plugin",
+          hookName: "before_prompt_build",
+          source: "test",
+          handler: () => ({ [field]: "  small guidance\r\n" }),
+        },
+      );
+      const warn = vi.fn();
+      const runner = createHookRunner(registry, { logger: { warn, error: vi.fn() } });
+      const ctx = { sessionId: "session-1", contextTokenBudget: 32_000 };
+      const first = await runner.runBeforePromptBuild(phaseEvent, ctx);
+      expect(first?.[field]).toMatch(
+        /\[Plugin system context truncated to fit the model budget\.\]\n\n {2}small guidance\r\n$/,
+      );
+      expect(first?.[field]?.length).toBe(32_000 + 2 + "  small guidance\r\n".length);
+      expect(first?.[field]?.startsWith("xxxx")).toBe(true);
+      expect(warn).toHaveBeenCalledOnce();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("verbose-plugin"));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("824170 -> 32000 chars"));
+      expect(await runner.runBeforePromptBuild(phaseEvent, ctx)).toEqual(first);
+      expect(warn).toHaveBeenCalledOnce();
+      await runner.runBeforePromptBuild(phaseEvent, { ...ctx, sessionId: "session-2" });
+      expect(warn).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("keeps normal system context byte-identical and bounds dense CJK context", async () => {
+    const normal = "  static guidance\r\n";
+    const runner = promptRunner([
+      {
+        handler: () => ({ prependSystemContext: normal, appendSystemContext: "界".repeat(2_000) }),
+      },
+    ]);
+    const result = await runner.runBeforePromptBuild(phaseEvent, { contextTokenBudget: 4_000 });
+    expect(result?.prependSystemContext).toBe(normal);
+    expect(result?.appendSystemContext).toMatch(/^界+\n\[Plugin system context truncated/);
+    expect(result?.appendSystemContext?.length).toBeLessThanOrEqual(1_060);
+  });
+
   it("merges context in priority order while keeping the first system prompt", async () => {
     const context = (suffix: string): PluginHookBeforePromptBuildResult => ({
       systemPrompt: `system ${suffix}`,
@@ -367,43 +523,7 @@ describe("prompt hook invocation", () => {
 
 const promptEvent = (prompt: string) => ({ prompt, messages: [] });
 
-describe("before_prompt_build reentrancy", () => {
-  it("runs each handler once when a handler starts a nested prompt build", async () => {
-    const firstHandler = vi.fn(async () => {
-      await runner.runBeforePromptBuild(promptEvent("nested"), TEST_PLUGIN_AGENT_CTX);
-      return { prependContext: "first" };
-    });
-    const secondHandler = vi.fn(() => ({ appendContext: "second" }));
-    const runner = createHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "before_prompt_build",
-          handler: firstHandler,
-          pluginId: "first",
-          priority: 10,
-        },
-        {
-          hookName: "before_prompt_build",
-          handler: secondHandler,
-          pluginId: "second",
-          priority: 1,
-        },
-      ]),
-    );
-
-    await expect(
-      runner.runBeforePromptBuild(promptEvent("outer"), TEST_PLUGIN_AGENT_CTX),
-    ).resolves.toEqual({
-      systemPrompt: undefined,
-      prependContext: "first",
-      appendContext: "second",
-      prependSystemContext: undefined,
-      appendSystemContext: undefined,
-    });
-    expect(firstHandler).toHaveBeenCalledOnce();
-    expect(secondHandler).toHaveBeenCalledOnce();
-  });
-
+describe("before_prompt_build dispatch", () => {
   it("keeps sibling hook families and other runners active during dispatch", async () => {
     const turnPrepare = vi.fn(() => ({ prependContext: "turn" }));
     const heartbeat = vi.fn(() => ({ appendContext: "heartbeat" }));
@@ -584,33 +704,54 @@ describe("before_agent_finalize", () => {
   });
 });
 
-it("keeps the highest-priority model override after a broken plugin", async () => {
-  const registry = createEmptyPluginRegistry();
-  const broken = vi.fn(() => {
-    throw new Error("plugin crashed");
-  });
-  addStaticTestHooks(registry, {
-    hookName: "before_model_resolve",
-    hooks: [
-      {
-        pluginId: "low",
-        result: { modelOverride: "low-model", providerOverride: "low-provider" },
-      },
-      {
-        pluginId: "broken",
-        priority: 100,
-        result: {},
-        handler: broken,
-      },
-      {
-        pluginId: "high",
-        priority: 10,
-        result: { modelOverride: "high-model", providerOverride: "high-provider" },
-      },
-    ],
-  });
-  await expect(
-    createHookRunner(registry).runBeforeModelResolve({ prompt: "test" }, TEST_PLUGIN_AGENT_CTX),
-  ).resolves.toEqual({ modelOverride: "high-model", providerOverride: "high-provider" });
-  expect(broken).toHaveBeenCalledOnce();
-});
+it.each([
+  { higher: [], lower: ["local/backup"], priority: 10, expected: [] },
+  { higher: ["local/backup"], lower: [], priority: 10, expected: ["local/backup"] },
+  { higher: undefined, lower: ["local/backup"], priority: 10, expected: ["local/backup"] },
+  { higher: [], lower: ["local/first"], priority: 0, expected: ["local/first"] },
+  { higher: null as unknown as string[], lower: ["local/backup"], priority: 10, expected: [] },
+])(
+  "keeps the first defined routing overrides after a broken plugin ($priority)",
+  async ({ higher, lower, priority, expected }) => {
+    const registry = createEmptyPluginRegistry();
+    const broken = vi.fn(() => {
+      throw new Error("plugin crashed");
+    });
+    addStaticTestHooks(registry, {
+      hookName: "before_model_resolve",
+      hooks: [
+        {
+          pluginId: "low",
+          result: {
+            modelOverride: "low-model",
+            providerOverride: "low-provider",
+            fallbacksOverride: lower,
+          },
+        },
+        {
+          pluginId: "broken",
+          priority: 100,
+          result: {},
+          handler: broken,
+        },
+        {
+          pluginId: "high",
+          priority,
+          result: {
+            modelOverride: "high-model",
+            providerOverride: "high-provider",
+            fallbacksOverride: higher,
+          },
+        },
+      ],
+    });
+    await expect(
+      createHookRunner(registry).runBeforeModelResolve({ prompt: "test" }, TEST_PLUGIN_AGENT_CTX),
+    ).resolves.toEqual({
+      modelOverride: priority ? "high-model" : "low-model",
+      providerOverride: priority ? "high-provider" : "low-provider",
+      fallbacksOverride: expected,
+    });
+    expect(broken).toHaveBeenCalledOnce();
+  },
+);

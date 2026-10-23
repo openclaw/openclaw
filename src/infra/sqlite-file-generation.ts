@@ -1,4 +1,4 @@
-import fs, { type BigIntStats } from "node:fs";
+import fs from "node:fs";
 import { sameFileIdentity, type FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { FileMutationFingerprint } from "./file-descriptor.js";
@@ -25,17 +25,13 @@ export type SqliteFileGeneration = {
   wal?: SqliteFileFingerprint;
 };
 
-function assertRegularFile(stat: BigIntStats): void {
-  if (!stat.isFile()) {
-    throw new Error("SQLite generation target must be a regular file");
-  }
-}
-
 function fingerprintFile(pathname: string): SqliteFileFingerprint {
   const fd = fs.openSync(pathname, "r");
   try {
     const before = fs.fstatSync(fd, { bigint: true });
-    assertRegularFile(before);
+    if (!before.isFile()) {
+      throw new Error("SQLite generation target must be a regular file");
+    }
     const { sha256 } = hashPublishedFileSync(fs.realpathSync.native(pathname), before);
     const after = fs.fstatSync(fd, { bigint: true });
     const current = fs.statSync(pathname, { bigint: true });
@@ -68,7 +64,8 @@ function readOptionalFile(pathname: string): SqliteFileFingerprint | undefined {
   }
 }
 
-function readGeneration(pathname: string): SqliteFileGeneration {
+/** Provisional family observation; callers must verify it against a later stable read. */
+export function readSqliteFileGeneration(pathname: string): SqliteFileGeneration {
   const database = fingerprintFile(pathname);
   const journal = readOptionalFile(`${pathname}-journal`);
   const wal = readOptionalFile(`${pathname}-wal`);
@@ -79,9 +76,10 @@ function readGeneration(pathname: string): SqliteFileGeneration {
   };
 }
 
+/** Raw source reads require an isolated process or a drained database owner. */
 export function readStableSqliteFileGeneration(pathname: string): SqliteFileGeneration {
-  const first = readGeneration(pathname);
-  const second = readGeneration(pathname);
+  const first = readSqliteFileGeneration(pathname);
+  const second = readSqliteFileGeneration(pathname);
   if (!sameSqliteFileGeneration(first, second)) {
     throw new Error(`SQLite file generation changed while reading: ${pathname}`);
   }

@@ -302,7 +302,7 @@ function notifyFixturePhase(path) {
 ${prelude}
 syncBuiltinESMExports();
 ${includeCapsule ? `const {prepareCrabboxSourceCapsule} = await import(${JSON.stringify(resolveRuntimeWorkerUrl(toolingMtsEntrypoints.crabboxSourceCapsule).href)});` : ""}
-const {createStaging,createMirrorStaging,discoverStaging,recoverDiscoveredStaging,runStagingCommand} = await import(${JSON.stringify(resolveRuntimeWorkerUrl(toolingMtsEntrypoints.crabboxStaging).href)});
+const {createStaging,createMirrorStaging,runStagingCommand} = await import(${JSON.stringify(resolveRuntimeWorkerUrl(toolingMtsEntrypoints.crabboxStaging).href)});
 const {captureClaimNamespace} = await import(${JSON.stringify(resolveRuntimeWorkerUrl(toolingMtsEntrypoints.crabboxStagingClaims).href)});
 const {preserveCrabboxArtifacts} = await import(${JSON.stringify(resolveRuntimeWorkerUrl(toolingMtsEntrypoints.crabboxStagingArtifacts).href)});
 ${body}`,
@@ -354,13 +354,6 @@ process.kill(process.pid,'SIGKILL');`,
     expect(result.status, result.stdout + result.stderr).toBe(report.recovered ? 0 : 1);
     return { ...result, report };
   };
-  const automatic = async () => {
-    const result = await program(
-      `const discovery=discoverStaging(ctx.staging);const result=await recoverDiscoveredStaging(ctx.staging,discovery,{binary:ctx.cli,cwd:ctx.repository});console.log(JSON.stringify({discovery,result}));`,
-    );
-    expect(result.status, result.stderr).toBe(0);
-    return JSON.parse(result.stdout) as { discovery: Inspection; result?: Recovery };
-  };
   const waitForPhase = (
     path: string,
     operation: Promise<unknown>,
@@ -396,7 +389,6 @@ process.kill(process.pid,'SIGKILL');`,
     prepare,
     wrapper,
     recover,
-    automatic,
     inventory,
     initialize,
     commit,
@@ -1097,15 +1089,13 @@ console.log(JSON.stringify({outcomes,secret:fs.readFileSync(secret,'utf8')}));`)
       });
     }));
 
-  it("keeps idle mirrors during automatic discovery and reclaims them through explicit staging recovery", async () =>
+  it("reclaims idle mirrors through explicit staging recovery", async () =>
     withFixture(async (f) => {
       const result = await f.program(`${seedMirror}
-const owner=createMirrorStaging(ctx.staging,ctx.repository);seed(owner);owner.finish();
-const discovery=discoverStaging(ctx.staging);
-const automatic=await recoverDiscoveredStaging(ctx.staging,discovery,{binary:ctx.cli,cwd:ctx.repository});
-if(automatic?.recovered||!fs.existsSync(owner.staging.root))throw new Error('automatic discovery disposed a reusable mirror');
+const syncRoot=join(ctx.staging,'mîrror');fs.mkdirSync(syncRoot);
+const owner=createMirrorStaging(syncRoot,ctx.repository);seed(owner);owner.finish();
 const id=JSON.parse(fs.readFileSync(join(owner.staging.root,'staging.json'),'utf8')).id;
-await runStagingCommand(['recover',id],ctx.staging,{binary:ctx.cli,cwd:ctx.repository});
+await runStagingCommand(['recover',id],syncRoot,{binary:ctx.cli,cwd:ctx.repository});
 if(fs.existsSync(owner.staging.root))throw new Error('explicit recovery retained disposable mirror');`);
       expect(result.status, result.stderr).toBe(0);
       expect(JSON.parse(result.stdout)).toMatchObject({ recovered: true });
@@ -1324,11 +1314,12 @@ registerHooks({ load(url, context, nextLoad) {
             artifactBytes,
           );
           const settled = await f.prepare(admit + diagnostics + "cap.staging.settled();");
-          const automatic = await f.automatic();
-          expect(
-            automatic.discovery.entries.find((entry) => entry.id === settled.receipt.id)?.status,
-          ).toBe("protected");
-          expect(automatic.result).toBeUndefined();
+          const inspected = await f.wrapper(["inspect"]);
+          expect(inspected.status, inspected.stderr).toBe(0);
+          const inspection = JSON.parse(inspected.stdout) as Inspection;
+          expect(inspection.entries.find((entry) => entry.id === settled.receipt.id)?.status).toBe(
+            "protected",
+          );
           expect(existsSync(join(f.source, ".crabbox/wrapper-artifacts"))).toBe(false);
           const recovered = await f.recover(settled);
           expect(recovered.report.recovered, recovered.stdout + recovered.stderr).toBe(true);
@@ -1343,21 +1334,16 @@ registerHooks({ load(url, context, nextLoad) {
       90_000,
     );
 
-    it.each(["automatic", "removing"] as const)(
-      "holds corrupted preserved artifacts during %s recovery",
-      async (mode) =>
+    it(
+      "holds corrupted preserved artifacts during interrupted removal recovery",
+      async () =>
         withFixture(async (f) => {
           const stage = await f.prepare(
-            admit +
-              diagnostics +
-              "cap.staging.settled();" +
-              preserve +
-              (mode === "removing" ? interruptedRemoval("none") : ""),
+            admit + diagnostics + "cap.staging.settled();" + preserve + interruptedRemoval("none"),
           );
           const saved = join(stage.destination!, "runs/lease/output.bin");
           writeFileSync(saved, "changed saved diagnostics");
-          const result =
-            mode === "automatic" ? (await f.automatic()).result : (await f.recover(stage)).report;
+          const result = (await f.recover(stage)).report;
           expect(result).toMatchObject({
             recovered: false,
             reason: expect.stringMatching(/artifact/i),
@@ -1414,7 +1400,13 @@ if(!interrupted)throw new Error('fixture did not interrupt artifact publication'
           expect(f.receipt(bound).hold).toBe("claims");
           expect(existsSync(bound.root)).toBe(true);
           f.inventory();
-          expect((await f.automatic()).result).toBeUndefined();
+          const inspected = await f.wrapper(["inspect"]);
+          expect(inspected.status, inspected.stderr).toBe(0);
+          expect(
+            (JSON.parse(inspected.stdout) as Inspection).entries.find(
+              (entry) => entry.id === bound.receipt.id,
+            )?.status,
+          ).toBe("protected");
           expect((await f.recover(bound)).report.recovered).toBe(true);
           const changed = await f.prepare();
           const calls = readFileSync(f.calls, "utf8");
@@ -1648,17 +1640,23 @@ if(!interrupted)throw new Error('fixture did not interrupt artifact publication'
     );
 
     it(
-      "recovers an independent candidate without replacing an unknown discovery cursor",
+      "shows a legacy discovery cursor as protected and recovers only the selected ID",
       async () =>
         withFixture(async (f) => {
           const stage = await f.prepare(),
             cursor = join(f.staging, "openclaw-crabbox-sync-discovery");
           mkdirSync(cursor);
           writeFileSync(join(cursor, "operator-note"), "unknown cursor bytes\n");
-          expect((await f.automatic()).result).toMatchObject({
-            id: stage.receipt.id,
-            recovered: true,
-          });
+          const inspected = await f.wrapper(["inspect"]);
+          expect(inspected.status, inspected.stderr).toBe(0);
+          expect((JSON.parse(inspected.stdout) as Inspection).entries).toContainEqual(
+            expect.objectContaining({
+              id: "openclaw-crabbox-sync-discovery",
+              status: "protected",
+            }),
+          );
+          expect(existsSync(stage.root)).toBe(true);
+          expect((await f.recover(stage)).report.recovered).toBe(true);
           expect(readdirSync(cursor)).toEqual(["operator-note"]);
           expect(readFileSync(join(cursor, "operator-note"), "utf8")).toBe(
             "unknown cursor bytes\n",
@@ -1668,129 +1666,41 @@ if(!interrupted)throw new Error('fixture did not interrupt artifact publication'
     );
 
     it(
-      "advances past a dirty candidate so the following clean candidate can recover",
-      async () =>
-        withFixture(async (f) => {
-          writeFileSync(join(f.source, "source.txt"), "unretained dirty source\n");
-          const dirty = await f.prepare();
-          writeFileSync(join(f.source, "source.txt"), "retained source\n");
-          const clean = await f.prepare();
-          const result = await f.program(
-            `const results=[];for(let i=0;i<2;i++){const discovery=discoverStaging(ctx.staging);results.push(await recoverDiscoveredStaging(ctx.staging,discovery,{binary:ctx.cli,cwd:ctx.repository}));}console.log(JSON.stringify(results));`,
-            orderedDirectories([basename(dirty.root), basename(clean.root)], "first"),
-          );
-          expect(result.status, result.stderr).toBe(0);
-          expect(JSON.parse(result.stdout)).toMatchObject([
-            { id: dirty.receipt.id, recovered: false },
-            { id: clean.receipt.id, recovered: true },
-          ]);
-          expect(readFileSync(join(dirty.source, "source.txt"), "utf8")).toBe(
-            "unretained dirty source\n",
-          );
-          expect(existsSync(clean.root)).toBe(false);
-        }),
-      90_000,
-    );
-
-    it(
-      "reaches a candidate beyond 64 protected entries over bounded metadata-only discovery passes",
+      "pages through protected staging without recovering unrelated candidates",
       async () =>
         withFixture(async (f) => {
           const stage = await f.prepare("", {
             before: "for(let i=0;i<64;i++)createStaging(ctx.staging,ctx.repository,'worktree');",
           });
-          const measurement = await f.program(
-            `
-const passes=[];
-for(let pass=0;pass<128&&fs.existsSync(${JSON.stringify(stage.root)});pass++){
-  counters={headers:0,bytes:0,payload:0,commands:0,hashes:0,osReads:0,osBytes:0,osCommands:0,osHashes:0,osHashBytes:0};phase='discover';
-  const discovery=discoverStaging(ctx.staging);phase='recover';
-  const metrics={...counters,entries:discovery.entries.length,elapsedMs:discovery.elapsedMs,statuses:discovery.entries.map(entry=>entry.status)};
-  const result=await recoverDiscoveredStaging(ctx.staging,discovery,{binary:ctx.cli,cwd:ctx.repository});
-  phase='idle';passes.push({...metrics,recovered:result?.recovered===true});
+          const result = await f.program(
+            `const pages=[];let after;const output=console.log;
+for(let page=0;page<128;page++){
+  let printed;console.log=value=>{printed=value;};
+  try{await runStagingCommand(['inspect',...(after?['--after',after]:[])],ctx.staging,{binary:ctx.cli,cwd:ctx.repository});}finally{console.log=output;}
+  const inspection=JSON.parse(printed);pages.push(inspection);
+  if(!inspection.incomplete)break;
+  if(!inspection.nextCursor||inspection.nextCursor===after)throw new Error('inspection did not advance');
+  after=inspection.nextCursor;
 }
-console.log(JSON.stringify({passes,remaining:fs.existsSync(${JSON.stringify(stage.root)})}));`,
-            `
-let phase='idle';let counters;let observedBoot='',observedNamespace='';const descriptors=new Map();
-const originalOpen=fs.openSync,originalRead=fs.readSync,originalClose=fs.closeSync;
-fs.openSync=(path,...args)=>{const fd=originalOpen(path,...args);descriptors.set(fd,String(path));if(phase==='discover'){if(basename(String(path))==='staging.json')counters.headers++;if(String(path).includes('/payload'))counters.payload++;}return fd;};
-fs.readSync=(fd,...args)=>{const count=originalRead(fd,...args);if(phase==='discover'&&descriptors.has(fd)){if(descriptors.get(fd)==='/proc/sys/kernel/random/boot_id'){counters.osReads++;counters.osBytes+=count;if(Buffer.isBuffer(args[0])&&args[0].length<=128)observedBoot=args[0].subarray(0,count).toString('utf8').trim();}else counters.bytes+=count;}return count;};
-fs.closeSync=(fd)=>{descriptors.delete(fd);return originalClose(fd);};
-const originalReadlink=fs.readlinkSync;fs.readlinkSync=(path,...args)=>{const value=originalReadlink(path,...args);if(phase==='discover'&&path==='/proc/self/ns/pid'){counters.osReads++;counters.osBytes+=Buffer.byteLength(String(value));if(Buffer.byteLength(String(value))<=128)observedNamespace=String(value);}return value;};
-for(const name of ['lstatSync','statSync','readFileSync','readdirSync','readlinkSync']){const original=fs[name];fs[name]=(path,...args)=>{if(phase==='discover'&&String(path).includes('/payload'))counters.payload++;return original(path,...args);};}
-${orderedDirectories([basename(stage.root)], "last")}
-for(const name of ['spawn','spawnSync','execFileSync']){const original=cp[name];cp[name]=(...args)=>{const options=args[2];const bootProbe=phase==='discover'&&process.platform==='darwin'&&name==='spawnSync'&&args[0]==='/usr/sbin/sysctl'&&JSON.stringify(args[1])===JSON.stringify(['-n','kern.bootsessionuuid'])&&options?.encoding==='utf8'&&options.env&&Object.keys(options.env).length===0&&options.timeout>0&&options.timeout<=1000&&options.maxBuffer>0&&options.maxBuffer<=1024;if(phase==='discover'){if(bootProbe)counters.osCommands++;else counters.commands++;}const result=original(...args);if(bootProbe&&typeof result.stdout==='string'){observedBoot=result.stdout.trim();counters.osBytes+=Buffer.byteLength(result.stdout);}return result;};}
-const originalHash=crypto.createHash;crypto.createHash=(algorithm,...args)=>{const hash=originalHash(algorithm,...args);if(phase==='discover'){const metrics=counters;metrics.hashes++;const update=hash.update.bind(hash),digest=hash.digest.bind(hash);let updates=0,identity=false,size=0,finished=false;hash.update=(data,...options)=>{updates++;size=typeof data==='string'?Buffer.byteLength(data):0;identity=updates===1&&algorithm==='sha256'&&typeof data==='string'&&size<=256&&observedBoot.length===36&&(process.platform==='darwin'||observedNamespace.startsWith('pid:['))&&data===process.platform+':'+observedBoot.toLowerCase()+':'+observedNamespace;return update(data,...options);};hash.digest=(...options)=>{if(!finished&&identity){metrics.hashes--;metrics.osHashes++;metrics.osHashBytes+=size;}finished=true;return digest(...options);};}return hash;};`,
-            120_000,
+console.log(JSON.stringify(pages));`,
+            orderedDirectories([basename(stage.root)], "last"),
           );
-          expect(measurement.status, measurement.stderr).toBe(0);
-          const report = JSON.parse(measurement.stdout) as {
-            passes: {
-              headers: number;
-              bytes: number;
-              payload: number;
-              commands: number;
-              hashes: number;
-              osReads: number;
-              osBytes: number;
-              osCommands: number;
-              osHashes: number;
-              osHashBytes: number;
-              entries: number;
-              elapsedMs: number;
-              statuses: string[];
-              recovered: boolean;
-            }[];
-            remaining: boolean;
-          };
-          expect(report.remaining).toBe(false);
-          expect(report.passes.length).toBeGreaterThan(1);
-          expect(report.passes[0]!.statuses.every((status) => status === "protected")).toBe(true);
-          expect(report.passes.filter((pass) => pass.recovered)).toHaveLength(1);
-          // Classify only the observed boot/PID-namespace digest as bounded OS
-          // metadata. No discovery pass is run before measurement or prewarmed.
-          expect(report.passes.reduce((sum, pass) => sum + pass.osHashes, 0)).toBe(1);
-          expect(report.passes.reduce((sum, pass) => sum + pass.osCommands, 0)).toBe(
-            process.platform === "darwin" ? 1 : 0,
-          );
-          for (const pass of report.passes) {
-            expect(pass.headers).toBeLessThanOrEqual(64);
-            expect(pass.entries).toBeLessThanOrEqual(64);
-            expect(pass).toMatchObject({ payload: 0, commands: 0, hashes: 0 });
-            expect(pass.bytes).toBeLessThanOrEqual(65 * 32 * 1024);
-            expect(pass.osReads).toBeLessThanOrEqual(2);
-            expect(pass.osBytes).toBeLessThanOrEqual(256);
-            expect(pass.osHashBytes).toBeLessThanOrEqual(256);
+          expect(result.status, result.stderr).toBe(0);
+          const pages = JSON.parse(result.stdout) as Inspection[];
+          expect(pages.length).toBeGreaterThan(1);
+          expect(pages.at(-1)?.incomplete).toBe(false);
+          for (const page of pages) {
+            expect(page.entries.length).toBeLessThanOrEqual(64);
           }
-          expect(readFileSync(f.calls, "utf8").trim().split("\n")).toHaveLength(2);
-          console.info(
-            "Staging discovery metadata measurements: " +
-              JSON.stringify(
-                report.passes.map(
-                  ({
-                    headers,
-                    bytes,
-                    elapsedMs,
-                    osReads,
-                    osBytes,
-                    osCommands,
-                    osHashes,
-                    osHashBytes,
-                  }) => ({
-                    headers,
-                    bytes,
-                    elapsedMs,
-                    osReads,
-                    osBytes,
-                    osCommands,
-                    osHashes,
-                    osHashBytes,
-                  }),
-                ),
-              ),
+          expect(pages.flatMap((page) => page.entries)).toContainEqual(
+            expect.objectContaining({ id: stage.receipt.id, status: "candidate" }),
           );
+          expect(existsSync(stage.root)).toBe(true);
+          expect(readFileSync(f.calls, "utf8")).toBe("");
+          expect((await f.recover(stage)).report.recovered).toBe(true);
+          expect(existsSync(stage.root)).toBe(false);
         }),
-      180_000,
+      90_000,
     );
   },
 );

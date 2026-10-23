@@ -4,12 +4,11 @@ export const REPLY_TOOL_AUTHORITY_COMPAT_RECORD = {
   code: "reply-tool-authority-sync-preparation",
   status: "deprecated",
   owner: "sdk",
-  introduced: "2026-10-04",
   deprecated: "2026-10-04",
   warningStarts: "2026-10-04",
-  removalGate: "next-plugin-sdk-major",
+  removeAfter: "2026-12-31",
   replacement:
-    "Await the Async reply-operation, fingerprint, and V2 queue companions. Question dispatchers await authority.assertCurrentAsync after transport preparation and assert current authority immediately before I/O. Released synchronous contracts remain until the next Plugin SDK major and explicit breaking-release approval.",
+    "Await the Async reply-operation, fingerprint, and V2 queue companions. Question dispatchers await authority.assertCurrentAsync after transport preparation and assert current authority immediately before I/O. Released synchronous contracts remain through 2026-12-31; removal ships in the first January 2027 stable release without an SDK major.",
   docsPath: "/plugins/sdk-migration/how-to-migrate#await-reply-tool-authority",
   surfaces: [
     "EmbeddedRunAttemptParams.replyOperation",
@@ -21,12 +20,6 @@ export const REPLY_TOOL_AUTHORITY_COMPAT_RECORD = {
     "AgentQuestionDispatcher.authority.assertCurrent",
   ],
   diagnostics: [
-    "TypeScript @deprecated annotations and migration documentation; no runtime warnings",
+    "TypeScript @deprecated annotations and bounded warnings on legacy preparation or injection fallbacks; supported prepared projections and live effect assertions remain silent",
   ],
-  tests: [
-    "src/plugins/compat/registry.test.ts",
-    "src/plugin-sdk/reply-tool-authority-compat.test.ts",
-  ],
-  releaseNote:
-    "Reply tool authority preparation gains awaited session-reader paths while retaining released synchronous snapshot, operation, and dispatcher contracts. Legacy external V2 dispatchers retain fresh native authority checks; schema, retention, and update behavior are unchanged.",
 } as const satisfies PluginCompatRecord;

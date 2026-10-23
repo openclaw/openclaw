@@ -1,3 +1,4 @@
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -77,6 +78,7 @@ describe("renderQrPngBase64", () => {
   });
 
   it("writes QR PNGs to a scoped temp file", async ({ onTestFinished }) => {
+    using sync = vi.spyOn(syncFs, "fsyncSync");
     const tmpRoot = useAutoCleanupTempDirTracker(onTestFinished).make("openclaw-qr-image-");
 
     const result = await writeQrPngTempFile("openclaw", {
@@ -89,6 +91,7 @@ describe("renderQrPngBase64", () => {
     expect(path.basename(result.dirPath)).toMatch(/^pair-/);
     expect(result.mediaLocalRoots).toEqual([result.dirPath]);
     await expect(fs.readFile(result.filePath, "utf8")).resolves.toBe("fakepng");
+    expect(sync).not.toHaveBeenCalled();
   });
 
   it.each([

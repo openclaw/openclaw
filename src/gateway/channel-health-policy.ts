@@ -7,23 +7,21 @@ import type { ChannelAccountSnapshot, ChannelId } from "../channels/plugins/type
 
 type ChannelHealthSnapshot = Omit<ChannelAccountSnapshot, "accountId">;
 
-type ChannelHealthEvaluationReason =
-  | "healthy"
-  | "unmanaged"
-  | "not-running"
-  | "terminal-disconnect"
-  | "blocked"
-  | "busy"
-  | "stuck"
-  | "startup-connect-grace"
-  | "reconnect-grace"
-  | "disconnected"
-  | "stale-socket"
-  | "ingress-unavailable";
-
 export type ChannelHealthEvaluation = {
   healthy: boolean;
-  reason: ChannelHealthEvaluationReason;
+  reason:
+    | "healthy"
+    | "unmanaged"
+    | "not-running"
+    | "terminal-disconnect"
+    | "blocked"
+    | "busy"
+    | "stuck"
+    | "startup-connect-grace"
+    | "reconnect-grace"
+    | "disconnected"
+    | "stale-socket"
+    | "ingress-unavailable";
 };
 
 export type ChannelHealthPolicy = {
@@ -44,14 +42,6 @@ export function resolveChannelHealthState(
     : snapshot.healthState;
 }
 
-type ChannelRestartReason =
-  | "gave-up"
-  | "stopped"
-  | "stale-socket"
-  | "stuck"
-  | "disconnected"
-  | "ingress-unavailable";
-
 function resolveObservedChannelTimestamp(value: unknown, now: number): number | null {
   return typeof value === "number" &&
     Number.isFinite(value) &&
@@ -71,11 +61,14 @@ export function evaluateChannelHealth(
   snapshot: ChannelHealthSnapshot,
   policy: ChannelHealthPolicy,
 ): ChannelHealthEvaluation {
-  if (snapshot.enabled === false || snapshot.configured === false || snapshot.linked === false) {
+  if (snapshot.enabled === false || snapshot.configured === false) {
     return { healthy: true, reason: "unmanaged" };
   }
   if (!snapshot.running && snapshot.terminalDisconnect) {
     return { healthy: false, reason: "terminal-disconnect" };
+  }
+  if (snapshot.lifecycle === "blocked") {
+    return { healthy: false, reason: "blocked" };
   }
   // Transport liveness and inbound admission are independent failure domains: a
   // channel can hold a healthy socket and still admit nothing. This outranks the
@@ -86,8 +79,10 @@ export function evaluateChannelHealth(
   if (snapshot.ingressUnavailable === true) {
     return { healthy: false, reason: "ingress-unavailable" };
   }
-  if (snapshot.lifecycle === "blocked") {
-    return { healthy: false, reason: "blocked" };
+  // Ordinary unlinked accounts need no recovery, but losing linkage cannot hide
+  // an already recorded failure (for example, a terminal session logout).
+  if (snapshot.linked === false) {
+    return { healthy: true, reason: "unmanaged" };
   }
   const lastStartAt = asFiniteNumber(snapshot.lastStartAt) ?? null;
   const currentLifecycleStarted =
@@ -180,7 +175,7 @@ export function evaluateChannelHealth(
 export function resolveChannelRestartReason(
   snapshot: ChannelHealthSnapshot,
   evaluation: ChannelHealthEvaluation,
-): ChannelRestartReason {
+): "gave-up" | "stopped" | "stale-socket" | "stuck" | "disconnected" | "ingress-unavailable" {
   // Restart reasons are intentionally coarse: downstream logs/UI need stable
   // categories, while detailed channel state stays in the health snapshot.
   if (

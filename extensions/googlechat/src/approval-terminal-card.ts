@@ -1,4 +1,5 @@
 import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
+import { formatApprovalDecisionLabel } from "openclaw/plugin-sdk/approval-runtime";
 import {
   buildGoogleChatApprovalTextWidget as buildTextWidget,
   escapeGoogleChatApprovalCardText as escapeGoogleChatText,
@@ -7,17 +8,14 @@ import type { GoogleChatCardV2 } from "./types.js";
 
 const GOOGLECHAT_APPROVAL_CARD_ID = "openclaw-approval";
 function formatCanonicalOutcome(approval: ApprovalResolveResult["approval"]): string {
-  switch (approval.status) {
-    case "allowed":
-      return approval.decision === "allow-always" ? "Allowed always" : "Allowed once";
-    case "denied":
-      return "Denied";
-    case "expired":
-      return "Expired";
-    case "cancelled":
-      return "Cancelled";
+  if (approval.status === "allowed" || approval.status === "denied") {
+    return formatApprovalDecisionLabel(approval.decision);
   }
-  return "Unavailable";
+  return approval.status === "expired"
+    ? "Expired"
+    : approval.status === "cancelled"
+      ? "Cancelled"
+      : "Unavailable";
 }
 
 function buildSubjectSection(

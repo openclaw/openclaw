@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { getRuntimeConfig } from "./config/config.js";
+import { createConfigIO } from "./config/config.js";
 import { resolveGatewayPort } from "./config/paths.js";
 import { readActiveGatewayLockPort } from "./infra/gateway-lock.js";
 import { isMainModule } from "./infra/is-main.js";
@@ -16,11 +16,10 @@ async function resolveDockerHealthcheckPort(): Promise<number> {
     // A best-effort lock read must not hide a healthy Gateway on the configured port.
   }
 
-  const config = getRuntimeConfig({
-    pin: false,
-    skipPluginValidation: true,
-    skipShellEnvFallback: true,
-  });
+  const config = await createConfigIO({
+    pluginValidation: "skip",
+    shellEnvFallback: "defer",
+  }).loadConfigAsync();
   return resolveGatewayPort(config, process.env);
 }
 

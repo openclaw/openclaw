@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import { PhotonImage, resize, SamplingFilter, watermark } from "@silvia-odwyer/photon-node";
 import type { Plugin } from "vite";
 
 /** Generate the public card from the existing brand artwork, without a browser or fonts. */
@@ -7,7 +6,9 @@ export function controlUiSocialCardPlugin(): Plugin {
   return {
     name: "control-ui-social-card",
     apply: "build",
-    buildStart() {
+    async buildStart() {
+      const { PhotonImage, resize, SamplingFilter, watermark } =
+        await import("@silvia-odwyer/photon-node");
       const pixels = Buffer.alloc(1200 * 630 * 4, Buffer.from([11, 16, 22, 255]));
       const canvas = new PhotonImage(pixels, 1200, 630);
       const images = [canvas];

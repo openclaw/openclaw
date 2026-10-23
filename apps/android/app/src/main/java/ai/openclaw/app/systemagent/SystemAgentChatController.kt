@@ -182,17 +182,13 @@ internal class SystemAgentChatController(
     messageId: String,
     optionLabel: String,
   ) {
-    val current = state.value
-    val message = current.messages.firstOrNull { it.id == messageId } ?: return
-    if (!current.canAnswer(message)) return
+    val message = state.value.answerableMessage(messageId) ?: return
     val option = message.question?.options?.firstOrNull { it.label == optionLabel } ?: return
     request(message = option.reply ?: option.label, displayText = option.label)
   }
 
   fun skipQuestion(messageId: String) {
-    val current = state.value
-    val message = current.messages.firstOrNull { it.id == messageId } ?: return
-    if (!current.canAnswer(message)) return
+    if (state.value.answerableMessage(messageId) == null) return
     request(
       message = "Skip for now",
       displayText = nativeString("Skip for now"),
@@ -253,6 +249,12 @@ internal class SystemAgentChatController(
 
     requestJob =
       scope.launch {
+        fun canApplyResponse(): Boolean {
+          if (!isCurrent(requestGeneration)) return false
+          if (lease.isCurrent()) return true
+          markRouteChanged(requestGeneration)
+          return false
+        }
         try {
           if (!isCurrent(requestGeneration) || !lease.isCurrent()) return@launch
           val payload =
@@ -261,21 +263,13 @@ internal class SystemAgentChatController(
               message?.let { put("message", JsonPrimitive(it)) }
             }
           val response = lease.request(GatewayMethod.OpenclawChat.rawValue, payload.toString(), 190_000)
-          if (!isCurrent(requestGeneration)) return@launch
-          if (!lease.isCurrent()) {
-            markRouteChanged(requestGeneration)
-            return@launch
-          }
+          if (!canApplyResponse()) return@launch
           val result = json.parseToJsonElement(response).jsonObject
           val reply = result["reply"]?.jsonPrimitive?.contentOrNull ?: ""
           val action = result["action"]?.jsonPrimitive?.contentOrNull ?: "none"
           val sensitive = result["sensitive"]?.jsonPrimitive?.booleanOrNull
           val agentId = result["agentId"]?.jsonPrimitive?.contentOrNull
-          if (!isCurrent(requestGeneration)) return@launch
-          if (!lease.isCurrent()) {
-            markRouteChanged(requestGeneration)
-            return@launch
-          }
+          if (!canApplyResponse()) return@launch
           commitRequestState(requestGeneration, lease) {
             it.copy(
               messages =
@@ -382,11 +376,13 @@ private fun SystemAgentChatState.canSend(): Boolean =
     errorText == null &&
     handoff == null
 
-private fun SystemAgentChatState.canAnswer(message: SystemAgentChatMessage): Boolean =
-  canSend() &&
-    message.question != null &&
-    message.id !in dismissedQuestionIds &&
-    message.id !in retiredQuestionIds
+private fun SystemAgentChatState.answerableMessage(id: String): SystemAgentChatMessage? =
+  messages.firstOrNull { it.id == id }?.takeIf { message ->
+    canSend() &&
+      message.question != null &&
+      message.id !in dismissedQuestionIds &&
+      message.id !in retiredQuestionIds
+  }
 
 private fun SystemAgentGatewayAccess.toChatAccess(): SystemAgentChatAccess =
   when {

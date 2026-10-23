@@ -1,91 +1,105 @@
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-pane-suspension.test/"} */
 
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
-import { ChatPaneBase } from "./chat-pane-base.ts";
-import { createTestChatPane } from "./chat-pane.test-support.ts";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { createStorageMock } from "../../test-helpers/storage.ts";
+import {
+  createTestChatPane,
+  connectPaneTestView,
+  type TestChatPane,
+} from "./chat-pane.test-support.ts";
 import { getChatComposerState, resetChatComposerState } from "./components/chat-composer-state.ts";
+import { loadChatComposerState } from "./composer-draft-storage.ts";
 
+let visibility: DocumentVisibilityState;
+const panes: TestChatPane[] = [];
+beforeEach(() => {
+  visibility = "visible";
+  vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+});
+function setVisibility(next: DocumentVisibilityState) {
+  visibility = next;
+  document.dispatchEvent(new Event("visibilitychange"));
+}
+function createPane() {
+  const fixture = createTestChatPane({ client: createTestGatewayClient(async () => ({})) });
+  fixture.pane.render = () => ({
+    layout: null,
+    capabilityDialogs: undefined,
+    providerReviewSource: undefined,
+  });
+  panes.push(fixture.pane);
+  return fixture;
+}
 afterEach(() => {
+  for (const pane of panes.splice(0)) {
+    Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
+    pane.disconnectedCallback();
+  }
   resetChatComposerState();
   vi.restoreAllMocks();
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
-describe("chat pane suspension", () => {
-  it("pauses minute updates while hidden and refreshes once on return", async () => {
-    vi.useFakeTimers();
-    let visibility: DocumentVisibilityState = "visible";
-    vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
-    const client = new GatewayBrowserClient({ url: "ws://example.test" });
-    vi.spyOn(client, "request").mockResolvedValue({});
-    const { pane } = createTestChatPane({ client });
-    const lifecycle = Object.assign(pane, { render: () => null });
-    ChatPaneBase.prototype.connectedCallback.call(lifecycle);
-    await lifecycle.updateComplete;
-    const requestUpdate = vi.spyOn(lifecycle, "requestUpdate");
-    try {
-      vi.advanceTimersByTime(60_000);
-      expect(requestUpdate).toHaveBeenCalledOnce();
-      requestUpdate.mockClear();
-      visibility = "hidden";
-      document.dispatchEvent(new Event("visibilitychange"));
-      vi.advanceTimersByTime(600_000);
-      expect(requestUpdate).not.toHaveBeenCalled();
-      visibility = "visible";
-      document.dispatchEvent(new Event("visibilitychange"));
-      expect(requestUpdate).toHaveBeenCalledOnce();
-      vi.advanceTimersByTime(60_000);
-      expect(requestUpdate).toHaveBeenCalledTimes(2);
-    } finally {
-      Object.defineProperty(lifecycle, "isConnected", { configurable: true, value: false });
-      ChatPaneBase.prototype.disconnectedCallback.call(lifecycle);
-    }
-  });
+it("pauses minute updates while hidden and refreshes once on return", async () => {
+  vi.useFakeTimers();
+  const { pane } = createPane();
+  connectPaneTestView(pane);
+  await pane.updateComplete;
+  const render = vi.spyOn(pane, "render");
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(render).toHaveBeenCalledOnce();
+  setVisibility("hidden");
+  render.mockClear();
+  await vi.advanceTimersByTimeAsync(600_000);
+  expect(render).not.toHaveBeenCalled();
+  setVisibility("visible");
+  await pane.updateComplete;
+  expect(render).toHaveBeenCalledOnce();
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(render).toHaveBeenCalledTimes(2);
+});
 
-  it("commits each retained presentation's live draft before the document can suspend", async () => {
-    let visibilityState: DocumentVisibilityState = "visible";
-    vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibilityState);
-    const presentations = ["first", "second"].map((name) => {
-      const { pane, requestUpdate, state } = createTestChatPane({
-        client: { request: vi.fn() } as unknown as GatewayBrowserClient,
-        sessions: {} as SessionCapability,
-      });
-      const lifecycle = Object.assign(pane, {
-        paneId: "p1",
-        presentationId: JSON.stringify(["p1", `agent:main:${name}`]),
-        render: () => null,
-      });
-      const textarea = document.createElement("textarea");
-      textarea.value = `${name} draft still being composed 雪`;
-      getChatComposerState(lifecycle.presentationId).composerTextarea = textarea;
-      state.chatMessage = `${name} draft still being`;
-      state.handleChatDraftChange = vi.fn((next: string) => {
-        state.chatMessage = next;
-      });
-      ChatPaneBase.prototype.connectedCallback.call(lifecycle);
-      return { lifecycle, requestUpdate, state, textarea };
+it("commits each retained presentation's live draft before the document can suspend", async () => {
+  const presentations = ["first", "second"].map((name) => {
+    const { pane, state } = createPane();
+    Object.assign(pane, {
+      paneId: "p1",
+      presentationId: JSON.stringify(["p1", `agent:main:${name}`]),
     });
-    try {
-      await Promise.all(presentations.map(({ lifecycle }) => lifecycle.updateComplete));
-      visibilityState = "hidden";
-      document.dispatchEvent(new Event("visibilitychange"));
-
-      for (const { requestUpdate, state, textarea } of presentations) {
-        expect(state.handleChatDraftChange).toHaveBeenCalledExactlyOnceWith(textarea.value);
-        expect(state.chatMessage).toBe(textarea.value);
-        expect(requestUpdate).toHaveBeenCalledOnce();
-      }
-    } finally {
-      visibilityState = "visible";
-      document.dispatchEvent(new Event("visibilitychange"));
-      await Promise.all(presentations.map(({ lifecycle }) => lifecycle.updateComplete));
-      for (const { lifecycle } of presentations) {
-        Object.defineProperty(lifecycle, "isConnected", { configurable: true, value: false });
-        ChatPaneBase.prototype.disconnectedCallback.call(lifecycle);
-      }
-    }
+    const textarea = document.createElement("textarea");
+    textarea.value = `${name} draft still being composed 雪`;
+    getChatComposerState(pane.presentationId).composerTextarea = textarea;
+    state.chatMessage = `${name} draft still being`;
+    vi.spyOn(state, "handleChatDraftChange");
+    const draft = pane.chatState.composerDraft;
+    connectPaneTestView(pane);
+    return { pane, draft, state, textarea };
   });
+  await Promise.all(presentations.map(({ pane }) => pane.updateComplete));
+  setVisibility("hidden");
+  for (const { draft, state, textarea } of presentations) {
+    expect(state.handleChatDraftChange).toHaveBeenCalledExactlyOnceWith(textarea.value);
+    expect([state.chatMessage, draft.read().draft]).toEqual([textarea.value, textarea.value]);
+  }
+});
+
+it("stores an ordinary committed draft on hide before its debounce runs", async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal("sessionStorage", createStorageMock());
+  const { pane, state } = createPane();
+  state.settings = { ...state.settings, gatewayUrl: pane.context.gateway.connection.gatewayUrl };
+  connectPaneTestView(pane);
+  await pane.updateComplete;
+  pane.chatState.composerPersistence.start();
+  const draft = "unfinished later draft";
+  const textarea = document.createElement("textarea");
+  textarea.value = draft;
+  getChatComposerState(pane.presentationId).composerTextarea = textarea;
+  state.handleChatDraftChange(draft);
+  expect(loadChatComposerState(state, state.sessionKey).snapshot?.draft ?? "").toBe("");
+  setVisibility("hidden");
+  expect(loadChatComposerState(state, state.sessionKey).snapshot?.draft).toBe(draft);
 });

@@ -1,11 +1,9 @@
-import { createServer } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
-import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BROWSER_PROXY_OWNED_TAB_CLOSE_PATH } from "../browser-proxy-envelope.js";
 import type { closeTrackedCdpTarget } from "../browser/cdp.helpers.js";
+import { createCdpFixture } from "../browser/cdp.test-support.js";
 import { resolveBrowserConfig } from "../browser/config.js";
 import type { BrowserDispatchRequest } from "../browser/routes/dispatcher.js";
 import type { BrowserServerState } from "../browser/server-context.js";
@@ -20,7 +18,7 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
-  getRuntimeConfig: () => mocks.config,
+  readRuntimeConfig: () => mocks.config,
   getRuntimeConfigSourceSnapshot: () => mocks.config,
 }));
 vi.mock("../control-service.js", () => ({
@@ -44,6 +42,10 @@ vi.mock("../browser/cdp.helpers.js", async (importOriginal) => ({
 }));
 
 import { runBrowserProxyCommand } from "./invoke-browser.js";
+
+function invoke(params: Record<string, unknown> = {}) {
+  return runBrowserProxyCommand(JSON.stringify({ method: "POST", path: "/stop", ...params }));
+}
 
 const ownership = {
   status: "durable",
@@ -70,48 +72,24 @@ describe("node browser proxy admission", () => {
       write();
       return { status: 200, body: { ok: true } };
     });
-    await expect(
-      runBrowserProxyCommand(JSON.stringify({ method: "POST", path: "/stop" })),
-    ).rejects.toThrow("node browser proxy disabled");
+    await expect(invoke()).rejects.toThrow("node browser proxy disabled");
     expect(write).not.toHaveBeenCalled();
   });
 
   it("rechecks policy after native ownership discovery before closing a target", async () => {
-    let wsUrl = "";
-    const server = createServer((_request, response) => {
-      response.setHeader("Content-Type", "application/json");
-      response.end(JSON.stringify({ webSocketDebuggerUrl: wsUrl }));
-    });
-    const sockets = new WebSocketServer({ server });
-    const commands: string[] = [];
-    sockets.on("connection", (socket) =>
-      socket.on("message", (raw) => {
-        const message = JSON.parse(rawDataToString(raw)) as { id: number; method: string };
-        commands.push(message.method);
+    const fixture = createCdpFixture({});
+    try {
+      const { cdpUrl, messages } = await fixture.start((message) => {
         if (message.method === "Target.getTargets") {
           mocks.config = { ...mocks.config, nodeHost: { browserProxy: { enabled: false } } };
         }
-        socket.send(
-          JSON.stringify({
-            id: message.id,
-            result:
-              message.method === "Target.getTargets"
-                ? { targetInfos: [{ targetId: "synthetic-target" }] }
-                : { success: true },
-          }),
-        );
-      }),
-    );
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("fixture requires a TCP listener");
-    }
-    const cdpUrl = `http://127.0.0.1:${address.port}`;
-    wsUrl = `ws://127.0.0.1:${address.port}/devtools/browser/proof`;
-    try {
+        return {
+          result:
+            message.method === "Target.getTargets"
+              ? { targetInfos: [{ targetId: "synthetic-target" }] }
+              : { success: true },
+        };
+      });
       mocks.config = {
         ...mocks.config,
         browser: { profiles: { openclaw: { cdpUrl, attachOnly: true } } },
@@ -126,25 +104,13 @@ describe("node browser proxy admission", () => {
       });
       expect(nativeOwnership.status).toBe("durable");
       mocks.close.mockImplementationOnce(cdp.closeTrackedCdpTarget);
-      await runBrowserProxyCommand(
-        JSON.stringify({
-          method: "POST",
-          path: BROWSER_PROXY_OWNED_TAB_CLOSE_PATH,
-          body: { ownership: nativeOwnership },
-        }),
-      );
-      expect(commands).not.toContain("Target.closeTarget");
+      await invoke({
+        path: BROWSER_PROXY_OWNED_TAB_CLOSE_PATH,
+        body: { ownership: nativeOwnership },
+      });
+      expect(messages.map(({ method }) => method)).not.toContain("Target.closeTarget");
     } finally {
-      for (const socket of sockets.clients) {
-        socket.terminate();
-      }
-      await new Promise<void>((resolve) => {
-        sockets.close(() => resolve());
-      });
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
+      await fixture.close();
     }
   });
 
@@ -153,73 +119,47 @@ describe("node browser proxy admission", () => {
       mocks.config = { ...mocks.config, browser: { defaultProfile: "user" } };
       return { body };
     });
-    await runBrowserProxyCommand(JSON.stringify({ method: "POST", path: "/stop" }));
+    await invoke();
     expect(mocks.dispatch).toHaveBeenCalledWith(
       expect.objectContaining({ query: { profile: "openclaw" } }),
     );
   });
 
-  it("rejects PUT before it can become a host-local GET", async () => {
-    await expect(
-      runBrowserProxyCommand(JSON.stringify({ method: "PUT", path: "/system-profiles" })),
-    ).rejects.toThrow(/method must be GET, POST, or DELETE/);
-    expect(mocks.dispatch).not.toHaveBeenCalled();
-  });
-
-  it("does not close an owned target through DELETE", async () => {
-    await expect(
-      runBrowserProxyCommand(
-        JSON.stringify({
-          method: "DELETE",
-          path: BROWSER_PROXY_OWNED_TAB_CLOSE_PATH,
-          body: { ownership },
-        }),
-      ),
-    ).rejects.toThrow(/requires POST/);
+  it.each([
+    { method: "PUT", path: "/system-profiles", error: /method must be GET, POST, or DELETE/ },
+    { method: "DELETE", path: BROWSER_PROXY_OWNED_TAB_CLOSE_PATH, error: /requires POST/ },
+  ])("rejects $method on $path before dispatch", async ({ method, path, error }) => {
+    await expect(invoke({ method, path, body: { ownership } })).rejects.toThrow(error);
     expect(mocks.close).not.toHaveBeenCalled();
     expect(mocks.dispatch).not.toHaveBeenCalled();
   });
 
   it.each([
-    { phase: "startup", restriction: "disabled" },
-    { phase: "staging", restriction: "profile" },
-  ] as const)(
-    "rechecks $restriction admission after awaited $phase",
-    async ({ phase, restriction }) => {
-      const entered = createDeferred<void>();
-      const released = createDeferred<void>();
-      if (phase === "startup") {
-        mocks.start.mockImplementationOnce(async () => {
-          entered.resolve();
-          await released.promise;
-          return state;
-        });
-      } else {
-        mocks.stage.mockImplementationOnce(async ({ body }) => {
-          entered.resolve();
-          await released.promise;
-          return { body };
-        });
-      }
-      const run = runBrowserProxyCommand(
-        JSON.stringify({ method: "POST", path: "/stop", profile: "openclaw" }),
-      );
-      const rejected = expect(run).rejects.toThrow(
-        restriction === "disabled" ? "node browser proxy disabled" : "browser profile not allowed",
-      );
-      await entered.promise;
-      mocks.config = {
-        ...mocks.config,
-        nodeHost: {
-          browserProxy:
-            restriction === "disabled"
-              ? { enabled: false }
-              : { enabled: true, allowProfiles: ["user"] },
-        },
-      };
-      released.resolve();
-      await rejected;
-      expect(mocks.dispatch).not.toHaveBeenCalled();
+    { phase: "startup", policy: { enabled: false }, error: "node browser proxy disabled" },
+    {
+      phase: "staging",
+      policy: { enabled: true, allowProfiles: ["user"] },
+      error: "browser profile not allowed",
     },
-  );
+  ])("rechecks admission after awaited $phase", async ({ phase, policy, error }) => {
+    const entered = createDeferred<void>();
+    const released = createDeferred<void>();
+    async function pause<T>(value: T) {
+      entered.resolve();
+      await released.promise;
+      return value;
+    }
+    if (phase === "startup") {
+      mocks.start.mockImplementationOnce(() => pause(state));
+    } else {
+      mocks.stage.mockImplementationOnce(({ body }) => pause({ body }));
+    }
+    const run = invoke({ profile: "openclaw" });
+    const rejected = expect(run).rejects.toThrow(error);
+    await entered.promise;
+    mocks.config = { ...mocks.config, nodeHost: { browserProxy: policy } };
+    released.resolve();
+    await rejected;
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+  });
 });

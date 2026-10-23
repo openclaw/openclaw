@@ -1,8 +1,8 @@
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { estimateUtf8Bytes, splitTextToUtf8ByteLimit } from "./embedding-input-limits.js";
 import { hasNonTextEmbeddingParts } from "./embedding-inputs.js";
 import { resolveEmbeddingMaxInputTokens } from "./embedding-model-limits.js";
 import type { EmbeddingProvider } from "./embeddings.types.js";
-import { hashText } from "./hash.js";
 import type { MemoryChunk } from "./internal.js";
 
 // Enforces provider byte budgets before chunks reach embedding workers.
@@ -42,7 +42,7 @@ export function enforceEmbeddingMaxInputTokens(
           ? { entryStartLine: chunk.entryStartLine, entryEndLine: chunk.entryEndLine }
           : {}),
         text,
-        hash: hashText(text),
+        hash: sha256Hex(text),
         embeddingInput: { text },
         ...(chunk.provenance ? { provenance: chunk.provenance } : {}),
       });

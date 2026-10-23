@@ -4,6 +4,18 @@ import { isLegacyAuditMigrationBackupPath } from "./backup-audit-paths.js";
 // These live-mutation paths are transient or have durable equivalents in state;
 // archiving their changing bytes would race the size captured by the tar header.
 const CHROMIUM_SINGLETON_FILES = new Set(["SingletonCookie", "SingletonLock", "SingletonSocket"]);
+const VOLATILE_DIRECTORY_RULES = [
+  // Older installs keep the obsolete Control UI cache until Doctor removes it.
+  [["sandbox/skills-workspaces", "cache/control-ui-assets", "tmp/plugin-captures"], undefined],
+  [
+    ["sessions", "cron/runs", "logs"],
+    [".jsonl", ".log"],
+  ],
+  [
+    ["delivery-queue", "session-delivery-queue"],
+    [".json", ".delivered", ".tmp"],
+  ],
+] as const;
 const SQLITE_MEMORY_TRANSIENT_PATH_PATTERN =
   /(?:^|\/)(?:[^/]+\.sqlite\.(?:generation-(?:lock|writer)|reindex-lock)\.sqlite|[^/]+\.sqlite\.(?:backup|memory-reindex|tmp)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:-wal|-shm|-journal)?$/iu;
 
@@ -39,25 +51,10 @@ export function isTransientSqliteBackupPath(filePath: string): boolean {
   return SQLITE_MEMORY_TRANSIENT_PATH_PATTERN.test(normalizedPath);
 }
 
-function isAgentSessionTranscriptPath(filePosix: string, stateDirPosix: string): boolean {
-  const agentsRoot = path.posix.join(stateDirPosix, "agents");
-  if (!isUnder(filePosix, agentsRoot)) {
-    return false;
-  }
-  const relative = path.posix.relative(agentsRoot, filePosix);
-  const parts = relative.split("/").filter(Boolean);
-  return parts.length >= 3 && parts[1] === "sessions";
-}
-
-function isManagedBrowserSingletonPath(filePosix: string, stateDirPosix: string): boolean {
-  const browserRoot = path.posix.join(stateDirPosix, "browser");
-  if (!isUnder(filePosix, browserRoot)) {
-    return false;
-  }
-  const parts = path.posix.relative(browserRoot, filePosix).split("/").filter(Boolean);
-  return (
-    parts.length === 3 && parts[1] === "user-data" && CHROMIUM_SINGLETON_FILES.has(parts[2] ?? "")
-  );
+function relativePathParts(filePosix: string, root: string): string[] {
+  return isUnder(filePosix, root)
+    ? path.posix.relative(root, filePosix).split("/").filter(Boolean)
+    : [];
 }
 
 type VolatileFilterPlan = {
@@ -83,37 +80,29 @@ export function isVolatileBackupPath(absolutePath: string, plan: VolatileFilterP
     ) {
       return true;
     }
-    if (isManagedBrowserSingletonPath(filePosix, stateDirPosix)) {
-      return true;
-    }
-
-    for (const parts of [
-      ["sandbox", "skills-workspaces"],
-      // Rebuildable bundles bridge open Control UI documents across updates.
-      ["cache", "control-ui-assets"],
-      ["tmp", "plugin-captures"],
-    ]) {
-      if (isUnder(filePosix, path.posix.join(stateDirPosix, ...parts))) {
-        return true;
-      }
-    }
-
+    const browserParts = relativePathParts(filePosix, path.posix.join(stateDirPosix, "browser"));
     if (
-      hasExtension(filePosix, [".jsonl", ".log"]) &&
-      (isAgentSessionTranscriptPath(filePosix, stateDirPosix) ||
-        [["sessions"], ["cron", "runs"], ["logs"]].some((parts) =>
-          isUnder(filePosix, path.posix.join(stateDirPosix, ...parts)),
-        ))
+      browserParts.length === 3 &&
+      browserParts[1] === "user-data" &&
+      CHROMIUM_SINGLETON_FILES.has(browserParts[2] ?? "")
     ) {
       return true;
     }
 
-    for (const queueDir of ["delivery-queue", "session-delivery-queue"]) {
-      const queueRoot = path.posix.join(stateDirPosix, queueDir);
+    for (const [directories, extensions] of VOLATILE_DIRECTORY_RULES) {
       if (
-        isUnder(filePosix, queueRoot) &&
-        hasExtension(filePosix, [".json", ".delivered", ".tmp"])
+        (!extensions || hasExtension(filePosix, extensions)) &&
+        directories.some((directory) =>
+          isUnder(filePosix, path.posix.join(stateDirPosix, directory)),
+        )
       ) {
+        return true;
+      }
+    }
+
+    if (hasExtension(filePosix, [".jsonl", ".log"])) {
+      const agentParts = relativePathParts(filePosix, path.posix.join(stateDirPosix, "agents"));
+      if (agentParts.length >= 3 && agentParts[1] === "sessions") {
         return true;
       }
     }

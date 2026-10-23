@@ -67,82 +67,79 @@ it("starts the pacing receiver measurement only after consuming encoded source a
   }
 });
 
-it.each([false, true])(
-  "preserves PCM frames across arbitrary splits and caller reuse (partial flush: %s)",
-  async (flushBetween) => {
-    const frameBytes = 960 * 2 * 2;
-    const pcm = Buffer.alloc(frameBytes * 5 + 336);
-    for (let index = 0; index < pcm.length; index += 1) {
-      pcm[index] = (index * 37 + 11) % 251;
+it("preserves PCM frames across arbitrary splits, partial flushes, and caller reuse", async () => {
+  const frameBytes = 960 * 2 * 2;
+  const pcm = Buffer.alloc(frameBytes * 5 + 336);
+  for (let index = 0; index < pcm.length; index += 1) {
+    pcm[index] = (index * 37 + 11) % 251;
+  }
+  const parts = [pcm.subarray(0, frameBytes * 4 + 317), pcm.subarray(frameBytes * 4 + 317)];
+  const codec = await vi.importActual<typeof import("libopus-wasm")>("libopus-wasm");
+  const encoder = await codec.createEncoder({
+    application: codec.Application.Audio,
+    channels: 2,
+    sampleRate: 48_000,
+  });
+  const encode = encoder.encode.bind(encoder);
+  const frames: Buffer[] = [];
+  vi.spyOn(encoder, "encode").mockImplementation((input, options) => {
+    frames.push(Buffer.from(new Uint8Array(input.buffer, input.byteOffset, input.byteLength)));
+    return encode(input, options);
+  });
+  createEncoderMock.mockResolvedValueOnce(encoder);
+  const stream = new DiscordOpusEncodeStream();
+  const consumedBytes: number[] = [];
+  const consume = async () => {
+    for await (const packet of stream) {
+      consumedBytes.push(stream.takePcmBytes(packet));
     }
-    const parts = [pcm.subarray(0, frameBytes * 4 + 317), pcm.subarray(frameBytes * 4 + 317)];
-    const codec = await vi.importActual<typeof import("libopus-wasm")>("libopus-wasm");
-    const encoder = await codec.createEncoder({
-      application: codec.Application.Audio,
-      channels: 2,
-      sampleRate: 48_000,
-    });
-    const encode = encoder.encode.bind(encoder);
-    const frames: Buffer[] = [];
-    vi.spyOn(encoder, "encode").mockImplementation((input, options) => {
-      frames.push(Buffer.from(new Uint8Array(input.buffer, input.byteOffset, input.byteLength)));
-      return encode(input, options);
-    });
-    createEncoderMock.mockResolvedValueOnce(encoder);
-    const stream = new DiscordOpusEncodeStream();
-    const consumedBytes: number[] = [];
-    const consume = async () => {
-      for await (const packet of stream) {
-        consumedBytes.push(stream.takePcmBytes(packet));
-      }
-    };
-    const write = async () => {
-      for (const [partIndex, part] of parts.entries()) {
-        let offset = 0;
-        for (const size of [1, frameBytes - 2, 1, frameBytes + 1, part.length]) {
-          if (offset >= part.length) {
-            break;
-          }
-          const chunk = Buffer.from(part.subarray(offset, offset + size));
-          offset += chunk.length;
-          await new Promise<void>((resolve, reject) => {
-            stream.write(chunk, (error) => {
-              chunk.fill(0x7f);
-              if (error) {
-                reject(error);
-              } else {
-                resolve();
-              }
-            });
+  };
+  const write = async () => {
+    for (const [partIndex, part] of parts.entries()) {
+      let offset = 0;
+      for (const size of [1, frameBytes - 2, 1, frameBytes + 1, part.length]) {
+        if (offset >= part.length) {
+          break;
+        }
+        const chunk = Buffer.from(part.subarray(offset, offset + size));
+        offset += chunk.length;
+        await new Promise<void>((resolve, reject) => {
+          stream.write(chunk, (error) => {
+            chunk.fill(0x7f);
+            if (error) {
+              reject(error);
+            } else {
+              resolve();
+            }
           });
-        }
-        if (flushBetween && partIndex === 0) {
-          expect(stream.flushPartialFrame()).toBe(true);
-          expect(stream.flushPartialFrame()).toBe(false);
-        }
+        });
       }
-      stream.end();
-    };
-    try {
-      await Promise.all([consume(), write()]);
-      const expectedFrames: Buffer[] = [];
-      const expectedBytes: number[] = [];
-      for (const part of flushBetween ? parts : [pcm]) {
-        for (let offset = 0; offset < part.length; offset += frameBytes) {
-          const frame = Buffer.alloc(frameBytes);
-          expectedBytes.push(part.copy(frame, 0, offset, offset + frameBytes));
-          expectedFrames.push(frame);
-        }
+      if (partIndex === 0) {
+        expect(stream.flushPartialFrame()).toBe(true);
+        expect(stream.flushPartialFrame()).toBe(false);
       }
-      expect(frames).toEqual(expectedFrames);
-      expect(consumedBytes).toEqual(expectedBytes);
-    } finally {
-      stream.destroy();
-      encoder.free();
-      vi.restoreAllMocks();
     }
-  },
-);
+    stream.end();
+  };
+  try {
+    await Promise.all([consume(), write()]);
+    const expectedFrames: Buffer[] = [];
+    const expectedBytes: number[] = [];
+    for (const part of parts) {
+      for (let offset = 0; offset < part.length; offset += frameBytes) {
+        const frame = Buffer.alloc(frameBytes);
+        expectedBytes.push(part.copy(frame, 0, offset, offset + frameBytes));
+        expectedFrames.push(frame);
+      }
+    }
+    expect(frames).toEqual(expectedFrames);
+    expect(consumedBytes).toEqual(expectedBytes);
+  } finally {
+    stream.destroy();
+    encoder.free();
+    vi.restoreAllMocks();
+  }
+});
 
 it("releases an encoder acquired after playback was destroyed without encoding queued audio", async () => {
   const codec = await vi.importActual<typeof import("libopus-wasm")>("libopus-wasm");
@@ -272,9 +269,44 @@ it("reports decoder initialization failure to the receive owner", async () => {
   await decodeOpusStreamChunks(Readable.from([Buffer.from([0xf8, 0xff, 0xfe])]), {
     onError,
     onChunk,
-    onVerbose: vi.fn(),
     onWarn: vi.fn(),
   });
   expect(onError).toHaveBeenCalledExactlyOnceWith(error);
   expect(onChunk).not.toHaveBeenCalled();
+});
+
+it("waits for received audio consumption and releases the decoder when it fails", async () => {
+  const codec = await vi.importActual<typeof import("libopus-wasm")>("libopus-wasm");
+  const decoder = await codec.createDecoder({ channels: 2, sampleRate: 48_000 });
+  const decode = vi.spyOn(decoder, "decode");
+  const free = vi.spyOn(decoder, "free");
+  createDecoderMock.mockResolvedValueOnce(decoder);
+  const entered = createDeferred<void>();
+  const consumed = createDeferred<void>();
+  const error = new Error("receive consumer failed");
+  const onError = vi.fn();
+  const packet = Buffer.from([0xf8, 0xff, 0xfe]);
+  const decoding = decodeOpusStreamChunks(Readable.from([packet, packet]), {
+    onWarn: vi.fn(),
+    onError,
+    onChunk: async () => {
+      entered.resolve();
+      await consumed.promise;
+    },
+  });
+  try {
+    await entered.promise;
+    expect(decode).toHaveBeenCalledOnce();
+    expect(free).not.toHaveBeenCalled();
+    consumed.reject(error);
+    await decoding;
+    expect(onError).toHaveBeenCalledExactlyOnceWith(error);
+    expect(decode).toHaveBeenCalledOnce();
+    expect(free).toHaveBeenCalledOnce();
+  } finally {
+    consumed.resolve();
+    await decoding;
+    decoder.free();
+    vi.restoreAllMocks();
+  }
 });

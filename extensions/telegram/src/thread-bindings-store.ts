@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { AccountScopedConversationBindingRecord } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 
@@ -42,7 +42,7 @@ export type TelegramThreadBindingManager = {
     targetSessionKey: string,
     update: (entry: TelegramThreadBindingRecord, now: number) => TelegramThreadBindingRecord,
   ) => Promise<TelegramThreadBindingRecord[]>;
-  /** Synchronous SDK compatibility only; bundled callers use queued mutations. */
+  /** @deprecated Use touchConversation or updateBySessionKey; compatible through 2026-12-31, removed in the first January 2027 stable. */
   updateConversationSync: (
     conversationId: string,
     update: (entry: TelegramThreadBindingRecord) => TelegramThreadBindingRecord | undefined,
@@ -54,10 +54,7 @@ export function resolveStoredBindingKey(params: {
   accountId: string;
   conversationId: string;
 }): string {
-  return createHash("sha256")
-    .update(`${params.accountId}\0${params.conversationId}`, "utf8")
-    .digest("hex")
-    .slice(0, 32);
+  return sha256Hex(`${params.accountId}\0${params.conversationId}`).slice(0, 32);
 }
 
 export function normalizeMetadataForStore(
@@ -106,14 +103,11 @@ export function sanitizeStoredBinding(
   if (typeof entry?.maxAgeMs === "number" && Number.isFinite(entry.maxAgeMs)) {
     record.maxAgeMs = Math.max(0, Math.floor(entry.maxAgeMs));
   }
-  if (typeof entry?.agentId === "string" && entry.agentId.trim()) {
-    record.agentId = entry.agentId.trim();
-  }
-  if (typeof entry?.label === "string" && entry.label.trim()) {
-    record.label = entry.label.trim();
-  }
-  if (typeof entry?.boundBy === "string" && entry.boundBy.trim()) {
-    record.boundBy = entry.boundBy.trim();
+  for (const field of ["agentId", "label", "boundBy"] as const) {
+    const value = entry?.[field];
+    if (typeof value === "string" && value.trim()) {
+      record[field] = value.trim();
+    }
   }
   const metadata = normalizeMetadataForStore(
     entry?.metadata && typeof entry.metadata === "object" ? { ...entry.metadata } : undefined,

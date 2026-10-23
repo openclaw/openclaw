@@ -1,4 +1,5 @@
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
+import { normalizeSessionKeyForComparison } from "@openclaw/normalization-core/session-key-comparison";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -11,6 +12,7 @@ import {
   parseAgentSessionKeyParts,
   type ParsedAgentSessionKey,
 } from "@openclaw/session-url-contract";
+import type { GatewayHelloOk } from "../../api/gateway.ts";
 
 export { buildAgentMainSessionKey, DEFAULT_MAIN_KEY };
 export const DEFAULT_AGENT_ID = "main";
@@ -27,15 +29,10 @@ const COMPARISON_KEY_CACHE_LIMIT = 4_096;
 export type UiSessionDefaultsHost = {
   assistantAgentId?: string | null;
   agentsList?: { defaultId?: string | null; mainKey?: string | null; scope?: string | null } | null;
-  hello?: { snapshot?: unknown } | null;
+  hello?: Pick<GatewayHelloOk, "snapshot"> | null;
 };
 
-type UiSessionDefaults = {
-  defaultAgentId?: string | null;
-  mainKey?: string | null;
-  mainSessionKey?: string | null;
-  modelConfigured?: boolean;
-};
+type UiSessionDefaults = NonNullable<NonNullable<GatewayHelloOk["snapshot"]>["sessionDefaults"]>;
 
 export { normalizeAgentId };
 
@@ -81,8 +78,15 @@ export function isPinnableUiSessionRow(row: {
   key: string;
   parentSessionKey?: string | null;
   spawnedBy?: string | null;
+  sidebarRoot?: boolean;
 }): boolean {
-  if (isSubagentSessionKey(row.key) || normalizeOptionalString(row.spawnedBy)) {
+  if (isSubagentSessionKey(row.key)) {
+    return false;
+  }
+  if (row.sidebarRoot) {
+    return true;
+  }
+  if (normalizeOptionalString(row.spawnedBy)) {
     return false;
   }
   const parentSessionKey = normalizeOptionalString(row.parentSessionKey);
@@ -104,7 +108,7 @@ export function normalizeSessionKeyForUiComparison(sessionKey: string | undefine
   if (cached !== undefined) {
     return cached;
   }
-  const normalized = normalizeComparisonKey(sessionKey);
+  const normalized = normalizeSessionKeyForComparison(sessionKey);
   if (comparisonKeys.size >= COMPARISON_KEY_CACHE_LIMIT) {
     comparisonKeys.clear();
   }
@@ -112,64 +116,10 @@ export function normalizeSessionKeyForUiComparison(sessionKey: string | undefine
   return normalized;
 }
 
-function normalizeComparisonKey(sessionKey: string): string {
-  const raw = normalizeOptionalString(sessionKey);
-  if (!raw) {
-    return "";
-  }
-  // Only opaque channel IDs need structural parsing to preserve tail casing.
-  if (!/(?:^|:)(?:catalog|matrix|signal)(?=:|$)/i.test(raw)) {
-    return raw.toLowerCase();
-  }
-  const parts = raw.split(":");
-  let bodyStart = 0;
-  while (parts.length - bodyStart >= 3 && parts[bodyStart]?.toLowerCase() === "agent") {
-    parts[bodyStart] = "agent";
-    parts[bodyStart + 1] = parts[bodyStart + 1]?.toLowerCase() ?? "";
-    bodyStart += 2;
-  }
-  while (bodyStart < parts.length && !parts[bodyStart]?.trim()) {
-    bodyStart += 1;
-  }
-  const channel = parts[bodyStart]?.toLowerCase();
-  // Catalog source identifiers are opaque; only the agent prefix is normalized.
-  if (channel === "catalog") {
-    return parts.join(":");
-  }
-  const peerKind = parts[bodyStart + 1]?.toLowerCase();
-  const preservesMatrixTail =
-    channel === "matrix" && (peerKind === "channel" || peerKind === "group");
-  const preservesSignalGroup = channel === "signal" && peerKind === "group";
-  if (!preservesMatrixTail && !preservesSignalGroup) {
-    return raw.toLowerCase();
-  }
-  parts[bodyStart] = channel;
-  parts[bodyStart + 1] = peerKind;
-  if (preservesMatrixTail) {
-    for (let index = parts.length - 2; index >= bodyStart + 2; index -= 1) {
-      if (parts[index]?.toLowerCase() === "thread") {
-        parts[index] = "thread";
-        break;
-      }
-    }
-  } else {
-    parts[bodyStart + 2] = parts[bodyStart + 2]?.trim() ?? "";
-    for (let index = bodyStart + 3; index < parts.length; index += 1) {
-      parts[index] = parts[index]?.toLowerCase() ?? "";
-    }
-  }
-  return parts.join(":");
-}
-
 export function readSessionDefaults(
   host: Pick<UiSessionDefaultsHost, "hello">,
 ): UiSessionDefaults | undefined {
-  const snapshot = host.hello?.snapshot;
-  if (!snapshot || typeof snapshot !== "object" || !("sessionDefaults" in snapshot)) {
-    return undefined;
-  }
-  const defaults = snapshot.sessionDefaults;
-  return defaults && typeof defaults === "object" ? (defaults as UiSessionDefaults) : undefined;
+  return host.hello?.snapshot?.sessionDefaults;
 }
 
 export function resolveUiConfiguredMainKey(
@@ -233,7 +183,7 @@ export function isUiGlobalScopeConfigured(
 export function resolveUiConversationIdentity(
   host: UiSessionDefaultsHost,
   sessionKey: string,
-  agentIdOverride?: string,
+  agentIdOverride?: string | null,
 ): { sessionKey: string; agentId?: string } {
   const raw = sessionKey.trim();
   const parsed = parseAgentSessionKey(raw);
@@ -295,6 +245,42 @@ export function canonicalUiSessionKeyForPersistence(
   return raw ? resolveUiConversationIdentity(host, raw).sessionKey : "";
 }
 
+function createUiConversationMatcher(
+  host: UiSessionDefaultsHost,
+  selectedKey: string | undefined | null,
+  selectedAgentId?: string | null,
+  scopeGlobalRows = false,
+) {
+  const selected = normalizeOptionalString(selectedKey);
+  const explicitSelectedAgent = normalizeOptionalString(selectedAgentId);
+  const current = selected
+    ? resolveUiConversationIdentity(host, selected, explicitSelectedAgent)
+    : null;
+  const defaultAgent = resolveUiDefaultAgentId(host);
+  const currentAgent = current?.agentId ?? defaultAgent;
+  return (candidateKey: string | undefined | null, candidateAgentId?: string | null): boolean => {
+    const candidate = normalizeOptionalString(candidateKey);
+    if (
+      !current ||
+      !candidate ||
+      (explicitSelectedAgent && normalizeAgentId(explicitSelectedAgent) !== currentAgent)
+    ) {
+      return false;
+    }
+    const explicitAgent = normalizeOptionalString(
+      candidateAgentId ??
+        (scopeGlobalRows && isUiGlobalSessionKey(candidate) ? current.agentId : undefined),
+    );
+    const other = resolveUiConversationIdentity(host, candidate, explicitAgent ?? defaultAgent);
+    const otherAgent = other.agentId ?? defaultAgent;
+    return (
+      (!explicitAgent || normalizeAgentId(explicitAgent) === otherAgent) &&
+      current.sessionKey === other.sessionKey &&
+      currentAgent === otherAgent
+    );
+  };
+}
+
 /** Compare selected conversation ownership, rejecting contradictory captured agent facts. */
 export function uiConversationMatches(
   host: UiSessionDefaultsHost,
@@ -303,24 +289,19 @@ export function uiConversationMatches(
   candidateAgentId?: string | null,
   selectedAgentId?: string | null,
 ): boolean {
-  const selected = normalizeOptionalString(selectedKey);
-  const candidate = normalizeOptionalString(candidateKey);
-  if (!selected || !candidate) {
-    return false;
-  }
-  const explicitSelectedAgent = normalizeOptionalString(selectedAgentId);
-  const current = resolveUiConversationIdentity(host, selected, explicitSelectedAgent);
-  const explicitAgent = normalizeOptionalString(candidateAgentId);
-  const defaultAgent = resolveUiDefaultAgentId(host);
-  const other = resolveUiConversationIdentity(host, candidate, explicitAgent ?? defaultAgent);
-  const currentAgent = current.agentId ?? defaultAgent;
-  const otherAgent = other.agentId ?? defaultAgent;
-  return (
-    (!explicitSelectedAgent || normalizeAgentId(explicitSelectedAgent) === currentAgent) &&
-    (!explicitAgent || normalizeAgentId(explicitAgent) === otherAgent) &&
-    current.sessionKey === other.sessionKey &&
-    currentAgent === otherAgent
-  );
+  return createUiConversationMatcher(
+    host,
+    selectedKey,
+    selectedAgentId,
+  )(candidateKey, candidateAgentId);
+}
+
+/** Resolve the selected identity once when matching an entire list. */
+export function createUiSessionRowMatcher(
+  host: UiSessionDefaultsHost,
+  selectedSessionKey: string | undefined | null,
+) {
+  return createUiConversationMatcher(host, selectedSessionKey, undefined, true);
 }
 
 export function uiSessionEventMatches(
@@ -357,16 +338,7 @@ export function uiSessionRowMatchesSelectedChat(
   selectedSessionKey: string | undefined | null,
   rowAgentId?: string | null,
 ): boolean {
-  // Rows without an explicit agent are already scoped by their owning list.
-  const selected = selectedSessionKey
-    ? resolveUiConversationIdentity(host, selectedSessionKey)
-    : null;
-  return uiConversationMatches(
-    host,
-    selectedSessionKey,
-    rowKey,
-    rowAgentId ?? (isUiGlobalSessionKey(rowKey) ? selected?.agentId : undefined),
-  );
+  return createUiSessionRowMatcher(host, selectedSessionKey)(rowKey, rowAgentId);
 }
 
 export function normalizeDefaultMainSessionAliasForUi(
@@ -437,6 +409,16 @@ export function canDeleteSessionRows(
     rows.every(
       (row) => row.hasActiveRun !== true && !isProtectedSessionLifecycleKey(row, configuredMainKey),
     )
+  );
+}
+
+/** Native catalog adoptions retain their provider transcript outside OpenClaw's delete lifecycle. */
+export function isNativeCatalogAdoptionSessionKey(key: string): boolean {
+  const rest = parseAgentSessionKey(key)?.rest ?? key;
+  return (
+    rest.startsWith("plugin:anthropic:catalog-adopt:claude:") ||
+    rest.startsWith("harness:codex:supervision:") ||
+    rest.startsWith("harness:codex:node-session:")
   );
 }
 

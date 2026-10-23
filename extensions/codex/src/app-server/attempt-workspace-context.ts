@@ -27,13 +27,12 @@ const CODEX_BOOTSTRAP_CONTEXT_ORDER = new Map<string, number>([
   ["memory.md", 60],
 ]);
 
-export type CodexBootstrapFile = Awaited<
+type CodexBootstrapFile = Awaited<
   ReturnType<typeof prepareAgentWorkspaceContext>
 >["bootstrapFiles"][number];
 export type CodexWorkspaceBootstrapContext = {
   bootstrapFiles: CodexBootstrapFile[];
   contextFiles: EmbeddedContextFile[];
-  inheritsAgentWorkspace: boolean;
   promptContextFiles?: EmbeddedContextFile[];
   threadDeveloperInstructionFiles?: EmbeddedContextFile[];
   personaFiles?: EmbeddedContextFile[];
@@ -153,7 +152,6 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
     return {
       bootstrapFiles,
       contextFiles,
-      inheritsAgentWorkspace,
       promptContextFiles,
       threadDeveloperInstructionFiles,
       personaFiles,
@@ -183,7 +181,6 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
     return {
       bootstrapFiles: [],
       contextFiles: [],
-      inheritsAgentWorkspace,
       threadDeveloperInstructions: includeAgentWorkspaceInstructions
         ? params.agentWorkspaceDeveloperInstructions
         : undefined,
@@ -293,6 +290,6 @@ export function getCodexContextFileBasename(filePath: string): string {
   return normalizeCodexContextFilePath(filePath).split("/").pop() ?? "";
 }
 
-export function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
+export function isNonEmptyString(value: string | undefined): value is string {
+  return Boolean(value);
 }

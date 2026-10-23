@@ -1,15 +1,14 @@
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   mergeDiscordAccountConfig,
   resolveDiscordAccount,
   type ResolvedDiscordAccount,
 } from "./accounts.js";
+import { RequestClient } from "./internal/rest.js";
 import { getGateway } from "./monitor/gateway-registry.js";
 import { resolveDiscordProxyFetchForAccount } from "./proxy-fetch.js";
-import { createDiscordRequestClient } from "./proxy-request-client.js";
 import { createDiscordRetryRunner } from "./retry.js";
 import type { DiscordReactOpts, DiscordRuntimeAccountContext } from "./send.types.js";
 import { normalizeDiscordToken } from "./token.js";
@@ -27,7 +26,6 @@ export function createDiscordRuntimeAccountContext(
 
 export function resolveDiscordClientAccountContext(
   opts: Pick<DiscordClientOpts, "cfg" | "accountId">,
-  runtime?: Pick<RuntimeEnv, "error">,
 ) {
   const resolvedCfg = requireRuntimeConfig(opts.cfg, "Discord client");
   const accountId = normalizeAccountId(opts.accountId);
@@ -44,24 +42,20 @@ export function resolveDiscordClientAccountContext(
   return {
     cfg: resolvedCfg,
     account,
-    proxyFetch: resolveDiscordProxyFetchForAccount(account, resolvedCfg, runtime),
+    proxyFetch: resolveDiscordProxyFetchForAccount(account, resolvedCfg),
   };
 }
 
-function resolveToken(params: {
-  account: ResolvedDiscordAccount;
-  accountId: string;
-  fallbackToken?: string;
-}) {
-  const fallback = normalizeDiscordToken(params.fallbackToken, "channels.discord.token");
+function resolveToken(account: ResolvedDiscordAccount) {
+  const fallback = normalizeDiscordToken(account.token, "channels.discord.token");
   if (!fallback) {
-    if (params.account.tokenStatus === "configured_unavailable") {
+    if (account.tokenStatus === "configured_unavailable") {
       throw new Error(
-        `Discord bot token configured for account "${params.accountId}" is unavailable; resolve SecretRefs against the active runtime snapshot before using this account.`,
+        `Discord bot token configured for account "${account.accountId}" is unavailable; resolve SecretRefs against the active runtime snapshot before using this account.`,
       );
     }
     throw new Error(
-      `Discord bot token missing for account "${params.accountId}" (set discord.accounts.${params.accountId}.token or DISCORD_BOT_TOKEN for default).`,
+      `Discord bot token missing for account "${account.accountId}" (set discord.accounts.${account.accountId}.token or DISCORD_BOT_TOKEN for default).`,
     );
   }
   return fallback;
@@ -74,13 +68,7 @@ export function createDiscordRestClient(opts: DiscordClientOpts) {
   const account = explicitToken
     ? proxyContext.account
     : resolveDiscordAccount({ cfg: resolvedCfg, accountId: opts.accountId });
-  const token =
-    explicitToken ??
-    resolveToken({
-      account,
-      accountId: account.accountId,
-      fallbackToken: account.token,
-    });
+  const token = explicitToken ?? resolveToken(account);
   const { rest, signal, timeoutMs } = opts;
   if (rest) {
     return { token, rest, account };
@@ -89,7 +77,7 @@ export function createDiscordRestClient(opts: DiscordClientOpts) {
     proxyContext.proxyFetch ?? resolveDiscordProxyFetchForAccount(account, resolvedCfg);
   return {
     token,
-    rest: createDiscordRequestClient(token, {
+    rest: new RequestClient(token, {
       ...(proxyFetch ? { fetch: proxyFetch } : {}),
       ...(signal ? { signal } : {}),
       ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
@@ -108,6 +96,7 @@ export function createDiscordClient(opts: DiscordClientOpts) {
   const request = createDiscordRetryRunner({
     retry: opts.retry,
     verbose: opts.verbose,
+    signal: opts.signal,
     isGatewayDisconnected: () => {
       const gateway = getGateway(restAccount.accountId);
       return gateway !== undefined && !gateway.isConnected;

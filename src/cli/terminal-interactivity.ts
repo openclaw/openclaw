@@ -1,8 +1,5 @@
 export function isTerminalInteractive(output: { isTTY?: boolean } = process.stdout): boolean {
-  if (!process.stdin.isTTY) {
-    return false;
-  }
-  return output.isTTY === true;
+  return process.stdin.isTTY ? output.isTTY === true : false;
 }
 
 export const NON_INTERACTIVE_GATEWAY_STOP_MESSAGE =

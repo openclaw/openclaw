@@ -36,21 +36,21 @@ function probeMxcIsolationTier(executablePath: string): { tier: string; warnings
     });
   } catch (error) {
     const detail = error instanceof Error && error.message ? `: ${error.message.trim()}` : "";
-    throw notReady(`the MXC host probe failed${detail}`, error);
+    throw notReady(`the MXC host check failed${detail}`, error);
   }
   let probe: unknown;
   try {
     probe = JSON.parse(output);
   } catch (error) {
-    throw notReady("the MXC host probe did not return JSON", error);
+    throw notReady("the MXC host check did not return JSON", error);
   }
   const parsed = MxcProbeOutputSchema.safeParse(probe);
   if (!parsed.success) {
-    throw notReady("the MXC host probe returned an unexpected result", parsed.error);
+    throw notReady("the MXC host check returned an unexpected result", parsed.error);
   }
   const { tier, warnings, error } = parsed.data;
   if (!tier) {
-    const reason = error || "the probe reported no isolation tier";
+    const reason = error || "the check reported no isolation tier";
     throw notReady(`MXC cannot select an isolation tier on this host (${reason})`);
   }
   return { tier, warnings };

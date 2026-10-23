@@ -430,17 +430,22 @@ pub(crate) struct CanvasSurfaceState {
 }
 
 #[derive(Default)]
+struct GatewayConfigState {
+    config: Option<GatewayWsConfig>,
+    native_control_session: Option<NativeControlSession>,
+    canvas_surface: Option<String>,
+    user_accent: Option<String>,
+}
+
+#[derive(Default)]
 struct GatewayClientInner {
     route_publication: Mutex<()>,
-    config: Mutex<Option<GatewayWsConfig>>,
+    config: Mutex<GatewayConfigState>,
     config_generation: AtomicU64,
     commands: Mutex<Option<mpsc::Sender<DriverCommand>>>,
     agents_cache: Mutex<Option<CachedAgents>>,
     identity: Mutex<Option<GatewayDeviceIdentityStore>>,
-    native_control_session: Mutex<Option<NativeControlSession>>,
     connection_changed: tokio::sync::Notify,
-    canvas_surface: Mutex<Option<String>>,
-    user_accent: Mutex<Option<String>>,
     connection_notice: Mutex<Option<String>>,
     connection_state: AtomicU64,
     reconnect_paused: AtomicBool,
@@ -470,7 +475,15 @@ impl GatewayClient {
         generation: GatewayGeneration,
         action: impl FnOnce() -> Result<T, String>,
     ) -> Result<T, String> {
-        let _config = self
+        self.with_config_state(generation, |_| action())
+    }
+
+    fn with_config_state<T>(
+        &self,
+        generation: GatewayGeneration,
+        action: impl FnOnce(&mut GatewayConfigState) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let mut config = self
             .inner
             .config
             .lock()
@@ -478,7 +491,7 @@ impl GatewayClient {
         if self.generation() != generation {
             return Err("Gateway changed during the Quick Chat request.".to_string());
         }
-        action()
+        action(&mut config)
     }
 
     #[cfg(target_os = "linux")]
@@ -521,7 +534,7 @@ impl GatewayClient {
             if self.inner.config_generation.load(Ordering::SeqCst) != generation {
                 return Err("Desktop Gateway changed; refresh before trying again.".into());
             }
-            config.as_ref().map(|config| config.ws_url.clone())
+            config.config.as_ref().map(|config| config.ws_url.clone())
         };
         action(url.as_deref())
     }
@@ -561,13 +574,8 @@ impl GatewayClient {
         surface_url: &str,
         action: impl FnOnce() -> Result<T, String>,
     ) -> Result<T, String> {
-        self.with_generation(generation, || {
-            let surface = self
-                .inner
-                .canvas_surface
-                .lock()
-                .map_err(|_| "Gateway Canvas surface is unavailable.".to_string())?;
-            if !self.is_connected() || surface.as_deref() != Some(surface_url) {
+        self.with_config_state(generation, |state| {
+            if !self.is_connected() || state.canvas_surface.as_deref() != Some(surface_url) {
                 return Err("Gateway Canvas owner or capability changed.".to_string());
             }
             action()
@@ -608,12 +616,8 @@ impl GatewayClient {
             .config
             .lock()
             .expect("gateway config mutex poisoned");
-        *current = config;
-        *self
-            .inner
-            .native_control_session
-            .lock()
-            .expect("native control session mutex poisoned") = None;
+        current.config = config;
+        current.native_control_session = None;
         self.inner.connection_changed.notify_waiters();
         let generation = self.inner.config_generation.fetch_add(1, Ordering::SeqCst) + 1;
         *self
@@ -621,11 +625,7 @@ impl GatewayClient {
             .agents_cache
             .lock()
             .expect("gateway agents cache mutex poisoned") = None;
-        *self
-            .inner
-            .canvas_surface
-            .lock()
-            .expect("gateway canvas surface mutex poisoned") = None;
+        current.canvas_surface = None;
         self.inner
             .connection_state
             .store(GatewayConnectionState::Down as u64, Ordering::SeqCst);
@@ -673,25 +673,22 @@ impl GatewayClient {
         generation: GatewayGeneration,
         action: impl FnOnce(Url, String) -> Result<T, String>,
     ) -> Result<T, String> {
-        let config = self
+        let state = self
             .inner
             .config
             .lock()
             .map_err(|_| "Gateway configuration unavailable.")?;
-        let config = config
+        let config = state
+            .config
             .as_ref()
             .ok_or("Gateway configuration unavailable.")?;
         if self.generation() != generation || config.ownership != GatewayOwnership::Remote {
             return Err("Native Gateway connection changed.".into());
         }
-        let session = self
-            .inner
-            .native_control_session
-            .lock()
-            .map_err(|_| "Native authentication unavailable.")?;
         // A retired/not-ready session still owns a secret-free native marker.
         // Publishing that projection retires installed shared credentials too.
-        let legacy_auth = session
+        let legacy_auth = state
+            .native_control_session
             .as_ref()
             .filter(|_| self.is_connected())
             .map(NativeControlSession::legacy_auth)
@@ -713,12 +710,13 @@ impl GatewayClient {
         challenge: &Challenge,
     ) -> Result<Value, String> {
         challenge.validate()?;
-        let config = self
+        let state = self
             .inner
             .config
             .lock()
             .map_err(|_| "Gateway configuration unavailable.")?;
-        let config = config
+        let config = state
+            .config
             .as_ref()
             .ok_or("Connect the native app to this Gateway first.")?;
         let expected = crate::remote_gateway::dashboard_url(
@@ -731,12 +729,7 @@ impl GatewayClient {
         {
             return Err("The native Gateway connection changed. Reconnect the dashboard.".into());
         }
-        let session = self
-            .inner
-            .native_control_session
-            .lock()
-            .map_err(|_| "Native authentication unavailable.")?;
-        let session = session.as_ref().ok_or(
+        let session = state.native_control_session.as_ref().ok_or(
             "The native Gateway has not accepted dashboard authentication. Reconnect the app.",
         )?;
         let store = self
@@ -886,19 +879,14 @@ impl GatewayClient {
         let Some(refreshed) = refreshed else {
             return Err("Gateway did not return a refreshed Canvas surface.".to_string());
         };
-        self.with_generation(generation, || {
-            let mut current = self
-                .inner
-                .canvas_surface
-                .lock()
-                .map_err(|_| "Gateway Canvas surface state is unavailable.".to_string())?;
-            if *current != observed.url {
+        self.with_config_state(generation, |state| {
+            if state.canvas_surface != observed.url {
                 return Err("Gateway Canvas surface changed during refresh.".to_string());
             }
-            *current = Some(refreshed);
+            state.canvas_surface = Some(refreshed);
             Ok(CanvasSurfaceState {
                 generation: generation.0,
-                url: current.clone(),
+                url: state.canvas_surface.clone(),
             })
         })
     }
@@ -954,6 +942,7 @@ impl GatewayClient {
             .lock()
             .expect("gateway config mutex poisoned");
         current
+            .config
             .as_ref()
             .filter(|config| {
                 config.ownership == GatewayOwnership::Local && is_loopback_ws_url(&config.ws_url)
@@ -1068,7 +1057,7 @@ impl GatewayClient {
                     .lock()
                     .expect("gateway config mutex poisoned");
                 (
-                    current.clone(),
+                    current.config.clone(),
                     self.inner.config_generation.load(Ordering::SeqCst),
                 )
             };
@@ -1126,7 +1115,7 @@ impl GatewayClient {
             if !self.driver_has_demand(&app) {
                 continue;
             }
-            let delay = reconnect_backoff(reconnect_attempt);
+            let delay = shared_reconnect_backoff(reconnect_attempt, MAX_RECONNECT_DELAY);
             tokio::select! {
                 _ = tokio::time::sleep(delay) => {}
                 command = receiver.recv() => {
@@ -1147,6 +1136,7 @@ impl GatewayClient {
                     .config
                     .lock()
                     .expect("gateway config mutex poisoned")
+                    .config
                     .as_ref()
                     .is_some_and(|config| config.ownership == GatewayOwnership::Remote),
             self.inner.sleep_cycle_depth.load(Ordering::SeqCst) > 0,
@@ -1237,18 +1227,13 @@ impl GatewayClient {
         self.cache_agents(GatewayGeneration(generation), agents)
             .map_err(|message| RequestFailure::method_with_details(message, None))?;
         self.set_user_accent(generation, accent);
-        self.with_generation(GatewayGeneration(generation), || {
-            *self
-                .inner
-                .native_control_session
-                .lock()
-                .map_err(|_| "Native authentication unavailable.")? =
-                NativeControlSession::from_hello(
-                    auth,
-                    hello.auth_method.as_deref(),
-                    hello.operator_scopes,
-                    hello.device_token.as_deref(),
-                );
+        self.with_config_state(GatewayGeneration(generation), |state| {
+            state.native_control_session = NativeControlSession::from_hello(
+                auth,
+                hello.auth_method.as_deref(),
+                hello.operator_scopes,
+                hello.device_token.as_deref(),
+            );
             Ok(())
         })
         .map_err(RequestFailure::transport)?;
@@ -1399,56 +1384,33 @@ impl GatewayClient {
     }
 
     fn set_canvas_surface_url(&self, generation: u64, url: Option<String>) {
-        let _ = self.with_generation(GatewayGeneration(generation), || {
-            let mut surface = self
-                .inner
-                .canvas_surface
-                .lock()
-                .map_err(|_| "Gateway Canvas surface is unavailable.".to_string())?;
-            *surface = url;
+        let _ = self.with_config_state(GatewayGeneration(generation), |state| {
+            state.canvas_surface = url;
             Ok(())
         });
     }
 
     fn canvas_surface_state(&self) -> CanvasSurfaceState {
-        let _config = self
+        let state = self
             .inner
             .config
             .lock()
             .expect("gateway config mutex poisoned");
         CanvasSurfaceState {
             generation: self.generation().0,
-            url: self
-                .inner
-                .canvas_surface
-                .lock()
-                .expect("gateway canvas surface mutex poisoned")
-                .clone(),
+            url: state.canvas_surface.clone(),
         }
     }
 
     fn set_user_accent(&self, generation: u64, accent: Option<String>) -> bool {
-        self.with_generation(GatewayGeneration(generation), || {
-            let mut current = self
-                .inner
-                .user_accent
-                .lock()
-                .expect("gateway user accent mutex poisoned");
-            if *current == accent {
+        self.with_config_state(GatewayGeneration(generation), |state| {
+            if state.user_accent == accent {
                 return Ok(false);
             }
-            *current = accent;
+            state.user_accent = accent;
             Ok(true)
         })
         .unwrap_or(false)
-    }
-
-    fn user_accent(&self) -> Option<String> {
-        self.inner
-            .user_accent
-            .lock()
-            .expect("gateway user accent mutex poisoned")
-            .clone()
     }
 
     fn is_connected(&self) -> bool {
@@ -1475,28 +1437,16 @@ impl GatewayClient {
         notice: Option<String>,
         generation: GatewayGeneration,
     ) {
-        let event = self.with_generation(generation, || {
+        let event = self.with_config_state(generation, |config| {
             if state != GatewayConnectionState::Up {
-                *self
-                    .inner
-                    .native_control_session
-                    .lock()
-                    .expect("native control session mutex poisoned") = None;
+                config.native_control_session = None;
                 *self
                     .inner
                     .agents_cache
                     .lock()
                     .expect("gateway agents cache mutex poisoned") = None;
-                *self
-                    .inner
-                    .canvas_surface
-                    .lock()
-                    .expect("gateway canvas surface mutex poisoned") = None;
-                *self
-                    .inner
-                    .user_accent
-                    .lock()
-                    .expect("gateway accent mutex poisoned") = None;
+                config.canvas_surface = None;
+                config.user_accent = None;
             }
             let notice_changed = {
                 let mut current = self
@@ -1519,16 +1469,11 @@ impl GatewayClient {
             if !state_changed && !notice_changed {
                 return Ok(None);
             }
-            let surface = self
-                .inner
-                .canvas_surface
-                .lock()
-                .expect("gateway canvas surface mutex poisoned");
             Ok(Some(GatewayStateEvent::new(
                 state,
                 notice,
-                surface.clone(),
-                self.user_accent(),
+                config.canvas_surface.clone(),
+                config.user_accent.clone(),
                 generation,
             )))
         });
@@ -1553,16 +1498,11 @@ impl GatewayClient {
     }
 
     fn state_event(&self) -> GatewayStateEvent {
-        let _config = self
+        let config = self
             .inner
             .config
             .lock()
             .expect("gateway config mutex poisoned");
-        let surface = self
-            .inner
-            .canvas_surface
-            .lock()
-            .expect("gateway canvas surface mutex poisoned");
         let notice = self
             .inner
             .connection_notice
@@ -1572,8 +1512,8 @@ impl GatewayClient {
         GatewayStateEvent::new(
             self.connection_state(),
             notice,
-            surface.clone(),
-            self.user_accent(),
+            config.canvas_surface.clone(),
+            config.user_accent.clone(),
             self.generation(),
         )
     }
@@ -1697,10 +1637,6 @@ fn connection_notice(
     Some(notice)
 }
 
-fn reconnect_backoff(attempt: u32) -> Duration {
-    shared_reconnect_backoff(attempt, MAX_RECONNECT_DELAY)
-}
-
 fn should_clear_stored_device_token(failure: &RequestFailure, auth: &GatewayAuth) -> bool {
     matches!(auth, GatewayAuth::DeviceToken(_))
         && failure.connect_details.invalidates_device_token()
@@ -1713,7 +1649,7 @@ fn connect_params(
     signed_at_ms: u64,
     inline_widgets_available: bool,
 ) -> Result<Value, String> {
-    let mut client_caps = vec![AGENT_KIND_CLIENT_CAPABILITY];
+    let mut client_caps = vec![AGENT_KIND_CLIENT_CAPABILITY, "health-summary"];
     if inline_widgets_available {
         client_caps.push(INLINE_WIDGETS_CLIENT_CAPABILITY);
     }
@@ -1740,16 +1676,6 @@ fn connect_params(
     Ok(params)
 }
 
-#[cfg(test)]
-fn request_frame(id: &str, method: &str, params: Value) -> Value {
-    json!({
-        "type": "req",
-        "id": id,
-        "method": method,
-        "params": params
-    })
-}
-
 struct RequestDispatch {
     generation: GatewayGeneration,
     connection_generation: u64,
@@ -1768,7 +1694,7 @@ fn validate_request_dispatch(
         .config
         .lock()
         .map_err(|_| DispatchRejection::new("Gateway route is unavailable."))?;
-    if current.is_none() {
+    if current.config.is_none() {
         return Err(DispatchRejection::new(
             "Gateway route changed before dispatch; refresh before trying again.",
         ));
@@ -1777,7 +1703,7 @@ fn validate_request_dispatch(
         || authority.connection_generation != authority.generation.0;
     #[cfg(target_os = "linux")]
     if let Some(route) = authority.sleep_route.as_ref() {
-        let owned = current.as_ref().is_some_and(|config| {
+        let owned = current.config.as_ref().is_some_and(|config| {
             config.ownership == GatewayOwnership::Local
                 && config.ws_url == route.ws_url
                 && is_loopback_ws_url(&config.ws_url)
@@ -2147,8 +2073,6 @@ pub(crate) mod tests {
     use super::*;
     use std::convert::Infallible;
 
-    type GatewaySocket = SharedGatewaySession;
-
     async fn accept_test_session(
         stream: tokio::net::TcpStream,
     ) -> tokio_tungstenite::WebSocketStream<tokio::net::TcpStream> {
@@ -2198,7 +2122,7 @@ pub(crate) mod tests {
         socket
     }
 
-    async fn connect_test_session(url: &str) -> GatewaySocket {
+    async fn connect_test_session(url: &str) -> SharedGatewaySession {
         SharedGatewayClient::connect(SharedGatewayClientConfig::new(url).unwrap(), |_| async {
             Ok::<_, Infallible>(json!({"role": "test"}))
         })
@@ -2290,10 +2214,9 @@ pub(crate) mod tests {
     async fn perform_request(
         client: &GatewayClient,
         generation: u64,
-        socket: &mut GatewaySocket,
+        socket: &SharedGatewaySession,
         request: GatewayRequest,
         budget: Option<Duration>,
-        _on_event: &impl Fn(&GatewayEvent),
     ) -> Result<Value, RequestFailure> {
         perform_session_request(
             client,
@@ -2303,14 +2226,6 @@ pub(crate) mod tests {
             Instant::now() + budget.unwrap_or(REQUEST_TIMEOUT),
         )
         .await
-    }
-
-    async fn request_agents_list(
-        socket: &mut GatewaySocket,
-        timeout: Duration,
-        _on_event: &impl Fn(&GatewayEvent),
-    ) -> Result<AgentsListResult, RequestFailure> {
-        request_agents_list_session(socket, Instant::now() + timeout).await
     }
 
     pub(crate) struct RpcFixture {
@@ -2388,7 +2303,7 @@ pub(crate) mod tests {
         fn start_driver(
             client: &GatewayClient,
             generation: u64,
-            mut socket: GatewaySocket,
+            socket: SharedGatewaySession,
         ) -> tokio::task::JoinHandle<()> {
             let (commands, mut receiver) = mpsc::channel(16);
             *client.inner.commands.lock().unwrap() = Some(commands);
@@ -2405,15 +2320,9 @@ pub(crate) mod tests {
                         complete,
                     } = command
                     {
-                        let result = perform_request(
-                            &driver_client,
-                            generation,
-                            &mut socket,
-                            request,
-                            budget,
-                            &|_| {},
-                        )
-                        .await;
+                        let result =
+                            perform_request(&driver_client, generation, &socket, request, budget)
+                                .await;
                         let _ = complete(result);
                     }
                 }
@@ -2430,6 +2339,7 @@ pub(crate) mod tests {
                 .config
                 .lock()
                 .unwrap()
+                .config
                 .as_ref()
                 .unwrap()
                 .ws_url
@@ -2493,7 +2403,7 @@ pub(crate) mod tests {
         }
 
         pub(crate) fn replace_route(&self) {
-            let config = self.client.inner.config.lock().unwrap().clone();
+            let config = self.client.inner.config.lock().unwrap().config.clone();
             self.client.replace_configuration(config);
         }
 
@@ -2599,7 +2509,7 @@ pub(crate) mod tests {
                 }
                 frames
             });
-            let mut socket = connect_test_session(&url).await;
+            let socket = connect_test_session(&url).await;
             if case == "stale-connection" {
                 client.replace_configuration(Some(config));
             }
@@ -2611,7 +2521,7 @@ pub(crate) mod tests {
             let result = perform_request(
                 &client,
                 connection.0,
-                &mut socket,
+                &socket,
                 GatewayRequest::ChatSend {
                     generation: caller,
                     params: ChatSendParams {
@@ -2622,7 +2532,6 @@ pub(crate) mod tests {
                     },
                 },
                 None,
-                &|_| {},
             )
             .await;
             assert_eq!(result.is_ok(), case == "current", "{case}");
@@ -2632,7 +2541,7 @@ pub(crate) mod tests {
                     "authority rejection is not a transport failure"
                 );
             }
-            request_agents_list(&mut socket, Duration::from_secs(1), &|_| {})
+            request_agents_list_session(&socket, Instant::now() + Duration::from_secs(1))
                 .await
                 .unwrap_or_else(|failure| panic!("marker failed: {}", failure.message));
             socket.close().await;
@@ -3232,7 +3141,7 @@ esac
             assert_eq!(frame["params"]["deliver"], false);
             socket.send(Message::Text(json!({"type":"res","id":frame["id"],"ok":true,"payload":{"status":"started","runId":"fixture-run"}}).to_string().into())).await.unwrap();
         });
-        let mut socket = connect_test_session(&format!("ws://{address}")).await;
+        let socket = connect_test_session(&format!("ws://{address}")).await;
         let client = GatewayClient::new();
         let config = |ownership| {
             GatewayWsConfig::new(format!("ws://{address}"), None, None, None, ownership)
@@ -3243,14 +3152,13 @@ esac
             let result = perform_request(
                 &client,
                 connection,
-                &mut socket,
+                &socket,
                 GatewayRequest::Desktop {
                     generation: token,
                     method: DesktopMethod::Send,
                     params: json!({"message":"stale route"}),
                 },
                 None,
-                &|_| {},
             )
             .await;
             let error = result.err().expect("stale route must fail before enqueue");
@@ -3261,14 +3169,13 @@ esac
         assert!(perform_request(
             &client,
             cleared,
-            &mut socket,
+            &socket,
             GatewayRequest::Desktop {
                 generation: cleared,
                 method: DesktopMethod::Send,
                 params: json!({"message":"cleared route"}),
             },
             None,
-            &|_| {}
         )
         .await
         .is_err());
@@ -3276,14 +3183,13 @@ esac
         let value = perform_request(
             &client,
             current,
-            &mut socket,
+            &socket,
             GatewayRequest::Desktop {
                 generation: current,
                 method: DesktopMethod::Send,
                 params: json!({"message":"current route","deliver":false}),
             },
             None,
-            &|_| {},
         )
         .await
         .unwrap_or_else(|error| panic!("{}", error.message));
@@ -3379,9 +3285,8 @@ esac
                     .await
                     .expect("send malformed payload");
             });
-            let mut socket = connect_test_session(&format!("ws://{address}")).await;
-            let result =
-                perform_request(&client, generation, &mut socket, request, None, &|_| {}).await;
+            let socket = connect_test_session(&format!("ws://{address}")).await;
+            let result = perform_request(&client, generation, &socket, request, None).await;
             let failure = complete(result).expect("typed response must reject a number");
             assert!(failure.disconnect, "{method} must recycle the socket");
             assert!(failure
@@ -3403,7 +3308,7 @@ esac
             let _request = socket.next().await.expect("request frame");
             std::future::pending::<()>().await;
         });
-        let mut socket = connect_test_session(&format!("ws://{address}")).await;
+        let socket = connect_test_session(&format!("ws://{address}")).await;
         let (commands, mut receiver) = mpsc::channel(2);
         let (reply, response) = oneshot::channel();
         commands
@@ -3429,19 +3334,11 @@ esac
         else {
             panic!("expected request command");
         };
-        let failure = match perform_request(
-            &GatewayClient::new(),
-            0,
-            &mut socket,
-            request,
-            budget,
-            &|_| {},
-        )
-        .await
-        {
-            Ok(_) => panic!("hung request should time out"),
-            Err(failure) => failure,
-        };
+        let failure =
+            match perform_request(&GatewayClient::new(), 0, &socket, request, budget).await {
+                Ok(_) => panic!("hung request should time out"),
+                Err(failure) => failure,
+            };
         let elapsed = started.elapsed();
         assert!(failure.disconnect, "timeout must recycle the socket");
         let _ = complete(Err(failure));
@@ -3487,7 +3384,7 @@ esac
         struct SleepSocketFixture {
             client: GatewayClient,
             generation: u64,
-            socket: GatewaySocket,
+            socket: SharedGatewaySession,
             receiver: mpsc::Receiver<DriverCommand>,
             server: tokio::task::JoinHandle<Vec<Value>>,
             fail_resume: Arc<AtomicBool>,
@@ -3562,15 +3459,9 @@ esac
                 else {
                     panic!("expected sleep request");
                 };
-                let result = perform_request(
-                    &self.client,
-                    self.generation,
-                    &mut self.socket,
-                    request,
-                    budget,
-                    &|_| {},
-                )
-                .await;
+                let result =
+                    perform_request(&self.client, self.generation, &self.socket, request, budget)
+                        .await;
                 let _ = complete(result);
             }
 
@@ -3599,6 +3490,7 @@ esac
                     .config
                     .lock()
                     .unwrap()
+                    .config
                     .as_ref()
                     .unwrap()
                     .ws_url
@@ -3694,7 +3586,7 @@ esac
                 .await;
                 let controller = controller(&fixture.client, |_| std::future::ready(()));
                 let cycle = async {
-                    controller.will_sleep().1.await;
+                    controller.will_sleep().await;
                     controller.did_wake().await;
                 };
                 fixture.drive(cycle).await;
@@ -3801,7 +3693,7 @@ esac
                     let mut fixture =
                         SleepSocketFixture::new(dashboard_handoff::local_ws_config).await;
                     let controller = controller(&fixture.client, |_| std::future::ready(()));
-                    let mut sleeping = Box::pin(controller.will_sleep().1);
+                    let mut sleeping = Box::pin(controller.will_sleep());
                     assert!(futures_util::poll!(&mut sleeping).is_pending());
                     let command = fixture.next_request().await;
                     fixture.dispatch(command).await;
@@ -3832,7 +3724,7 @@ esac
                     }
                     std::future::ready(())
                 });
-                fixture.drive(controller.will_sleep().1).await;
+                fixture.drive(controller.will_sleep()).await;
                 fixture.fail_resume.store(true, Ordering::SeqCst);
                 fixture.drive(controller.did_wake()).await;
                 let frames = fixture.finish().await;
@@ -3926,19 +3818,6 @@ esac
     }
 
     #[test]
-    fn tls_trust_uses_system_roots_or_an_exact_pin() {
-        assert_eq!(
-            tls_trust(None).expect("system trust"),
-            TlsTrust::SystemRoots
-        );
-        assert_eq!(
-            tls_trust(Some(&"ab".repeat(32))).expect("pinned trust"),
-            TlsTrust::Pinned([0xab; 32])
-        );
-        assert!(tls_trust(Some("sha256:abc")).is_err());
-    }
-
-    #[test]
     fn tls_failures_have_a_distinct_connectivity_state() {
         let failure =
             RequestFailure::from_shared(SharedClientError::Tls("fixture TLS failure".to_string()))
@@ -3954,16 +3833,7 @@ esac
     }
 
     #[test]
-    fn reconnect_backoff_is_exponential_and_capped() {
-        assert_eq!(reconnect_backoff(1), Duration::from_secs(1));
-        assert_eq!(reconnect_backoff(2), Duration::from_secs(2));
-        assert_eq!(reconnect_backoff(5), Duration::from_secs(16));
-        assert_eq!(reconnect_backoff(6), MAX_RECONNECT_DELAY);
-        assert_eq!(reconnect_backoff(100), MAX_RECONNECT_DELAY);
-    }
-
-    #[test]
-    fn connect_frame_matches_gateway_schema() {
+    fn connect_params_match_gateway_schema() {
         let directory = std::env::temp_dir().join(format!(
             "openclaw-linux-connect-frame-test-{}",
             Uuid::new_v4()
@@ -3978,39 +3848,29 @@ esac
             true,
         )
         .expect("connect params");
-        let frame = request_frame("connect-1", "connect", params);
-
-        assert_eq!(frame["type"], "req");
-        assert_eq!(frame["id"], "connect-1");
-        assert_eq!(frame["method"], "connect");
-        assert_eq!(frame["params"]["minProtocol"], MIN_PROTOCOL_VERSION);
-        assert_eq!(frame["params"]["maxProtocol"], MAX_PROTOCOL_VERSION);
+        assert_eq!(params["minProtocol"], MIN_PROTOCOL_VERSION);
+        assert_eq!(params["maxProtocol"], MAX_PROTOCOL_VERSION);
         assert_eq!(
-            frame["params"]["caps"],
+            params["caps"],
             json!([
                 AGENT_KIND_CLIENT_CAPABILITY,
+                "health-summary",
                 INLINE_WIDGETS_CLIENT_CAPABILITY
             ])
         );
-        assert_eq!(frame["params"]["client"]["id"], CLIENT_ID);
+        assert_eq!(params["client"]["id"], CLIENT_ID);
+        assert_eq!(params["client"]["deviceFamily"], CLIENT_DEVICE_FAMILY);
+        assert_eq!(params["auth"], json!({ "token": "secret" }));
+        assert_eq!(params["device"]["nonce"], "fixture-nonce");
+        assert_eq!(params["device"]["signedAt"], 1_800_000_000_000_u64);
         assert_eq!(
-            frame["params"]["client"]["deviceFamily"],
-            CLIENT_DEVICE_FAMILY
-        );
-        assert_eq!(frame["params"]["auth"], json!({ "token": "secret" }));
-        assert_eq!(frame["params"]["device"]["nonce"], "fixture-nonce");
-        assert_eq!(frame["params"]["device"]["signedAt"], 1_800_000_000_000_u64);
-        assert_eq!(
-            frame["params"]["device"]["id"]
-                .as_str()
-                .expect("device id")
-                .len(),
+            params["device"]["id"].as_str().expect("device id").len(),
             64
         );
-        assert!(frame["params"]["device"]["publicKey"]
+        assert!(params["device"]["publicKey"]
             .as_str()
             .is_some_and(|value| !value.contains('=')));
-        assert!(frame["params"]["device"]["signature"]
+        assert!(params["device"]["signature"]
             .as_str()
             .is_some_and(|value| !value.contains('=')));
 
@@ -4022,8 +3882,11 @@ esac
             false,
         )
         .expect("pinned connect params");
-        // Pinning only withdraws inline widgets; agent-kind is unconditional.
-        assert_eq!(pinned_params["caps"], json!([AGENT_KIND_CLIENT_CAPABILITY]));
+        // Pinning only withdraws inline widgets; other capabilities are unconditional.
+        assert_eq!(
+            pinned_params["caps"],
+            json!([AGENT_KIND_CLIENT_CAPABILITY, "health-summary"])
+        );
         std::fs::remove_dir_all(directory).expect("remove connect fixture");
     }
 
@@ -4054,24 +3917,6 @@ esac
         assert_eq!(
             gated_canvas_surface_url(hello.canvas_surface_url, false),
             None
-        );
-    }
-
-    #[test]
-    fn plugin_surface_refresh_response_decodes_canvas_url() {
-        let response: PluginSurfaceRefreshResponse = serde_json::from_value(json!({
-            "pluginSurfaceUrls": {
-                "canvas": "https://gateway.example/__openclaw__/cap/refreshed-capability"
-            }
-        }))
-        .expect("refresh response");
-
-        assert_eq!(
-            response
-                .plugin_surface_urls
-                .and_then(|urls| urls.get("canvas").cloned())
-                .as_deref(),
-            Some("https://gateway.example/__openclaw__/cap/refreshed-capability")
         );
     }
 
@@ -4365,7 +4210,7 @@ esac
     }
 
     #[test]
-    fn chat_send_frame_matches_gateway_schema() {
+    fn chat_send_params_match_gateway_schema() {
         let params = ChatSendParams {
             session_key: "agent:work:main".to_string(),
             agent_id: None,
@@ -4373,20 +4218,11 @@ esac
             idempotency_key: "idempotency-1".to_string(),
         };
         assert_eq!(
-            request_frame(
-                "chat-1",
-                "chat.send",
-                serde_json::to_value(params).expect("chat params")
-            ),
+            serde_json::to_value(params).expect("chat params"),
             json!({
-                "type": "req",
-                "id": "chat-1",
-                "method": "chat.send",
-                "params": {
-                    "sessionKey": "agent:work:main",
-                    "message": "hello",
-                    "idempotencyKey": "idempotency-1"
-                }
+                "sessionKey": "agent:work:main",
+                "message": "hello",
+                "idempotencyKey": "idempotency-1"
             })
         );
     }

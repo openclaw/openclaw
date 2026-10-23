@@ -86,34 +86,37 @@ export const {
   initializeSqliteRuntimeCapabilities,
 } = await import("./bun-sqlite-library.js");
 
-let restore: () => void;
+function snapshotProperty(target: object, key: PropertyKey) {
+  const descriptor = Object.getOwnPropertyDescriptor(target, key);
+  return () =>
+    descriptor
+      ? Object.defineProperty(target, key, descriptor)
+      : Reflect.deleteProperty(target, key);
+}
+let restore: (() => unknown)[];
 beforeEach(() => {
-  const originals = [
-    [globalThis, sqliteSelectionKey],
-    [process, "versions"],
-    [process, "platform"],
-  ] as const;
-  const descriptors = originals.map(([target, key]) =>
-    Object.getOwnPropertyDescriptor(target, key),
-  );
-  restore = () => {
-    originals.forEach(([target, key], index) => {
-      const descriptor = descriptors[index];
-      if (descriptor) {
-        Object.defineProperty(target, key, descriptor);
-      } else {
-        Reflect.deleteProperty(target, key);
-      }
-    });
-  };
+  restore = [
+    snapshotProperty(globalThis, sqliteSelectionKey),
+    snapshotProperty(globalThis, "__openclawStandaloneRootUrl"),
+    snapshotProperty(process, "versions"),
+    snapshotProperty(process, "platform"),
+  ];
 });
 afterEach(() => {
-  restore();
+  restore.forEach((property) => property());
   native.enabled = false;
   native.environment.clear();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
+
+function setValue(target: object, key: PropertyKey, value: unknown) {
+  if (value === undefined) {
+    Reflect.deleteProperty(target, key);
+  } else {
+    Object.defineProperty(target, key, { configurable: true, value });
+  }
+}
 
 export function mockBunSqliteNativeBoundary(
   options: {
@@ -124,6 +127,7 @@ export function mockBunSqliteNativeBoundary(
     exists?: (pathname: string) => boolean;
     probe?: (pathname: string) => LibraryProbe;
     select?: (pathname: string) => void;
+    standaloneRootUrl?: string;
   } = {},
 ) {
   native.enabled = true;
@@ -137,14 +141,12 @@ export function mockBunSqliteNativeBoundary(
   );
   native.select = vi.fn(options.select ?? (() => {}));
   Reflect.deleteProperty(globalThis, sqliteSelectionKey);
-  Object.defineProperty(process, "versions", {
-    configurable: true,
-    value: { ...process.versions, bun: (options.isBun ?? true) ? "fixture" : undefined },
+  setValue(globalThis, "__openclawStandaloneRootUrl", options.standaloneRootUrl);
+  setValue(process, "versions", {
+    ...process.versions,
+    bun: (options.isBun ?? true) ? "fixture" : undefined,
   });
-  Object.defineProperty(process, "platform", {
-    configurable: true,
-    value: options.platform ?? "darwin",
-  });
+  setValue(process, "platform", options.platform ?? "darwin");
   for (const key of ["OPENCLAW_SQLITE_LIBRARY", "HOMEBREW_PREFIX", "OPENCLAW_DIAGNOSTICS"]) {
     vi.stubEnv(key, options.env?.[key]);
   }

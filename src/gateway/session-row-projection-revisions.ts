@@ -1,5 +1,5 @@
-import { isDeepStrictEqual } from "node:util";
-import { isIncognitoSessionKey } from "../routing/session-key.js";
+import { recordSessionRowSelectionReset } from "../infra/gateway-work-metrics.js";
+import { isIncognitoSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
 import { notifyListeners } from "../shared/listeners.js";
 import {
@@ -37,6 +37,7 @@ export function createSessionRowProjectionRevisions(
   const publishSelection = (row?: Row, removed = false) => {
     if (!row) {
       invalidate(true);
+      recordSessionRowSelectionReset();
     }
     const change: SelectionChange = row
       ? {
@@ -62,7 +63,18 @@ export function createSessionRowProjectionRevisions(
     publishFacts,
     publishRuntimeChange(change: SessionRowChange) {
       if ("all" in change) {
-        publishFacts();
+        if (change.scope === "agent-runs" && change.runtimeSession) {
+          const { sessionId, agentId } = change.runtimeSession;
+          const owner = agentId ? normalizeAgentId(agentId) : undefined;
+          for (const id of byKey.get(`id:${sessionId}`) ?? []) {
+            const row = rows.get(id);
+            if (row && (!owner || row.agentId === owner)) {
+              publishFacts(row);
+            }
+          }
+        } else {
+          publishFacts();
+        }
         return;
       }
       publishFacts({ key: change.sessionKey });
@@ -112,7 +124,7 @@ export function createSessionRowProjectionRevisions(
         !previous ||
         previous.generation !== row.generation ||
         previous.hasBoard !== row.hasBoard ||
-        !isDeepStrictEqual(previous.entry, row.entry);
+        previous.entry !== row.entry;
       invalidate(changed);
       publishFacts(row);
       if (changed) {

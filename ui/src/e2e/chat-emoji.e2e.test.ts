@@ -1,30 +1,28 @@
-import type WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { polledCount, polledFocus } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI emoji entry" });
 
 suite.define(() => {
+  const chat = { route: "chat", selector: ".agent-chat__composer-combobox > textarea" };
+  const desktop = { viewport: { width: 1280, height: 800 }, prefix: "Nice " };
   it.each([
     {
       name: "Chat",
-      route: "chat",
-      selector: ".agent-chat__composer-combobox > textarea",
-      viewport: { width: 1280, height: 800 },
-      prefix: "Nice ",
+      ...chat,
+      ...desktop,
     },
     {
       name: "New Session",
       route: "new?agent=main",
       selector: ".new-session-page__message",
-      viewport: { width: 1280, height: 800 },
-      prefix: "Nice ",
+      ...desktop,
     },
     {
       name: "narrow multiline Chat",
-      route: "chat",
-      selector: ".agent-chat__composer-combobox > textarea",
+      ...chat,
       viewport: { width: 390, height: 760 },
       prefix: "A short first line.\nNice ",
     },
@@ -36,6 +34,11 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}${route}`);
         const composer = page.locator(selector);
         await composer.waitFor({ state: "visible" });
+        const openMenu = async (text = "") => {
+          await composer.fill(text);
+          await composer.pressSequentially(":smi");
+          await page.getByRole("listbox", { name: /emoji/i }).waitFor({ state: "visible" });
+        };
         await composer.fill(prefix);
         await expect
           .poll(() => composer.evaluate((element) => element.scrollHeight - element.clientHeight))
@@ -43,27 +46,24 @@ suite.define(() => {
         const beforeMenu = (await composer.boundingBox())!;
         const openingVisibility = page.evaluate(
           () =>
-            new Promise<string>((resolve) => {
+            new Promise<boolean>((resolve) => {
               const observer = new MutationObserver(() => {
                 const popup = document.querySelector(".emoji-menu-popup");
                 const openingMenu = popup?.querySelector<HTMLElement>(".emoji-menu");
-                if (openingMenu && popup && !popup.hasAttribute("data-current-placement")) {
+                if (openingMenu && popup && !popup.matches(":popover-open")) {
                   observer.disconnect();
-                  resolve(getComputedStyle(popup).visibility);
+                  resolve(popup.checkVisibility({ checkVisibilityCSS: true }));
                 }
               });
               observer.observe(document.body, { childList: true, subtree: true });
             }),
         );
         await composer.pressSequentially(":smi");
-        expect(await openingVisibility).toBe("hidden");
+        expect(await openingVisibility).toBe(false);
         const menu = page.getByRole("listbox", { name: /emoji/i });
         await menu.waitFor({ state: "visible" });
         expect(await menu.getByRole("option").count()).toBeGreaterThan(1);
-        const word = await composer.evaluate((element, draftPrefix) => {
-          if (!(element instanceof HTMLTextAreaElement)) {
-            throw new Error("Expected composer");
-          }
+        const word = await composer.evaluate((element: HTMLTextAreaElement, draftPrefix) => {
           const style = getComputedStyle(element);
           const context = document.createElement("canvas").getContext("2d")!;
           context.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
@@ -97,21 +97,26 @@ suite.define(() => {
           .toBeLessThan(3);
         expect((await menu.boundingBox())!.width).toBeLessThanOrEqual(302);
         const anchor = await page
-          .locator("wa-popup.emoji-menu-popup")
-          .evaluateHandle((popup: WaPopup) => popup.anchor);
+          .locator(".emoji-menu-popup")
+          .evaluateHandle((popup: HTMLElement) => {
+            const anchorName = popup.style.getPropertyValue("position-anchor");
+            return [...document.querySelectorAll<HTMLElement>("[style]")].find((element) =>
+              element.style
+                .getPropertyValue("anchor-name")
+                .split(",")
+                .some((name) => name.trim() === anchorName),
+            );
+          });
+        const anchorConnected = () =>
+          anchor.evaluate((element) => element instanceof Element && element.isConnected);
         await composer.press("ArrowDown");
         await composer.press("ArrowUp");
+        expect(await anchorConnected()).toBe(true);
         await composer.press("Tab");
         await expect.poll(() => composer.inputValue()).toBe(`${prefix}😄`);
-        await expect
-          .poll(() => composer.evaluate((element) => document.activeElement === element))
-          .toBe(true);
-        await expect.poll(() => menu.count()).toBe(0);
-        await expect
-          .poll(() =>
-            anchor.evaluate((element) => element instanceof Element && element.isConnected),
-          )
-          .toBe(false);
+        await polledFocus(composer).toBe(true);
+        await polledCount(menu).toBe(0);
+        await expect.poll(anchorConnected).toBe(false);
         await anchor.dispose();
 
         await composer.fill("Nice ");
@@ -119,12 +124,9 @@ suite.define(() => {
         await expect.poll(() => composer.inputValue()).toBe("Nice 😄");
 
         await composer.fill("Before :smi after");
-        await composer.evaluate((element) => {
-          if (!(element instanceof HTMLTextAreaElement)) {
-            throw new Error("Expected composer");
-          }
-          element.setSelectionRange(11, 11);
-        });
+        await composer.evaluate((element: HTMLTextAreaElement) =>
+          element.setSelectionRange(11, 11),
+        );
         await composer.press("ArrowLeft");
         await composer.press("ArrowRight");
         await menu.waitFor({ state: "visible" });
@@ -146,21 +148,17 @@ suite.define(() => {
           await composer.fill(literalPrefix);
           await composer.pressSequentially(":");
           await expect.poll(() => composer.inputValue()).toBe(`${literalPrefix}:`);
-          await expect.poll(() => menu.count()).toBe(0);
+          await polledCount(menu).toBe(0);
         }
 
-        await composer.fill("");
-        await composer.pressSequentially(":smi");
-        await menu.waitFor({ state: "visible" });
+        await openMenu();
         await composer.press("Escape");
-        await expect.poll(() => menu.count()).toBe(0);
+        await polledCount(menu).toBe(0);
         await expect.poll(() => composer.inputValue()).toBe(":smi");
-        await composer.fill("");
-        await composer.pressSequentially(":smi");
-        await menu.waitFor({ state: "visible" });
+        await openMenu();
         await page.keyboard.down("Enter");
         await expect.poll(() => composer.inputValue()).toBe("😄");
-        await expect.poll(() => menu.count()).toBe(0);
+        await polledCount(menu).toBe(0);
         await page.keyboard.down("Enter");
         await page.keyboard.up("Enter");
         expect(await composer.inputValue()).toBe("😄");
@@ -189,7 +187,7 @@ suite.define(() => {
       await composer.evaluate((element) => {
         element.scrollTop = 0;
       });
-      await expect.poll(() => menu.count()).toBe(0);
+      await polledCount(menu).toBe(0);
       await composer.dispatchEvent("select");
       expect(await composer.getAttribute("aria-expanded")).not.toBe("true");
       await expect.poll(() => composer.inputValue()).toBe("Context line\n".repeat(50) + ":smi");

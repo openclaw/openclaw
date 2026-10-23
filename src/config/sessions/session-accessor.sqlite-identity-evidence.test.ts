@@ -6,6 +6,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { readSessionIdentityEvidenceBatch, replaceSessionEntrySync } from "./session-accessor.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 
@@ -36,8 +37,10 @@ it("bounds participant reads for 32 session identity probes", () => {
   }
   const expected = probes.map(({ sessionKey }) => ({ status: "current", sessionKey }));
   expect(readSessionIdentityEvidenceBatch(probes)).toEqual(expected);
-  const queries = trackSqliteStatementExecutions(database.db, ["participants"], (sql) =>
-    sql.includes('from "session_participants"') ? "participants" : null,
+  const queries = trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(database.db),
+    ["participants"],
+    (sql) => (sql.includes('from "session_participants"') ? "participants" : null),
   );
   try {
     expect(readSessionIdentityEvidenceBatch(probes)).toEqual(expected);

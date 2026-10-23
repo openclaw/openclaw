@@ -10,8 +10,9 @@ import {
   normalizeToolApprovalReview,
 } from "../shared/tool-approval-reviews.js";
 import { truncateChatHistoryText } from "./chat-display-projection.helpers.js";
+import { projectPluginInlineView } from "./chat-display-projection.inline-view.js";
 
-function isBrowserRouteIdentifier(value: unknown, maxChars: number): value is string {
+function isDisplayRouteIdentifier(value: unknown, maxChars: number): value is string {
   return (
     typeof value === "string" &&
     value.length > 0 &&
@@ -36,20 +37,25 @@ export function isToolResultHistoryBlockType(type: unknown): boolean {
 export function projectToolResultDetails(
   details: unknown,
   maxChars: number,
+  invocation: Record<string, unknown> = {},
 ): { details: Record<string, unknown> | undefined; truncated: boolean } {
   const record = readRecord(details);
   if (!record) {
     return { details: undefined, truncated: false };
   }
   const projected: Record<string, unknown> = {};
+  const inline = projectPluginInlineView(record, invocation);
+  if (inline) {
+    projected.pluginView = inline;
+  }
   const browserTab = readRecord(record.browserTab);
   // A partial or shortened address can select a different browser. Only display
   // text may be truncated; route identifiers must survive projection unchanged.
   if (
-    isBrowserRouteIdentifier(browserTab?.targetId, 128) &&
-    isBrowserRouteIdentifier(browserTab?.profile, 128) &&
+    isDisplayRouteIdentifier(browserTab?.targetId, 128) &&
+    isDisplayRouteIdentifier(browserTab?.profile, 128) &&
     ((browserTab?.target === "host" && browserTab.node === undefined) ||
-      (browserTab?.target === "node" && isBrowserRouteIdentifier(browserTab.node, 256)))
+      (browserTab?.target === "node" && isDisplayRouteIdentifier(browserTab.node, 256)))
   ) {
     projected.browserTab = {
       targetId: browserTab.targetId,
@@ -77,12 +83,7 @@ export function projectToolResultDetails(
     projected.cwd = cwd.text;
     truncated ||= cwd.truncated;
   }
-  if (
-    typeof record.sessionKey === "string" &&
-    record.sessionKey.length > 0 &&
-    record.sessionKey.length <= maxChars &&
-    record.sessionKey.trim() === record.sessionKey
-  ) {
+  if (isDisplayRouteIdentifier(record.sessionKey, maxChars)) {
     projected.sessionKey = record.sessionKey;
   }
   for (const key of ["ok", "changed", "created"] as const) {

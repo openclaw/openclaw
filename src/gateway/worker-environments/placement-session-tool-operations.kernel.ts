@@ -1,7 +1,8 @@
-import type { DatabaseSync } from "node:sqlite";
+import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { WORKER_PROTOCOL_MAX_CONCURRENT_TOOLS } from "../../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
   isCurrentPlacementTurnClaim,
   required,
@@ -20,7 +21,7 @@ type WorkerSessionToolOperationIdentity = {
   requestDigest: string;
 };
 
-function runningOperations(db: DatabaseSync, identity: WorkerTurnToolStateIdentity) {
+function runningOperations(db: EngineConnection, identity: WorkerTurnToolStateIdentity) {
   return query(db)
     .selectFrom("worker_session_tool_operations")
     .select("tool_call_id")
@@ -29,17 +30,19 @@ function runningOperations(db: DatabaseSync, identity: WorkerTurnToolStateIdenti
     .where("status", "=", "running");
 }
 
-export function assertNoRunningWorkerSessionToolOperations(
-  db: DatabaseSync,
+/** Removes idle authority and replay data in the transaction that revokes the turn claim. */
+export function clearWorkerTurnToolState(
+  db: EngineConnection,
   identity: WorkerTurnToolStateIdentity,
 ): void {
   if (executeSqliteQuerySync(db, runningOperations(db, identity).limit(1)).rows.length) {
     throw new Error(`Session ${identity.sessionId} has a running worker session operation`);
   }
+  deleteWorkerTurnToolState(db, identity);
 }
 
 function closeWorkerTurnToolAdmission(
-  db: DatabaseSync,
+  db: EngineConnection,
   identity: WorkerTurnToolStateIdentity,
 ): void {
   executeSqliteQuerySync(
@@ -51,9 +54,8 @@ function closeWorkerTurnToolAdmission(
   );
 }
 
-/** Removes authority and replay data in the same transaction that revokes the turn claim. */
-export function clearWorkerTurnToolState(
-  db: DatabaseSync,
+function deleteWorkerTurnToolState(
+  db: EngineConnection,
   identity: WorkerTurnToolStateIdentity,
 ): void {
   closeWorkerTurnToolAdmission(db, identity);
@@ -68,7 +70,7 @@ export function clearWorkerTurnToolState(
 }
 
 export function createPlacementSessionToolOperationKernel(runtime: {
-  db: DatabaseSync;
+  db: EngineConnection;
   instanceId: string;
   now: () => number;
 }) {
@@ -105,11 +107,7 @@ export function createPlacementSessionToolOperationKernel(runtime: {
     }
     try {
       const names: unknown = JSON.parse(authority.tool_names_json);
-      return (
-        Array.isArray(names) &&
-        names.every((name) => typeof name === "string") &&
-        names.includes(toolName)
-      );
+      return isStringArray(names) && names.includes(toolName);
     } catch {
       return false;
     }
@@ -177,7 +175,7 @@ export function createPlacementSessionToolOperationKernel(runtime: {
       if (executeSqliteQuerySync(db, runningOperations(db, claim).limit(1)).rows.length) {
         return false;
       }
-      clearWorkerTurnToolState(db, claim);
+      deleteWorkerTurnToolState(db, claim);
       return true;
     },
 

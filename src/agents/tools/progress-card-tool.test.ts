@@ -1,5 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as gateway from "./in-process-gateway.js";
 import { createProgressCardTool } from "./progress-card-tool.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 describe("progress_card tool", () => {
   it("limits creation to sequential work while preserving updates, clears, and optional checklists", () => {
@@ -22,7 +25,7 @@ describe("progress_card tool", () => {
       { step: "Verify", status: "pending" as const },
     ];
     const callGateway = vi
-      .fn()
+      .spyOn(gateway, "callInProcessGatewayTool")
       .mockResolvedValueOnce({
         card: {
           sessionKey: "agent:main:main",
@@ -44,7 +47,6 @@ describe("progress_card tool", () => {
     const savedPlans: boolean[] = [];
     const tool = createProgressCardTool({
       agentSessionKey: "agent:main:main",
-      callGateway,
       onPlanSaved: (unfinished) => savedPlans.push(unfinished),
     });
 
@@ -118,16 +120,16 @@ describe("progress_card tool", () => {
       message: "8192 UTF-8 bytes",
     },
   ])("rejects $name before writing", async ({ args, message }) => {
-    const callGateway = vi.fn();
-    const tool = createProgressCardTool({ agentSessionKey: "agent:main:main", callGateway });
+    const callGateway = vi.spyOn(gateway, "callInProcessGatewayTool");
+    const tool = createProgressCardTool({ agentSessionKey: "agent:main:main" });
 
     await expect(tool.execute("call-invalid", args)).rejects.toThrow(message);
     expect(callGateway).not.toHaveBeenCalled();
   });
 
   it("fails before calling the gateway without a session", async () => {
-    const callGateway = vi.fn();
-    const tool = createProgressCardTool({ callGateway });
+    const callGateway = vi.spyOn(gateway, "callInProcessGatewayTool");
+    const tool = createProgressCardTool();
 
     await expect(tool.execute("call-1", { markdown: "Working" })).rejects.toMatchObject({
       name: "ToolInputError",
@@ -136,8 +138,10 @@ describe("progress_card tool", () => {
   });
 
   it("keeps the bound global owner when model arguments name another session", async () => {
-    const callGateway = vi.fn().mockResolvedValue({ card: null });
-    const options = { agentSessionKey: "global", agentId: "research", callGateway };
+    const callGateway = vi
+      .spyOn(gateway, "callInProcessGatewayTool")
+      .mockResolvedValue({ card: null });
+    const options = { agentSessionKey: "global", agentId: "research" };
     const tool = createProgressCardTool(options);
 
     await tool.execute("call-owner", { sessionKey: "agent:main:main", agentId: "main" });

@@ -5,6 +5,7 @@ import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
 } from "openclaw/plugin-sdk/windows-spawn";
+import type { CodexPluginConfig } from "./config-contracts.js";
 import { readCodexPluginConfig } from "./config-parsing.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config-runtime.js";
 import { buildCodexLoginStatusArgs, isCodexAppServerProxyLaunch } from "./launch-args.js";
@@ -20,16 +21,15 @@ const OPENAI_LOGIN_MODES: Readonly<Record<string, "oauth" | "token">> = {
 /** Ask the selected native binary about its own store; retain no credential material. */
 export async function probeCodexNativeAuth(params: {
   config?: OpenClawConfig;
-  pluginConfig?: unknown;
+  pluginConfig?: CodexPluginConfig;
   pluginRoot?: string;
   env?: NodeJS.ProcessEnv;
   signal?: AbortSignal;
 }): ReturnType<NonNullable<ProviderPlugin["prepareSyntheticAuth"]>> {
   params.signal?.throwIfAborted();
   try {
-    const pluginConfig = readCodexPluginConfig(
-      params.pluginConfig ?? params.config?.plugins?.entries?.codex?.config,
-    );
+    const pluginConfig =
+      params.pluginConfig ?? readCodexPluginConfig(params.config?.plugins?.entries?.codex?.config);
     const options = resolveCodexAppServerRuntimeOptions({ pluginConfig, env: params.env });
     // Isolated homes and external servers cannot borrow the operator's local login.
     if (
@@ -39,8 +39,11 @@ export async function probeCodexNativeAuth(params: {
     ) {
       return undefined;
     }
+    // Login status reads the same auth.json on every Codex version; skip the
+    // installed-binary probe so this short auth check never waits on it.
     const start = await resolveManagedCodexAppServerStartOptions(options.start, {
       pluginRoot: params.pluginRoot,
+      preferInstalled: false,
     });
     const env = resolveCodexAppServerSpawnEnv(start, params.env ?? process.env);
     const invocation = materializeWindowsSpawnProgram(

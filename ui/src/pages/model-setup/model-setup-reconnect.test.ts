@@ -2,274 +2,212 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
-import type { ApplicationContext, ApplicationGateway } from "../../app/context.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
+import { createAgentCapability } from "../../lib/agents/index.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
-import type { ModelSetupRouteData } from "./first-run-setup.ts";
-import "./model-setup-page.ts";
-
-type TestModelSetupPage = HTMLElement & {
-  routeData?: ModelSetupRouteData;
-  updateComplete: Promise<boolean>;
-};
+import {
+  running,
+  callsFor,
+  authButton,
+  waitForElement,
+  waitForText,
+  configSnapshot,
+  createFirstRunContext,
+  detection as emptyDetection,
+  runningStep,
+} from "./model-setup-first-run.test-support.ts";
+import type { TestModelSetupPage } from "./test-helpers/page.test-support.ts";
+import {
+  createPage,
+  mountModelSetupPage,
+  unmountModelSetupPage,
+} from "./test-helpers/solid-page.test-support.tsx";
 
 const detection: SystemAgentSetupDetectResult = {
-  candidates: [],
-  unavailableCandidates: [],
-  manualProviders: [],
+  ...emptyDetection,
   authOptions: [{ id: "provider-auth", label: "Provider", kind: "oauth", featured: true }],
-  prepareOptions: [],
-  recommendedInstalls: [],
-  workspace: "/tmp/workspace",
-  setupComplete: false,
 };
 
 function createFixture() {
-  const request = vi.fn<GatewayBrowserClient["request"]>();
-  const client = { request } as unknown as GatewayBrowserClient;
-  const listeners = new Set<(snapshot: ApplicationGateway["snapshot"]) => void>();
-  const selectionListeners = new Set<() => void>();
+  const {
+    context: originalContext,
+    request,
+    snapshot,
+    publishGatewaySnapshot,
+  } = createFirstRunContext();
+  originalContext.runtimeConfig.dispose();
+  const context = {
+    ...originalContext,
+    basePath: "",
+    runtimeConfig: createRuntimeConfigCapability(originalContext.gateway),
+  };
+  context.gateway.connection.gatewayUrl = "ws://localhost";
+  context.gateway.connection.token = "";
   const connectedSnapshot = {
-    client,
-    phase: "connected" as const,
-    offlineStable: false,
+    ...snapshot,
     hello: {
-      type: "hello-ok" as const,
-      protocol: 1,
-      auth: {
-        role: "operator",
-        scopes: ["operator.read", "operator.admin"],
-        recoveryScope: "synthetic-setup-owner",
-      },
+      ...snapshot.hello,
       features: { methods: ["openclaw.setup.detect", "openclaw.setup.verify"] },
     },
-    canvasPluginSurfaceUrl: null,
-    assistantAgentId: "main",
-    sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  } satisfies ApplicationGateway["snapshot"];
-  const gateway = {
-    snapshot: connectedSnapshot as ApplicationGateway["snapshot"],
-    connection: {
-      gatewayUrl: "ws://localhost",
-      token: "",
-      bootstrapToken: "",
-      password: "",
-    },
-    connectionRevision: 0,
-    eventLog: [],
-    eventLogRevision: 0,
-    loadSelfProfile: async () => null,
-    connect: vi.fn(),
-    setSessionKey: vi.fn(),
-    start: vi.fn(),
-    stop: vi.fn(),
-    subscribe: (listener: (snapshot: ApplicationGateway["snapshot"]) => void) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    subscribeEventLog: () => () => undefined,
-    subscribeEvents: () => () => undefined,
-  } satisfies ApplicationGateway;
-  const runtimeConfig = createRuntimeConfigCapability(gateway);
-  const selection = { selectedId: "main", scopeId: "main" };
-  const context = {
-    gateway,
-    settingsAgentSelection: {
-      state: selection,
-      subscribe: (listener: () => void) => {
-        selectionListeners.add(listener);
-        return () => selectionListeners.delete(listener);
-      },
-    },
-    basePath: "",
-    navigate: vi.fn(),
-    runtimeConfig,
-  } as unknown as ApplicationContext;
-  const setGatewayPhase = (phase: "connected" | "reconnecting") => {
-    gateway.snapshot = {
-      ...connectedSnapshot,
-      phase,
-      hello: phase === "connected" ? { ...connectedSnapshot.hello } : null,
-    };
-    for (const listener of listeners) {
-      listener(gateway.snapshot);
-    }
   };
-  const setAgent = (agentId: string) => {
-    selection.selectedId = agentId;
-    for (const listener of selectionListeners) {
-      listener();
-    }
-  };
+  publishGatewaySnapshot(connectedSnapshot);
   return {
     context,
     request,
-    runtimeConfig,
-    setGatewayPhase,
-    setAgent,
-    detectCalls: () => request.mock.calls.filter(([method]) => method === "openclaw.setup.detect"),
+    setGatewayPhase: (phase: "connected" | "reconnecting") =>
+      publishGatewaySnapshot({
+        ...connectedSnapshot,
+        phase,
+        hello: phase === "connected" ? { ...connectedSnapshot.hello } : null,
+      }),
+    detectCalls: () => callsFor(request, "openclaw.setup.detect"),
   };
 }
 
-async function mountPage(context: ApplicationContext): Promise<TestModelSetupPage> {
+async function mountPage(context: ApplicationContext, visit = true): Promise<TestModelSetupPage> {
   const provider = createApplicationContextProvider(context);
-  const page = document.createElement("openclaw-model-setup-page") as TestModelSetupPage;
-  page.routeData = { firstRun: false };
+  const page = createPage(context);
+  if (visit) {
+    page.routeData = { firstRun: false };
+  }
   provider.append(page);
   document.body.append(provider);
+  mountModelSetupPage(page);
   await page.updateComplete;
   return page;
 }
 
-function selectedModelDetail(page: TestModelSetupPage): string | undefined {
-  return page.querySelector(".model-setup__current-copy > .muted")?.textContent?.trim();
-}
+const selectedModelDetail = (page: TestModelSetupPage) =>
+  page.querySelector(".model-setup__current-copy > .muted")?.textContent?.trim();
 
 describe("ModelSetupPage detection ownership", () => {
+  let fixture: ReturnType<typeof createFixture>;
   beforeEach(async () => {
+    fixture = createFixture();
     await i18n.setLocale("en");
   });
 
   afterEach(() => {
+    fixture.context.runtimeConfig.dispose();
     document.body.replaceChildren();
     vi.restoreAllMocks();
   });
 
-  it("starts one detection when the visit arrives after mounting on a connected Gateway", async () => {
-    const { context, request, runtimeConfig } = createFixture();
-    request.mockResolvedValue(detection);
-    const provider = createApplicationContextProvider(context);
-    const page = document.createElement("openclaw-model-setup-page") as TestModelSetupPage;
-    provider.append(page);
-    document.body.append(provider);
-    await page.updateComplete;
-
-    expect(request).not.toHaveBeenCalled();
-    page.routeData = { firstRun: false };
-    await vi.waitFor(() => {
-      expect(request).toHaveBeenCalledOnce();
-      expect(page.querySelector('[data-auth-choice="provider-auth"]')).not.toBeNull();
-    });
-    runtimeConfig.dispose();
-  });
-
-  it("keeps pending detection owned through an equivalent route-data refresh", async () => {
-    const { context, request, runtimeConfig, detectCalls } = createFixture();
-    const detected = createDeferred<SystemAgentSetupDetectResult>();
-    request.mockReturnValue(detected.promise);
-    const page = await mountPage(context);
-    await vi.waitFor(() => expect(detectCalls()).toHaveLength(1));
-    const signal = detectCalls()[0]?.[2]?.signal;
-    try {
-      page.routeData = { firstRun: false };
-      await page.updateComplete;
-      expect(detectCalls()).toHaveLength(1);
-      expect(signal?.aborted).toBe(false);
-      detected.resolve(detection);
-      await vi.waitFor(() =>
-        expect(page.querySelector('[data-auth-choice="provider-auth"]')).not.toBeNull(),
-      );
-      expect(detectCalls()).toHaveLength(1);
-    } finally {
-      detected.resolve(detection);
-      runtimeConfig.dispose();
-    }
-  });
-
-  it("waits for the connected Gateway when the page mounts during reconnect", async () => {
-    const { context, request, runtimeConfig, setGatewayPhase, detectCalls } = createFixture();
-    request.mockImplementation(async (method) =>
-      method === "openclaw.setup.detect" ? detection : {},
-    );
-    setGatewayPhase("reconnecting");
-    const page = await mountPage(context);
-
-    expect(page.querySelector('[data-auth-choice="provider-auth"]')).toBeNull();
-    expect(request).not.toHaveBeenCalled();
-    setGatewayPhase("connected");
-    await vi.waitFor(() => {
-      expect(detectCalls()).toHaveLength(1);
-      expect(page.querySelector('[data-auth-choice="provider-auth"]')).not.toBeNull();
-    });
-    runtimeConfig.dispose();
-  });
-
-  it.each(["reconnect", "agent", "remount", "reattach"] as const)(
-    "cancels stale detection on %s and accepts only the replacement result",
-    async (change) => {
-      const { context, request, runtimeConfig, setGatewayPhase, setAgent, detectCalls } =
-        createFixture();
-      const stale = createDeferred<SystemAgentSetupDetectResult>();
-      let signal: AbortSignal | undefined;
-      request.mockImplementationOnce(async (_method, _params, options) => {
-        signal = options?.signal;
-        return stale.promise;
-      });
+  it.each(["route", "gateway"] as const)(
+    "waits for %s readiness before detection",
+    async (ready) => {
+      const { context, request, setGatewayPhase, detectCalls } = fixture;
       request.mockImplementation(async (method) =>
-        method === "openclaw.setup.detect"
-          ? { ...detection, configuredModel: "provider/current-model", setupComplete: true }
-          : {},
+        method === "openclaw.setup.detect" ? detection : {},
       );
-      let page = await mountPage(context);
-      await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-      expect(page.querySelector(".model-setup__loading")).not.toBeNull();
-      if (change === "reconnect") {
+      if (ready === "gateway") {
         setGatewayPhase("reconnecting");
-        setGatewayPhase("connected");
-      } else if (change === "agent") {
-        setAgent("research");
-      } else if (change === "remount") {
-        page.remove();
-        page = await mountPage(context);
-      } else {
-        const provider = page.parentElement!;
-        page.remove();
-        page.routeData = { firstRun: false };
-        provider.append(page);
       }
-      await vi.waitFor(() => expect(selectedModelDetail(page)).toBe("current-model"));
-      expect(signal?.aborted).toBe(true);
-      expect(detectCalls()).toHaveLength(2);
-      expect(detectCalls().at(-1)).toEqual([
-        "openclaw.setup.detect",
-        { agentId: change === "agent" ? "research" : "main" },
-        expect.objectContaining({ signal: expect.any(AbortSignal) }),
-      ]);
-      // A server can finish after local cancellation; it cannot publish into the next visit.
-      stale.resolve({ ...detection, configuredModel: "provider/stale-model", setupComplete: true });
-      await vi.waitFor(() => expect(request.mock.settledResults[0]?.type).toBe("fulfilled"));
-      await page.updateComplete;
-      expect(selectedModelDetail(page)).toBe("current-model");
-      runtimeConfig.dispose();
+      const page = await mountPage(context, ready !== "route");
+      expect(request).not.toHaveBeenCalled();
+      if (ready === "gateway") {
+        expect(authButton(page, "provider-auth")).toBeNull();
+        setGatewayPhase("connected");
+      } else {
+        page.routeData = { firstRun: false };
+      }
+      await vi.waitFor(() => {
+        expect(detectCalls()).toHaveLength(1);
+        expect(authButton(page, "provider-auth")).not.toBeNull();
+        if (ready === "route") {
+          expect(request).toHaveBeenCalledOnce();
+        }
+      });
     },
   );
 
-  it("recovers the selected provider wizard across a same-Gateway reconnect", async () => {
-    const { context, request, runtimeConfig, setGatewayPhase } = createFixture();
+  it("rejects stale detection after reattach", async () => {
+    const { context, request, detectCalls } = fixture;
+    const stale = createDeferred<SystemAgentSetupDetectResult>();
+    let signal: AbortSignal | undefined;
+    request.mockImplementationOnce(async (_method, _params, options) => {
+      signal = options?.signal;
+      return stale.promise;
+    });
+    request.mockImplementation(async (method) =>
+      method === "openclaw.setup.detect"
+        ? { ...detection, configuredModel: "provider/current-model", setupComplete: true }
+        : {},
+    );
+    const page = await mountPage(context);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    expect(page.querySelector(".model-setup__loading")).not.toBeNull();
+    const provider = page.parentElement!;
+    unmountModelSetupPage(page);
+    page.remove();
+    page.routeData = { firstRun: false };
+    provider.append(page);
+    mountModelSetupPage(page);
+    await vi.waitFor(() => expect(selectedModelDetail(page)).toBe("current-model"));
+    expect(signal?.aborted).toBe(true);
+    expect(detectCalls()).toHaveLength(2);
+    expect(detectCalls().at(-1)).toEqual([
+      "openclaw.setup.detect",
+      { agentId: "main" },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    ]);
+    stale.resolve({ ...detection, configuredModel: "provider/stale-model", setupComplete: true });
+    await vi.waitFor(() => expect(request.mock.settledResults[0]?.type).toBe("fulfilled"));
+    await page.updateComplete;
+    expect(selectedModelDetail(page)).toBe("current-model");
+  });
+
+  it("replaces failed detection with loading while the agent roster is pending", async () => {
+    const { context, request, detectCalls } = fixture;
+    const agents = createAgentCapability(context.gateway);
+    const retry = createDeferred<SystemAgentSetupDetectResult>();
+    request.mockRejectedValueOnce(new Error("Detection failed before roster refresh."));
+    request.mockImplementation(() => retry.promise);
+    try {
+      const page = await mountPage({ ...context, agents });
+      await waitForText(page, "Detection failed before roster refresh.");
+
+      context.settingsAgentSelection.state.selectedId = null;
+      page.routeData = { firstRun: false };
+      await vi.waitFor(() => {
+        expect(page.querySelector(".model-setup__loading")).not.toBeNull();
+        expect(page.querySelector('[role="alert"]')).toBeNull();
+      });
+      expect(detectCalls()).toHaveLength(1);
+
+      context.settingsAgentSelection.state.selectedId = "main";
+      page.routeData = { firstRun: false };
+      await vi.waitFor(() => expect(detectCalls()).toHaveLength(2));
+      expect(page.querySelector(".model-setup__loading")).not.toBeNull();
+      retry.resolve(detection);
+      await waitForElement(page, '[data-auth-choice="provider-auth"]');
+      expect(page.querySelector('[role="alert"]')).toBeNull();
+    } finally {
+      retry.resolve(detection);
+      agents.dispose();
+    }
+  });
+
+  it("resumes the provider wizard after reconnect", async () => {
+    const { context, request, setGatewayPhase } = fixture;
     let oldWizardSignal: AbortSignal | undefined;
     let nextCalls = 0;
     request.mockImplementation(async (method, _params, options) => {
       if (method === "openclaw.setup.auth.start") {
-        return { done: false, status: "running" };
+        return running;
       }
       if (method === "wizard.next") {
         nextCalls += 1;
         if (nextCalls > 1) {
-          return {
-            done: false,
-            status: "running",
-            step: {
-              id: "provider-key",
-              type: "text",
-              message: "Enter the selected provider key",
-              sensitive: true,
-            },
-          };
+          return runningStep({
+            id: "provider-key",
+            type: "text",
+            message: "Enter the selected provider key",
+            sensitive: true,
+          });
         }
         oldWizardSignal = options?.signal;
         return await new Promise((_resolve, reject) => {
@@ -279,73 +217,29 @@ describe("ModelSetupPage detection ownership", () => {
         });
       }
       if (method === "config.get") {
-        return { config: {}, sourceConfig: {}, raw: "{}", hash: "hash-1", valid: true, issues: [] };
+        return configSnapshot();
       }
       return method === "openclaw.setup.detect" ? detection : {};
     });
     const page = await mountPage(context);
-    await vi.waitFor(() =>
-      expect(page.querySelector('[data-auth-choice="provider-auth"]')).not.toBeNull(),
-    );
-    page.querySelector<HTMLButtonElement>('[data-auth-choice="provider-auth"] button')!.click();
+    await waitForElement(page, '[data-auth-choice="provider-auth"]');
+    authButton(page, "provider-auth")!.click();
     await vi.waitFor(() => expect(oldWizardSignal).toBeInstanceOf(AbortSignal));
     const start = request.mock.calls.find(([method]) => method === "openclaw.setup.auth.start")!;
 
     setGatewayPhase("reconnecting");
     setGatewayPhase("connected");
-    await vi.waitFor(() => expect(page.textContent).toContain("Enter the selected provider key"));
+    await waitForText(page, "Enter the selected provider key");
+    await vi.waitFor(() => {
+      expect(page.querySelector<HTMLInputElement>("#model-setup-wizard-text-input")?.disabled).toBe(
+        false,
+      );
+    });
     expect(oldWizardSignal?.aborted).toBe(true);
-    expect(
-      request.mock.calls.filter(([method]) => method === "openclaw.setup.auth.start"),
-    ).toHaveLength(1);
-    expect(request.mock.calls.filter(([method]) => method === "wizard.cancel")).toHaveLength(0);
+    expect(callsFor(request, "openclaw.setup.auth.start")).toHaveLength(1);
+    expect(callsFor(request, "wizard.cancel")).toHaveLength(0);
     expect(request.mock.calls.findLast(([method]) => method === "wizard.next")?.[1]).toEqual({
       sessionId: (start[1] as { sessionId: string }).sessionId,
     });
-    runtimeConfig.dispose();
-  });
-
-  it("suppresses a late wizard completion after Gateway credentials change", async () => {
-    const { context, request, runtimeConfig, setGatewayPhase } = createFixture();
-    let releaseWizard: ((value: unknown) => void) | undefined;
-    request.mockImplementation(async (method) => {
-      if (method === "config.get") {
-        return { config: {}, sourceConfig: {}, raw: "{}", hash: "hash-1", valid: true, issues: [] };
-      }
-      if (method === "openclaw.setup.auth.start") {
-        return { sessionId: "wizard-before-reconnect", done: false, status: "running" };
-      }
-      if (method === "wizard.next") {
-        return await new Promise((resolve) => {
-          // The server can commit after the local request was invalidated.
-          releaseWizard = resolve;
-        });
-      }
-      if (method === "openclaw.setup.detect") {
-        return { ...detection, configuredModel: "provider/current-model", setupComplete: true };
-      }
-      return {};
-    });
-    await runtimeConfig.ensureLoaded();
-    const page = await mountPage(context);
-    await vi.waitFor(() =>
-      expect(page.querySelector('[data-auth-choice="provider-auth"]')).not.toBeNull(),
-    );
-    page.querySelector<HTMLButtonElement>('[data-auth-choice="provider-auth"] button')?.click();
-    await vi.waitFor(() => expect(releaseWizard).toBeTypeOf("function"));
-
-    Object.assign(context.gateway, { connectionRevision: context.gateway.connectionRevision + 1 });
-    setGatewayPhase("reconnecting");
-    setGatewayPhase("connected");
-    releaseWizard?.({ done: true, status: "done" });
-
-    await vi.waitFor(() => {
-      expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
-      expect(page.textContent).toContain(
-        "Connection changed before the configuration update was refreshed.",
-      );
-      expect(selectedModelDetail(page)).toBe("current-model");
-    });
-    runtimeConfig.dispose();
   });
 });

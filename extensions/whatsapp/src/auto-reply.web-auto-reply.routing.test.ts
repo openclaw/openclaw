@@ -1,4 +1,3 @@
-// WhatsApp web auto-reply routing behavior.
 import "./test-helpers.js";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -31,85 +30,6 @@ vi.mock("./auto-reply/monitor/last-route.js", async () => {
   };
 });
 
-function makeCfg(storePath: string): OpenClawConfig {
-  return {
-    channels: { whatsapp: { allowFrom: ["*"] } },
-    session: { store: storePath },
-  };
-}
-
-function makeReplyLogger() {
-  return {
-    warn: vi.fn(),
-    info: vi.fn(),
-    debug: vi.fn(),
-    error: vi.fn(),
-  } as unknown as Parameters<typeof createWebOnMessageHandler>[0]["replyLogger"];
-}
-
-function createHandlerForTest(opts: { cfg: OpenClawConfig; replyResolver: unknown }) {
-  const backgroundTasks = new Set<Promise<unknown>>();
-  const replyLogger = makeReplyLogger();
-  const handler = createWebOnMessageHandler({
-    cfg: opts.cfg,
-    verbose: false,
-    connectionId: "test",
-    maxMediaBytes: 1024,
-    groupHistoryLimit: 3,
-    groupHistories: new Map(),
-    groupMemberNames: new Map(),
-    backgroundTasks,
-    replyResolver: opts.replyResolver as Parameters<
-      typeof createWebOnMessageHandler
-    >[0]["replyResolver"],
-    replyLogger,
-  });
-
-  return { handler, backgroundTasks };
-}
-
-function buildInboundMessage(params: {
-  id: string;
-  from: string;
-  conversationId: string;
-  chatType: "direct" | "group";
-  chatId: string;
-  timestamp: number;
-  body?: string;
-  to?: string;
-  accountId?: string;
-  senderE164?: string;
-  senderName?: string;
-  selfE164?: string;
-}) {
-  return createTestWebInboundMessage({
-    event: {
-      id: params.id,
-      timestamp: params.timestamp,
-    },
-    payload: {
-      body: params.body ?? "hello",
-    },
-    platform: {
-      chatJid: params.chatId,
-      recipientJid: params.to ?? "+2000",
-      senderE164: params.senderE164,
-      senderName: params.senderName,
-      selfE164: params.selfE164,
-    },
-    admission: {
-      accountId: params.accountId ?? "default",
-      conversation: {
-        kind: params.chatType,
-        id: params.conversationId,
-      },
-      sender: {
-        id: params.senderE164 ?? params.from,
-      },
-    },
-  });
-}
-
 describe("web auto-reply routing", () => {
   installWebAutoReplyUnitTestHooks();
 
@@ -125,25 +45,45 @@ describe("web auto-reply routing", () => {
       [groupSessionKey]: { sessionId: "sid", updatedAt: now - 1 },
     });
 
-    const cfg = makeCfg(store.storePath);
-    const { handler, backgroundTasks } = createHandlerForTest({
+    const cfg: OpenClawConfig = {
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { store: store.storePath },
+    };
+    const backgroundTasks = new Set<Promise<unknown>>();
+    const handler = createWebOnMessageHandler({
       cfg,
+      verbose: false,
+      connectionId: "test",
+      maxMediaBytes: 1024,
+      groupHistoryLimit: 3,
+      groupHistories: new Map(),
+      groupMemberNames: new Map(),
+      backgroundTasks,
       replyResolver: vi.fn().mockResolvedValue(undefined),
+      replyLogger: {
+        warn: vi.fn(),
+        info: vi.fn(),
+        debug: vi.fn(),
+        error: vi.fn(),
+      } as unknown as Parameters<typeof createWebOnMessageHandler>[0]["replyLogger"],
     });
 
     await handler(
-      buildInboundMessage({
-        id: "g1",
-        from: "123@g.us",
-        conversationId: "123@g.us",
-        chatType: "group",
-        chatId: "123@g.us",
-        body: "hello +2000",
-        timestamp: now,
-        accountId: "work",
-        senderE164: "+1000",
-        senderName: "Alice",
-        selfE164: "+2000",
+      createTestWebInboundMessage({
+        event: { id: "g1", timestamp: now },
+        payload: { body: "hello +2000" },
+        platform: {
+          chatJid: "123@g.us",
+          recipientJid: "+2000",
+          senderE164: "+1000",
+          senderName: "Alice",
+          selfE164: "+2000",
+        },
+        admission: {
+          accountId: "work",
+          conversation: { kind: "group", id: "123@g.us" },
+          sender: { id: "+1000" },
+        },
       }),
     );
 
@@ -167,7 +107,6 @@ describe("web auto-reply routing", () => {
     expect(routeParams).toEqual({
       storeAgentId: "main",
       sessionKey: `${groupSessionKey}:thread:whatsapp-account-work`,
-      channel: "whatsapp",
       to: "123@g.us",
       accountId: "work",
     });

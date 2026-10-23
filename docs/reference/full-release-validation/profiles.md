@@ -10,14 +10,14 @@ read_when:
 ## Release profiles
 
 `release_profile` controls live/provider breadth inside release checks. The
-bounded canonical beta gate described in [Extended-stable and changelog-only
+bounded standard beta gate described in [Extended-stable and changelog-only
 validation](/reference/full-release-validation/extended-stable) also selects npm-focused CI and
 defers performance and Telegram confidence. Plugin Prerelease, install smoke,
 package acceptance, and QA parity remain selected. Stable and full profiles always run exhaustive
 repo/live E2E, Docker release-path, and QA-live soak coverage. The beta profile
 adds those lanes only with `run_release_soak=true`, an explicit `qa-live`
 controller retry, or the direct child's manual `qa` aggregate. Package
-Acceptance supplies the canonical package Telegram E2E when selected; beta
+Acceptance supplies the standard package Telegram E2E when selected; beta
 `all` without soak defers it to confidence work.
 
 | Profile  | Intended use                      | Included live/provider coverage                                                                                                                                                                            |
@@ -44,23 +44,37 @@ Anthropic and OpenCode Go model shards instead. Focused reruns can still use the
 aggregate `native-live-src-gateway-profiles-anthropic` or
 `native-live-src-gateway-profiles-opencode-go` handles.
 
+When repo/live coverage is selected, every profile also runs `live-cache`:
+stored provider floors, transport-prefix assertions, and live agent scenarios for
+Anthropic Messages and OpenAI Responses. The transport scenario also selects
+OpenRouter when its credential is present. The agent scenario forces full-history
+requests and rehydrates persisted prompt state; it does not restart a Gateway
+process or cover retained HTTP continuation requests.
+This is included in default stable/full validation; beta without soak retains
+its deferred repo/live coverage. See
+[Prompt-cache regression coverage](/help/testing/suites#prompt-cache-regression-coverage)
+for commands, estimated cost, and the distinction from offline admitted-agent
+and authenticated Gateway chat/subagent-completion coverage with an in-process server
+stop/start.
+
 ## Focused reruns
 
 Use `rerun_group` to avoid repeating unrelated release boxes:
 
-| Handle              | Scope                                                                                                                                               |
-| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `all`               | Profile-selected qualification; canonical beta without soak uses `npm-beta-v1`; regular stable uses `npm-stable-v1`, which defers native apps only. |
-| `ci`                | Manual full CI child only.                                                                                                                          |
-| `plugin-prerelease` | Plugin Prerelease child only.                                                                                                                       |
-| `install-smoke`     | Install Smoke through release checks.                                                                                                               |
-| `cross-os`          | Cross-OS release checks.                                                                                                                            |
-| `live-e2e`          | Repo/live E2E and Docker release-path validation.                                                                                                   |
-| `package`           | Package Acceptance.                                                                                                                                 |
-| `qa-parity`         | QA parity, runtime-pair/restart, and runtime tool coverage.                                                                                         |
-| `qa-live`           | QA live Matrix, Buzz, and Telegram plus gated Discord, WhatsApp, and Slack lanes when enabled.                                                      |
-| `npm-telegram`      | Published-package Telegram E2E; requires `release_package_spec` or `npm_telegram_package_spec`.                                                     |
-| `performance`       | Product performance evidence only.                                                                                                                  |
+| Handle              | Scope                                                                                                                                              |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `all`               | Profile-selected qualification; standard beta without soak uses `npm-beta-v1`; regular stable uses `npm-stable-v1`, which defers native apps only. |
+| `ci`                | Manual full CI child only.                                                                                                                         |
+| `plugin-prerelease` | Plugin Prerelease child only.                                                                                                                      |
+| `install-smoke`     | Install Smoke through release checks.                                                                                                              |
+| `cross-os`          | Cross-OS release checks.                                                                                                                           |
+| `windows-node`      | Candidate package with stable/prerelease Windows-node release artifacts and pinned main source.                                                    |
+| `live-e2e`          | Repo/live E2E and Docker release-path validation.                                                                                                  |
+| `package`           | Package Acceptance.                                                                                                                                |
+| `qa-parity`         | QA parity, runtime-pair/restart, and runtime tool coverage.                                                                                        |
+| `qa-live`           | QA live Matrix, Buzz, and Telegram plus gated Discord, WhatsApp, and Slack lanes when enabled.                                                     |
+| `npm-telegram`      | Published-package Telegram E2E; requires `release_package_spec` or `npm_telegram_package_spec`.                                                    |
+| `performance`       | Product performance evidence only.                                                                                                                 |
 
 Use `live_suite_filter` with `rerun_group=live-e2e` when one live suite failed.
 The former `release-checks` aggregate retry handle is invalid. It silently
@@ -72,14 +86,14 @@ dispatches may use it only as a deliberate manual aggregate of `qa-parity` and
 filters are also accepted for `all`.
 Mismatches fail before scheduling and never widen to an unfiltered run.
 Valid filter ids are defined in the reusable live/E2E workflow, including
-`docker-live-models`, `live-gateway-docker`,
+`live-cache`, `docker-live-models`, `live-gateway-docker`,
 `live-gateway-anthropic-docker`, `live-gateway-google-docker`,
 `live-gateway-minimax-docker`, `live-gateway-advisory-docker`,
 `live-cli-backend-docker`, `live-cli-cache-docker`, `live-acp-bind-docker`, and
 `live-codex-harness-docker`.
 
 For a focused QA transport rerun, set `rerun_group=qa-live` and use the
-canonical selector `qa-live-matrix`, `qa-live-buzz`, `qa-live-telegram`,
+standard selector `qa-live-matrix`, `qa-live-buzz`, `qa-live-telegram`,
 `qa-live-discord`, `qa-live-whatsapp`, or `qa-live-slack`.
 
 The `live-gateway-advisory-docker` handle is an aggregate rerun handle for its
@@ -91,11 +105,12 @@ for example `windows/packaged-upgrade`, `windows`, or `packaged-fresh`.
 All-group runs must keep every OS/suite pair: `-f cross_os_suite_filter=ubuntu,windows,macos`
 or `packaged-fresh,installer-fresh,packaged-upgrade` are accepted, while any all-group
 filter that omits one of the nine Linux/Windows/macOS install and upgrade pairs is
-rejected before scheduling. All selected cross-OS outcomes block on failure. Every all-group run must retain
-all nine install/upgrade combinations. Every selected lane must succeed. No
-operator waiver can authorize publication with
-failed selected tests. Stable publication requires stable/full evidence,
-soak, and blocking performance.
+rejected before scheduling. All selected cross-OS outcomes block on failure. Every
+all-group run must retain all nine install/upgrade combinations; these cannot be
+waived. Only exact failed live-provider or Telegram leaves may use the
+[release-tooling policy](/reference/full-release-validation/evidence#release-tooling-waivers).
+Publication always requires successful FRV. Stable publication also requires
+stable/full evidence, soak, and blocking performance.
 
 Skipped or deferred attempts are never reported as passed. When
 `live_suite_filter` explicitly requests a gated QA live lane such as Discord,

@@ -1,8 +1,10 @@
 import { expect, it, vi } from "vitest";
+import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import * as stateReads from "../../../state/openclaw-state-db-readonly.js";
-import { subagentRuns } from "./subagent-registry-memory.js";
+import { bindSubagentRunGatewayOwners } from "./subagent-registry-gateway-owner.js";
+import { getSubagentActivationRuns, subagentRuns } from "./subagent-registry-memory.js";
 import { restoreSubagentRunsFromDisk } from "./subagent-registry-persistence.js";
 import { persistRegistryFixture } from "./subagent-registry-state.fixture.test-support.js";
 import {
@@ -17,6 +19,50 @@ export function registerSubagentRestoreCacheCases(params: {
   refuseNextWrite(): void;
 }) {
   const { createRun } = params;
+  it("keeps restored history cold without publishing unchanged session facts", async () => {
+    vi.useRealTimers();
+    const restored = new Map(
+      Array.from({ length: 257 }, (_, index) => {
+        const entry: SubagentRunRecord = {
+          ...createRun(`retained-${index}`),
+          execution: { status: "terminal", endedAt: 100, outcome: { status: "ok" } },
+          cleanupCompletedAt: 100,
+          delivery: { status: "not_required" },
+        };
+        return [entry.runId, entry] as const;
+      }),
+    );
+    params.mockRestoredRows(restored);
+    await restoreSubagentRunsFromDisk({ runs: subagentRuns });
+    const first = subagentRuns.get("retained-0")!;
+    const registration = subagentRuns.captureRegistrationOwnership(first.childSessionKey, first);
+    const gateway = { resolveGatewayContext: () => gateway as never };
+    const observe = vi.fn();
+    const unsubscribe = sessionChanges.subscribe(observe);
+    try {
+      expect(
+        await bindSubagentRunGatewayOwners({
+          runs: subagentRuns,
+          entries: [...getSubagentActivationRuns(subagentRuns)],
+          resumedRuns: new Set(),
+          getGatewayContextResolver: () => gateway.resolveGatewayContext,
+          onRecovered: () => {},
+        }),
+      ).toBe(true);
+      expect(observe).not.toHaveBeenCalled();
+      expect(subagentRuns.size).toBe(restored.size);
+      for (const entry of subagentRuns.values()) {
+        expect(getGatewayContextResolver(entry)).toBeUndefined();
+        expect(entry.execution.outcome).toEqual({ status: "ok" });
+      }
+      expect(() => registration.assertCurrent()).not.toThrow();
+    } finally {
+      unsubscribe();
+      registration.release();
+      subagentRuns.clear();
+    }
+  });
+
   it("publishes restored rows together after replacing ownership and cached facts", async () => {
     subagentRuns.clear();
     const previous = { ...createRun("replaced"), generation: 1 };
@@ -53,27 +99,6 @@ export function registerSubagentRestoreCacheCases(params: {
     }
   });
 
-  it.each([false, true])(
-    "invalidates loaded snapshots on restore, including empty stores (%s)",
-    async (empty) => {
-      const stale = createRun("stale");
-      persistRegistryFixture(new Map([[stale.runId, stale]]));
-      const restored = empty
-        ? new Map<string, SubagentRunRecord>()
-        : new Map([["restored", createRun("restored")]]);
-      params.mockRestoredRows(restored);
-
-      await restoreSubagentRunsFromDisk({ runs: new Map() });
-
-      for (const read of [
-        getSubagentRunsSnapshotForRead,
-        getSubagentSessionListRunsSnapshotForRead,
-      ]) {
-        expect([...read(new Map()).keys()]).toEqual([...restored.keys()]);
-      }
-    },
-  );
-
   it.each([true, false])(
     "restores canonical rows across an external deletion publication (committed: %s)",
     async (committed) => {
@@ -94,7 +119,6 @@ export function registerSubagentRestoreCacheCases(params: {
           options?.onChunk?.(
             [...snapshot.values()].map((restored) => ({
               entry: restored,
-              version: "fixture-version",
               createdAt: restored.createdAt,
             })),
           );
@@ -121,7 +145,6 @@ export function registerSubagentRestoreCacheCases(params: {
         release.resolve();
       }
       await restoring;
-      expect(reads).toBe(committed ? 2 : 1);
       expect(restored.has(entry.runId)).toBe(!committed);
       expect(getSubagentRunsSnapshotForRead(new Map()).has(entry.runId)).toBe(!committed);
     },

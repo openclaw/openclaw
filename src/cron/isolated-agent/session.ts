@@ -35,6 +35,7 @@ const FRESH_CRON_CARRIED_PREFERENCE_FIELDS = [
   "ttsAuto",
   "responseUsage",
   "pinnedAt",
+  "sidebarRoot",
   "label",
   "displayName",
 ] as const satisfies readonly (keyof SessionEntry)[];
@@ -112,7 +113,7 @@ function preserveNonAutoModelOverride(target: Partial<SessionEntry>, entry: Sess
 
 function preserveUserAuthOverride(target: Partial<SessionEntry>, entry: SessionEntry): void {
   const source = resolveSessionAuthProfileOverrideSource(entry);
-  if (source === "user") {
+  if (source === "user" || source === "user-link") {
     if (entry.authProfileOverride !== undefined) {
       target.authProfileOverride = entry.authProfileOverride;
     }
@@ -195,7 +196,7 @@ export async function prepareCronSession(params: CronSessionParams) {
   });
 }
 
-/** Resolves prepared rows; heartbeat can supply its writer-owned current row. */
+/** Resolves prepared rows for ordinary cron execution. */
 export function resolveCronSession(
   params: CronSessionParams & {
     store: Record<string, SessionEntry>;
@@ -214,16 +215,9 @@ export function resolveCronSession(
   const sourceSessionDiffers = Boolean(sourceSessionKey && sourceSessionKey !== params.sessionKey);
   const targetEntry = store[params.sessionKey];
   const entry = store[sourceSessionKey || params.sessionKey];
-  // Guard the run's target row even when a differing source session seeds the
-  // carried preferences. A forced isolated heartbeat may replace its archived
-  // synthetic row, but trusted initialization must still finish first.
-  const canRollArchivedHeartbeat =
-    params.forceNew === true &&
-    targetEntry?.archivedAt !== undefined &&
-    targetEntry.initializationPending !== true &&
-    Boolean(targetEntry.heartbeatIsolatedBaseSessionKey?.trim());
+  // Guard the target row even when a differing source seeds its preferences.
   const sessionWorkStartError = resolveSessionWorkStartError(params.sessionKey, targetEntry);
-  if (sessionWorkStartError && !canRollArchivedHeartbeat) {
+  if (sessionWorkStartError) {
     throw new Error(sessionWorkStartError);
   }
 

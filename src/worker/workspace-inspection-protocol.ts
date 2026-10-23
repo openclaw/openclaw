@@ -7,6 +7,7 @@ import {
   SessionsFilesGetResultSchema,
   SessionsFilesListResultSchema,
 } from "../../packages/gateway-protocol/src/schema/sessions.js";
+import { WORKSPACE_DOWNLOAD_CHUNK_BYTES } from "../gateway/workspace-file-limits.js";
 
 export const WORKSPACE_INSPECTION_COMMAND = "openclaw-internal-workspace-inspect";
 export const WORKSPACE_INSPECTION_MAX_BYTES = 2 * 1024 * 1024;
@@ -32,6 +33,16 @@ const schema = z.discriminatedUnion("operation", [
   z
     .object({
       ...owner,
+      operation: z.literal("download"),
+      path: text,
+      files,
+      offset: z.number().int().min(0).optional(),
+      identity: z.string().max(4096).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      ...owner,
       operation: z.literal("set"),
       path: text,
       content: z.string(),
@@ -44,6 +55,7 @@ const schema = z.discriminatedUnion("operation", [
       operation: z.literal("diff"),
       scope: z.enum(["all", "uncommitted", "commit"]),
       commit: text.optional(),
+      summaryOnly: z.boolean().optional(),
       baseCommit: z.string().regex(/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u),
     })
     .strict(),
@@ -92,6 +104,22 @@ const writeResult = Type.Union([
   ),
 ]);
 const resultSchemas = {
+  download: Type.Union([
+    Type.Object({ status: Type.Literal("missing") }, { additionalProperties: false }),
+    Type.Object(
+      {
+        status: Type.Literal("ok"),
+        filename: Type.String({ minLength: 1 }),
+        size: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+        identity: Type.String({ minLength: 1, maxLength: 4096 }),
+        data: Type.String({
+          maxLength: Math.ceil(WORKSPACE_DOWNLOAD_CHUNK_BYTES / 3) * 4,
+          pattern: "^[A-Za-z0-9+/]*={0,2}$",
+        }),
+      },
+      { additionalProperties: false },
+    ),
+  ]),
   list: Type.Omit(SessionsFilesListResultSchema, ["sessionKey"]),
   get: Type.Object(
     {

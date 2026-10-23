@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import http from "node:http";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
+import { McpServer } from "@modelcontextprotocol/server";
 
 export async function startRequesterScopedMcpProofServer(): Promise<{
   url: string;
@@ -10,7 +10,7 @@ export async function startRequesterScopedMcpProofServer(): Promise<{
 }> {
   const server = new McpServer({ name: "openclaw-requester-proof", version: "1.0.0" });
   const session: { current?: string; closed?: string; calls: number } = { calls: 0 };
-  const transport = new StreamableHTTPServerTransport({
+  const transport = new NodeStreamableHTTPServerTransport({
     sessionIdGenerator: randomUUID,
     onsessioninitialized(nextSessionId) {
       session.current = nextSessionId;

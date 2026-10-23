@@ -92,6 +92,16 @@ public protocol GatewayTLSFailureProviding: AnyObject {
     func consumeLastTLSFailure() -> GatewayTLSValidationFailure?
 }
 
+extension GatewayTLSFailureProviding {
+    func consumeHTTPFailure(_ error: Error) -> Error {
+        // The delegate's diagnostic belongs to this attempt, including cancellation.
+        // Consume it once so a later request cannot inherit an earlier trust failure.
+        let failure = self.consumeLastTLSFailure()
+        guard !Task.isCancelled, error is URLError, let failure else { return error }
+        return GatewayTLSValidationError(failure: failure, context: "gateway request")
+    }
+}
+
 // periphery:ignore - Native session adapters declare whether their TLS path permits token retry.
 public protocol GatewayDeviceTokenRetryTrustProviding: AnyObject {
     // periphery:ignore - The shared channel consumes this through the optional provider seam.
@@ -146,6 +156,17 @@ enum GatewayTLSServerTrustEvaluation {
 }
 
 public enum GatewayTLSServerTrust {
+    /// Fingerprinting identifies the leaf certificate; callers evaluate its trust separately.
+    public static func certificateFingerprint(_ trust: SecTrust) -> String? {
+        guard let chain = SecTrustCopyCertificateChain(trust) as? [SecCertificate],
+              let cert = chain.first
+        else {
+            return nil
+        }
+        return SHA256.hash(data: SecCertificateCopyData(cert) as Data)
+            .map { String(format: "%02x", $0) }.joined()
+    }
+
     public static func evaluate(
         trust: SecTrust,
         host: String,
@@ -180,7 +201,7 @@ public enum GatewayTLSServerTrust {
         let systemTrustOk =
             SecTrustSetPolicies(trust, hostnamePolicy) == errSecSuccess &&
             SecTrustEvaluateWithError(trust, nil)
-        let fingerprint = certificateFingerprint(trust)
+        let fingerprint = self.certificateFingerprint(trust)
         let expected = expectedFingerprint.map(normalizeFingerprint)
         let failure: (GatewayTLSValidationFailureKind, String?, String?) -> GatewayTLSServerTrustEvaluation
         failure = { kind, expectedFingerprint, enforcedFingerprint in
@@ -749,15 +770,19 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
         // Task delegates forward unimplemented authentication callbacks to the session owner.
         task.delegate = delegate
         defer { task.cancel() }
-        return try await withTaskCancellationHandler {
-            try Task.checkCancellation()
-            task.resume()
-            var responses = delegate.responses.stream.makeAsyncIterator()
-            guard let response = try await responses.next() else { throw CancellationError() }
-            try Task.checkCancellation()
-            return response
-        } onCancel: {
-            task.cancel()
+        do {
+            return try await withTaskCancellationHandler {
+                try Task.checkCancellation()
+                task.resume()
+                var responses = delegate.responses.stream.makeAsyncIterator()
+                guard let response = try await responses.next() else { throw CancellationError() }
+                try Task.checkCancellation()
+                return response
+            } onCancel: {
+                task.cancel()
+            }
+        } catch {
+            throw self.consumeHTTPFailure(error)
         }
     }
 
@@ -774,9 +799,7 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
         try Task.checkCancellation()
         guard isCurrent() else { throw CancellationError() }
         try Task.checkCancellation()
-        // AsyncBytes owns a task delegate; without ours, its authentication
-        // handling bypasses the session-level certificate policy.
-        let (bytes, response) = try await self.session.bytes(for: request, delegate: self)
+        let (bytes, response) = try await self.bytes(for: request)
         let expectedLength = response.expectedContentLength
         guard expectedLength < 0 || expectedLength <= Int64(maximumBytes) else {
             bytes.task.cancel()
@@ -804,6 +827,16 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
         } onCancel: {
             // Cancellation after headers must also interrupt a stalled body.
             bytes.task.cancel()
+        }
+    }
+
+    private func bytes(for request: URLRequest) async throws -> (URLSession.AsyncBytes, URLResponse) {
+        do {
+            // AsyncBytes owns a task delegate; without ours, its authentication
+            // handling bypasses the session-level certificate policy.
+            return try await self.session.bytes(for: request, delegate: self)
+        } catch {
+            throw self.consumeHTTPFailure(error)
         }
     }
 
@@ -918,16 +951,6 @@ private final class GatewayHTTPResponseDelegate: NSObject, URLSessionDataDelegat
     func urlSession(_: URLSession, task _: URLSessionTask, didCompleteWithError error: Error?) {
         self.responses.continuation.finish(throwing: error ?? URLError(.badServerResponse))
     }
-}
-
-private func certificateFingerprint(_ trust: SecTrust) -> String? {
-    guard let chain = SecTrustCopyCertificateChain(trust) as? [SecCertificate],
-          let cert = chain.first
-    else {
-        return nil
-    }
-    return SHA256.hash(data: SecCertificateCopyData(cert) as Data)
-        .map { String(format: "%02x", $0) }.joined()
 }
 
 private func normalizeFingerprint(_ raw: String) -> String {

@@ -230,6 +230,11 @@ export const UpdateRunRecordSchema = z.object({
   reason: text.nullable(),
   admission: admission.optional(),
   origin: z.object({
+    windowsUserSid: z
+      .string()
+      .max(184)
+      .regex(/^S-1-\d+(?:-\d+)+$/)
+      .optional(),
     admission: admission.optional(),
     candidateAdmission: candidateAdmission.optional(),
     updateRecoveryCapture: updateRecoveryCaptureStateSchema.optional(),
@@ -286,6 +291,7 @@ export const UpdateRunRecordSchema = z.object({
     pluginErrors: z.array(text).max(32).optional(),
     channelsReady: z.boolean().optional(),
     readyz: z.boolean().optional(),
+    coreReady: z.boolean().optional(),
     settled: z.boolean().optional(),
     noticeDelivered: z.boolean().optional(),
     doctorHint: text.optional(),

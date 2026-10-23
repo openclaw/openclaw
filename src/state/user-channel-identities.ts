@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -13,17 +12,20 @@ import type { GatewayConfig } from "../config/types.gateway.js";
 import { sha256Base64Url } from "../infra/crypto-digest.js";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import { generateSecureUuid } from "../infra/secure-random.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
-import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.types.js";
 import { updateConfigMachineStateInDatabase } from "./config-machine-state-write.js";
 import { readConfigMachineStateRowInDatabase } from "./config-machine-state.js";
+import { isStateSchemaVersionAtLeast } from "./openclaw-state-db-admission.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
+import { parseUserChannelAuthorizationReference } from "./user-channel-authorization-reference.js";
 import {
   publishUserProfileAliasChange,
   publishUserChannelIdentityAuthorityChange,
@@ -52,19 +54,10 @@ import type {
 // The dot keeps administrator-attested channel links outside Tailscale login namespaces.
 export const CHANNEL_IDENTITY_PROVIDER = "channel.identity";
 const POLICY_KEY = "operator.channelPolicy";
-const referenceSchema = z.strictObject({ version: z.literal(1), id: z.uuid() });
-const configuredReferenceSchema = referenceSchema.extend({ version: z.literal(2) });
 const configuredPolicySchema = z.strictObject({
   fingerprint: z.string().length(43),
   id: z.uuid(),
 });
-const commandReferenceSchema = z.union([referenceSchema, configuredReferenceSchema]);
-export type CommandOwnerReference = Readonly<z.infer<typeof commandReferenceSchema>>;
-
-export function parseCommandOwnerReference(value: unknown) {
-  return commandReferenceSchema.safeParse(value).data;
-}
-
 export function configuredCommandOwnerPolicyFingerprint(owners?: readonly (string | number)[]) {
   const entries = normalizeSortedUniqueStringEntries(owners);
   return entries.length ? sha256Base64Url(JSON.stringify(entries)) : undefined;
@@ -84,16 +77,12 @@ export function readConfiguredCommandOwnerPolicy(value: unknown, fingerprint: st
 const grantSchema = z
   .strictObject({ pluginId: z.string().min(1).max(128), grantId: z.uuid() })
   .nullable();
-export function parseUserChannelAuthorizationReference(value: unknown) {
-  return referenceSchema.safeParse(value).data;
-}
-
 export function resolveUserChannelAuthorizationPolicy(
   gateway: Pick<GatewayConfig, "roles" | "auth"> | undefined,
 ): UserChannelAuthorizationPolicy {
   return { roles: gateway?.roles ?? null, identityScopes: gateway?.auth?.identityScopes ?? null };
 }
-function matchesPolicy(db: DatabaseSync, policy: UserChannelAuthorizationPolicy): boolean {
+function matchesPolicy(db: EngineConnection, policy: UserChannelAuthorizationPolicy): boolean {
   const row = readConfigMachineStateRowInDatabase(db, POLICY_KEY);
   return (
     row !== undefined && isDeepStrictEqual(splitPolicy(JSON.parse(row.value_json)).policy, policy)
@@ -102,7 +91,7 @@ function matchesPolicy(db: DatabaseSync, policy: UserChannelAuthorizationPolicy)
 
 /** Activation and rollback retire old references before their exact authorization policy is published. */
 export function publishUserChannelPolicyInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   policy: UserChannelAuthorizationPolicy,
   configuredOwnersHash?: string,
 ) {
@@ -115,7 +104,7 @@ export function publishUserChannelPolicyInDatabase(
       const previous = splitPolicy(current);
       if (
         !isDeepStrictEqual(previous.policy, policy) &&
-        getAdmittedSqliteSchemaFacts(db)?.tables.has("user_profile_identities")
+        tableExists(db, "user_profile_identities")
       ) {
         profiles = executeSqliteQuerySync(
           db,
@@ -149,7 +138,7 @@ export function publishUserChannelPolicyInDatabase(
 
 /** The reference names this uninterrupted channel link; it carries no permission by itself. */
 export function authorizeUserChannelIdentityInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: {
     identity: UserChannelIdentity;
     profileId: string;
@@ -157,10 +146,7 @@ export function authorizeUserChannelIdentityInDatabase(
     grant: GatewayAccessGrantRef | null;
   },
 ): UserChannelAuthorizationReference | undefined {
-  if (
-    (getAdmittedSqliteSchemaFacts(db)?.userVersion ?? 0) < 19 ||
-    !matchesPolicy(db, input.policy)
-  ) {
+  if (!isStateSchemaVersionAtLeast(db, 19) || !matchesPolicy(db, input.policy)) {
     return undefined;
   }
   const subject = userChannelIdentitySubject(input.identity);
@@ -177,7 +163,7 @@ export function authorizeUserChannelIdentityInDatabase(
     return undefined;
   }
   const basis = JSON.stringify(grantSchema.parse(input.grant));
-  const original = referenceSchema.safeParse({ version: 1, id: row.authorization_id }).data;
+  const original = parseUserChannelAuthorizationReference({ version: 1, id: row.authorization_id });
   if (row.authorization_basis_json === basis && original) {
     return original;
   }
@@ -193,8 +179,12 @@ export function authorizeUserChannelIdentityInDatabase(
   return { version: 1, id };
 }
 
-function readAuthorization(db: DatabaseSync, id: string, policy: UserChannelAuthorizationPolicy) {
-  if ((getAdmittedSqliteSchemaFacts(db)?.userVersion ?? 0) < 19 || !matchesPolicy(db, policy)) {
+function readAuthorization(
+  db: EngineConnection,
+  id: string,
+  policy: UserChannelAuthorizationPolicy,
+) {
+  if (!isStateSchemaVersionAtLeast(db, 19) || !matchesPolicy(db, policy)) {
     return undefined;
   }
   const row = executeSqliteQueryTakeFirstSync(
@@ -237,7 +227,7 @@ function readIdentity(subject: string): UserChannelIdentity | undefined {
   return Check(UserChannelIdentitySchema, identity) ? identity : undefined;
 }
 
-function selectLink(db: DatabaseSync, subject: string) {
+function selectLink(db: EngineConnection, subject: string) {
   return executeSqliteQueryTakeFirstSync(
     db,
     userProfilesDb(db)
@@ -248,7 +238,7 @@ function selectLink(db: DatabaseSync, subject: string) {
   );
 }
 
-function requirePerson(db: DatabaseSync, profileId: string) {
+function requirePerson(db: EngineConnection, profileId: string) {
   const profile = requireResolvedUserProfileMetadataById(db, profileId);
   if (profileId === GATEWAY_OWNER_PROFILE_ID || profile.id === GATEWAY_OWNER_PROFILE_ID) {
     throw new UserProfileOwnerError("merge");
@@ -256,7 +246,7 @@ function requirePerson(db: DatabaseSync, profileId: string) {
   return profile;
 }
 
-function publishIdentityChange(db: DatabaseSync, profileId: string, subject: string) {
+function publishIdentityChange(db: EngineConnection, profileId: string, subject: string) {
   publishUserChannelIdentityAuthorityChange(db, subject);
   publishUserProfilesChange(db, profileId);
   deferSqlitePostCommitPublication(db, publishUserProfileAliasChange);
@@ -266,7 +256,7 @@ function publishIdentityChange(db: DatabaseSync, profileId: string, subject: str
 export function linkUserChannelIdentity(
   profileId: string,
   identity: UserChannelIdentity,
-  options: OpenClawStateDatabaseOptions & { beforeChange?: (db: DatabaseSync) => void } = {},
+  options: OpenClawStateDatabaseOptions & { beforeChange?: (db: EngineConnection) => void } = {},
 ): UserChannelIdentityLink {
   const subject = userChannelIdentitySubject(identity);
   ensureUserProfilesSchema(options);
@@ -303,7 +293,7 @@ export function linkUserChannelIdentity(
 export function unlinkUserChannelIdentity(
   profileId: string,
   identity: UserChannelIdentity,
-  options: OpenClawStateDatabaseOptions & { beforeChange?: (db: DatabaseSync) => void } = {},
+  options: OpenClawStateDatabaseOptions & { beforeChange?: (db: EngineConnection) => void } = {},
 ): boolean {
   const subject = userChannelIdentitySubject(identity);
   ensureUserProfilesSchema(options);
@@ -333,16 +323,15 @@ export function unlinkUserChannelIdentity(
   );
 }
 
-function hasIdentityTables(db: DatabaseSync): boolean {
-  const tables = getAdmittedSqliteSchemaFacts(db)?.tables;
-  return tables?.has("user_profiles") === true && tables.has("user_profile_identities");
+function hasIdentityTables(db: EngineConnection): boolean {
+  return tableExists(db, "user_profiles") && tableExists(db, "user_profile_identities");
 }
 
 export function listUserChannelIdentitiesInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   profileId: string,
 ): UserChannelIdentityLink[] {
-  return runSqliteDeferredTransactionSync(db, () => {
+  return runSqliteReadSnapshotSync(db, () => {
     if (!hasIdentityTables(db)) {
       return [];
     }
@@ -364,10 +353,10 @@ export function listUserChannelIdentitiesInDatabase(
 
 /** Reads the current person and login grant subjects; channel links never become login aliases. */
 export function resolveUserChannelIdentityInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   identity: UserChannelIdentitySelector,
 ): UserChannelIdentityAuthorityFacts | undefined {
-  return runSqliteDeferredTransactionSync(
+  return runSqliteReadSnapshotSync(
     db,
     () => {
       if (!hasIdentityTables(db)) {

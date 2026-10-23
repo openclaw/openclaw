@@ -21,9 +21,9 @@ export function resetRequesterSettleWakeRetry(
     ...wake,
     status: "pending",
     attemptCount: 0,
+    privateInput: undefined,
     replayCount: undefined,
     nextAttemptAt: undefined,
-    deferralCount: undefined,
     lastError: undefined,
   };
 }
@@ -91,9 +91,7 @@ export function projectSubagentRunForSessionList(entry: SubagentRunRecord): Suba
       ? {
           delivery: {
             status: entry.delivery.status,
-            ...(entry.delivery.disposition === "intentional_non_delivery"
-              ? { disposition: entry.delivery.disposition }
-              : {}),
+            ...(entry.delivery.disposition ? { disposition: entry.delivery.disposition } : {}),
             ...(entry.delivery.suspendedAt !== undefined
               ? { suspendedAt: entry.delivery.suspendedAt }
               : {}),
@@ -101,6 +99,22 @@ export function projectSubagentRunForSessionList(entry: SubagentRunRecord): Suba
         }
       : {}),
   };
+}
+
+export function shouldPreserveSubagentForMaintenance(entry: SubagentRunMaintenanceRecord): boolean {
+  if (entry.killReconciliation || entry.killIntent) {
+    // Reconciliation tombstones own provider results until completion or cancellation settles.
+    return true;
+  }
+  if (typeof entry.cleanupCompletedAt === "number") {
+    return false;
+  }
+  return (
+    typeof entry.execution.endedAt !== "number" ||
+    (entry.expectsCompletionMessage === true && entry.delivery?.status !== "delivered") ||
+    entry.delivery?.status === "pending" ||
+    isDeliverySuspended(entry)
+  );
 }
 
 /** Copy only protection facts; live memory retains its existing, unnormalized semantics. */
@@ -189,6 +203,10 @@ export function normalizeSubagentRunState(entry: SubagentRunRecord): SubagentRun
       suppressTaskDelivery: killIntent.suppressTaskDelivery === true ? true : undefined,
     };
   }
+  // Only the durable session queue can retain in-progress delivery across restart.
+  if (entry.delivery?.status === "in_progress" && !entry.delivery.queueId) {
+    entry.delivery = { ...entry.delivery, status: "pending" };
+  }
   // cleanupHandled is an in-process lock; after restart, unfinished cleanup must
   // retry unless durable cleanup completion was recorded.
   if (
@@ -225,14 +243,15 @@ export function isDeliverySuspended(entry: Pick<SubagentRunRecord, "delivery">):
   return entry.delivery?.status === "suspended" && typeof entry.delivery.suspendedAt === "number";
 }
 
-/** A finished requester without its required message receipt must not execute again implicitly. */
+/** A finished requester without its required reply receipt must not execute again implicitly. */
 export function isCompletedRequesterDeliveryBlocked(
   entry: Pick<SubagentRunRecord, "delivery">,
 ): boolean {
   return (
     isDeliverySuspended(entry) &&
     entry.delivery?.suspendedReason === "permanent_failure" &&
-    entry.delivery.lastDropReason === "message_tool_delivery_missing"
+    (entry.delivery.lastDropReason === "message_tool_delivery_missing" ||
+      entry.delivery.lastDropReason === "visible_reply_missing")
   );
 }
 
@@ -278,7 +297,7 @@ export const markRequesterSettleWakePending = (
 ) => {
   const existing = entry.requesterSettleWake;
   entry.requesterSettleWake = {
-    ...structuredClone(existing),
+    ...existing,
     status: existing?.status ?? "pending",
     attemptCount: existing?.attemptCount ?? 0,
     ...(existing?.retireAfterSettle === true || options?.retireAfterSettle === true

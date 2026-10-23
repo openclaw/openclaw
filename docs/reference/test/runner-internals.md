@@ -9,9 +9,10 @@ read_when:
 ## Shared test state and process helpers
 
 TypeScript tooling uses the native `typescript` package. The `pnpm tsgo` lanes
-resolve its executable directly; syntax and semantic tools use its unstable API
-with explicit process lifetimes. The package root exports version metadata,
-while AST, filesystem, and compiler APIs live under `typescript/unstable/*`.
+resolve its executable directly; syntax and semantic tools use its native API
+with explicit process lifetimes. The package root exports version metadata.
+AST and filesystem APIs use `typescript/ast` and `typescript/fs`; synchronous and
+asynchronous compiler APIs use `typescript/sync` and `typescript/async`.
 Packaged declaration builds run the same native compiler with semantic checking
 and validate its complete source and package-manifest receipts before bundling.
 The tsdown wrapper defaults declaration builds to one configuration at a time,
@@ -119,8 +120,19 @@ containing checkout as the ownership boundary. Other `pnpm tsgo` lanes continue
 to use the native CLI; its wrapper does not create or reuse a shared external
 install.
 
+Canvas A2UI asset builds use the shared build-artifact cache, including
+`BUILD_ALL_CACHE_ROOT` when consecutive update candidates use different checkouts.
+The cache verifies and restores both dialect bundles together. Canvas source,
+its package manifest, the lockfile, workspace dependency settings, patches, build
+scripts, Node version, and build environment invalidate reuse; unrelated root
+package scripts do not. `OPENCLAW_BUILD_CACHE=0` forces compilation. Explicit
+`OPENCLAW_A2UI_BUNDLE_OUT` destinations bypass the shared cache. Sparse checkouts
+retain their existing complete-prebuilt-bundle behavior. Cold A2UI builds default
+the native Rayon and Rolldown worker pools to four threads each, preserving explicit
+`RAYON_NUM_THREADS` and `ROLLDOWN_WORKER_THREADS` overrides.
+
 Packaged SDK declarations belong to one staged owner shared by full, package, and
-`ciArtifacts` builds. It serializes the two canonical tsdown SDK groups on a miss
+`ciArtifacts` builds. It serializes the two standard tsdown SDK groups on a miss
 and caches their complete staged generation. Each successful compiler supplies its
 source and package-manifest membership through a private staged receipt; missing receipts or inputs
 changed during compilation prevent publication. The shared input snapshot policy
@@ -181,6 +193,12 @@ threads, named builtin imports, and import-time captures; changing only a worker
 JavaScript `process.env` does not change native thread home lookup. Per-worker and
 per-test fixture homes remain separate. Installed Corepack and Playwright browser
 caches retain their caller-selected locations.
+
+Source subprocesses reuse the invocation's temporary TSX disk cache. Fixtures
+with descriptor-heavy source Worker imports opt out locally with
+`TSX_DISABLE_CACHE=1`: those threads share the parent's file descriptor table,
+and bursts of asynchronous cache writes can exhaust it. Tooling shims retain
+their separate cache policy.
 
 Gateway port claims remain in the common temporary directory outside all enclosing
 Vitest namespaces, found through their explicit resource owners. Parallel invocations

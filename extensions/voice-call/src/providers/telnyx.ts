@@ -167,7 +167,6 @@ export class TelnyxProvider implements VoiceCallProvider {
           type: "call.speech",
           transcript,
           isFinal: data.payload?.transcription_data?.is_final ?? data.payload?.is_final ?? true,
-          confidence: data.payload?.transcription_data?.confidence ?? data.payload?.confidence,
         };
       }
 

@@ -13,8 +13,6 @@ import {
 import type { ManagedProxyTlsOptions } from "./net/proxy/proxy-tls.js";
 import { apnsSendInvalidatedError } from "./push-apns-send-current.js";
 
-const APNS_DEFAULT_PORT = "443";
-
 const APNS_AUTHORITIES = new Set([
   "https://api.push.apple.com",
   "https://api.sandbox.push.apple.com",
@@ -67,18 +65,14 @@ function assertApnsAuthority(authority: string): ApnsAuthority {
     parsed.password ||
     parsed.pathname !== "/" ||
     parsed.search ||
-    parsed.hash
+    parsed.hash ||
+    !APNS_AUTHORITIES.has(parsed.origin)
   ) {
-    throw new Error(`Unsupported APNs authority: ${authority}`);
-  }
-  const port = parsed.port && parsed.port !== APNS_DEFAULT_PORT ? `:${parsed.port}` : "";
-  const normalized = `${parsed.protocol}//${parsed.hostname}${port}`;
-  if (!APNS_AUTHORITIES.has(normalized)) {
     throw new Error(`Unsupported APNs authority: ${authority}`);
   }
   // Return a normalized origin only. APNs paths are created by callers and
   // should never be accepted from user/config authority input.
-  return normalized as ApnsAuthority;
+  return parsed.origin as ApnsAuthority;
 }
 
 function normalizeConnectProxyUrl(proxyUrl: URL): URL {
@@ -235,10 +229,9 @@ export function createApnsResponseBodyCapture(): ApnsResponseBodyCapture {
 export function appendApnsResponseBodyCapture(
   capture: ApnsResponseBodyCapture,
   chunk: unknown,
-  maxBytes = APNS_RESPONSE_BODY_MAX_BYTES,
 ): void {
   const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
-  const remaining = maxBytes - capture.capturedBytes;
+  const remaining = APNS_RESPONSE_BODY_MAX_BYTES - capture.capturedBytes;
   if (remaining <= 0) {
     capture.truncated = capture.truncated || buffer.byteLength > 0;
     return;

@@ -45,7 +45,6 @@ async function withHashes<T>(
 ): Promise<WorkspaceComputationHashResult<T>> {
   const metrics: WorkspaceHashMetrics = {
     contentHashCount: 0,
-    contentHashDurationMs: 0,
     memoHitCount: 0,
   };
   if (!input) {
@@ -100,7 +99,11 @@ export async function executeWorkspaceManifestComputation(
     }
     case "workspace.manifest.staged": {
       const { loadStagedWorkerWorkspace } = await import("./workspace-result-inventory.runtime.js");
-      return await loadStagedWorkerWorkspace(command.input.root, command.input.ref);
+      return await loadStagedWorkerWorkspace(
+        command.input.root,
+        command.input.ref,
+        command.input.buildCacheInputs,
+      );
     }
     case "workspace.manifest.stage-input": {
       const { buildWorkspaceStageInput } =
@@ -117,19 +120,31 @@ export async function executeWorkspaceManifestComputation(
       return ownedWorkerBytes(await readStagedWorkerWorkspaceEntries(command.input));
     }
     case "workspace.manifest.capture":
-    case "workspace.manifest.snapshot": {
+    case "workspace.manifest.snapshot":
+    case "workspace.manifest.document":
+    case "workspace.manifest.reference": {
       const { readActualWorkspaceManifestImpl } = await import("./workspace-actual-manifest.js");
       const input = decodeManifestValue(command);
-      return await withHashes(input.hashes, async () => {
-        const snapshot = await readActualWorkspaceManifestImpl({
+      const result = await withHashes(input.hashes, () =>
+        readActualWorkspaceManifestImpl({
           ...input,
           includePaths: input.includePaths && new Set(input.includePaths),
+          buildCacheInputs: input.buildCacheInputs && new Set(input.buildCacheInputs),
           preserveDirectories: input.preserveDirectories && new Set(input.preserveDirectories),
-        });
-        return command.type === "workspace.manifest.snapshot"
-          ? snapshot
-          : { manifest: snapshot.manifest, manifestRef: snapshot.manifestRef };
-      });
+        }),
+      );
+      if (command.type === "workspace.manifest.document") {
+        const { manifestRef, rawManifest } = result.value;
+        return { ...result, value: { manifestRef, rawManifest } };
+      }
+      return command.type === "workspace.manifest.reference"
+        ? { ...result, value: result.value.manifestRef }
+        : command.type === "workspace.manifest.snapshot"
+          ? result
+          : {
+              ...result,
+              value: { manifest: result.value.manifest, manifestRef: result.value.manifestRef },
+            };
     }
     case "workspace.manifest.file": {
       const { readWorkspaceFileSnapshotWithLimit } = await import("./workspace-actual-manifest.js");

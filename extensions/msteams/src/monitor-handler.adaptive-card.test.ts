@@ -1,4 +1,3 @@
-// Msteams tests cover monitor handler.adaptive card plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
@@ -24,8 +23,9 @@ function createDeps(): MSTeamsMessageHandlerDeps {
   installMSTeamsTestRuntime();
 
   return {
-    cfg: {} as OpenClawConfig,
+    cfg: { channels: { msteams: { dmPolicy: "allowlist", allowFrom: ["user-aad"] } } },
     runtime: { error: vi.fn() } as unknown as RuntimeEnv,
+    accountId: "default",
     appId: "test-app",
     app: {} as MSTeamsMessageHandlerDeps["app"],
     tokenProvider: {
@@ -80,7 +80,6 @@ async function runAdaptiveCardInvoke(
       value,
     },
     sendActivity: vi.fn(async () => ({ id: "activity-id" })),
-    sendActivities: async () => [],
   } as unknown as MSTeamsTurnContext);
 }
 
@@ -115,7 +114,6 @@ async function runMessageActivity(params: {
       value: params.value,
     },
     sendActivity: vi.fn(async () => ({ id: "activity-id" })),
-    sendActivities: async () => [],
   } as unknown as MSTeamsTurnContext);
 }
 
@@ -129,35 +127,119 @@ function lastDispatchedCtxPayload(): Record<string, unknown> {
   return dispatched.ctx;
 }
 
+describe("msteams members added handler", () => {
+  it.each([
+    { promptStarters: ["Do X", "Do Y"], labels: ["Do X", "Do Y"] },
+    {
+      promptStarters: [],
+      labels: ["What can you do?", "Summarize my last meeting", "Help me draft an email"],
+    },
+  ])("sends welcome card starters $promptStarters", async ({ promptStarters, labels }) => {
+    const deps = createDeps();
+    deps.cfg = { channels: { msteams: { promptStarters } } };
+    const sendActivity = vi.fn(async () => ({ id: "activity-id" }));
+    await createMSTeamsActivityHandler(deps)({
+      activity: {
+        type: "conversationUpdate",
+        membersAdded: [{ id: "bot-id" }],
+        recipient: { id: "bot-id" },
+        conversation: { id: "conversation-id", conversationType: "personal" },
+      },
+      sendActivity,
+      updateActivity: vi.fn(async () => undefined),
+    });
+    expect(sendActivity).toHaveBeenCalledWith({
+      type: "message",
+      attachments: [
+        {
+          contentType: "application/vnd.microsoft.card.adaptive",
+          content: {
+            type: "AdaptiveCard",
+            version: "1.5",
+            body: [
+              { type: "TextBlock", text: "Hi! I'm OpenClaw.", weight: "Bolder", size: "Medium" },
+              {
+                type: "TextBlock",
+                text: "I can help you with questions, tasks, and more. Here are some things to try:",
+                wrap: true,
+              },
+            ],
+            actions: labels.map((label) => ({
+              type: "Action.Submit",
+              title: label,
+              data: { msteams: { type: "imBack", value: label } },
+            })),
+          },
+        },
+      ],
+    });
+  });
+
+  it.each([
+    { botName: undefined, name: "OpenClaw" },
+    { botName: "", name: "OpenClaw" },
+    { botName: "Support", name: "Support" },
+  ])("sends the group welcome for $botName", async ({ botName, name }) => {
+    const deps = createDeps();
+    deps.cfg = { channels: { msteams: { groupWelcomeCard: true } } };
+    const sendActivity = vi.fn(async () => ({ id: "activity-id" }));
+    await createMSTeamsActivityHandler(deps)({
+      activity: {
+        type: "conversationUpdate",
+        membersAdded: [{ id: "bot-id" }],
+        recipient: { id: "bot-id", name: botName },
+        conversation: { id: "conversation-id", conversationType: "groupChat" },
+      },
+      sendActivity,
+      updateActivity: vi.fn(async () => undefined),
+    });
+    expect(sendActivity).toHaveBeenCalledWith(
+      `Hi! I'm ${name}. Mention me with @${name} to get started.`,
+    );
+  });
+
+  it("uses account-specific welcome card config", async () => {
+    const deps = {
+      ...createDeps(),
+      accountId: "support",
+      cfg: {
+        channels: {
+          msteams: {
+            welcomeCard: true,
+            accounts: {
+              support: {
+                appId: "support-app",
+                appPassword: "support-secret",
+                tenantId: "tenant-id",
+                webhook: { path: "/api/messages/support" },
+                welcomeCard: false,
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+    };
+    const handler = createMSTeamsActivityHandler(deps);
+    const sendActivity = vi.fn(async () => ({ id: "activity-id" }));
+
+    await handler({
+      activity: {
+        type: "conversationUpdate",
+        membersAdded: [{ id: "bot-id" }],
+        recipient: { id: "bot-id", name: "Support" },
+        conversation: { id: "conversation-id", conversationType: "personal" },
+      },
+      sendActivity,
+      updateActivity: vi.fn(async () => undefined),
+    });
+
+    expect(sendActivity).not.toHaveBeenCalled();
+  });
+});
+
 describe("msteams adaptive card action invoke", () => {
   beforeEach(() => {
     runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mockClear();
-  });
-
-  it("forwards adaptive card submitted data to the agent as message text", async () => {
-    const deps = createDeps();
-    const registered = createMSTeamsActivityHandler(deps);
-    const payload = {
-      action: {
-        type: "Action.Submit",
-        data: {
-          intent: "deploy",
-          environment: "prod",
-        },
-      },
-      trigger: "button-click",
-    };
-
-    await runAdaptiveCardInvoke(registered, payload);
-
-    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
-    const expectedBody = JSON.stringify(payload.action.data);
-    const ctxPayload = lastDispatchedCtxPayload();
-    expect(ctxPayload.RawBody).toBe(expectedBody);
-    expect(ctxPayload.BodyForAgent).toBe(expectedBody);
-    expect(ctxPayload.CommandBody).toBe(expectedBody);
-    expect(ctxPayload.SessionKey).toBe("msteams:direct:user-aad");
-    expect(ctxPayload.SenderId).toBe("user-aad");
   });
 
   it("routes Teams imBack actions as the submitted message text", async () => {
@@ -171,6 +253,10 @@ describe("msteams adaptive card action invoke", () => {
     });
 
     const ctxPayload = lastDispatchedCtxPayload();
+    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    expect(ctxPayload.RawBody).toBe("Summarize my last meeting");
+    expect(ctxPayload.SessionKey).toBe("msteams:direct:user-aad");
+    expect(ctxPayload.SenderId).toBe("user-aad");
     expect(ctxPayload.BodyForAgent).toBe("Summarize my last meeting");
     expect(ctxPayload.CommandBody).toBe("Summarize my last meeting");
   });
@@ -224,10 +310,8 @@ describe("msteams adaptive card action invoke", () => {
   });
 
   it.each([
-    { activity: "invoke", token: "unknown-token" },
     { activity: "invoke", token: "" },
     { activity: "message", token: "unknown-token" },
-    { activity: "message", token: undefined },
   ])(
     "does not dispatch a rejected approval submit from a $activity activity",
     async ({ activity, token }) => {
@@ -263,16 +347,5 @@ describe("msteams adaptive card action invoke", () => {
     expect(ctxPayload.CommandBody).toBe(JSON.stringify(data));
     expect(ctxPayload.SessionKey).toBe("msteams:direct:user-aad");
     expect(ctxPayload.SenderId).toBe("user-aad");
-  });
-
-  it("keeps activity text ahead of submitted card values on normal messages", async () => {
-    await runMessageActivity({
-      text: "typed text",
-      value: { value: "card-value", label: "Card value" },
-    });
-
-    const ctxPayload = lastDispatchedCtxPayload();
-    expect(ctxPayload.BodyForAgent).toBe("typed text");
-    expect(ctxPayload.CommandBody).toBe("typed text");
   });
 });

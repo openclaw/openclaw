@@ -7,6 +7,7 @@ import type {
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
+import { registerUpdateActionsEnglish } from "../../i18n/locales/en-update-actions.ts";
 import { formatDateTimeMs } from "../../lib/format.ts";
 import {
   clearFirstRunActivationReceipt,
@@ -25,6 +26,8 @@ import {
   type ModelSetupWizardResult,
   type ModelSetupWizardRecovery,
 } from "./state.ts";
+
+registerUpdateActionsEnglish();
 
 export type ModelSetupConnection = Pick<
   ApplicationContext["gateway"]["snapshot"],
@@ -183,12 +186,12 @@ export class FirstRunSetup {
     this.readyConnection = connection;
   }
 
-  routeChanged(): void {
+  routeChanged(firstRun: boolean): void {
     const receipt = this.pending?.receipt ?? null;
     this.reset();
     this.readyConnection = null;
     this.pending = null;
-    if (this.host.routeData()?.firstRun === false) {
+    if (!firstRun) {
       clearFirstRunActivationReceipt(receipt);
     }
   }
@@ -354,7 +357,7 @@ export class FirstRunSetup {
       });
       return;
     }
-    void this.run(this.owner(routeData.firstRun), pageState.result);
+    void this.verifyRestoredModel(this.owner(routeData.firstRun), configured);
   }
 
   beginActivation(intent: {
@@ -404,15 +407,18 @@ export class FirstRunSetup {
       }
       return;
     }
-    const modelRef = result.status === "done" ? result.modelActivation?.modelRef : undefined;
-    if (!modelRef || this.pending !== activation || !this.ownsActivation(activation)) {
+    const modelActivation = result.status === "done" ? result.modelActivation : undefined;
+    if (
+      !modelActivation?.modelRef ||
+      this.pending !== activation ||
+      !this.ownsActivation(activation)
+    ) {
       return;
     }
     // Capture the verified target before config refresh can replace the hello
     // and retire the Lit task that otherwise owns this response.
-    activation.modelRef = modelRef;
-    activation.modelTarget =
-      result.status === "done" ? result.modelActivation?.modelTarget : undefined;
+    activation.modelRef = modelActivation.modelRef;
+    activation.modelTarget = modelActivation.modelTarget;
     activation.outcome = "verified";
     activation.receipt = persistFirstRunActivationReceipt(this.host.context(), activation);
   }
@@ -593,20 +599,22 @@ export class FirstRunSetup {
     );
   }
 
-  private async run(owner: FirstRunOwner, detection: SystemAgentSetupDetectResult): Promise<void> {
-    const configured = this.configuredActivationModel(detection);
-    if (configured) {
-      if (this.pending && configured !== this.pending.modelRef) {
-        this.showUnresolved();
-        return;
-      }
-      const outcome = await this.verify();
-      if (!this.owns(owner) || !outcome || "error" in outcome) {
-        return;
-      }
-      if (outcome.value.ok) {
-        this.finishVerified(outcome.value.modelRef, outcome.value.modelTarget);
-      }
+  private async verifyRestoredModel(owner: FirstRunOwner, configured: string): Promise<void> {
+    if (this.pending && configured !== this.pending.modelRef) {
+      this.showUnresolved();
+      return;
+    }
+    const outcome = await this.verify();
+    if (!this.owns(owner) || !outcome || "error" in outcome || !outcome.value.ok) {
+      return;
+    }
+    const { modelRef, modelTarget } = outcome.value;
+    if (!this.pending) {
+      this.host.context().navigate("chat");
+    } else if (this.pending.modelRef === modelRef && this.pending.modelTarget === modelTarget) {
+      this.completeNavigation();
+    } else {
+      this.showUnresolved();
     }
   }
 
@@ -615,15 +623,5 @@ export class FirstRunSetup {
       return detection.setupComplete ? detection.configuredModel : undefined;
     }
     return detection.utilityModel ?? detection.setupModel;
-  }
-
-  private finishVerified(modelRef: string, modelTarget?: "utility"): void {
-    if (!this.pending) {
-      this.host.context().navigate("chat");
-    } else if (this.pending.modelRef === modelRef && this.pending.modelTarget === modelTarget) {
-      this.completeNavigation();
-    } else {
-      this.showUnresolved();
-    }
   }
 }

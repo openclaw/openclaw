@@ -12,6 +12,7 @@ export const enum CommandLane {
    */
   HookDispatch = "hook-dispatch",
   Background = "background",
+  RestartRecovery = "restart-recovery",
   Subagent = "subagent",
   ActiveMemory = "active-memory",
   Nested = "nested",
@@ -35,6 +36,7 @@ export const STATIC_COMMAND_LANES = [
   CommandLane.CronNested,
   CommandLane.HookDispatch,
   CommandLane.Background,
+  CommandLane.RestartRecovery,
   CommandLane.Subagent,
   CommandLane.ActiveMemory,
   CommandLane.Nested,

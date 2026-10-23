@@ -194,10 +194,6 @@ export function resolveChatSendOriginatingRoute(params: {
   };
 }
 
-function isAcpSessionKey(sessionKey: string | undefined): boolean {
-  return Boolean(sessionKey?.split(":").includes("acp"));
-}
-
 export async function resolveExplicitOriginBindingTargets(
   origin: ChatSendExplicitOrigin | undefined,
 ): Promise<{ acp: boolean; plugin: boolean }> {
@@ -210,7 +206,7 @@ export async function resolveExplicitOriginBindingTargets(
         })
       : undefined;
   return {
-    acp: isAcpSessionKey(binding?.targetSessionKey),
+    acp: Boolean(binding?.targetSessionKey?.split(":").includes("acp")),
     plugin: isPluginOwnedSessionBindingRecord(binding),
   };
 }

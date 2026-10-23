@@ -25,7 +25,7 @@ title: "Store maintenance and retention"
 
 Reset boundaries start a fresh history window without deleting earlier transcript rows. When session rollover advances the live `sessionKey -> sessionId` mapping, the previous SQLite session, transcript, trajectory, and search rows also remain; ordinary entry and session lists show only the live mapping. Retained reset history is bounded by the disk budget, not by `resetArchiveRetention`, which only ages archive artifacts. Explicit deletion is different: it stores and verifies the compressed transcript archive in SQLite in the same transaction that removes the deleted session's rows. It then publishes, syncs, and reads back the derived `*.jsonl.deleted.<timestamp>.zst` file before reporting success when zstd is available.
 
-If an archive file export fails after deletion commits, its canonical archive
+If an archive file export fails after deletion commits, its stored archive
 remains in SQLite for retry. Creating an unrelated new session does not retry
 that export or fail because of it. Retry the deletion after resolving the file
 error to publish the retained archive, even if the deleted session is already
@@ -33,7 +33,7 @@ absent.
 
 Archiving a session changes its visibility and retention metadata while keeping
 its transcript rows in SQLite. Converting reclaimed history to a transcript
-archive replaces those rows with a compressed canonical blob in SQLite's
+archive replaces those rows with a compressed transcript blob in SQLite's
 `session_transcript_archives` table and a derived JSONL file in the sessions
 directory. The compressed payload therefore still occupies database space; the
 file is not its only copy. Runtimes without zstd support write plain JSONL
@@ -77,6 +77,14 @@ transcript versions, and session protection before committing. Unrelated writes 
 not cancel the plan. Conflicting inputs receive at most three immediate planning
 attempts before maintenance pauses until a later write; settled refusals retain the
 worker connection. Retention policies and stored data formats are unchanged.
+
+Automatic age retention scans at most 64 candidates per pass and releases the
+writer queue between settled passes. It finishes the age scan before applying
+the session-count cap, including when protected entries fill a page. Large
+backlogs therefore converge through several bounded passes while foreground
+writes can proceed between them. Each scan keeps its original age cutoff;
+newly due entries retain their deadline for the next scan. Explicit cleanup
+remains exhaustive.
 
 OpenClaw no longer creates automatic `sessions.json.bak.*` rotation backups during Gateway writes. The current schema rejects the legacy `session.maintenance.rotateBytes` key, and `openclaw doctor --fix` removes it from older configs.
 
@@ -232,5 +240,11 @@ Isolated cron runs create their own session entries/transcripts with dedicated r
 
 - `cron.sessionRetention` (default `"24h"`) prunes old isolated cron run sessions from the store; `false` or a zero duration such as `"0h"` disables.
 - Terminal run history is retained for 7 days (`lost` rows for 24 hours), with the newest 2000 rows per job and history class enforced as an additional ceiling.
+
+Exact cron run rows retain only their own session-id lineage while sharing the
+base job's usage-family key. The Gateway's seven-day session-registry sweep reads
+and prunes run rows in small batches, so older rows containing oversized inherited
+family lists can expire without loading the entire store into memory. Existing
+rows are not rewritten; active-work protections and transcript archival still apply.
 
 When cron force-creates a new isolated run session, it sanitizes the previous `cron:<jobId>` session entry before writing the new row: it carries safe preferences (thinking/fast/verbose/reasoning settings, labels, display name) and explicit user-selected model/auth overrides, but drops ambient conversation context (channel/group routing, send/queue policy, elevation, origin, ACP runtime binding) so a fresh isolated run cannot inherit stale delivery or runtime authority from an older run.

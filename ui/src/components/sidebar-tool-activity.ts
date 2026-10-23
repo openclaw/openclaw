@@ -1,6 +1,8 @@
 import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
-import { Value } from "typebox/value";
-import { AgentActivityItemSchema } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import {
+  cleanAgentActivityItem,
+  isAgentActivityItem,
+} from "../lib/protocol-validators.generated/activity.js";
 import type { SidebarToolActivity } from "./app-sidebar-session-types.ts";
 import { deriveSidebarNarrationLine } from "./sidebar-narration-line.ts";
 
@@ -14,9 +16,8 @@ export function readSidebarToolActivity(
     return undefined;
   }
   const data = asNullableObjectRecord(value);
-  const candidate =
-    stream === "item" ? Value.Clean(AgentActivityItemSchema, { ...data }) : undefined;
-  const item = Value.Check(AgentActivityItemSchema, candidate) ? candidate : undefined;
+  const candidate = stream === "item" ? cleanAgentActivityItem({ ...data }) : undefined;
+  const item = isAgentActivityItem(candidate) ? candidate : undefined;
   if (stream === "item" && (!item || item.kind !== "tool")) {
     return undefined;
   }

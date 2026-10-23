@@ -1,8 +1,3 @@
-/**
- * Tests agent-specific tool filtering and filesystem policy.
- * Covers sandbox inheritance, group policies, and workspace-only behavior in
- * createOpenClawCodingTools.
- */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -16,8 +11,9 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { resolveEffectiveToolPolicy } from "./agent-tools.policy.js";
+import { expectOwnerGated } from "./agent-tools.turn-authority.test-support.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
-import type { SandboxDockerConfig } from "./sandbox/types.docker.js";
+import type { SandboxDockerConfig } from "./sandbox/types.js";
 import { createRestrictedAgentSandboxConfig } from "./test-helpers/sandbox-agent-config-fixtures.js";
 
 type ToolWithExecute = {
@@ -45,12 +41,13 @@ describe("Agent-specific tool filtering", () => {
   };
 
   function expectReadOnlyToolSet(toolNames: string[], extraDenied: string[] = []) {
-    expect(toolNames).toContain("read");
-    expect(toolNames).not.toContain("exec");
-    expect(toolNames).not.toContain("write");
-    expect(toolNames).not.toContain("apply_patch");
-    for (const toolName of extraDenied) {
-      expect(toolNames).not.toContain(toolName);
+    expectToolNames(toolNames, ["read"], ["exec", "write", "apply_patch", ...extraDenied]);
+  }
+
+  function expectToolNames(names: string[], allowed: string[], denied: string[] = []) {
+    expect(names).toEqual(expect.arrayContaining(allowed));
+    for (const name of denied) {
+      expect(names).not.toContain(name);
     }
   }
 
@@ -70,23 +67,21 @@ describe("Agent-specific tool filtering", () => {
     const relativeEscape = path.relative(workspaceDir, escapedPath);
 
     try {
-      const cfg: OpenClawConfig = {
-        tools: {
-          allow: ["read", "write", "exec"],
-          exec: {
-            applyPatch: opts.workspaceOnly === false ? { workspaceOnly: false } : {},
+      const tools = createMainSessionTools(
+        {
+          tools: {
+            allow: ["read", "write", "exec"],
+            exec: {
+              applyPatch: opts.workspaceOnly === false ? { workspaceOnly: false } : {},
+            },
           },
         },
-      };
-
-      const tools = createOpenClawCodingTools({
-        config: cfg,
-        sessionKey: "agent:main:main",
-        workspaceDir,
-        agentDir: "/tmp/agent",
-        modelProvider: "openai",
-        modelId: "gpt-5.4",
-      });
+        {
+          workspaceDir,
+          modelProvider: "openai",
+          modelId: "gpt-5.4",
+        },
+      );
 
       const applyPatchTool = tools.find((t) => t.name === "apply_patch");
       if (!applyPatchTool) {
@@ -109,120 +104,85 @@ describe("Agent-specific tool filtering", () => {
     }
   }
 
-  function createMainSessionTools(cfg: OpenClawConfig) {
+  function createMainSessionTools(
+    cfg: OpenClawConfig,
+    options: Partial<Parameters<typeof createOpenClawCodingTools>[0]> = {},
+  ) {
     return createOpenClawCodingTools({
       config: cfg,
       sessionKey: "agent:main:main",
       workspaceDir: "/tmp/test",
       agentDir: "/tmp/agent",
+      ...options,
     });
   }
 
-  function createMainAgentConfig(params: {
-    tools: NonNullable<OpenClawConfig["tools"]>;
-    agentTools?: NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>[string]["tools"];
-  }): OpenClawConfig {
-    return {
-      tools: params.tools,
-      agents: {
-        entries: {
-          main: {
-            workspace: "~/openclaw",
-            ...(params.agentTools ? { tools: params.agentTools } : {}),
-          },
-        },
-      },
-    };
-  }
+  const agentConfig = (
+    entries: NonNullable<OpenClawConfig["agents"]>["entries"],
+  ): OpenClawConfig => ({ agents: { entries } });
+  const groupConfig = (
+    groups: NonNullable<NonNullable<OpenClawConfig["channels"]>["whatsapp"]>["groups"],
+    channel = "whatsapp",
+  ): OpenClawConfig => ({ channels: { [channel]: { groups } } });
+  const groupPolicy = (cfg: OpenClawConfig, groupId: string, senderId?: string) =>
+    resolveChannelGroupToolsPolicy({ cfg, channel: "whatsapp", groupId, senderId });
 
   it("should apply global tool policy when no agent-specific policy exists", () => {
-    const cfg = createMainAgentConfig({
-      tools: {
-        allow: ["read", "write"],
-        deny: ["bash"],
-      },
+    const tools = createMainSessionTools({
+      tools: { allow: ["read", "write"], deny: ["bash"] },
+      agents: { entries: { main: { workspace: "~/openclaw" } } },
     });
-    const tools = createMainSessionTools(cfg);
 
     const toolNames = tools.map((t) => t.name);
-    expect(toolNames).toContain("read");
-    expect(toolNames).toContain("write");
-    expect(toolNames).not.toContain("exec");
-    expect(toolNames).toContain("apply_patch");
+    expectToolNames(toolNames, ["read", "write", "apply_patch"], ["exec"]);
   });
 
   it("should keep global tool policy when agent only sets tools.elevated", () => {
-    const cfg = createMainAgentConfig({
-      tools: {
-        deny: ["write"],
-      },
-      agentTools: {
-        elevated: {
-          enabled: true,
-          allowFrom: { whatsapp: ["+15555550123"] },
+    const tools = createMainSessionTools({
+      tools: { deny: ["write"] },
+      ...agentConfig({
+        main: {
+          workspace: "~/openclaw",
+          tools: {
+            elevated: { enabled: true, allowFrom: { whatsapp: ["+15555550123"] } },
+          },
         },
-      },
+      }),
     });
-    const tools = createMainSessionTools(cfg);
 
     const toolNames = tools.map((t) => t.name);
-    expect(toolNames).toContain("exec");
-    expect(toolNames).toContain("read");
-    expect(toolNames).not.toContain("write");
-    expect(toolNames).toContain("apply_patch");
+    expectToolNames(toolNames, ["exec", "read", "apply_patch"], ["write"]);
   });
 
   it("uses the configured default agent for lean local-model filtering on legacy session keys", () => {
     const cfg: OpenClawConfig = {
-      agents: {
-        entries: {
-          local: {
-            experimental: {
-              localModelLean: true,
-            },
-          },
-        },
-      },
+      agents: { entries: { local: { experimental: { localModelLean: true } } } },
     };
 
-    const tools = createOpenClawCodingTools({
-      config: cfg,
+    const tools = createMainSessionTools(cfg, {
       sessionKey: "main",
-      workspaceDir: "/tmp/test",
       agentDir: "/tmp/agent-local",
       modelProvider: "lmstudio",
       modelId: "gemma-4-e4b-it",
     });
 
     const toolNames = tools.map((t) => t.name);
-    expect(toolNames).toContain("read");
-    expect(toolNames).not.toContain("browser");
-    expect(toolNames).not.toContain("automations");
-    expect(toolNames).not.toContain("message");
+    expectToolNames(toolNames, ["read"], ["browser", "automations", "message"]);
   });
 
   it("should allow disabling apply_patch explicitly", () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        allow: ["read", "write", "exec"],
-        exec: {
-          applyPatch: { enabled: false },
-        },
+    const tools = createMainSessionTools(
+      {
+        tools: { allow: ["read", "write", "exec"], exec: { applyPatch: { enabled: false } } },
       },
-    };
-
-    const tools = createOpenClawCodingTools({
-      config: cfg,
-      sessionKey: "agent:main:main",
-      workspaceDir: "/tmp/test",
-      agentDir: "/tmp/agent",
-      modelProvider: "openai",
-      modelId: "gpt-5.4",
-    });
+      {
+        modelProvider: "openai",
+        modelId: "gpt-5.4",
+      },
+    );
 
     const toolNames = tools.map((t) => t.name);
-    expect(toolNames).toContain("exec");
-    expect(toolNames).not.toContain("apply_patch");
+    expectToolNames(toolNames, ["exec"], ["apply_patch"]);
   });
 
   it("defaults apply_patch to workspace-only (blocks traversal)", async () => {
@@ -230,11 +190,7 @@ describe("Agent-specific tool filtering", () => {
       await expect(applyPatchTool.execute("tc1", { input: patch })).rejects.toThrow(
         /Path escapes sandbox root/,
       );
-      const readError = await fs.readFile(escapedPath, "utf8").then(
-        () => undefined,
-        (err: unknown) => err,
-      );
-      expect(readError).toMatchObject({ code: "ENOENT" });
+      await expect(fs.readFile(escapedPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
 
@@ -250,30 +206,22 @@ describe("Agent-specific tool filtering", () => {
   });
 
   it("should apply agent-specific tool policy", () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        allow: ["read", "write", "exec"],
-        deny: [],
-      },
-      agents: {
-        entries: {
+    const tools = createMainSessionTools(
+      {
+        tools: { allow: ["read", "write", "exec"], deny: [] },
+        ...agentConfig({
           restricted: {
             workspace: "~/openclaw-restricted",
-            tools: {
-              allow: ["read"], // Agent override: only read
-              deny: ["exec", "write", "edit"],
-            },
+            tools: { allow: ["read"], deny: ["exec", "write", "edit"] },
           },
-        },
+        }),
       },
-    };
-
-    const tools = createOpenClawCodingTools({
-      config: cfg,
-      sessionKey: "agent:restricted:main",
-      workspaceDir: "/tmp/test-restricted",
-      agentDir: "/tmp/agent-restricted",
-    });
+      {
+        sessionKey: "agent:restricted:main",
+        workspaceDir: "/tmp/test-restricted",
+        agentDir: "/tmp/agent-restricted",
+      },
+    );
 
     expectReadOnlyToolSet(
       tools.map((t) => t.name),
@@ -282,46 +230,32 @@ describe("Agent-specific tool filtering", () => {
   });
 
   it("should apply provider-specific tool policy", () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        allow: ["read", "write", "exec"],
-        byProvider: {
-          "google-antigravity": {
-            allow: ["read"],
+    const tools = createMainSessionTools(
+      {
+        tools: {
+          allow: ["read", "write", "exec"],
+          byProvider: {
+            "google-antigravity": { allow: ["read"] },
           },
         },
       },
-    };
-
-    const tools = createOpenClawCodingTools({
-      config: cfg,
-      sessionKey: "agent:main:main",
-      workspaceDir: "/tmp/test-provider",
-      agentDir: "/tmp/agent-provider",
-      modelProvider: "google-antigravity",
-      modelId: "claude-opus-4-6-thinking",
-    });
+      {
+        workspaceDir: "/tmp/test-provider",
+        agentDir: "/tmp/agent-provider",
+        modelProvider: "google-antigravity",
+        modelId: "claude-opus-4-6-thinking",
+      },
+    );
 
     expectReadOnlyToolSet(tools.map((t) => t.name));
   });
 
   it("should apply provider-specific tool profile overrides", () => {
     const cfg: OpenClawConfig = {
-      tools: {
-        profile: "coding",
-        byProvider: {
-          "google-antigravity": {
-            profile: "minimal",
-          },
-        },
-      },
+      tools: { profile: "coding", byProvider: { "google-antigravity": { profile: "minimal" } } },
     };
 
-    const tools = createOpenClawCodingTools({
-      config: cfg,
-      sessionKey: "agent:main:main",
-      workspaceDir: "/tmp/test-provider-profile",
-      agentDir: "/tmp/agent-provider-profile",
+    const tools = createMainSessionTools(cfg, {
       modelProvider: "google-antigravity",
       modelId: "claude-opus-4-6-thinking",
     });
@@ -331,25 +265,17 @@ describe("Agent-specific tool filtering", () => {
   });
 
   it("should resolve different tool policies for different agents", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        entries: {
-          main: {
-            workspace: "~/openclaw",
-            // No tools restriction - all tools available
-          },
-          family: {
-            workspace: "~/openclaw-family",
-            tools: {
-              allow: ["read"],
-              deny: ["exec", "write", "edit", "process"],
-            },
-          },
+    const cfg = agentConfig({
+      main: { workspace: "~/openclaw" },
+      family: {
+        workspace: "~/openclaw-family",
+        tools: {
+          allow: ["read"],
+          deny: ["exec", "write", "edit", "process"],
         },
       },
-    };
+    });
 
-    // main agent: no override
     const mainPolicy = resolveEffectiveToolPolicy({
       config: cfg,
       sessionKey: "agent:main:main",
@@ -357,7 +283,6 @@ describe("Agent-specific tool filtering", () => {
     expect(mainPolicy.agentId).toBe("main");
     expect(mainPolicy.agentPolicy).toBeUndefined();
 
-    // family agent: restricted
     const familyPolicy = resolveEffectiveToolPolicy({
       config: cfg,
       sessionKey: "agent:family:whatsapp:group:123",
@@ -370,203 +295,103 @@ describe("Agent-specific tool filtering", () => {
   });
 
   it("should resolve group tool policy overrides (group-specific beats wildcard)", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        whatsapp: {
-          groups: {
-            "*": {
-              tools: { allow: ["read"] },
-            },
-            trusted: {
-              tools: { allow: ["read", "exec"] },
-            },
-          },
-        },
-      },
-    };
-
-    expect(
-      resolveChannelGroupToolsPolicy({ cfg, channel: "whatsapp", groupId: "trusted" }),
-    ).toEqual({ allow: ["read", "exec"] });
-
-    expect(
-      resolveChannelGroupToolsPolicy({ cfg, channel: "whatsapp", groupId: "unknown" }),
-    ).toEqual({ allow: ["read"] });
+    const cfg = groupConfig({
+      "*": { tools: { allow: ["read"] } },
+      trusted: { tools: { allow: ["read", "exec"] } },
+    });
+    expect(groupPolicy(cfg, "trusted")).toEqual({ allow: ["read", "exec"] });
+    expect(groupPolicy(cfg, "unknown")).toEqual({ allow: ["read"] });
   });
 
   it("should apply per-sender tool policies for group tools", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        whatsapp: {
-          groups: {
-            "*": {
-              tools: { allow: ["read"] },
-              toolsBySender: {
-                "id:alice": { allow: ["read", "exec"] },
-              },
-            },
-          },
-        },
+    const cfg = groupConfig({
+      "*": {
+        tools: { allow: ["read"] },
+        toolsBySender: { "id:alice": { allow: ["read", "exec"] } },
       },
-    };
-
-    expect(
-      resolveChannelGroupToolsPolicy({
-        cfg,
-        channel: "whatsapp",
-        groupId: "family",
-        senderId: "alice",
-      }),
-    ).toEqual({ allow: ["read", "exec"] });
-
-    expect(
-      resolveChannelGroupToolsPolicy({
-        cfg,
-        channel: "whatsapp",
-        groupId: "family",
-        senderId: "bob",
-      }),
-    ).toEqual({ allow: ["read"] });
+    });
+    expect(groupPolicy(cfg, "family", "alice")).toEqual({ allow: ["read", "exec"] });
+    expect(groupPolicy(cfg, "family", "bob")).toEqual({ allow: ["read"] });
   });
 
   it("should apply global per-sender tool policy to core tools", () => {
     const cfg: OpenClawConfig = {
-      tools: {
-        toolsBySender: {
-          "id:guest": { deny: ["exec", "process"] },
-        },
-      },
+      tools: { toolsBySender: { "id:guest": { deny: ["exec", "process"] } } },
     };
 
-    const tools = createOpenClawCodingTools({
-      config: cfg,
+    const tools = createMainSessionTools(cfg, {
       messageProvider: "discord",
+      sessionKey: undefined,
       senderId: "guest",
-      workspaceDir: "/tmp/test-global-sender-policy",
-      agentDir: "/tmp/agent-global-sender-policy",
     });
     const names = tools.map((tool) => tool.name);
 
-    expect(names).toContain("read");
-    expect(names).not.toContain("exec");
-    expect(names).not.toContain("process");
+    expectToolNames(names, ["read"], ["exec", "process"]);
   });
 
-  it("keeps core tools for owner WebChat while restricting non-owners", () => {
+  it("keeps core tools for owner WebChat while restricting non-owners", async () => {
     const cfg: OpenClawConfig = {
-      tools: {
-        toolsBySender: {
-          "*": { deny: ["exec", "process"] },
-        },
-      },
+      tools: { toolsBySender: { "*": { deny: ["exec", "process"] } } },
     };
     const createWebChatTools = (senderIsOwner: boolean) =>
-      createOpenClawCodingTools({
-        config: cfg,
+      createMainSessionTools(cfg, {
         messageProvider: "webchat",
+        sessionKey: undefined,
         senderIsOwner,
-        workspaceDir: "/tmp/test-webchat-owner-policy",
-        agentDir: "/tmp/agent-webchat-owner-policy",
-      }).map((tool) => tool.name);
+      });
+    const ownerOnly = [
+      "automations",
+      "gateway",
+      "nodes",
+      "openclaw",
+      "conversations_list",
+      "conversations_send",
+      "conversations_turn",
+    ];
 
-    const ownerTools = createWebChatTools(true);
+    const ownerTools = createWebChatTools(true).map((tool) => tool.name);
     const nonOwnerTools = createWebChatTools(false);
-
-    expect(ownerTools).toContain("exec");
-    expect(ownerTools).toContain("process");
-    expect(ownerTools).toContain("automations");
-    expect(ownerTools).toContain("gateway");
-    expect(ownerTools).toContain("nodes");
-    expect(ownerTools).toContain("openclaw");
-    expect(ownerTools).toContain("conversations_list");
-    expect(ownerTools).toContain("conversations_send");
-    expect(ownerTools).toContain("conversations_turn");
-    expect(nonOwnerTools).not.toContain("exec");
-    expect(nonOwnerTools).not.toContain("process");
-    expect(nonOwnerTools).not.toContain("automations");
-    expect(nonOwnerTools).not.toContain("gateway");
-    expect(nonOwnerTools).not.toContain("nodes");
-    expect(nonOwnerTools).not.toContain("openclaw");
-    expect(nonOwnerTools).not.toContain("conversations_list");
-    expect(nonOwnerTools).not.toContain("conversations_send");
-    expect(nonOwnerTools).not.toContain("conversations_turn");
+    for (const name of ["exec", "process", ...ownerOnly]) {
+      expect(ownerTools).toContain(name);
+    }
+    for (const name of ["exec", "process"]) {
+      expect(nonOwnerTools.map((tool) => tool.name)).not.toContain(name);
+    }
+    // Owner-only tools keep their definitions for prompt-cache stability; calls are gated.
+    await expectOwnerGated(nonOwnerTools, ...ownerOnly);
   });
 
   it("should let agent per-sender policy override global sender wildcard", () => {
     const cfg: OpenClawConfig = {
-      tools: {
-        toolsBySender: {
-          "*": { deny: ["exec"] },
+      tools: { toolsBySender: { "*": { deny: ["exec"] } } },
+      ...agentConfig({
+        trusted: {
+          workspace: "~/openclaw-trusted",
+          tools: { toolsBySender: { "id:alice": {} } },
         },
-      },
-      agents: {
-        entries: {
-          trusted: {
-            workspace: "~/openclaw-trusted",
-            tools: {
-              toolsBySender: {
-                "id:alice": {},
-              },
-            },
-          },
-        },
-      },
+      }),
     };
 
-    const tools = createOpenClawCodingTools({
-      config: cfg,
+    const tools = createMainSessionTools(cfg, {
       sessionKey: "agent:trusted:discord:dm:alice",
       messageProvider: "discord",
       senderId: "alice",
-      workspaceDir: "/tmp/test-agent-sender-policy",
-      agentDir: "/tmp/agent-sender-policy",
     });
     const names = tools.map((tool) => tool.name);
 
-    expect(names).toContain("read");
-    expect(names).toContain("exec");
+    expectToolNames(names, ["read", "exec"]);
   });
 
   it("should not let default sender policy override group tools", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        whatsapp: {
-          groups: {
-            "*": {
-              toolsBySender: {
-                "id:admin": { allow: ["read", "exec"] },
-              },
-            },
-            locked: {
-              tools: { allow: ["read"] },
-            },
-          },
-        },
-      },
-    };
-
-    expect(
-      resolveChannelGroupToolsPolicy({
-        cfg,
-        channel: "whatsapp",
-        groupId: "locked",
-        senderId: "admin",
-      }),
-    ).toEqual({ allow: ["read"] });
+    const cfg = groupConfig({
+      "*": { toolsBySender: { "id:admin": { allow: ["read", "exec"] } } },
+      locked: { tools: { allow: ["read"] } },
+    });
+    expect(groupPolicy(cfg, "locked", "admin")).toEqual({ allow: ["read"] });
   });
 
   it("should resolve telegram group tool policy for topic session keys", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        telegram: {
-          groups: {
-            "123": {
-              tools: { allow: ["read"] },
-            },
-          },
-        },
-      },
-    };
+    const cfg = groupConfig({ "123": { tools: { allow: ["read"] } } }, "telegram");
 
     expect(resolveChannelGroupToolsPolicy({ cfg, channel: "telegram", groupId: "123" })).toEqual({
       allow: ["read"],
@@ -575,102 +400,62 @@ describe("Agent-specific tool filtering", () => {
 
   it("should not apply forged caller group tool policy for non-group sessions", () => {
     const cfg: OpenClawConfig = {
+      ...groupConfig({ "trusted-group": { tools: { allow: ["exec", "read", "write", "edit"] } } }),
       tools: { allow: ["read"] },
-      channels: {
-        whatsapp: {
-          groups: {
-            "trusted-group": {
-              tools: { allow: ["exec", "read", "write", "edit"] },
-            },
-          },
-        },
-      },
     };
 
-    const tools = createOpenClawCodingTools({
-      config: cfg,
-      sessionKey: "agent:main:main",
+    const tools = createMainSessionTools(cfg, {
       messageProvider: "whatsapp",
       groupId: "trusted-group",
-      workspaceDir: "/tmp/test-forged-group-policy",
-      agentDir: "/tmp/agent-forged-group-policy",
     });
     const names = tools.map((t) => t.name);
-    expect(names).toContain("read");
-    expect(names).not.toContain("exec");
-    expect(names).not.toContain("write");
-    expect(names).not.toContain("edit");
-    expect(names).not.toContain("apply_patch");
+    expectReadOnlyToolSet(names, ["edit"]);
   });
 
   it("should prefer scoped group candidates before wildcard tool policy", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        feishu: {
-          groups: {
-            "*": {
-              tools: { allow: ["read", "exec"] },
-            },
-            oc_group_chat: {
-              tools: { allow: ["read"] },
-            },
-          },
-        },
+    const cfg = groupConfig(
+      {
+        "*": { tools: { allow: ["read", "exec"] } },
+        oc_group_chat: { tools: { allow: ["read"] } },
       },
-    };
+      "feishu",
+    );
 
-    const tools = createOpenClawCodingTools({
-      config: cfg,
+    const tools = createMainSessionTools(cfg, {
       sessionKey: "agent:main:feishu:group:oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
       messageProvider: "feishu",
-      workspaceDir: "/tmp/test-feishu-wildcard-group",
-      agentDir: "/tmp/agent-feishu-wildcard",
     });
     const names = tools.map((t) => t.name);
-    expect(names).toContain("read");
-    expect(names).not.toContain("exec");
+    expectToolNames(names, ["read"], ["exec"]);
   });
 
   it("should apply global tool policy before agent-specific policy", () => {
     const cfg: OpenClawConfig = {
-      tools: {
-        deny: ["browser"], // Global deny
-      },
-      agents: {
-        entries: {
-          work: {
-            workspace: "~/openclaw-work",
-            tools: {
-              deny: ["exec", "process"], // Agent deny (override)
-            },
-          },
+      tools: { deny: ["browser"] },
+      ...agentConfig({
+        work: {
+          workspace: "~/openclaw-work",
+          tools: { deny: ["exec", "process"] },
         },
-      },
+      }),
     };
 
-    const tools = createOpenClawCodingTools({
-      config: cfg,
+    const tools = createMainSessionTools(cfg, {
       sessionKey: "agent:work:slack:dm:user123",
-      workspaceDir: "/tmp/test-work",
-      agentDir: "/tmp/agent-work",
     });
 
     const toolNames = tools.map((t) => t.name);
-    // Global policy still applies; agent policy further restricts
-    expect(toolNames).not.toContain("browser");
-    expect(toolNames).not.toContain("exec");
-    expect(toolNames).not.toContain("process");
-    expect(toolNames).toContain("apply_patch");
+    expectToolNames(toolNames, ["apply_patch"], ["browser", "exec", "process"]);
   });
 
   it("should work with sandbox tools filtering", () => {
     const cfg = createRestrictedAgentSandboxConfig({
       agentTools: {
-        allow: ["read"], // Agent further restricts to only read
+        allow: ["read"],
         deny: ["exec", "write"],
       },
       globalSandboxTools: {
-        allow: ["read", "write", "exec"], // Sandbox allows these
+        allow: ["read", "write", "exec"],
         deny: [],
       },
     });
@@ -710,11 +495,6 @@ describe("Agent-specific tool filtering", () => {
     });
 
     const toolNames = tools.map((t) => t.name);
-    // Agent policy should be applied first, then sandbox
-    // Agent allows only "read", sandbox allows ["read", "write", "exec"]
-    // Result: only "read" (most restrictive wins)
-    expect(toolNames).toContain("read");
-    expect(toolNames).not.toContain("exec");
-    expect(toolNames).not.toContain("write");
+    expectToolNames(toolNames, ["read"], ["exec", "write"]);
   });
 });

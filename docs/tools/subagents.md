@@ -37,10 +37,12 @@ Named subagent sessions use their task title without an automatic â€œSubagent:â€
 prefix; their parent relationship and view-only state still identify the run.
 
 A subagent run ends; a session does not. In the Control UI, open **Subagents**
-from the parent conversation to see ordinary child runs under **Running** and
+from the parent conversation to see child runs, including swarm workers, under **Running** and
 **Finished**. Selecting a run opens its existing view-only transcript beside
 the parent. **Back to Subagents** returns to the list without replacing the
-parent conversation or its draft. Swarm members stay in the parallel-tasks view.
+parent conversation or its draft. The panel loads all child pages automatically;
+older running workers remain visible even when newer children have finished.
+The parallel-tasks view also shows aggregate swarm progress.
 
 A directly opened subagent page keeps a compact notice naming its parent and an
 **Open parent session** button. The embedded panel omits that notice because the
@@ -49,6 +51,11 @@ an abortable run and your session access permits it. Persistent sessions created
 with `visible: true` are ordinary sessions in the session tree: they keep their
 parent for navigation and completion announcements, and you can always type in
 them and steer them like any other session.
+
+Visible spawned sessions can use the `message` tool for user-approved replies.
+Hidden helpers still communicate through the announce chain. Configured subagent,
+inherited sender, sandbox, and channel restrictions continue to apply, and every
+other subagent hard deny stays in place.
 
 Use ordinary subagents for internal QA, research, coding, review, and test lanes,
 with results returning to the parent task. Create a persistent visible session

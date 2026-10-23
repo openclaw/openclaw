@@ -1,4 +1,3 @@
-import { toOpenAiResponsesUsage } from "../agents/usage.js";
 import type { OutputItem, ResponseResource, Usage } from "./open-responses.schema.js";
 
 export function createAssistantOutputItem(params: {
@@ -22,7 +21,6 @@ export function createFunctionCallOutputItem(params: {
   callId: string;
   name: string;
   arguments: string;
-  status?: "in_progress" | "completed";
 }): Extract<OutputItem, { type: "function_call" }> {
   return {
     type: "function_call",
@@ -30,7 +28,6 @@ export function createFunctionCallOutputItem(params: {
     call_id: params.callId,
     name: params.name,
     arguments: params.arguments,
-    status: params.status,
   };
 }
 
@@ -50,7 +47,7 @@ export function createResponseResource(params: {
     status: params.status,
     model: params.model,
     output: params.output,
-    usage: params.usage ?? toOpenAiResponsesUsage(undefined),
+    usage: params.usage,
     error: params.error,
     ...(params.status === "incomplete"
       ? { incomplete_details: { reason: "max_output_tokens" as const } }

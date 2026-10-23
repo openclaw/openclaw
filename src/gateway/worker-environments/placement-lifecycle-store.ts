@@ -2,13 +2,25 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
 import type { WorkerOperations } from "../../state/worker-operation-registry.js";
 import type { PreparedEnvironmentSelection } from "./environment-record.js";
+import {
+  placementAuthorityOwnerFor,
+  reserveLocalPlacementMutation,
+  withLocalPlacementTurn,
+} from "./placement-authority-owner.js";
 import type { WorkerPlacementAuthorization } from "./placement-authorization.js";
 import type { PlacementLifecycleReceipt } from "./placement-lifecycle.types.js";
 import type { placementLifecycleOperations } from "./placement-lifecycle.worker.js";
 import type { createPlacementMoveOps } from "./placement-move-intent.js";
-import { required, type WorkerSessionPlacementRecord } from "./placement-record.js";
+import {
+  normalizeIdentity,
+  normalizeWorkerPlacementExecutionMode,
+  required,
+  type WorkerSessionPlacementDispatchIdentity,
+  type WorkerSessionPlacementRecord,
+} from "./placement-record.js";
 import type { WorkerSessionPlacementRetirement } from "./placement-retirement.js";
 import {
   stagePlacementRetirementWorkerPublication,
@@ -19,7 +31,10 @@ import { createPlacementWorkerMutation } from "./placement-worker-mutation.js";
 import { reserveWorkerEnvironmentNativePublication } from "./store-native-publication.js";
 
 type Moves = ReturnType<typeof createPlacementMoveOps>;
-type Operations = WorkerOperations<typeof placementLifecycleOperations>;
+type Operations = Omit<
+  WorkerOperations<typeof placementLifecycleOperations>,
+  "workerPlacements.clearLocalTurnClaims"
+>;
 type Guard = { assertCurrent?: WorkerPlacementAuthorization };
 
 function isReceipt(value: unknown): value is PlacementLifecycleReceipt {
@@ -39,22 +54,39 @@ export function createPlacementLifecycleWorkerOps(runtime: {
   onRetired: (sessionId: string) => void;
 }) {
   const context = captureOpenClawStateWorkerContext({ path: runtime.path });
-  const execute = (
+  const owner = placementAuthorityOwnerFor(context.admission.identity);
+  const executeDurable = (
     command: SqliteWorkerCommand<Operations>,
     assertCurrent?: WorkerPlacementAuthorization,
     assertNewSource?: (placement: WorkerSessionPlacementRecord) => void,
   ) => {
+    command.input = {
+      ...command.input,
+      nowMs:
+        runtime.now?.() ??
+        (command.type === "workerPlacements.startDispatch" ? Date.now() : undefined),
+    };
     const captured = structuredClone(command);
     captured.input.sessionId = required(captured.input.sessionId, "session id");
-    let published = false;
+    const readReceipt = (facts: unknown): PlacementLifecycleReceipt | undefined => {
+      if (!isReceipt(facts) || facts.sessionId !== captured.input.sessionId) {
+        return undefined;
+      }
+      return facts;
+    };
+    const dispatch = captured.type === "workerPlacements.startDispatch";
     let newSource: WorkerSessionPlacementRecord | undefined;
     const mutation = createPlacementWorkerMutation<PlacementLifecycleReceipt>({
       context,
-      label: "Worker placement lifecycle",
+      label: dispatch ? "Worker placement dispatch" : "Worker placement lifecycle",
       nativeLocation: context.admission.databasePath,
       orderedAdmission: true,
-      assertCurrent: assertCurrent?.assertWorkerLifetime ?? assertCurrent,
-      assertGrantCurrent: assertCurrent?.assertWorkerGrant ?? assertCurrent,
+      assertCurrent: dispatch
+        ? assertCurrent
+        : (assertCurrent?.assertWorkerLifetime ?? assertCurrent),
+      assertGrantCurrent: dispatch
+        ? assertCurrent
+        : (assertCurrent?.assertWorkerGrant ?? assertCurrent),
       admissionFacts(request) {
         if (request.stage === "transaction" && assertNewSource) {
           const facts = request.facts;
@@ -72,9 +104,27 @@ export function createPlacementLifecycleWorkerOps(runtime: {
         }
         return request.facts;
       },
-      stageCommit(facts) {
-        if (!isReceipt(facts) || facts.sessionId !== captured.input.sessionId) {
+      stageCommit(committed, nativeSettlement) {
+        const facts = readReceipt(committed);
+        if (!facts) {
           throw new Error("Worker placement lifecycle receipt has a different session");
+        }
+        facts.placement = withLocalPlacementTurn(owner, facts.sessionId, facts.placement);
+        if (captured.type === "workerPlacements.retire" && facts.changed === false) {
+          const current = owner.placements.get(facts.sessionId)?.placement;
+          if (current) {
+            if (
+              current.state !== captured.input.expectedState ||
+              current.generation !== captured.input.expectedGeneration
+            ) {
+              throw new Error(
+                `Worker session placement ${facts.sessionId} changed before retirement`,
+              );
+            }
+            facts.retired = captured.input.expectedState;
+            facts.retiredIdentity = current;
+            facts.changed = true;
+          }
         }
         if (
           facts.joined ||
@@ -88,6 +138,8 @@ export function createPlacementLifecycleWorkerOps(runtime: {
               context.admission.identity,
               facts.sessionId,
               facts.retired,
+              nativeSettlement,
+              facts.retiredIdentity,
             )
           : facts.placement
             ? stagePlacementTurnClaimWorkerPublication(
@@ -96,6 +148,8 @@ export function createPlacementLifecycleWorkerOps(runtime: {
                 undefined,
                 undefined,
                 facts.placement,
+                undefined,
+                nativeSettlement,
               )
             : stagePlacementWorkspaceJournalWorkerPublication(
                 context.admission.identity,
@@ -116,14 +170,13 @@ export function createPlacementLifecycleWorkerOps(runtime: {
           },
         };
       },
-      readReceipt(facts) {
-        return isReceipt(facts) && facts.sessionId === captured.input.sessionId ? facts : undefined;
+      readReceipt(facts, publication) {
+        if (dispatch) {
+          publication?.commit();
+        }
+        return readReceipt(facts);
       },
       publish(receipt) {
-        if (published) {
-          return;
-        }
-        published = true;
         if (captured.type === "workerPlacements.retire") {
           runtime.onRetired(receipt.sessionId);
         }
@@ -141,6 +194,32 @@ export function createPlacementLifecycleWorkerOps(runtime: {
     });
     return mutation.run((scope) => scope.execute(captured));
   };
+  const execute = async (
+    command: SqliteWorkerCommand<Operations>,
+    assertCurrent?: WorkerPlacementAuthorization,
+    assertNewSource?: (placement: WorkerSessionPlacementRecord) => void,
+  ) => {
+    const sessionId = required(command.input.sessionId, "session id");
+    const turnClaim = owner.placements.get(sessionId)?.placement?.turnClaim;
+    if (
+      owner.localClaimSessions.has(sessionId) &&
+      turnClaim?.owner === "local" &&
+      turnClaim.ownerEpoch === null &&
+      !(command.type === "workerPlacements.startDispatch" && !command.input.expectedPlacement)
+    ) {
+      throw new Error(`Cannot change session ${sessionId} during an active turn`);
+    }
+    const release = reserveLocalPlacementMutation(owner, sessionId);
+    try {
+      const receipt = await executeDurable(command, assertCurrent, assertNewSource);
+      if (receipt.placement) {
+        receipt.placement = withLocalPlacementTurn(owner, sessionId, receipt.placement);
+      }
+      return receipt;
+    } finally {
+      release();
+    }
+  };
   const placement = (receipt: PlacementLifecycleReceipt) => {
     if (!receipt.placement) {
       throw new Error("Worker placement lifecycle receipt is missing its placement");
@@ -148,12 +227,45 @@ export function createPlacementLifecycleWorkerOps(runtime: {
     return receipt.placement;
   };
   return {
+    async clearLocalTurnClaimsAfterRestartAsync(): Promise<number> {
+      // Startup holds the state-directory lock and has not admitted turns.
+      // An uncertain result aborts startup; the next boot can repeat this clear.
+      const placements = await executeOpenClawStateWorker(context, {
+        type: "workerPlacements.clearLocalTurnClaims",
+        input: { nowMs: runtime.now?.() },
+      });
+      for (const clearedPlacement of placements) {
+        stagePlacementTurnClaimWorkerPublication(
+          context.admission.identity,
+          clearedPlacement,
+          undefined,
+          clearedPlacement.state,
+          clearedPlacement,
+        ).commit();
+      }
+      return placements.length;
+    },
+    async startDispatch(input: WorkerSessionPlacementDispatchIdentity, guard: Guard = {}) {
+      return placement(
+        await execute(
+          {
+            type: "workerPlacements.startDispatch",
+            input: {
+              ...input,
+              ...normalizeIdentity(input),
+              executionMode: normalizeWorkerPlacementExecutionMode(input.executionMode),
+            },
+          },
+          guard.assertCurrent,
+        ),
+      );
+    },
     async beginPlacementMove(
       input: Parameters<Moves["beginPlacementMove"]>[0],
       guard: Guard & { assertNewSource?: (placement: WorkerSessionPlacementRecord) => void } = {},
     ) {
       const receipt = await execute(
-        { type: "workerPlacements.beginMove", input: { ...input, nowMs: runtime.now?.() } },
+        { type: "workerPlacements.beginMove", input },
         guard.assertCurrent,
         guard.assertNewSource,
       );
@@ -163,40 +275,25 @@ export function createPlacementLifecycleWorkerOps(runtime: {
       return { intent: receipt.intent, placement: placement(receipt), joined: receipt.joined };
     },
     async recordPlacementMoveError(input: Parameters<Moves["recordPlacementMoveError"]>[0]) {
-      return (
-        (
-          await execute({
-            type: "workerPlacements.moveError",
-            input: { ...input, nowMs: runtime.now?.() },
-          })
-        ).changed === true
-      );
+      const receipt = await execute({ type: "workerPlacements.moveError", input });
+      return receipt.changed === true;
     },
     async cancelPlacementMove(
       input: Parameters<Moves["cancelPlacementMove"]>[0],
       guard: Guard = {},
     ) {
-      return (
-        (
-          await execute(
-            { type: "workerPlacements.cancelMove", input: { ...input, nowMs: runtime.now?.() } },
-            guard.assertCurrent,
-          )
-        ).changed === true
+      const receipt = await execute(
+        { type: "workerPlacements.cancelMove", input },
+        guard.assertCurrent,
       );
+      return receipt.changed === true;
     },
     async completePlacementMoveSourceToLocal(
       input: Parameters<Moves["completePlacementMoveSourceToLocal"]>[0],
       guard: Guard = {},
     ) {
       return placement(
-        await execute(
-          {
-            type: "workerPlacements.completeMoveSource",
-            input: { ...input, nowMs: runtime.now?.() },
-          },
-          guard.assertCurrent,
-        ),
+        await execute({ type: "workerPlacements.completeMoveSource", input }, guard.assertCurrent),
       );
     },
     async completeAbandonedPlacementMoveSourceToLocal(
@@ -205,10 +302,7 @@ export function createPlacementLifecycleWorkerOps(runtime: {
     ) {
       return placement(
         await execute(
-          {
-            type: "workerPlacements.completeAbandonedMoveSource",
-            input: { ...input, nowMs: runtime.now?.() },
-          },
+          { type: "workerPlacements.completeAbandonedMoveSource", input },
           guard.assertCurrent,
         ),
       );
@@ -218,25 +312,15 @@ export function createPlacementLifecycleWorkerOps(runtime: {
       guard: Guard = {},
     ) {
       return placement(
-        await execute(
-          { type: "workerPlacements.completeMove", input: { ...input, nowMs: runtime.now?.() } },
-          guard.assertCurrent,
-        ),
+        await execute({ type: "workerPlacements.completeMove", input }, guard.assertCurrent),
       );
     },
     async bindPreparedEnvironment({ assertCurrent, ...input }: PreparedEnvironmentSelection) {
-      return (
-        await execute(
-          { type: "workerPlacements.bindPrepared", input: { ...input, nowMs: runtime.now?.() } },
-          assertCurrent,
-        )
-      ).placement;
+      return (await execute({ type: "workerPlacements.bindPrepared", input }, assertCurrent))
+        .placement;
     },
     async retireSessionPlacementAsync(input: WorkerSessionPlacementRetirement, guard: Guard = {}) {
-      await execute(
-        { type: "workerPlacements.retire", input: { ...input, nowMs: runtime.now?.() } },
-        guard.assertCurrent,
-      );
+      await execute({ type: "workerPlacements.retire", input }, guard.assertCurrent);
     },
   };
 }

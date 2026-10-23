@@ -48,39 +48,53 @@ async function associatedPullRequests(api, prefix, sha) {
 }
 
 async function selectRunPullRequests(api, prefix, run, repository, defaultBranch) {
+  if (run.conclusion !== "skipped" && !positiveInteger(run.run_attempt)) {
+    throw new Error("CI event has no valid workflow run attempt.");
+  }
   let candidates = run.pull_requests;
   if (!Array.isArray(candidates)) {
     throw new Error("CI workflow response has no pull request association list.");
   }
-  if (candidates.length === 0) {
-    candidates = await associatedPullRequests(api, prefix, run.head_sha);
-    // Fork run associations can be empty and the commit can be unavailable in
-    // the base repository. Query only the run's branch, never the PR backlog.
-    if (candidates.length === 0) {
-      const owner = run.head_repository?.owner?.login;
-      if (!owner || !run.head_branch) {
-        throw new Error("CI workflow response has no source branch identity.");
+  const selected = new Map();
+  async function selectCandidates(associations) {
+    for (const candidate of associations) {
+      if (!positiveInteger(candidate.number)) {
+        throw new Error("CI workflow association contains an invalid pull request number.");
       }
-      candidates = await api.paginate(
-        `${prefix}/pulls?state=open&head=${encodeURIComponent(`${owner}:${run.head_branch}`)}`,
-      );
+      const pullRequest = await api.request(`${prefix}/pulls/${candidate.number}`);
+      if (
+        reviewable(pullRequest, repository, defaultBranch) &&
+        pullRequest.head.sha === run.head_sha &&
+        positiveInteger(run.head_repository?.id) &&
+        pullRequest.head.repo?.id === run.head_repository.id &&
+        pullRequest.head.ref === run.head_branch
+      ) {
+        selected.set(pullRequest.number, {
+          pr: pullRequest.number,
+          head: pullRequest.head.sha,
+          ...(run.conclusion === "skipped"
+            ? {}
+            : { ciRunId: run.id, ciRunAttempt: run.run_attempt }),
+        });
+      }
     }
   }
-  const selected = new Map();
-  for (const candidate of candidates) {
-    if (!positiveInteger(candidate.number)) {
-      throw new Error("CI workflow association contains an invalid pull request number.");
+  if (candidates.length === 0) {
+    candidates = await associatedPullRequests(api, prefix, run.head_sha);
+  }
+  await selectCandidates(candidates);
+  // Associations can name stacked descendants without the completed run's PR.
+  // Fall back only after current head/repository/branch qualification.
+  if (selected.size === 0) {
+    const owner = run.head_repository?.owner?.login;
+    if (!owner || !run.head_branch) {
+      throw new Error("CI workflow response has no source branch identity.");
     }
-    const pullRequest = await api.request(`${prefix}/pulls/${candidate.number}`);
-    if (
-      reviewable(pullRequest, repository, defaultBranch) &&
-      pullRequest.head.sha === run.head_sha &&
-      positiveInteger(run.head_repository?.id) &&
-      pullRequest.head.repo?.id === run.head_repository.id &&
-      pullRequest.head.ref === run.head_branch
-    ) {
-      selected.set(pullRequest.number, { pr: pullRequest.number, head: pullRequest.head.sha });
-    }
+    await selectCandidates(
+      await api.paginate(
+        `${prefix}/pulls?state=open&head=${encodeURIComponent(`${owner}:${run.head_branch}`)}`,
+      ),
+    );
   }
   return selected;
 }
@@ -309,10 +323,16 @@ async function resolvePullRequests(api, event, eventName, repository) {
   if (eventName === "schedule") {
     return reconcileCompletedRuns(api, prefix, repository, defaultBranch);
   }
-  if (eventName !== "workflow_run" || event.action !== "completed") {
+  const replay = eventName === "workflow_dispatch";
+  if (!replay && (eventName !== "workflow_run" || event.action !== "completed")) {
     throw new Error("Security review requires an automatic pull request or CI event.");
   }
-  const runId = event.workflow_run?.id;
+  const replayId = event.inputs?.completed_ci_run_id;
+  const runId = replay
+    ? typeof replayId === "string" && /^[1-9][0-9]*$/u.test(replayId)
+      ? Number(replayId)
+      : null
+    : event.workflow_run?.id;
   if (!positiveInteger(runId)) {
     throw new Error("CI event has no valid workflow run identifier.");
   }
@@ -326,7 +346,7 @@ async function resolvePullRequests(api, event, eventName, repository) {
     run.path !== workflow.path ||
     run.repository?.full_name !== repository ||
     !shaPattern.test(run.head_sha ?? "") ||
-    run.head_sha !== event.workflow_run?.head_sha
+    (!replay && run.head_sha !== event.workflow_run?.head_sha)
   ) {
     throw new Error("CI completion does not match the repository's CI workflow.");
   }

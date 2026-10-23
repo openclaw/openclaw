@@ -1,11 +1,11 @@
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString as normalizeLowercaseString,
   normalizeOptionalString as normalizeString,
 } from "@openclaw/normalization-core/string-coerce";
 
-/** Provider/model override parsed from config. */
 export type VoiceModelRef = {
   provider: string;
   model: string;
@@ -21,17 +21,10 @@ export type VoiceModelProvider = {
   models?: readonly string[];
 };
 
-/** Ordered provider candidate, optionally with a concrete voice model override. */
 export type VoiceProviderCandidate = {
   provider: string;
   voiceModel?: VoiceModelRef;
 };
-
-function normalizeTimeoutMs(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : undefined;
-}
 
 function parseVoiceModelRef(value: unknown): VoiceModelRef | undefined {
   const parsed = typeof value === "string" ? parseModelCatalogRef(value) : null;
@@ -49,7 +42,6 @@ export function providerMatchesId(provider: VoiceModelProvider, providerId?: str
   );
 }
 
-/** Return true when a provider advertises the requested model. */
 export function voiceProviderSupportsModel(
   provider: VoiceModelProvider | undefined,
   model: unknown,
@@ -63,7 +55,6 @@ export function voiceProviderSupportsModel(
   );
 }
 
-/** Parse primary/fallback voice model refs from config. */
 export function resolveVoiceModelRefs(config: unknown): VoiceModelRef[] {
   if (typeof config === "string") {
     const parsed = parseVoiceModelRef(config);
@@ -73,7 +64,7 @@ export function resolveVoiceModelRefs(config: unknown): VoiceModelRef[] {
   if (!voiceModel) {
     return [];
   }
-  const timeoutMs = normalizeTimeoutMs(voiceModel.timeoutMs);
+  const timeoutMs = floorPositiveFiniteNumber(voiceModel.timeoutMs);
   const refs: VoiceModelRef[] = [];
   const addRef = (value: unknown) => {
     const parsed = parseVoiceModelRef(value);
@@ -90,7 +81,6 @@ export function resolveVoiceModelRefs(config: unknown): VoiceModelRef[] {
   return refs;
 }
 
-/** Resolve configured voice model refs that are supported by known providers. */
 export function resolveSupportedVoiceModelRefs(params: {
   config: unknown;
   providers: readonly VoiceModelProvider[];
@@ -107,7 +97,6 @@ export function resolveSupportedVoiceModelRefs(params: {
   });
 }
 
-/** Build ordered provider candidates from primary provider plus voice-model fallbacks. */
 export function resolveVoiceProviderCandidates(params: {
   primaryProvider: string;
   providers: readonly VoiceModelProvider[];

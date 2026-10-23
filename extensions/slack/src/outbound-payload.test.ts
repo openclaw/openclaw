@@ -1,7 +1,7 @@
 // Slack tests cover outbound payload plugin behavior.
 import { installChannelOutboundPayloadContractSuite } from "openclaw/plugin-sdk/channel-contract-testing";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import { createSlackSendTestClient } from "./blocks.test-helpers.js";
 import { slackOutbound } from "./outbound-adapter.js";
 import { createSlackOutboundPayloadHarness as createHarness } from "./outbound-payload.test-harness.js";
@@ -31,16 +31,9 @@ type PostedSlackMessage = Pick<SlackSendOptions, "blocks"> & {
 };
 
 function sentSlackMessage(sendMock: MockWithCalls, index: number) {
-  const call = sendMock.mock.calls[index];
-  if (!call) {
-    throw new Error(`expected Slack send call ${index}`);
-  }
-  const options = call[2];
-  if (!options) {
-    throw new Error("Expected Slack send options");
-  }
+  const call = sendMock.mock.calls[index]!;
   return {
-    options: options as SlackSendOptions,
+    options: call[2] as SlackSendOptions,
     text: call[1],
     to: call[0],
   };
@@ -61,9 +54,7 @@ function renderedPresentationSegments(payload: ReplyPayload | null | undefined) 
   const value = (
     payload?.channelData?.slack as { renderedPresentationSegments?: unknown } | undefined
   )?.renderedPresentationSegments;
-  if (!Array.isArray(value)) {
-    throw new Error("Expected rendered Slack presentation segments");
-  }
+  assert(Array.isArray(value), "Expected rendered Slack presentation segments");
   return value as SlackReplyBlockSegment[];
 }
 
@@ -73,9 +64,7 @@ async function renderPresentation(payload: ReplyPayload, text = ""): Promise<Rep
     presentation: payload.presentation!,
     ctx: { cfg: {}, to: "C12345", text, payload },
   });
-  if (!rendered) {
-    throw new Error("Expected rendered Slack presentation");
-  }
+  assert(rendered, "Expected rendered Slack presentation");
   return rendered;
 }
 
@@ -444,7 +433,7 @@ describe("slackOutbound sendPayload", () => {
         { type: "section", text: { text: "Choose an action" } },
       ],
     });
-    expect(segments[1]).toEqual({ kind: "text", text: "- Status: `/status`", mrkdwn: false });
+    expect(segments[1]).toEqual({ kind: "text", text: "- Status: `/status`" });
   });
 
   it("renders typed URL and web-app buttons as native Slack links", async () => {

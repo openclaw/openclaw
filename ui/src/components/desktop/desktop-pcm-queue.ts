@@ -1,3 +1,5 @@
+import { listen } from "../../lib/reactive/listener.ts";
+
 const SAMPLE_RATE = 48_000;
 const FRAME_BYTES = 4;
 const MAX_FRAMES = SAMPLE_RATE / 4;
@@ -50,14 +52,12 @@ export class DesktopPcmQueue {
     }
     const source = this.context.createBufferSource();
     const ended = () => {
-      if (!this.sources.delete(source)) {
-        return;
-      }
-      source.removeEventListener("ended", ended);
+      this.sources.delete(source);
+      stopEnded();
       source.disconnect();
     };
-    this.sources.set(source, ended);
-    source.addEventListener("ended", ended);
+    const stopEnded = listen(source, "ended", ended);
+    this.sources.set(source, stopEnded);
     source.buffer = buffer;
     source.connect(this.context.destination);
     const start = Math.max(now, this.playhead);
@@ -74,8 +74,8 @@ export class DesktopPcmQueue {
     const sources = [...this.sources];
     this.sources.clear();
     this.playhead = this.context.currentTime;
-    for (const [source, ended] of sources) {
-      source.removeEventListener("ended", ended);
+    for (const [source, stopEnded] of sources) {
+      stopEnded();
       try {
         source.stop();
       } catch {

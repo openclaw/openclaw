@@ -41,30 +41,23 @@ internal data class ContactsAddRequest(
 )
 
 internal interface ContactsDataSource {
-  fun hasReadPermission(context: Context): Boolean
+  fun hasReadPermission(): Boolean
 
-  fun hasWritePermission(context: Context): Boolean
+  fun hasWritePermission(): Boolean
 
-  fun search(
-    context: Context,
-    request: ContactsSearchRequest,
-  ): List<ContactRecord>
+  fun search(request: ContactsSearchRequest): List<ContactRecord>
 
-  fun add(
-    context: Context,
-    request: ContactsAddRequest,
-  ): ContactRecord
+  fun add(request: ContactsAddRequest): ContactRecord
 }
 
-private object SystemContactsDataSource : ContactsDataSource {
-  override fun hasReadPermission(context: Context): Boolean = context.hasPermission(Manifest.permission.READ_CONTACTS)
+private class SystemContactsDataSource(
+  private val context: Context,
+) : ContactsDataSource {
+  override fun hasReadPermission(): Boolean = context.hasPermission(Manifest.permission.READ_CONTACTS)
 
-  override fun hasWritePermission(context: Context): Boolean = context.hasPermission(Manifest.permission.WRITE_CONTACTS)
+  override fun hasWritePermission(): Boolean = context.hasPermission(Manifest.permission.WRITE_CONTACTS)
 
-  override fun search(
-    context: Context,
-    request: ContactsSearchRequest,
-  ): List<ContactRecord> {
+  override fun search(request: ContactsSearchRequest): List<ContactRecord> {
     val resolver = context.contentResolver
     val projection =
       arrayOf(
@@ -96,10 +89,7 @@ private object SystemContactsDataSource : ContactsDataSource {
       }
   }
 
-  override fun add(
-    context: Context,
-    request: ContactsAddRequest,
-  ): ContactRecord {
+  override fun add(request: ContactsAddRequest): ContactRecord {
     val resolver = context.contentResolver
     val operations = ArrayList<ContentProviderOperation>()
     operations +=
@@ -296,26 +286,23 @@ private object SystemContactsDataSource : ContactsDataSource {
 }
 
 class ContactsHandler internal constructor(
-  private val appContext: Context,
-  private val dataSource: ContactsDataSource = SystemContactsDataSource,
+  appContext: Context,
+  private val dataSource: ContactsDataSource = SystemContactsDataSource(appContext),
 ) {
   fun handleContactsSearch(paramsJson: String?): GatewaySession.InvokeResult {
-    if (!dataSource.hasReadPermission(appContext)) {
+    if (!dataSource.hasReadPermission()) {
       return nodeInvokeError("CONTACTS_PERMISSION_REQUIRED", "grant Contacts permission")
     }
     val request =
       parseSearchRequest(paramsJson)
         ?: return nodeInvokeError("INVALID_REQUEST", "expected JSON object")
-    return try {
-      val contacts = dataSource.search(appContext, request)
-      GatewaySession.InvokeResult.ok(Json.encodeToString(mapOf("contacts" to contacts)))
-    } catch (err: Throwable) {
-      nodeInvokeError("CONTACTS_UNAVAILABLE", err.message ?: "contacts query failed")
+    return nodeInvokeJson("CONTACTS_UNAVAILABLE", "contacts query failed") {
+      Json.encodeToString(mapOf("contacts" to dataSource.search(request)))
     }
   }
 
   fun handleContactsAdd(paramsJson: String?): GatewaySession.InvokeResult {
-    if (!dataSource.hasWritePermission(appContext)) {
+    if (!dataSource.hasWritePermission()) {
       return nodeInvokeError("CONTACTS_PERMISSION_REQUIRED", "grant Contacts permission")
     }
     val request =
@@ -328,11 +315,8 @@ class ContactsHandler internal constructor(
     if (!hasName && !hasOrg && !hasDetails) {
       return nodeInvokeError("CONTACTS_INVALID", "include a name, organization, phone, or email")
     }
-    return try {
-      val contact = dataSource.add(appContext, request)
-      GatewaySession.InvokeResult.ok(Json.encodeToString(mapOf("contact" to contact)))
-    } catch (err: Throwable) {
-      nodeInvokeError("CONTACTS_UNAVAILABLE", err.message ?: "contact add failed")
+    return nodeInvokeJson("CONTACTS_UNAVAILABLE", "contact add failed") {
+      Json.encodeToString(mapOf("contact" to dataSource.add(request)))
     }
   }
 

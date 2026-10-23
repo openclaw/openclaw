@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 import type { ProgressCard, ProgressCardChangedEvent } from "@openclaw/gateway-protocol";
-import { html, render } from "lit";
+import { createComponent, createMemo } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
@@ -9,9 +9,12 @@ import type { ApplicationContext } from "../../app/context.ts";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import { t } from "../../i18n/index.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
+import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { setChatHistoryLoad } from "./chat-history-state.ts";
-import { ChatPaneBase } from "./chat-pane-base.ts";
 import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";
 import {
   createGatewayBrowserClientFixture,
@@ -20,11 +23,14 @@ import {
   createSessionCapabilityFixture,
   createSessionContext,
   createTestChatPane,
+  connectPaneTestView,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
+import { chatRunPresentation } from "./chat-run-presentation.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { cancelChatStreamRenderFrame } from "./chat-state-render.ts";
-import { renderChat } from "./chat-view.ts";
+import { disposeChatView, renderChatPropsInto } from "./chat-view.test-helpers.ts";
+import { ChatView } from "./chat-view.tsx";
+import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { questionPanelIn } from "./components/chat-question-card.test-support.ts";
 import {
   installTranscriptDomMocks,
@@ -33,23 +39,44 @@ import {
 import { projectSessionApprovalReplay } from "./session-approval-projection.ts";
 
 describe("chat pane assistant identity snapshots", () => {
-  it("keeps an explicitly owned global Home pane on its agent across work selection", () => {
-    const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({
-      client,
-      sessions: createSessionCapabilityFixture(),
-    });
-    (pane as TestChatPane & { agentId: string }).agentId = "personal";
-    pane.sessionKey = "global";
-    state.sessionKey = "global";
-    state.assistantAgentId = "personal";
-    state.agentsList = { defaultId: "main", mainKey: "main", scope: "global", agents: [] };
-    pane.context.agentSelection.set("work");
+  it("keeps an unknown transcript loading before hello and reconciles cached or live history", () => {
+    installTranscriptDomMocks();
+    const pane = createRenderTestChatPane();
+    const state = pane.initialize(createInitializationContext());
+    state.sessionKey = "agent:main:dashboard:first-paint";
+    const container = document.createElement("div");
+    const draw = () => {
+      pane.render();
+      renderChatPropsInto(container, pane.chatProps!, pane.context);
+    };
+    try {
+      draw();
+      expect(container.querySelector(".agent-chat__welcome")).toBeNull();
+      expect(container.querySelector("openclaw-panel-loading-skeleton")).not.toBeNull();
 
-    pane.applyGatewaySnapshot(pane.context.gateway.snapshot);
+      state.currentSessionId = "cached-session";
+      state.chatMessages = [{ role: "assistant", content: "Cached mission briefing." }];
+      draw();
+      expect(container.textContent).toContain("Cached mission briefing.");
+      expect(container.querySelector(".agent-chat__welcome")).toBeNull();
 
-    expect(state.assistantAgentId).toBe("personal");
-    expect(pane.context.agentSelection.state.selectedId).toBe("work");
+      state.chatMessages = [];
+      draw();
+      expect(container.querySelector(".agent-chat__welcome")).not.toBeNull();
+
+      state.currentSessionId = null;
+      state.connected = true;
+      state.chatLoading = true;
+      draw();
+      expect(container.querySelector(".agent-chat__welcome")).toBeNull();
+
+      state.chatLoading = false;
+      draw();
+      expect(container.querySelector(".agent-chat__welcome")).not.toBeNull();
+    } finally {
+      disposeChatView(container);
+      resetTranscriptTestDom();
+    }
   });
 
   it("rebinds agent-owned presentation when a retained fixed route changes owner", () => {
@@ -145,6 +172,7 @@ describe("chat pane assistant identity snapshots", () => {
       },
       runtimeConfig: {
         state: { configNeedsApply: false, configSnapshot: null },
+        ensureLoaded: async () => undefined,
         subscribe: () => () => undefined,
       },
     });
@@ -152,16 +180,24 @@ describe("chat pane assistant identity snapshots", () => {
     pane.context = context;
     pane.connectedClient = null;
     pane.sessionKey = "global";
-    (pane as TestChatPane & { render: () => null }).render = () => null;
+    pane.render = () => ({
+      layout: null,
+      capabilityDialogs: undefined,
+      providerReviewSource: { state: pane.state, canWrite: false },
+    });
 
     try {
       pane.connectedCallback();
       await vi.waitFor(() =>
-        expect(subscribeMessages).toHaveBeenCalledWith("global", {
+        expect(pane.state.chatSessionMessageSubscription).toMatchObject({
+          key: "global",
           agentId: "main",
-          includeApprovals: true,
         }),
       );
+      expect(subscribeMessages).toHaveBeenCalledWith("global", {
+        agentId: "main",
+        includeApprovals: true,
+      });
       pane.state.chatSessionApprovalQueue = [
         {
           id: "stale-main-approval",
@@ -259,7 +295,7 @@ describe("chat pane approval requester identity", () => {
     } satisfies GatewaySessionRow;
     const decideApproval = vi.fn();
     const context: ApplicationContext = {
-      ...createInitializationContext(),
+      ...createInitializationContext(createGatewayBrowserClientFixture()),
       overlays: {
         snapshot: {
           approvalQueue: [],
@@ -271,7 +307,7 @@ describe("chat pane approval requester identity", () => {
       } as unknown as ApplicationContext["overlays"],
       sessions: createSessionCapabilityFixture({
         state: {
-          result: null,
+          result: sessionsResult([{ ...host, label: "Unrelated pane title" }], 1),
           agentId: "main",
           modelOverrides: {},
           deletedSessions: [],
@@ -286,8 +322,8 @@ describe("chat pane approval requester identity", () => {
       }),
     };
     const state = pane.initialize(context);
+    state.connected = true;
     state.sessionKey = host.key;
-    pane.presentationTitle = "Unrelated pane title";
     const now = Date.now();
     state.chatSessionApprovalQueue = projectSessionApprovalReplay(
       {
@@ -326,12 +362,23 @@ describe("chat pane approval requester identity", () => {
     });
     Object.freeze(approval.request);
     Object.freeze(approval);
-    const container = document.createElement("div");
-    const redraw = vi.fn(() => {
-      pane.render();
-      render(renderChat(pane.chatProps!), container);
-    });
-    state.requestUpdate = redraw;
+    const container = document.body.appendChild(createApplicationContextProvider(context));
+    const view = mountSolid(
+      () => {
+        const props = createMemo(() => {
+          pane.render();
+          return pane.chatProps!;
+        });
+        return createComponent(ChatView, {
+          questions: createComposerQuestions(pane.presentationId, props),
+          get props() {
+            return props();
+          },
+          application: context,
+        });
+      },
+      { container },
+    );
     const publications: Array<[GatewaySessionRow | undefined, string]> = [
       [undefined, "New session"],
       [
@@ -349,9 +396,7 @@ describe("chat pane approval requester identity", () => {
 
     try {
       for (const [row, title] of publications) {
-        redraw.mockClear();
-        pane.applySessionsState({
-          ...context.sessions.state,
+        Object.assign(context.sessions.state, {
           result: {
             ts: now,
             path: "",
@@ -360,18 +405,24 @@ describe("chat pane approval requester identity", () => {
             sessions: row ? [host, row] : [host],
           },
         });
-        await vi.waitFor(() => expect(redraw).toHaveBeenCalled());
-        const card = container.querySelector(".chat-inline-approval .exec-approval-card");
-        expect(card?.getAttribute("data-approval-id")).toBe(approval.id);
-        expect
-          .soft(card?.querySelector('[role="note"]')?.textContent?.trim())
-          .toBe(t("execApproval.requestedBySession", { session: title }));
+        pane.applySessionsState(context.sessions.state);
+        await waitForSolid(() => {
+          const card = container.querySelector(".chat-inline-approval .exec-approval-card");
+          expect(card?.getAttribute("data-approval-id")).toBe(approval.id);
+          expect(card?.querySelector('[role="note"]')?.textContent?.trim()).toBe(
+            t("execApproval.requestedBySession", { session: title }),
+          );
+        });
       }
-      container.querySelector<HTMLButtonElement>(".exec-approval-actions .primary")!.click();
+      const allow = container.querySelector<HTMLButtonElement>(".exec-approval-actions .primary")!;
+      expect(allow.disabled).toBe(false);
+      allow.click();
       expect(decideApproval).toHaveBeenCalledExactlyOnceWith("allow-once", approval.id, approval);
     } finally {
-      cancelChatStreamRenderFrame(state);
-      render(html``, container);
+      chatRunPresentation(state).cancelFrame();
+      view.unmount();
+      pane.disconnectedCallback();
+      container.remove();
     }
   });
 });
@@ -435,14 +486,13 @@ function createGlobalFeaturePane(
         { key: "global", agentId, sessionId: `${agentId}-parent`, kind: "global", updatedAt: 1 },
       ],
     };
-    pane.requestUpdate();
   };
   select("research");
-  ChatPaneBase.prototype.connectedCallback.call(pane);
+  connectPaneTestView(pane);
   onTestFinished(() => {
     Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
-    ChatPaneBase.prototype.disconnectedCallback.call(pane);
-    cancelChatStreamRenderFrame(state);
+    pane.disconnectedCallback();
+    chatRunPresentation(state).cancelFrame();
   });
   const emit = (payload: ProgressCardChangedEvent) => {
     const gateway = context.gateway as ApplicationContext["gateway"] & {
@@ -520,18 +570,20 @@ describe("global chat pane feature ownership", () => {
           },
         });
       }
-      const container = document.body.appendChild(document.createElement("div"));
+      const container = document.body.appendChild(createApplicationContextProvider(context));
       const draw = async () => {
         await pane.updateComplete;
-        render(renderChat(pane.chatProps!), container);
+        renderChatPropsInto(container, pane.chatProps!, pane.context);
         if (container.querySelector("openclaw-chat-question-card")) {
           await questionPanelIn(container);
         }
       };
       const expectStableQuestions = async () => {
         const previous = pane.chatProps?.gatewayQuestionPrompts;
-        pane.requestUpdate();
+        pane.prepareRender();
+        pane.render();
         await draw();
+        pane.commitRender();
         expect(pane.chatProps?.gatewayQuestionPrompts).toBe(previous);
       };
       try {
@@ -569,14 +621,18 @@ describe("global chat pane feature ownership", () => {
         await draw();
         expect(pane.chatProps?.gatewayQuestionPrompts).not.toBe(pendingQuestions);
         expect(container.querySelector(".chat-question-panel")).toBeNull();
-        expect(container.querySelector(".chat-question-summary")?.textContent).toContain("Skipped");
+        await waitForSolid(() =>
+          expect(container.querySelector(".chat-question-summary")?.textContent).toContain(
+            "Skipped",
+          ),
+        );
         await expectStableQuestions();
 
         select("main");
         await draw();
         expect(container.querySelector(".chat-question-summary, .chat-inline-approval")).toBeNull();
       } finally {
-        render(html``, container);
+        disposeChatView(container);
         container.remove();
       }
     },

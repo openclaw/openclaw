@@ -1,277 +1,126 @@
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
+import { afterEach, beforeEach, expect, it } from "vitest";
+import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
-} from "../../state/openclaw-agent-db.js";
-import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
-import {
-  resolveSessionEntryResetFreshness,
-  resolveSessionEntryResetFreshnessAsync,
+  resolveSessionEntryResetFreshness as resolve,
+  resolveSessionEntryResetFreshnessAsync as resolveAsync,
 } from "./entry-freshness.js";
 import {
   appendTranscriptEvent,
   replaceSessionEntry,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
+import type { SessionEntry } from "./types.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const now = Date.parse("2026-01-02T12:00:00Z");
+const threadKey = "agent:main:main:thread:test";
+const sessionId = "session";
 
-describe("resolveSessionEntryResetFreshness", () => {
-  let tempDirs: string[] = [];
-  let tempDir: string;
-  let storePath: string;
-
-  beforeEach(() => {
-    tempDirs = [];
-    tempDir = makeTempDir(tempDirs, "openclaw-session-entry-freshness-");
-    storePath = path.join(tempDir, "sessions.json");
-  });
-
-  afterEach(async () => {
-    await closeOpenClawAgentDatabasesAsync();
-    closeOpenClawAgentDatabasesForTest();
-    await closeStateDatabaseForTest();
-    cleanupTempDirs(tempDirs);
-  });
-
-  it.each([resolveSessionEntryResetFreshness, resolveSessionEntryResetFreshnessAsync])(
-    "returns missing state with a resolved reset policy for absent entries (%s)",
-    async (resolveFreshness) => {
-      const result = await resolveFreshness({
-        sessionKey: "agent:main:missing:thread:100.000",
-        storePath,
-        sessionCfg: {},
-        resetType: "thread",
-        now: new Date("2026-01-02T12:00:00Z").getTime(),
-      });
-
-      expect(result).toMatchObject({
-        state: "missing",
-        entry: undefined,
-        freshness: undefined,
-        resetType: "thread",
-        resetPolicy: {
-          mode: "none",
-          atHour: 4,
-        },
-      });
-    },
-  );
-
-  it("uses the configured default agent for an unqualified session key", async () => {
-    const sessionKey = "global";
-    const now = new Date("2026-01-02T12:00:00Z").getTime();
-    await upsertSessionEntryCore(
-      { agentId: "ops", defaultAgentId: "ops", sessionKey, storePath },
-      {
-        sessionId: "session-global-ops",
-        updatedAt: now,
-        sessionStartedAt: now,
-        lastInteractionAt: now,
-      },
-    );
-
-    const result = resolveSessionEntryResetFreshness({
-      defaultAgentId: "ops",
-      sessionKey,
-      storePath,
-      sessionCfg: {},
-      resetType: "direct",
-      now,
-    });
-
-    expect(result.state).toBe("fresh");
-    expect(result.entry?.sessionId).toBe("session-global-ops");
-  });
-
-  it("resolves stale daily freshness from lifecycle timestamps instead of activity", async () => {
-    const sessionKey = "agent:main:main:thread:100.000";
-    const now = new Date("2026-01-02T12:00:00Z").getTime();
-    await upsertSessionEntryCore(
-      { sessionKey, storePath },
-      {
-        sessionId: "session-stale-thread",
-        updatedAt: now,
-        sessionStartedAt: now - 2 * DAY_MS,
-        lastInteractionAt: now - 2 * DAY_MS,
-      },
-    );
-
-    const result = resolveSessionEntryResetFreshness({
-      sessionKey,
-      storePath,
-      sessionCfg: { reset: { mode: "daily" } },
-      resetType: "thread",
-      now,
-    });
-
-    expect(result.state).toBe("stale");
-    expect(result.entry?.sessionId).toBe("session-stale-thread");
-    expect(result.resetType).toBe("thread");
-    expect(result.freshness).toMatchObject({
-      fresh: false,
-      staleReason: "daily",
-    });
-  });
-
-  it("keeps provider-owned sessions fresh when reset policy is implicit", async () => {
-    const sessionKey = "agent:main:main:thread:provider-owned";
-    const now = new Date("2026-01-02T12:00:00Z").getTime();
-    await upsertSessionEntryCore(
-      { sessionKey, storePath },
-      {
-        sessionId: "session-provider-owned",
-        updatedAt: now,
-        sessionStartedAt: now - 2 * DAY_MS,
-        lastInteractionAt: now - 2 * DAY_MS,
-        providerOverride: "claude-cli",
-        cliSessionBindings: {
-          "claude-cli": { sessionId: "cli-session-provider-owned" },
-        },
-      },
-    );
-
-    const result = resolveSessionEntryResetFreshness({
-      sessionKey,
-      storePath,
-      sessionCfg: {},
-      resetType: "thread",
-      now,
-    });
-
-    expect(result.state).toBe("fresh");
-    expect(result.freshness).toMatchObject({ fresh: true });
-  });
-
-  it("applies configured reset policies to provider-owned sessions", async () => {
-    const sessionKey = "agent:main:main:thread:provider-owned-configured";
-    const now = new Date("2026-01-02T12:00:00Z").getTime();
-    await upsertSessionEntryCore(
-      { sessionKey, storePath },
-      {
-        sessionId: "session-provider-owned-configured",
-        updatedAt: now,
-        sessionStartedAt: now - 2 * DAY_MS,
-        lastInteractionAt: now - 2 * DAY_MS,
-        providerOverride: "claude-cli",
-        cliSessionBindings: {
-          "claude-cli": { sessionId: "cli-session-provider-owned-configured" },
-        },
-      },
-    );
-
-    const result = resolveSessionEntryResetFreshness({
-      sessionKey,
-      storePath,
-      sessionCfg: { reset: { mode: "daily" } },
-      resetType: "thread",
-      now,
-    });
-
-    expect(result.state).toBe("stale");
-    expect(result.freshness).toMatchObject({
-      fresh: false,
-      staleReason: "daily",
-    });
-  });
-
-  it("honors reset overrides when resolving entry freshness", async () => {
-    const sessionKey = "agent:main:main:thread:idle";
-    const now = new Date("2026-01-02T12:00:00Z").getTime();
-    await upsertSessionEntryCore(
-      { sessionKey, storePath },
-      {
-        sessionId: "session-idle-stale",
-        updatedAt: now,
-        sessionStartedAt: now,
-        lastInteractionAt: now - 60 * 60 * 1000,
-      },
-    );
-
-    const result = resolveSessionEntryResetFreshness({
-      sessionKey,
-      storePath,
-      sessionCfg: { reset: { mode: "daily" } },
-      resetOverride: { mode: "idle", idleMinutes: 30 },
-      resetType: "thread",
-      now,
-    });
-
-    expect(result.state).toBe("stale");
-    expect(result.resetPolicy).toMatchObject({
-      mode: "idle",
-      idleMinutes: 30,
-    });
-    expect(result.freshness).toMatchObject({
-      fresh: false,
-      staleReason: "idle",
-    });
-  });
-
-  it("resolves the store path from session config", async () => {
-    const sessionKey = "agent:main:main:thread:configured-store";
-    const now = new Date("2026-01-02T12:00:00Z").getTime();
-    const configuredStorePath = path.join(tempDir, "configured-sessions.json");
-    await upsertSessionEntryCore(
-      { sessionKey, storePath: configuredStorePath },
-      {
-        sessionId: "session-configured-store",
-        updatedAt: now,
-        sessionStartedAt: now,
-        lastInteractionAt: now - 60 * 60 * 1000,
-      },
-    );
-
-    const result = resolveSessionEntryResetFreshness({
-      sessionKey,
-      sessionCfg: { store: configuredStorePath, reset: { mode: "idle", idleMinutes: 30 } },
-      resetType: "thread",
-      now,
-    });
-
-    expect(result.state).toBe("stale");
-    expect(result.entry?.sessionId).toBe("session-configured-store");
-    expect(result.resetPolicy).toMatchObject({
-      mode: "idle",
-      idleMinutes: 30,
-    });
-    expect(result.freshness).toMatchObject({
-      fresh: false,
-      staleReason: "idle",
-    });
-  });
-
-  it.each([resolveSessionEntryResetFreshness, resolveSessionEntryResetFreshnessAsync])(
-    "uses the SQLite transcript header when lifecycle metadata is missing (%s)",
-    async (resolveFreshness) => {
-      const sessionKey = "agent:main:main:thread:header";
-      const sessionId = "session-header-fallback";
-      const now = new Date("2026-01-02T12:00:00Z").getTime();
-      const headerTimestamp = new Date(now - 2 * DAY_MS).toISOString();
-      const target = { agentId: "main", sessionId, sessionKey, storePath };
-      const entry = await replaceSessionEntry(target, { sessionId, updatedAt: now });
-      expect(entry?.sessionStartedAt).toBeUndefined();
-      await appendTranscriptEvent(target, {
-        type: "session",
-        version: 3,
-        id: sessionId,
-        timestamp: headerTimestamp,
-        cwd: tempDir,
-      });
-
-      const result = await resolveFreshness({
-        sessionKey,
-        storePath,
-        sessionCfg: { reset: { mode: "daily" } },
-        resetType: "thread",
-        now,
-      });
-
-      expect(result.state).toBe("stale");
-      expect(result.lifecycleTimestamps.sessionStartedAt).toBe(Date.parse(headerTimestamp));
-      expect(result.freshness).toMatchObject({ fresh: false, staleReason: "daily" });
-    },
-  );
+let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
+let storePath: string;
+beforeEach(async () => {
+  state = await createOpenClawTestState({ label: "entry-freshness" });
+  storePath = state.statePath("sessions.json");
 });
+afterEach(async () => {
+  await state.cleanup();
+});
+type Scope = Parameters<typeof upsertSessionEntryCore>[0];
+const lifecycle = { updatedAt: now, sessionStartedAt: now, lastInteractionAt: now };
+const seed = (entry: Partial<SessionEntry> = {}, scope: Partial<Scope> = {}) =>
+  upsertSessionEntryCore(
+    { sessionKey: threadKey, storePath, ...scope },
+    { sessionId, ...lifecycle, ...entry },
+  );
+
+const params = (sessionKey: string) => ({
+  sessionKey,
+  storePath,
+  sessionCfg: {},
+  resetType: "thread" as const,
+  now,
+});
+
+it.each([resolve, resolveAsync])(
+  "returns missing state with a resolved reset policy for absent entries (%s)",
+  async (resolveFreshness) => {
+    expect(await resolveFreshness(params("agent:main:missing:thread:100.000"))).toMatchObject({
+      state: "missing",
+      entry: undefined,
+      freshness: undefined,
+      resetType: "thread",
+      resetPolicy: { mode: "none", atHour: 4 },
+    });
+  },
+);
+
+it("uses the configured default agent for an unqualified session key", async () => {
+  const sessionKey = "global";
+  await seed({}, { sessionKey, agentId: "ops", defaultAgentId: "ops" });
+
+  const result = resolve({
+    ...params(sessionKey),
+    defaultAgentId: "ops",
+    resetType: "direct",
+  });
+
+  expect(result).toMatchObject({ state: "fresh", entry: { sessionId } });
+});
+
+it("keeps provider-owned sessions fresh when reset policy is implicit", async () => {
+  await seed({
+    sessionStartedAt: now - 2 * DAY_MS,
+    lastInteractionAt: now - 2 * DAY_MS,
+    providerOverride: "claude-cli",
+    cliSessionBindings: { "claude-cli": { sessionId: "cli-session-provider-owned" } },
+  });
+
+  expect(resolve(params(threadKey))).toMatchObject({ state: "fresh", freshness: { fresh: true } });
+});
+
+it("resolves the store path from session config", async () => {
+  const configuredStorePath = state.statePath("configured-sessions.json");
+  await seed({ lastInteractionAt: now - 60 * 60 * 1000 }, { storePath: configuredStorePath });
+
+  const result = resolve({
+    sessionKey: threadKey,
+    sessionCfg: { store: configuredStorePath, reset: { mode: "idle", idleMinutes: 30 } },
+    resetType: "thread",
+    now,
+  });
+
+  expect(result).toMatchObject({
+    state: "stale",
+    entry: { sessionId },
+    resetPolicy: { mode: "idle", idleMinutes: 30 },
+    freshness: { fresh: false, staleReason: "idle" },
+  });
+});
+
+it.each([resolve, resolveAsync])(
+  "uses the SQLite transcript header when lifecycle metadata is missing (%s)",
+  async (resolveFreshness) => {
+    const headerTimestamp = new Date(now - 2 * DAY_MS).toISOString();
+    const target = { agentId: "main", sessionId, sessionKey: threadKey, storePath };
+    const entry = await replaceSessionEntry(target, { sessionId, updatedAt: now });
+    expect(entry?.sessionStartedAt).toBeUndefined();
+    await appendTranscriptEvent(target, {
+      type: "session",
+      version: 3,
+      id: sessionId,
+      timestamp: headerTimestamp,
+      cwd: state.root,
+    });
+
+    const result = await resolveFreshness({
+      ...params(threadKey),
+      sessionCfg: { reset: { mode: "daily" } },
+    });
+
+    expect(result).toMatchObject({
+      state: "stale",
+      lifecycleTimestamps: { sessionStartedAt: Date.parse(headerTimestamp) },
+      freshness: { fresh: false, staleReason: "daily" },
+    });
+  },
+);

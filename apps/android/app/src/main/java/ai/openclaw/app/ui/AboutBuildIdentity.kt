@@ -174,27 +174,22 @@ private fun AboutBuildIdentityCell(
   cell: AboutBuildCell,
   modifier: Modifier,
 ) {
-  val clickModifier =
-    cell.onClick?.let { action ->
-      Modifier.clickable(onClickLabel = cell.onClickLabel, onClick = action)
-    } ?: Modifier
-  val accessibilityModifier =
-    Modifier.clearAndSetSemantics {
-      contentDescription = cell.accessibilityLabel
-      cell.onClick?.let { action ->
-        onClick(label = cell.onClickLabel) {
-          action()
-          true
-        }
-      }
-    }
-
   Column(
     modifier =
       modifier
-        .then(clickModifier)
-        .then(accessibilityModifier)
-        .heightIn(min = 54.dp)
+        .then(
+          cell.onClick?.let { action ->
+            Modifier.clickable(onClickLabel = cell.onClickLabel, onClick = action)
+          } ?: Modifier,
+        ).clearAndSetSemantics {
+          contentDescription = cell.accessibilityLabel
+          cell.onClick?.let { action ->
+            onClick(label = cell.onClickLabel) {
+              action()
+              true
+            }
+          }
+        }.heightIn(min = 54.dp)
         .padding(horizontal = 5.dp, vertical = 6.dp),
     horizontalAlignment = Alignment.CenterHorizontally,
     verticalArrangement = Arrangement.Center,

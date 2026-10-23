@@ -25,9 +25,8 @@ import {
   removeDeliveredQueuedChatSendForRun,
   updateQueuedMessage,
 } from "./chat-queue.ts";
-import type { TerminalFailureChatSendAck } from "./chat-send-ack.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
-import type { ChatQueueAdmissionResult } from "./composer-persistence.ts";
+import type { ChatQueueAdmissionResult } from "./composer-queue-persistence.ts";
 import {
   admitChatSubmission,
   retireChatSubmissionDisplay,
@@ -74,12 +73,15 @@ export function requiresChatInputConsumption(item: ChatQueueItem): boolean {
   return !item.intent && !item.localCommandName && !item.text.trimStart().startsWith("/");
 }
 
-export function chatSendHoldReason(
+/** Local queue admission does not require the initial turn to have settled. */
+export function chatSendAdmissionHoldReason(
   host: ChatHost,
   sessionKey: string,
-  initialTurnPending = false,
   agentId?: string,
 ): string | null {
+  if (sessionKey === host.sessionKey && host.isRouteSessionPending?.()) {
+    return t("chat.thread.loading");
+  }
   if (isExpiredIncognitoSession(host, sessionKey)) {
     return t("chat.incognitoExpiredTitle");
   }
@@ -87,7 +89,25 @@ export function chatSendHoldReason(
   if (sendDisabledReason) {
     return sendDisabledReason;
   }
-  return chatSendPendingReason(host, sessionKey, initialTurnPending);
+  return chatConnectionPendingReason(host);
+}
+
+export function chatSendHoldReason(
+  host: ChatHost,
+  sessionKey: string,
+  initialTurnPending = false,
+  agentId?: string,
+): string | null {
+  return (
+    chatSendAdmissionHoldReason(host, sessionKey, agentId) ??
+    chatSendPendingReason(host, sessionKey, initialTurnPending)
+  );
+}
+
+function chatConnectionPendingReason(host: Pick<ChatHost, "client" | "connected">): string | null {
+  return host.connected && host.client && !host.client.recoveryScopeReady
+    ? t("chat.queue.connectionPending")
+    : null;
 }
 
 // Hello permits RPCs before account recovery has claimed any retained first turn.
@@ -97,23 +117,12 @@ export function chatSendPendingReason(
   sessionKey: string,
   initialTurnPending = false,
 ): string | null {
-  if (host.connected && host.client && !host.client.recoveryScopeReady) {
-    return t("chat.queue.connectionPending");
-  }
-  return initialTurnPending || host.hasPendingInitialTurn?.(sessionKey)
-    ? t("chat.queue.initialTurnPending")
-    : null;
-}
-
-export function formatTerminalChatSendAckError(
-  ack: TerminalFailureChatSendAck,
-  context: "chat" | "detached",
-): string {
-  return ack.status === "error"
-    ? "Chat failed before the run started; try again."
-    : context === "detached"
-      ? "The active run ended before the detached message was accepted."
-      : "The run ended before the message was accepted.";
+  return (
+    chatConnectionPendingReason(host) ??
+    (initialTurnPending || host.hasPendingInitialTurn?.(sessionKey)
+      ? t("chat.queue.initialTurnPending")
+      : null)
+  );
 }
 
 function preserveDeliveredUserTurn(
@@ -202,10 +211,7 @@ export function retireDeliveredQueuedUserTurn(
       // attempt still owns the row; an absent row must not swallow chat.final.
       return readQueuedMessageById(host, stored.id) ? "stale" : "retired";
     }
-    if (!sameQueuedDeliveryVersion(current, stored)) {
-      return "stale";
-    }
-    if (!stored.sendRunId) {
+    if (!sameQueuedDeliveryVersion(current, stored) || !stored.sendRunId) {
       return "stale";
     }
     // Every pane receives the terminal. Retain complete message bytes before

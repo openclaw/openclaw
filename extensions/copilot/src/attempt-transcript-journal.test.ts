@@ -7,9 +7,16 @@ import {
 } from "openclaw/plugin-sdk/hook-runtime";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
+  appendSessionTranscriptMessageByIdentity,
+  readSessionTranscriptEvents,
+} from "openclaw/plugin-sdk/session-transcript-runtime";
 import { useSqliteWorkerFault } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createFixture,
   createJournalSession,
@@ -31,7 +38,10 @@ const toolResultFault = useSqliteWorkerFault([
   },
 ]);
 
+beforeEach(() => setRuntimeConfigSnapshot({}));
+
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   resetGlobalHookRunner();
   vi.restoreAllMocks();
 });
@@ -1076,6 +1086,27 @@ describe("Copilot attempt transcript journal", () => {
     expect(hook).toHaveBeenCalledTimes(3);
     expect(transcriptMessages(await readSessionTranscriptEvents(target))).toHaveLength(3);
     expect(replayJournal.snapshot().messagesSnapshot).toHaveLength(3);
+  });
+
+  it("rejects a partial persisted tool group before running group hooks", async () => {
+    const { journal, session, target } = await createInitializedFixture();
+    await appendSessionTranscriptMessageByIdentity({
+      ...target,
+      eventId: "assistant-replay",
+      message: {
+        role: "assistant",
+        content: [],
+        idempotencyKey: "copilot-sdk:sdk-session:assistant-replay",
+      },
+    });
+    const hook = vi.fn(() => undefined);
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_message_write", handler: hook }]),
+    );
+    emitReplayGroup(session);
+    await expect(journal.barrier("partial group")).rejects.toThrow("partial persisted tool group");
+    expect(hook).not.toHaveBeenCalled();
+    expect(transcriptMessages(await readSessionTranscriptEvents(target))).toHaveLength(2);
   });
 
   it("rolls back the complete group when SQLite fails mid-group", async () => {

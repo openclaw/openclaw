@@ -2,7 +2,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ConfigUiHints } from "../../api/types.ts";
 import {
   isSettingsNavigationRouteVisible,
-  settingsSearchTextMatches,
   type SettingsSearchBlock,
 } from "../../app-navigation.ts";
 import { pathForMemoryTab } from "../../app-route-paths.ts";
@@ -10,6 +9,7 @@ import type {
   NativeDeviceSettingsCapability,
   NativeDeviceSettingsSnapshot,
 } from "../../app/native-device-settings.ts";
+import { currentThemeBranding } from "../../app/theme-branding.ts";
 import { SECTION_META } from "../../components/config-form.meta.ts";
 import {
   matchesConfigSectionSearch,
@@ -19,16 +19,14 @@ import { splitConfigSchemaByTier } from "../../components/config-form.tiers.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { schemaType, type JsonSchema } from "../../lib/config-form-utils.ts";
-import { configPageForSection } from "./config-sections.ts";
+import { settingsSearchTextMatches } from "../../lib/settings-navigation.ts";
+import { PLUGIN_SETTINGS_VISIBLE_KEYS } from "../plugins/settings-model.ts";
+import { configPageForSection, omitCuratedOwnedConfigLeaves } from "./config-sections.ts";
 import { MEMORY_SETTINGS_KEYS } from "./memory-schema.ts";
 import { SETTINGS_SEARCH_TARGETS, type SettingsSearchTarget } from "./settings-targets.ts";
 import { setupVisibleSchema } from "./setup-schema.ts";
 
 registerSettingsEnglish();
-
-type StaticSettingsBlock = SettingsSearchBlock & {
-  searchText: string;
-};
 
 const STATIC_SETTINGS_BLOCKS: readonly SettingsSearchTarget[] =
   Object.values(SETTINGS_SEARCH_TARGETS);
@@ -36,7 +34,7 @@ const STATIC_SETTINGS_BLOCKS: readonly SettingsSearchTarget[] =
 function resolveStaticSettingsBlock(
   block: SettingsSearchTarget,
   snapshot: NativeDeviceSettingsSnapshot | null,
-): StaticSettingsBlock {
+): SettingsSearchBlock & { searchText: string } {
   const label = t(block.labelKey);
   const nativeKeys = snapshot
     ? Object.entries(block.nativeSearchKeys ?? {})
@@ -50,7 +48,12 @@ function resolveStaticSettingsBlock(
     label,
     searchText: [
       label,
-      ...[...block.searchKeys, ...nativeKeys].map((key) => t(key)),
+      ...[...block.searchKeys, ...nativeKeys]
+        .filter(
+          (key) =>
+            currentThemeBranding().lobsterdex || key !== "configView.appearance.tabIcon.lobsterdex",
+        )
+        .map((key) => t(key)),
       block.aliases ?? "",
     ].join(" "),
   };
@@ -61,7 +64,7 @@ function resolveStaticSettingsBlock(
 // dead-end.
 const CURATED_ROUTE_VISIBLE_KEYS: Partial<Record<string, readonly string[]>> = {
   memory: MEMORY_SETTINGS_KEYS,
-  "plugin-settings": ["enabled", "allow", "deny", "load", "slots"],
+  "plugin-settings": PLUGIN_SETTINGS_VISIBLE_KEYS,
   updates: ["channel", "checkOnStart", "auto"],
 };
 
@@ -149,10 +152,12 @@ export function findSettingsSearchBlocks(params: {
     }
     let section = prepared.sections.get(key);
     if (!section) {
-      const sectionSchema =
+      const sectionSchema = omitCuratedOwnedConfigLeaves(
         key === "wizard"
           ? setupVisibleSchema(rawSectionSchema)
-          : visibleSectionSchema(routeId, rawSectionSchema);
+          : visibleSectionSchema(routeId, rawSectionSchema),
+        key,
+      );
       section = {
         schema: sectionSchema,
         tiers: splitConfigSchemaByTier({
@@ -192,6 +197,7 @@ export function findSettingsSearchBlocks(params: {
       ...(routeId === "memory"
         ? {
             pathname: pathForMemoryTab("settings", params.basePath),
+            ...(matchesAdvanced ? { search: "?advanced=1" } : {}),
             hash: editorHash,
           }
         : routeId === "plugin-settings"

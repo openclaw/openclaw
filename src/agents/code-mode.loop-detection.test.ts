@@ -2,9 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
-import { applyCodeModeCatalog } from "./code-mode.js";
 import {
-  createCodeModeHarness,
+  createCatalogCodeModeHarness,
+  codeModeRunner,
   fakeTool,
   resetCodeModeTestState,
   resultDetails,
@@ -12,16 +12,12 @@ import {
 import { jsonResult } from "./tools/common.js";
 
 function createLoopHarness(maxOutputBytes?: number) {
-  const harness = createCodeModeHarness({ codeMode: { maxOutputBytes } });
   const fixture = fakeTool("loop_fixture", "A stable fixture operation");
-  applyCodeModeCatalog({ ...harness.ctx, tools: [...harness.tools, fixture] });
-  const [exec, wait] = harness.tools.map((tool) =>
+  const harness = createCatalogCodeModeHarness([fixture], { codeMode: { maxOutputBytes } });
+  const tools = harness.tools.map((tool) =>
     wrapToolWithBeforeToolCallHook(tool, { ...harness.ctx, loopDetection: { enabled: true } }),
   );
-  if (!exec || !wait) {
-    throw new Error("Code Mode controls missing");
-  }
-  return { ...harness, exec, wait, fixture };
+  return { ...codeModeRunner(tools), fixture };
 }
 
 afterEach(async () => {
@@ -42,7 +38,7 @@ describe("Code Mode loop protection", () => {
     "compares actual $kind outcomes independently of bookkeeping",
     async ({ kind, code }) => {
       const progress = kind === "guest metadata";
-      const { exec, fixture } = createLoopHarness(kind === "retained" ? 1024 : undefined);
+      const { run, fixture } = createLoopHarness(kind === "retained" ? 1024 : undefined);
       let completed = 0;
       if (progress) {
         fixture.execute = async () =>
@@ -53,12 +49,9 @@ describe("Code Mode loop protection", () => {
       }
       const references = new Set<string>();
       for (let index = 0; index < (progress ? 22 : 20); index++) {
-        const result = resultDetails(
-          await exec.execute(`${kind}-${index}`, {
-            title: kind === "discovery" ? `Inspect available tools ${index}` : "Inspect result",
-            code,
-          }),
-        );
+        const result = await run(code, `${kind}-${index}`, {
+          title: kind === "discovery" ? `Inspect available tools ${index}` : "Inspect result",
+        });
         expect(result.status).toBe("completed");
         if (kind === "retained") {
           expect(result.value).toMatchObject({ reference: { id: expect.any(String) } });
@@ -78,12 +71,9 @@ describe("Code Mode loop protection", () => {
       }
       if (!progress) {
         expect(
-          resultDetails(
-            await exec.execute("blocked", {
-              title: kind === "discovery" ? "Recover available tool handles" : "Inspect result",
-              code,
-            }),
-          ),
+          await run(code, "blocked", {
+            title: kind === "discovery" ? "Recover available tool handles" : "Inspect result",
+          }),
         ).toMatchObject({ status: "blocked", deniedReason: "tool-loop" });
       }
     },
@@ -92,7 +82,7 @@ describe("Code Mode loop protection", () => {
   it.each([false, true])(
     "compares resumed work rather than bridge ids; changing output=%s",
     async (progress) => {
-      const { exec, wait } = createLoopHarness();
+      const { run, resume } = createLoopHarness();
       const code = `const [tool] = await catalog.search("loop_fixture");
       for (let index = 0; index < 13; index++) {
         await tool({ value: "unchanged" });
@@ -100,20 +90,18 @@ describe("Code Mode loop protection", () => {
         await yield_control();
       }
       return "finished";`;
-      let result = resultDetails(
-        await exec.execute("start-waits", { title: "Start fixture sequence", code }),
-      );
+      let result = await run(code, "start-waits", { title: "Start fixture sequence" });
       expect(result.status).toBe("waiting");
       const runId = result.runId;
       const pendingIds = new Set<string>();
       for (let index = 0; index < 10; index++) {
-        result = resultDetails(await wait.execute(`resume-${index}`, { runId }));
+        result = await resume({ runId }, `resume-${index}`);
         expect(result.status).toBe("waiting");
         pendingIds.add(JSON.stringify(result.pendingToolCalls));
         expect(result.telemetry).toMatchObject({ callCount: index + 2 });
       }
       expect(pendingIds.size).toBeGreaterThan(1);
-      result = resultDetails(await wait.execute("resume-after-streak", { runId }));
+      result = await resume({ runId }, "resume-after-streak");
       expect(result).toMatchObject(
         progress
           ? { status: "waiting", output: [{ type: "json", value: { completed: 11 } }] }
@@ -124,7 +112,7 @@ describe("Code Mode loop protection", () => {
 
   it("allows changing pending operations even when the guest emits no output", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
-    const { exec, wait, fixture } = createLoopHarness();
+    const { execute, resume, fixture } = createLoopHarness();
     let started = createDeferred();
     let release = () => {};
     fixture.execute = async (_id, _input, signal) => {
@@ -142,7 +130,7 @@ describe("Code Mode loop protection", () => {
     };
     const code =
       'for (let index = 0; index < 12; index++) { await loop_fixture({value: String(index)}); } return "finished";';
-    const initial = exec.execute("start-changing-work", { title: "Start changing work", code });
+    const initial = execute(code, "start-changing-work", { title: "Start changing work" });
     await started.promise;
     await vi.advanceTimersByTimeAsync(10_000);
     let result = resultDetails(await initial);
@@ -151,12 +139,12 @@ describe("Code Mode loop protection", () => {
       expect(result.status).toBe("waiting");
       started = createDeferred();
       release();
-      const next = wait.execute("advance-work-" + index, { runId });
+      const next = resume({ runId }, "advance-work-" + index);
       if (index < 11) {
         await started.promise;
         await vi.advanceTimersByTimeAsync(10_000);
       }
-      result = resultDetails(await next);
+      result = await next;
     }
     expect(result).toMatchObject({ status: "completed", value: "finished" });
   });

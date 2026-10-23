@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   loadOrCreateDeviceIdentity,
@@ -11,9 +12,24 @@ import {
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { captureEnv } from "../../test-utils/env.js";
-import { runNodeIdentityShow } from "./identity.js";
+import { ExpectedCliError } from "../failure-output.js";
+import { registerNodeCli } from "./register.js";
 
-describe("runNodeIdentityShow", () => {
+function runNodeIdentity(json = false, identity?: string) {
+  const program = new Command().exitOverride();
+  registerNodeCli(program);
+  return program.parseAsync(
+    [
+      "node",
+      "identity",
+      ...(json ? ["--json"] : []),
+      ...(identity ? ["--identity", identity] : []),
+    ],
+    { from: "user" },
+  );
+}
+
+describe("node identity command", () => {
   let stateDir: string;
   let originalEnv: ReturnType<typeof captureEnv>;
   let stdout: string[];
@@ -50,10 +66,17 @@ describe("runNodeIdentityShow", () => {
     fs.rmSync(stateDir, { recursive: true, force: true });
   });
 
-  it("fails closed when no identity exists (never mints one)", async () => {
-    await runNodeIdentityShow({});
-    expect(errorSpy).toHaveBeenCalledOnce();
-    expect(exitSpy).toHaveBeenCalledWith(1);
+  it.each([false, true])("fails closed without minting an identity (json=%s)", async (json) => {
+    const failure = await runNodeIdentity(json).catch((error: unknown) => error);
+    const message =
+      "no node device identity found (start the node host once with `openclaw node run` or `openclaw node install`)";
+    expect(failure).toBeInstanceOf(ExpectedCliError);
+    expect(failure).toMatchObject({ message, humanOutput: message, machineOutput: message });
+    expect(errorSpy).not.toHaveBeenCalled();
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(logSpy).not.toHaveBeenCalled();
+    expect(writeStdoutSpy).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(stateDir, "client", "credentials.sqlite"))).toBe(false);
     expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(false);
   });
 
@@ -63,7 +86,7 @@ describe("runNodeIdentityShow", () => {
     const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
     const exec = vi.spyOn(DatabaseSync.prototype, "exec");
     try {
-      await runNodeIdentityShow({ json: true });
+      await runNodeIdentity(true);
       expect(prepare).not.toHaveBeenCalled();
       expect(exec).not.toHaveBeenCalled();
     } finally {
@@ -86,10 +109,19 @@ describe("runNodeIdentityShow", () => {
 
   it("prints human-readable lines without --json", async () => {
     const identity = loadOrCreateDeviceIdentity();
-    await runNodeIdentityShow({});
+    await runNodeIdentity();
     expect(exitSpy).not.toHaveBeenCalled();
     const output = logSpy.mock.calls.map((call: unknown[]) => String(call[0])).join("\n");
     expect(output).toContain(identity.deviceId);
     expect(output).toContain(publicKeyRawBase64UrlFromPem(identity.publicKeyPem));
+  });
+  it("selects an existing native profile without creating the default identity", async () => {
+    const identity = loadOrCreateDeviceIdentity({ identityKey: "node" });
+    await runNodeIdentity(true, "node");
+    expect(JSON.parse(stdout.join(""))).toEqual({
+      deviceId: identity.deviceId,
+      publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+    });
+    await expect(runNodeIdentity(false, "unknown")).rejects.toBeInstanceOf(ExpectedCliError);
   });
 });

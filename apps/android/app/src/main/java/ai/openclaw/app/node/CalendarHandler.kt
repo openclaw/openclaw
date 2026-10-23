@@ -49,30 +49,23 @@ internal data class CalendarEventRecord(
 )
 
 internal interface CalendarDataSource {
-  fun hasReadPermission(context: Context): Boolean
+  fun hasReadPermission(): Boolean
 
-  fun hasWritePermission(context: Context): Boolean
+  fun hasWritePermission(): Boolean
 
-  fun events(
-    context: Context,
-    request: CalendarEventsRequest,
-  ): List<CalendarEventRecord>
+  fun events(request: CalendarEventsRequest): List<CalendarEventRecord>
 
-  fun add(
-    context: Context,
-    request: CalendarAddRequest,
-  ): CalendarEventRecord
+  fun add(request: CalendarAddRequest): CalendarEventRecord
 }
 
-private object SystemCalendarDataSource : CalendarDataSource {
-  override fun hasReadPermission(context: Context): Boolean = context.hasPermission(Manifest.permission.READ_CALENDAR)
+private class SystemCalendarDataSource(
+  private val context: Context,
+) : CalendarDataSource {
+  override fun hasReadPermission(): Boolean = context.hasPermission(Manifest.permission.READ_CALENDAR)
 
-  override fun hasWritePermission(context: Context): Boolean = context.hasPermission(Manifest.permission.WRITE_CALENDAR)
+  override fun hasWritePermission(): Boolean = context.hasPermission(Manifest.permission.WRITE_CALENDAR)
 
-  override fun events(
-    context: Context,
-    request: CalendarEventsRequest,
-  ): List<CalendarEventRecord> {
+  override fun events(request: CalendarEventsRequest): List<CalendarEventRecord> {
     val resolver = context.contentResolver
     val builder = CalendarContract.Instances.CONTENT_URI.buildUpon()
     // Instances expands recurring events inside the requested time window.
@@ -90,10 +83,7 @@ private object SystemCalendarDataSource : CalendarDataSource {
     }
   }
 
-  override fun add(
-    context: Context,
-    request: CalendarAddRequest,
-  ): CalendarEventRecord {
+  override fun add(request: CalendarAddRequest): CalendarEventRecord {
     val resolver = context.contentResolver
     val resolvedCalendarId = resolveCalendarId(resolver, request.calendarId, request.calendarTitle)
     val values =
@@ -206,26 +196,23 @@ private object SystemCalendarDataSource : CalendarDataSource {
 }
 
 class CalendarHandler internal constructor(
-  private val appContext: Context,
-  private val dataSource: CalendarDataSource = SystemCalendarDataSource,
+  appContext: Context,
+  private val dataSource: CalendarDataSource = SystemCalendarDataSource(appContext),
 ) {
   fun handleCalendarEvents(paramsJson: String?): GatewaySession.InvokeResult {
-    if (!dataSource.hasReadPermission(appContext)) {
+    if (!dataSource.hasReadPermission()) {
       return nodeInvokeError("CALENDAR_PERMISSION_REQUIRED", "grant Calendar permission")
     }
     val request =
       parseEventsRequest(paramsJson)
         ?: return nodeInvokeError("INVALID_REQUEST", "expected JSON object")
-    return try {
-      val events = dataSource.events(appContext, request)
-      GatewaySession.InvokeResult.ok(Json.encodeToString(mapOf("events" to events)))
-    } catch (err: Throwable) {
-      nodeInvokeError("CALENDAR_UNAVAILABLE", err.message ?: "calendar query failed")
+    return nodeInvokeJson("CALENDAR_UNAVAILABLE", "calendar query failed") {
+      Json.encodeToString(mapOf("events" to dataSource.events(request)))
     }
   }
 
   fun handleCalendarAdd(paramsJson: String?): GatewaySession.InvokeResult {
-    if (!dataSource.hasWritePermission(appContext)) {
+    if (!dataSource.hasWritePermission()) {
       return nodeInvokeError("CALENDAR_PERMISSION_REQUIRED", "grant Calendar permission")
     }
     val request =
@@ -238,7 +225,7 @@ class CalendarHandler internal constructor(
       return nodeInvokeError("CALENDAR_INVALID", "endISO must be after startISO")
     }
     return try {
-      val event = dataSource.add(appContext, request)
+      val event = dataSource.add(request)
       GatewaySession.InvokeResult.ok(Json.encodeToString(mapOf("event" to event)))
     } catch (err: IllegalArgumentException) {
       val msg = err.message ?: "CALENDAR_INVALID: invalid request"

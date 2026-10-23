@@ -298,6 +298,25 @@ private func cumulativePrefixes(of text: String, chunkLength: Int) -> [String] {
     return prefixes
 }
 
+struct ChatNarrationPreparedTextTests {
+    @Test(arguments: ["NO_REPLY", "**NO_REPLY**", "no_reply", "NO_REPLY.", "I will not reply: NO_REPLY"])
+    func `prepared narration remains visible and empty progress retracts it`(text: String) {
+        var narration = ChatNarration()
+        func event(_ text: String, sequence: Int) -> OpenClawAgentEventPayload {
+            OpenClawAgentEventPayload(
+                runId: "prepared-run", seq: sequence, stream: "item", ts: sequence,
+                data: [
+                    "kind": AnyCodable("preamble"), "itemId": AnyCodable("prepared-item"),
+                    "phase": AnyCodable("end"), "progressText": AnyCodable(text),
+                ])
+        }
+        narration.receive(event(text, sequence: 1), history: [])
+        #expect(narration.projecting([]).map(\.rawText) == [text])
+        narration.receive(event("", sequence: 2), history: [])
+        #expect(narration.projecting([]).isEmpty)
+    }
+}
+
 // MARK: - Harness
 
 private struct StreamReplayHarness {
@@ -493,6 +512,10 @@ struct ChatStreamReplayTests {
             let (text, expected) = entry
             transport.emit(replayAssistantDeltaEvent(runId: runId, cumulativeText: text, seq: offset + 1))
             await harness.converge("hosted stream applied") { $0.streamingAssistantText == text }
+            // Rendering assertions consume the paced display, not just authoritative input.
+            if let scheduledID = vm.streamPacing.scheduledID {
+                vm.flushStreamingAssistantDisplay(scheduledID: scheduledID)
+            }
             expectRendered(expected)
         }
 
@@ -559,6 +582,9 @@ struct ChatStreamReplayTests {
         #expect(Self.mathLabels(in: host).map(\.latex) == ["x = 1"])
         harness.transport.emit(replayAssistantDeltaEvent(runId: runId, cumulativeText: "$$y = 2$$", seq: 5))
         try await harness.converge("different live text received") { $0.streamingAssistantText == "$$y = 2$$" }
+        if let scheduledID = harness.vm.streamPacing.scheduledID {
+            harness.vm.flushStreamingAssistantDisplay(scheduledID: scheduledID)
+        }
         host.layoutSubtreeIfNeeded()
         #expect(Self.mathLabels(in: host).map(\.latex).sorted() == ["x = 1", "y = 2"])
     }
@@ -582,22 +608,22 @@ struct ChatStreamReplayTests {
 
         // Prior turns and non-assistant rows must not suppress a new reply.
         vm.replaceMessages([reply, user])
-        #expect(vm.liveAssistantText == "**Ready**")
+        #expect(vm.liveText(vm.streamingAssistantText) == "**Ready**")
         let tool = replayDurableMessage(role: "toolResult", text: "**Ready**", timestamp: 300)
         vm.replaceMessages([user, tool])
-        #expect(vm.liveAssistantText == "**Ready**")
+        #expect(vm.liveText(vm.streamingAssistantText) == "**Ready**")
         vm.replaceMessages([user, reply, tool])
-        #expect(vm.liveAssistantText == nil)
+        #expect(vm.liveText(vm.streamingAssistantText) == nil)
         #expect(vm.streamingAssistantText == "**Ready**")
 
         // Compare raw Markdown, not parsed visible words; dropping the matching row restores live text.
         vm.updateStreamingAssistantText("Ready")
-        #expect(vm.liveAssistantText == "Ready")
+        #expect(vm.liveText(vm.streamingAssistantText) == "Ready")
         vm.updateStreamingAssistantText("**Ready**")
         vm.replaceMessages([user])
-        #expect(vm.liveAssistantText == "**Ready**")
+        #expect(vm.liveText(vm.streamingAssistantText) == "**Ready**")
         vm.updateStreamingAssistantText(nil)
-        #expect(vm.liveAssistantText == nil)
+        #expect(vm.liveText(vm.streamingAssistantText) == nil)
     }
 
     @Test @MainActor func `live text comparison preserves supported text types and block boundaries`() {
@@ -615,9 +641,9 @@ struct ChatStreamReplayTests {
             ], timestamp: nil)
             vm.replaceMessages([message])
             vm.updateStreamingAssistantText("ab")
-            #expect(vm.liveAssistantText == "ab")
+            #expect(vm.liveText(vm.streamingAssistantText) == "ab")
             vm.updateStreamingAssistantText("a\nb")
-            #expect(vm.liveAssistantText == nil)
+            #expect(vm.liveText(vm.streamingAssistantText) == nil)
         }
     }
 

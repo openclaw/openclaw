@@ -1,7 +1,9 @@
 // Control UI tests cover memory engine ordering and serialized config writes.
+import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -53,6 +55,88 @@ const memoryPlugins = [
 ];
 
 suite.define(() => {
+  it.each(["success", "failure"] as const)(
+    "keeps engine focus and blocks repeated selection until save %s",
+    async (outcome) => {
+      const viewport = { height: 900, width: 1440 };
+      await suite.withPage(
+        {
+          colorScheme: "dark",
+          locale: "en-US",
+          serviceWorkers: "block",
+          viewport,
+          ...(captureUiProofEnabled
+            ? { recordVideo: { dir: uiProofArtifactDir, size: viewport } }
+            : {}),
+        },
+        async ({ page }) => {
+          const gateway = await installMockGateway(page, {
+            methodResponses: {
+              "config.get": configResponse("memory-lancedb", "focus-before"),
+              "plugins.list": { plugins: memoryPlugins, diagnostics: [], mutationAllowed: true },
+            },
+          });
+          await page.goto(`${suite.server.baseUrl}settings/memory/settings`);
+          const group = page.getByRole("radiogroup").first();
+          const current = group.getByRole("radio", { name: "Memory LanceDB", exact: true });
+          const next = group.getByRole("radio", { name: "OpenClaw Memory", exact: true });
+          await expect.poll(() => current.isChecked()).toBe(true);
+          await current.focus();
+          await gateway.deferNext("plugins.setEnabled");
+          await page.keyboard.press("ArrowLeft");
+          await gateway.waitForRequest("plugins.setEnabled");
+          await expect.poll(() => next.getAttribute("aria-disabled")).toBe("true");
+          expect(await next.evaluate((element) => document.activeElement === element)).toBe(true);
+          await page.keyboard.press("ArrowRight");
+          await page.keyboard.press("Space");
+          expect(await next.evaluate((element) => document.activeElement === element)).toBe(true);
+          expect(await next.isChecked()).toBe(true);
+          if (captureUiProofEnabled) {
+            const section = page.locator(".settings-section").filter({ has: next });
+            const frame = await takeControlUiScreenshotFrame(page, section, [group], {
+              animations: "disabled",
+            });
+            writeFileSync(path.join(uiProofArtifactDir, "saving.png"), frame.png);
+          }
+          // Send a physical click: locator.click waits for aria-disabled to clear.
+          const label = group.locator("label").filter({ hasText: /^Memory LanceDB$/ });
+          const bounds = await label.boundingBox();
+          if (!bounds) {
+            throw new Error("Memory LanceDB label is not visible");
+          }
+          await page.mouse.click(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+          expect(await gateway.getRequests("plugins.setEnabled")).toHaveLength(1);
+          expect(await next.isChecked()).toBe(true);
+          const focused = await page.evaluate(() => document.activeElement?.getAttribute("value"));
+          if (outcome === "success") {
+            await gateway.setMethodResponse(
+              "config.get",
+              configResponse("memory-core", "focus-after"),
+            );
+            await gateway.resolveDeferred("plugins.setEnabled", {
+              ok: true,
+              plugin: memoryPlugins[1],
+              restartRequired: false,
+            });
+          } else {
+            await gateway.rejectDeferred("plugins.setEnabled", {
+              code: "UNAVAILABLE",
+              message: "Memory setting could not be saved",
+            });
+            await page.getByText("Memory setting could not be saved", { exact: true }).waitFor();
+          }
+          await expect.poll(() => next.getAttribute("aria-disabled")).toBeNull();
+          expect(await next.isChecked()).toBe(outcome === "success");
+          expect(await current.isChecked()).toBe(outcome === "failure");
+          expect(await page.evaluate(() => document.activeElement?.getAttribute("value"))).toBe(
+            focused,
+          );
+          expect(await gateway.getRequests("plugins.setEnabled")).toHaveLength(1);
+        },
+      );
+    },
+  );
+
   it("config.set keeps the default engine first and drains Off before selecting it", async () => {
     await suite.withPage(
       {
@@ -74,11 +158,11 @@ suite.define(() => {
         const response = await page.goto(`${suite.server.baseUrl}settings/memory/settings`);
         expect(response?.status()).toBe(200);
 
-        const engineGroup = page.locator("wa-radio-group.settings-segmented").first();
+        const engineGroup = page.getByRole("radiogroup").first();
         await engineGroup.waitFor();
         await expect
           .poll(async () =>
-            (await engineGroup.locator("wa-radio").allTextContents()).map((label) => label.trim()),
+            (await engineGroup.locator("label").allTextContents()).map((label) => label.trim()),
           )
           .toEqual(["OpenClaw Memory", "Memory LanceDB", "Off"]);
 
@@ -117,7 +201,7 @@ suite.define(() => {
           name: "OpenClaw Memory",
           exact: true,
         });
-        await expect.poll(() => selected.getAttribute("aria-checked")).toBe("true");
+        await expect.poll(() => selected.isChecked()).toBe(true);
         await expect
           .poll(() => page.getByText("Could not change the memory engine").count())
           .toBe(0);
@@ -171,10 +255,7 @@ suite.define(() => {
         const initialCatalogReads = (await gateway.getRequests("plugins.list")).length;
         await gateway.deferNext("plugins.setEnabled");
         await gateway.deferNext("config.get");
-        await page
-          .locator("wa-switch.settings-toggle")
-          .filter({ hasText: "Enable or disable Active memory" })
-          .click();
+        await toggle.click();
 
         const mutation = await gateway.waitForRequest("plugins.setEnabled");
         expect(mutation.params).toEqual({ pluginId: "active-memory", enabled: true });
@@ -200,7 +281,7 @@ suite.define(() => {
         await expect
           .poll(async () => (await gateway.getRequests("plugins.list")).length)
           .toBeGreaterThan(initialCatalogReads);
-        await expect.poll(() => toggle.getAttribute("aria-checked")).toBe("true");
+        await expect.poll(() => toggle.isChecked()).toBe(true);
         await page.getByText("Needs attention", { exact: true }).first().waitFor();
         await page
           .getByText(
@@ -243,20 +324,20 @@ suite.define(() => {
         const response = await page.goto(`${suite.server.baseUrl}settings/memory/settings`);
         expect(response?.status()).toBe(200);
 
-        const engineGroup = page.locator("wa-radio-group.settings-segmented").first();
+        const engineGroup = page.getByRole("radiogroup").first();
         await engineGroup.waitFor();
         await expect
           .poll(async () =>
-            (await engineGroup.locator("wa-radio").allTextContents()).map((label) => label.trim()),
+            (await engineGroup.locator("label").allTextContents()).map((label) => label.trim()),
           )
           .toEqual(["OpenClaw Memory (Unavailable)", "Memory LanceDB", "Off"]);
         await expect
           .poll(() =>
             engineGroup
               .getByRole("radio", { name: "OpenClaw Memory (Unavailable)", exact: true })
-              .getAttribute("aria-checked"),
+              .isChecked(),
           )
-          .toBe("true");
+          .toBe(true);
 
         if (captureUiProofEnabled) {
           await page

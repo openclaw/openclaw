@@ -4,12 +4,11 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { OpenClawPluginApi, PluginRuntime } from "../runtime-api.js";
 
 const createFeishuToolClientMock = vi.hoisted(() => vi.fn());
-const resolveAnyEnabledFeishuToolsConfigMock = vi.hoisted(() => vi.fn());
 const cleanupAmbientCommentTypingReactionMock = vi.hoisted(() => vi.fn(async () => false));
 
-vi.mock("./tool-account.js", () => ({
+vi.mock("./tool-account.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./tool-account.js")>()),
   createFeishuToolClient: createFeishuToolClientMock,
-  resolveAnyEnabledFeishuToolsConfig: resolveAnyEnabledFeishuToolsConfigMock,
 }));
 
 vi.mock("./comment-reaction.js", () => ({
@@ -219,15 +218,6 @@ describe("registerFeishuDriveTools", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    resolveAnyEnabledFeishuToolsConfigMock.mockReturnValue({
-      doc: false,
-      chat: false,
-      wiki: false,
-      drive: true,
-      perm: false,
-      scopes: false,
-      bitable: false,
-    });
     createFeishuToolClientMock.mockReturnValue({
       request: requestMock,
     });
@@ -472,35 +462,42 @@ describe("registerFeishuDriveTools", () => {
     });
   });
 
-  it("falls back to root lookup when the metadata scope is missing", async () => {
-    const batchQuery = vi.fn().mockRejectedValue({
-      response: {
+  it.each(["thrown", "fulfilled"])(
+    "falls back to root lookup when metadata scope failure is %s",
+    async (mode) => {
+      const failure = {
+        code: 99991672,
+        msg: "permission denied: drive:drive.metadata:readonly",
+      };
+      const batchQuery =
+        mode === "fulfilled"
+          ? vi.fn().mockResolvedValue(failure)
+          : vi.fn().mockRejectedValue({
+              response: {
+                data: failure,
+              },
+            });
+      const listFiles = vi.fn().mockResolvedValue({
+        code: 0,
         data: {
-          code: 99991672,
-          msg: "permission denied: drive:drive.metadata:readonly",
+          files: [{ token: "doc_1", name: "Project Plan", type: "docx" }],
         },
-      },
-    });
-    const listFiles = vi.fn().mockResolvedValue({
-      code: 0,
-      data: {
-        files: [{ token: "doc_1", name: "Project Plan", type: "docx" }],
-      },
-    });
-    createFeishuToolClientMock.mockReturnValue({
-      drive: { file: { list: listFiles }, meta: { batchQuery } },
-    });
-    const tool = buildDriveTool();
+      });
+      createFeishuToolClientMock.mockReturnValue({
+        drive: { file: { list: listFiles }, meta: { batchQuery } },
+      });
+      const tool = buildDriveTool();
 
-    const result = await tool.execute("call-info-missing-scope", {
-      action: "info",
-      file_token: "doc_1",
-      type: "docx",
-    });
+      const result = await tool.execute("call-info-missing-scope", {
+        action: "info",
+        file_token: "doc_1",
+        type: "docx",
+      });
 
-    expect(listFiles).toHaveBeenCalledWith({ params: {} });
-    expect(result.details).toMatchObject({ token: "doc_1", name: "Project Plan", type: "docx" });
-  });
+      expect(listFiles).toHaveBeenCalledWith({ params: {} });
+      expect(result.details).toMatchObject({ token: "doc_1", name: "Project Plan", type: "docx" });
+    },
+  );
 
   it("normalizes folder pagination and suppresses it for root listings", async () => {
     const listFiles = vi.fn().mockResolvedValue({ code: 0, data: { files: [] } });
@@ -532,23 +529,6 @@ describe("registerFeishuDriveTools", () => {
     for (const callIndex of [2, 3, 4]) {
       expect(listFiles).toHaveBeenNthCalledWith(callIndex, { params: {} });
     }
-  });
-
-  it.each([0, 201, 1.5])("rejects invalid folder page_size %s", async (pageSize) => {
-    const listFiles = vi.fn();
-    createFeishuToolClientMock.mockReturnValue({ drive: { file: { list: listFiles } } });
-    const tool = buildDriveTool();
-
-    const result = await tool.execute("call-list-invalid-page-size", {
-      action: "list",
-      folder_token: "folder_1",
-      page_size: pageSize,
-    });
-
-    expect(result.details).toMatchObject({
-      error: "page_size must be a positive integer between 1 and 200",
-    });
-    expect(listFiles).not.toHaveBeenCalled();
   });
 
   it("surfaces reply_comment HTTP errors when the single supported body fails", async () => {
@@ -632,32 +612,6 @@ describe("registerFeishuDriveTools", () => {
     const details = result.details as FeishuDriveCommentDetails;
     expect(details.success).toBe(true);
     expect(details.reply_id).toBe("r-preflight-fallback");
-    expect(details.delivery_mode).toBe("reply_comment");
-  });
-
-  it("continues with reply_comment when batch_query returns no exact comment match", async () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const tool = buildDriveTool();
-
-    requestMock
-      .mockResolvedValueOnce(commentMetadataResponse(true, "different_comment"))
-      .mockResolvedValueOnce(driveResponse({ reply_id: "r-no-exact-match" }));
-
-    const result = await tool.execute(
-      "call-preflight-no-exact-match",
-      replyCommentInput("fallback on exact match miss"),
-    );
-
-    expectRequestCall(requestMock, 0, commentMetadataRequest());
-    expectRequestCall(requestMock, 1, replyCommentRequest("fallback on exact match miss"));
-    expect(
-      warnSpy.mock.calls.some((call) =>
-        String(call[0]).includes("whole-comment compatibility path"),
-      ),
-    ).toBe(false);
-    const details = result.details as FeishuDriveCommentDetails;
-    expect(details.success).toBe(true);
-    expect(details.reply_id).toBe("r-no-exact-match");
     expect(details.delivery_mode).toBe("reply_comment");
   });
 

@@ -1,8 +1,9 @@
 import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import path from "node:path";
+import { finished } from "node:stream/promises";
 import { setImmediate as checkpoint } from "node:timers/promises";
-import { Worker } from "node:worker_threads";
+import type { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   afterAll,
@@ -18,15 +19,14 @@ import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginMetadataSnapshotCache, retirePluginCache } from "../plugins/plugin-cache.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as agentAuthDiscovery from "./agent-auth-discovery.js";
 import { saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
-import {
-  getPreparedModelCatalogWorkerPoolSnapshot,
-  PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS,
-} from "./prepared-model-catalog-worker.js";
+import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";
+import { getPreparedModelCatalogWorkerPoolSnapshot } from "./prepared-model-catalog-worker.js";
 import { writeFixturePlugin, PROVIDER_ID } from "./prepared-model-catalog-worker.test-support.js";
 import {
   getPreparedModelFullCatalogAuth,
@@ -69,7 +69,11 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
   };
 });
 
-const { makeTempDir, observeCatalogEntry: observeEntry } = usePreparedCatalogWorkerFixtures({
+const {
+  makeTempDir,
+  observeCatalogEntry: observeEntry,
+  observeWorkers,
+} = usePreparedCatalogWorkerFixtures({
   observeCatalogWork: true,
 });
 
@@ -87,28 +91,6 @@ function observeCatalogEntry(marker: string, agentDir: string) {
   return observeEntry(receipts, { marker, agentDir });
 }
 
-function observeWorkers() {
-  const spawned: Worker[] = [];
-  let peakWorkers = 0;
-  const workerChannel = channel("worker_threads");
-  const recordWorker = (message: unknown) => {
-    if (isRecord(message) && message.worker instanceof Worker) {
-      spawned.push(message.worker);
-      peakWorkers = Math.max(
-        peakWorkers,
-        spawned.filter((worker) => worker.threadId !== -1).length,
-      );
-    }
-  };
-  return {
-    spawned,
-    get peakWorkers() {
-      return peakWorkers;
-    },
-    subscribe: () => workerChannel.subscribe(recordWorker),
-    close: () => workerChannel.unsubscribe(recordWorker),
-  };
-}
 const workerFailureWarnings = () =>
   runtimeWarnings.filter((message) => message.startsWith("model catalog worker failed"));
 
@@ -117,19 +99,40 @@ describe("Gateway catalog worker pool", () => {
     vi.stubEnv("CODEX_HOME", makeTempDir("openclaw-worker-empty-codex-"));
   });
   it("republishes failed catalog borrowers before replacing their source worker", async () => {
-    const observed = observeWorkers();
+    let firstWorkerStderr = "";
+    let firstWorkerStderrFinished: Promise<void> | undefined;
+    const observed = observeWorkers((worker) => {
+      if (firstWorkerStderrFinished) {
+        return;
+      }
+      worker.stderr.on("data", (chunk: Buffer) => {
+        firstWorkerStderr += chunk.toString();
+      });
+      firstWorkerStderrFinished = finished(worker.stderr);
+    });
     try {
       const fixture = await createFleetFixture(observed.subscribe);
-      await Promise.all(
-        fixture.snapshots.map((snapshot) =>
-          loadPreparedModelRuntimeAuth(snapshot, { providerIds: [PROVIDER_ID] }),
-        ),
-      );
+      await Promise.all(fixture.snapshots.map((snapshot) => loadCompletedFullCatalog(snapshot)));
       expect(observed.spawned).toHaveLength(1);
       const { workerFailures } = getPreparedModelCatalogWorkerPoolSnapshot();
       const warnings = workerFailureWarnings().length;
       writeFixturePlugin({ root: fixture.root, spinMs: 0, pluginVersion: "v2" });
+      expect(getPreparedModelCatalogWorkerPoolSnapshot()).toMatchObject({
+        activeTasks: 0,
+        pendingTasks: 0,
+      });
       await observed.spawned[0]!.terminate();
+      await firstWorkerStderrFinished;
+      expect(firstWorkerStderr).not.toContain(
+        "loadAuthProfileStoreWithoutExternalProfiles is deprecated",
+      );
+      expect(getPreparedModelCatalogWorkerPoolSnapshot()).toMatchObject({
+        workers: 0,
+        workerFailures: workerFailures + 1,
+      });
+      expect(workerFailureWarnings().slice(warnings)).toEqual([
+        expect.stringMatching(/^model catalog worker failed; .*worker exited with code 1/),
+      ]);
       await expect(
         loadPreparedModelRuntimeAuth(fixture.snapshots[0]!, { providerIds: [] }),
       ).rejects.toThrow();
@@ -163,38 +166,6 @@ describe("Gateway catalog worker pool", () => {
     }
   });
 
-  it("logs and counts an idle catalog worker exit before a request recovers it", async () => {
-    const observed = observeWorkers();
-    try {
-      const fixture = await createFleetFixture(observed.subscribe);
-      await Promise.all(fixture.snapshots.map((snapshot) => loadCompletedFullCatalog(snapshot)));
-      const { workerFailures } = getPreparedModelCatalogWorkerPoolSnapshot();
-      expect(getPreparedModelCatalogWorkerPoolSnapshot()).toMatchObject({
-        workers: 1,
-        activeTasks: 0,
-        pendingTasks: 0,
-      });
-      const warnings = workerFailureWarnings().length;
-      await observed.spawned[0]!.terminate();
-      // No request is waiting; the exit is still counted and logged before recovery starts.
-      expect(getPreparedModelCatalogWorkerPoolSnapshot()).toMatchObject({
-        workers: 0,
-        workerFailures: workerFailures + 1,
-      });
-      expect(workerFailureWarnings().slice(warnings)).toEqual([
-        expect.stringMatching(/^model catalog worker failed; .*worker exited with code 1/),
-      ]);
-      await expect(
-        loadPreparedModelRuntimeAuth(fixture.snapshots[0]!, { providerIds: [] }),
-      ).rejects.toThrow();
-      // Recovery replaces the worker without counting or logging the same failure again.
-      expect(getPreparedModelCatalogWorkerPoolSnapshot().workerFailures).toBe(workerFailures + 1);
-      expect(workerFailureWarnings()).toHaveLength(warnings + 1);
-    } finally {
-      observed.close();
-    }
-  });
-
   it("retains only the admitted renewal failure when queued auth observes pool closure first", async ({
     signal,
   }) => {
@@ -207,7 +178,7 @@ describe("Gateway catalog worker pool", () => {
         failedTasks.push({ activeTasks: message.activeTasks, pendingTasks: message.pendingTasks });
       }
     };
-    const catalogFailures: Array<{ error: Error; modelFactsChanged?: boolean }> = [];
+    const catalogFailures: Array<{ phase: "catalog-failed"; modelFactsChanged?: boolean }> = [];
     const unregister = registerPreparedModelRuntimePublicationListener((event) => {
       if (event.phase === "catalog-failed") {
         catalogFailures.push(event);
@@ -274,10 +245,13 @@ describe("Gateway catalog worker pool", () => {
       await expect(queuedCatalog).rejects.toThrow("superseded");
       vi.useRealTimers();
       const originalError = await renewal.catch((error: unknown) => error);
-      expect(originalError).toBe(catalogFailures[0]!.error);
       expect(catalogFailures[0]).toMatchObject({ modelFactsChanged: false });
       expect(originalError).toBe(await queuedAuth.catch((error: unknown) => error));
-      expect(originalError).toMatchObject({ message: "worker exited with code 1" });
+      expect(originalError).toMatchObject({
+        message: expect.stringMatching(
+          /^worker exited with code 1 \[task=preparedModelCatalog\.task /,
+        ),
+      });
       taskChannel.unsubscribe(recordFailure);
       expect(failedTasks).toEqual([
         { activeTasks: 1, pendingTasks: 1 },
@@ -342,10 +316,10 @@ describe("Gateway catalog worker pool", () => {
       const release = createDeferredCore();
       const resume = () => release.resolve();
       signal.addEventListener("abort", resume, { once: true });
-      const failures: Error[] = [];
+      const failures: string[] = [];
       const unregister = registerPreparedModelRuntimePublicationListener((event) => {
         if (event.phase === "catalog-failed") {
-          failures.push(event.error);
+          failures.push(event.phase);
         }
       });
       let renewal: ReturnType<typeof loadCompletedFullCatalog> | undefined;
@@ -527,15 +501,73 @@ describe("Gateway catalog worker pool", () => {
     },
   );
 
+  it("closes automatic catalog discovery without reporting a refresh failure", async ({
+    signal,
+  }) => {
+    const observed = observeWorkers();
+    const warnings = runtimeWarnings.length;
+    let marker: string | undefined;
+    let discovery: ReturnType<typeof loadCompletedFullCatalog> | undefined;
+    let closing: Promise<void> | undefined;
+    try {
+      const fixture = await createFleetFixture(
+        (input) => {
+          marker = input.marker;
+          observed.subscribe();
+          fs.writeFileSync(`${marker}.hold`, "");
+          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        },
+        true,
+        { agentCount: 1 },
+      );
+      await withinTest(receipts.waitFor(fixture.marker, "start"), signal);
+      const original = fixture.snapshots[0]!;
+      // Join automatic discovery so its detached warning handler settles before inspection.
+      discovery = original.loadFullModelCatalog!({ changedOnly: true });
+      void discovery.catch(() => undefined);
+      const { workerFailures } = getPreparedModelCatalogWorkerPoolSnapshot();
+      expect(observed.spawned).toHaveLength(1);
+      expect(getPreparedModelCatalogWorkerPoolSnapshot()).toMatchObject({
+        workers: 1,
+        activeTasks: 1,
+        pendingTasks: 1,
+      });
+
+      closing = closePreparedModelRuntimeSnapshots();
+      await withinTest(closing, signal);
+      await expect(withinTest(discovery, signal)).rejects.toThrow(
+        "prepared model runtime process lifetime closed",
+      );
+
+      expect(original.isCurrent()).toBe(false);
+      expect(observed.spawned[0]!.threadId).toBe(-1);
+      expect(getPreparedModelCatalogWorkerPoolSnapshot()).toMatchObject({
+        workers: 0,
+        activeTasks: 0,
+        pendingTasks: 0,
+        workerFailures,
+      });
+      expect(runtimeWarnings.slice(warnings)).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+      if (marker) {
+        fs.rmSync(`${marker}.hold`, { force: true });
+      }
+      closing ??= closePreparedModelRuntimeSnapshots();
+      await Promise.allSettled([discovery, closing]);
+      observed.close();
+    }
+  });
+
   it.for(["shutdown", "plugin retirement"])(
     "does not report renewal failure during warm %s",
     async (reason, { signal }) => {
       const fixture = await createFleetFixture(undefined, true);
       await Promise.all(fixture.snapshots.map((snapshot) => loadCompletedFullCatalog(snapshot)));
-      const failures: Error[] = [];
+      const failures: string[] = [];
       const unregister = registerPreparedModelRuntimePublicationListener((event) => {
         if (event.phase === "catalog-failed") {
-          failures.push(event.error);
+          failures.push(event.phase);
         }
       });
       const entered = observeCatalogEntry(fixture.marker, fixture.snapshots[0]!.agentDir);
@@ -838,6 +870,8 @@ describe("Gateway catalog worker pool", () => {
     signal,
   }) => {
     const fixture = await createFleetFixture();
+    // Startup discovery must finish before the pool is expected to drain.
+    await Promise.all(fixture.snapshots.map((snapshot) => loadCompletedFullCatalog(snapshot)));
     await Promise.all(
       fixture.snapshots.map((snapshot) =>
         loadPreparedModelRuntimeAuth(snapshot, { providerIds: [] }),

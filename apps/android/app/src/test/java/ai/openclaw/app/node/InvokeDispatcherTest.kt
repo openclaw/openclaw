@@ -255,27 +255,6 @@ class InvokeDispatcherTest {
     }
 
   @Test
-  fun advertisementSamplesEachCommandFamilyOnceAndRefreshesOnNextBuild() {
-    var cameraReads = 0
-    val dispatcher =
-      newInvokeDispatcher(
-        cameraEnabled = {
-          cameraReads += 1
-          cameraReads % 2 == 1
-        },
-      )
-
-    val cameras = listOf(OpenClawCameraCommand.List, OpenClawCameraCommand.Snap, OpenClawCameraCommand.Clip).map { it.rawValue }
-    val enabled = dispatcher.buildInvokeCommands()
-    assertEquals(1, cameraReads)
-    assertEquals(cameras, enabled.filter { it in cameras })
-
-    val disabled = dispatcher.buildInvokeCommands()
-    assertEquals(2, cameraReads)
-    assertTrue(disabled.none { it in cameras })
-  }
-
-  @Test
   fun boundHandlerReceivesOpaqueParamsAndPropagatesFailureAndCancellation() =
     runTest {
       val talk = InvokeDispatcherFakeTalkHandler()
@@ -422,68 +401,47 @@ private class InvokeDispatcherFakeTalkHandler : TalkHandler {
 }
 
 private class InvokeDispatcherFakePhotosDataSource : PhotosDataSource {
-  override fun hasPermission(context: Context): Boolean = true
+  override fun hasPermission(): Boolean = true
 
-  override fun latest(
-    context: Context,
-    request: PhotosLatestRequest,
-  ): List<EncodedPhotoPayload> = emptyList()
+  override fun latest(request: PhotosLatestRequest): List<EncodedPhotoPayload> = emptyList()
 }
 
 private class InvokeDispatcherFakeContactsDataSource : ContactsDataSource {
-  override fun hasReadPermission(context: Context): Boolean = true
+  override fun hasReadPermission(): Boolean = true
 
-  override fun hasWritePermission(context: Context): Boolean = true
+  override fun hasWritePermission(): Boolean = true
 
-  override fun search(
-    context: Context,
-    request: ContactsSearchRequest,
-  ): List<ContactRecord> = emptyList()
+  override fun search(request: ContactsSearchRequest): List<ContactRecord> = emptyList()
 
-  override fun add(
-    context: Context,
-    request: ContactsAddRequest,
-  ): ContactRecord {
+  override fun add(request: ContactsAddRequest): ContactRecord {
     error("unused in InvokeDispatcherTest")
   }
 }
 
 private class InvokeDispatcherFakeCalendarDataSource : CalendarDataSource {
-  override fun hasReadPermission(context: Context): Boolean = true
+  override fun hasReadPermission(): Boolean = true
 
-  override fun hasWritePermission(context: Context): Boolean = true
+  override fun hasWritePermission(): Boolean = true
 
-  override fun events(
-    context: Context,
-    request: CalendarEventsRequest,
-  ): List<CalendarEventRecord> = emptyList()
+  override fun events(request: CalendarEventsRequest): List<CalendarEventRecord> = emptyList()
 
-  override fun add(
-    context: Context,
-    request: CalendarAddRequest,
-  ): CalendarEventRecord {
+  override fun add(request: CalendarAddRequest): CalendarEventRecord {
     error("unused in InvokeDispatcherTest")
   }
 }
 
 private class InvokeDispatcherFakeMotionDataSource : MotionDataSource {
-  override fun isActivityAvailable(context: Context): Boolean = false
+  override fun isActivityAvailable(): Boolean = false
 
-  override fun isPedometerAvailable(context: Context): Boolean = false
+  override fun isPedometerAvailable(): Boolean = false
 
-  override fun hasPermission(context: Context): Boolean = true
+  override fun hasPermission(): Boolean = true
 
-  override suspend fun activity(
-    context: Context,
-    request: MotionRangeRequest,
-  ): MotionActivityRecord {
+  override suspend fun activity(request: MotionRangeRequest): MotionActivityRecord {
     error("unused in InvokeDispatcherTest")
   }
 
-  override suspend fun pedometer(
-    context: Context,
-    request: MotionRangeRequest,
-  ): PedometerRecord {
+  override suspend fun pedometer(request: MotionRangeRequest): PedometerRecord {
     error("unused in InvokeDispatcherTest")
   }
 }

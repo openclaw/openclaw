@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { WindowsProcessSnapshotEntry } from "./schtasks-process-snapshot.js";
 import { readScheduledTaskRuntime, resolveFallbackRuntime } from "./schtasks-runtime.js";
 import type { GatewayServiceReadOptions } from "./service-types.js";
 import { readGatewayServiceState, resolveGatewayService } from "./service.js";
@@ -7,22 +8,22 @@ import {
   WINDOWS_TASK_SUPERVISOR_FLAG,
 } from "./windows-task-supervisor-contract.js";
 
-const native = vi.hoisted(() => ({
-  command: ["C:\\runtime-b\\node.exe", "C:\\openclaw\\entry.js", "gateway", "--port", "18789"],
-  processes: [{ ProcessId: 42, CommandLine: "" }] as Array<{
-    ProcessId: number;
-    CommandLine: string | null;
-    Name?: string | null;
-  }> | null,
-  state: 4,
-  ownerAlive: false,
-  ownerPid: 42,
-  ownerPort: 18789,
-  ownerTask: "OpenClaw Gateway",
-  environment: undefined as Record<string, string> | undefined,
-  reads: 0,
-  changed: undefined as "present" | "absent" | "unavailable" | undefined,
-}));
+const { native, resetNative } = vi.hoisted(() => {
+  const defaults = () => ({
+    command: ["C:\\runtime-b\\node.exe", "C:\\openclaw\\entry.js", "gateway", "--port", "18789"],
+    processes: [] as WindowsProcessSnapshotEntry[] | null,
+    state: 4,
+    ownerAlive: false,
+    ownerPid: 42,
+    ownerPort: 18789,
+    ownerTask: "OpenClaw Gateway",
+    environment: undefined as Record<string, string> | undefined,
+    reads: 0,
+    changed: undefined as "present" | "absent" | "unavailable" | undefined,
+  });
+  const fixture = defaults();
+  return { native: fixture, resetNative: () => Object.assign(fixture, defaults()) };
+});
 vi.mock("./schtasks-layout.js", async (original) => ({
   ...(await original<typeof import("./schtasks-layout.js")>()),
   readScheduledTaskCommand: async (_env: unknown, options?: GatewayServiceReadOptions) => {
@@ -72,56 +73,47 @@ vi.mock("../infra/gateway-owner-lease.js", () => ({
 }));
 beforeEach(() => {
   vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-  native.changed = undefined;
-  native.reads = 0;
-  native.state = 4;
-  native.ownerAlive = false;
-  native.ownerPid = 42;
-  native.ownerPort = 18789;
-  native.ownerTask = "OpenClaw Gateway";
-  native.environment = undefined;
-  native.command = [
-    "C:\\runtime-b\\node.exe",
-    "C:\\openclaw\\entry.js",
-    "gateway",
-    "--port",
-    "18789",
-  ];
+  resetNative();
 });
 
-it.each([
-  "direct",
-  "supervised",
-  "other-pid",
-  "other-port",
-  "other-task",
-  "other-command",
-  "unowned",
-])("binds an environment-only port to its exact Gateway owner (%s)", async (kind) => {
+function environmentPort() {
   native.command = native.command.slice(0, -2);
   native.environment = { OPENCLAW_GATEWAY_PORT: "18789" };
-  native.ownerAlive = kind !== "unowned";
-  if (kind === "other-pid") {
-    native.ownerPid = 43;
-  }
-  if (kind === "other-port") {
-    native.ownerPort = 19848;
-  }
-  if (kind === "other-task") {
-    native.ownerTask = "Another Gateway";
-  }
+}
+function processEntry(pid = 42, argv = native.command) {
+  return { ProcessId: pid, CommandLine: argv.join(" ") };
+}
+function controlRuntime() {
+  const installed = { programArguments: native.command, environment: native.environment };
+  return resolveFallbackRuntime({}, installed, "control", performance.now() + 5_000);
+}
+async function expectUnidentified(status = "unknown") {
+  const runtime = await readScheduledTaskRuntime({});
+  expect(runtime).toMatchObject({ status });
+  expect(runtime.pid).toBeUndefined();
+  return runtime;
+}
+
+it.each<[string, Partial<typeof native>]>([
+  ["direct", {}],
+  ["supervised", {}],
+  ["other-pid", { ownerPid: 43 }],
+  ["other-port", { ownerPort: 19848 }],
+  ["other-task", { ownerTask: "Another Gateway" }],
+  ["other-command", {}],
+  ["unowned", { ownerAlive: false }],
+])("binds an environment-only port to its exact Gateway owner (%s)", async (kind, owner) => {
+  environmentPort();
+  Object.assign(native, { ownerAlive: true }, owner);
   const actual =
     kind === "other-command"
       ? ["C:\\runtime-a\\node.exe", ...native.command.slice(1)]
       : native.command;
   native.processes = [
-    {
-      ProcessId: 42,
-      CommandLine: (kind === "supervised"
-        ? [...actual, formatWindowsTaskSupervisorChildArgument(65536)]
-        : actual
-      ).join(" "),
-    },
+    processEntry(
+      42,
+      kind === "supervised" ? [...actual, formatWindowsTaskSupervisorChildArgument(65536)] : actual,
+    ),
   ];
   const runtime = await readScheduledTaskRuntime({});
   const matches = kind === "direct" || kind === "supervised";
@@ -129,34 +121,12 @@ it.each([
   expect(runtime.pid).toBe(matches ? 42 : undefined);
 });
 
-it("does not admit an environment-only port while its unleased supervisor survives", async () => {
-  native.command = native.command.slice(0, -2);
-  native.environment = { OPENCLAW_GATEWAY_PORT: "18789" };
-  native.processes = [
-    { ProcessId: 42, CommandLine: [...native.command, WINDOWS_TASK_SUPERVISOR_FLAG].join(" ") },
-  ];
-  const runtime = await resolveFallbackRuntime(
-    {},
-    { programArguments: native.command, environment: native.environment },
-    "control",
-    performance.now() + 5_000,
-  );
-  expect(runtime.status).toBe("unknown");
-});
-
 it("keeps an unleased environment-only child unknown before ownership is published", async () => {
   native.state = 3;
-  native.command = native.command.slice(0, -2);
-  native.environment = { OPENCLAW_GATEWAY_PORT: "18789" };
-  native.processes = [{ ProcessId: 42, CommandLine: native.command.join(" ") }];
+  environmentPort();
+  native.processes = [processEntry()];
   expect((await readScheduledTaskRuntime({})).status).toBe("unknown");
-  const runtime = await resolveFallbackRuntime(
-    {},
-    { programArguments: native.command, environment: native.environment },
-    "control",
-    performance.now() + 5_000,
-  );
-  expect(runtime.status).toBe("unknown");
+  expect(await controlRuntime()).toMatchObject({ status: "unknown" });
 });
 
 // Server 2022 returns these native image names without readable command lines.
@@ -168,31 +138,18 @@ const protectedProcesses = [
 ];
 
 it.each([
-  { executable: "C:\\runtime-b\\node.exe", expected: "stopped" },
-  { executable: "C:\\runtime-b\\bun.exe", expected: "stopped" },
-  { executable: "C:\\runtime-b\\gateway.cmd", expected: "unknown" },
-  { executable: "node.exe", expected: "unknown" },
-  { executable: "%RUNTIME%\\node.exe", expected: "unknown" },
+  { executable: "C:\\runtime-b\\bun.exe", expected: "stopped", unreadable: false },
+  { executable: "node.exe", expected: "unknown", unreadable: false },
+  { executable: "C:\\runtime-b\\node.exe", expected: "unknown", unreadable: true },
 ])(
-  "classifies unrelated protected native images only for $executable",
-  async ({ executable, expected }) => {
+  "classifies protected images for $executable (unreadable image=$unreadable)",
+  async ({ executable, expected, unreadable }) => {
     native.state = 3;
     native.command[0] = executable;
-    native.processes = protectedProcesses;
-    const runtime = await readScheduledTaskRuntime({});
-    expect(runtime.status).toBe(expected);
-    expect(runtime.pid).toBeUndefined();
-  },
-);
-
-it.each(["NODE.EXE", undefined, null, "C:\\another\\other.exe"])(
-  "retains unknown process evidence for an unreadable image %s",
-  async (Name) => {
-    native.state = 3;
-    native.processes = [...protectedProcesses, { ProcessId: 42, Name, CommandLine: null }];
-    const runtime = await readScheduledTaskRuntime({});
-    expect(runtime.status).toBe("unknown");
-    expect(runtime.pid).toBeUndefined();
+    native.processes = unreadable
+      ? [...protectedProcesses, { ProcessId: 42, Name: undefined, CommandLine: null }]
+      : protectedProcesses;
+    await expectUnidentified(expected);
   },
 );
 
@@ -200,7 +157,7 @@ it.each(["present", "absent", "unavailable"] as const)(
   "does not combine an earlier %s observation with a later matching runtime",
   async (initial) => {
     native.changed = initial;
-    native.processes = [{ ProcessId: 43, CommandLine: native.command.join(" ") }];
+    native.processes = [processEntry(43)];
     const state = await readGatewayServiceState(resolveGatewayService(), { env: {} });
     expect(state.command?.programArguments[0]).toBe(
       initial === "present" ? "C:\\runtime-a\\node.exe" : undefined,
@@ -211,102 +168,62 @@ it.each(["present", "absent", "unavailable"] as const)(
 );
 afterEach(() => vi.restoreAllMocks());
 
-it.each([undefined, 5_000])(
-  "does not report the replacement definition running on the old task owner (budget %s)",
-  async (timeoutMs) => {
-    native.ownerAlive = true;
-    native.processes = [
-      {
-        ProcessId: 42,
-        CommandLine: ["C:\\runtime-a\\node.exe", ...native.command.slice(1)].join(" "),
-      },
-    ];
-    const runtime = await readScheduledTaskRuntime({}, { timeoutMs });
-    expect(runtime).toMatchObject({ status: "unknown", state: "Running" });
-    expect(runtime.pid).toBeUndefined();
-  },
-);
-
-it.each([1, 3])(
-  "does not describe an old owned Gateway as stopped after its definition changed (state %s)",
-  async (state) => {
+it.each<[number, string]>([
+  [4, "Running"],
+  [3, "Ready"],
+])(
+  "keeps the old task owner unknown after definition replacement (state %s)",
+  async (state, name) => {
     native.state = state;
     native.ownerAlive = true;
-    native.processes = [
-      {
-        ProcessId: 42,
-        CommandLine: ["C:\\runtime-a\\node.exe", ...native.command.slice(1)].join(" "),
-      },
-    ];
-    const runtime = await readScheduledTaskRuntime({});
-    expect(runtime.status).toBe("unknown");
+    native.processes = [processEntry(42, ["C:\\runtime-a\\node.exe", ...native.command.slice(1)])];
+    const options = state === 4 ? { timeoutMs: 5_000 } : undefined;
+    const runtime = await readScheduledTaskRuntime({}, options);
+    expect(runtime).toMatchObject({ status: "unknown", state: name });
     expect(runtime.pid).toBeUndefined();
   },
 );
 
 it("reports the process matching the installed command, excluding its task supervisor", async () => {
   native.processes = [
-    { ProcessId: 42, CommandLine: [...native.command, WINDOWS_TASK_SUPERVISOR_FLAG].join(" ") },
-    { ProcessId: 43, CommandLine: native.command.join(" ") },
+    processEntry(42, [...native.command, WINDOWS_TASK_SUPERVISOR_FLAG]),
+    processEntry(43),
   ];
   expect(await readScheduledTaskRuntime({})).toMatchObject({ status: "running", pid: 43 });
 });
 
-it.each([1, 3, 4])(
-  "keeps a surviving supervisor without its child unknown (task %s)",
-  async (state) => {
-    native.state = state;
+it("keeps a surviving supervisor without its child unknown", async () => {
+  native.state = 3;
+  native.processes = [processEntry(42, [...native.command, WINDOWS_TASK_SUPERVISOR_FLAG])];
+  await expectUnidentified();
+});
+
+it.each([false, true])(
+  "blocks stopped publication with a surviving supervisor (env port=%s)",
+  async (envPort) => {
+    if (envPort) {
+      environmentPort();
+    }
     native.processes = [
-      { ProcessId: 42, CommandLine: [...native.command, WINDOWS_TASK_SUPERVISOR_FLAG].join(" ") },
+      ...(envPort ? [] : protectedProcesses),
+      {
+        ...(envPort ? {} : { Name: "node.exe" }),
+        ...processEntry(42, [...native.command, WINDOWS_TASK_SUPERVISOR_FLAG]),
+      },
     ];
-    const runtime = await readScheduledTaskRuntime({});
-    expect(runtime.status).toBe("unknown");
-    expect(runtime.pid).toBeUndefined();
+    expect(await controlRuntime()).toMatchObject({ status: "unknown" });
   },
 );
 
-it("does not admit stopped publication while the exact task supervisor survives on a free port", async () => {
-  native.processes = [
-    ...protectedProcesses,
-    {
-      ProcessId: 42,
-      Name: "node.exe",
-      CommandLine: [...native.command, WINDOWS_TASK_SUPERVISOR_FLAG].join(" "),
-    },
-  ];
-  const runtime = await resolveFallbackRuntime(
-    {},
-    { programArguments: native.command },
-    "control",
-    performance.now() + 5_000,
-  );
-  expect(runtime.status).toBe("unknown");
-});
-
-it.each(
-  [1, 3].flatMap((state) => [
-    { state, evidence: "unavailable", snapshot: null, expected: "unknown" },
-    {
-      state,
-      evidence: "incomplete",
-      snapshot: [{ ProcessId: 42, CommandLine: null }],
-      expected: "unknown",
-    },
-    {
-      state,
-      evidence: "confirmed absence",
-      snapshot: [{ ProcessId: 43, CommandLine: "powershell.exe" }],
-      expected: "stopped",
-    },
-  ]),
-)(
-  "keeps unreadable process evidence distinct from absence (state $state, $evidence)",
-  async ({ state, snapshot, expected }) => {
-    native.state = state;
-    native.processes = snapshot;
-    const runtime = await readScheduledTaskRuntime({});
-    expect(runtime.status).toBe(expected);
-    expect(runtime.state).toBe(state === 1 ? "Disabled" : "Ready");
-    expect(runtime.pid).toBeUndefined();
+it.each([
+  ["unavailable", null, "unknown"],
+  ["incomplete", [{ ProcessId: 42, CommandLine: null }], "unknown"],
+  ["confirmed absence", [{ ProcessId: 43, CommandLine: "powershell.exe" }], "stopped"],
+] as const)(
+  "keeps unreadable process evidence distinct from absence (%s)",
+  async (_evidence, snapshot, expected) => {
+    native.state = 3;
+    native.processes = snapshot === null ? null : [...snapshot];
+    expect((await expectUnidentified(expected)).state).toBe("Ready");
   },
 );

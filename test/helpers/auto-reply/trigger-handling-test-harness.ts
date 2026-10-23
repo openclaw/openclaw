@@ -5,7 +5,6 @@ import os from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, expect, vi } from "vitest";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../../../src/agents/auth-profiles.js";
-import type { EmbeddedAgentQueueMessageOutcome } from "../../../src/agents/embedded-agent-runner/runs.js";
 import { withFastReplyConfig } from "../../../src/auto-reply/reply/get-reply-fast-path.test-support.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../../src/state/openclaw-agent-db-lifecycle.js";
@@ -28,22 +27,10 @@ const embeddedAgentMocks = getSharedMocks("openclaw.trigger-handling.embedded-ag
   abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
   compactEmbeddedAgentSession: vi.fn(),
   runEmbeddedAgent: vi.fn(),
-  queueEmbeddedAgentMessageWithOutcome: vi.fn(
-    (sessionId: string, _text?: string, _options?: unknown): EmbeddedAgentQueueMessageOutcome => ({
-      queued: false,
-      sessionId,
-      reason: "not_streaming",
-      gatewayHealth: "live",
-    }),
-  ),
-  resolveActiveEmbeddedRunSessionId: vi.fn().mockReturnValue(undefined),
-  isEmbeddedAgentRunActive: vi.fn().mockReturnValue(false),
-  isEmbeddedAgentRunStreaming: vi.fn().mockReturnValue(false),
+  resolveActiveSessionRunId: vi.fn().mockReturnValue(undefined),
+  isSessionRunActive: vi.fn().mockReturnValue(false),
+  isSessionNativeAttemptStreaming: vi.fn().mockReturnValue(false),
 }));
-
-export function getAbortEmbeddedAgentRunMock(): AnyMock {
-  return embeddedAgentMocks.abortEmbeddedAgentRun;
-}
 
 export function getCompactEmbeddedAgentSessionMock(): AnyMock {
   return embeddedAgentMocks.compactEmbeddedAgentSession;
@@ -54,38 +41,31 @@ export function getRunEmbeddedAgentMock(): AnyMock {
 }
 
 const installEmbeddedAgentMock = () =>
-  vi.doMock("../../../src/agents/embedded-agent.js", () => ({
+  vi.doMock("../../../src/agents/embedded-agent.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../../../src/agents/embedded-agent.js")>()),
     abortEmbeddedAgentRun: (...args: unknown[]) =>
       embeddedAgentMocks.abortEmbeddedAgentRun(...args),
     compactEmbeddedAgentSession: (...args: unknown[]) =>
       embeddedAgentMocks.compactEmbeddedAgentSession(...args),
     runEmbeddedAgent: (...args: unknown[]) => embeddedAgentMocks.runEmbeddedAgent(...args),
-    queueEmbeddedAgentMessageWithOutcome: (sessionId: string, text: string, options?: unknown) =>
-      embeddedAgentMocks.queueEmbeddedAgentMessageWithOutcome(sessionId, text, options),
-    resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-    resolveActiveEmbeddedRunSessionId: (...args: unknown[]) =>
-      embeddedAgentMocks.resolveActiveEmbeddedRunSessionId(...args),
-    isEmbeddedAgentRunActive: (...args: unknown[]) =>
-      embeddedAgentMocks.isEmbeddedAgentRunActive(...args),
-    isEmbeddedAgentRunStreaming: (...args: unknown[]) =>
-      embeddedAgentMocks.isEmbeddedAgentRunStreaming(...args),
+    resolveActiveSessionRunId: (...args: unknown[]) =>
+      embeddedAgentMocks.resolveActiveSessionRunId(...args),
+    isSessionRunActive: (...args: unknown[]) => embeddedAgentMocks.isSessionRunActive(...args),
+    isSessionNativeAttemptStreaming: (...args: unknown[]) =>
+      embeddedAgentMocks.isSessionNativeAttemptStreaming(...args),
   }));
 
 installEmbeddedAgentMock();
 
+// mock-isolation: Trigger cases use the shared abort stub and must not cancel process-wide native runs.
 vi.doMock("../../../src/agents/embedded-agent-runner/runs.js", () => ({
   abortEmbeddedAgentRun: (...args: unknown[]) => embeddedAgentMocks.abortEmbeddedAgentRun(...args),
-  formatEmbeddedAgentQueueFailureSummary: (outcome: { reason?: string; sessionId?: string }) =>
-    outcome.reason && outcome.sessionId
-      ? `queue_message_failed reason=${outcome.reason} sessionId=${outcome.sessionId} gatewayHealth=live`
-      : undefined,
-  queueEmbeddedAgentMessageWithOutcome: (sessionId: string, text: string, options?: unknown) =>
-    embeddedAgentMocks.queueEmbeddedAgentMessageWithOutcome(sessionId, text, options),
 }));
 
-vi.doMock("../../../src/agents/embedded-agent-runner/active-run-projections.js", () => ({
-  resolveActiveEmbeddedRunSessionId: (...args: unknown[]) =>
-    embeddedAgentMocks.resolveActiveEmbeddedRunSessionId(...args),
+vi.doMock("../../../src/sessions/session-controller.queries.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../src/sessions/session-controller.queries.js")>()),
+  resolveActiveSessionRunId: (...args: unknown[]) =>
+    embeddedAgentMocks.resolveActiveSessionRunId(...args),
 }));
 
 const providerUsageMocks = vi.hoisted(() => ({
@@ -172,7 +152,13 @@ const modelFallbackMocks = getSharedMocks("openclaw.trigger-handling.model-fallb
       model: string;
       run: (provider: string, model: string, runOptions?: unknown) => Promise<unknown>;
     }) => ({
-      result: await params.run(params.provider, params.model),
+      result: await params.run(params.provider, params.model, {
+        modelRoutingProvenance: {
+          requestedProvider: params.provider,
+          requestedModel: params.model,
+          stage: "initial",
+        },
+      }),
       provider: params.provider,
       model: params.model,
       attempts: [],
@@ -262,16 +248,8 @@ export async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise
     embeddedAgentMocks.runEmbeddedAgent.mockReset();
     embeddedAgentMocks.abortEmbeddedAgentRun.mockReset().mockReturnValue(false);
     embeddedAgentMocks.compactEmbeddedAgentSession.mockReset();
-    embeddedAgentMocks.queueEmbeddedAgentMessageWithOutcome
-      .mockReset()
-      .mockImplementation((sessionId: string) => ({
-        queued: false,
-        sessionId,
-        reason: "not_streaming",
-        gatewayHealth: "live",
-      }));
-    embeddedAgentMocks.isEmbeddedAgentRunActive.mockReset().mockReturnValue(false);
-    embeddedAgentMocks.isEmbeddedAgentRunStreaming.mockReset().mockReturnValue(false);
+    embeddedAgentMocks.isSessionRunActive.mockReset().mockReturnValue(false);
+    embeddedAgentMocks.isSessionNativeAttemptStreaming.mockReset().mockReturnValue(false);
     modelFallbackMocks.runWithModelFallback.mockClear();
     return await fn(home);
   } finally {

@@ -13,60 +13,54 @@ describe("resolveActiveRunQueueAction", () => {
         resolveActiveRunQueueAction({
           hasQueuedFollowups,
           isActive: false,
-          isHeartbeat: false,
+
           shouldFollowup: true,
         }),
       ).toBe(action);
     },
   );
 
-  it("drops heartbeat runs while another run is active", () => {
+  it("enqueues followups for active runs", () => {
     expect(
       resolveActiveRunQueueAction({
         isActive: true,
-        isHeartbeat: true,
-        shouldFollowup: true,
-      }),
-    ).toBe("drop");
-  });
 
-  it("enqueues followups for non-heartbeat active runs", () => {
-    expect(
-      resolveActiveRunQueueAction({
-        isActive: true,
-        isHeartbeat: false,
         shouldFollowup: true,
       }),
     ).toBe("enqueue-followup");
   });
 
-  it("runs reset-triggered turns immediately while another run is active", () => {
+  it("runs interrupts ahead of queued followups", () => {
     expect(
       resolveActiveRunQueueAction({
+        hasQueuedFollowups: true,
         isActive: true,
-        isHeartbeat: false,
-        shouldFollowup: true,
-        resetTriggered: true,
+        interrupt: true,
+
+        shouldFollowup: false,
       }),
     ).toBe("run-now");
   });
 
-  it("keeps heartbeat drops ahead of reset-triggered turns", () => {
+  it.each(["steer", "followup", "collect"] as const)(
+    "enqueues %s turns behind queued followups",
+    (mode) => {
+      expect(
+        resolveActiveRunQueueAction({
+          hasQueuedFollowups: true,
+          isActive: true,
+
+          shouldFollowup: mode === "steer" || mode === "followup" || mode === "collect",
+        }),
+      ).toBe("enqueue-followup");
+    },
+  );
+
+  it("runs reset-triggered turns immediately while another run is active", () => {
     expect(
       resolveActiveRunQueueAction({
         isActive: true,
-        isHeartbeat: true,
-        shouldFollowup: true,
-        resetTriggered: true,
-      }),
-    ).toBe("drop");
-  });
 
-  it("ignores reset-triggered policy when there is no active run", () => {
-    expect(
-      resolveActiveRunQueueAction({
-        isActive: false,
-        isHeartbeat: false,
         shouldFollowup: true,
         resetTriggered: true,
       }),

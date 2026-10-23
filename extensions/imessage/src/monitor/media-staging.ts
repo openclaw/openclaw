@@ -4,6 +4,7 @@ import type { ChannelInboundMediaInput } from "openclaw/plugin-sdk/channel-inbou
 import { readFileHandleBounded } from "openclaw/plugin-sdk/file-access-runtime";
 import { isInboundPathAllowed, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { FsSafeError, openLocalFileSafely } from "openclaw/plugin-sdk/security-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
@@ -12,13 +13,6 @@ import type { IMessageAttachment } from "./types.js";
 type StagedIMessageAttachments = {
   attachments: ChannelInboundMediaInput[];
   unavailableCount: number;
-};
-
-type StageIMessageAttachmentsDeps = {
-  saveMediaBuffer?: typeof saveMediaBuffer;
-  convertHeicToJpeg?: (sourcePath: string, maxBytes: number) => Promise<Buffer>;
-  openLocalFileSafely?: typeof openLocalFileSafely;
-  logVerbose?: (message: string) => void;
 };
 
 function createTypeOnlyIMessageAttachment(
@@ -42,9 +36,8 @@ async function readAttachmentBuffer(params: {
   mimeType?: string | null;
   maxBytes: number;
   allowedRoots?: readonly string[];
-  deps: StageIMessageAttachmentsDeps;
 }): Promise<{ buffer: Buffer; contentType?: string; originalFilename?: string }> {
-  await using opened = await (params.deps.openLocalFileSafely ?? openLocalFileSafely)({
+  await using opened = await openLocalFileSafely({
     filePath: params.attachmentPath,
   });
   if (opened.stat.size > params.maxBytes) {
@@ -80,19 +73,14 @@ async function readAttachmentBuffer(params: {
 
   if (isHeicAttachment(params.attachmentPath, params.mimeType)) {
     try {
-      const convert = params.deps.convertHeicToJpeg;
       const converted = await withTempWorkspace(
         { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-imessage-heic-" },
         async (workspace) => {
           const pinnedPath = await workspace.write("attachment.heic", buffer);
-          return convert
-            ? {
-                buffer: await convert(pinnedPath, params.maxBytes),
-              }
-            : await loadWebMedia(pinnedPath, {
-                maxBytes: params.maxBytes,
-                localRoots: [workspace.dir],
-              });
+          return await loadWebMedia(pinnedPath, {
+            maxBytes: params.maxBytes,
+            localRoots: [workspace.dir],
+          });
         },
       );
       return {
@@ -101,7 +89,7 @@ async function readAttachmentBuffer(params: {
         originalFilename: `${path.parse(params.attachmentPath).name || "imessage-attachment"}.jpg`,
       };
     } catch (err) {
-      params.deps.logVerbose?.(
+      logVerbose(
         `imessage: HEIC attachment conversion failed; staging original instead: ${String(err)}`,
       );
     }
@@ -119,11 +107,8 @@ export async function stageIMessageAttachments(
   params: {
     maxBytes: number;
     allowedRoots?: readonly string[];
-    deps?: StageIMessageAttachmentsDeps;
   },
 ): Promise<StagedIMessageAttachments> {
-  const deps = params.deps ?? {};
-  const save = deps.saveMediaBuffer ?? saveMediaBuffer;
   const staged: ChannelInboundMediaInput[] = [];
   let unavailableCount = 0;
 
@@ -141,9 +126,8 @@ export async function stageIMessageAttachments(
         mimeType: attachment.mime_type,
         maxBytes: params.maxBytes,
         allowedRoots: params.allowedRoots,
-        deps,
       });
-      const saved = await save(
+      const saved = await saveMediaBuffer(
         media.buffer,
         media.contentType,
         "inbound",
@@ -159,7 +143,7 @@ export async function stageIMessageAttachments(
     } catch (err) {
       unavailableCount += 1;
       staged.push(createTypeOnlyIMessageAttachment(attachment));
-      deps.logVerbose?.(`imessage: failed to stage inbound attachment: ${String(err)}`);
+      logVerbose(`imessage: failed to stage inbound attachment: ${String(err)}`);
     }
   }
 

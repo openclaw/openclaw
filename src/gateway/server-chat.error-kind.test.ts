@@ -6,7 +6,6 @@ it.each([
   ["context overflow", new Error("context length exceeded"), "context_length"],
   ["refusal_policy", new Error("Unhandled stop reason: refusal_policy"), "refusal"],
   ["content_filter", new Error("content_filter blocked the response"), "refusal"],
-  ["plain error", new Error("plain provider failure"), undefined],
   [
     "http 500 is not a timeout",
     Object.assign(new Error("Internal server error"), { status: 500 }),

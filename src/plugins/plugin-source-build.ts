@@ -22,8 +22,16 @@ export type PluginSourceFile = {
   generated?: true;
 };
 
+export type PluginSourceBuild = {
+  directory: string;
+  include: (additions: readonly string[]) => void;
+  resolve: (source: string, mode?: PluginSourceLoadMode, nativeFormat?: string | null) => string;
+  sourceForOutput: (file: string) => PluginSourceFile | undefined;
+  dispose: () => void;
+};
+
 /** Compile captured source into a private namespace; native files stay with their capture owner. */
-export function buildPluginTypeScriptSource(root: string) {
+export function buildPluginTypeScriptSource(root: string): PluginSourceBuild {
   if (!useNodeModuleHooks()) {
     throw new Error("Plugin source builds require Node module hooks");
   }
@@ -185,6 +193,7 @@ export function buildPluginTypeScriptSource(root: string) {
           `import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
 const modules = createRequire(import.meta.url).cache;
+const pendingImports = Symbol.for("openclaw.plugin.pendingImports");
 export const bindRequire = (nativeRequire) => {
   // Only resolution can retry; evaluation below always runs once through Node.
   const select = (specifier, options) => {
@@ -205,12 +214,26 @@ export const bindRequire = (nativeRequire) => {
   const resolve = (specifier, options) => select(specifier, options).resolved;
   return Object.assign(require, nativeRequire, { resolve: Object.assign(resolve, nativeRequire.resolve) });
 };
-export const importModule = async (specifier) => {
+export const importModule = async (importer, specifier) => {
   const resolved = import.meta.resolve(specifier);
+  const pending = importer[pendingImports] ??= new Set();
+  pending.add(resolved);
   const cached = modules[resolved];
-  const imported = cached
-    ? { "openclaw:async-commonjs": await cached.exports }
-    : await import(specifier);
+  const reachesImporter = (entry, seen = new Set()) => {
+    if (!entry || seen.has(entry)) return false;
+    if (entry === importer) return true;
+    seen.add(entry);
+    return [...(entry[pendingImports] ?? [])].some(url => reachesImporter(modules[url], seen));
+  };
+  let imported;
+  try {
+    // Partial exports break dependency cycles; concurrent callers must await initialization.
+    imported = cached && (cached.loaded || reachesImporter(cached))
+      ? { "openclaw:async-commonjs": await cached.exports }
+      : await import(specifier);
+  } finally {
+    pending.delete(resolved);
+  }
   if (new URL(resolved).pathname.endsWith(".json")) return imported.default;
   const namespace = Object.hasOwn(imported, "openclaw:async-commonjs")
     ? imported["openclaw:async-commonjs"] : imported;
@@ -277,7 +300,8 @@ export const resolve = (specifier, options) => {
           ${
             helper
               ? `require = require(${JSON.stringify(helper)}).bindRequire(require("node:module").createRequire(${JSON.stringify(pathToFileURL(input).href)}));
-          const { importModule: jitiImport, resolve: jitiESMResolve } = require(${JSON.stringify(helper)});
+          const { resolve: jitiESMResolve } = require(${JSON.stringify(helper)});
+          const jitiImport = require(${JSON.stringify(helper)}).importModule.bind(null, module);
           ${asynchronous ? "module.require = require;" : ""}`
               : ""
           }`);

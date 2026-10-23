@@ -8,26 +8,22 @@ import { requireNodeTool, stripNodeTypeScriptTypes } from "../../test/helpers/no
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
 const temp = useAutoCleanupTempDirTracker(afterAll);
+const read = (file: string) => fs.readFile(file, "utf8");
 let directory: string;
 beforeAll(async () => {
   directory = temp.make("openclaw-command-settlement-");
-  const source = await fs.readFile(path.resolve("src/process/exec-termination.ts"), "utf8");
-  const owner = stripNodeTypeScriptTypes(source).replace(
+  const owner = stripNodeTypeScriptTypes(await read("src/process/exec-termination.ts")).replace(
     /from "(\.\.?\/[^"\n]+)"/g,
     'from "./dependencies.mjs"',
   );
-  const retry = transformSync(
-    await fs.readFile(path.resolve("packages/retry/src/index.ts"), "utf8"),
-    {
-      loader: "ts",
-      target: "esnext",
-      format: "esm",
-    },
-  ).code;
+  const retry = transformSync(await read("packages/retry/src/index.ts"), {
+    loader: "ts",
+    target: "esnext",
+    format: "esm",
+  }).code;
   await fs.writeFile(path.join(directory, "retry.mjs"), retry);
-  const sleepSource = await fs.readFile(path.resolve("src/utils/sleep.ts"), "utf8");
   // Keep the real timer owner so an unref regression still lets the child exit early.
-  const sleep = stripNodeTypeScriptTypes(sleepSource).replace(
+  const sleep = stripNodeTypeScriptTypes(await read("src/utils/sleep.ts")).replace(
     /from "([^"\n]+)"/g,
     (_match, specifier: string) =>
       `from ${JSON.stringify(
@@ -36,12 +32,13 @@ beforeAll(async () => {
           : import.meta.resolve(specifier),
       )}`,
   );
-  await fs.writeFile(path.join(directory, "owner.mjs"), owner);
-  await fs.writeFile(
-    path.join(directory, "dependencies.mjs"),
-    `
+  const modules = {
+    "owner.mjs": owner,
+    "dependencies.mjs": `
 ${sleep}
 export const COMMAND_PROCESS_TREE_KILL_GRACE_MS = 300;
+export const COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS = 10_000;
+export const waitForCommandProcessGroupExit = () => { throw new Error('unexpected POSIX observation'); };
 export const getWindowsSystem32ExePath = () => 'taskkill.exe';
 export const getFileLockProcessStartTime = () => { throw new Error('unexpected POSIX identity'); };
 export const isChildProcessTreeAlive = () => { throw new Error('unexpected POSIX group'); };
@@ -54,8 +51,7 @@ export const requests = [];
 export function bind(value, reject) { child = value; failure = reject; }
 export async function spawnCommand(args) {
   requests.push(args);
-  // Child exit and helper completion are inputs from the process backend.
-  // Their completion leaves no referenced native handle in this fresh Node process.
+  // Simulate backend completion without retaining a native handle.
   await Promise.resolve();
   child.exitCode = 0;
   completedHelpers++;
@@ -63,10 +59,7 @@ export async function spawnCommand(args) {
   return { exitCode: 0 };
 }
 `,
-  );
-  await fs.writeFile(
-    path.join(directory, "driver.mjs"),
-    `
+    "driver.mjs": `
 import * as backend from './dependencies.mjs';
 Object.defineProperty(process, 'platform', { value: 'win32' });
 const { createCommandTerminationController } = await import('./owner.mjs');
@@ -84,7 +77,10 @@ const outcome = await owner.settle();
 console.log(JSON.stringify({ outcome, completedHelpers: backend.completedHelpers,
   requests: backend.requests, cancelled: cancellation.signal.aborted }));
 `,
-  );
+  };
+  for (const [name, content] of Object.entries(modules)) {
+    await fs.writeFile(path.join(directory, name), content);
+  }
 });
 
 it.each([

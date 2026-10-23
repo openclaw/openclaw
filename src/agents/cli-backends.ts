@@ -6,9 +6,12 @@ import {
   resolvePluginSetupCliBackend,
   resolvePluginSetupRegistry,
 } from "../plugins/setup-registry.js";
-import { resolveRuntimeTextTransforms } from "../plugins/text-transforms.runtime.js";
 import type { CliBackendNormalizeConfigContext, CliBackendPlugin } from "../plugins/types.js";
 import { mergePluginTextTransforms } from "./plugin-text-transforms.js";
+import {
+  resolveProviderIdForAuth,
+  type ProviderAuthAliasLookupParams,
+} from "./provider-auth-aliases.js";
 
 export type ResolvedCliBackend = Pick<
   CliBackendPlugin,
@@ -28,9 +31,9 @@ export type ResolvedCliBackend = Pick<
   | "resolveExecutionArgs"
   | "resolveModelId"
   | "parseJsonlEvent"
+  | "classifyErrorCode"
   | "parseJsonlLifecycleEvent"
   | "toolAvailabilityEnforcement"
-  | "isolatesInstructionsWithExactTools"
   | "projectNativeToolAuthority"
   | "nativeToolMode"
   | "hostOwnedTools"
@@ -53,6 +56,48 @@ type CliRuntimeModelBackendBinding = {
   provider: string;
   runtime: string;
 };
+
+/** Match a profile's declared provider to a CLI binding without reading credential stores. */
+export function resolveCliRuntimeProfileAlias(params: {
+  cfg?: OpenClawConfig;
+  metadataSnapshot?: ProviderAuthAliasLookupParams["metadataSnapshot"];
+  provider: string;
+  profileProvider: string | undefined;
+}): string | undefined {
+  const provider = normalizeProviderId(params.provider);
+  const profileProvider = normalizeProviderId(params.profileProvider ?? "");
+  if (!provider || !profileProvider || profileProvider === provider) {
+    return undefined;
+  }
+  const authParams = { config: params.cfg, metadataSnapshot: params.metadataSnapshot };
+  if (
+    resolveProviderIdForAuth(provider, authParams) !==
+    resolveProviderIdForAuth(profileProvider, { ...authParams, storedCredential: true })
+  ) {
+    return undefined;
+  }
+  return resolveCliRuntimeModelBackendBinding({
+    config: params.cfg,
+    provider,
+    runtime: profileProvider,
+  })?.runtime;
+}
+
+/** Exact caps require both a selectable tool surface and its declared execution adapter. */
+export function cliBackendSupportsExactToolAvailability(
+  backend: Pick<
+    CliBackendPlugin,
+    "nativeToolMode" | "toolAvailabilityEnforcement" | "resolveExecutionArgs" | "prepareExecution"
+  >,
+): boolean {
+  return (
+    backend.nativeToolMode === "selectable" &&
+    ((backend.toolAvailabilityEnforcement === "execution-args" &&
+      backend.resolveExecutionArgs !== undefined) ||
+      (backend.toolAvailabilityEnforcement === "prepare-execution" &&
+        backend.prepareExecution !== undefined))
+  );
+}
 
 function resolveCliBackendModelProvider(
   backend: Pick<CliBackendPlugin, "modelProvider">,
@@ -117,6 +162,29 @@ export function listCliRuntimeProviderIds(
   ].toSorted();
 }
 
+function resolveCliRuntimeBinding(
+  runtime: string,
+  provider: string | undefined,
+  resolveSetup: () => ReturnType<typeof resolvePluginSetupCliBackend>,
+): CliRuntimeModelBackendBinding | undefined {
+  if (!runtime) {
+    return undefined;
+  }
+  const matchesProvider = (candidate: string) =>
+    provider === undefined || candidate === provider || runtime === provider;
+  const runtimeBinding = listCliRuntimeModelBackendBindings().find(
+    (binding) => binding.runtime === runtime && matchesProvider(binding.provider),
+  );
+  if (runtimeBinding) {
+    return runtimeBinding;
+  }
+  const setupBackend = resolveSetup();
+  const setupProvider = setupBackend && resolveCliBackendModelProvider(setupBackend.backend);
+  return setupProvider && matchesProvider(setupProvider)
+    ? { provider: setupProvider, runtime }
+    : undefined;
+}
+
 export function resolveCliRuntimeCanonicalProvider(params: {
   runtime: string | undefined;
   config?: OpenClawConfig;
@@ -125,25 +193,16 @@ export function resolveCliRuntimeCanonicalProvider(params: {
   metadataSnapshot?: PluginMetadataSnapshot | null;
 }): string | undefined {
   const runtime = normalizeProviderId(params.runtime ?? "");
-  if (!runtime) {
-    return undefined;
-  }
-  const runtimeBinding = listCliRuntimeModelBackendBindings().find(
-    (binding) => binding.runtime === runtime,
-  );
-  if (runtimeBinding) {
-    return runtimeBinding.provider;
-  }
-  if (params.includeSetupRegistry !== true || params.metadataSnapshot === null) {
-    return undefined;
-  }
-  const setupBackend = resolvePluginSetupCliBackend({
-    backend: runtime,
-    config: params.config,
-    env: params.env,
-    metadataSnapshot: params.metadataSnapshot,
-  });
-  return setupBackend ? resolveCliBackendModelProvider(setupBackend.backend) : undefined;
+  return resolveCliRuntimeBinding(runtime, undefined, () =>
+    params.includeSetupRegistry === true && params.metadataSnapshot !== null
+      ? resolvePluginSetupCliBackend({
+          backend: runtime,
+          config: params.config,
+          env: params.env,
+          metadataSnapshot: params.metadataSnapshot,
+        })
+      : undefined,
+  )?.provider;
 }
 
 export function resolveCliRuntimeModelBackendBinding(params: {
@@ -156,30 +215,11 @@ export function resolveCliRuntimeModelBackendBinding(params: {
   if (!provider || !runtime) {
     return undefined;
   }
-  const runtimeBinding = listCliRuntimeModelBackendBindings().find(
-    (binding) =>
-      binding.runtime === runtime && (binding.provider === provider || runtime === provider),
+  return resolveCliRuntimeBinding(runtime, provider, () =>
+    params.config === undefined
+      ? undefined
+      : resolvePluginSetupCliBackend({ backend: runtime, config: params.config }),
   );
-  if (runtimeBinding) {
-    return runtimeBinding;
-  }
-  if (params.config === undefined) {
-    return undefined;
-  }
-  const setupBackend = resolvePluginSetupCliBackend({
-    backend: runtime,
-    config: params.config,
-  });
-  if (!setupBackend) {
-    return undefined;
-  }
-  const setupProvider = resolveCliBackendModelProvider(setupBackend.backend);
-  return setupProvider && (setupProvider === provider || runtime === provider)
-    ? {
-        provider: setupProvider,
-        runtime,
-      }
-    : undefined;
 }
 
 export function isCliRuntimeModelBackendForProvider(params: {
@@ -225,7 +265,6 @@ export function resolveCliBackendConfig(
     ...(options.agentId ? { agentId: options.agentId } : {}),
     ...(cfg ? { config: cfg } : {}),
   };
-  const runtimeTextTransforms = resolveRuntimeTextTransforms();
   const registered = resolveRuntimeCliBackends().find(
     (entry) => normalizeProviderId(entry.id) === normalized,
   );
@@ -251,7 +290,7 @@ export function resolveCliBackendConfig(
     bundleMcpMode: bundleMcp ? (backend.bundleMcpMode ?? "claude-config-file") : undefined,
     ...(registered ? { pluginId: registered.pluginId } : {}),
     transformSystemPrompt: backend.transformSystemPrompt,
-    textTransforms: mergePluginTextTransforms(runtimeTextTransforms, backend.textTransforms),
+    textTransforms: mergePluginTextTransforms(backend.textTransforms),
     defaultAuthProfileId: backend.defaultAuthProfileId,
     authEpochMode: backend.authEpochMode,
     autoSelectAuthProfile: backend.autoSelectAuthProfile,
@@ -262,9 +301,9 @@ export function resolveCliBackendConfig(
     resolveExecutionArgs: backend.resolveExecutionArgs,
     resolveModelId: backend.resolveModelId,
     parseJsonlEvent: backend.parseJsonlEvent,
+    classifyErrorCode: backend.classifyErrorCode,
     parseJsonlLifecycleEvent: backend.parseJsonlLifecycleEvent,
     toolAvailabilityEnforcement: backend.toolAvailabilityEnforcement,
-    isolatesInstructionsWithExactTools: backend.isolatesInstructionsWithExactTools,
     projectNativeToolAuthority: backend.projectNativeToolAuthority,
     nativeToolMode: backend.nativeToolMode,
     hostOwnedTools: backend.hostOwnedTools,

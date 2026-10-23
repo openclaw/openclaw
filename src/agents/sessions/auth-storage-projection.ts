@@ -97,21 +97,16 @@ export function applyAuthStorageData(
     const profileId = `${provider}:default`;
     const existing = profiles[profileId];
     if (
-      credential.type === "api_key" &&
-      existing?.type === "api_key" &&
-      existing.keyRef &&
-      materializedBaseline[provider]?.type === "api_key" &&
-      materializedBaseline[provider].key === credential.key
-    ) {
-      profiles[profileId] = existing;
-      continue;
-    }
-    if (
-      credential.type === "token" &&
-      existing?.type === "token" &&
-      existing.tokenRef &&
-      materializedBaseline[provider]?.type === "token" &&
-      materializedBaseline[provider].token === credential.token
+      (credential.type === "api_key" &&
+        existing?.type === "api_key" &&
+        existing.keyRef &&
+        materializedBaseline[provider]?.type === "api_key" &&
+        materializedBaseline[provider].key === credential.key) ||
+      (credential.type === "token" &&
+        existing?.type === "token" &&
+        existing.tokenRef &&
+        materializedBaseline[provider]?.type === "token" &&
+        materializedBaseline[provider].token === credential.token)
     ) {
       profiles[profileId] = existing;
       continue;

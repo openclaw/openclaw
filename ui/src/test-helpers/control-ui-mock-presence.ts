@@ -54,9 +54,9 @@ export function createControlUiMockPresence(
         user: {
           id: user.id,
           ...(user.identity ? { identity: user.identity } : {}),
-          name: user.name ?? null,
-          email: user.email ?? null,
-          avatarUrl: user.avatarUrl ?? null,
+          name: user.name ?? undefined,
+          email: user.email ?? undefined,
+          avatarUrl: user.avatarUrl ?? undefined,
         },
         watchedSessions: user.watchedSessions ?? [],
       })),
@@ -66,6 +66,28 @@ export function createControlUiMockPresence(
   const self = scenario.presenceUsers.find((user) => user.self);
   return {
     snapshot,
+    eventFrame(
+      client: { hasCapability: (capability: string) => boolean },
+      event: string,
+      payload: unknown,
+      seq: number,
+    ) {
+      // Full-roster fixture inputs still use the negotiated presence wire format.
+      const wirePayload =
+        event === "presence" &&
+        client.hasCapability("presence-deltas") &&
+        isRecord(payload) &&
+        Array.isArray(payload.presence) &&
+        !("version" in payload)
+          ? {
+              reset: true,
+              version: seq,
+              presence: payload.presence,
+              keys: payload.presence.map((_, index) => `mock-presence-${index}`),
+            }
+          : payload;
+      return { event, payload: wirePayload, seq, type: "event" };
+    },
     actor: { type: "human" as const, id: self?.id ?? "profile-1", label: self?.name ?? "You" },
   };
 }

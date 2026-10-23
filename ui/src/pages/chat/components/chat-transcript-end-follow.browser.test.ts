@@ -1,15 +1,16 @@
-import { LitElement, html } from "lit";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished } from "vitest";
 import { page } from "vitest/browser";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
-import { ChatTranscriptController } from "./chat-transcript-controller.ts";
+import { saveChatSessionScrollPosition } from "../scroll.ts";
+import { TranscriptTestHost } from "../test-helpers/chat-transcript-native.tsx";
+import { createChatTranscript } from "./chat-transcript-controller.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import { subscribeTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 
-class EndFollowFixture extends LitElement {
+class EndFollowFixture extends TranscriptTestHost {
   followEnabled = true;
-  readonly transcript = new ChatTranscriptController(this, () => "end-follow-browser", {
+  override readonly transcript = createChatTranscript(() => "end-follow-browser", {
     canFollowEnd: () => this.followEnabled,
   });
   viewportHeight = 400;
@@ -17,45 +18,57 @@ class EndFollowFixture extends LitElement {
   earlierRowHeight = 400;
   lastRowHeight = 900;
 
-  protected override createRenderRoot() {
-    return this;
+  private readonly viewport = document.createElement("div");
+  private readonly thread = document.createElement("div");
+  private readonly earlier = document.createElement("div");
+  private readonly last = document.createElement("div");
+  private readonly dock = document.createElement("div");
+  private readonly content = [this.viewport, this.dock];
+  private appliedEarlierRowHeight: number | undefined;
+  private appliedLastRowHeight: number | undefined;
+
+  constructor() {
+    super();
+    this.viewport.className = "chat-thread-viewport";
+    this.thread.className = "chat-thread";
+    this.thread.style.overflowAnchor = "none";
+    this.viewport.append(this.thread);
+    this.earlier.textContent = "Earlier";
+    this.last.textContent = "Growing run";
+    this.dock.className = "chat-prs";
+    this.dock.style.cssText = "position: relative; height: 38px; margin-top: -38px";
+    this.dock.textContent = "Pull request";
   }
 
-  protected override render() {
+  override renderTranscript = () => {
+    this.viewport.style.cssText = `height: ${this.viewportHeight}px; flex: none; padding: 0 0 ${this.viewportPadding}px`;
+    // Preserve intrinsic DOM growth when only the controller requests a render.
+    if (this.appliedEarlierRowHeight !== this.earlierRowHeight) {
+      this.earlier.style.height = `${this.earlierRowHeight}px`;
+      this.appliedEarlierRowHeight = this.earlierRowHeight;
+    }
+    if (this.appliedLastRowHeight !== this.lastRowHeight) {
+      this.last.style.height = `${this.lastRowHeight}px`;
+      this.appliedLastRowHeight = this.lastRowHeight;
+    }
     const rows: TranscriptRow[] = [
-      {
-        kind: "content",
-        key: "earlier",
-        content: html`<div style=${`height: ${this.earlierRowHeight}px`}>Earlier</div>`,
-      },
-      {
-        kind: "content",
-        key: "growing-run",
-        content: html`<div style=${`height: ${this.lastRowHeight}px`}>Growing run</div>`,
-      },
+      { kind: "content", key: "earlier", content: this.earlier },
+      { kind: "content", key: "growing-run", content: this.last },
     ];
-    return html`
-      <div
-        class="chat-thread-viewport"
-        style=${`height: ${this.viewportHeight}px; flex: none; padding: 0 0 ${this.viewportPadding}px`}
-      >
-        <div class="chat-thread" style="overflow-anchor: none">
-          ${this.transcript.renderSession("agent:main:end-follow", (session) => {
-            session.setContentReady(true);
-            return session.render(
-              rows,
-              (row) => (row.kind === "content" ? row.content : null),
-              null,
-              false,
-            );
-          })}
-        </div>
-      </div>
-      <div class="chat-prs" style="position: relative; height: 38px; margin-top: -38px">
-        Pull request
-      </div>
-    `;
-  }
+    const content = this.transcript.renderSession("agent:main:end-follow", (session) => {
+      session.setContentReady(true);
+      return session.render(
+        rows,
+        (row) => (row.kind === "content" ? row.content : null),
+        null,
+        false,
+      );
+    });
+    if (content.parentElement !== this.thread) {
+      this.thread.replaceChildren(content);
+    }
+    return this.content;
+  };
 }
 customElements.define("test-transcript-end-follow", EndFollowFixture);
 
@@ -73,8 +86,12 @@ afterEach(() => {
   expect(browserErrors).toEqual([]);
 });
 
-async function mountEndFollowFixture() {
+async function mountEndFollowFixture(savedOffset?: number) {
   await page.viewport(1200, 900);
+  saveChatSessionScrollPosition("end-follow-browser", "agent:main:end-follow", {
+    scrollTop: savedOffset ?? 0,
+    anchorToEnd: savedOffset === undefined,
+  });
   const host = new EndFollowFixture();
   fixture = host;
   host.style.cssText = "display: block; width: 800px";
@@ -89,21 +106,131 @@ async function mountEndFollowFixture() {
   return { host, thread, row, extent, dock, distance };
 }
 
+async function mountFollowingFixture() {
+  const view = await mountEndFollowFixture();
+  view.host.transcript.scrollToEnd();
+  await expect.poll(view.distance).toBe(0);
+  await settleFrames();
+  return view;
+}
+
 async function settleFrames() {
   await new Promise<void>((resolve) => {
     requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
   });
 }
 
+it.each([true, false])(
+  "preserves footer-only resize intent while following: %s",
+  async (following) => {
+    const { host, thread } = following
+      ? await mountFollowingFixture()
+      : await mountEndFollowFixture(200);
+    host.followEnabled = following;
+    if (!following) {
+      await expect.poll(() => thread.scrollTop).toBe(200);
+    }
+    const before = thread.scrollTop;
+    // An asynchronously resized footer changes padding without rendering transcript rows.
+    host.viewportPadding = 69;
+    thread.parentElement!.style.paddingBottom = "69px";
+    await expect.poll(() => thread.style.paddingBottom).toBe("69px");
+    await settleFrames();
+    expect(thread.scrollTop).toBe(following ? before + 9 : before);
+  },
+);
+
+async function resizeViewport(host: EndFollowFixture, thread: HTMLElement, height: number) {
+  host.viewportHeight = height;
+  host.requestRender();
+  await expect.poll(() => thread.clientHeight).toBe(height);
+}
+
+async function growLastRow(host: EndFollowFixture, extent: HTMLElement) {
+  host.lastRowHeight += 48;
+  host.requestRender();
+  await expect.poll(() => extent.offsetHeight).toBe(1348);
+  await settleFrames();
+}
+
+function departAndClamp(host: EndFollowFixture, thread: HTMLElement) {
+  host.followEnabled = false;
+  thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -32 }));
+  thread.scrollTop -= 32;
+  host.viewportHeight = 600;
+}
+
 async function commitTask(host: EndFollowFixture, change: () => void) {
   await new Promise<void>((resolve) => {
     setTimeout(() => {
       change();
-      host.requestUpdate();
+      host.requestRender();
       void host.updateComplete.then(() => resolve());
     }, 0);
   });
 }
+
+// A measured extent can commit before its corrective scroll is delivered. Wait
+// for that native event and the observer's receipt-retirement frame, not a fixed
+// number of frames counted from the earlier DOM commit.
+async function commitScrollTask(
+  host: EndFollowFixture,
+  thread: HTMLElement,
+  target: number,
+  change: () => void,
+) {
+  const listener = new AbortController();
+  let frame: number | undefined;
+  const scrolled = new Promise<void>((resolve) => {
+    thread.addEventListener(
+      "scroll",
+      () => {
+        if (thread.scrollTop === target) {
+          frame = requestAnimationFrame(() => resolve());
+        }
+      },
+      { signal: listener.signal },
+    );
+  });
+  try {
+    await commitTask(host, change);
+    await scrolled;
+  } finally {
+    listener.abort();
+    if (frame !== undefined) {
+      cancelAnimationFrame(frame);
+    }
+  }
+}
+
+it("paints a saved reader only after its measured range and offset commit together", async () => {
+  const visible: Array<{ top: number; height: number }> = [];
+  let frame = 0;
+  const frames = new Promise<void>((resolve) => {
+    let count = 0;
+    const sample = () => {
+      const thread = fixture?.querySelector<HTMLElement>(".chat-thread");
+      const extent = thread?.querySelector<HTMLElement>(".chat-thread-inner--virtual");
+      if (thread && extent && getComputedStyle(extent).visibility !== "hidden") {
+        visible.push({ top: thread.scrollTop, height: extent.offsetHeight });
+      }
+      if (++count < 24 || visible.length === 0) {
+        frame = requestAnimationFrame(sample);
+      } else {
+        resolve();
+      }
+    };
+    frame = requestAnimationFrame(sample);
+  });
+  onTestFinished(() => cancelAnimationFrame(frame));
+  await mountEndFollowFixture(400);
+  await frames;
+  expect(visible.length).toBeGreaterThan(0);
+  expect(
+    visible.every(({ top, height }) => top === 400 && height === 1300),
+    JSON.stringify(visible),
+  ).toBe(true);
+});
 
 it.each(["requested", "smooth no-op", "native observation"] as const)(
   "preserves the %s end through same-key row measurement growth",
@@ -134,13 +261,13 @@ it.each(["requested", "smooth no-op", "native observation"] as const)(
       await expect.poll(distance).toBe(0);
       if (acquisition === "native observation") {
         await settleFrames();
-        expect(host.transcript.isProgrammaticScroll).toBe(false);
+        await expect.poll(() => host.transcript.isProgrammaticScroll).toBe(false);
       }
     }
 
     const previousMax = thread.scrollHeight - thread.clientHeight;
     const growth = acquisition === "smooth no-op" ? 35 : 48;
-    await commitTask(host, () => {
+    await commitScrollTask(host, thread, previousMax + growth, () => {
       // Reconciliation precedes the observer's measured-extent commit.
       if (acquisition === "requested") {
         host.transcript.scrollToEnd({ behavior: "auto" });
@@ -148,11 +275,10 @@ it.each(["requested", "smooth no-op", "native observation"] as const)(
       host.lastRowHeight += growth;
     });
     await expect.poll(() => extent.offsetHeight).toBe(1300 + growth);
-    await settleFrames();
-    expect(distance()).toBe(0);
     if (acquisition !== "smooth no-op") {
-      expect(host.transcript.isProgrammaticScroll).toBe(false);
+      await expect.poll(() => host.transcript.isProgrammaticScroll).toBe(false);
     }
+    expect(distance()).toBe(0);
     if (acquisition === "requested") {
       expect(thread.scrollHeight - thread.clientHeight - previousMax).toBe(48);
       expect(
@@ -165,10 +291,7 @@ it.each(["requested", "smooth no-op", "native observation"] as const)(
 it.each([null, 400, 380])(
   "preserves native reader departure through growth or a deferred %s px viewport commit",
   async (viewportHeight) => {
-    const { host, thread, extent, distance } = await mountEndFollowFixture();
-    host.transcript.scrollToEnd();
-    await expect.poll(distance).toBe(0);
-    await settleFrames();
+    const { host, thread, extent, distance } = await mountFollowingFixture();
     const previousEnd = thread.scrollTop;
     if (viewportHeight === null) {
       expect(host.transcript.isProgrammaticScroll).toBe(false);
@@ -203,17 +326,14 @@ it.each([null, 400, 380])(
 );
 
 it.each([
-  { deltaY: 120, follows: true, earlierGrowth: 0 },
-  { deltaY: -120, follows: false, earlierGrowth: 0 },
-  { deltaY: 120, follows: true, earlierGrowth: 11 },
-  { deltaY: -120, follows: false, earlierGrowth: 11 },
+  [120, 0],
+  [-120, 0],
+  [120, 11],
+  [-120, 11],
 ])(
-  "preserves wheel intent through late growth ($deltaY, $earlierGrowth px above the viewport)",
-  async ({ deltaY, follows, earlierGrowth }) => {
-    const { host, thread, extent, row, dock, distance } = await mountEndFollowFixture();
-    host.transcript.scrollToEnd();
-    await expect.poll(distance).toBe(0);
-    await settleFrames();
+  "preserves wheel intent through late growth (%i, %i px above the viewport)",
+  async (deltaY, earlierGrowth) => {
+    const { host, thread, extent, row, dock, distance } = await mountFollowingFixture();
 
     // Intrinsic growth must trigger its own measured-range commit. Growth above
     // the viewport also queues compensation clamped by the still-old range.
@@ -228,8 +348,8 @@ it.each([
     });
     await expect.poll(() => extent.offsetHeight).toBe(1500 + earlierGrowth);
     await settleFrames();
-    expect(distance()).toBe(follows ? 0 : 200);
-    if (follows) {
+    expect(distance()).toBe(deltaY > 0 ? 0 : 200);
+    if (deltaY > 0) {
       expect(row.getBoundingClientRect().bottom).toBeLessThanOrEqual(
         dock.getBoundingClientRect().top,
       );
@@ -238,16 +358,8 @@ it.each([
 );
 
 it("does not turn a resize-clamped reader into permission to follow", async () => {
-  const { host, thread, extent, distance } = await mountEndFollowFixture();
-  host.transcript.scrollToEnd();
-  await expect.poll(distance).toBe(0);
-  await settleFrames();
-  await commitTask(host, () => {
-    host.followEnabled = false;
-    thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -32 }));
-    thread.scrollTop -= 32;
-    host.viewportHeight = 600;
-  });
+  const { host, thread, extent, distance } = await mountFollowingFixture();
+  await commitTask(host, () => departAndClamp(host, thread));
   await expect.poll(distance).toBe(0);
   const clamped = thread.scrollTop;
   expect(host.transcript.scrollToEnd({ source: "auto" })).toBe(false);
@@ -264,34 +376,30 @@ it("does not turn a resize-clamped reader into permission to follow", async () =
 });
 
 it("preserves compensation provenance for later native scroll listeners", async () => {
-  const { host, thread, extent, distance } = await mountEndFollowFixture();
-  host.transcript.scrollToEnd();
-  await expect.poll(distance).toBe(0);
-  await settleFrames();
+  const { host, thread, extent, distance } = await mountFollowingFixture();
   const readerIdle = new Promise<void>((resolve) => {
-    let moved = false;
+    let sawScrolling = false;
     const unsubscribe = subscribeTranscriptScroll(thread, (observation) => {
-      if (observation.type !== "offset") {
+      // Startup scrolling cannot establish that the later resize clamp is idle.
+      if (observation.type !== "offset" || thread.clientHeight !== 600 || distance() !== 0) {
         return;
       }
-      moved ||= observation.scrolling && observation.delta !== 0;
-      if (moved && !observation.scrolling) {
+      // The clamp receipt can consume the delta before the native observation.
+      sawScrolling ||= observation.scrolling;
+      if (sawScrolling && !observation.scrolling) {
         unsubscribe();
         resolve();
       }
     });
   });
-  await commitTask(host, () => {
-    host.followEnabled = false;
-    thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -32 }));
-    thread.scrollTop -= 32;
-    host.viewportHeight = 600;
-  });
+  await commitTask(host, () => departAndClamp(host, thread));
   await readerIdle;
+  await expect.poll(() => thread.clientHeight).toBe(600);
   await expect.poll(distance).toBe(0);
   await settleFrames();
   expect(host.transcript.isProgrammaticScroll).toBe(false);
 
+  const expectedOffset = thread.scrollTop + 48;
   const observations: Array<{ trusted: boolean; programmatic: boolean }> = [];
   // Mount already installed the offset observer. Native dispatch has no outer
   // JavaScript stack, so microtasks may run before this later listener.
@@ -301,70 +409,61 @@ it("preserves compensation provenance for later native scroll listeners", async 
       programmatic: host.transcript.isProgrammaticScroll,
     });
   });
-  await commitTask(host, () => {
+  await commitScrollTask(host, thread, expectedOffset, () => {
     host.earlierRowHeight += 48;
   });
   await expect.poll(() => extent.offsetHeight).toBe(1348);
-  await expect.poll(() => observations.length).toBeGreaterThan(0);
+  expect(observations.length).toBeGreaterThan(0);
   expect(observations[0]).toEqual({ trusted: true, programmatic: true });
   thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -1 }));
   expect(host.transcript.isProgrammaticScroll).toBe(false);
 });
 
 it.each([
-  { readerMovement: 0, beforeClamp: false },
-  { readerMovement: 8, beforeClamp: false },
-  { readerMovement: 8, beforeClamp: true },
-])(
-  "preserves layout clamps versus $readerMovement px reader movement (before clamp: $beforeClamp)",
-  async ({ readerMovement, beforeClamp }) => {
-    const { host, thread, extent, distance } = await mountEndFollowFixture();
-    host.transcript.scrollToEnd();
-    await expect.poll(distance).toBe(0);
-    await settleFrames();
+  [0, false],
+  [8, false],
+  [8, true],
+] as const)(
+  "preserves layout clamps versus %i px reader movement (before clamp: %s)",
+  async (readerMovement, beforeClamp) => {
+    const { host, thread, extent } = await mountFollowingFixture();
     const original = thread.scrollTop;
     if (beforeClamp) {
       thread.scrollTop -= readerMovement;
     }
 
-    host.viewportHeight = 500;
-    host.requestUpdate();
-    await expect.poll(() => thread.clientHeight).toBe(500);
+    await resizeViewport(host, thread, 500);
     expect(thread.scrollTop).toBe(original - 100);
     if (!beforeClamp) {
       thread.scrollTop -= readerMovement;
     }
     const readerPosition = thread.scrollTop;
 
-    host.viewportHeight = 400;
-    host.requestUpdate();
-    await expect.poll(() => thread.clientHeight).toBe(400);
+    await resizeViewport(host, thread, 400);
     await settleFrames();
     expect(thread.scrollTop).toBe(readerMovement ? readerPosition : original);
 
-    host.lastRowHeight += 48;
-    host.requestUpdate();
-    await expect.poll(() => extent.offsetHeight).toBe(1348);
-    await settleFrames();
+    await growLastRow(host, extent);
     expect(thread.scrollTop).toBe(readerMovement ? readerPosition : original + 48);
   },
 );
 
 it.each([
-  { behavior: "auto", fromEnd: true },
-  { behavior: "auto", fromEnd: false },
-  { behavior: "smooth", fromEnd: true },
-  { behavior: "smooth", fromEnd: false },
+  ["auto", true],
+  ["auto", false],
+  ["smooth", true],
+  ["smooth", false],
 ] as const)(
-  "preserves a departed reader through clamped idle ($behavior, starts at end: $fromEnd)",
-  async ({ behavior, fromEnd }) => {
+  "preserves a departed reader through clamped idle (%s, starts at end: %s)",
+  async (behavior, fromEnd) => {
     const { host, thread, extent, distance } = await mountEndFollowFixture();
     if (fromEnd) {
       host.transcript.scrollToEnd({ behavior });
       await expect.poll(distance).toBe(0);
     } else {
-      thread.scrollTop = 0;
-      await settleFrames();
+      await new Promise<void>((resolve) => {
+        host.transcript.scrollToOffset(0, () => resolve());
+      });
       let arrived = false;
       const stop = subscribeTranscriptScroll(thread, (event) => {
         if (event.type === "offset" && event.scrolling && distance() === 0) {
@@ -375,10 +474,7 @@ it.each([
         host.transcript.scrollToEnd({ behavior });
         await expect
           .poll(() => ({ arrived, distance: distance() }))
-          .toEqual({
-            arrived: true,
-            distance: 0,
-          });
+          .toEqual({ arrived: true, distance: 0 });
       } finally {
         stop();
       }
@@ -395,23 +491,16 @@ it.each([
     });
     try {
       thread.scrollTop -= 8;
-      host.viewportHeight = 500;
-      host.requestUpdate();
-      await expect.poll(() => thread.clientHeight).toBe(500);
+      await resizeViewport(host, thread, 500);
       expect(thread.scrollTop).toBe(original - 100);
       const readerPosition = thread.scrollTop;
       // The existing native observer must settle while layout holds the reader
       // at a temporary end, not after the original viewport has returned.
       await expect.poll(() => idleAtClamp).toBe(true);
-      host.viewportHeight = 400;
-      host.requestUpdate();
-      await expect.poll(() => thread.clientHeight).toBe(400);
+      await resizeViewport(host, thread, 400);
       await settleFrames();
       expect(thread.scrollTop).toBe(readerPosition);
-      host.lastRowHeight += 48;
-      host.requestUpdate();
-      await expect.poll(() => extent.offsetHeight).toBe(1348);
-      await settleFrames();
+      await growLastRow(host, extent);
       expect(thread.scrollTop).toBe(readerPosition);
     } finally {
       unsubscribe();
@@ -420,10 +509,7 @@ it.each([
 );
 
 it("does not expose unmeasured intrinsic overflow as an independent scroll range", async () => {
-  const { host, thread, row, extent, distance } = await mountEndFollowFixture();
-  host.transcript.scrollToEnd();
-  await expect.poll(distance).toBe(0);
-  await settleFrames();
+  const { host, thread, row, extent, distance } = await mountFollowingFixture();
   const original = thread.scrollTop;
   const range = thread.scrollHeight;
   const body = row.firstElementChild;
@@ -437,7 +523,7 @@ it("does not expose unmeasured intrinsic overflow as an independent scroll range
   expect(thread.scrollTop).toBe(original);
   thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
   host.lastRowHeight = 1100;
-  host.requestUpdate();
+  host.requestRender();
   await expect.poll(() => extent.offsetHeight).toBe(1500);
   await settleFrames();
   expect(thread.scrollTop).toBe(original);
@@ -445,14 +531,11 @@ it("does not expose unmeasured intrinsic overflow as an independent scroll range
 });
 
 it("publishes padding changes when either viewport box stays the same size", async () => {
-  const { host, thread, distance } = await mountEndFollowFixture();
-  host.transcript.scrollToEnd();
-  await expect.poll(distance).toBe(0);
-  await settleFrames();
+  const { host, thread, distance } = await mountFollowingFixture();
   const original = thread.scrollTop;
 
   host.viewportPadding = 40;
-  host.requestUpdate();
+  host.requestRender();
   await expect.poll(() => getComputedStyle(thread).paddingBottom).toBe("40px");
   expect(thread.clientHeight).toBe(400);
   expect(thread.scrollTop).toBe(original - 20);
@@ -460,8 +543,60 @@ it("publishes padding changes when either viewport box stays the same size", asy
   // Border-box growth and matching padding growth leave the observed content box unchanged.
   host.viewportHeight = 420;
   host.viewportPadding = 60;
-  host.requestUpdate();
+  host.requestRender();
   await expect.poll(() => thread.clientHeight).toBe(420);
   expect(getComputedStyle(thread).paddingBottom).toBe("60px");
   expect(distance()).toBe(0);
+});
+
+it("holds the canceled viewport after a smooth journey's automatic final approach", async () => {
+  const { host, thread, extent, distance } = await mountEndFollowFixture(0);
+  const earlier = host.querySelector<HTMLElement>('[data-virtual-row-key="earlier"]')!;
+  const nativeScrollTo = thread.scrollTo.bind(thread);
+  let finalApproach = false;
+  let grewNearEnd = false;
+  let canceledOffset: number | undefined;
+  function observeScroll(options?: ScrollToOptions): void;
+  function observeScroll(x: number, y: number): void;
+  function observeScroll(options: ScrollToOptions | number | undefined, y?: number): void {
+    if (typeof options === "number") {
+      nativeScrollTo(options, y ?? 0);
+    } else {
+      finalApproach ||= grewNearEnd && options?.behavior === "auto";
+      nativeScrollTo(options);
+    }
+  }
+  thread.scrollTo = observeScroll;
+  const listener = new AbortController();
+  const canceled = new Promise<number>((resolve) => {
+    thread.addEventListener(
+      "scroll",
+      () => {
+        if (canceledOffset !== undefined) {
+          return;
+        }
+        if (finalApproach) {
+          canceledOffset = thread.scrollTop;
+          earlier.style.height = "442px";
+          host.transcript.cancelScroll();
+          resolve(canceledOffset);
+        } else if (!grewNearEnd && distance() <= thread.clientHeight) {
+          grewNearEnd = true;
+          host.lastRowHeight += 48;
+          host.requestRender();
+        }
+      },
+      { capture: true, signal: listener.signal },
+    );
+  });
+  try {
+    host.transcript.scrollToEnd({ behavior: "smooth" });
+    const offset = await canceled;
+    await settleFrames();
+    expect(extent.offsetHeight).toBe(1390);
+    expect(thread.scrollTop).toBe(offset);
+  } finally {
+    listener.abort();
+    thread.scrollTo = nativeScrollTo;
+  }
 });

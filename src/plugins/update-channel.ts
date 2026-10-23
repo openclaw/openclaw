@@ -4,6 +4,7 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { readInstalledPackageVersion } from "../infra/package-update-utils.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
+import { buildBundledPluginLoadPathAliases } from "./bundled-load-path-aliases.js";
 import { resolveBundledPluginSources } from "./bundled-sources.js";
 import {
   capturePluginCapabilityConsentHandlerErrors,
@@ -114,6 +115,13 @@ async function syncPluginsForUpdateChannelWithLease(
 
   let next = params.config;
   const loadHelpers = buildLoadPathHelpers(next.plugins?.load?.paths ?? [], env);
+  // Discovery loads packaged bundled roots without a load path, and Doctor removes
+  // these aliases (bundled-plugin-load-paths). Writing one would churn every update.
+  const addBundledLoadPath = (localPath: string) => {
+    if (buildBundledPluginLoadPathAliases(localPath).length === 0) {
+      loadHelpers.addPath(localPath);
+    }
+  };
   let installs = next.plugins?.installs ?? {};
   let changed = false;
   const retainedLinks = new Set<string>();
@@ -144,7 +152,7 @@ async function syncPluginsForUpdateChannelWithLease(
         continue;
       }
 
-      loadHelpers.addPath(bundledInfo.localPath);
+      addBundledLoadPath(bundledInfo.localPath);
 
       const alreadyBundled =
         record.source === "path" && userPathsEqual(record.sourcePath, bundledInfo.localPath, env);
@@ -157,6 +165,9 @@ async function syncPluginsForUpdateChannelWithLease(
         source: "path",
         sourcePath: bundledInfo.localPath,
         installPath: bundledInfo.localPath,
+        ...(bundledInfo.contextEngineIds
+          ? { contextEngineIdsByPlugin: { [pluginId]: [...bundledInfo.contextEngineIds] } }
+          : {}),
         spec: record.spec ?? bundledInfo.npmSpec,
         version: record.version,
       });
@@ -442,7 +453,7 @@ async function syncPluginsForUpdateChannelWithLease(
       }
       // Keep explicit bundled installs on release channels. Replacing them with
       // npm installs can reintroduce duplicate-id shadowing and packaging drift.
-      loadHelpers.addPath(bundledInfo.localPath);
+      addBundledLoadPath(bundledInfo.localPath);
       if (userPathsEqual(record.installPath, bundledInfo.localPath, env)) {
         continue;
       }
@@ -452,6 +463,9 @@ async function syncPluginsForUpdateChannelWithLease(
         source: "path",
         sourcePath: bundledInfo.localPath,
         installPath: bundledInfo.localPath,
+        ...(bundledInfo.contextEngineIds
+          ? { contextEngineIdsByPlugin: { [pluginId]: [...bundledInfo.contextEngineIds] } }
+          : {}),
         spec: record.spec ?? bundledInfo.npmSpec,
         version: record.version,
       });

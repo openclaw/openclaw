@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { ignoreMissingPath } from "./errno.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { isPathInside } from "./fs-safe.js";
 import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
@@ -114,44 +115,36 @@ export async function prepareStagedPackageInstall(
 > {
   const startedAt = Date.now();
   try {
+    let native: StagedPackageInstall["native"];
+    let prefix: string;
+    let layout: StagedPackageInstall["layout"];
     if (nativeOptions) {
-      const native = await prepareNativePackageStage({
+      const prepared = await prepareNativePackageStage({
         installTarget,
         packageName,
         ...nativeOptions,
       });
-      if (!native) {
+      if (!prepared) {
         throw new Error("Cannot resolve the native package manager's staging owner.");
       }
-      // Isolated pnpm resolves its newly created owner after installation.
-      const packageRoot = path.join(native.globalRoot, packageName);
-      return {
-        stagedInstall: {
-          prefix: native.projectRoot,
-          layout: {
-            prefix: native.projectRoot,
-            globalRoot: native.globalRoot,
-            binDir: native.binDir,
-          },
-          packageRoot,
-          installTarget: { ...installTarget, globalRoot: native.globalRoot, packageRoot },
-          native,
-        },
-        failedStep: null,
-      };
+      native = prepared;
+      prefix = native.projectRoot;
+      layout = { prefix, globalRoot: native.globalRoot, binDir: native.binDir };
+    } else {
+      const targetLayout = resolveNpmGlobalPrefixLayoutFromGlobalRoot(installTarget.globalRoot, {
+        allowDirectNodeModulesRoot: installTarget.directNodeModulesRoot === true,
+      });
+      if (!targetLayout) {
+        throw new Error(
+          `The ${installTarget.manager} global install layout cannot prepare the update. Reinstall with ${installTarget.manager} into its default global layout, then retry the update.`,
+        );
+      }
+      await fs.mkdir(targetLayout.globalRoot, { recursive: true });
+      // Active stages must stay outside cleanupGlobalRenameDirs' disposable ".openclaw-" namespace.
+      prefix = await fs.mkdtemp(path.join(targetLayout.globalRoot, ".openclaw.update-stage-"));
+      layout = resolveNpmGlobalPrefixLayoutFromPrefix(prefix);
     }
-    const targetLayout = resolveNpmGlobalPrefixLayoutFromGlobalRoot(installTarget.globalRoot, {
-      allowDirectNodeModulesRoot: installTarget.directNodeModulesRoot === true,
-    });
-    if (!targetLayout) {
-      throw new Error(
-        `The ${installTarget.manager} global install layout cannot prepare the update. Reinstall with ${installTarget.manager} into its default global layout, then retry the update.`,
-      );
-    }
-    await fs.mkdir(targetLayout.globalRoot, { recursive: true });
-    // Active stages must stay outside cleanupGlobalRenameDirs' disposable ".openclaw-" namespace.
-    const prefix = await fs.mkdtemp(path.join(targetLayout.globalRoot, ".openclaw.update-stage-"));
-    const layout = resolveNpmGlobalPrefixLayoutFromPrefix(prefix);
+    // Isolated pnpm resolves its newly created owner after installation.
     const packageRoot = path.join(layout.globalRoot, packageName);
     return {
       stagedInstall: {
@@ -159,11 +152,11 @@ export async function prepareStagedPackageInstall(
         layout,
         packageRoot,
         installTarget: {
-          manager: "npm",
-          command: installTarget.command,
+          ...(native ? installTarget : { manager: "npm" as const, command: installTarget.command }),
           globalRoot: layout.globalRoot,
           packageRoot,
         },
+        ...(native ? { native } : {}),
       },
       failedStep: null,
     };
@@ -207,12 +200,7 @@ async function cleanupStagedPackageInstall(stage: StagedPackageInstall): Promise
       await removePackageUpdatePath(stage.native.binDir);
     }
   };
-  const prefix = await fs.realpath(stage.prefix).catch((error: unknown) => {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return null;
-    }
-    throw error;
-  });
+  const prefix = (await fs.realpath(stage.prefix).catch(ignoreMissingPath)) ?? null;
   const candidates = [stage.packageRoot];
   if (prefix && stage.native && stage.installTarget.pnpmIsolated) {
     // Activation follows active hash links only. Disposal also removes unlinked
@@ -220,12 +208,7 @@ async function cleanupStagedPackageInstall(stage: StagedPackageInstall): Promise
     // a completed manifest or lockfile. Discovery errors must preserve the stage.
     const entries = await fs
       .readdir(stage.native.globalRoot, { withFileTypes: true })
-      .catch((error: unknown) => {
-        if (hasErrnoCode(error, "ENOENT")) {
-          return [];
-        }
-        throw error;
-      });
+      .catch((error: unknown) => ignoreMissingPath(error) ?? []);
     for (const entry of entries) {
       if (entry.isDirectory() || entry.isSymbolicLink()) {
         candidates.push(
@@ -266,39 +249,32 @@ async function cleanupStagedPackageInstall(stage: StagedPackageInstall): Promise
 export async function discardPackageUpdateStage(params: {
   stage: StagedPackageInstall;
   committed: boolean;
-}): Promise<PackageUpdateLifecycleResult | { status: "advisory"; step: UpdateStepResult }> {
+}): Promise<UpdateStepResult | null> {
   try {
     await cleanupStagedPackageInstall(params.stage);
-    return { status: "complete" };
+    return null;
   } catch (error) {
     // Only a refused disposable-prefix removal after a verified swap is harmless.
     // Discovery, lifecycle ownership and release failures remain strict.
     if (params.committed && error instanceof PackageStageRemovalError) {
       const message = `${error.message}. Installation verification succeeded; inspect the retained stage before removing it manually.`;
       return {
-        status: "advisory",
-        step: {
-          name: "package-stage-cleanup",
-          command: `discard ${params.stage.prefix}`,
-          cwd: params.stage.prefix,
-          durationMs: 0,
-          exitCode: 1,
-          stderrTail: message,
-          advisory: { kind: "recoverable-maintenance", message },
-        },
+        name: "package-stage-cleanup",
+        command: `discard ${params.stage.prefix}`,
+        cwd: params.stage.prefix,
+        durationMs: 0,
+        exitCode: 1,
+        stderrTail: message,
+        advisory: { kind: "recoverable-maintenance", message },
       };
     }
     return {
-      status: "failed",
-      preserveStage: true,
-      step: {
-        name: `${params.stage.installTarget.manager}-package-lifecycle`,
-        command: `discard ${params.stage.packageRoot}`,
-        cwd: params.stage.packageRoot,
-        durationMs: 0,
-        exitCode: 1,
-        stderrTail: formatErrorMessage(error),
-      },
+      name: `${params.stage.installTarget.manager}-package-lifecycle`,
+      command: `discard ${params.stage.packageRoot}`,
+      cwd: params.stage.packageRoot,
+      durationMs: 0,
+      exitCode: 1,
+      stderrTail: formatErrorMessage(error),
     };
   }
 }

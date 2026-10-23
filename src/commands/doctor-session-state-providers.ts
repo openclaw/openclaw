@@ -1,12 +1,14 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-/** Doctor repair for stale plugin-owned routing state persisted in session entries. */
+import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as normalizeString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntriesLower } from "@openclaw/normalization-core/string-normalization";
+import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import {
   resolveAgentModelFallbacksOverride,
+  resolveAgentWorkspaceDir,
   tryResolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
+import type { ModelRef } from "../agents/model-ref-shared.js";
 import {
   modelKey,
   normalizeProviderId,
@@ -20,6 +22,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { updateLegacySessionStore } from "../infra/state-migrations.legacy-session-store.js";
 import { listPluginDoctorSessionRouteStateOwners } from "../plugins/doctor-contract-registry.js";
 import type { DoctorSessionRouteStateOwner } from "../plugins/doctor-session-route-state-owner-types.js";
+import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import { isValidAgentHarnessSessionStoreEntry } from "../sessions/agent-harness-session-key.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
@@ -124,9 +127,15 @@ type DoctorSessionRouteStateManualReview = {
   message: string;
 };
 
-type DoctorSessionRouteStateScan = ReturnType<
-  ReturnType<typeof createPluginSessionStateDoctorScanner>["result"]
->;
+type DoctorSessionRouteStateScan = {
+  repairs: DoctorSessionRouteStateRepair[];
+  manualReview: DoctorSessionRouteStateManualReview[];
+};
+
+type DoctorSessionRouteEntryScan = {
+  repair?: DoctorSessionRouteStateRepair;
+  manualReview?: DoctorSessionRouteStateManualReview;
+};
 
 function resolvePersistedOverrideModelRef(params: {
   defaultProvider: string;
@@ -155,21 +164,14 @@ function hasOwnedCliSession(params: {
   entry: Record<string, unknown>;
   cliSessionKeys: readonly string[];
 }): boolean {
-  const bindings = params.entry.cliSessionBindings;
-  const ids = params.entry.cliSessionIds;
-  return params.cliSessionKeys.some((key) => {
-    return (
+  const bindings = [params.entry.cliSessionBindings, params.entry.cliSessionIds].map(
+    asOptionalObjectRecord,
+  );
+  return params.cliSessionKeys.some(
+    (key) =>
       (key === "claude-cli" && normalizeString(params.entry.claudeCliSessionId) !== undefined) ||
-      (bindings !== null &&
-        typeof bindings === "object" &&
-        key in bindings &&
-        (bindings as Record<string, unknown>)[key] !== undefined) ||
-      (ids !== null &&
-        typeof ids === "object" &&
-        key in ids &&
-        (ids as Record<string, unknown>)[key] !== undefined)
-    );
-  });
+      bindings.some((value) => value && key in value && value[key] !== undefined),
+  );
 }
 
 function modelRefKey(provider: string, model: string): string {
@@ -181,10 +183,7 @@ function scanEntryForOwner(params: {
   entry: Record<string, unknown>;
   owner: DoctorSessionRouteStateOwner;
   route: DoctorSessionRouteState;
-}): {
-  repair?: DoctorSessionRouteStateRepair;
-  manualReview?: DoctorSessionRouteStateManualReview;
-} {
+}): DoctorSessionRouteEntryScan {
   const providerIds = normalizeIdSet(params.owner.providerIds);
   const runtimeIds = normalizeIdSet(params.owner.runtimeIds);
   const cliSessionKeys = [...normalizeIdSet(params.owner.cliSessionKeys)];
@@ -290,6 +289,23 @@ export function createPluginSessionStateDoctorScanner(params: {
   const manualReview: DoctorSessionRouteStateManualReview[] = [];
   let owners: DoctorSessionRouteStateOwner[] | undefined;
   const routeByAgentId = new Map<string, DoctorSessionRouteState>();
+  const explicitSelections = new Map<
+    string,
+    Array<{
+      key: string;
+      ownerLabel: string;
+      model: ModelRef | null;
+      runtime: string;
+    }>
+  >();
+  const recordScan = (scan: DoctorSessionRouteEntryScan) => {
+    if (scan.repair) {
+      repairs.push(scan.repair);
+    }
+    if (scan.manualReview) {
+      manualReview.push(scan.manualReview);
+    }
+  };
   return {
     scanEntry(key: string, entry: SessionEntry) {
       if (!entryMayContainPluginSessionRouteState(key, entry)) {
@@ -313,16 +329,122 @@ export function createPluginSessionStateDoctorScanner(params: {
         routeByAgentId.set(agentId, route);
       }
       for (const owner of owners) {
-        const scan = scanEntryForOwner({ key, entry, owner, route });
-        if (scan.repair) {
-          repairs.push(scan.repair);
-        }
-        if (scan.manualReview) {
-          manualReview.push(scan.manualReview);
+        const runtime = normalizeOptionalAgentRuntimeId(entry.agentRuntimeOverride);
+        if (
+          entry.modelOverrideSource === "user" &&
+          runtime &&
+          normalizeIdSet(owner.runtimeIds).has(normalizeProviderId(runtime))
+        ) {
+          const selections = explicitSelections.get(agentId) ?? [];
+          selections.push({
+            key,
+            ownerLabel: owner.label,
+            runtime,
+            model: resolvePersistedOverrideModelRef({
+              defaultProvider: route.defaultProvider,
+              overrideProvider: entry.providerOverride,
+              overrideModel: entry.modelOverride,
+            }),
+          });
+          explicitSelections.set(agentId, selections);
+        } else {
+          recordScan(scanEntryForOwner({ key, entry, owner, route }));
         }
       }
     },
-    result() {
+    async result() {
+      if (explicitSelections.size === 0) {
+        return { repairs, manualReview };
+      }
+      // Inspect installed support without making transient auth failures erase user choices.
+      const [
+        { resolveAgentRuntimePluginLoadPlan },
+        { buildAgentHarnessSupportContext },
+        { listCliRuntimeModelBackendBindings },
+        { acquirePluginRegistryForInspection },
+        { loadPluginMetadataSnapshot },
+        { withPluginRuntimeRegistryScope },
+      ] = await Promise.all([
+        import("../agents/harness/runtime-plugin-load-plan.js"),
+        import("../agents/harness/support.js"),
+        import("../agents/cli-backends.js"),
+        import("../plugins/loader.js"),
+        import("../plugins/plugin-metadata-snapshot.js"),
+        import("../plugins/runtime/gateway-request-scope.js"),
+      ]);
+      for (const [agentId, selections] of explicitSelections) {
+        const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
+        const loadPlan = resolveAgentRuntimePluginLoadPlan({
+          config: params.cfg,
+          workspaceDir,
+          purpose: "isolated-completion",
+          selections: selections.flatMap(({ model, runtime }) =>
+            model ? [{ provider: model.provider, modelId: model.model, runtime, agentId }] : [],
+          ),
+          metadataSnapshot: loadPluginMetadataSnapshot({
+            config: params.cfg,
+            workspaceDir,
+            env: params.env,
+          }),
+        });
+        const inspection = loadPlan.pluginIds?.length
+          ? await acquirePluginRegistryForInspection({
+              config: loadPlan.config ?? params.cfg,
+              env: params.env,
+              workspaceDir,
+              onlyPluginIds: loadPlan.pluginIds,
+            })
+          : undefined;
+        try {
+          const cliBindings = inspection
+            ? withPluginRuntimeRegistryScope(inspection.registry, () =>
+                listCliRuntimeModelBackendBindings(),
+              )
+            : [];
+          for (const selection of selections) {
+            const model = selection.model;
+            const harness = inspection?.registry.agentHarnesses.find(
+              (registration) => registration.harness.id === selection.runtime,
+            )?.harness;
+            const available = Boolean(
+              model &&
+              !params.cfg.cloudWorkers?.requiredProfile &&
+              (cliBindings.some(
+                (binding) =>
+                  binding.runtime === selection.runtime &&
+                  binding.provider === normalizeProviderId(model.provider),
+              ) ||
+                (harness &&
+                  inspection &&
+                  withPluginRuntimeRegistryScope(inspection.registry, () =>
+                    harness.supports(
+                      buildAgentHarnessSupportContext({
+                        provider: model.provider,
+                        modelId: model.model,
+                        requestedRuntime: selection.runtime,
+                        contextManagement: harness.contextManagement,
+                        config: params.cfg,
+                        agentId,
+                        sessionKey: selection.key,
+                      }),
+                    ),
+                  ).supported)),
+            );
+            if (!available) {
+              repairs.push({
+                key: selection.key,
+                ownerLabel: selection.ownerLabel,
+                reasons: ["pinned runtime"],
+                pinnedRuntimeKeys: ["agentRuntimeOverride"],
+                cliSessionKeys: [],
+              });
+            }
+          }
+        } finally {
+          await inspection?.release();
+        }
+      }
+      explicitSelections.clear();
       return { repairs, manualReview };
     },
   };
@@ -333,13 +455,12 @@ function clearRecordKeys(
   recordKey: string,
   ownedKeys: readonly string[],
 ): boolean {
-  const value = entry[recordKey];
-  if (value === null || typeof value !== "object") {
+  const value = asOptionalObjectRecord(entry[recordKey]);
+  if (!value) {
     return false;
   }
-  const record = value as Record<string, unknown>;
   let changed = false;
-  const next = { ...record };
+  const next = { ...value };
   for (const key of ownedKeys) {
     if (next[key] !== undefined) {
       delete next[key];
@@ -413,18 +534,6 @@ function applySessionRouteStateRepair(params: {
   return changed;
 }
 
-function groupByOwnerLabel<T extends { ownerLabel: string }>(
-  items: readonly T[],
-): Map<string, T[]> {
-  const grouped = new Map<string, T[]>();
-  for (const item of items) {
-    const group = grouped.get(item.ownerLabel) ?? [];
-    group.push(item);
-    grouped.set(item.ownerLabel, group);
-  }
-  return grouped;
-}
-
 type DoctorSessionStateStore =
   | { kind: "legacy"; path: string }
   | { kind: "sqlite"; agentId: string; path: string };
@@ -438,90 +547,75 @@ export async function runPluginSessionStateDoctorRepairs(params: {
   changes: string[];
 }): Promise<void> {
   const { scan } = params;
-  if (scan.repairs.length > 0) {
-    for (const [ownerLabel, repairs] of groupByOwnerLabel(scan.repairs)) {
-      const staleCount = countLabel(repairs.length, "session");
-      params.warnings.push(
-        [
-          `- Found stale ${ownerLabel} session routing state in ${staleCount} outside the current configured model/runtime route.`,
-          "  This can keep later message-channel runs pinned to an old runtime/provider after defaults move elsewhere.",
-          `  Examples: ${repairs.slice(0, 3).map(repairExample).join(", ")}`,
-        ].join("\n"),
-      );
-      const repairState = await params.prompter.confirmRuntimeRepair({
-        message: `Clear stale ${ownerLabel} session routing state for ${staleCount}?`,
-        initialValue: true,
-      });
-      if (repairState) {
-        let repaired = 0;
-        const repairedAt = Date.now();
-        const repairsByKey = new Map(repairs.map((repair) => [repair.key, repair]));
-        if (params.store.kind === "sqlite") {
-          repaired = await applySessionEntryReplacements<number>({
-            agentId: params.store.agentId,
-            sessionKeys: [...repairsByKey.keys()],
-            storePath: params.store.path,
-            update: (currentEntries) => {
-              const replacements = currentEntries.flatMap(({ entry, sessionKey }) => {
-                const repair = repairsByKey.get(sessionKey);
-                return repair &&
-                  isRecord(entry) &&
-                  applySessionRouteStateRepair({
-                    sessionKey,
-                    entry,
-                    repair,
-                    now: repairedAt,
-                  })
-                  ? [{ entry, sessionKey }]
-                  : [];
-              });
-              return { replacements, result: replacements.length };
-            },
-          });
-        } else {
-          await updateLegacySessionStore(params.store.path, (currentStore) => {
-            for (const [key, repair] of repairsByKey) {
-              const current = currentStore[key];
-              if (
-                isRecord(current) &&
-                applySessionRouteStateRepair({
-                  sessionKey: key,
-                  entry: current,
-                  repair,
-                  now: repairedAt,
-                })
-              ) {
-                repaired += 1;
-              }
+  for (const [ownerLabel, repairs] of groupRecords(scan.repairs, (repair) => repair.ownerLabel)) {
+    const staleCount = countLabel(repairs.length, "session");
+    params.warnings.push(
+      [
+        `- Found stale ${ownerLabel} session routing state in ${staleCount}.`,
+        "  An unavailable runtime or legacy routing state can keep later runs on an obsolete route.",
+        `  Examples: ${repairs.slice(0, 3).map(repairExample).join(", ")}`,
+      ].join("\n"),
+    );
+    const repairState = await params.prompter.confirmRuntimeRepair({
+      message: `Clear stale ${ownerLabel} session routing state for ${staleCount}?`,
+      initialValue: true,
+    });
+    if (repairState) {
+      let repaired = 0;
+      const repairedAt = Date.now();
+      const repairsByKey = new Map(repairs.map((repair) => [repair.key, repair]));
+      const repairEntry = (sessionKey: string, entry: unknown) => {
+        const repair = repairsByKey.get(sessionKey);
+        return (
+          repair &&
+          isRecord(entry) &&
+          applySessionRouteStateRepair({ sessionKey, entry, repair, now: repairedAt })
+        );
+      };
+      if (params.store.kind === "sqlite") {
+        repaired = await applySessionEntryReplacements<number>({
+          agentId: params.store.agentId,
+          sessionKeys: [...repairsByKey.keys()],
+          storePath: params.store.path,
+          update: (currentEntries) => {
+            const replacements = currentEntries.filter(({ entry, sessionKey }) =>
+              repairEntry(sessionKey, entry),
+            );
+            return { replacements, result: replacements.length };
+          },
+        });
+      } else {
+        await updateLegacySessionStore(params.store.path, (currentStore) => {
+          for (const key of repairsByKey.keys()) {
+            if (repairEntry(key, currentStore[key])) {
+              repaired += 1;
             }
-          });
-        }
-        if (repaired > 0) {
-          params.changes.push(
-            `- Cleared stale ${ownerLabel} session routing state for ${countLabel(
-              repaired,
-              "session",
-            )}.`,
-          );
-        }
+          }
+        });
+      }
+      if (repaired > 0) {
+        params.changes.push(
+          `- Cleared stale ${ownerLabel} session routing state for ${countLabel(
+            repaired,
+            "session",
+          )}.`,
+        );
       }
     }
   }
-  if (scan.manualReview.length > 0) {
-    for (const [ownerLabel, hits] of groupByOwnerLabel(scan.manualReview)) {
-      params.warnings.push(
-        [
-          `- Found explicit ${ownerLabel} model overrides in ${countLabel(
-            hits.length,
-            "session",
-          )} outside the current configured route.`,
-          "  Doctor leaves explicit or legacy user selections untouched; switch them with /model or reset the session if that provider is no longer intended.",
-          `  Examples: ${hits
-            .slice(0, 3)
-            .map((hit) => hit.message)
-            .join(", ")}`,
-        ].join("\n"),
-      );
-    }
+  for (const [ownerLabel, hits] of groupRecords(scan.manualReview, (hit) => hit.ownerLabel)) {
+    params.warnings.push(
+      [
+        `- Found explicit ${ownerLabel} model overrides in ${countLabel(
+          hits.length,
+          "session",
+        )} outside the current configured route.`,
+        "  Doctor leaves explicit or legacy user selections untouched; switch them with /model or reset the session if that provider is no longer intended.",
+        `  Examples: ${hits
+          .slice(0, 3)
+          .map((hit) => hit.message)
+          .join(", ")}`,
+      ].join("\n"),
+    );
   }
 }

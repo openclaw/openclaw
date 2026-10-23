@@ -1,9 +1,9 @@
 // Discord question component feedback tests.
 import { InteractionResponseType, MessageFlags } from "discord-api-types/v10";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createInteraction as createDiscordInteraction,
-  type ButtonInteraction,
+  type BaseComponentInteraction,
 } from "../internal/discord.js";
 import {
   attachRestMock,
@@ -12,8 +12,25 @@ import {
 } from "../internal/test-builders.test-support.js";
 import { createDiscordQuestionButton } from "./questions.js";
 
+const dependencies = vi.hoisted(() => ({ authorize: vi.fn(), resolve: vi.fn() }));
+vi.mock("./agent-components-guild-auth.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agent-components-guild-auth.js")>()),
+  resolveAuthorizedComponentInteraction: dependencies.authorize,
+}));
+vi.mock("openclaw/plugin-sdk/question-gateway-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/question-gateway-runtime")>();
+  return {
+    ...actual,
+    questionGatewayRuntime: {
+      ...actual.questionGatewayRuntime,
+      resolveOption: dependencies.resolve,
+    },
+  };
+});
+
 type InteractionHarness = {
-  interaction: ButtonInteraction;
+  interaction: BaseComponentInteraction;
   acknowledge: ReturnType<typeof vi.fn>;
   followUp: ReturnType<typeof vi.fn>;
 };
@@ -26,19 +43,22 @@ function createInteraction(): InteractionHarness {
     reply: vi.fn(),
     acknowledge,
     followUp,
-  } as unknown as ButtonInteraction;
+  } as unknown as BaseComponentInteraction;
   return { interaction, acknowledge, followUp };
 }
 
 describe("Discord question button", () => {
+  beforeEach(() => {
+    dependencies.authorize.mockReset().mockResolvedValue(true);
+    dependencies.resolve.mockReset();
+  });
   it("does not resolve unauthorized clicks", async () => {
     const { interaction, acknowledge } = createInteraction();
-    const resolveQuestion = vi.fn();
+    const resolveQuestion = dependencies.resolve;
+    dependencies.authorize.mockResolvedValue(false);
     const button = createDiscordQuestionButton({
       cfg: {} as never,
       accountId: "default",
-      authorizeQuestion: vi.fn(async () => false),
-      resolveQuestion,
     });
 
     await button.run(interaction, {
@@ -53,15 +73,14 @@ describe("Discord question button", () => {
   it("does not turn a committed answer into an error when feedback fails", async () => {
     const { interaction, followUp } = createInteraction();
     followUp.mockRejectedValue(new Error("receipt failed"));
+    dependencies.resolve.mockResolvedValue({
+      status: "answered",
+      questionId: "target",
+      optionValue: "Production",
+    });
     const button = createDiscordQuestionButton({
       cfg: {} as never,
       accountId: "default",
-      authorizeQuestion: vi.fn(async () => true),
-      resolveQuestion: vi.fn(async () => ({
-        status: "answered" as const,
-        questionId: "target",
-        optionValue: "Production",
-      })),
     });
 
     await expect(
@@ -120,8 +139,8 @@ describe("Discord question button", () => {
           global_name: null,
         },
       }),
-    ) as ButtonInteraction;
-    const resolveQuestion = vi.fn(async () => {
+    ) as BaseComponentInteraction;
+    const resolveQuestion = dependencies.resolve.mockImplementation(async () => {
       if (testCase.error) {
         throw testCase.error;
       }
@@ -130,8 +149,6 @@ describe("Discord question button", () => {
     const button = createDiscordQuestionButton({
       cfg: {} as never,
       accountId: "default",
-      authorizeQuestion: vi.fn(async () => true),
-      resolveQuestion: resolveQuestion as never,
     });
 
     await button.run(interaction, {

@@ -58,6 +58,7 @@ export async function recoverEmbeddedRunTimeout(
   const recoveryMarker = markEmbeddedRunRecoveringTimeout({
     sessionId: input.getActiveSession().id,
     runId: input.runParams.runId,
+    operation: input.runParams.replyOperation,
   });
   try {
     const timeoutDiagId = createRunRecoveryDiagId();

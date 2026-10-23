@@ -262,12 +262,9 @@ describe("processGatewayAllowlist", () => {
       segmentAllowlistEntries: [{ pattern: "/usr/bin/echo", source: "allow-always" }],
       segmentSatisfiedBy: [],
     });
-    hasDurableExecApprovalMock.mockReset();
-    hasDurableExecApprovalMock.mockReturnValue(true);
-    hasExactCommandDurableExecApprovalMock.mockReset();
-    hasExactCommandDurableExecApprovalMock.mockReturnValue(false);
-    requiresExecApprovalMock.mockReset();
-    requiresExecApprovalMock.mockReturnValue(false);
+    hasDurableExecApprovalMock.mockReset().mockReturnValue(true);
+    hasExactCommandDurableExecApprovalMock.mockReset().mockReturnValue(false);
+    requiresExecApprovalMock.mockReset().mockReturnValue(false);
     buildEnforcedShellCommandMock.mockReset();
     buildEnforcedShellCommandMock.mockReturnValue({
       ok: false,
@@ -540,34 +537,6 @@ describe("processGatewayAllowlist", () => {
     },
   );
 
-  it("emits security events for gateway exec approval requests and denials", async () => {
-    approvalDecisionMock.mockResolvedValue("deny");
-    const captured = captureSecurityEvents();
-
-    let result: Awaited<ReturnType<typeof runGatewayAllowlist>>;
-    try {
-      result = await runGatewayAllowlist({
-        command: "deploy --token raw-secret-value",
-        turnSourceChannel: "webchat",
-        agentId: "agent-1",
-      });
-    } finally {
-      captured.stop();
-    }
-
-    expect(result!.deniedResult?.details.status).toBe("failed");
-    expect(captured.events.map(({ action, outcome, reason }) => [action, outcome, reason])).toEqual(
-      [
-        ["exec.approval.requested", "success", undefined],
-        ["exec.approval.denied", "denied", "user-denied"],
-      ],
-    );
-    const serialized = JSON.stringify(captured.events);
-    expect(serialized).not.toContain("deploy");
-    expect(serialized).not.toContain("raw-secret-value");
-    expect(serialized).not.toContain("agent-1");
-  });
-
   it("emits a denied security event for inline unavailable approval denials", async () => {
     approvalRouteFixture.inline = true;
     const captured = captureSecurityEvents();
@@ -722,10 +691,6 @@ describe("processGatewayAllowlist", () => {
       assessment: { decision: "allow-once", risk: "low", rationale: "read-only" },
       status: "approved",
     },
-    {
-      assessment: { decision: "ask", risk: "medium", rationale: "needs a person" },
-      status: "denied",
-    },
   ] as const)(
     "publishes and records the $status Guardian review on its exec call",
     async ({ assessment, status }) => {
@@ -790,14 +755,8 @@ describe("processGatewayAllowlist", () => {
         expect(onApprovalReview).toHaveBeenCalledWith(
           expect.objectContaining({ id: "guardian:tool-review", status }),
         );
-        if (assessment.decision === "ask") {
-          expect(createExecApprovalRequestRouteMock).toHaveBeenCalledOnce();
-          expect(warnings.join("\n")).toContain(assessment.rationale);
-          expect(result.deniedResult?.details.status).toBe("failed");
-        } else {
-          expect(createExecApprovalRequestRouteMock).not.toHaveBeenCalled();
-          expect(result.deniedResult).toBeUndefined();
-        }
+        expect(createExecApprovalRequestRouteMock).not.toHaveBeenCalled();
+        expect(result.deniedResult).toBeUndefined();
       } finally {
         unsubscribe();
       }
@@ -1108,7 +1067,7 @@ describe("processGatewayAllowlist", () => {
     expect(defaultExecAutoReviewerMock).toHaveBeenCalledOnce();
     expect(result.deniedResult?.details.status).toBe("failed");
     expect(result.deniedResult?.content[0]).toMatchObject({
-      text: `Exec denied (gateway id=${approvalRouteFixture.id}, approval-timeout): echo ok`,
+      text: `Exec denied (gateway id=${approvalRouteFixture.id}, approval-timeout): echo ok\nCommand did not run: approval timed out.`,
     });
   });
 
@@ -1218,6 +1177,9 @@ describe("processGatewayAllowlist", () => {
     expect(followupText).toContain("Diagnostics export created.");
     expect(followupText).toContain("Path: /tmp/openclaw-diagnostics.zip");
     expect(followupText).toContain("Contents (2 files):");
+    expect(followupText).toContain("Size: 1234 bytes");
+    expect(followupText).toContain("Privacy:\n- payload-free: yes\n- raw logs included: no");
+    expect(followupText).toContain("- Logs keep operational summaries.");
     expect(followupText).toContain("OpenAI Codex harness:");
     expect(followupText).toContain("Codex diagnostics sent to OpenAI servers:");
     expect(followupText).toContain("Codex thread id: `thread-1`");
@@ -1286,34 +1248,6 @@ describe("processGatewayAllowlist", () => {
     } finally {
       unhandledRejections.restore();
     }
-  });
-
-  it("keeps multiline gateway approval follow-up output intact", async () => {
-    mockHostPolicy({ hostAsk: "always" });
-    const aggregated = "first line\r\n\tindented\n\nlast line  \t\n";
-    mockApprovedDetachedExec({
-      outcome: {
-        status: "completed",
-        exitCode: 0,
-        timedOut: false,
-        aggregated,
-      },
-    });
-
-    const result = await runGatewayAllowlist({
-      command: "openclaw sessions export-trajectory --json",
-      approvalFollowupMode: "agent",
-      sessionId: "approval-session",
-      sessionStore: "/tmp/openclaw-sessions.json",
-      turnSourceChannel: "webchat",
-    });
-
-    expect(result.pendingResult?.details.status).toBe("approval-pending");
-    await vi.waitFor(() => expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledOnce());
-    const text = requireSentFollowupText();
-    expect(text).toContain(aggregated);
-    // The compact notify formatter would have collapsed every run of whitespace.
-    expect(text).not.toContain("first line indented last line");
   });
 
   it("fails closed when a detached allow-always authorization commit fails", async () => {

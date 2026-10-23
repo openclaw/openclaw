@@ -1,9 +1,9 @@
 // Foreign-job tests protect the live command evidence and Doctor's removal boundary.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { execLaunchctl } from "./launchd-exec.js";
 import {
   findForeignLaunchdJobs,
@@ -20,15 +20,27 @@ const exec = vi.mocked(execLaunchctl);
 const label = "ai.openclaw.update-validator.20260727.v2";
 const uid = process.getuid?.() ?? 0;
 const domain = `gui/${uid}`;
+const target = `${domain}/${label}`;
+const cli = "/opt/bin/openclaw";
+const entry = "/opt/openclaw.mjs";
+const restartCommand = "/usr/local/bin/openclaw gateway restart";
+const shellScript = (...lines: string[]) => `#!/bin/sh\n${lines.join("\n")}\n`;
+const restartScript = shellScript(
+  "openclaw_bin=/usr/local/bin/openclaw",
+  '"$openclaw_bin" gateway restart',
+);
+const pollingScript = (shebang: string) =>
+  restartScript.replace("#!/bin/sh", shebang) +
+  'for attempt in 1 2; do\n  "$openclaw_bin" gateway status\n  sleep 1\ndone\n';
 const ok = (stdout = "") => ({ code: 0, stdout, stderr: "", termination: "exit" as const });
-const missing = {
-  code: 113,
-  stdout: "",
-  stderr: "Could not find service",
-  termination: "exit" as const,
-};
+const missing = { ...ok(), code: 113, stderr: "Could not find service" };
+const temporary = useAutoCleanupTempDirTracker(afterEach);
+const shellEnvironmentNames = `SHELLOPTS BASHOPTS BASH_ENV ENV ZDOTDIR POSIXLY_CORRECT
+IFS CDPATH PS4 BASH_XTRACEFD BASH_CUSTOM BASH_FUNC_example%%`.split(/\s+/);
 let dir: string;
 let jobs: Map<string, string>;
+const operations = (...names: string[]) =>
+  exec.mock.calls.filter(([args]) => names.includes(args[0] ?? "")).map(([args]) => args);
 
 function addJob(name: string, args: string[], extra = "") {
   jobs.set(
@@ -37,7 +49,45 @@ function addJob(name: string, args: string[], extra = "") {
   );
 }
 
-beforeEach(async () => {
+function jobEnvironment(values: Record<string, string>, block = "environment") {
+  return `\t${block} = {\n${Object.entries(values)
+    .map(([key, value]) => `\t\t${key} => ${value}\n`)
+    .join("")}\t}\n`;
+}
+
+async function addScript(contents: string, name = "validator.sh") {
+  const file = path.join(dir, name);
+  await fs.writeFile(file, contents);
+  return file;
+}
+
+async function expectActions(gatewayActions: string[], extra: Partial<ForeignLaunchdJob> = {}) {
+  expect(await findForeignLaunchdJobs({})).toEqual([
+    expect.objectContaining({ gatewayActions, safeToRemove: gatewayActions.length > 0, ...extra }),
+  ]);
+}
+
+async function expectShellEnvironmentBlocked(message?: string) {
+  expect((await findForeignLaunchdJobs({}))[0], message).toMatchObject({
+    gatewayActions: [],
+    safeToRemove: false,
+    diagnostic: "Shell environment alters execution; left unchanged.",
+  });
+}
+
+async function addLifecycleJob(action = "restart", plist: boolean | "agent" = false) {
+  addJob(label, [cli, "gateway", action]);
+  if (plist) {
+    const file = await addScript("<plist><dict></dict></plist>", "foreign.plist");
+    jobs.set(label, jobs.get(label)!.replace("(submitted by launchctl[123])", file));
+    if (plist === "agent") {
+      jobs.set(label, jobs.get(label)!.replace("type = Submitted", "type = LaunchAgent"));
+    }
+  }
+  return expectDefined((await findForeignLaunchdJobs({}))[0], "detected foreign job");
+}
+
+beforeEach(() => {
   vi.stubGlobal(
     "process",
     Object.create(process, {
@@ -45,7 +95,7 @@ beforeEach(async () => {
       getuid: { value: () => uid },
     }),
   );
-  dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-foreign-jobs-"));
+  dir = temporary.make("openclaw-foreign-jobs-");
   jobs = new Map();
   exec.mockReset();
   exec.mockImplementation(async (args) => {
@@ -67,161 +117,52 @@ beforeEach(async () => {
   });
 });
 
-afterEach(async () => {
-  vi.unstubAllGlobals();
-  await fs.rm(dir, { recursive: true, force: true });
-});
+afterEach(() => vi.unstubAllGlobals());
 
 describe("foreign launchd command classification", () => {
   it.each([
-    [
-      "ai.openclaw.update-validator.20260727.v2",
-      ["/opt/bin/openclaw", "gateway", "restart"],
-      ["restart"],
-    ],
-    ["ai.openclaw.upgrade-2026-9-1-beta-1", ["/opt/bin/openclaw", "update", "--yes"], []],
-    [
-      "ai.openclaw.maintenance",
-      ["/usr/bin/env", "PATH=/bin", "/opt/bin/openclaw", "gateway", "stop"],
-      ["stop"],
-    ],
-    [
-      "ai.openclaw.profile-watch",
-      ["/bin/node", "/opt/openclaw.mjs", "--profile", "work", "gateway", "start"],
-      ["start"],
-    ],
-    ["ai.openclaw.echo", ["/bin/echo", "openclaw", "gateway", "restart"], []],
-    ["ai.openclaw.inline", ["/bin/sh", "-c", "openclaw gateway restart"], []],
-    [
-      "ai.openclaw.inline-absolute",
-      ["/bin/sh", "-c", "/usr/local/bin/openclaw gateway restart"],
-      ["restart"],
-    ],
-    ["ai.openclaw.bare", ["openclaw", "gateway", "restart"], []],
-    ["ai.openclaw.env-bare", ["/usr/bin/env", "openclaw", "gateway", "restart"], []],
-    ["ai.openclaw.node-bare-entry", ["/usr/bin/node", "openclaw.mjs", "gateway", "restart"], []],
-    ["ai.openclaw.node-bare-runtime", ["node", "/opt/openclaw.mjs", "gateway", "restart"], []],
-    ["ai.openclaw.bun", ["/opt/bin/bun", "/opt/openclaw.mjs", "gateway", "restart"], ["restart"]],
-    [
-      "ai.openclaw.bun-relative-entry",
-      ["/opt/bin/bun", "./openclaw.mjs", "gateway", "restart"],
-      [],
-    ],
-    [
-      "ai.openclaw.env-node",
-      ["/usr/bin/env", "/usr/bin/node", "/opt/openclaw.mjs", "gateway", "restart"],
-      ["restart"],
-    ],
-    [
-      "ai.openclaw.env-bare-node",
-      ["/usr/bin/env", "node", "/opt/openclaw.mjs", "gateway", "restart"],
-      [],
-    ],
-    ["ai.openclaw.help", ["/opt/bin/openclaw", "gateway", "restart", "--help"], []],
-    ["ai.openclaw.help-short", ["/opt/bin/openclaw", "gateway", "restart", "-h"], []],
-  ])("reports %s and verifies only executable lifecycle arguments", async (name, args, actions) => {
+    ["upgrade-2026-9-1-beta-1", [cli, "update", "--yes"], []],
+    ["maintenance", ["/usr/bin/env", "PATH=/bin", cli, "gateway", "stop"], ["stop"]],
+    ["profile-watch", ["/bin/node", entry, "--profile", "work", "gateway", "start"], ["start"]],
+    ["echo", ["/bin/echo", "openclaw", "gateway", "restart"], []],
+    ["inline-absolute", ["/bin/sh", "-c", restartCommand], ["restart"]],
+    ["shell-syntax-check", ["/bin/sh", "-nc", "openclaw gateway restart"], []],
+    ["node-bare-runtime", ["node", entry, "gateway", "restart"], []],
+    ["bun-relative-entry", ["/opt/bin/bun", "./openclaw.mjs", "gateway", "restart"], []],
+    ["env-bare-node", ["/usr/bin/env", "node", entry, "gateway", "restart"], []],
+    ["help-short", [cli, "gateway", "restart", "-h"], []],
+  ])("classifies %s lifecycle arguments", async (suffix, args, actions) => {
+    const name = `ai.openclaw.${suffix}`;
     addJob(name, args);
-    const found = await findForeignLaunchdJobs({});
-    expect(found).toEqual([
-      expect.objectContaining({
-        label: name,
-        program: args[0],
-        keepAlive: true,
-        gatewayActions: actions,
-        safeToRemove: actions.length > 0,
-      }),
-    ]);
+    await expectActions(actions, { label: name, program: args[0], keepAlive: true });
   });
 
-  it.each([
-    ["#!/bin/sh\nopenclaw gateway restart\n", []],
-    ["#!/bin/sh\n/usr/local/bin/openclaw gateway restart\n", ["restart"]],
-    ['#!/bin/sh\nopenclaw_bin=openclaw\n"$openclaw_bin" gateway restart\n', []],
-    ['#!/bin/sh\nopenclaw_bin="/opt/bin/openclaw"\n"$openclaw_bin" gateway restart\n', []],
-    [
-      "#!/bin/sh\nset -e\n'openclaw_bin=/opt/bin/openclaw'\n\"$openclaw_bin\" gateway restart\n",
-      [],
-    ],
-    ["#!/bin/sh\n/opt/*/openclaw gateway restart\n", []],
-    ["#!/bin/sh\n~/bin/openclaw gateway restart\n", []],
-    [
-      '#!/bin/sh\nopenclaw_bin=/usr/local/bin/openclaw\n"$openclaw_bin" gateway restart\n',
-      ["restart"],
-    ],
-    [
-      '#!/bin/sh\nopenclaw_bin=/usr/local/bin/openclaw\n"${openclaw_bin}" gateway restart\n',
-      ["restart"],
-    ],
-    [
-      "#!/bin/sh\nopenclaw_bin=/usr/local/bin/openclaw\n$openclaw_bin gateway restart\n",
-      ["restart"],
-    ],
-    ["#!/bin/sh\nexec /usr/local/bin/openclaw gateway restart --profile work\n", ["restart"]],
-    ['#!/bin/sh\nset "-e"\nopenclaw gateway restart\n', []],
-    ['#!/bin/sh\nopenclaw_bin=/bin/echo\n"$openclaw_bin" gateway restart\n', []],
-    [
-      '#!/bin/sh\nopenclaw_bin=/usr/local/bin/openclaw\u2028\n"$openclaw_bin" gateway restart\n',
-      [],
-    ],
-    [
-      '#!/bin/sh\r\nopenclaw_bin=/usr/local/bin/openclaw\r\n"$openclaw_bin" gateway restart\r\n',
-      [],
-    ],
-    [
-      '#!/bin/bash\nset -e\nUID=1000\nopenclaw_bin=/usr/local/bin/openclaw\n"$openclaw_bin" gateway restart\n',
-      [],
-    ],
-    [
-      '#!/bin/sh\nPATH=/usr/local/bin\nopenclaw_bin=/usr/local/bin/openclaw\n"$openclaw_bin" gateway restart\n',
-      [],
-    ],
-    [
-      '#!/bin/sh\nexport OPENCLAW_BIN=/usr/local/bin/openclaw\n"$OPENCLAW_BIN" gateway restart\n',
-      ["restart"],
-    ],
-    ["#!/bin/sh\nset -e -u -x +e +u +x\n/usr/local/bin/openclaw gateway restart\n", ["restart"]],
-    ["#!/bin/sh\nexec >/dev/null\nopenclaw gateway restart\n", []],
-    [
-      '#!/bin/sh\nset -u\nopenclaw_bin=/usr/local/bin/openclaw\n"$openclaw_bin" gateway restart --profile "$PROFILE"\nopenclaw gateway restart\n',
-      [],
-    ],
-    [
-      '#!/bin/sh\nset -u\nopenclaw_bin=/usr/local/bin/openclaw\n"$openclaw_bin" gateway restart --profile work\n',
-      ["restart"],
-    ],
-    ["#!/bin/sh\n/opt/bin/openclaw gateway stop\n/opt/bin/openclaw gateway start\n", ["stop"]],
-    ['#!/bin/sh\n# openclaw gateway restart\necho "openclaw gateway start"\n', []],
-    ["#!/bin/sh\ncat <<EOF\nopenclaw gateway restart\nEOF\n", []],
-    ["#!/bin/sh\nif false; then\nopenclaw gateway restart\nfi\n", []],
-    ["#!/bin/sh\nset -n\nopenclaw gateway restart\n", []],
-    ["#!/bin/sh\nset -o noexec\nopenclaw gateway restart\n", []],
-    ["#!/bin/sh\nIFS=o\nopenclaw_bin=openclaw\n$openclaw_bin gateway restart\n", []],
-    [
-      '#!/bin/zsh\nopenclaw_bin=/opt/bin/openclaw\nexec >${openclaw_bin::=/bin/echo}\n"$openclaw_bin" gateway restart\n',
-      [],
-    ],
-  ])(
-    "reads shell scripts without executing or confusing quoted data with commands (%#)",
-    async (script, actions) => {
-      const file = path.join(dir, "validator.sh");
-      await fs.writeFile(file, script);
-      addJob(label, ["/bin/sh", file]);
-      expect(await findForeignLaunchdJobs({})).toEqual([
-        expect.objectContaining({ gatewayActions: actions, safeToRemove: actions.length > 0 }),
-      ]);
-    },
-  );
+  it.each<[string, string[], string[]?]>([
+    [restartScript.replace("/usr/local/bin/openclaw", "openclaw"), []],
+    [restartScript, ["restart"]],
+    [restartScript.replace("openclaw\n", "openclaw\u2028\n"), []],
+    [restartScript.replaceAll("\n", "\r\n"), []],
+    [shellScript("/opt/bin/openclaw gateway stop", "/opt/bin/openclaw gateway start"), ["stop"]],
+    [shellScript("cat <<EOF", "openclaw gateway restart", "EOF"), []],
+    [pollingScript("#!/usr/bin/env zsh"), ["restart"], ["$SCRIPT"]],
+    [pollingScript(""), [], ["$SCRIPT"]],
+    [pollingScript("#!/bin/bash -n"), [], ["$SCRIPT"]],
+    [shellScript("sleep 120"), [], ["/bin/sh", "$SCRIPT", "-c", "openclaw gateway restart"]],
+    [shellScript("sleep 120"), [], ["/bin/sh", "--", "$SCRIPT", "-c", "openclaw gateway restart"]],
+  ])("classifies script %# without executing it", async (script, actions, argv) => {
+    const file = await addScript(script);
+    const args = (argv ?? ["/bin/sh", "$SCRIPT"]).map((arg) => (arg === "$SCRIPT" ? file : arg));
+    addJob(label, args);
+    await expectActions(actions, { program: args[0] });
+  });
 
-  it("does not inspect or remove managed, profile, custom, node, or unrelated labels", async () => {
+  it("protects managed, profile, custom, node and unrelated labels", async () => {
     const protectedLabels = [
-      "ai.openclaw.gateway",
-      "ai.openclaw.work",
-      "ai.openclaw.custom",
-      "ai.openclaw.node",
+      ...["gateway", "work", "custom", "node"].map((name) => `ai.openclaw.${name}`),
       "com.example.validator",
     ];
     for (const name of protectedLabels) {
-      addJob(name, ["/opt/bin/openclaw", "gateway", "restart"]);
+      addJob(name, [cli, "gateway", "restart"]);
     }
     const env = { OPENCLAW_PROFILE: "work", OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.custom" };
     expect(await findForeignLaunchdJobs(env)).toEqual([]);
@@ -233,150 +174,49 @@ describe("foreign launchd command classification", () => {
     expect(exec.mock.calls.map(([args]) => args)).toEqual([["list"]]);
   });
 
-  it.each(["inline", "script", "direct"] as const)(
-    "rejects shell-altering environment names for %s launches without examining values",
-    async (mode) => {
-      const file = path.join(dir, "validate.sh");
-      await fs.writeFile(file, "#!/bin/bash\nset -x\n/usr/local/bin/openclaw gateway restart\n");
-      const args =
-        mode === "inline"
-          ? ["/bin/bash", "-xc", "/usr/local/bin/openclaw gateway restart"]
-          : mode === "direct"
-            ? [file]
-            : ["/bin/bash", file];
-      for (const block of ["inherited environment", "default environment"]) {
-        addJob(
-          label,
-          args,
-          `\t${block} = {\n\t\tBASH_ENV => /tmp/profile\n\t}\n\tenvironment = {\n\t\tPATH => /usr/bin:/bin\n\t}\n`,
-        );
-        expect((await findForeignLaunchdJobs({}))[0], block).toMatchObject({
-          gatewayActions: [],
-          safeToRemove: false,
-          diagnostic: "Shell environment alters execution; left unchanged.",
-        });
-      }
-      for (const name of [
-        "SHELLOPTS",
-        "BASHOPTS",
-        "BASH_ENV",
-        "ENV",
-        "ZDOTDIR",
-        "POSIXLY_CORRECT",
-        "IFS",
-        "CDPATH",
-        "PS4",
-        "BASH_XTRACEFD",
-        "BASH_CUSTOM",
-        "BASH_FUNC_example%%",
-      ]) {
-        addJob(
-          label,
-          args,
-          `\tenvironment = {\n\t\t${name} => ${name === "SHELLOPTS" ? "noexec" : "ignored"}\n\t}\n`,
-        );
-        expect((await findForeignLaunchdJobs({}))[0], name).toMatchObject({
-          gatewayActions: [],
-          safeToRemove: false,
-          diagnostic: "Shell environment alters execution; left unchanged.",
-        });
-      }
+  it.each(["inline", "direct"])("guards %s shell environment names, not values", async (mode) => {
+    const file = await addScript(`#!/bin/bash\nset -x\n${restartCommand}\n`);
+    const args = mode === "inline" ? ["/bin/bash", "-xc", restartCommand] : [file];
+    for (const block of ["inherited environment", "default environment"]) {
       addJob(
         label,
         args,
-        "\tenvironment = {\n\t\tPATH => /usr/bin:/bin\n\t\tHOME => /home/operator\n\t\tOPENCLAW_EXAMPLE => SHELLOPTS=noexec BASH_ENV=ignored\n\t}\n",
+        jobEnvironment({ BASH_ENV: "/tmp/profile" }, block) +
+          jobEnvironment({ PATH: "/usr/bin:/bin" }),
       );
-      expect((await findForeignLaunchdJobs({}))[0]).toMatchObject({
-        gatewayActions: ["restart"],
-        safeToRemove: true,
-      });
-    },
-  );
-
-  it.each([false, true])(
-    "leaves non-shell CLI verification unaffected by shell environment names (env: %s)",
-    async (viaEnv) => {
-      const file = path.join(dir, "openclaw");
-      await fs.writeFile(file, "#!/usr/bin/env node\n");
-      addJob(
-        label,
-        [...(viaEnv ? ["/usr/bin/env"] : []), file, "gateway", "restart"],
-        "\tenvironment = {\n\t\tSHELLOPTS => noexec\n\t}\n",
-      );
-      expect((await findForeignLaunchdJobs({}))[0]).toMatchObject({
-        gatewayActions: ["restart"],
-        safeToRemove: true,
-      });
-    },
-  );
-
-  it.each([
-    { name: "openclaw", viaEnv: false },
-    { name: "openclaw", viaEnv: true },
-    { name: "node", viaEnv: true },
-    { name: "env", viaEnv: false },
-  ])(
-    "guards an executed shell script even when its filename is $name (env: $viaEnv)",
-    async ({ name, viaEnv }) => {
-      const file = path.join(dir, name);
-      await fs.writeFile(file, "#!/bin/bash\n/usr/local/bin/openclaw gateway restart\n");
-      const prefix =
-        name === "env"
-          ? [file, "/usr/local/bin/openclaw"]
-          : name === "node" || name === "bun"
-            ? [file, "/opt/openclaw.mjs"]
-            : [file];
-      addJob(
-        label,
-        [...(viaEnv ? ["/usr/bin/env"] : []), ...prefix, "gateway", "restart"],
-        "\tenvironment = {\n\t\tSHELLOPTS => noexec\n\t}\n",
-      );
-      expect((await findForeignLaunchdJobs({}))[0]).toMatchObject({
-        gatewayActions: [],
-        safeToRemove: false,
-        diagnostic: "Shell environment alters execution; left unchanged.",
-      });
-    },
-  );
-
-  it.each([
-    { shebang: "#!/bin/bash", verified: true },
-    { shebang: "#!/usr/bin/env zsh", verified: true },
-    { shebang: "#!/usr/bin/python3", verified: false },
-    { shebang: "", verified: false },
-    { shebang: "#!/bin/bash -n", verified: false },
-  ])(
-    "verifies directly executed scripts only with an executing shell shebang ($shebang)",
-    async ({ shebang, verified }) => {
-      const file = path.join(dir, "validate.sh");
-      await fs.writeFile(
-        file,
-        `${shebang}\nopenclaw_bin=/usr/local/bin/openclaw\n"$openclaw_bin" gateway restart\nfor attempt in 1 2; do\n  "$openclaw_bin" gateway status\n  sleep 1\ndone\n`,
-      );
-      addJob(label, [file]);
-      expect(await findForeignLaunchdJobs({})).toEqual([
-        expect.objectContaining({
-          program: file,
-          gatewayActions: verified ? ["restart"] : [],
-          safeToRemove: verified,
-        }),
-      ]);
-    },
-  );
-
-  it("does not inspect positional script arguments as executable files", async () => {
-    const file = path.join(dir, "observer");
-    const argument = path.join(dir, "restart.sh");
-    await fs.writeFile(file, "#!/usr/bin/python3\n");
-    await fs.writeFile(argument, "#!/bin/sh\nopenclaw gateway restart\n");
-    addJob(label, [file, argument]);
-    expect((await findForeignLaunchdJobs({}))[0]).toMatchObject({
-      gatewayActions: [],
-      safeToRemove: false,
-    });
+      await expectShellEnvironmentBlocked(block);
+    }
+    for (const name of shellEnvironmentNames) {
+      addJob(label, args, jobEnvironment({ [name]: name === "SHELLOPTS" ? "noexec" : "ignored" }));
+      await expectShellEnvironmentBlocked(name);
+    }
+    addJob(
+      label,
+      args,
+      jobEnvironment({
+        PATH: "/usr/bin:/bin",
+        HOME: "/home/operator",
+        OPENCLAW_EXAMPLE: "SHELLOPTS=noexec BASH_ENV=ignored",
+      }),
+    );
+    await expectActions(["restart"]);
   });
 
-  it("protects another profile's generated service even if its command is corrupted", async () => {
+  it.each([
+    { name: "node", viaEnv: true },
+    { name: "env", viaEnv: false },
+  ])("guards shell scripts named $name (env: $viaEnv)", async ({ name, viaEnv }) => {
+    const file = await addScript(`#!/bin/bash\n${restartCommand}\n`, name);
+    const prefix = name === "env" ? [file, "/usr/local/bin/openclaw"] : [file, entry];
+    addJob(
+      label,
+      [...(viaEnv ? ["/usr/bin/env"] : []), ...prefix, "gateway", "restart"],
+      jobEnvironment({ SHELLOPTS: "noexec" }),
+    );
+    await expectShellEnvironmentBlocked();
+  });
+
+  it("protects corrupted generated services from other profiles", async () => {
     addJob(label, [
       "/bin/sh",
       `/home/operator/.openclaw/service-env/${label}-env-wrapper.sh`,
@@ -388,24 +228,8 @@ describe("foreign launchd command classification", () => {
     expect(await findForeignLaunchdJobs({})).toEqual([]);
   });
 
-  it("does not remove shell syntax-check jobs", async () => {
-    addJob(label, ["/bin/sh", "-nc", "openclaw gateway restart"]);
-    expect((await findForeignLaunchdJobs({}))[0]).toMatchObject({ safeToRemove: false });
-  });
-
-  it.each([{ prefix: [] }, { prefix: ["--"] }])(
-    "does not treat script positional arguments as shell options ($prefix)",
-    async ({ prefix }) => {
-      const file = path.join(dir, "harmless.sh");
-      await fs.writeFile(file, "#!/bin/sh\nsleep 120\n");
-      addJob(label, ["/bin/sh", ...prefix, file, "-c", "openclaw gateway restart"]);
-      expect((await findForeignLaunchdJobs({}))[0]).toMatchObject({ safeToRemove: false });
-    },
-  );
-
   it("leaves oversized and symlinked shell scripts unverified", async () => {
-    const file = path.join(dir, "validator.sh");
-    await fs.writeFile(file, `openclaw gateway restart\n${"#".repeat(65536)}`);
+    const file = await addScript(`openclaw gateway restart\n${"#".repeat(65536)}`);
     addJob(label, ["/bin/sh", file]);
     expect((await findForeignLaunchdJobs({}))[0]).toMatchObject({ safeToRemove: false });
     const link = path.join(dir, "link.sh");
@@ -416,55 +240,31 @@ describe("foreign launchd command classification", () => {
 });
 
 describe("foreign launchd repair", () => {
-  it("revalidates the live command, removes a submitted lifecycle job and confirms absence", async () => {
-    addJob(label, ["/opt/bin/openclaw", "gateway", "restart"]);
-    const job = expectDefined((await findForeignLaunchdJobs({}))[0], "detected foreign job");
+  it.each([false, "agent"] as const)("removes a verified job (plist: %s)", async (plist) => {
+    const job = await addLifecycleJob(plist ? "stop" : "restart", plist);
     const result = await repairForeignLaunchdJob(job, {});
     expect(result).toEqual({
       removed: true,
       detail: expect.stringContaining(`Removed stray launchd job ${label}`),
     });
     expect(jobs.has(label)).toBe(false);
-    expect(exec.mock.calls.filter(([args]) => args[0] === "disable")).toEqual([]);
+    if (plist) {
+      expect(await fs.readFile(path.join(dir, "foreign.plist"), "utf8")).toContain("<plist>");
+    }
+    expect(operations("disable", "bootout")).toEqual(
+      (plist ? ["disable", "bootout"] : ["bootout"]).map((action) => [action, target]),
+    );
   });
 
   it("never trusts stale or caller-forged removal evidence", async () => {
-    addJob(label, ["/opt/bin/openclaw", "gateway", "restart"]);
-    const job = expectDefined((await findForeignLaunchdJobs({}))[0], "detected foreign job");
+    const job = await addLifecycleJob();
     addJob(label, ["/bin/echo", "gateway restart"]);
     expect((await repairForeignLaunchdJob(job, {})).removed).toBe(false);
-    expect(exec.mock.calls.some(([args]) => ["bootout", "disable"].includes(args[0] ?? ""))).toBe(
-      false,
-    );
-  });
-
-  it("disables a verified foreign plist job at login while retaining its file", async () => {
-    const plistPath = path.join(dir, "foreign.plist");
-    await fs.writeFile(plistPath, "<plist><dict></dict></plist>");
-    addJob(label, ["/opt/bin/openclaw", "gateway", "stop"]);
-    jobs.set(
-      label,
-      jobs
-        .get(label)!
-        .replace("(submitted by launchctl[123])", plistPath)
-        .replace("type = Submitted", "type = LaunchAgent"),
-    );
-    const job = expectDefined((await findForeignLaunchdJobs({}))[0], "detected foreign job");
-    expect((await repairForeignLaunchdJob(job, {})).removed).toBe(true);
-    expect(await fs.readFile(plistPath, "utf8")).toContain("<plist>");
-    expect(
-      exec.mock.calls
-        .filter(([args]) => ["disable", "bootout"].includes(args[0] ?? ""))
-        .map(([args]) => args),
-    ).toEqual([
-      ["disable", `${domain}/${label}`],
-      ["bootout", `${domain}/${label}`],
-    ]);
+    expect(operations("bootout", "disable")).toEqual([]);
   });
 
   it("does not claim success when launchd rejects removal", async () => {
-    addJob(label, ["/opt/bin/openclaw", "gateway", "restart"]);
-    const job = expectDefined((await findForeignLaunchdJobs({}))[0], "detected foreign job");
+    const job = await addLifecycleJob();
     const execute = exec.getMockImplementation()!;
     exec.mockImplementation(async (args, timeout) =>
       args[0] === "bootout"
@@ -476,11 +276,7 @@ describe("foreign launchd repair", () => {
   });
 
   it("revalidates a plist job after disabling it before bootout", async () => {
-    const plistPath = path.join(dir, "foreign.plist");
-    await fs.writeFile(plistPath, "<plist><dict></dict></plist>");
-    addJob(label, ["/opt/bin/openclaw", "gateway", "restart"]);
-    jobs.set(label, jobs.get(label)!.replace("(submitted by launchctl[123])", plistPath));
-    const job = expectDefined((await findForeignLaunchdJobs({}))[0], "detected foreign job");
+    const job = await addLifecycleJob("restart", true);
     const execute = exec.getMockImplementation()!;
     exec.mockImplementation(async (args, timeout) => {
       if (args[0] === "disable") {
@@ -492,6 +288,6 @@ describe("foreign launchd repair", () => {
       removed: false,
       detail: expect.stringContaining("definition changed before removal"),
     });
-    expect(exec.mock.calls.some(([args]) => args[0] === "bootout")).toBe(false);
+    expect(operations("bootout")).toEqual([]);
   });
 });

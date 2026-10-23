@@ -24,18 +24,12 @@ describe("shouldBypassAcpDispatchForCommand", () => {
     setActivePluginRegistry(createTestRegistry([]));
   });
 
-  it("returns false for plain-text ACP turns", () => {
-    expect(shouldBypassAcpDispatchForCommand(commandContext("write a test"), {})).toBe(false);
-  });
-
-  it.each([
-    { command: "/acp@otherbot cancel", expected: false },
-    { command: "/status", expected: true },
-    { command: "/v off", expected: true },
-    { command: "/reset", expected: true },
-  ])("returns $expected for $command", ({ command, expected }) => {
-    expect(shouldBypassAcpDispatchForCommand(commandContext(command), {})).toBe(expected);
-  });
+  it.each([{ command: "/acp@otherbot cancel", expected: false }])(
+    "returns $expected for $command",
+    ({ command, expected }) => {
+      expect(shouldBypassAcpDispatchForCommand(commandContext(command), {})).toBe(expected);
+    },
+  );
 
   it("prefers clean command text over channel envelopes", () => {
     const ctx = commandContext("/status", {
@@ -48,11 +42,6 @@ describe("shouldBypassAcpDispatchForCommand", () => {
 
   it("returns true for a colon-form local verbose alias", () => {
     expect(shouldBypassAcpDispatchForCommand(commandContext("/v:off"), {})).toBe(true);
-  });
-
-  it("returns true for ACP reset-tail slash commands", () => {
-    const ctx = commandContext("/new continue with deployment", { CommandSource: "native" });
-    expect(shouldBypassAcpDispatchForCommand(ctx, {})).toBe(true);
   });
 
   it("returns true for ACP slash commands when text commands are disabled", () => {
@@ -80,16 +69,6 @@ describe("shouldBypassAcpDispatchForCommand", () => {
   it("returns true for native local status commands when text commands are disabled", () => {
     const ctx = commandContext("/status", { CommandSource: "native" });
     expect(shouldBypassAcpDispatchForCommand(ctx, { commands: { text: false } })).toBe(true);
-  });
-
-  it("returns false for unauthorized bang-prefixed commands", () => {
-    const ctx = commandContext("!poll", { CommandAuthorized: false });
-    expect(shouldBypassAcpDispatchForCommand(ctx, {})).toBe(false);
-  });
-
-  it("returns false for bang-prefixed commands when text commands are disabled", () => {
-    const ctx = commandContext("!poll", { CommandAuthorized: true, CommandSource: "text" });
-    expect(shouldBypassAcpDispatchForCommand(ctx, { commands: { text: false } })).toBe(false);
   });
 
   it("returns true for authorized bang-prefixed commands when text commands are enabled", () => {

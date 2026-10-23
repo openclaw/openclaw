@@ -96,11 +96,9 @@ internal class WearRealtimeTalkClient(
       val nodeId = session.phoneNodeId
       val attemptScopedAudio = WearProxyCapability.AttemptScopedRealtimeAudio in capabilities
       var resources: ChannelResources? = null
-      var channelOpened = false
       var activatedAttempt: ActiveAttempt? = null
       try {
         resources = openChannel(nodeId, attemptId, attemptScopedAudio)
-        channelOpened = true
         val language =
           Locale
             .getDefault()
@@ -134,7 +132,7 @@ internal class WearRealtimeTalkClient(
         // A failed start owes Voice the same audio error a failed restart publishes.
         // Cancellation cannot reach here: nothing suspends between activate and return.
         activatedAttempt?.let { closeLocal(it, failed = true) }
-        if (channelOpened) {
+        if (resources != null || activatedAttempt != null) {
           // Finish ambiguous-start cleanup before another attempt can acquire
           // the lifecycle lock and create a replacement relay for this Watch.
           withContext(NonCancellable) { runCatching { repository.stopRealtimeTalk(nodeId, attemptId) } }
@@ -526,18 +524,10 @@ internal fun wearRealtimeAudioChannelPath(
     WearProtocol.LEGACY_REALTIME_AUDIO_CHANNEL_PATH
   }
 
-internal class Pcm16MouthLevelAccumulator(
-  private val sampleRateHz: Int = WearProtocol.REALTIME_AUDIO_SAMPLE_RATE_HZ,
-  frameMillis: Int = MOUTH_FRAME_MILLIS,
-) {
-  private val samplesPerFrame: Int
+internal class Pcm16MouthLevelAccumulator {
+  private val samplesPerFrame = WearProtocol.REALTIME_AUDIO_SAMPLE_RATE_HZ * MOUTH_FRAME_MILLIS / 1_000
   private var squareSum = 0.0
   private var sampleCount = 0
-
-  init {
-    require(sampleRateHz > 0 && frameMillis > 0)
-    samplesPerFrame = (sampleRateHz * frameMillis / 1_000).coerceAtLeast(1)
-  }
 
   fun append(pcm: ByteArray): List<Float> {
     require(pcm.size % PCM_BYTES_PER_SAMPLE == 0)
@@ -561,7 +551,7 @@ internal class Pcm16MouthLevelAccumulator(
     sampleCount = 0
   }
 
-  fun pendingFrameDurationMillis(): Long = ceil(sampleCount * 1_000.0 / sampleRateHz).toLong()
+  fun pendingFrameDurationMillis(): Long = ceil(sampleCount * 1_000.0 / WearProtocol.REALTIME_AUDIO_SAMPLE_RATE_HZ).toLong()
 
   private fun finishFrame(): Float {
     val rms = sqrt(squareSum / sampleCount)

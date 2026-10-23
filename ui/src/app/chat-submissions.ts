@@ -1,6 +1,7 @@
-import { registerListener } from "../../../src/shared/listeners.js";
+import { createChangeListeners } from "../../../src/shared/listeners.js";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import type { buildLocalUserMessage } from "../pages/chat/user-message-content.ts";
+import type { CreationComposer } from "../pages/new-session/creation-composer.ts";
 
 type RetainedMessage = NonNullable<ReturnType<typeof buildLocalUserMessage>>;
 
@@ -29,20 +30,22 @@ type PendingChatCreate = Readonly<{
   creation: Readonly<{ sessionKey: string; admitted: boolean }>;
   message: RetainedMessage | null;
   canDisplay: () => boolean;
+  composer?: CreationComposer;
+  displayName?: string;
+  /** Custom group requested by the create; its admitted row lands in that section. */
+  category?: string;
 }>;
 
 export type ApplicationChatSubmissions = ReturnType<typeof createChatSubmissions>;
-/** App-owned display bytes only. Outbox payloads, attempts, and retries stay with the outbox. */
+/** App-owned display bytes only. Delivery and retries stay with the outbox. */
 export function createChatSubmissions() {
   const initial = new Map<string, RetainedChatSubmission>();
   // Only the foreground handoff owns a provisional display; accepted turns are separate.
   let pendingCreate: PendingChatCreate | undefined;
-  const createListeners = new Set<() => void>();
+  const createListeners = createChangeListeners();
   const setPendingCreate = (pending: typeof pendingCreate) => {
     pendingCreate = pending;
-    for (const listener of createListeners) {
-      listener();
-    }
+    createListeners.publish();
   };
   let delivered = new WeakMap<object, Map<string, RetainedChatSubmission>>();
   const initialKey = (sessionKey: string) =>
@@ -105,11 +108,16 @@ export function createChatSubmissions() {
     get creation(): Readonly<{ sessionKey: string; admitted: boolean }> | undefined {
       return pendingCreate?.creation;
     },
+    readCreate: () => (pendingCreate?.canDisplay() ? pendingCreate : undefined),
     readCreateMessage: (sessionKey: string) =>
       pendingCreate?.creation.sessionKey === sessionKey && pendingCreate.canDisplay()
         ? pendingCreate.message
         : null,
-    subscribeCreate: (listener: () => void) => registerListener(createListeners, listener),
+    readCreateComposer: (sessionKey: string) =>
+      pendingCreate?.creation.sessionKey === sessionKey && pendingCreate.canDisplay()
+        ? pendingCreate.composer
+        : undefined,
+    subscribeCreate: createListeners.subscribe,
     readInitial,
     observeInitialSession: (sessionKey: string, owner: object | null, sessionId: string | null) => {
       const submission = readInitial(sessionKey, owner);

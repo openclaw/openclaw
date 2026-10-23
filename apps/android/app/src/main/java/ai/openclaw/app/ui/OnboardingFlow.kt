@@ -190,11 +190,13 @@ internal enum class OnboardingAccessStage(
   ),
 }
 
-internal enum class OnboardingGatewayInputSource {
-  SetupScanner,
+internal enum class OnboardingGatewayInputSource(
+  val recoveryBackState: OnboardingBackState = OnboardingBackState(OnboardingStep.SetupCode),
+) {
+  SetupScanner(OnboardingBackState(OnboardingStep.SetupCode, inlineQrScannerActive = true)),
   SetupGallery,
   SetupEntry,
-  Manual,
+  Manual(OnboardingBackState(OnboardingStep.Manual)),
 }
 
 internal enum class OnboardingErrorCode(
@@ -329,43 +331,21 @@ internal fun onboardingBackStateAfterBack(
   accessStage: OnboardingAccessStage = OnboardingAccessStage.InitialApproval,
 ): OnboardingBackState? =
   when (step) {
-    OnboardingStep.Welcome -> {
-      null
-    }
+    OnboardingStep.Welcome -> null
 
-    OnboardingStep.Gateway -> {
-      OnboardingBackState(OnboardingStep.Welcome)
-    }
+    OnboardingStep.Gateway -> OnboardingBackState(OnboardingStep.Welcome)
 
     OnboardingStep.SetupCode,
     OnboardingStep.Manual,
-    -> {
-      OnboardingBackState(OnboardingStep.Gateway)
-    }
+    -> OnboardingBackState(OnboardingStep.Gateway)
 
-    OnboardingStep.EnterSetupCode -> {
-      OnboardingBackState(OnboardingStep.SetupCode, inlineQrScannerActive = setupCodeEntryOpenedFromScanner)
-    }
+    OnboardingStep.EnterSetupCode -> OnboardingBackState(OnboardingStep.SetupCode, inlineQrScannerActive = setupCodeEntryOpenedFromScanner)
 
-    OnboardingStep.Recovery -> {
-      when (lastGatewayInputSource) {
-        OnboardingGatewayInputSource.SetupScanner -> OnboardingBackState(OnboardingStep.SetupCode, inlineQrScannerActive = true)
+    OnboardingStep.Recovery -> lastGatewayInputSource.recoveryBackState
 
-        OnboardingGatewayInputSource.SetupGallery,
-        OnboardingGatewayInputSource.SetupEntry,
-        -> OnboardingBackState(OnboardingStep.SetupCode)
+    OnboardingStep.NodeApproval -> OnboardingBackState(accessStage.nodeApprovalBackStep)
 
-        OnboardingGatewayInputSource.Manual -> OnboardingBackState(OnboardingStep.Manual)
-      }
-    }
-
-    OnboardingStep.NodeApproval -> {
-      OnboardingBackState(accessStage.nodeApprovalBackStep)
-    }
-
-    OnboardingStep.Permissions -> {
-      OnboardingBackState(accessStage.permissionsBackStep)
-    }
+    OnboardingStep.Permissions -> OnboardingBackState(accessStage.permissionsBackStep)
   }
 
 /** First-run Android onboarding flow for gateway pairing and permission setup. */
@@ -667,10 +647,9 @@ fun OnboardingFlow(
     }
 
     fun handleScannedSetupCode(
-      rawValue: String,
+      scanned: GatewayScannedSetupCodeResult,
       inputSource: OnboardingGatewayInputSource,
     ) {
-      val scanned = resolveScannedSetupCodeResult(rawValue)
       if (scanned.setupCode == null) {
         val errorCode =
           when (scanned.error) {
@@ -742,12 +721,12 @@ fun OnboardingFlow(
         setupBarcodeScanner
           .process(image)
           .addOnSuccessListener { barcodes ->
-            val rawValue = barcodes.firstNotNullOfOrNull { barcode -> barcode.rawValue?.takeIf { it.isNotBlank() } }
-            if (rawValue == null) {
+            val scanned = resolveScannedSetupCodeResult(barcodes.asSequence().map { it.rawValue })
+            if (scanned == null) {
               showSetupScanError(OnboardingErrorCode.ImageMissingQr)
               return@addOnSuccessListener
             }
-            handleScannedSetupCode(rawValue, inputSource = OnboardingGatewayInputSource.SetupGallery)
+            handleScannedSetupCode(scanned, inputSource = OnboardingGatewayInputSource.SetupGallery)
           }.addOnFailureListener {
             showSetupScanError(OnboardingErrorCode.ImageQrReadFailed)
           }
@@ -839,7 +818,7 @@ fun OnboardingFlow(
             }
           },
           onRequestCameraPermission = { cameraPermissionLauncher.launch(Manifest.permission.CAMERA) },
-          onCodeScanned = { rawValue -> handleScannedSetupCode(rawValue, inputSource = OnboardingGatewayInputSource.SetupScanner) },
+          onCodeScanned = { rawValue -> handleScannedSetupCode(resolveScannedSetupCodeResult(rawValue), inputSource = OnboardingGatewayInputSource.SetupScanner) },
           onCameraError = {
             showSetupScanError(OnboardingErrorCode.CameraStartFailed)
           },
@@ -1613,7 +1592,7 @@ private fun analyzeSetupQrFrame(
   scanner
     .process(inputImage)
     .addOnSuccessListener { barcodes ->
-      val rawValue = barcodes.firstNotNullOfOrNull { barcode -> barcode.rawValue?.takeIf { it.isNotBlank() } }
+      val rawValue = resolveScannedSetupCodeResult(barcodes.asSequence().map { it.rawValue })?.setupCode
       if (rawValue != null && scanActive.get() && handledScan.compareAndSet(false, true)) {
         onCodeScanned(rawValue)
       }
@@ -2806,7 +2785,7 @@ internal fun recoveryNodeApprovalCommand(pendingRequestId: String?): String {
   return if (requestId != null) "openclaw nodes approve $requestId" else "openclaw nodes approve REQUEST_ID"
 }
 
-private fun approvalRequestId(approval: GatewayNodeCapabilityApproval): String? =
+internal fun approvalRequestId(approval: GatewayNodeCapabilityApproval): String? =
   when (approval) {
     is GatewayNodeCapabilityApproval.PendingApproval -> approval.requestId
     is GatewayNodeCapabilityApproval.PendingReapproval -> approval.requestId

@@ -58,12 +58,18 @@ function addPayloadTextFallback(
       };
 }
 
-function countDiscordMessageComponents(params: {
+export function isDiscordComponentSpecWithinMessageLimit(params: {
   spec: DiscordComponentMessageSpec;
-  includesMedia: boolean;
-}): number {
-  const blocks = params.spec.blocks ?? [];
-  let count = 1 + (params.spec.text ? 1 : 0);
+  fallbackText?: string;
+  includesMedia?: boolean;
+}): boolean {
+  const spec = addPayloadTextFallback(params.spec, { text: params.fallbackText });
+  if (spec.text && Array.from(spec.text).length > DISCORD_TEXT_DISPLAY_LIMIT) {
+    return false;
+  }
+  const includesMedia = params.includesMedia === true;
+  const blocks = spec.blocks ?? [];
+  let count = 1 + (spec.text ? 1 : 0);
   for (const block of blocks) {
     if (block.type === "section") {
       const textCount = block.texts?.length ? block.texts.length : block.text ? 1 : 0;
@@ -75,7 +81,7 @@ function countDiscordMessageComponents(params: {
     }
   }
 
-  if (params.spec.modal) {
+  if (spec.modal) {
     const lastBlock = blocks.at(-1);
     const triggerFitsLastRow =
       lastBlock?.type === "actions" && !lastBlock.select && (lastBlock.buttons?.length ?? 0) < 5;
@@ -83,25 +89,10 @@ function countDiscordMessageComponents(params: {
   }
 
   const hasFileBlock = blocks.some((block) => block.type === "file");
-  if (params.includesMedia && !hasFileBlock) {
+  if (includesMedia && !hasFileBlock) {
     count += 1;
   }
-  return count;
-}
-
-export function isDiscordComponentSpecWithinMessageLimit(params: {
-  spec: DiscordComponentMessageSpec;
-  fallbackText?: string;
-  includesMedia?: boolean;
-}): boolean {
-  const countedSpec = addPayloadTextFallback(params.spec, { text: params.fallbackText });
-  return (
-    (!countedSpec.text || Array.from(countedSpec.text).length <= DISCORD_TEXT_DISPLAY_LIMIT) &&
-    countDiscordMessageComponents({
-      spec: countedSpec,
-      includesMedia: params.includesMedia === true,
-    }) <= DISCORD_MESSAGE_COMPONENT_LIMIT
-  );
+  return count <= DISCORD_MESSAGE_COMPONENT_LIMIT;
 }
 
 export async function buildDiscordPresentationPayload(params: {

@@ -1,24 +1,29 @@
+import { measuredRequestPressure } from "@openclaw/ai/internal/openai";
 import type { FirstStreamEventInternalOptions } from "@openclaw/ai/internal/runtime";
-import type { OpenAIResponsesCompactionRejection } from "@openclaw/ai/transports";
+import type { CompactionReplayRejection } from "@openclaw/ai/transports";
 import { resolveDiagnosticModelContentCapturePolicy } from "../../../infra/diagnostic-llm-content.js";
 import { DEFAULT_UNDICI_STREAM_TIMEOUT_MS } from "../../../infra/net/undici-global-dispatcher.js";
+import type { AssistantMessage } from "../../../llm/types.js";
 import type { DiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import { resolveToolCallArgumentsEncoding } from "../../../plugins/provider-model-compat.js";
 import { captureAsyncWorkTracker } from "../../../shared/async-work-scope.js";
+import { isSmallModel } from "../../../shared/model-param-b.js";
 import {
   assertOperatorModelAllowed,
   readRunOperatorAuthority,
 } from "../../admitted-run-context.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../embedded-agent-helpers/turns.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
+import { resolveModelCallUrgency } from "../../run-trigger.js";
 import type { StreamFn } from "../../runtime/index.js";
+import { setInternalRepetitionGuard } from "../../runtime/internal-hooks.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
-import { wrapStreamFnCodeModeSource } from "../../transcript-code-mode-source.js";
 import type { NormalizedUsage } from "../../usage.js";
 import { log } from "../logger.js";
 import { createPromptCacheRequestObserver } from "../prompt-cache-request-observer.js";
+import { getProviderPromptState } from "../provider-prompt-state.js";
 import {
   repairRejectedCompactionReplayInSessionManager,
   repairRejectedThinkingReplayInSessionManager,
@@ -54,15 +59,16 @@ import {
   streamWithIdleTimeout,
 } from "./llm-idle-timeout.js";
 import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
+import { estimateProjectedRequestTokenPressure } from "./preemptive-compaction.js";
 import { wrapStreamObjectSettlement } from "./stream-wrapper.js";
 
 type CompactionReplayStreamOptions = NonNullable<Parameters<StreamFn>[2]> & {
-  onCompactionRejected?: (checkpoint: OpenAIResponsesCompactionRejection) => void;
+  onCompactionRejected?: (checkpoint: CompactionReplayRejection) => void;
 };
 
 function wrapStreamFnWithCompactionReplayRepair(
   streamFn: StreamFn,
-  onRejected: (checkpoint: OpenAIResponsesCompactionRejection) => Promise<void>,
+  onRejected: (checkpoint: CompactionReplayRejection) => Promise<void>,
 ): StreamFn {
   return async (model, context, options) => {
     const trackRepair = captureAsyncWorkTracker();
@@ -109,7 +115,7 @@ export function installEmbeddedAttemptStreamGuards(
 ) {
   const { attempt } = input;
   const {
-    agentSession: { activeSession: session, codeModeExecToolNames },
+    agentSession: { activeSession: session },
     anthropicPayloadLogger,
     cacheTrace,
     contextGuards,
@@ -118,12 +124,14 @@ export function installEmbeddedAttemptStreamGuards(
     state: { systemPromptText },
     transcriptPolicy,
     transport: {
+      compactionReplayEnabled,
       effectiveAgentTransport,
       effectivePromptCacheRetention,
       streamStrategy,
       providerTextTransforms,
     },
   } = input.prepared.sessionRuntime;
+  setInternalRepetitionGuard(session.agent, isSmallModel);
   const { liveAllowedToolNames, replayAllowedToolNames } =
     input.prepared.toolCatalog.toolSearchRunPlan;
   const installStreamWrapper = <Args extends unknown[]>(
@@ -147,7 +155,7 @@ export function installEmbeddedAttemptStreamGuards(
   }
   const repairRejectedReplay = async (
     kind: "compaction" | "thinking",
-    checkpoint?: OpenAIResponsesCompactionRejection,
+    checkpoint?: CompactionReplayRejection,
   ): Promise<void> => {
     try {
       const repairParams = {
@@ -191,8 +199,16 @@ export function installEmbeddedAttemptStreamGuards(
       );
     }
   };
+  const providerPromptState = getProviderPromptState(attempt.runId);
+  // Turn facts attribute a prefix change to the kind of turn that caused it.
+  const turnFacts =
+    `trigger=${attempt.trigger ?? "unknown"} ` +
+    `provenance=${attempt.inputProvenance?.kind ?? "none"}${attempt.inputProvenance?.sourceTool ? `:${attempt.inputProvenance.sourceTool}` : ""} ` +
+    `replyMode=${attempt.sourceReplyDeliveryMode ?? "unset"} ` +
+    `senderIsOwner=${attempt.senderIsOwner ?? "unset"}`;
   const cacheObserver = createPromptCacheRequestObserver(
     {
+      turn: turnFacts,
       sessionId: attempt.sessionId,
       sessionKey: attempt.sessionKey,
       promptCacheKey: attempt.promptCacheKey,
@@ -204,10 +220,15 @@ export function installEmbeddedAttemptStreamGuards(
       if (observation.broke) {
         const changes =
           observation.changes?.map((change) => `${change.code}(${change.detail})`).join(", ") ??
-          "no tracked cache input change";
-        log.warn(
+          observation.dropCause;
+        log[observation.dropCause?.startsWith("unattributed:") ? "debug" : "warn"](
           `[prompt-cache] cache read dropped ${observation.previousCacheRead} -> ${observation.cacheRead} ` +
-            `runId=${attempt.runId} request=${observation.requestIndex} for ${snapshot.provider}/${snapshot.modelId} via ${streamStrategy}; ${changes}`,
+            `runId=${attempt.runId} request=${observation.requestIndex} for ${snapshot.provider}/${snapshot.modelId} via ${streamStrategy}; ${changes}; ` +
+            `requestGapMs=${observation.requestGapMs ?? "unknown"} promptTokens=${observation.promptTokens ?? "unknown"} ` +
+            `responseId=${observation.responseId ?? "unknown"} sessionId=${attempt.sessionId} ` +
+            `${turnFacts} ` +
+            `providerPrefix=${observation.providerPrefix ?? "unavailable"} ` +
+            `requests=${JSON.stringify(observation.requests)}`,
         );
       }
       cacheTrace?.recordStage("cache:result", { options: { ...observation } });
@@ -278,10 +299,14 @@ export function installEmbeddedAttemptStreamGuards(
     );
   }
 
-  if (isOpenAIResponsesApi) {
+  // Responses and eligible Anthropic routes replay provider checkpoints; a rejected one must be
+  // stripped from its transcript owner or every later turn resends it.
+  if (isOpenAIResponsesApi || compactionReplayEnabled) {
     installStreamWrapper(wrapStreamFnWithCompactionReplayRepair, (checkpoint) =>
       repairRejectedReplay("compaction", checkpoint),
     );
+  }
+  if (isOpenAIResponsesApi) {
     installStreamWrapper(wrapStreamFnWithMessageTransform, sanitizeOpenAIResponsesReplayForStream);
   }
 
@@ -378,12 +403,15 @@ export function installEmbeddedAttemptStreamGuards(
       } as typeof options);
     };
   }
-  let diagnosticModelCallSeq = 0;
+  const modelCallSequence = (attempt.modelCallSequence ??= { value: 0 });
+  const firstModelCallNumber = modelCallSequence.value + 1;
   let modelResponseTerminal = false;
+  let activeModelCallId: string | undefined;
   installStreamWrapper(wrapStreamFnWithDiagnosticModelCallEvents, {
     config: attempt.config,
     runId: attempt.runId,
     agentId: sessionAgentId,
+    priority: resolveModelCallUrgency(attempt) === "foreground" ? "interactive" : "background",
     ...(attempt.sessionKey && { sessionKey: attempt.sessionKey }),
     ...(attempt.sessionId && { sessionId: attempt.sessionId }),
     provider: attempt.provider,
@@ -404,14 +432,26 @@ export function installEmbeddedAttemptStreamGuards(
       : {}),
     trace: input.diagnostics.runTrace,
     contentCapture: resolveDiagnosticModelContentCapturePolicy(attempt.config),
-    nextCallId: () => `${attempt.runId}:model:${(diagnosticModelCallSeq += 1)}`,
+    nextCallId: () => `${attempt.runId}:model:${(modelCallSequence.value += 1)}`,
     ownerGeneration: callbacks.diagnosticOwner.generation,
+    diagnosticOwner: callbacks.diagnosticOwner,
+    onAgentEvent: attempt.onAgentEvent,
     onSucceeded: contextGuards.recordCacheTouch,
     onTerminal: () => {
       modelResponseTerminal = true;
     },
-    onStarted: () => {
+    onFinished: (callId) => {
+      if (activeModelCallId === callId) {
+        activeModelCallId = undefined;
+      }
+    },
+    onStarted: (callId) => {
+      activeModelCallId = callId;
       modelResponseTerminal = false;
+      if (modelCallSequence.value === firstModelCallNumber) {
+        input.setup.prepStages.mark("model-dispatch");
+        input.setup.emitPrepStageSummary("model-dispatch");
+      }
       attempt.onExecutionPhase?.({
         phase: "model_call_started",
         provider: attempt.provider,
@@ -421,19 +461,46 @@ export function installEmbeddedAttemptStreamGuards(
     },
     suppressPluginHooks: attempt.operation === "settled-tool-finalization",
   });
-  if (codeModeExecToolNames?.size) {
-    installStreamWrapper(wrapStreamFnCodeModeSource, codeModeExecToolNames);
-  }
   return {
-    onModelRequest: cacheObserver.onModelRequest,
-    onModelUsage: (usage: NormalizedUsage | undefined) => {
+    /** Returns the measured predecessor that may anchor this exact request's pressure. */
+    onModelRequest: async (...args: Parameters<typeof cacheObserver.onModelRequest>) => {
+      const previous = cacheObserver.getContextUsage();
+      const request = await cacheObserver.onModelRequest(...args);
+      const previousRequest =
+        previous?.requestIndex === request.requestIndex - 1 &&
+        request.prefixUnchanged &&
+        (request.changes ?? []).every(
+          ({ code }) => code === "pruning" || code === "aggregateToolResultTruncation",
+        )
+          ? previous
+          : undefined;
+      if (input.activeContextEngine?.info.ownsCompaction || request.requestIndex > 1) {
+        contextGuards.checkMidTurnPrecheck({ context: args[1], previousRequest });
+      }
+      if (args[0].api === "openai-completions") {
+        measuredRequestPressure.set(
+          args[0],
+          args[1],
+          previousRequest && previousRequest.contextTokens > 0
+            ? estimateProjectedRequestTokenPressure({ context: args[1], previousRequest })
+                .estimatedPromptTokens
+            : undefined,
+        );
+      }
+      return previousRequest;
+    },
+    onModelUsage: (
+      usage: NormalizedUsage | undefined,
+      identity?: Pick<AssistantMessage, "responseId" | "turnId">,
+    ) => {
       // Async-tool fragments also end messages. result() marks the terminal
       // response before core commits its final fragment with normalized usage.
       if (modelResponseTerminal) {
         modelResponseTerminal = false;
-        cacheObserver.onModelUsage(usage);
+        cacheObserver.onModelUsage(usage, providerPromptState.lastAttempt, identity);
       }
     },
     getPromptCacheObservation: cacheObserver.getObservation,
+    isModelCallActive: () => activeModelCallId !== undefined,
   };
 }

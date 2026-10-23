@@ -295,6 +295,8 @@ const ModelDefinitionSchema = z.strictObject({
   compat: ModelCompatSchema,
   /** Media input limits used by routing and preflight compression. */
   mediaInput: ModelMediaInputSchema.optional(),
+  /** Custom authored rows may accept endpoint-selected response ids; official policy still wins. */
+  responseModelEquivalent: z.boolean().optional(),
   /** Metadata source marker for models added by CLI/catalog tooling. */
   metadataSource: z.literal("models-add").optional(),
 });
@@ -324,7 +326,13 @@ const ModelProviderSchema = z.strictObject({
   apiKey: SecretInputSchema.optional().register(sensitive),
   /** Authentication mode used when resolving credentials for this provider. */
   auth: z
-    .union([z.literal("api-key"), z.literal("aws-sdk"), z.literal("oauth"), z.literal("token")])
+    .union([
+      z.literal("api-key"),
+      z.literal("aws-sdk"),
+      z.literal("oauth"),
+      z.literal("token"),
+      z.literal("none"),
+    ])
     .optional(),
   /** Default API adapter for models under this provider. */
   api: ModelApiSchema.optional(),
@@ -406,6 +414,7 @@ export const ModelsConfigSchema = z
     mode: z.union([z.literal("merge"), z.literal("replace")]).optional(),
     providers: ModelProvidersSchema.optional(),
     catalogRefresh: ModelCatalogRefreshConfigSchema,
+    usage: z.strictObject({ cacheTtlMs: z.number().int().nonnegative().optional() }).optional(),
   })
   .optional();
 
@@ -616,7 +625,10 @@ const MediaUnderstandingAttachmentsSchema = z
   .optional();
 
 const ProviderOptionsSchema = z
-  .record(z.string(), z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])))
+  .record(
+    z.string(),
+    z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.array(z.string())])),
+  )
   .optional();
 
 const MediaUnderstandingRuntimeFields = {

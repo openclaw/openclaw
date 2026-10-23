@@ -12,7 +12,7 @@ import {
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { discordPlugin } from "../channel.js";
-import { inspectDiscordConversationRouteOwner } from "../conversation-route-owner.js";
+import { inspectDiscordConversationRouteOwner } from "../conversation-route-owner.test-support.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 const cfg: OpenClawConfig = {
@@ -33,29 +33,21 @@ afterEach(() => {
 });
 
 it("keeps an unbound direct route available while thread bindings are disabled", async () => {
-  const scenario = {
-    kind: "direct" as const,
-    peerId: "100000000000000009",
-    conversationId: "user:100000000000000009",
-  };
+  const peerId = "100000000000000009";
+  const conversation = { channel: "discord", accountId: "work", conversationId: `user:${peerId}` };
   const manager = createNoopThreadBindingManager("work");
   try {
-    const conversation = {
-      channel: "discord",
-      accountId: "work",
-      conversationId: scenario.conversationId,
-    };
     const route = resolveAgentRoute({
       cfg,
       channel: "discord",
       accountId: "work",
-      peer: { kind: scenario.kind, id: scenario.peerId },
+      peer: { kind: "direct", id: peerId },
     });
     expect(
-      inspectDiscordConversationRouteOwner({
+      await inspectDiscordConversationRouteOwner({
         cfg,
         accountId: "work",
-        conversation: { kind: scenario.kind, peerId: scenario.peerId },
+        conversation: { kind: "direct", peerId },
       }),
     ).toEqual({ kind: "agent", agentId: route.agentId });
     const resolved = await resolveRuntimeConversationBindingRouteAsync({ route, conversation });

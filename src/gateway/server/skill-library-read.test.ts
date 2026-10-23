@@ -13,6 +13,7 @@ import {
   type SkillsLibraryReceipt,
   type SkillLibrarySelection,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { waitForGatewayStartup } from "../../../test/helpers/gateway-startup.js";
 import {
   acquireGatewayTestWebSocket,
   closeGatewayTestWebSocket,
@@ -359,16 +360,17 @@ describe("Gateway pinned manual library read", () => {
               startGatewayServer(port, { bind: "loopback", controlUiEnabled: false }),
             );
             await gateway.startupSettled;
+            await waitForGatewayStartup(port);
             const alice = await connectProfile(
               port,
               "alice@example.test",
-              state.path("alice-device.sqlite"),
+              state.path("alice-device", "client", "credentials.sqlite"),
             );
             sockets.push(alice);
             const bob = await connectProfile(
               port,
               "bob@example.test",
-              state.path("bob-device.sqlite"),
+              state.path("bob-device", "client", "credentials.sqlite"),
             );
             sockets.push(bob);
             const saved = (await rpc(alice, "skills.library.save", {

@@ -1,18 +1,20 @@
 // Discord plugin module owns its transport-private approval callback envelope.
 import { buildApprovalResolutionRef } from "openclaw/plugin-sdk/approval-reference-runtime";
 import type { MessagePresentationAction } from "openclaw/plugin-sdk/interactive-runtime";
-import type { ComponentData } from "./internal/discord.js";
+import type { ComponentData } from "./internal/components.base.js";
 
 type DiscordApprovalAction = Extract<MessagePresentationAction, { type: "approval" }>;
+
+export const DISCORD_APPROVAL_DECISIONS = {
+  "allow-once": { label: "Allowed (once)", color: "#57F287" },
+  "allow-always": { label: "Allowed (always)", color: "#5865F2" },
+  deny: { label: "Denied", color: "#ED4245" },
+};
 
 const DISCORD_APPROVAL_CUSTOM_ID_MAX_CHARS = 100;
 
 function encodeDiscordApprovalCustomId(action: DiscordApprovalAction): string {
-  return [
-    `execapproval:kind=${action.approvalKind}`,
-    `id=${encodeURIComponent(action.approvalId)}`,
-    `action=${action.decision}`,
-  ].join(";");
+  return `execapproval:kind=${action.approvalKind};id=${encodeURIComponent(action.approvalId)};action=${action.decision}`;
 }
 
 function encodeBoundedDiscordApprovalCustomId(action: DiscordApprovalAction): string {
@@ -72,11 +74,7 @@ export function parseExecApprovalData(data: ComponentData): {
   const rawId = coerce(data.id);
   const rawKind = coerce(data.kind);
   const rawAction = coerce(data.action);
-  if (
-    !rawId ||
-    (rawKind !== "exec" && rawKind !== "plugin" && rawKind !== "system-agent") ||
-    !rawAction
-  ) {
+  if (!rawId || (rawKind !== "exec" && rawKind !== "plugin" && rawKind !== "system-agent")) {
     return null;
   }
   if (rawAction !== "allow-once" && rawAction !== "allow-always" && rawAction !== "deny") {

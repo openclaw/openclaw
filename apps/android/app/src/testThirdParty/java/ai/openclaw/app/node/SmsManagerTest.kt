@@ -818,7 +818,7 @@ class SmsManagerTest {
   }
 
   @Test
-  fun effectiveSearchParamsRaisesConversationReviewLimitFloor() {
+  fun resolveSearchParamsRaisesConversationReviewLimitFloor() {
     val params =
       SmsManager.QueryParams(
         limit = 5,
@@ -833,16 +833,16 @@ class SmsManagerTest {
         conversationReview = true,
       )
 
-    assertEquals(25, SmsManager.effectiveSearchParams(params).limit)
-    assertEquals(40, SmsManager.effectiveSearchParams(params.copy(limit = 40)).limit)
-    assertEquals(5, SmsManager.effectiveSearchParams(params.copy(conversationReview = false)).limit)
+    assertEquals(25, SmsManager.resolveSearchParams(params, params.phoneNumber).limit)
+    assertEquals(40, SmsManager.resolveSearchParams(params.copy(limit = 40), params.phoneNumber).limit)
+    assertEquals(5, SmsManager.resolveSearchParams(params.copy(conversationReview = false), params.phoneNumber).limit)
 
     val singleResolvedContact = params.copy(phoneNumber = null, contactName = "Leah")
-    assertEquals(25, SmsManager.effectiveSearchParams(singleResolvedContact, listOf("15551234567")).limit)
-    assertEquals(5, SmsManager.effectiveSearchParams(singleResolvedContact, listOf("15551234567", "15557654321")).limit)
+    assertEquals(25, SmsManager.resolveSearchParams(singleResolvedContact, null, listOf("15551234567")).limit)
+    assertEquals(5, SmsManager.resolveSearchParams(singleResolvedContact, null, listOf("15551234567", "15557654321")).limit)
     assertEquals(
-      SmsManager.effectiveSearchParams(params).limit,
-      SmsManager.effectiveSearchParams(singleResolvedContact, listOf("15551234567")).limit,
+      SmsManager.resolveSearchParams(params, params.phoneNumber).limit,
+      SmsManager.resolveSearchParams(singleResolvedContact, null, listOf("15551234567")).limit,
     )
   }
 

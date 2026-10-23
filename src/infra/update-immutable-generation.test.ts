@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
+  recordImmutableOperatorBuild,
   sealImmutableGeneration,
   verifyImmutableGeneration,
 } from "./update-immutable-generation.js";
@@ -25,6 +26,7 @@ async function unseal(root: string): Promise<void> {
 const temporary = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     for (const directory of temporary.dirs) {
       await unseal(directory);
     }
@@ -62,18 +64,22 @@ const runGit: CommandRunner = async (argv, options) => {
 
 async function generation() {
   const root = temporary.make("openclaw-immutable-generation-");
-  await fs.mkdir(path.join(root, "dist", "plugin-sdk"), { recursive: true });
-  await fs.mkdir(path.join(root, "dist", "control-ui"), { recursive: true });
+  const json = (file: string, value: unknown) =>
+    fs.writeFile(path.join(root, file), JSON.stringify(value));
+  await fs.mkdir(path.join(root, "dist/plugin-sdk"), { recursive: true });
+  await fs.mkdir(path.join(root, "dist/control-ui"), { recursive: true });
   await fs.writeFile(path.join(root, ".gitignore"), "dist/\n");
   await fs.writeFile(path.join(root, "source.txt"), "source\n");
-  await fs.writeFile(
-    path.join(root, "package.json"),
-    JSON.stringify({
-      name: "openclaw",
-      version: "1.0.0",
-      exports: { "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" } },
-    }),
-  );
+  await json("package.json", {
+    name: "openclaw",
+    version: "1.0.0",
+    exports: {
+      "./plugin-sdk/core": {
+        types: "./dist/plugin-sdk/core.d.ts",
+        default: "./dist/plugin-sdk/core.js",
+      },
+    },
+  });
   const git = (...args: string[]) =>
     execFileSync("git", ["-C", root, ...args], {
       encoding: "utf8",
@@ -82,62 +88,83 @@ async function generation() {
   git("init", "--quiet");
   git("add", ".");
   git(
-    "-c",
-    "user.name=Fixture",
-    "-c",
-    "user.email=fixture@example.invalid",
-    "commit",
-    "--quiet",
-    "-m",
-    "fixture",
+    ..."-c user.name=Fixture -c user.email=fixture@example.invalid commit -qm fixture".split(" "),
   );
   const sha = git("rev-parse", "HEAD");
-  for (const name of ["entry.js", "index.js", "plugin-sdk/core.js"]) {
+  for (const name of ["entry.js", "index.js", "plugin-sdk/core.js", "plugin-sdk/core.d.ts"]) {
     await fs.writeFile(path.join(root, "dist", name), "export {};\n");
   }
-  await fs.writeFile(path.join(root, "dist", "control-ui", "index.html"), "ready");
-  await fs.writeFile(
-    path.join(root, "dist", "build-info.json"),
-    JSON.stringify({ commit: sha, buildId: sha }),
-  );
+  await fs.writeFile(path.join(root, "dist/control-ui/index.html"), "ready");
+  await json("dist/build-info.json", { commit: sha, buildId: sha });
   for (const name of [".buildstamp", ".runtime-postbuildstamp"]) {
-    await fs.writeFile(path.join(root, "dist", name), JSON.stringify({ head: sha }));
+    await json(`dist/${name}`, { head: sha });
   }
-  return { root, sha };
+  return { root, sha, json };
 }
 
 describe("sealed immutable generation", () => {
-  it("checks the selected generation even when the caller supplies another Git repository", async () => {
+  it("seals recorded operator-build provenance and detects its later modification", async () => {
     const { root, sha } = await generation();
-    const foreign = temporary.make("openclaw-immutable-foreign-git-");
-    execFileSync("git", ["clone", "--quiet", "--no-hardlinks", root, foreign]);
-    await fs.writeFile(path.join(root, "source.txt"), "uncommitted candidate source\n");
+    await recordImmutableOperatorBuild(root, { account: "fixture", uid: 1002, gid: 1002 });
     await sealImmutableGeneration(root);
-    vi.stubEnv("GIT_DIR", path.join(foreign, ".git"));
-    vi.stubEnv("GIT_WORK_TREE", foreign);
-    try {
-      await expect(verifyImmutableGeneration(root, sha, runGit)).rejects.toThrow(
-        "uncommitted source changes",
-      );
-    } finally {
-      vi.unstubAllEnvs();
-    }
+    const original = await verifyImmutableGeneration(root, sha, runGit);
+    expect(JSON.parse(await fs.readFile(path.join(root, "dist/build-info.json"), "utf8"))).toEqual({
+      commit: sha,
+      buildId: sha,
+      immutableBuild: {
+        builtBy: "operator",
+        isolation: "none",
+        account: "fixture",
+        uid: 1002,
+        gid: 1002,
+      },
+    });
+    await unseal(root);
+    await fs.writeFile(
+      path.join(root, "dist/build-info.json"),
+      JSON.stringify({ commit: sha, buildId: sha }),
+    );
+    await sealImmutableGeneration(root);
+    const modified = await verifyImmutableGeneration(root, sha, runGit);
+    expect(modified.buildDigest).not.toBe(original.buildDigest);
   });
+
+  it.each(["config", "commondir"])(
+    "refuses build-authored Git helpers through %s before privileged Git verification",
+    async (kind) => {
+      const { root, sha } = await generation();
+      const metadata = kind === "config" ? path.join(root, ".git") : path.join(root, "shared-git");
+      if (kind === "commondir") {
+        await fs.cp(path.join(root, ".git"), metadata, { recursive: true });
+        await fs.writeFile(path.join(root, ".git/commondir"), "../shared-git\n");
+      }
+      await fs.appendFile(path.join(metadata, "config"), '\n[filter "candidate"]\n\tclean = cat\n');
+      await fs.writeFile(path.join(metadata, "info/attributes"), "source.txt filter=candidate\n");
+      await sealImmutableGeneration(root);
+      const command = vi.fn(runGit);
+      await expect(verifyImmutableGeneration(root, sha, command)).rejects.toThrow(
+        kind === "config" ? "unsupported Git configuration" : "independent Git metadata",
+      );
+      expect(command).not.toHaveBeenCalled();
+    },
+  );
 
   it("seals code and dependencies while preserving executable bits and contained links, and verifies without writing Git metadata", async () => {
     const { root, sha } = await generation();
-    const executable = path.join(root, "dist", "index.js");
+    const executable = path.join(root, "dist/index.js");
     await fs.chmod(executable, 0o755);
     await fs.mkdir(path.join(root, "node_modules"));
-    await fs.appendFile(path.join(root, ".git", "info", "exclude"), "\nnode_modules/\n");
-    await fs.symlink("../dist/index.js", path.join(root, "node_modules", "contained"));
-    const index = path.join(root, ".git", "index");
+    await fs.appendFile(path.join(root, ".git/info/exclude"), "\nnode_modules/\n");
+    await fs.symlink("../dist/index.js", path.join(root, "node_modules/contained"));
+    const index = path.join(root, ".git/index");
     const beforeIndex = await fs.readFile(index);
     await sealImmutableGeneration(root);
     const beforeMtime = (await fs.stat(index)).mtimeMs;
     const result = await verifyImmutableGeneration(root, sha, runGit);
-    expect(result.buildDigest).toMatch(/^[a-f0-9]{64}$/u);
-    expect(result.identity).toMatch(/^\d+:\d+$/u);
+    expect(result).toMatchObject({
+      buildDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      identity: expect.stringMatching(/^\d+:\d+$/u),
+    });
     expect((await fs.stat(executable)).mode & 0o777).toBe(0o555);
     expect((await fs.stat(path.join(root, "source.txt"))).mode & 0o777).toBe(0o444);
     expect((await fs.stat(root)).mode & 0o777).toBe(0o555);
@@ -149,20 +176,28 @@ describe("sealed immutable generation", () => {
     ["different HEAD", /HEAD does not match/u],
     ["dirty source", /uncommitted source/u],
     ["stale build", /git runtime mismatch/u],
-    ["missing SDK", /ENOENT/u],
+    ["missing SDK declarations", /core\.d\.ts/u],
+    ["foreign Git context", "uncommitted source changes"],
+    ["writable after sealing", "not sealed"],
   ] as const)("refuses a sealed release with %s", async (kind, error) => {
-    const { root, sha } = await generation();
-    if (kind === "dirty source") {
+    const { root, sha, json } = await generation();
+    if (kind === "foreign Git context") {
+      const foreign = temporary.make("openclaw-immutable-foreign-git-");
+      execFileSync("git", ["clone", "--quiet", "--no-hardlinks", root, foreign]);
+      vi.stubEnv("GIT_DIR", path.join(foreign, ".git"));
+      vi.stubEnv("GIT_WORK_TREE", foreign);
+    }
+    if (kind === "dirty source" || kind === "foreign Git context") {
       await fs.writeFile(path.join(root, "source.txt"), "edited\n");
     } else if (kind === "stale build") {
-      await fs.writeFile(
-        path.join(root, "dist", "build-info.json"),
-        JSON.stringify({ commit: "0".repeat(40) }),
-      );
-    } else if (kind === "missing SDK") {
-      await fs.unlink(path.join(root, "dist", "plugin-sdk", "core.js"));
+      await json("dist/build-info.json", { commit: "0".repeat(40) });
+    } else if (kind === "missing SDK declarations") {
+      await fs.unlink(path.join(root, "dist", "plugin-sdk", "core.d.ts"));
     }
     await sealImmutableGeneration(root);
+    if (kind === "writable after sealing") {
+      await fs.chmod(path.join(root, "dist/plugin-sdk/core.js"), 0o644);
+    }
     await expect(
       verifyImmutableGeneration(root, kind === "different HEAD" ? "0".repeat(40) : sha, runGit),
     ).rejects.toThrow(error);
@@ -185,11 +220,4 @@ describe("sealed immutable generation", () => {
       expect((await fs.stat(source)).mode).toBe(before);
     },
   );
-
-  it("rejects a generation made writable after sealing", async () => {
-    const { root, sha } = await generation();
-    await sealImmutableGeneration(root);
-    await fs.chmod(path.join(root, "dist", "plugin-sdk", "core.js"), 0o644);
-    await expect(verifyImmutableGeneration(root, sha, runGit)).rejects.toThrow("not sealed");
-  });
 });

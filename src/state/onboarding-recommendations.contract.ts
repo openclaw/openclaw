@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { sha256Hex } from "../infra/crypto-digest.js";
 
+export const ONBOARDING_RECOMMENDATIONS_STATE_KEY_PREFIX = "onboarding.recommendations.";
+
 const OnboardingRecommendationMatchSchema = z.object({
   appLabel: z.string(),
   candidateId: z.string(),
@@ -90,5 +92,5 @@ export function prepareOnboardingRecommendationPending(
 ) {
   const nowMs = params.nowMs ?? Date.now();
   const matches = OnboardingRecommendationMatchesSchema.parse(params.matches);
-  return { matches, expected: structuredClone(params.expected), nowMs };
+  return { matches, expected: params.expected, nowMs };
 }

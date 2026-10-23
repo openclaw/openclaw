@@ -52,8 +52,9 @@ sidebarTitle: "Voice and speech"
     Talk over a ChatGPT subscription when the account has access (see the
     Realtime accordion).
     OpenAI TTS and GA realtime Voice Call, Gateway relay, and Discord sessions
-    still require a Platform API key. Codex GPT-Live supports ChatGPT OAuth
-    through the shared Gateway-owned bridge, including Discord and Voice Call.
+    still require a Platform API key. Codex GPT-Live supports ChatGPT OAuth and
+    pasted ChatGPT access-token profiles through the shared Gateway-owned bridge,
+    including Discord and Voice Call.
     </Note>
 
   </Accordion>
@@ -521,10 +522,11 @@ sidebarTitle: "Voice and speech"
     `/openai/v1/realtime?model=<realtime-deployment>` and sends the GA
     `session.update` payload. Authentication uses the Azure `api-key` header.
     Microsoft deprecated the Preview Realtime API on April 30, 2026 and directs
-    applications to migrate to GA; accordingly, `azureApiVersion` does not
-    select a Preview endpoint or protocol for this bridge. Remove any preview
-    API-version setting when migrating. The GA session configuration does not
-    send `temperature`.
+    applications to migrate to GA. If `azureApiVersion` is explicitly set, the
+    bridge preserves the preview WebSocket route and matching session payload;
+    remove that setting to use the GA route and session payload instead. The GA
+    session configuration does not send `temperature`; the preview session
+    continues to use `temperature` when configured.
 
     `inputTranscriptionModel` selects the Azure deployment used only for input
     transcription. If omitted, Azure defaults to `whisper-1`; the value must

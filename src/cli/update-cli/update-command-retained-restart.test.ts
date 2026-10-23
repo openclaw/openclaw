@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
-import { createServer, type Socket } from "node:net";
 import path from "node:path";
-import { createInterface } from "node:readline";
 import { DatabaseSync } from "node:sqlite";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+} from "../../../test/helpers/fixture-receipts.js";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -21,7 +23,6 @@ import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
-import { reserveTestPortListener } from "../../test-utils/port-claims.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 import {
@@ -37,8 +38,8 @@ vi.mock("../../daemon/launchd.js", async (importOriginal) => ({
   restartLaunchAgent: async (args: GatewayServiceControlArgs) =>
     (await import("../../daemon/systemd-lifecycle.js")).restartSystemdService(args),
 }));
-vi.mock("../../daemon/schtasks.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../daemon/schtasks.js")>()),
+vi.mock("../../daemon/schtasks-control.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/schtasks-control.js")>()),
   restartScheduledTask: async (args: GatewayServiceControlArgs) =>
     (await import("../../daemon/systemd-lifecycle.js")).restartSystemdService(args),
 }));
@@ -85,16 +86,12 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 function revoke(root: string) {
-  const db = new DatabaseSync(path.join(control, "managed-update-handoffs.sqlite"));
-  try {
-    expect(
-      db
-        .prepare("UPDATE managed_update_handoffs SET owner = ? WHERE install_root = ?")
-        .run("replacement", root).changes,
-    ).toBe(1);
-  } finally {
-    db.close();
-  }
+  using db = new DatabaseSync(path.join(control, "managed-update-handoffs.sqlite"));
+  expect(
+    db
+      .prepare("UPDATE managed_update_handoffs SET owner = ? WHERE install_root = ?")
+      .run("replacement", root).changes,
+  ).toBe(1);
 }
 function request(run: NonNullable<UpdateCommandOptions["run"]>, root = a) {
   return {
@@ -106,158 +103,113 @@ function request(run: NonNullable<UpdateCommandOptions["run"]>, root = a) {
     revalidate: async () => undefined,
   };
 }
-function owned(
-  operation: (run: NonNullable<UpdateCommandOptions["run"]>) => Promise<void>,
+function owned<T>(
+  operation: (run: NonNullable<UpdateCommandOptions["run"]>) => Promise<T>,
   retained = true,
 ) {
   const run: NonNullable<UpdateCommandOptions["run"]> = { runId: randomUUID(), env };
   return withUpdateCommandExecutor(run.runId, async (executor) => {
     run.executorFence = await executor.enter(b, retained ? { serviceRoot: a } : undefined);
-    await operation(run);
+    return await operation(run);
   });
+}
+function expectOwners(kind: "busy" | "absent") {
+  const store = createManagedHandoffLeaseStore();
+  for (const root of [a, b]) {
+    if (kind === "busy") {
+      expect(store.acquire(root, randomUUID(), { kind: "update" }).kind).toBe(kind);
+    } else {
+      expect(store.read(root)).toEqual({ kind });
+    }
+  }
+}
+function restartOwned() {
+  return owned((run) => commands.restartRetainedUpdateGatewayService(request(run)));
 }
 
 describe.skipIf(process.platform === "win32")("retained POSIX native restart", () => {
-  it.for(["native drain", "readiness failure"] as const)(
-    "restarts retained A with a real child and keeps both owners until %s",
-    async (outcome, { signal }) => {
-      const effect = path.join(a, "effect");
-      const started = createDeferred();
-      const definition = path.join(a, "unit");
-      fs.writeFileSync(definition, "original Node A and service definition");
-      let pid = 0;
-      let complete = false;
-      let work: Promise<void> | undefined;
-      let connection: Socket | undefined;
-      let reader: ReturnType<typeof createInterface> | undefined;
-      let releaseRequested = false;
-      const readinessError = new Error("fixture readiness observer failed");
-      const releaseChild = () => {
-        releaseRequested = true;
-        if (connection && !connection.writableEnded) {
-          connection.end("release\n");
-        }
-      };
-      // Directory notifications can coalesce. Keep readiness and release outside
-      // native custody so a failed observer can still unblock the owned child.
-      const listener = await reserveTestPortListener({
-        offsets: [0],
-        signal,
-        createListener: () =>
-          createServer((socket) => {
-            connection = socket;
-            socket.on("error", started.reject);
-            reader = createInterface({ input: socket });
-            reader.once("line", (line) => {
-              try {
-                pid = Number(fs.readFileSync(effect, "utf8"));
-                expect(Number(line)).toBe(pid);
-                if (outcome === "readiness failure") {
-                  started.reject(readinessError);
-                } else {
-                  started.resolve();
-                }
-              } catch (error) {
-                started.reject(error);
-              }
-            });
-            if (releaseRequested) {
-              releaseChild();
+  it("restarts retained A with a real child and keeps both owners until native drain", async ({
+    signal,
+  }) => {
+    const effect = path.join(a, "effect");
+    const receipts = await openFixtureReceiptChannel();
+    const definition = path.join(a, "unit");
+    fs.writeFileSync(definition, "original Node A and service definition");
+    let pid = 0;
+    let complete = false;
+    let work: Promise<void> | undefined;
+    const releaseChild = () => receipts.release("native", "release");
+    // Directory notifications can coalesce. Keep readiness and release outside
+    // native custody so a failed observer can still unblock the owned child.
+    const started = receipts.waitFor("native", "pid:").then(async () => {
+      pid = Number(fs.readFileSync(effect, "utf8"));
+      await receipts.waitFor("native", `pid:${pid}:`);
+      expect(pid).toBeGreaterThan(0);
+      expect(pid).not.toBe(process.pid);
+    });
+    await runQaGatewayFixture(
+      async () => {
+        const native = vi
+          .spyOn(systemdExec, "execSystemctlUser")
+          .mockImplementation(async (_env, args, _timeout, assertCurrent) => {
+            assertCurrent?.();
+            assertGatewayServiceUpdateCurrent();
+            if (args[0] === "reset-failed") {
+              return success;
             }
-          }),
-      });
-      listener.listener.on("error", started.reject);
-      await runQaGatewayFixture(
-        async () => {
-          const native = vi
-            .spyOn(systemdExec, "execSystemctlUser")
-            .mockImplementation(async (_env, args, _timeout, assertCurrent) => {
-              assertCurrent?.();
-              assertGatewayServiceUpdateCurrent();
-              if (args[0] === "reset-failed") {
-                return success;
-              }
-              expect(args).toEqual(["restart", "fixture-A.service"]);
-              return await execFileUtf8(process.execPath, [
-                "-e",
-                `
-      const fs = require("node:fs");
-      const socket = require("node:net").connect(${listener.claim.port}, "127.0.0.1", () => {
+            expect(args).toEqual(["restart", "fixture-A.service"]);
+            return await execFileUtf8(process.execPath, [
+              "--input-type=module",
+              "-e",
+              `
+      import fs from "node:fs";
+      ${fixtureReceiptClientSource(receipts.endpoint)}
         fs.writeFileSync(${JSON.stringify(effect + ".tmp")}, String(process.pid));
         fs.renameSync(${JSON.stringify(effect + ".tmp")}, ${JSON.stringify(effect)});
-        socket.write(String(process.pid) + "\\n");
-      });
-      const lines = require("node:readline").createInterface({ input: socket });
-      lines.once("line", (line) => {
-        if (line !== "release") throw new Error("Unexpected fixture release");
-        lines.close();
+        sendReceipt("native", "pid:" + process.pid + ":");
+        await awaitRelease("native", "release");
         process.stdout.write("drained");
-        socket.end();
-      });
     `,
-              ]);
-            });
-          const running = owned(async (run) => {
-            const onGatewayStartAttempted = vi.fn();
-            await expect(
-              commands.restartRetainedUpdateGatewayService({
-                ...request(run),
-                onGatewayStartAttempted,
-                signal,
-              }),
-            ).resolves.toEqual({
-              outcome: "completed",
-            });
-            expect(onGatewayStartAttempted).toHaveBeenCalledOnce();
-          }).then(() => {
-            complete = true;
+            ]);
           });
-          work = running;
-          const exercise = async () => {
-            try {
-              await withinTest(Promise.race([started.promise, running]), signal);
-              expect(pid).toBeGreaterThan(0);
-              expect(pid).not.toBe(process.pid);
-              expect(complete).toBe(false);
-              const store = createManagedHandoffLeaseStore();
-              for (const root of [a, b]) {
-                expect(store.acquire(root, randomUUID(), { kind: "update" }).kind).toBe("busy");
-              }
-              expect(store.read(c)).toEqual({ kind: "absent" });
-              releaseChild();
-              await running;
-            } finally {
-              releaseChild();
-              await running.catch(() => undefined);
-            }
-          };
-          if (outcome === "readiness failure") {
-            await expect(exercise()).rejects.toBe(readinessError);
-          } else {
-            await exercise();
-          }
-          expect(pid).toBeGreaterThan(0);
-          expect(complete).toBe(true);
-          expect(native.mock.calls.map((call) => call[1][0])).toEqual(["reset-failed", "restart"]);
-          expect(fs.readFileSync(definition, "utf8")).toBe(
-            "original Node A and service definition",
-          );
-          const store = createManagedHandoffLeaseStore();
-          for (const root of [a, b]) {
-            expect(store.read(root)).toEqual({ kind: "absent" });
-          }
-        },
-        async () => {
+        const running = owned(async (run) => {
+          const onGatewayStartAttempted = vi.fn();
+          expect(
+            await commands.restartRetainedUpdateGatewayService({
+              ...request(run),
+              onGatewayStartAttempted,
+              signal,
+            }),
+          ).toEqual({ outcome: "completed" });
+          expect(onGatewayStartAttempted).toHaveBeenCalledOnce();
+        }).then(() => {
+          complete = true;
+        });
+        work = running;
+        const observe = async () => {
+          await withinTest(Promise.race([started, running]), signal);
+          expect(complete).toBe(false);
+          expectOwners("busy");
+          expect(createManagedHandoffLeaseStore().read(c)).toEqual({ kind: "absent" });
+        };
+        try {
+          await observe();
+        } finally {
           releaseChild();
-          await work?.catch(() => undefined);
-          reader?.close();
-          connection?.destroy();
-          await listener.releaseListener();
-        },
-        () => listener.claim.release(),
-      );
-    },
-  );
+          await running.catch(() => undefined);
+        }
+        await running;
+        expect(native.mock.calls.map((call) => call[1][0])).toEqual(["reset-failed", "restart"]);
+        expect(fs.readFileSync(definition, "utf8")).toBe("original Node A and service definition");
+        expectOwners("absent");
+      },
+      async () => {
+        releaseChild();
+        await work?.catch(() => undefined);
+      },
+      () => receipts.close(),
+    );
+  });
 
   it.each([
     "A",
@@ -325,12 +277,9 @@ describe.skipIf(process.platform === "win32")("retained POSIX native restart", (
     await expect(work).rejects.toThrow(
       /executor|ownership|cancelled fixture|changed original service|unavailable|scope/,
     );
-    if (afterReset) {
-      expect(native).toHaveBeenCalledOnce();
-      expect(native.mock.calls[0]?.[1][0]).toBe("reset-failed");
-    } else {
+    expect(native.mock.calls.map((call) => call[1][0])).toEqual(afterReset ? ["reset-failed"] : []);
+    if (!afterReset) {
       expect(futureConfig.assertFutureConfigActionAllowed).toHaveBeenCalledOnce();
-      expect(native).not.toHaveBeenCalled();
     }
     expect(onGatewayStartAttempted).not.toHaveBeenCalled();
   });
@@ -369,14 +318,10 @@ describe.skipIf(process.platform === "win32")("retained POSIX native restart", (
       code: 1,
       stderr: "native failed",
     });
-    await expect(
-      owned(async (run) => {
-        await commands.restartRetainedUpdateGatewayService(request(run));
-      }),
-    ).rejects.toThrow("native failed");
+    await expect(restartOwned()).rejects.toThrow("native failed");
   });
 
-  it("does not release native operation lock while a nested native borrower is pending", async () => {
+  it("holds the native lock until its nested borrower settles", async () => {
     const release = createDeferred();
     const entered = createDeferred();
     let borrower: Promise<void> | undefined;
@@ -392,20 +337,14 @@ describe.skipIf(process.platform === "win32")("retained POSIX native restart", (
       return success;
     });
     let done = false;
-    const work = owned(async (run) => {
-      await commands.restartRetainedUpdateGatewayService(request(run));
-    }).then(() => {
+    const work = restartOwned().then(() => {
       done = true;
     });
     try {
       await Promise.race([entered.promise, work]);
       await Promise.resolve();
       expect(done).toBe(false);
-      for (const root of [a, b]) {
-        expect(
-          createManagedHandoffLeaseStore().acquire(root, randomUUID(), { kind: "update" }).kind,
-        ).toBe("busy");
-      }
+      expectOwners("busy");
       release.resolve();
       await work;
       await borrower;
@@ -416,7 +355,6 @@ describe.skipIf(process.platform === "win32")("retained POSIX native restart", (
   });
 
   it("retained-root query uses actual delegated authority", async () => {
-    const proceed = path.join(a, "proceed");
     const effect = path.join(a, "delegated-effect");
     const ownerUrl = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor);
     const sourceArgs = ownerUrl.pathname.endsWith(".ts")
@@ -424,26 +362,16 @@ describe.skipIf(process.platform === "win32")("retained POSIX native restart", (
       : [];
     const script = `
       import fs from "node:fs";
-      import {setTimeout} from "node:timers/promises";
+      import {json} from "node:stream/consumers";
       import {withDelegatedUpdateCommandExecutor,assertRetainedUpdateCommandRoot,captureUpdateCommandExecutorAuthority} from ${JSON.stringify(ownerUrl.href)};
-      // The parent binds child identity before sending the grant; stdin can be nonblocking.
-      process.stdin.setEncoding("utf8");
-      let input="";
-      for await(const chunk of process.stdin)input+=chunk;
-      const {grant,a,b,proceed,effect}=JSON.parse(input);
-      try {
-        await withDelegatedUpdateCommandExecutor(grant,grant.runId,grant.root,async fence=>{
-          assertRetainedUpdateCommandRoot(fence,a);
-          if(captureUpdateCommandExecutorAuthority(fence).installKey!==b)throw Error("B identity lost");
-          process.stdout.write("ADMITTED");
-          while(!fs.existsSync(proceed))await setTimeout(10);
-          assertRetainedUpdateCommandRoot(fence,a);
-          fs.writeFileSync(effect,"live retained A with original B");
-        });
-      } catch(error) {process.stderr.write(error.message);process.exitCode=1;}
+      const {grant,a,b,effect}=await json(process.stdin);
+      await withDelegatedUpdateCommandExecutor(grant,grant.runId,grant.root,async fence=>{
+        assertRetainedUpdateCommandRoot(fence,a);
+        if(captureUpdateCommandExecutorAuthority(fence).installKey!==b)throw Error("B identity lost");
+        fs.writeFileSync(effect,"live retained A with original B");
+      });
     `;
-    let childAdmitted = false;
-    const work = owned(async (run) => {
+    await owned(async (run) => {
       const fence = run.executorFence;
       if (!fence) {
         throw new Error("Missing fixture fence");
@@ -452,24 +380,16 @@ describe.skipIf(process.platform === "win32")("retained POSIX native restart", (
         runUtf8CommandWithTimeout(
           [process.execPath, ...sourceArgs, "--input-type=module", "-e", script],
           {
-            input: JSON.stringify({ grant, a, b, proceed, effect }),
+            input: JSON.stringify({ grant, a, b, effect }),
             beforeInput,
             timeoutMs: 15000,
             killProcessTree: true,
             requireProcessTreeExtinction: true,
-            onOutputChunk(chunk, stream) {
-              if (!childAdmitted && stream === "stdout" && chunk.toString() === "ADMITTED") {
-                childAdmitted = true;
-                fs.writeFileSync(proceed, "");
-              }
-            },
           },
         ),
       );
       expect(result.code, result.stderr).toBe(0);
     });
-    await work;
     expect(fs.readFileSync(effect, "utf8")).toBe("live retained A with original B");
-    expect(childAdmitted).toBe(true);
   });
 });

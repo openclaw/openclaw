@@ -1,12 +1,16 @@
 import path from "node:path";
+import { StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { prepareSessionMaintenancePreservation } from "../../../config/sessions/store-maintenance-preserve.js";
+import * as stateReads from "../../../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../../../state/openclaw-state-db.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
+import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import {
   persistRegistryFixture,
   saveSubagentRegistryToSqlite,
@@ -68,7 +72,43 @@ afterEach(async () => {
 });
 
 describe("subagent maintenance protection", () => {
-  it("collects protection keys without decoding retained task and reply text", async () => {
+  it("does not revisit settled live facts while capturing current protection", async () => {
+    const pending = createRun();
+    const rows = new Map([[pending.runId, pending]]);
+    let settledFactReads = 0;
+    for (let index = 0; index < 200; index++) {
+      const settled = createRun({
+        runId: `settled-${index}`,
+        childSessionKey: `agent:main:subagent:settled-${index}`,
+      });
+      Object.defineProperty(settled, "cleanupCompletedAt", {
+        enumerable: true,
+        get() {
+          settledFactReads++;
+          return 3;
+        },
+      });
+      rows.set(settled.runId, settled);
+      subagentRuns.set(settled.runId, settled);
+    }
+    saveSubagentRegistryToSqlite(rows);
+    const prepared = await prepareSessionMaintenancePreservation(storePath);
+    try {
+      settledFactReads = 0;
+      expect(prepared.capture().providerKeys).toEqual([pending.childSessionKey]);
+      expect(prepared.capture().providerKeys).toEqual([pending.childSessionKey]);
+      expect(settledFactReads).toBe(0);
+      // A live replacement vetoes durable protection, and deleting it exposes durable facts again.
+      subagentRuns.set(pending.runId, { ...pending, cleanupCompletedAt: 4 });
+      expect(prepared.capture().providerKeys).toEqual([]);
+      subagentRuns.delete(pending.runId);
+      expect(prepared.capture().providerKeys).toEqual([pending.childSessionKey]);
+    } finally {
+      prepared.dispose();
+    }
+  });
+
+  it("loads protection once without decoding retained task and reply text", async () => {
     const publicRun = createRun();
     const privateRun = createRun({
       runId: "private",
@@ -78,12 +118,29 @@ describe("subagent maintenance protection", () => {
     saveSubagentRegistryToSqlite(
       new Map([publicRun, privateRun].map((entry) => [entry.runId, entry])),
     );
+    subagentRuns.set("duplicate", {
+      ...publicRun,
+      runId: "duplicate",
+      childSessionKey: `  ${publicRun.childSessionKey}  `,
+    });
+    subagentRuns.set("blank", { ...publicRun, runId: "blank", childSessionKey: "  " });
     const parse = vi.spyOn(JSON, "parse");
+    const read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
     try {
       expect(await protectedKeys()).toEqual([
         publicRun.childSessionKey,
         privateRun.childSessionKey,
       ]);
+      expect(await protectedKeys()).toEqual([
+        publicRun.childSessionKey,
+        privateRun.childSessionKey,
+      ]);
+      expect(
+        read.mock.calls.filter(
+          ([, command]) =>
+            command.type === "subagents.runs" && command.scope.kind === "maintenance",
+        ),
+      ).toHaveLength(1);
       expect(
         parse.mock.calls.some(
           ([text]) =>
@@ -92,6 +149,7 @@ describe("subagent maintenance protection", () => {
       ).toBe(false);
     } finally {
       parse.mockRestore();
+      read.mockRestore();
     }
   });
 
@@ -181,6 +239,54 @@ describe("subagent maintenance protection", () => {
       write.run(text, run.runId);
       clearSubagentRunsReadCacheForTest();
       expect(await protectedKeys(), name).toEqual(protectedRun ? [run.childSessionKey] : []);
+    }
+  });
+
+  it("uses committed registry writes for prepared protection without rereading SQLite", async () => {
+    const first = createRun({
+      runId: "first",
+      childSessionKey: "agent:main:subagent:first",
+      cleanupCompletedAt: 3,
+    });
+    const second = createRun({
+      runId: "second",
+      childSessionKey: "agent:main:subagent:second",
+    });
+    saveSubagentRegistryToSqlite(new Map([first, second].map((entry) => [entry.runId, entry])));
+    const runs = new Map<string, SubagentRunRecord>();
+    const prepared = await prepareSessionMaintenancePreservation(storePath, { native: true });
+    try {
+      const previous = prepared.capture();
+      expect(previous.providerKeys).toEqual([second.childSessionKey]);
+      await mutateSubagentRuns(
+        [first.runId],
+        () => ({
+          value: undefined,
+          postimages: new Map([[first.runId, { ...first, cleanupCompletedAt: undefined }]]),
+        }),
+        { runs },
+      );
+      const observation = observeSqliteReadSql(StatementSync.prototype);
+      try {
+        expect(prepared.refreshCandidates([first.childSessionKey]).providerKeys).toEqual([
+          first.childSessionKey,
+          second.childSessionKey,
+        ]);
+        expect(observation.queries).toEqual([]);
+      } finally {
+        observation.restore();
+      }
+      expect(previous.providerKeys).toEqual([second.childSessionKey]);
+      expect(await protectedKeys()).toEqual([first.childSessionKey, second.childSessionKey]);
+      await mutateSubagentRuns(
+        [first.runId],
+        () => ({ value: undefined, postimages: new Map([[first.runId, null]]) }),
+        { runs },
+      );
+      expect(prepared.capture().providerKeys).toEqual([second.childSessionKey]);
+      expect(await protectedKeys()).toEqual([second.childSessionKey]);
+    } finally {
+      prepared.dispose();
     }
   });
 

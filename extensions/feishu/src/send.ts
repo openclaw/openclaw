@@ -7,6 +7,7 @@ import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { assertFeishuApiSuccess } from "./api-response.js";
+import { resolveFeishuSenderName } from "./bot-sender-name.js";
 import { createFeishuClient } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
 import { createConfiguredFeishuClient } from "./configured-client.js";
@@ -19,7 +20,7 @@ import {
   type FeishuMarkdownChunkOptions,
 } from "./markdown.js";
 import type { MentionTarget } from "./mention-target.types.js";
-import { buildMentionedCardContent } from "./mention.js";
+import { buildMentionedCardContent, normalizeMentions } from "./mention.js";
 import { parseMergeForwardContent } from "./message-content.js";
 import { resolveFeishuCardTemplate } from "./native-card.js";
 import { renderPostContent } from "./post.js";
@@ -42,7 +43,6 @@ function shouldFallbackFromReplyTarget(response: { code?: number; msg?: string }
   return msg.includes("withdrawn") || msg.includes("not found");
 }
 
-/** Check whether a thrown error indicates a withdrawn/not-found reply target. */
 function isWithdrawnReplyError(err: unknown): boolean {
   if (typeof err !== "object" || err === null) {
     return false;
@@ -222,6 +222,7 @@ function parseFeishuMessageItem(
 ): FeishuMessageInfo {
   const msgType = item.msg_type ?? "text";
   const rawContent = item.body?.content ?? "";
+  const content = parseFeishuMessageContent(rawContent, msgType, item.message_id);
 
   return {
     messageId: item.message_id ?? fallbackMessageId ?? "",
@@ -230,7 +231,8 @@ function parseFeishuMessageItem(
     senderId: item.sender?.id,
     senderOpenId: item.sender?.id_type === "open_id" ? item.sender?.id : undefined,
     senderType: item.sender?.sender_type,
-    content: parseFeishuMessageContent(rawContent, msgType, item.message_id),
+    // Text placeholders use item metadata; posts/cards already render native mention elements.
+    content: msgType === "text" ? normalizeMentions(content, item.mentions) : content,
     contentType: msgType,
     createTime: parseStrictNonNegativeInteger(item.create_time),
     ...(item.root_id ? { rootId: item.root_id } : {}),
@@ -270,9 +272,22 @@ export async function getMessageFeishu(params: {
 
     const parsedItem = parseFeishuMessageItem(item, messageId);
     if (parsedItem.contentType === "merge_forward" && responseItems) {
+      const account = resolveFeishuRuntimeAccount({ cfg, accountId });
       return {
         ...parsedItem,
-        content: parseMergeForwardContent(responseItems),
+        content: await parseMergeForwardContent(
+          responseItems,
+          account.config.resolveSenderNames
+            ? async (senderId) =>
+                (
+                  await resolveFeishuSenderName({
+                    account,
+                    senderId,
+                    log: (...args) => logVerbose(args.map(String).join(" ")),
+                  })
+                ).name
+            : undefined,
+        ),
       };
     }
     return parsedItem;
@@ -444,7 +459,7 @@ export async function editMessageFeishu(params: {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
   }
 
-  const hasText = typeof text === "string" && text.trim().length > 0;
+  const hasText = Boolean(text?.trim());
   const hasCard = Boolean(card);
   if (hasText === hasCard) {
     throw new Error("Feishu edit requires exactly one of text or card.");

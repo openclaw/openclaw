@@ -47,21 +47,16 @@ import kotlin.math.sin
 
 // Canonical 120x120 mascot geometry from ui/public/favicon.svg. Parts stay
 // separate so the original silhouette can react without substituting artwork.
-private val BodyPath by lazy {
-  PathParser()
-    .parsePathString(
-      "M60 10 C30 10 15 35 15 55 C15 75 30 95 45 100 L45 110 L55 110 L55 100 " +
-        "C55 100 60 102 65 100 L65 110 L75 110 L75 100 C90 95 105 75 105 55 C105 35 90 10 60 10Z",
-    ).toPath()
-}
-private val LeftClawPath by lazy {
-  PathParser().parsePathString("M20 45 C5 40 0 50 5 60 C10 70 20 65 25 55 C28 48 25 45 20 45Z").toPath()
-}
-private val RightClawPath by lazy {
-  PathParser().parsePathString("M100 45 C115 40 120 50 115 60 C110 70 100 65 95 55 C92 48 95 45 100 45Z").toPath()
-}
-private val LeftAntennaPath by lazy { PathParser().parsePathString("M45 15 Q35 5 30 8").toPath() }
-private val RightAntennaPath by lazy { PathParser().parsePathString("M75 15 Q85 5 90 8").toPath() }
+private fun avatarPath(svg: String) = lazy { PathParser().parsePathString(svg).toPath() }
+
+private val BodyPath by avatarPath(
+  "M60 10 C30 10 15 35 15 55 C15 75 30 95 45 100 L45 110 L55 110 L55 100 " +
+    "C55 100 60 102 65 100 L65 110 L75 110 L75 100 C90 95 105 75 105 55 C105 35 90 10 60 10Z",
+)
+private val LeftClawPath by avatarPath("M20 45 C5 40 0 50 5 60 C10 70 20 65 25 55 C28 48 25 45 20 45Z")
+private val RightClawPath by avatarPath("M100 45 C115 40 120 50 115 60 C110 70 100 65 95 55 C92 48 95 45 100 45Z")
+private val LeftAntennaPath by avatarPath("M45 15 Q35 5 30 8")
+private val RightAntennaPath by avatarPath("M75 15 Q85 5 90 8")
 
 private val CoralBright = Color(0xFFFF4D4D)
 private val CoralDark = Color(0xFF991B1B)
@@ -549,10 +544,7 @@ internal fun smoothAvatarMouth(
 internal fun scaledAvatarDeltaSeconds(
   deltaSeconds: Float,
   durationScale: Float,
-): Float {
-  if (durationScale <= 0f) return 0f
-  return (deltaSeconds / durationScale).coerceIn(0f, 0.05f)
-}
+): Float = if (durationScale <= 0f) 0f else (deltaSeconds / durationScale).coerceIn(0f, 0.05f)
 
 private fun syntheticSpeechMouth(animationSeconds: Float): Float {
   val tau = 2f * PI.toFloat()

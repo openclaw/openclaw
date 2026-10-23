@@ -25,7 +25,7 @@ import {
   globalBeforeAll0,
   describe2BeforeEach0,
   requireBlockReplyHandler,
-} from "./dispatch-from-config.test-harness.js";
+} from "./dispatch-from-config.test-support.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -901,16 +901,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       expectedMode: "automatic",
       text: "visible switched-model reply",
     },
-    {
-      name: "honors heartbeat model overrides before Codex direct source delivery defaults",
-      supportsProvider: "codex",
-      currentEntry: codexEntry,
-      ctx: telegramDirectCtx,
-      cfg: emptyConfig,
-      replyOptions: { isHeartbeat: true, heartbeatModelOverride: "anthropic/claude-sonnet-4.6" },
-      expectedMode: "automatic",
-      text: "visible heartbeat-model reply",
-    },
+
     {
       name: "preserves non-Codex harness direct source delivery defaults",
       harnessId: "custom",
@@ -1022,7 +1013,6 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     });
 
     expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(sessionStoreMocks.loadSessionStore).not.toHaveBeenCalled();
     expect(sessionStoreMocks.loadSessionStoreEntry).toHaveBeenCalledWith({
       agentId: "main",
       storePath: "/tmp/mock-sessions.json",

@@ -240,10 +240,10 @@ export async function runWorkerSshCandidates<T extends WorkerSshCommandResult>(
   timeoutMs: number,
   run: (port: number, remainingTimeoutMs: number) => Promise<T>,
 ): Promise<T> {
-  const deadlineMs = Date.now() + timeoutMs;
+  const deadlineMs = performance.now() + timeoutMs;
   let lastResult: T | undefined;
   for (const port of workerSshCandidatePorts(prepared)) {
-    const remainingTimeoutMs = deadlineMs - Date.now();
+    const remainingTimeoutMs = deadlineMs - performance.now();
     if (lastResult !== undefined && remainingTimeoutMs <= 0) {
       return lastResult;
     }
@@ -292,6 +292,34 @@ export function workerSshOptions(
     "ControlMaster=no",
     "-o",
     "ControlPath=none",
+  ];
+}
+
+export function workerSshCommandPrefix(
+  prepared: PreparedWorkerSsh,
+  port = prepared.port,
+): string[] {
+  return [
+    "ssh",
+    ...workerSshOptions(prepared, { forwarding: "disabled" }),
+    "-a",
+    "-x",
+    "-T",
+    "-p",
+    String(port),
+  ];
+}
+
+export function workerSshCommand(
+  prepared: PreparedWorkerSsh,
+  argv: readonly string[],
+  port = prepared.port,
+): string[] {
+  return [
+    ...workerSshCommandPrefix(prepared, port),
+    "--",
+    prepared.sshTarget,
+    workerSshRemoteCommand(argv),
   ];
 }
 

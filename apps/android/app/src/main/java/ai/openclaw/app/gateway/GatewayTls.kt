@@ -477,11 +477,7 @@ internal suspend fun probeGatewayTlsFingerprint(
         }
       GatewayTlsProbeResult(failure = failure)
     } finally {
-      try {
-        socket.close()
-      } catch (_: Throwable) {
-        // ignore
-      }
+      runCatching { socket.close() }
     }
   }
 }

@@ -61,25 +61,11 @@ private enum class ActiveTalkState(
   Speaking(WearRealtimeTalkStatus.SPEAKING, "Speaking…"),
 }
 
-internal fun chunkWearRealtimeOutput(
-  payload: ByteArray,
-  maxFrameBytes: Int = WearProtocol.MAX_REALTIME_AUDIO_FRAME_BYTES,
-): List<ByteArray> {
-  require(maxFrameBytes > 0 && maxFrameBytes % PCM_16_BYTES == 0)
-  require(payload.size % PCM_16_BYTES == 0)
-  return buildList {
-    for (offset in payload.indices step maxFrameBytes) {
-      add(payload.copyOfRange(offset, minOf(offset + maxFrameBytes, payload.size)))
-    }
-  }
-}
-
 internal fun advanceWearRealtimePlaybackDeadline(
   currentEndsAtMillis: Long,
   deliveredAtMillis: Long,
   audioByteCount: Int,
 ): Long {
-  require(audioByteCount >= 0 && audioByteCount % PCM_16_BYTES == 0)
   val sampleCount = audioByteCount / PCM_16_BYTES
   val durationMillis =
     (
@@ -157,7 +143,6 @@ internal class WearRealtimeTalkController(
     onSessionActivated: () -> Unit = {},
   ): Boolean =
     lifecycleMutex.withLock {
-      var existingSession = false
       val startGeneration =
         synchronized(lifecycleStateLock) {
           if (!isConnected()) return@withLock false
@@ -168,8 +153,7 @@ internal class WearRealtimeTalkController(
             if (activeOwner != owner || ownerSessionKey != sessionKey) {
               return@withLock false
             }
-            existingSession = true
-            return@synchronized lifecycleGeneration.get()
+            return@synchronized null
           }
 
           conversation = emptyList()
@@ -181,7 +165,7 @@ internal class WearRealtimeTalkController(
           updateActiveState(ActiveTalkState.Connecting)
           generation
         }
-      if (existingSession) {
+      if (startGeneration == null) {
         onSessionActivated()
         return@withLock true
       }
@@ -331,17 +315,10 @@ internal class WearRealtimeTalkController(
     owner: WearRealtimeAttemptOwner,
     payload: ByteArray,
   ) {
-    if (
-      payload.isEmpty() ||
-      payload.size > WearProtocol.MAX_REALTIME_AUDIO_FRAME_BYTES ||
-      activeOwner != owner ||
-      sessionId == null ||
-      _snapshot.value.speaking
-    ) {
-      return
-    }
     val activeSessionId = sessionId ?: return
-    if (audioFrames?.trySend(payload.copyOf())?.isSuccess != true) {
+    if (activeOwner != owner || _snapshot.value.speaking) return
+    // The channel reader transfers a freshly allocated, validated PCM frame.
+    if (audioFrames?.trySend(payload)?.isSuccess != true) {
       fail(
         "Watch audio input is unavailable",
         expectedOwner = owner,
@@ -525,24 +502,20 @@ internal class WearRealtimeTalkController(
               sendWatchFrame(owner, WearRealtimeAudioFrameType.CLEAR_OUTPUT, byteArrayOf())
               delivered = isCurrentOutput(owner, activeSessionId)
             } else {
-              delivered = true
-              for (chunk in chunkWearRealtimeOutput(audio)) {
-                if (!isCurrentOutput(owner, activeSessionId)) {
-                  delivered = false
-                  break
+              delivered =
+                (audio.indices step WearProtocol.MAX_REALTIME_AUDIO_FRAME_BYTES).all { offset ->
+                  if (!isCurrentOutput(owner, activeSessionId)) return@all false
+                  val chunk = audio.copyOfRange(offset, minOf(offset + WearProtocol.MAX_REALTIME_AUDIO_FRAME_BYTES, audio.size))
+                  sendWatchFrame(owner, WearRealtimeAudioFrameType.OUTPUT_PCM, chunk)
+                  if (!isCurrentOutput(owner, activeSessionId)) return@all false
+                  playbackEndsAtMillis =
+                    advanceWearRealtimePlaybackDeadline(
+                      currentEndsAtMillis = playbackEndsAtMillis,
+                      deliveredAtMillis = SystemClock.elapsedRealtime(),
+                      audioByteCount = chunk.size,
+                    )
+                  true
                 }
-                sendWatchFrame(owner, WearRealtimeAudioFrameType.OUTPUT_PCM, chunk)
-                if (!isCurrentOutput(owner, activeSessionId)) {
-                  delivered = false
-                  break
-                }
-                playbackEndsAtMillis =
-                  advanceWearRealtimePlaybackDeadline(
-                    currentEndsAtMillis = playbackEndsAtMillis,
-                    deliveredAtMillis = SystemClock.elapsedRealtime(),
-                    audioByteCount = chunk.size,
-                  )
-              }
               if (!isCurrentOutput(owner, activeSessionId)) {
                 delivered = false
               }
@@ -771,8 +744,7 @@ internal class WearRealtimeTalkController(
     expectedOwner: WearRealtimeAttemptOwner,
     expectedSessionId: String? = null,
   ) {
-    var closingSession: String? = null
-    val closingOwner =
+    val (closingOwner, closingSession) =
       synchronized(lifecycleStateLock) {
         // Transport callbacks and non-cancellable I/O can outlive their relay.
         // Only that relay may own teardown, or a late error can stop its replacement.
@@ -780,7 +752,7 @@ internal class WearRealtimeTalkController(
         if (expectedSessionId != null && sessionId != expectedSessionId) return
         Log.w(TAG, message)
         val currentOwner = activeOwner
-        closingSession = sessionId
+        val closingSession = sessionId
         realtimeAgentCoordinator.resetTransport()
         setSnapshot(
           _snapshot.value.copy(
@@ -794,7 +766,7 @@ internal class WearRealtimeTalkController(
         )
         closeTransportLocked()
         conversation = emptyList()
-        currentOwner
+        currentOwner to closingSession
       }
     closingSession?.let { session ->
       scope.launch { runCatching { closeGatewaySession(session) } }

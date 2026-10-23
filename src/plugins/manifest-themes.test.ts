@@ -8,33 +8,44 @@ import { normalizeManifestThemes } from "./manifest-themes.js";
 import type { PluginDiagnostic, PluginManifestTheme } from "./manifest-types.js";
 import { loadPluginManifest } from "./manifest.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
-import { PLUGIN_ACTIVITY_ICON_MAX_BYTES } from "./portable-icon-paths.js";
+import {
+  PLUGIN_ACTIVITY_ICON_MAX_BYTES,
+  PLUGIN_THEME_BACKGROUND_MAX_BYTES,
+} from "./portable-icon-paths.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const SVG =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M0 0h24v24H0z"/></svg>';
-const definition = createThemeDefinitionFixture({ avatarHat: "beret", critters: ["ferris"] });
+// 1 × 1 lossless WebP.
+const WEBP = Buffer.from("UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAEAcQERGIiP4HAA==", "base64");
+const definition = createThemeDefinitionFixture({
+  brandIcon: "rocket",
+  avatarHat: "beret",
+  critters: ["ferris"],
+});
 const declaration: PluginManifestTheme = {
   id: "redhat",
   name: definition.name,
   description: definition.description,
   source: "theme.json",
+  icons: { rocket: "rocket.svg" },
   hats: { beret: "beret.svg" },
   critters: { ferris: { source: "ferris.svg", title: "a crab, allegedly", crossMs: 15000 } },
 };
 
-function fixture() {
+function fixture(theme = declaration, palette = definition) {
   const rootDir = tempDirs.make("openclaw-theme-artwork-");
-  fs.writeFileSync(path.join(rootDir, "theme.json"), JSON.stringify(definition));
-  fs.writeFileSync(path.join(rootDir, "beret.svg"), SVG);
-  fs.writeFileSync(path.join(rootDir, "ferris.svg"), SVG);
+  fs.writeFileSync(path.join(rootDir, "theme.json"), JSON.stringify(palette));
+  for (const name of ["rocket", "beret", "ferris"]) {
+    fs.writeFileSync(path.join(rootDir, `${name}.svg`), SVG);
+  }
   const capture = (rejectHardlinks = true) => {
     const diagnostics: PluginDiagnostic[] = [];
     const themes = withPluginCache(createPluginCache(), () =>
       loadManifestThemeDefinitions({
         pluginId: "theme-pack",
         rootDir,
-        themes: [declaration],
+        themes: [theme],
         rejectHardlinks,
         diagnostics,
       }),
@@ -43,6 +54,58 @@ function fixture() {
   };
   return { rootDir, capture };
 }
+
+const normalization = (artwork: Partial<PluginManifestTheme>, expected = artwork) => ({
+  artwork,
+  expected,
+});
+const entries = (prefix: string, value: unknown) =>
+  Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`${prefix}-${i}`, value]));
+
+function expectRejected(
+  captured: ReturnType<ReturnType<typeof fixture>["capture"]>,
+  message: string,
+) {
+  expect(captured).toEqual({
+    themes: [],
+    diagnostics: [
+      expect.objectContaining({
+        level: "warn",
+        pluginId: "theme-pack",
+        message: expect.stringContaining(message),
+      }),
+    ],
+  });
+}
+
+describe("manifest theme metadata", () => {
+  it.each([null, []])("rejects non-record entries: %j", (entry) => {
+    expect(normalizeManifestThemes([entry], "theme-pack")).toEqual({
+      ok: false,
+      error: "themes[0] must be an object",
+    });
+  });
+
+  it.each([{ name: "name\u0000" }, { description: "description\u007f" }])(
+    "rejects ASCII controls: %j",
+    (metadata) => {
+      expect(normalizeManifestThemes([{ ...declaration, ...metadata }], "theme-pack")).toEqual({
+        ok: false,
+        error: "themes[0] requires a unique safe id, name, description, and JSON source",
+      });
+    },
+  );
+
+  it("retains C1 and Unicode text while trimming surrounding spaces", () => {
+    const metadata = { name: "\u0080🦞\ud800", description: "description\u009f" };
+    expect(
+      normalizeManifestThemes(
+        [{ ...declaration, ...metadata, name: ` ${metadata.name} ` }],
+        "theme-pack",
+      ),
+    ).toEqual({ ok: true, themes: [{ ...declaration, ...metadata }] });
+  });
+});
 
 describe("manifest theme artwork", () => {
   const hats = Object.fromEntries(
@@ -55,87 +118,84 @@ describe("manifest theme artwork", () => {
     ]),
   );
   it.each([
-    {
-      name: "package-relative paths and presentation metadata",
-      artwork: {
+    normalization(
+      {
+        icons: { rocket: "./assets/rocket.svg" },
         hats: { beret: "./assets/beret.svg" },
         critters: { ferris: { source: "./assets/ferris.svg", title: "a crab", crossMs: 5000 } },
       },
-      expected: {
+      {
+        icons: { rocket: "assets/rocket.svg" },
         hats: { beret: "assets/beret.svg" },
         critters: { ferris: { source: "assets/ferris.svg", title: "a crab", crossMs: 5000 } },
       },
-    },
-    {
-      name: "entry, ID, title, and crossing-time boundaries",
-      artwork: { hats, critters },
-      expected: { hats, critters },
-    },
-  ])("normalizes $name", ({ artwork, expected }) => {
+    ),
+    normalization({
+      icons: hats,
+      hats,
+      critters,
+    }),
+    normalization(
+      { backgrounds: { light: "./assets/day.png", dark: "assets/night.webp" } },
+      { backgrounds: { light: "assets/day.png", dark: "assets/night.webp" } },
+    ),
+    normalization({ backgrounds: { dark: "night.JPEG" } }),
+  ])("normalizes %j", ({ artwork, expected }) => {
     expect(normalizeManifestThemes([{ ...declaration, ...artwork }], "theme-pack")).toEqual({
       ok: true,
       themes: [{ ...declaration, ...expected }],
     });
   });
 
+  const invalid = (artwork: Record<string, unknown>, error?: string) => ({ artwork, error });
   it.each([
-    ...[
-      { hats: [] },
-      { critters: null },
-      { hats: { Beret: "beret.svg" } },
-      { hats: { fedora: "beret.svg" } },
-      { critters: { penguin: { source: "ferris.svg" } } },
-      { critters: { ferris: "ferris.svg" } },
-      { critters: { ferris: { source: "ferris.svg", extra: true } } },
-      { hats: Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`hat-${i}`, "beret.svg"])) },
-      {
-        critters: Object.fromEntries(
-          Array.from({ length: 9 }, (_, i) => [`critter-${i}`, { source: "ferris.svg" }]),
-        ),
-      },
-    ].map((artwork) => ({ artworks: [artwork], error: undefined })),
-    ...[
-      "../beret.svg",
-      "/beret.svg",
-      "assets/../../beret.svg",
-      "assets\\beret.svg",
-      "assets//beret.svg",
-      "https://example.invalid/beret.svg",
-      "beret.png",
-      "beret.svg?hash=1",
-    ].map((source) => ({
-      artworks: [{ hats: { beret: source } }, { critters: { ferris: { source } } }],
-      error: "SVG file inside the plugin root",
-    })),
-    ...[4999, 90001, 12000.5, "12000"].map((crossMs) => ({
-      artworks: [{ critters: { ferris: { source: "ferris.svg", crossMs } } }],
-      error: "crossMs",
-    })),
-    ...["a".repeat(61), "hello\nworld", "hello\u202e", 12].map((title) => ({
-      artworks: [{ critters: { ferris: { source: "ferris.svg", title } } }],
-      error: "title",
-    })),
-  ])("rejects invalid artwork declarations: %j", ({ artworks, error }) => {
-    for (const artwork of artworks) {
-      expect(normalizeManifestThemes([{ ...declaration, ...artwork }], "theme-pack")).toMatchObject(
-        {
-          ok: false,
-          ...(error ? { error: expect.stringContaining(error) } : {}),
-        },
-      );
-    }
+    invalid({ icons: [] }),
+    invalid({ icons: { claw: "rocket.svg" } }),
+    invalid({ icons: entries("icon", "rocket.svg") }),
+    invalid({ hats: { Beret: "beret.svg" } }),
+    invalid({ hats: { fedora: "beret.svg" } }),
+    invalid({ critters: { penguin: { source: "ferris.svg" } } }),
+    invalid({ critters: { ferris: "ferris.svg" } }),
+    invalid({ critters: { ferris: { source: "ferris.svg", extra: true } } }),
+    invalid({ icons: { rocket: "../rocket.svg" } }, "SVG file inside the plugin root"),
+    invalid({ hats: { beret: "beret.png" } }, "SVG file inside the plugin root"),
+    invalid(
+      { critters: { ferris: { source: "../ferris.svg" } } },
+      "SVG file inside the plugin root",
+    ),
+    ...[{}, null, { dark: "night.webp", extra: "a.webp" }].map((backgrounds) =>
+      invalid({ backgrounds }, "light and/or dark"),
+    ),
+    ...["../night.webp", "night.svg", 7].map((source) =>
+      invalid({ backgrounds: { dark: source } }, "PNG, JPEG, or WebP file inside the plugin root"),
+    ),
+    ...[4999, 90001, 12000.5, "12000"].map((crossMs) =>
+      invalid({ critters: { ferris: { source: "ferris.svg", crossMs } } }, "crossMs"),
+    ),
+    ...["a".repeat(61), "hello\nworld", "hello\u202e", 12].map((title) =>
+      invalid({ critters: { ferris: { source: "ferris.svg", title } } }, "title"),
+    ),
+  ])("rejects invalid artwork declarations: %j", ({ artwork, error }) => {
+    expect(normalizeManifestThemes([{ ...declaration, ...artwork }], "theme-pack")).toMatchObject({
+      ok: false,
+      ...(error ? { error: expect.stringContaining(error) } : {}),
+    });
   });
 
   it.each([
+    '"icons":{"rocket":"rocket.svg","rocket":"other.svg"}',
     '"hats":{"beret":"beret.svg","b\\u0065ret":"other.svg"}',
     '"critters":{"ferris":{"source":"ferris.svg"},"ferris":{"source":"other.svg"}}',
     "hats: {beret: 'beret.svg', beret: 'other.svg'}",
+    '"backgrounds":{"dark":"night.webp","dark":"other.webp"}',
   ])("rejects duplicate artwork keys before JSON parsing can hide them: %s", (artwork) => {
     const rootDir = tempDirs.make("openclaw-theme-duplicate-");
-    const base = JSON.stringify({ ...declaration, hats: undefined, critters: undefined }).slice(
-      0,
-      -1,
-    );
+    const base = JSON.stringify({
+      ...declaration,
+      icons: undefined,
+      hats: undefined,
+      critters: undefined,
+    }).slice(0, -1);
     fs.writeFileSync(
       path.join(rootDir, "openclaw.plugin.json"),
       `{"id":"theme-pack","configSchema":{},"themes":[${base},${artwork}}]}`,
@@ -154,14 +214,18 @@ describe("manifest theme artwork", () => {
       id: "redhat",
       definition,
       artwork: {
+        icons: { rocket: { svg: SVG } },
         hats: { beret: { svg: SVG } },
         critters: { ferris: { svg: SVG, title: "a crab, allegedly", crossMs: 15000 } },
       },
     });
     const changedSvg = SVG.replace("24v24", "12v12");
     fs.writeFileSync(path.join(plugin.rootDir, "beret.svg"), changedSvg);
+    fs.writeFileSync(path.join(plugin.rootDir, "rocket.svg"), changedSvg);
     const after = plugin.capture();
     fs.unlinkSync(path.join(plugin.rootDir, "ferris.svg"));
+    expect(before.themes?.[0]?.artwork?.icons?.rocket?.svg).toBe(SVG);
+    expect(after.themes?.[0]?.artwork?.icons?.rocket?.svg).toBe(changedSvg);
     expect(before.themes?.[0]?.artwork?.hats?.beret?.svg).toBe(SVG);
     expect(after.themes?.[0]?.artwork?.hats?.beret?.svg).toBe(changedSvg);
     expect(after.themes?.[0]?.artwork?.critters?.ferris?.svg).toBe(SVG);
@@ -175,21 +239,43 @@ describe("manifest theme artwork", () => {
     null,
   ])("omits the whole theme with a warning when declared artwork is invalid: %j", (svg) => {
     const plugin = fixture();
-    const file = path.join(plugin.rootDir, "ferris.svg");
+    const file = path.join(plugin.rootDir, "rocket.svg");
     if (svg === null) {
       fs.unlinkSync(file);
     } else {
       fs.writeFileSync(file, svg);
     }
-    const captured = plugin.capture();
-    expect(captured.themes).toEqual([]);
-    expect(captured.diagnostics).toEqual([
-      expect.objectContaining({
-        level: "warn",
-        pluginId: "theme-pack",
-        message: expect.stringContaining("artwork ferris.svg"),
-      }),
-    ]);
+    expectRejected(plugin.capture(), "artwork rocket.svg");
+  });
+
+  it("captures sniffed raster backgrounds and omits the theme for unusable images", () => {
+    const plain = createThemeDefinitionFixture();
+    const plugin = fixture(
+      {
+        id: "night",
+        name: plain.name,
+        description: plain.description,
+        source: "theme.json",
+        backgrounds: { dark: "night.webp" },
+      },
+      plain,
+    );
+    const capture = (bytes: Buffer | string) => {
+      fs.writeFileSync(path.join(plugin.rootDir, "night.webp"), bytes);
+      return plugin.capture();
+    };
+    const captured = capture(WEBP);
+    expect(captured.diagnostics).toEqual([]);
+    expect(captured.themes?.[0]?.artwork).toEqual({
+      backgrounds: { dark: { base64: WEBP.toString("base64") } },
+    });
+    for (const bytes of [
+      SVG,
+      "<html>not an image</html>",
+      Buffer.concat([WEBP, Buffer.alloc(PLUGIN_THEME_BACKGROUND_MAX_BYTES)]),
+    ]) {
+      expectRejected(capture(bytes), "background night.webp");
+    }
   });
 
   it.skipIf(process.platform === "win32")(
@@ -198,7 +284,7 @@ describe("manifest theme artwork", () => {
       const plugin = fixture();
       const outside = tempDirs.make("openclaw-theme-artwork-outside-");
       const target = path.join(outside, "art.svg");
-      const artwork = path.join(plugin.rootDir, "beret.svg");
+      const artwork = path.join(plugin.rootDir, "rocket.svg");
       fs.writeFileSync(target, SVG);
       fs.unlinkSync(artwork);
       fs.symlinkSync(target, artwork);

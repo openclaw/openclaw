@@ -2,9 +2,11 @@ import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AssistantMessage } from "../../llm/types.js";
+import { formatMediaSize } from "../../media/store.shared.js";
 import { extractEmbeddedAssistantText } from "../embedded-agent-utils.js";
 import { isMinimaxVlmProvider } from "../minimax-vlm.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
+import { createMediaAssistantTextCoercer } from "./media-tool-text.js";
 import { coerceToolModelConfig, type ToolModelConfig } from "./model-config.helpers.js";
 
 export type ImageModelConfig = ToolModelConfig;
@@ -19,11 +21,6 @@ const MAX_IMAGE_REASONING_FALLBACK_BLOCKS = 50;
 const MAX_IMAGE_REASONING_SIGNATURE_PARSE_CHARS = 2_048;
 const MAX_IMAGE_REASONING_SIGNATURE_SCAN_CHARS = 65_536;
 
-function hasResponsesReasoningSignatureMarkers(value: string): boolean {
-  const scanned = value.slice(0, MAX_IMAGE_REASONING_SIGNATURE_SCAN_CHARS);
-  return /"id"\s*:\s*"rs_/.test(scanned) && /"type"\s*:\s*"reasoning(?:[."])/.test(scanned);
-}
-
 function isImageReasoningFallbackSignature(value: unknown): boolean {
   if (!value) {
     return false;
@@ -37,7 +34,8 @@ function isImageReasoningFallbackSignature(value: unknown): boolean {
       return false;
     }
     if (trimmed.length > MAX_IMAGE_REASONING_SIGNATURE_PARSE_CHARS) {
-      return hasResponsesReasoningSignatureMarkers(trimmed);
+      const scanned = trimmed.slice(0, MAX_IMAGE_REASONING_SIGNATURE_SCAN_CHARS);
+      return /"id"\s*:\s*"rs_/.test(scanned) && /"type"\s*:\s*"reasoning(?:[."])/.test(scanned);
     }
     try {
       return isImageReasoningFallbackSignature(JSON.parse(trimmed));
@@ -91,9 +89,12 @@ export function decodeDataUrl(
   if (!mimeType.startsWith("image/")) {
     throw new Error(`Unsupported data URL type: ${mimeType || "unknown"}`);
   }
-  if (typeof opts?.maxBytes === "number" && estimateBase64DecodedBytes(b64) > opts.maxBytes) {
+  const estimatedBytes = estimateBase64DecodedBytes(b64);
+  if (typeof opts?.maxBytes === "number" && estimatedBytes > opts.maxBytes) {
     // Estimate before decoding so oversized inline payloads do not allocate large buffers.
-    throw new Error("Invalid data URL: payload exceeds size limit.");
+    throw new Error(
+      `Invalid data URL: payload exceeds size limit (${formatMediaSize(estimatedBytes)}, limit ${formatMediaSize(opts.maxBytes)}).`,
+    );
   }
   const buffer = Buffer.from(b64, "base64");
   if (buffer.length === 0) {
@@ -102,79 +103,10 @@ export function decodeDataUrl(
   return { buffer, mimeType, kind: "image" };
 }
 
-export function coerceImageAssistantText(params: {
-  message: AssistantMessage;
-  provider: string;
-  model: string;
-}): string {
-  const stop = params.message.stopReason;
-  const errorMessage = params.message.errorMessage?.trim();
-  if (stop === "error" || stop === "aborted" || errorMessage) {
-    throw new Error(
-      errorMessage
-        ? `Image model failed (${params.provider}/${params.model}): ${errorMessage}`
-        : `Image model failed (${params.provider}/${params.model})`,
-    );
-  }
-  const text = extractEmbeddedAssistantText(params.message).trim();
-  if (text) {
-    return text;
-  }
-  throw new Error(`Image model returned no text (${params.provider}/${params.model}).`);
-}
+export const coerceImageAssistantText = createMediaAssistantTextCoercer("Image");
 
 export function coerceImageModelConfig(cfg?: OpenClawConfig): ImageModelConfig {
   return coerceToolModelConfig(cfg?.agents?.defaults?.imageModel);
-}
-
-function formatConfiguredImageModelRef(provider: string, modelId: string): string {
-  const slash = modelId.indexOf("/");
-  if (slash > 0 && normalizeProviderId(modelId.slice(0, slash)) === provider) {
-    return modelId;
-  }
-  return `${provider}/${modelId}`;
-}
-
-function modelIdMatchesProviderlessRef(params: {
-  provider: string;
-  modelId: string;
-  ref: string;
-}): boolean {
-  const candidates = [params.modelId];
-  const slash = params.modelId.indexOf("/");
-  if (slash > 0 && normalizeProviderId(params.modelId.slice(0, slash)) === params.provider) {
-    candidates.push(params.modelId.slice(slash + 1));
-  }
-  const normalizedRef = normalizeLowercaseStringOrEmpty(params.ref);
-  return candidates.some(
-    (candidate) => normalizeLowercaseStringOrEmpty(candidate) === normalizedRef,
-  );
-}
-
-function findConfiguredImageModelMatches(params: { cfg?: OpenClawConfig; ref: string }): string[] {
-  const providers = params.cfg?.models?.providers;
-  if (!providers || typeof providers !== "object") {
-    return [];
-  }
-
-  const matches = new Set<string>();
-  for (const [providerKey, providerConfig] of Object.entries(providers)) {
-    const provider = normalizeProviderId(providerKey);
-    if (!provider || !Array.isArray(providerConfig?.models)) {
-      continue;
-    }
-    for (const entry of providerConfig.models) {
-      const modelId = entry?.id?.trim();
-      if (!modelId || !Array.isArray(entry?.input) || !entry.input.includes("image")) {
-        continue;
-      }
-      if (!modelIdMatchesProviderlessRef({ provider, modelId, ref: params.ref })) {
-        continue;
-      }
-      matches.add(formatConfiguredImageModelRef(provider, modelId));
-    }
-  }
-  return [...matches];
 }
 
 function resolveProviderlessConfiguredImageModelRef(params: {
@@ -186,7 +118,39 @@ function resolveProviderlessConfiguredImageModelRef(params: {
     return ref;
   }
 
-  const matches = findConfiguredImageModelMatches({ cfg: params.cfg, ref });
+  const providers = params.cfg?.models?.providers;
+  const matchedRefs = new Set<string>();
+  for (const [providerKey, providerConfig] of Object.entries(providers ?? {})) {
+    const provider = normalizeProviderId(providerKey);
+    if (!provider || !Array.isArray(providerConfig?.models)) {
+      continue;
+    }
+    for (const entry of providerConfig.models) {
+      const modelId = entry?.id?.trim();
+      if (!modelId || !Array.isArray(entry?.input) || !entry.input.includes("image")) {
+        continue;
+      }
+      const candidates = [modelId];
+      const slash = modelId.indexOf("/");
+      if (slash > 0 && normalizeProviderId(modelId.slice(0, slash)) === provider) {
+        candidates.push(modelId.slice(slash + 1));
+      }
+      const normalizedRef = normalizeLowercaseStringOrEmpty(ref);
+      if (
+        !candidates.some(
+          (candidate) => normalizeLowercaseStringOrEmpty(candidate) === normalizedRef,
+        )
+      ) {
+        continue;
+      }
+      matchedRefs.add(
+        slash > 0 && normalizeProviderId(modelId.slice(0, slash)) === provider
+          ? modelId
+          : `${provider}/${modelId}`,
+      );
+    }
+  }
+  const matches = [...matchedRefs];
   if (matches.length <= 1) {
     return matches.at(0) ?? ref;
   }

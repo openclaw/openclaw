@@ -29,7 +29,7 @@ type ContextEngineQuarantineRecord = {
   failedAt: Date | number;
 };
 
-export type RuntimeToolQuarantineRecord = {
+type RuntimeToolQuarantineRecord = {
   toolName: string;
   owner?: string;
   reason: string;
@@ -198,9 +198,6 @@ export function formatCompactPluginHealthLine(
 }
 
 function formatPluginList(ids: readonly string[], limit: number): string {
-  if (ids.length === 0) {
-    return "none";
-  }
   const visible = ids.slice(0, limit).join(", ");
   return ids.length > limit ? `${visible}, +${ids.length - limit} more` : visible;
 }

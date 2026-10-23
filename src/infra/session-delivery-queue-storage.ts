@@ -7,8 +7,11 @@ import {
   ExpectedExistingSessionChangedError,
 } from "../gateway/server-methods/agent-expected-session.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import {
+  captureSessionTarget,
+  beginSessionEffect,
+} from "../sessions/session-controller.lifecycle.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
-import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import { bindDeliveryQueueEntry } from "./delivery-queue-sqlite-bound.js";
@@ -91,11 +94,15 @@ export async function withSessionDeliveryEnqueueAdmission<T>(
     lifecycleRevision: original.lifecycleRevision ?? null,
   };
   let interruption: Error | undefined;
-  let lease: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+  let lease: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
   try {
-    lease = await beginSessionWorkAdmission({
-      scope: storePath,
-      identities: [sessionKey, constraint.sessionId],
+    lease = await beginSessionEffect({
+      target: captureSessionTarget({
+        storeScope: storePath,
+        sessionKey,
+        incarnation: constraint.sessionId,
+        agentId,
+      }),
       assertAllowed: async (signal) => {
         signal.throwIfAborted();
         assertExpectedExistingSession({
@@ -148,24 +155,30 @@ function prepareEntry(
   });
 }
 
+function publishSessionDelivery<
+  Key extends "sessionDelivery.enqueue" | "sessionDelivery.enqueueClaimed",
+>(
+  entry: QueuedSessionDelivery,
+  type: Key,
+  context: OpenClawStateWorkerContext,
+): Promise<SessionDeliveryWorkerOperations[Key]["output"]> {
+  const input = prepareEntry(entry, "insert");
+  return withSessionDeliveryEnqueueAdmission(entry, context, (assertCurrent) =>
+    runOpenClawStateWorkerOperation(context, (scope) => scope.execute<Key>({ type, input }), {
+      assertCurrent,
+      createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
+        context.admission.databasePath,
+      ]),
+    }),
+  );
+}
+
 export async function enqueueSessionDelivery(
   params: QueuedSessionDeliveryPayload,
   context: OpenClawStateWorkerContext,
 ): Promise<string> {
   const entry = prepareSessionDelivery(params);
-  const input = prepareEntry(entry, "insert");
-  await withSessionDeliveryEnqueueAdmission(entry, context, (assertCurrent) =>
-    runOpenClawStateWorkerOperation(
-      context,
-      (scope) => scope.execute({ type: "sessionDelivery.enqueue", input }),
-      {
-        assertCurrent,
-        createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
-          context.admission.databasePath,
-        ]),
-      },
-    ),
-  );
+  await publishSessionDelivery(entry, "sessionDelivery.enqueue", context);
   return entry.id;
 }
 
@@ -174,19 +187,10 @@ export async function enqueueClaimedSessionDelivery(
   initialAttemptLeaseMs: number,
   context: OpenClawStateWorkerContext,
 ): Promise<SessionDeliveryWorkerOperations["sessionDelivery.enqueueClaimed"]["output"]> {
-  const entry = prepareClaimedSessionDelivery(params, initialAttemptLeaseMs);
-  const input = prepareEntry(entry, "insert");
-  return withSessionDeliveryEnqueueAdmission(entry, context, (assertCurrent) =>
-    runOpenClawStateWorkerOperation(
-      context,
-      (scope) => scope.execute({ type: "sessionDelivery.enqueueClaimed", input }),
-      {
-        assertCurrent,
-        createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
-          context.admission.databasePath,
-        ]),
-      },
-    ),
+  return publishSessionDelivery(
+    prepareClaimedSessionDelivery(params, initialAttemptLeaseMs),
+    "sessionDelivery.enqueueClaimed",
+    context,
   );
 }
 

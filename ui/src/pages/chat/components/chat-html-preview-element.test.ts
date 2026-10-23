@@ -1,11 +1,16 @@
-/* @vitest-environment jsdom */
 import type {
   CanvasDocumentViewResult,
   SessionsFilesAssetsResult,
 } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ApplicationContext } from "../../../app/context.ts";
 import { bumpCanvasWidgetFrameConnectionGeneration } from "../../../lib/chat/canvas-widget-frame-generation.ts";
-import { ChatHtmlPreview } from "./chat-html-preview-element.ts";
+import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import type { ChatHtmlPreviewElement } from "./chat-html-preview-element.tsx";
+/* @vitest-environment jsdom */
+import panelLoadingStyles from "../../../styles/panel-loading-skeleton.css?inline";
+import "./chat-html-preview-element.tsx";
 
 const source =
   "<!doctype html>\r\n<style>h1{color:red}</style><h1>HTML</h1><script>window.ready=true</script>\n";
@@ -14,8 +19,6 @@ const metadata: CanvasDocumentViewResult = {
   sandboxUrl: "/mcp-app-sandbox?frames=none",
   sandboxPort: 8444,
 };
-const tag = `test-html-preview-${crypto.randomUUID()}`;
-customElements.define(tag, class extends ChatHtmlPreview {});
 
 function mount(request = vi.fn().mockResolvedValue(metadata), html = source) {
   const listeners = new Set<() => void>();
@@ -29,15 +32,18 @@ function mount(request = vi.fn().mockResolvedValue(metadata), html = source) {
       },
     },
   };
-  const view = document.createElement(tag) as ChatHtmlPreview;
-  Reflect.set(view, "context", context);
+  // SAFETY: This transport fixture only consumes the Gateway portion of application context.
+  const wrapper = createApplicationContextProvider(context as unknown as ApplicationContext);
+  const view = document.createElement("openclaw-chat-html-preview");
   view.html = html;
   view.sourceIdentity = "file:example.html";
-  document.body.append(view);
+  wrapper.append(view);
+  document.body.append(wrapper);
   return {
     view,
     context,
     request,
+    setContext: (next: ApplicationContext) => wrapper.setContext(next),
     notify: () => {
       for (const listener of listeners) {
         listener();
@@ -46,7 +52,7 @@ function mount(request = vi.fn().mockResolvedValue(metadata), html = source) {
   };
 }
 
-async function frameFor(view: ChatHtmlPreview) {
+async function frameFor(view: ChatHtmlPreviewElement) {
   await expect.poll(() => view.querySelector("iframe")).not.toBeNull();
   return view.querySelector("iframe")!;
 }
@@ -69,6 +75,18 @@ function message(
 function ready(frame: HTMLIFrameElement) {
   return { method: "ui/notifications/sandbox-proxy-ready", params: { sandboxUrl: frame.src } };
 }
+
+async function transferFrom(
+  frame: HTMLIFrameElement,
+  post = vi.spyOn(frame.contentWindow!, "postMessage"),
+) {
+  message(frame, ready(frame));
+  await expect.poll(() => post.mock.calls.length).toBe(1);
+  return post.mock.calls[0]!;
+}
+
+const assetStatus = (view: ChatHtmlPreviewElement) =>
+  view.querySelector('.file-view__save-notice[role="status"]');
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -166,10 +184,8 @@ describe("ordinary HTML preview transport", () => {
       const request = vi.fn().mockResolvedValue({ ...metadata, html });
       const { view } = mount(request, html);
       const frame = await frameFor(view);
-      const post = vi.spyOn(frame.contentWindow!, "postMessage");
-      message(frame, ready(frame));
-      await expect.poll(() => post.mock.calls.length).toBe(1);
-      expect(post.mock.calls[0]![0].params.html).toBe(prefix + expected + suffix);
+      const [transfer] = await transferFrom(frame);
+      expect(transfer.params.html).toBe(prefix + expected + suffix);
       expect(view.html).toBe(html);
       expect(request).toHaveBeenCalledExactlyOnceWith(
         "canvas.document.preview",
@@ -187,10 +203,8 @@ describe("ordinary HTML preview transport", () => {
       view.embedSandboxMode = mode;
       await view.updateComplete;
       const frame = await frameFor(view);
-      const post = vi.spyOn(frame.contentWindow!, "postMessage");
-      message(frame, ready(frame));
-      await expect.poll(() => post.mock.calls.length).toBe(1);
-      expect(post.mock.calls[0]![0].params).toEqual({
+      const [transfer] = await transferFrom(frame);
+      expect(transfer.params).toEqual({
         html:
           mode === "strict" ? html.replace('href="#section"', 'href="about:srcdoc#section"') : html,
         renderId: expect.any(String),
@@ -211,21 +225,22 @@ describe("ordinary HTML preview transport", () => {
     );
     expect(frame.src).toBe("http://gateway.example:8444/mcp-app-sandbox?frames=none");
     expect(frame.hasAttribute("srcdoc")).toBe(false);
-    expect(view.querySelector("h1, style, script")).toBeNull();
+    expect(view.querySelector("h1, script")).toBeNull();
+    expect(Array.from(view.querySelectorAll("style"), (style) => style.textContent)).toEqual([
+      panelLoadingStyles,
+    ]);
     const post = vi.spyOn(frame.contentWindow!, "postMessage");
     message(frame, ready(frame), { origin: "https://wrong.example" });
     message(frame, ready(frame), { source: window });
     message(frame, { ...ready(frame), params: { sandboxUrl: frame.src + "&old=1" } });
     expect(post).not.toHaveBeenCalled();
-    message(frame, ready(frame));
-    await expect.poll(() => post.mock.calls.length).toBe(1);
-    const transfer = post.mock.calls[0]![0];
+    const [transfer, origin] = await transferFrom(frame, post);
     expect(transfer).toEqual({
       jsonrpc: "2.0",
       method: "ui/notifications/sandbox-resource-ready",
       params: { html: source, renderId: expect.any(String) },
     });
-    expect(post.mock.calls[0]![1]).toBe("http://gateway.example:8444");
+    expect(origin).toBe("http://gateway.example:8444");
     message(frame, {
       method: "ui/notifications/sandbox-resource-loaded",
       params: { renderId: transfer.params.renderId },
@@ -233,7 +248,6 @@ describe("ordinary HTML preview transport", () => {
     await view.updateComplete;
     expect(view.querySelector('[role="status"]')).toBeNull();
     view.title = "Changed title";
-    view.requestUpdate();
     await view.updateComplete;
     expect(view.querySelector("iframe")).toBe(frame);
     expect(request).toHaveBeenCalledOnce();
@@ -279,9 +293,7 @@ describe("ordinary HTML preview transport", () => {
       path: "/sender/report/index.html",
       refs: ["a.png", "missing.png"],
     });
-    expect(view.querySelector('.file-view__save-notice[role="status"]')?.textContent).toContain(
-      "Some assets couldn't be loaded (1)",
-    );
+    expect(assetStatus(view)?.textContent).toContain("Some assets couldn't be loaded (1)");
     expect(view.html).toBe(html);
   });
 
@@ -323,7 +335,7 @@ describe("ordinary HTML preview transport", () => {
     });
     await view.updateComplete;
     expect(oldPost).not.toHaveBeenCalled();
-    expect(view.querySelector('.file-view__save-notice[role="status"]')).toBeNull();
+    expect(assetStatus(view)).toBeNull();
   });
 
   it("closes unsupported ports without lending prompt, wake, tools, board or theme APIs", async () => {
@@ -363,10 +375,8 @@ describe("ordinary HTML preview transport", () => {
     expect(strict.getAttribute("sandbox")).toBe("allow-scripts allow-same-origin allow-forms");
     expect(strict.hasAttribute("srcdoc")).toBe(false);
     expect(strict.src).toBe(frame.src);
-    const strictPost = vi.spyOn(strict.contentWindow!, "postMessage");
-    message(strict, ready(strict));
-    await expect.poll(() => strictPost.mock.calls.length).toBe(1);
-    expect(strictPost.mock.calls[0]![0].params).toEqual({
+    const [transfer] = await transferFrom(strict);
+    expect(transfer.params).toEqual({
       html: source,
       renderId: expect.any(String),
       allowScripts: false,
@@ -387,9 +397,11 @@ describe("ordinary HTML preview transport", () => {
     "rejects invalid or Gateway-origin sandbox metadata (%s)",
     async (sandboxPort) => {
       const { view } = mount(vi.fn().mockResolvedValue({ ...metadata, sandboxPort }));
-      await expect
-        .poll(() => view.querySelector('[role="alert"]')?.textContent)
-        .toContain("Sandbox host URL is invalid");
+      await waitForSolid(() => {
+        expect(view.querySelector('[role="alert"]')?.textContent).toContain(
+          "Sandbox host URL is invalid",
+        );
+      });
       expect(view.querySelector("iframe")).toBeNull();
     },
   );
@@ -397,17 +409,9 @@ describe("ordinary HTML preview transport", () => {
   it.each(["html", "identity", "context", "client", "generation", "disconnect"])(
     "rejects an old request after %s changes",
     async (change) => {
-      let resolve!: (value: CanvasDocumentViewResult) => void;
-      const request = vi
-        .fn()
-        .mockImplementationOnce(
-          () =>
-            new Promise<CanvasDocumentViewResult>((done) => {
-              resolve = done;
-            }),
-        )
-        .mockResolvedValue(metadata);
-      const { view, context, notify } = mount(request);
+      const pending = Promise.withResolvers<CanvasDocumentViewResult>();
+      const request = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue(metadata);
+      const { view, context, notify, setContext } = mount(request);
       await expect.poll(() => request.mock.calls.length).toBe(1);
       if (change === "html") {
         view.html = "<p>new</p>";
@@ -416,7 +420,7 @@ describe("ordinary HTML preview transport", () => {
         view.sourceIdentity = "next.html";
       }
       if (change === "context") {
-        Reflect.set(view, "context", { gateway: { ...context.gateway } });
+        setContext({ gateway: { ...context.gateway } } as unknown as ApplicationContext);
       }
       if (change === "client") {
         context.gateway.snapshot.client = { request: vi.fn().mockResolvedValue(metadata) };
@@ -430,17 +434,15 @@ describe("ordinary HTML preview transport", () => {
         context.gateway.snapshot.phase = "offline";
         notify();
       }
-      resolve({ ...metadata, html: "<p>STALE</p>" });
+      pending.resolve({ ...metadata, html: "<p>STALE</p>" });
       await view.updateComplete;
       await Promise.resolve();
       if (change === "disconnect") {
         expect(view.querySelector("iframe")).toBeNull();
       } else {
         const frame = await frameFor(view);
-        const post = vi.spyOn(frame.contentWindow!, "postMessage");
-        message(frame, ready(frame));
-        await expect.poll(() => post.mock.calls.length).toBe(1);
-        expect(post.mock.calls[0]![0].params.html).toBe(source);
+        const [transfer] = await transferFrom(frame);
+        expect(transfer.params.html).toBe(source);
       }
     },
   );
@@ -457,16 +459,16 @@ describe("ordinary HTML preview transport", () => {
     expect(await frameFor(view)).not.toBe(frame);
   });
 
-  it("keeps read and transport failures terminal until an explicit retry", async () => {
+  it("keeps failures terminal until retry or a replacement frame mode", async () => {
     const request = vi
       .fn()
       .mockRejectedValueOnce(new Error("Preview denied"))
       .mockResolvedValue(metadata);
     const { view } = mount(request);
-    await expect
-      .poll(() => view.querySelector('[role="alert"]')?.textContent)
-      .toContain("Preview denied");
-    view.requestUpdate();
+    await waitForSolid(() => {
+      expect(view.querySelector('[role="alert"]')?.textContent).toContain("Preview denied");
+    });
+    view.title += " ";
     await view.updateComplete;
     expect(request).toHaveBeenCalledOnce();
     view.querySelector("button")!.click();
@@ -475,9 +477,17 @@ describe("ordinary HTML preview transport", () => {
     await view.updateComplete;
     expect(view.querySelector('[role="alert"]')).not.toBeNull();
     expect(view.querySelector("iframe")).toBeNull();
-    view.requestUpdate();
+    view.title += " ";
     await view.updateComplete;
     expect(request).toHaveBeenCalledTimes(2);
+    view.embedSandboxMode = "strict";
+    const replacement = await frameFor(view);
+    expect(replacement).not.toBe(frame);
+    expect(view.querySelector('[role="alert"]')).toBeNull();
+    expect(request).toHaveBeenCalledTimes(2);
+    replacement.dispatchEvent(new Event("error"));
+    await view.updateComplete;
+    expect(view.querySelector('[role="alert"]')).not.toBeNull();
     view.querySelector("button")!.click();
     await frameFor(view);
     expect(request).toHaveBeenCalledTimes(3);

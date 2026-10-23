@@ -45,21 +45,36 @@ export function resolveModelSseDebugMode(
   return isTruthyEnv(normalized) ? "events" : "off";
 }
 
-/** Returns whether any model transport debug channel is enabled. */
-function isModelTransportDebugEnabled(env: ModelTransportDebugEnv = process.env): boolean {
-  return (
+/** Emits transport diagnostics at debug, promoted to info by explicit debug flags. */
+export function emitModelTransportDebug(log: SubsystemLogger, message: string): void {
+  const env = process.env;
+  if (
     isTruthyEnv(env.OPENCLAW_DEBUG_MODEL_TRANSPORT) ||
     resolveModelPayloadDebugMode(env) !== "off" ||
     resolveModelSseDebugMode(env) !== "off" ||
     isTruthyEnv(env.OPENCLAW_DEBUG_CODE_MODE)
-  );
-}
-
-/** Emits transport diagnostics at debug, promoted to info by explicit debug flags. */
-export function emitModelTransportDebug(log: SubsystemLogger, message: string): void {
-  if (isModelTransportDebugEnabled()) {
+  ) {
     log.info(message);
     return;
   }
   log.debug(message);
+}
+
+/** The requesting layer owns AbortError classification; deadlines remain failures here. */
+export function emitModelTransportError(
+  log: SubsystemLogger & { warn(message: string): void },
+  label: string,
+  detail: string,
+  signal?: AbortSignal,
+): void {
+  const aborted =
+    signal?.aborted === true &&
+    signal.reason instanceof Error &&
+    signal.reason.name === "AbortError";
+  const message = `[${label}] ${aborted ? "aborted" : "error"} ${detail}`;
+  if (aborted) {
+    emitModelTransportDebug(log, message);
+  } else {
+    log.warn(message);
+  }
 }

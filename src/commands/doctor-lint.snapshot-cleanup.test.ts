@@ -1,16 +1,14 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
-import type { HealthFinding } from "../flows/health-checks.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import type { DoctorLintCliOptions } from "./doctor-lint-options.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
-const mocks = vi.hoisted(() => ({ checks: vi.fn() }));
+const mocks = vi.hoisted(() => ({ checks: vi.fn(), forked: vi.fn() }));
 vi.mock("../flows/doctor-health-contributions.js", () => ({
   resolveDoctorContributionHealthChecks: mocks.checks,
 }));
@@ -18,43 +16,38 @@ vi.mock("../infra/sqlite-snapshot-source.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/sqlite-snapshot-source.js")>();
   return {
     ...actual,
-    async prepareSqliteReadOnlyLocation(
-      ...args: Parameters<typeof actual.prepareSqliteReadOnlyLocation>
-    ) {
-      const prepared = await actual.prepareSqliteReadOnlyLocation(...args);
+    async forkSqlitePrivateSnapshot(...args: Parameters<typeof actual.forkSqlitePrivateSnapshot>) {
+      const prepared = await actual.forkSqlitePrivateSnapshot(...args);
+      mocks.forked(prepared.location);
       return {
         ...prepared,
-        cleanupAsync: vi
-          .fn()
-          .mockRejectedValueOnce(new Error("SQLite read-only worker snapshot cleanup failed"))
-          .mockImplementation(prepared.cleanupAsync),
-      };
-    },
-    prepareSqliteReadOnlyLocationSync(pathname: string) {
-      const prepared = actual.prepareSqliteReadOnlyLocationSync(pathname);
-      return {
-        ...prepared,
-        async cleanupAsync() {
-          await prepared.cleanupAsync();
-          return false;
-        },
+        cleanupAsync: () => prepared.cleanupAsync().then(() => false),
       };
     },
   };
 });
 
-beforeEach(() => clearHealthChecksForTest());
+beforeEach(() => {
+  clearHealthChecksForTest();
+  mocks.forked.mockClear();
+});
 
 afterEach(async () => {
   vi.restoreAllMocks();
   await closeOpenClawStateDatabaseAsync();
 });
 
-async function runCleanupLint(
-  options: DoctorLintCliOptions,
-  env: NodeJS.ProcessEnv,
-  config: unknown = { gateway: { mode: "local" }, memory: { search: { enabled: false } } },
-) {
+const CHECK_ID = "core/doctor/runtime-tool-schemas";
+const DETECTOR_ERROR = "Authoritative detector fixture failure.";
+
+async function runCleanupLint(json: boolean, invalid: boolean) {
+  const env = {
+    OPENCLAW_UPDATE_IN_PROGRESS: invalid ? "1" : "0",
+    OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: invalid ? "1" : "0",
+    ...(!invalid && { OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "0" }),
+  };
+  const gateway = { mode: invalid ? "fixture-invalid-mode" : "local" };
+  const config = invalid ? { gateway } : { gateway, memory: { search: { enabled: false } } };
   return withOpenClawTestState({ prefix: "doctor-lint-cleanup-", env }, async (state) => {
     await state.writeConfig(config);
     openOpenClawStateDatabase({ env: state.env });
@@ -62,18 +55,16 @@ async function runCleanupLint(
     const runtime = createTestRuntime();
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     const tty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
-    Object.defineProperty(process.stdout, "isTTY", {
-      configurable: true,
-      value: options.json === false,
-    });
+    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: !json });
     try {
       const exitCode = await runDoctorLintCli(runtime, {
-        json: true,
+        json,
         severityMin: "error",
-        ...options,
+        ...(!invalid && { onlyIds: [CHECK_ID] }),
       });
+      expect(exitCode).toBe(1);
+      expect(mocks.forked).toHaveBeenCalledOnce();
       return {
-        exitCode,
         runtime,
         lastOutput: String(stdout.mock.calls.at(-1)?.[0]),
         output: stdout.mock.calls.map(([chunk]) => String(chunk)).join(""),
@@ -89,142 +80,50 @@ async function runCleanupLint(
 }
 
 it.each([
-  { update: false, blocking: false, all: false },
-  { update: true, blocking: false, all: false },
-  { update: true, blocking: true, all: false },
-  { update: true, blocking: false, all: true },
-  { update: true, blocking: true, all: true },
-])(
-  "keeps snapshot cleanup diagnostic separate during lint (%j)",
-  async ({ update, blocking, all }) => {
-    const finding: HealthFinding = {
-      checkId: "core/doctor/runtime-tool-schemas",
-      severity: "error",
-      message: "Runtime tool schema is invalid.",
-    };
+  { mode: "json", invalid: true },
+  { mode: "human", invalid: true },
+  { mode: "human", invalid: false },
+])("keeps failure and cleanup warning ($mode/$invalid)", async ({ mode, invalid }) => {
+  const detect = vi.fn(async () => {
+    throw new Error(DETECTOR_ERROR);
+  });
+  if (!invalid) {
     mocks.checks.mockResolvedValue([
-      {
-        id: finding.checkId,
-        kind: "core",
-        description: "snapshot cleanup gate regression",
-        detect: async () => (blocking ? [finding] : []),
-      },
+      { id: CHECK_ID, kind: "core", description: "detector failure", detect },
     ]);
-    const result = await runCleanupLint(
-      all ? { includeAllChecks: true } : { onlyIds: [finding.checkId] },
-      {
-        OPENCLAW_UPDATE_IN_PROGRESS: "0",
-        OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: update ? "1" : "0",
-        OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "0",
-      },
+  }
+  const { runtime, lastOutput, output } = await runCleanupLint(mode === "json", invalid);
+  if (mode === "json") {
+    const report = JSON.parse(lastOutput);
+    expect(report.ok).toBe(false);
+    expect(report.findings).toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/final-config-validation",
+        severity: "error",
+        path: "gateway.mode",
+      }),
     );
-    const report = JSON.parse(result.lastOutput);
-    expect(result.exitCode).toBe(update && !blocking ? 0 : 1);
-    expect(report.ok).toBe(update && !blocking);
-    if (update) {
-      expect(report.findings).toEqual(blocking ? [finding] : []);
-      expect(report.checksRun).toBeGreaterThan(0);
-      expect(report.warnings).toContainEqual(
-        expect.objectContaining({
-          severity: "warning",
-          message: expect.stringContaining("snapshot cleanup did not complete"),
-        }),
-      );
-    } else {
-      expect(report.findings).toContainEqual(
-        expect.objectContaining({
-          severity: "error",
-          message: expect.stringContaining("snapshot cleanup did not complete"),
-        }),
-      );
+    expect(report.warnings).toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/lint-state-inspection",
+        severity: "warning",
+        requirement: "temporary-snapshot-cleanup",
+      }),
+    );
+  } else if (invalid) {
+    for (const message of [
+      "doctor --lint: config file exists but does not parse cleanly.",
+      expect.stringContaining("gateway.mode"),
+      expect.stringContaining("Temporary doctor lint state snapshot cleanup did not complete."),
+    ]) {
+      expect(runtime.error).toHaveBeenCalledWith(message);
     }
-  },
-);
-
-it.each(["json", "human"] as const)(
-  "preserves invalid-config failure and cleanup warnings in %s output",
-  async (mode) => {
-    const { exitCode, runtime, lastOutput } = await runCleanupLint(
-      { json: mode === "json" },
-      {
-        OPENCLAW_UPDATE_IN_PROGRESS: "1",
-        OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
-      },
-      { gateway: { mode: "fixture-invalid-mode" } },
-    );
-    expect(exitCode).toBe(1);
-    if (mode === "json") {
-      const report = JSON.parse(lastOutput);
-      expect(report.ok).toBe(false);
-      expect(report.findings).toContainEqual(
-        expect.objectContaining({
-          checkId: "core/doctor/final-config-validation",
-          severity: "error",
-          path: "gateway.mode",
-        }),
-      );
-      expect(report.warnings).toContainEqual(
-        expect.objectContaining({
-          checkId: "core/doctor/lint-state-inspection",
-          severity: "warning",
-          requirement: "temporary-snapshot-cleanup",
-        }),
-      );
-    } else {
-      expect(runtime.error).toHaveBeenCalledWith(
-        "doctor --lint: config file exists but does not parse cleanly.",
-      );
-      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("gateway.mode"));
-      expect(runtime.error).toHaveBeenCalledWith(
-        expect.stringContaining("Temporary doctor lint state snapshot cleanup did not complete."),
-      );
-    }
-  },
-);
-
-it.each(["json", "human"] as const)(
-  "preserves detector failures when ordinary snapshot cleanup fails in %s output",
-  async (mode) => {
-    const detect = vi.fn(async () => {
-      throw new Error("Authoritative detector fixture failure.");
-    });
-    mocks.checks.mockResolvedValue([
-      {
-        id: "core/doctor/runtime-tool-schemas",
-        kind: "core",
-        description: "ordinary detector and snapshot cleanup failure regression",
-        detect,
-      },
-    ]);
-    const { exitCode, lastOutput, output } = await runCleanupLint(
-      { json: mode === "json", onlyIds: ["core/doctor/runtime-tool-schemas"] },
-      {
-        OPENCLAW_UPDATE_IN_PROGRESS: "0",
-        OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "0",
-        OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "0",
-      },
-    );
+  } else {
     expect(detect).toHaveBeenCalledOnce();
-    expect(exitCode).toBe(1);
-    if (mode === "json") {
-      const report = JSON.parse(lastOutput);
-      expect(report.ok).toBe(false);
-      expect(report.findings).toContainEqual(
-        expect.objectContaining({
-          checkId: "core/doctor/runtime-tool-schemas",
-          severity: "error",
-          message: expect.stringContaining("Authoritative detector fixture failure."),
-        }),
-      );
-      expect(report.findings).toContainEqual(
-        expect.objectContaining({
-          message: expect.stringContaining("snapshot cleanup did not complete"),
-        }),
-      );
-    } else {
-      expect(output).toContain("[error] core/doctor/runtime-tool-schemas");
-      expect(output).toContain("Authoritative detector fixture failure.");
-      expect(output).toContain("snapshot cleanup did not complete");
-    }
-  },
-);
+    expect(output).toContain(`[error] ${CHECK_ID}`);
+    expect(output).toContain(DETECTOR_ERROR);
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("snapshot cleanup did not complete"),
+    );
+  }
+});

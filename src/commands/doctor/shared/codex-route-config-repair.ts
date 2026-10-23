@@ -8,12 +8,12 @@ import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.j
 import {
   canAutoMigrateLegacyLosslessCompaction,
   collectLegacyLosslessCompactionConfigs,
-  COMPACTION_OVERRIDE_KEYS,
   getSharedDefaultCompactionOverrideConsumers,
   legacyLosslessSummaryModels,
   LOSSLESS_CONTEXT_ENGINE_ID,
   readLosslessSummaryModel,
   sharedDefaultLosslessCompactionHasNonCodexConsumer,
+  UNSUPPORTED_CODEX_COMPACTION_KEYS,
 } from "./codex-route-compaction-scan.js";
 import {
   agentUsesCodexRuntimeForCompaction,
@@ -80,21 +80,16 @@ function rewriteAgentModelRefs(
   const context = { ...params, agent: params.agent };
   for (const key of AGENT_MODEL_CONFIG_KEYS) {
     const start = params.hits.length;
+    const rewrite =
+      key === "model" ? rewriteModelConfigSlot : rewriteModelConfigSlotIfCanonicalCodexRuntime;
+    rewrite({
+      ...context,
+      container: params.agent,
+      key,
+      path: `${params.path}.${key}`,
+    });
     if (key === "model") {
-      rewriteModelConfigSlot({
-        ...context,
-        container: params.agent,
-        key,
-        path: `${params.path}.${key}`,
-      });
       preserveCodexRuntimePolicyForHits(context, start);
-    } else {
-      rewriteModelConfigSlotIfCanonicalCodexRuntime({
-        ...context,
-        container: params.agent,
-        key,
-        path: `${params.path}.${key}`,
-      });
     }
   }
   rewriteStringModelSlotIfCanonicalCodexRuntime({
@@ -141,13 +136,10 @@ export function rewriteConfigModelRefs(params: {
   const nextConfig = structuredClone(params.cfg);
   const hits: CodexRouteHit[] = [];
   const runtimePolicyChanges: string[] = [];
-  const unsupportedCompactionChanges: string[] = [];
-  unsupportedCompactionChanges.push(
-    ...maybeMigrateLegacyLosslessCompactionConfig({
-      cfg: nextConfig,
-      env: params.env,
-    }),
-  );
+  const unsupportedCompactionChanges = maybeMigrateLegacyLosslessCompactionConfig({
+    cfg: nextConfig,
+    env: params.env,
+  });
   const preservedLegacyLosslessCompactionPaths = new Set(
     collectLegacyLosslessCompactionConfigs({
       cfg: nextConfig,
@@ -240,14 +232,12 @@ function rewriteAgentCompactionRefs(params: {
       preservePaths: params.preserveUnsupportedCompactionPaths,
       changes: params.unsupportedCompactionChanges,
     });
-    if (params.preserveUnsupportedCompactionOverrides?.model) {
-      rewriteStringModelSlot({
-        ...params,
-        container: compaction,
-        key: "model",
-        path: `${params.path}.compaction.model`,
-      });
-    }
+    rewriteStringModelSlot({
+      ...params,
+      container: compaction,
+      key: "model",
+      path: `${params.path}.compaction.model`,
+    });
   }
   rewriteStringModelSlotIfCanonicalCodexRuntime({
     ...params,
@@ -335,7 +325,7 @@ function removeUnsupportedCodexCompactionOverrides(params: {
   if (normalizeString(params.compaction.provider) === LOSSLESS_CONTEXT_ENGINE_ID) {
     return;
   }
-  for (const key of COMPACTION_OVERRIDE_KEYS) {
+  for (const key of UNSUPPORTED_CODEX_COMPACTION_KEYS) {
     const path = `${params.path}.compaction.${key}`;
     if (params.preservePaths?.has(path) || params.preserve?.[key]) {
       continue;
@@ -412,21 +402,26 @@ function maybeMigrateLegacyLosslessCompactionConfig(params: {
     changes,
   });
   for (const hit of hits) {
-    removeMigratedLosslessCompactionKey({
-      cfg: params.cfg,
-      path: hit.providerPath,
-      key: "provider",
-      changes,
-      changeMessage: `Removed ${hit.providerPath}; Lossless now runs through plugins.slots.contextEngine.`,
-    });
-    if (hit.modelPath) {
-      removeMigratedLosslessCompactionKey({
-        cfg: params.cfg,
-        path: hit.modelPath,
-        key: "model",
-        changes,
-        changeMessage: `Removed ${hit.modelPath} after migrating the Lossless summary model.`,
-      });
+    for (const key of ["provider", "model"] as const) {
+      const path = key === "provider" ? hit.providerPath : hit.modelPath;
+      if (!path) {
+        continue;
+      }
+      const owner = readCompactionOwnerForPath(params.cfg, readCompactionOwnerPathForKeyPath(path));
+      const compaction = asMutableRecord(owner?.compaction);
+      const value = compaction?.[key];
+      if (!owner || !compaction || typeof value !== "string" || !value.trim()) {
+        continue;
+      }
+      delete compaction[key];
+      changes.push(
+        key === "provider"
+          ? `Removed ${path}; Lossless now runs through plugins.slots.contextEngine.`
+          : `Removed ${path} after migrating the Lossless summary model.`,
+      );
+      if (Object.keys(compaction).length === 0) {
+        delete owner.compaction;
+      }
     }
   }
   return changes;
@@ -492,32 +487,6 @@ function ensureLosslessLlmPolicy(params: {
     params.changes.push(
       `Added ${params.summaryModel} to plugins.entries.${LOSSLESS_CONTEXT_ENGINE_ID}.llm.allowedModels.`,
     );
-  }
-}
-
-function removeMigratedLosslessCompactionKey(params: {
-  cfg: OpenClawConfigWithLegacyRoster;
-  path: string;
-  key: CompactionOverrideKey;
-  changes: string[];
-  changeMessage: string;
-}): void {
-  const owner = readCompactionOwnerForPath(
-    params.cfg,
-    readCompactionOwnerPathForKeyPath(params.path),
-  );
-  const compaction = asMutableRecord(owner?.compaction);
-  if (!owner || !compaction) {
-    return;
-  }
-  const value = compaction[params.key];
-  if (typeof value !== "string" || !value.trim()) {
-    return;
-  }
-  delete compaction[params.key];
-  params.changes.push(params.changeMessage);
-  if (Object.keys(compaction).length === 0) {
-    delete owner.compaction;
   }
 }
 

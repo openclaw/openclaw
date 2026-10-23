@@ -6,6 +6,7 @@ import {
   normalizeOptionalString,
   readNonBlankString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { CodexPluginConfig } from "./app-server/config-contracts.js";
 
 const APP_SERVER_BINDING_DATA_VERSION = 2;
 const CLI_BINDING_DATA_VERSION = 1;
@@ -27,6 +28,7 @@ type CodexAppServerConversationSource = {
   sessionId: string;
   threadId: string;
   sessionKey?: string;
+  storePath?: string;
 };
 
 type CodexAppServerConversationStart = {
@@ -60,8 +62,6 @@ export function createCodexConversationBindingData(params: {
 }): CodexAppServerConversationBindingData {
   const agentId = params.agentId?.trim();
   const agentDir = params.agentDir?.trim();
-  const source = readConversationSource(params.source);
-  const start = readConversationStart(params.start);
   return {
     kind: "codex-app-server-session",
     version: APP_SERVER_BINDING_DATA_VERSION,
@@ -69,8 +69,8 @@ export function createCodexConversationBindingData(params: {
     workspaceDir: params.workspaceDir,
     ...(agentId ? { agentId } : {}),
     ...(agentDir ? { agentDir } : {}),
-    ...(source ? { source } : {}),
-    ...(start ? { start } : {}),
+    ...(params.source ? { source: params.source } : {}),
+    ...(params.start ? { start: params.start } : {}),
   };
 }
 
@@ -147,12 +147,13 @@ export function readCodexConversationBindingDataRecord(
 }
 
 function readConversationSource(
-  value: CodexAppServerConversationSource | Record<string, unknown> | undefined,
+  value: Record<string, unknown> | undefined,
 ): CodexAppServerConversationSource | undefined {
   const agentId = normalizeOptionalString(value?.agentId);
   const sessionId = normalizeOptionalString(value?.sessionId);
   const threadId = normalizeOptionalString(value?.threadId);
   const sessionKey = normalizeOptionalString(value?.sessionKey);
+  const storePath = normalizeOptionalString(value?.storePath);
   if (!agentId || !sessionId || !threadId) {
     return undefined;
   }
@@ -161,6 +162,7 @@ function readConversationSource(
     sessionId,
     threadId,
     ...(sessionKey ? { sessionKey } : {}),
+    ...(storePath ? { storePath } : {}),
   };
 }
 
@@ -169,14 +171,13 @@ export function legacyCodexConversationBindingId(sessionFile: string): string {
   return `legacy-${createHash("sha256").update(sessionFile).digest("base64url")}`;
 }
 
-export function resolveCodexDefaultWorkspaceDir(pluginConfig: unknown): string {
-  const appServer = readRecord(readRecord(pluginConfig)?.appServer);
-  const configured = normalizeOptionalString(appServer?.defaultWorkspaceDir);
+export function resolveCodexDefaultWorkspaceDir(pluginConfig?: CodexPluginConfig): string {
+  const configured = normalizeOptionalString(pluginConfig?.appServer?.defaultWorkspaceDir);
   return configured ?? process.cwd();
 }
 
 function readConversationStart(
-  value: CodexAppServerConversationStart | Record<string, unknown> | undefined,
+  value: Record<string, unknown> | undefined,
 ): CodexAppServerConversationStart | undefined {
   const read = (key: keyof CodexAppServerConversationStart) =>
     normalizeOptionalString(value?.[key]);

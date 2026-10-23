@@ -62,11 +62,7 @@ type ResolveInboundConversationResolutionInput = {
   accountId?: string | null;
   to?: string | null;
   threadId?: string | number | null;
-  threadParentId?: string | number | null;
-  conversationId?: string | null;
   groupId?: string | null;
-  from?: string | null;
-  isGroup?: boolean;
 };
 
 const CANONICAL_TARGET_PREFIXES = ["user:", "spaces/"] as const;
@@ -106,16 +102,21 @@ function normalizeResolutionTarget(
   };
 }
 
-function resolveBindingAccountId(params: {
-  rawAccountId?: string | null;
-  plugin?: ChannelPlugin;
-  cfg: OpenClawConfig;
-}): string {
-  return (
-    normalizeOptionalString(params.rawAccountId) ||
-    normalizeOptionalString(params.plugin?.config.defaultAccountId?.(params.cfg)) ||
-    "default"
-  );
+function resolveConversationScope(
+  channel: string,
+  plugin: ChannelPlugin | undefined,
+  params: Pick<ResolveCommandConversationResolutionInput, "accountId" | "cfg" | "threadId">,
+) {
+  const { accountId, cfg } = params;
+  return {
+    channel,
+    accountId:
+      normalizeOptionalString(accountId) ||
+      normalizeOptionalString(plugin?.config.defaultAccountId?.(cfg)) ||
+      "default",
+    threadId: stringifyRouteThreadId(params.threadId),
+    plugin,
+  };
 }
 
 function resolveFallbackConversationTargetId(params: {
@@ -132,9 +133,8 @@ function resolveFallbackConversationTargetId(params: {
           allowNumericShorthand: params.allowNumericTopicShorthand ?? false,
         });
   return (
-    resolveConversationIdFromTargets({
-      targets: [withoutTopic],
-    }) ?? (withoutTopic !== target ? withoutTopic : undefined)
+    resolveConversationIdFromTargets([withoutTopic]) ??
+    (withoutTopic !== target ? withoutTopic : undefined)
   );
 }
 
@@ -233,13 +233,8 @@ export function resolveCommandConversationResolution(
     return null;
   }
   const plugin = params.plugin ?? getLoadedChannelPluginForRead(channel);
-  const accountId = resolveBindingAccountId({
-    rawAccountId: params.accountId,
-    plugin,
-    cfg: params.cfg,
-  });
-  const threadId = stringifyRouteThreadId(params.threadId);
-  const resolutionScope = { channel, accountId, threadId, plugin };
+  const resolutionScope = resolveConversationScope(channel, plugin, params);
+  const { accountId, threadId } = resolutionScope;
   const from = normalizeOptionalString(params.from);
   const chatType = normalizeOptionalString(params.chatType);
 
@@ -311,23 +306,16 @@ export function resolveInboundConversationResolution(
     return null;
   }
   const plugin = getLoadedChannelPluginForRead(channel);
-  const accountId = resolveBindingAccountId({
-    rawAccountId: params.accountId,
-    plugin,
-    cfg: params.cfg,
-  });
-  const threadId = stringifyRouteThreadId(params.threadId);
-  const resolutionScope = { channel, accountId, threadId, plugin };
+  const resolutionScope = resolveConversationScope(channel, plugin, params);
+  const { threadId } = resolutionScope;
+  const to = normalizeOptionalString(params.to);
   const resolverParams = {
-    from: normalizeOptionalString(params.from),
-    to: normalizeOptionalString(params.to),
-    conversationId:
-      normalizeOptionalString(params.conversationId) ??
-      normalizeOptionalString(params.groupId) ??
-      normalizeOptionalString(params.to),
+    from: undefined,
+    to,
+    conversationId: normalizeOptionalString(params.groupId) ?? to,
     threadId,
-    threadParentId: stringifyRouteThreadId(params.threadParentId),
-    isGroup: params.isGroup ?? true,
+    threadParentId: undefined,
+    isGroup: true,
   };
 
   const providerConversation = plugin?.messaging?.resolveInboundConversation?.(resolverParams);
@@ -355,16 +343,8 @@ export function resolveInboundConversationResolution(
       target,
       preserveExplicitTopicSuffix: threadId == null,
     });
-  const parentConversationId =
-    resolveTarget(params.threadParentId == null ? undefined : String(params.threadParentId)) ??
-    resolveTarget(params.to) ??
-    resolveTarget(params.conversationId) ??
-    resolveTarget(params.groupId);
-  const genericConversationId =
-    threadId ??
-    resolveTarget(params.conversationId) ??
-    resolveTarget(params.groupId) ??
-    parentConversationId;
+  const parentConversationId = resolveTarget(params.to) ?? resolveTarget(params.groupId);
+  const genericConversationId = threadId ?? resolveTarget(params.groupId) ?? parentConversationId;
   if (!genericConversationId) {
     return null;
   }

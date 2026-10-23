@@ -217,6 +217,20 @@ describe("Code Mode guest source validation", () => {
     );
   });
 
+  it("keeps an astral identifier whole at the syntax diagnostic cap", () => {
+    const name = `${"a".repeat(227)}\u{1D400}`;
+    const code = `const ${name} = 1; const ${name} = 2;`;
+    let error: unknown;
+    try {
+      prepareSource(code);
+    } catch (cause) {
+      error = cause;
+    }
+    const message = error instanceof Error ? error.message : "";
+    expect(message).toContain(`Identifier '${"a".repeat(227)}`);
+    expect(message.includes("\uD835")).toBe(false);
+  });
+
   it("bounds diagnostics containing long duplicate identifiers", () => {
     const name = "a".repeat(10_000);
     const code = "let " + name + "; let " + name + ";";
@@ -509,5 +523,14 @@ describe("Code Mode guest source validation", () => {
       const executable = `return ${expression};`;
       expect(() => prepareSource(executable)).toThrow("code mode module access is disabled");
     }
+  });
+
+  it("names the replacement tool path in the module access rejection", () => {
+    const rejectModuleAccess = () => prepareSource("return require('node:fs');");
+
+    expect(rejectModuleAccess).toThrow("code mode module access is disabled.");
+    expect(rejectModuleAccess).toThrow("Call an enabled async tool global from guest JavaScript");
+    expect(rejectModuleAccess).toThrow("catalog.search(query) when the bounded quick index omits");
+    expect(rejectModuleAccess).toThrow("Do not retry the same source with require() or an import.");
   });
 });

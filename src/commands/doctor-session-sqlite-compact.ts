@@ -9,9 +9,9 @@ import {
   assertOpenClawAgentDatabaseForMaintenance,
   migrateOpenClawAgentDatabaseForMaintenance,
 } from "../state/openclaw-agent-db-maintenance.js";
+import { ensureOpenClawAgentDatabasePermissions } from "../state/openclaw-agent-db-permissions.js";
 import {
   clearOpenClawAgentDatabaseOpenFailure,
-  ensureOpenClawAgentDatabasePermissions,
   isOpenClawAgentDatabaseOpen,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
@@ -55,7 +55,7 @@ export async function compactDoctorSessionSqliteTarget(
     }
   };
   const compactTarget = () => {
-    invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(sqlitePath, databaseOptions.env);
+    invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(sqlitePath);
     const compact = compactDoctorSqliteFile({
       operation: options.operation,
       afterSuccess: () => {

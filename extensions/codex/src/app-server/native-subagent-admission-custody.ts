@@ -31,9 +31,9 @@ export class CodexNativeSubagentAdmissionCustody {
 
   constructor(
     private readonly dependencies: {
-      parentState: (id: string) => ParentState | undefined;
-      knownChild: (id: string) => KnownChild | undefined;
-      childState: (runId: string) => ChildState | undefined;
+      parentStates: ReadonlyMap<string, ParentState>;
+      knownChildren: ReadonlyMap<string, KnownChild>;
+      childStates: ReadonlyMap<string, ChildState>;
       runtime: NativeSubagentMonitorRuntime;
     },
   ) {}
@@ -54,7 +54,7 @@ export class CodexNativeSubagentAdmissionCustody {
       // Interrupted continuations leave the receipt queue before their
       // interaction can arrive. Keep pairing against the observed starts.
       const nativeTurn = [
-        ...(this.dependencies.knownChild(evidence.childThreadId)?.observedTurns ?? []),
+        ...(this.dependencies.knownChildren.get(evidence.childThreadId)?.observedTurns ?? []),
       ].find(
         ([nativeTurnId, observed]) =>
           observed.awaitingInteraction &&
@@ -124,7 +124,7 @@ export class CodexNativeSubagentAdmissionCustody {
   }
 
   hasUnboundParentOwner(parentThreadId: string): boolean {
-    const owners = this.dependencies.parentState(parentThreadId)?.owners.values() ?? [];
+    const owners = this.dependencies.parentStates.get(parentThreadId)?.owners.values() ?? [];
     return [...owners].some((owner) => owner.turnId === undefined);
   }
 
@@ -155,11 +155,11 @@ export class CodexNativeSubagentAdmissionCustody {
 
   prune(isRetired: (state: ParentState) => boolean): void {
     this.retainOnly((evidence) => {
-      const known = this.dependencies.knownChild(evidence.childThreadId);
+      const known = this.dependencies.knownChildren.get(evidence.childThreadId);
       if (known && known.parent.parentThreadId !== evidence.parentThreadId) {
         return false;
       }
-      const state = this.dependencies.parentState(evidence.parentThreadId);
+      const state = this.dependencies.parentStates.get(evidence.parentThreadId);
       if (evidence.kind === "interaction" && (evidence.owner || evidence.modelSource)) {
         return Boolean(
           (evidence.modelSource && state && !isRetired(state)) ||
@@ -191,14 +191,14 @@ export class CodexNativeSubagentAdmissionCustody {
       admitNativeChildModelExecution(
         childState,
         owner,
-        this.dependencies.knownChild(childState.childThreadId),
+        this.dependencies.knownChildren.get(childState.childThreadId),
       );
     }
     return childState;
   }
 
   bindEventSink(child: ChildState): void {
-    const parent = this.dependencies.parentState(child.parentThreadId);
+    const parent = this.dependencies.parentStates.get(child.parentThreadId);
     if (!child.completionCustody || !parent?.completionScope || child.emitEvent) {
       return;
     }
@@ -207,8 +207,8 @@ export class CodexNativeSubagentAdmissionCustody {
       completionCustody: child.completionCustody,
       runId: child.runId,
       isSourceCurrent: () =>
-        this.dependencies.childState(child.runId) === child &&
-        this.dependencies.parentState(child.parentThreadId) === parent,
+        this.dependencies.childStates.get(child.runId) === child &&
+        this.dependencies.parentStates.get(child.parentThreadId) === parent,
     });
   }
 
@@ -216,7 +216,7 @@ export class CodexNativeSubagentAdmissionCustody {
     child: ChildState,
     event: Pick<Parameters<typeof emitAgentEvent>[0], "stream" | "data">,
   ): void {
-    if (this.dependencies.childState(child.runId) !== child) {
+    if (this.dependencies.childStates.get(child.runId) !== child) {
       return;
     }
     if (child.emitEvent) {

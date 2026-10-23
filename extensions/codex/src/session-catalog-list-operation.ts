@@ -9,12 +9,14 @@ import type {
 import { publishSessionCatalogHost } from "openclaw/plugin-sdk/session-catalog-paging";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import type { CodexAppServerBindingStore } from "./app-server/session-binding.js";
+import { withTimeout } from "./app-server/timeout.js";
 import { CodexCatalogLoadingError } from "./session-catalog-availability.js";
 import {
   currentCodexCatalogListDiagnostics,
   startCodexCatalogListTiming,
 } from "./session-catalog-diagnostics.js";
 import type { CodexCatalogHome } from "./session-catalog-homes.js";
+import { CODEX_CATALOG_HOST_RESPONSE_TIMEOUT_MS } from "./session-catalog-limits.js";
 import type { CatalogNode } from "./session-catalog-node-continue.js";
 import {
   CodexCatalogNodeSnapshots,
@@ -65,6 +67,7 @@ type LocalHost = {
   value?: CodexSessionCatalogHost;
   active?: Promise<void>;
   background?: boolean;
+  deadlineAt?: number;
 };
 
 type PreparedList = {
@@ -176,6 +179,27 @@ function managedMarker(
   };
 }
 
+async function readLocalHostPage(
+  params: ListParams,
+  agentId: string,
+  host: LocalHost,
+): Promise<CodexSessionCatalogHost | undefined> {
+  const remaining =
+    (host.deadlineAt ??= performance.now() + CODEX_CATALOG_HOST_RESPONSE_TIMEOUT_MS) -
+    performance.now();
+  if (remaining <= 0) {
+    throw new CodexCatalogLoadingError();
+  }
+  return await withTimeout(
+    host.page.next().then((step) => {
+      params.signal?.throwIfAborted();
+      return step.done ? projectLocalHost(params, agentId, host.source, step.page) : undefined;
+    }),
+    remaining,
+    "Codex session catalog host timed out. Retry shortly.",
+  );
+}
+
 async function finishLocalHost(
   params: ListParams,
   agentId: string,
@@ -183,10 +207,9 @@ async function finishLocalHost(
 ): Promise<CodexSessionCatalogHost> {
   try {
     for (;;) {
-      const step = await host.page.next();
-      params.signal?.throwIfAborted();
-      if (step.done) {
-        return await projectLocalHost(params, agentId, host.source, step.page);
+      const value = await readLocalHostPage(params, agentId, host);
+      if (value) {
+        return value;
       }
     }
   } catch (error) {
@@ -219,7 +242,6 @@ class CodexCatalogListDriver {
   private nodeHosts: CodexSessionCatalogHost[] | undefined;
   private nodeResults: Array<() => CodexSessionCatalogHost | undefined> = [];
   private readonly nodeSnapshots: CodexCatalogNodeSnapshots;
-  private readonly nodeGeneration: number;
   private nodeDiscoveryFailed = false;
   private readonly nodePublications = { pending: 0 };
   private nodesStarted = false;
@@ -233,7 +255,7 @@ class CodexCatalogListDriver {
   constructor(params: ListParams) {
     this.params = params;
     this.nodeSnapshots = params.nodeSnapshots ?? new CodexCatalogNodeSnapshots();
-    this.nodeGeneration = this.nodeSnapshots.start(params.config);
+    this.nodeSnapshots.start(params.config);
   }
 
   private request(): ListParams {
@@ -336,18 +358,10 @@ class CodexCatalogListDriver {
       return;
     }
     try {
-      const page = await host.page.next();
-      params.signal?.throwIfAborted();
-      if (page.done) {
-        host.value = await projectLocalHost(
-          params,
-          this.selection().agentId,
-          host.source,
-          page.page,
-        );
-      }
+      host.value = await readLocalHostPage(params, this.selection().agentId, host);
     } catch (error) {
       this.localFailed = true;
+      host.page.close();
       host.value = hostFailure(host.source, error);
     }
     if (host.value) {
@@ -421,7 +435,7 @@ class CodexCatalogListDriver {
       return [host];
     }
     params.signal?.throwIfAborted();
-    this.nodeSnapshots.observe(this.nodeGeneration, inventory);
+    this.nodeSnapshots.observe(inventory);
     const { listNodeAdoptedSessionEntries, nodeAdoptedSourceKey } =
       await import("./session-catalog-node-adoption.js");
     const { compareNodeLabels, listPairedNode, nodeLabel } =
@@ -452,7 +466,7 @@ class CodexCatalogListDriver {
         node.commands,
         node.invocableCommands,
       ]);
-      const publication = this.nodeSnapshots.forNode(node, this.nodeGeneration, key);
+      const publication = this.nodeSnapshots.forNode(node, key);
       const { project, publish, publishCached, readPublished } = createNodeHostPublication(
         publication,
         adopted,
@@ -470,7 +484,7 @@ class CodexCatalogListDriver {
           publishCached(latest);
           return project(latest.host);
         }
-        return !partial ? result : publication.valid() ? (readPublished() ?? result) : undefined;
+        return partial ? (readPublished() ?? result) : result;
       });
       if (cached) {
         publishCached(cached);

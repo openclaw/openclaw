@@ -9,10 +9,12 @@ import {
   finalizeRequesterFinalAttachment,
   registerRequesterFinalAttachment,
 } from "../requester-final-attachment.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   adoptSubagentRunForRequesterTurnInRuns,
   listUnsettledRequesterChildrenInRuns,
   markRequesterTurnYieldedInRuns,
+  selectRequesterTurnChildren,
   settleRequesterTurnAfterSessionSpawns,
 } from "./subagent-registry-requester-yield.js";
 import { createRequesterInitialTransferFixture } from "./subagent-registry-requester-yield.test-support.js";
@@ -21,6 +23,7 @@ import {
   saveSubagentRegistryChangesToSqlite,
 } from "./subagent-registry-state.fixture.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { copySubagentRunRuntimeOwner } from "./subagent-run-generation.js";
 
 const REQUESTER = "agent:main:main";
 const REQUESTER_TURN = "run-requester";
@@ -105,6 +108,77 @@ beforeAll(async () => {
 afterAll(() => state.cleanup());
 
 afterEach(() => vi.restoreAllMocks());
+
+describe("selectRequesterTurnChildren", () => {
+  it("tracks current requester cohorts without scanning unrelated retained runs", () => {
+    subagentRuns.clear();
+    try {
+      for (let index = 0; index < 256; index++) {
+        const entry = makeRun(`retained-${index}`);
+        entry.requesterTurnRunId = `retained-turn-${index}`;
+        subagentRuns.set(entry.runId, entry);
+      }
+      const previous = {
+        ...makeRun("previous"),
+        childAgentId: "main",
+        requesterAgentId: "main",
+        generation: 1,
+      };
+      const current = {
+        ...previous,
+        runId: "current",
+        taskRunId: previous.runId,
+        generation: 2,
+      };
+      const independent = {
+        ...current,
+        runId: "independent",
+        taskRunId: "independent",
+        requesterTurnRunId: "independent-turn",
+        generation: 3,
+      };
+      for (const entry of [
+        previous,
+        current,
+        independent,
+        { ...makeRun("other-agent"), requesterAgentId: "other" },
+        { ...makeRun("other-session"), requesterSessionKey: "agent:main:other" },
+        { ...makeRun("no-completion"), expectsCompletionMessage: false },
+      ]) {
+        subagentRuns.set(entry.runId, entry);
+      }
+      const enumeration = vi.spyOn(subagentRuns, "values").mockImplementation(() => {
+        throw new Error("Requester selection must not enumerate retained registry rows");
+      });
+      const superseded = vi.fn();
+      const select = () =>
+        selectRequesterTurnChildren(
+          subagentRuns,
+          REQUESTER,
+          "main",
+          REQUESTER_TURN,
+          superseded,
+        ).map((entry) => entry.runId);
+
+      expect(select()).toEqual([current.runId]);
+      expect(superseded).toHaveBeenLastCalledWith(previous);
+      subagentRuns.set(current.runId, { ...current, requesterTurnRunId: "rebound-turn" });
+      expect(select()).toEqual([]);
+      subagentRuns.set(current.runId, current);
+      expect(select()).toEqual([current.runId]);
+      subagentRuns.delete(current.runId);
+      expect(select()).toEqual([previous.runId]);
+      subagentRuns.clear();
+      expect(select()).toEqual([]);
+      subagentRuns.set(current.runId, current);
+      expect(select()).toEqual([current.runId]);
+      expect(enumeration).not.toHaveBeenCalled();
+    } finally {
+      vi.restoreAllMocks();
+      subagentRuns.clear();
+    }
+  });
+});
 
 describe("adoptSubagentRunForRequesterTurnInRuns", () => {
   function pendingChild(runId = "steered-child"): SubagentRunRecord {
@@ -208,12 +282,10 @@ describe("adoptSubagentRunForRequesterTurnInRuns", () => {
   it.each([
     "replaced execution",
     "cancelled",
-    "dispatching",
     "different-turn",
     "different-cohort",
     "ordinary-cohort",
     "missing-cohort",
-    "retrying-cohort",
   ] as const)("does not take a %s child completion", async (reason) => {
     const child = pendingChild();
     const params = adoption(child);
@@ -221,22 +293,12 @@ describe("adoptSubagentRunForRequesterTurnInRuns", () => {
       params.runs.set(child.runId, { ...child, generation: 2 });
     } else if (reason === "cancelled") {
       child.killIntent = { requestedAt: 2_000, reason: "operator stop" };
-    } else if (reason === "dispatching") {
-      child.requesterSettleWake = { status: "dispatching", attemptCount: 1 };
     } else if (reason === "different-cohort" || reason === "ordinary-cohort") {
       child.requesterSettleWake = {
         status: "pending",
         attemptCount: 0,
         batchRunIds: [child.runId, "another-child"],
         ...(reason === "different-cohort" ? { requesterYieldBatch: true, rearmGeneration: 1 } : {}),
-      };
-    } else if (reason === "retrying-cohort") {
-      child.requesterSettleWake = {
-        status: "pending",
-        attemptCount: 1,
-        batchRunIds: [child.runId],
-        requesterYieldBatch: true,
-        rearmGeneration: 1,
       };
     } else if (reason === "missing-cohort") {
       child.requesterSettleWake = {
@@ -288,6 +350,38 @@ describe("adoptSubagentRunForRequesterTurnInRuns", () => {
 });
 
 describe("settleRequesterTurnAfterSessionSpawns", () => {
+  it.each(["yield intent", "cohort release"] as const)(
+    "keeps a selected child's current requester turn at %s",
+    async (kind) => {
+      const child = makeRun("run-child");
+      const runs = new Map([[child.runId, child]]);
+      const commit = createRequesterInitialTransferFixture(runs);
+      const transfer: Parameters<
+        typeof settleRequesterTurnAfterSessionSpawns
+      >[0]["transfer"] = async (params) => {
+        runs.set(
+          child.runId,
+          copySubagentRunRuntimeOwner(child, { ...child, requesterTurnRunId: "run-other" }),
+        );
+        await commit(params);
+      };
+      const operation =
+        kind === "yield intent"
+          ? markRequesterTurnYieldedInRuns({
+              preparedAuthority: null,
+              requesterSessionKey: REQUESTER,
+              requesterTurnRunId: REQUESTER_TURN,
+              runs,
+              transfer,
+            })
+          : settleRuns([child], { runs, transfer });
+
+      await expect(operation).rejects.toThrow(/Requester (child changed its turn|spawn receipt)/);
+      expect(runs.get(child.runId)?.requesterTurnRunId).toBe("run-other");
+      expect(runs.get(child.runId)?.requesterSettleWake).toBeUndefined();
+    },
+  );
+
   function nestedRequester(delivery: "pending" | "delivered" = "delivered"): SubagentRunRecord {
     return {
       ...makeRun(REQUESTER_TURN),
@@ -426,6 +520,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
         expect(append).not.toHaveBeenCalled();
       } else {
         expect(await settling).toBe(true);
+        expect(beforeWrite).toHaveBeenCalledOnce();
         finalizeRequesterBatch(entry.runId, "settled");
         expect(append).toHaveBeenCalledExactlyOnceWith("settled");
       }
@@ -525,6 +620,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
           schedule,
         }),
       ).toBe(expected);
+      expect(beforeWrite).toHaveBeenCalledTimes(expected ? 1 : 0);
       if (expected) {
         expect(runs.get(entry.runId)!.requesterSettleWake?.batchRunIds).toEqual([entry.runId]);
         expect(schedule).toHaveBeenCalledExactlyOnceWith(
@@ -563,7 +659,9 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
         calls.push("persist");
       };
       const schedule = vi.fn(() => calls.push("schedule"));
+      const write = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
       expect(await settleRuns(entries, { runs, beforeWrite, schedule })).toBe(true);
+      expect(write).toHaveBeenCalledOnce();
       const batchRunIds = entries.map((entry) => entry.runId).toSorted();
       for (const entry of entries) {
         expect(runs.get(entry.runId)!.requesterSettleWake).toEqual({
@@ -579,18 +677,21 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
         expect(runs.get(entry.runId)!.requesterTurnRunId).toBeUndefined();
         expect(runs.get(entry.runId)!.retireAfterRequesterTurn).toBeUndefined();
       }
-      expect(
-        loadSubagentRegistryFromSqlite().get(first.runId)?.requesterSettleWake?.batchRunIds,
-      ).toEqual(batchRunIds);
-      expect(calls).toEqual(
-        kind === "running" ? ["persist", "persist"] : ["persist", "persist", "schedule"],
-      );
-      if (kind !== "running") {
+      expect(loadSubagentRegistryFromSqlite().get(first.runId)).toMatchObject({
+        requesterTurnRunId: undefined,
+        requesterTurnYielded: undefined,
+        requesterSettleWake: { status: "pending", requesterYieldBatch: true, batchRunIds },
+      });
+      if (kind === "running") {
+        expect(schedule).not.toHaveBeenCalled();
+        expect(calls).toEqual(["persist"]);
+      } else {
         expect(schedule).toHaveBeenCalledExactlyOnceWith(
           first.runId,
           runs.get(first.runId),
           "settle",
         );
+        expect(calls).toEqual(["persist", "schedule"]);
       }
       if (kind === "in_progress") {
         expect(runs.get(second.runId)!.delivery?.disposition).toBe("intentional_non_delivery");
@@ -625,6 +726,9 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
           schedule,
         }),
       ).toBe(true);
+      expect(beforeWrite.mock.calls).toEqual(
+        requesterYielded ? [[completion.runId], [completion.runId]] : [[completion.runId]],
+      );
       if (requesterYielded) {
         expect(runs.get(completion.runId)!.requesterSettleWake).toMatchObject({
           batchRunIds: [completion.runId],
@@ -651,14 +755,12 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
       const runs = new Map([[entry.runId, entry]]);
       const original = structuredClone(entry);
       const failure = new Error("sqlite unavailable");
+      if (reject) {
+        vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockRejectedValueOnce(failure);
+      }
       const settling = settleRuns([entry], {
         requesterYielded: false,
         runs,
-        beforeWrite: () => {
-          if (reject) {
-            throw failure;
-          }
-        },
       });
       if (reject) {
         await expect(settling).rejects.toMatchObject({ outcome: "not-committed", cause: failure });
@@ -685,6 +787,23 @@ describe("listUnsettledRequesterChildrenInRuns", () => {
       execution: { status: "running", startedAt: NOW - 1_000 },
       delivery: { status: "pending" },
       ...overrides,
+    };
+  }
+
+  function expectedChild(
+    runId: string,
+    startedAt: number,
+    childState: "running" | "completing" | "paused" = "running",
+    wakeArmed = false,
+    extra: { label?: string; childSessionKey?: string } = {},
+  ) {
+    return {
+      runId,
+      childSessionKey: `agent:main:subagent:${runId}`,
+      startedAt,
+      state: childState,
+      wakeArmed,
+      ...extra,
     };
   }
 
@@ -747,42 +866,13 @@ describe("listUnsettledRequesterChildrenInRuns", () => {
         now: NOW,
       }),
     ).toEqual([
-      {
-        runId: "run-completing",
-        childSessionKey: "agent:main:subagent:run-completing",
-        startedAt: NOW - 3_000,
-        state: "completing",
-        wakeArmed: false,
-      },
-      {
-        runId: "run-paused",
-        childSessionKey: "agent:main:subagent:run-paused",
-        startedAt: NOW - 2_000,
-        state: "paused",
-        wakeArmed: true,
-      },
-      {
-        runId: "run-yielded",
-        childSessionKey: "agent:main:subagent:run-yielded",
-        label: "Work session",
-        startedAt: NOW - 1_000,
-        state: "running",
-        wakeArmed: true,
-      },
-      {
-        runId: "run-earlier",
-        childSessionKey: "agent:main:subagent:run-earlier",
-        startedAt: NOW - 1_000,
-        state: "running",
-        wakeArmed: false,
-      },
-      {
-        runId: "current",
-        childSessionKey: old.childSessionKey,
-        startedAt: NOW - 1_000,
-        state: "running",
-        wakeArmed: false,
-      },
+      expectedChild("run-completing", NOW - 3_000, "completing"),
+      expectedChild("run-paused", NOW - 2_000, "paused", true),
+      expectedChild("run-yielded", NOW - 1_000, "running", true, { label: "Work session" }),
+      expectedChild("run-earlier", NOW - 1_000),
+      expectedChild("current", NOW - 1_000, "running", false, {
+        childSessionKey: "agent:main:subagent:old",
+      }),
     ]);
   });
 });

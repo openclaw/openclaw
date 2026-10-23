@@ -1,6 +1,10 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import {
+  getRpcSourceForGateway,
+  hasUnretiredRpcSource,
+} from "../../sessions/session-controller.rpc-sources.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
 import type { AgentTurnIo } from "./types.js";
@@ -57,12 +61,13 @@ export function isAcceptedAgentDedupePayload(payload: unknown): payload is {
 }
 
 export function resolveAgentWaitSource(
-  context: Pick<GatewayRequestContext, "chatAbortControllers" | "dedupe">,
+  context: Pick<GatewayRequestContext, "dedupe"> &
+    Partial<Pick<GatewayRequestContext, "resolveGatewayContext">>,
   runId: string,
 ): "agent" | "chat" | undefined {
-  const activeChatEntry = context.chatAbortControllers.get(runId);
+  const activeChatEntry = getRpcSourceForGateway(runId, context.resolveGatewayContext);
   if (activeChatEntry) {
-    return activeChatEntry.kind === "agent" ? "agent" : "chat";
+    return activeChatEntry.adapter.kind === "agent" ? "agent" : "chat";
   }
   // Cancellation can retire the controller before dispatch publishes its result;
   // sessionless admissions also retain their RPC owner in the accepted dedupe.
@@ -98,7 +103,7 @@ export function isPreRegistrationAbortedAgentDedupeEntryForSession(params: {
     return false;
   }
   const payload = params.entry.payload;
-  const payloadRunId = normalizeOptionalString(payload.runId);
+  const payloadRunId = typeof payload.runId === "string" ? payload.runId : "";
   if (payloadRunId && payloadRunId !== params.runId) {
     return false;
   }
@@ -127,13 +132,7 @@ export function setGatewayDedupeEntries(params: {
   session?: Parameters<typeof setGatewayDedupeEntry>[0]["session"];
 }): void {
   for (const key of params.keys) {
-    setGatewayDedupeEntry({
-      dedupe: params.dedupe,
-      key,
-      entry: params.entry,
-      startNewAttempt: params.startNewAttempt,
-      session: params.session,
-    });
+    setGatewayDedupeEntry({ ...params, key });
   }
 }
 
@@ -161,12 +160,9 @@ export function setAbortedAgentDedupeEntries(params: {
   sessionKey?: string;
   runId: string;
   stopReason: string;
-  session?: Parameters<typeof setGatewayDedupeEntry>[0]["session"];
 }): void {
   setGatewayDedupeEntries({
-    dedupe: params.dedupe,
-    keys: params.keys,
-    session: params.session,
+    ...params,
     entry: {
       ts: Date.now(),
       ok: true,
@@ -178,7 +174,7 @@ export function setAbortedAgentDedupeEntries(params: {
 export function replayAgentTurnIfCached(params: {
   acceptedOnly?: boolean;
   preflight: { agentDedupeKeys: readonly string[]; runId: string };
-  context: Pick<GatewayRequestContext, "dedupe" | "chatAbortControllers">;
+  context: Pick<GatewayRequestContext, "dedupe" | "resolveGatewayContext">;
   io: AgentTurnIo;
 }): boolean {
   const { agentDedupeKeys, runId } = params.preflight;
@@ -196,7 +192,14 @@ export function replayAgentTurnIfCached(params: {
     params.acceptedOnly &&
     isAcceptedAgentDedupePayload(cached.payload) &&
     !cached.payload.reservationId &&
-    !params.context.chatAbortControllers.has(runId)
+    !hasUnretiredRpcSource(
+      runId,
+      {
+        sessionKey: normalizeOptionalString(cached.payload.sessionKey),
+        agentId: normalizeOptionalString(cached.payload.agentId),
+      },
+      params.context.resolveGatewayContext,
+    )
   ) {
     // Durable private input owns recovery after the accepted controller is gone.
     return false;

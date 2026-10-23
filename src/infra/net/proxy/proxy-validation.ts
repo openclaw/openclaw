@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { createServer, type Server } from "node:http";
+import { once } from "node:events";
+import { createServer } from "node:http";
+import { promisify } from "node:util";
 import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -174,18 +176,6 @@ type LoopbackValidationCanary = {
   close: () => Promise<void>;
 };
 
-function closeServer(server: Server): Promise<void> {
-  return new Promise((resolve, reject) => {
-    server.close((err) => {
-      if (err) {
-        reject(err);
-        return;
-      }
-      resolve();
-    });
-  });
-}
-
 async function createLoopbackValidationCanary(): Promise<LoopbackValidationCanary> {
   const token = randomUUID();
   // Only the per-probe token distinguishes our listener from a proxy response.
@@ -197,24 +187,18 @@ async function createLoopbackValidationCanary(): Promise<LoopbackValidationCanar
     response.end();
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
+  await once(server.listen(0, "127.0.0.1"), "listening");
 
   const address = server.address();
   if (typeof address === "string" || address === null) {
-    await closeServer(server);
+    await promisify(server.close.bind(server))();
     throw new Error("Unable to start loopback proxy validation canary");
   }
 
   return {
     url: `http://127.0.0.1:${address.port}/`,
     token,
-    close: () => closeServer(server),
+    close: () => promisify(server.close.bind(server))(),
   };
 }
 

@@ -1,18 +1,17 @@
 import path from "node:path";
 import { afterEach, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import type { EmbeddedAgentQueueMessageOutcome } from "../../agents/embedded-agent-runner/runs.js";
 import {
   runInitialModelFallbackAttempt,
   type TestModelFallbackRunnerParams,
 } from "../../agents/test-helpers/model-fallback-runner.test-support.js";
 import { clearRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { QueueSettings } from "./queue.js";
 import {
   createReplyOperation as createRegisteredReplyOperation,
   type ReplyOperation,
-} from "./reply-run-registry.js";
+} from "../../sessions/session-controller.js";
+import type { QueueSettings } from "./queue.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 import {
   createMockFollowupRun,
@@ -29,26 +28,30 @@ const abortEmbeddedAgentRunMock = vi.fn();
 const compactEmbeddedAgentSessionMock = vi.fn();
 const isEmbeddedAgentRunActiveMock = vi.fn(() => false);
 const isEmbeddedAgentRunStreamingMock = vi.fn(() => false);
-const queueEmbeddedAgentMessageWithOutcomeAsyncMock = vi.fn(
-  async (
-    sessionId: string,
-    _text: string,
-    _options?: unknown,
-  ): Promise<EmbeddedAgentQueueMessageOutcome> => ({
+/** Scripted receipt for the fake reply backend's message injection. */
+type BackendQueueOutcome =
+  | {
+      queued: true;
+      transcriptCommit?: "unconfirmed";
+      errorMessage?: string;
+      [key: string]: unknown;
+    }
+  | { queued: false; reason: string; [key: string]: unknown };
+const backendQueueMessageMock = vi.fn(
+  async (sessionId: string, _text: string, _options?: unknown): Promise<BackendQueueOutcome> => ({
     queued: false,
     sessionId,
     reason: "not_streaming",
     gatewayHealth: "live",
   }),
 );
-const resolveEmbeddedSessionLaneMock = vi.fn();
 const waitForEmbeddedAgentRunEndMock = vi.fn();
 const enqueueFollowupRunMock = vi.fn();
 const parkedSteerAdmitMock = vi.fn(async () => "steer" as const);
 const parkedSteerAcceptedMock = vi.fn();
 const parkedSteerFallbackMock = vi.fn();
 const parkedSteerConsumeMock = vi.fn();
-const parkSteerCandidateMock = vi.fn(() => ({
+const reserveSteerCandidateMock = vi.fn(() => ({
   admit: parkedSteerAdmitMock,
   accepted: parkedSteerAcceptedMock,
   fallback: parkedSteerFallbackMock,
@@ -124,24 +127,19 @@ vi.mock("../../infra/agent-run-registry.js", async () => {
   };
 });
 
-vi.mock("../../agents/embedded-agent.js", () => ({
+vi.mock("../../agents/embedded-agent.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/embedded-agent.js")>()),
   abortEmbeddedAgentRun: abortEmbeddedAgentRunMock,
   compactEmbeddedAgentSession: compactEmbeddedAgentSessionMock,
-  isEmbeddedAgentRunActive: isEmbeddedAgentRunActiveMock,
-  isEmbeddedAgentRunStreaming: isEmbeddedAgentRunStreamingMock,
-  queueEmbeddedAgentMessageWithOutcomeAsync: queueEmbeddedAgentMessageWithOutcomeAsyncMock,
-  resolveEmbeddedSessionLane: resolveEmbeddedSessionLaneMock,
+  isSessionRunActive: isEmbeddedAgentRunActiveMock,
+  isSessionNativeAttemptStreaming: isEmbeddedAgentRunStreamingMock,
   runEmbeddedAgent: runEmbeddedAgentMock,
-  waitForEmbeddedAgentRunEnd: waitForEmbeddedAgentRunEndMock,
+  waitForSessionRunEnd: waitForEmbeddedAgentRunEndMock,
 }));
 
+// mock-isolation: The scripted reply backend owns cleanup; media cases must not detach process-wide native runs.
 vi.mock("../../agents/embedded-agent-runner/runs.js", () => ({
-  clearActiveEmbeddedRun: vi.fn(),
-  formatEmbeddedAgentQueueFailureSummary: (outcome: { reason?: string; sessionId?: string }) =>
-    outcome.reason && outcome.sessionId
-      ? `queue_message_failed reason=${outcome.reason} sessionId=${outcome.sessionId} gatewayHealth=live`
-      : undefined,
-  queueEmbeddedAgentMessageWithOutcomeAsync: queueEmbeddedAgentMessageWithOutcomeAsyncMock,
+  detachActiveEmbeddedRun: vi.fn(),
 }));
 
 vi.mock("../../cli/command-secret-gateway.js", () => ({
@@ -155,20 +153,17 @@ vi.mock("../../cli/command-secret-targets.js", () => ({
   getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
 }));
 
-vi.mock("../../agents/sandbox.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../agents/sandbox.js")>();
+vi.mock("../../agents/sandbox/context.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/sandbox/context.js")>();
   return {
     ...actual,
     ensureSandboxWorkspaceForSession: async () => null,
+    prepareSandboxWorkspaceForSession: async () => null,
   };
 });
 
 vi.mock("./session-updates.js", () => ({
   incrementCompactionCount: async () => undefined,
-}));
-
-vi.mock("./session-usage.js", () => ({
-  persistSessionUsageUpdate: async () => undefined,
 }));
 
 vi.mock("./agent-runner-memory.js", () => ({
@@ -180,14 +175,19 @@ vi.mock("./agent-runner-memory.js", () => ({
     sessionEntry,
 }));
 
-vi.mock("./queue.js", () => ({
-  admitFollowupRunLifecycle: vi.fn(async () => {}),
-  enqueueFollowupRun: enqueueFollowupRunMock,
-  parkSteerCandidate: parkSteerCandidateMock,
-  refreshQueuedFollowupSession: refreshQueuedFollowupSessionMock,
-  resolveFollowupAbortSignal: vi.fn(() => undefined),
-  scheduleFollowupDrain: scheduleFollowupDrainMock,
-}));
+vi.mock("./queue.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./queue.js")>();
+  return {
+    ...actual,
+    admitFollowupRunLifecycle: vi.fn(async () => {}),
+    completeFollowupRunLifecycle: actual.completeFollowupRunLifecycle,
+    enqueueFollowupRun: enqueueFollowupRunMock,
+    reserveSteerCandidate: reserveSteerCandidateMock,
+    refreshQueuedFollowupSession: refreshQueuedFollowupSessionMock,
+    resolveFollowupAbortSignal: vi.fn(() => undefined),
+    scheduleFollowupDrain: scheduleFollowupDrainMock,
+  };
+});
 
 vi.mock("../../media/outbound-attachment.js", () => ({
   resolveOutboundAttachmentFromUrl: (...args: unknown[]) =>
@@ -208,8 +208,11 @@ vi.mock("./reply-media-paths.js", async (importOriginal) => {
 
 const { runReplyAgent } = await import("./agent-runner-run.js");
 
-function createMediaFollowupRun(overrides: Parameters<typeof createMockFollowupRun>[0]) {
-  const followupRun = createMockFollowupRun(overrides);
+function createMediaFollowupRun(overrides: Parameters<typeof createMockFollowupRun>[0] = {}) {
+  const followupRun = createMockFollowupRun({
+    ...overrides,
+    run: { senderId: "alice", ...overrides.run },
+  });
   followupRun.run.thinkingCatalog = [
     {
       provider: followupRun.run.provider,
@@ -220,13 +223,13 @@ function createMediaFollowupRun(overrides: Parameters<typeof createMockFollowupR
   return followupRun;
 }
 
-function makeRunReplyAgentParams(
+async function makeRunReplyAgentParams(
   overrides: Partial<Parameters<typeof runReplyAgent>[0]> & {
     provider?: string;
     prompt?: string;
     workspaceDir?: string;
   } = {},
-): Parameters<typeof runReplyAgent>[0] {
+): Promise<Parameters<typeof runReplyAgent>[0]> {
   const provider = overrides.provider ?? "whatsapp";
   const prompt = overrides.prompt ?? "generate chart";
   const runWorkspaceDir = overrides.workspaceDir ?? testWorkspaceDir;
@@ -257,22 +260,25 @@ function makeRunReplyAgentParams(
     }
   }
   if (overrides.isActive === true && !overrides.replyOperation) {
-    replyOperation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(followupRun));
+    await replyOperation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(followupRun));
   }
   if (overrides.isActive === true) {
     replyOperation.attachBackend({
       kind: "embedded",
       cancel: vi.fn(),
       supportsQueueMessageImages: true,
+      supportsTranscriptCommitWait: true,
       taskSuggestionDeliveryMode: followupRun.run.taskSuggestionDeliveryMode,
-      messageInjection: {
+      messageInjectionV2: {
+        version: 2,
         isAvailable: () => true,
-        queueMessage: async (text, options) => {
-          const outcome = await queueEmbeddedAgentMessageWithOutcomeAsyncMock(
-            replyOperation.sessionId,
-            text,
-            options,
-          );
+        async queueMessage() {
+          throw new Error("Expected asynchronous prepared injection");
+        },
+        async queueMessageAsync(text, options, preparation) {
+          await preparation.prepareCurrent();
+          preparation.assertCurrent();
+          const outcome = await backendQueueMessageMock(replyOperation.sessionId, text, options);
           if (!outcome.queued) {
             throw new Error(outcome.reason);
           }
@@ -290,7 +296,7 @@ function makeRunReplyAgentParams(
   return {
     commandBody: prompt,
     followupRun,
-    queueKey: "main",
+    queueKey: overrides.sessionKey ?? "main",
     resolvedQueue: { mode: "interrupt" } as QueueSettings,
     shouldSteer: false,
     shouldFollowup: false,
@@ -326,14 +332,13 @@ export function resetAgentRunnerMediaTestState() {
   isEmbeddedAgentRunActiveMock.mockReturnValue(false);
   isEmbeddedAgentRunStreamingMock.mockReset();
   isEmbeddedAgentRunStreamingMock.mockReturnValue(false);
-  queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockReset();
-  queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
+  backendQueueMessageMock.mockReset();
+  backendQueueMessageMock.mockImplementation(async (sessionId: string) => ({
     queued: false,
     sessionId,
     reason: "not_streaming",
     gatewayHealth: "live",
   }));
-  resolveEmbeddedSessionLaneMock.mockReset();
   waitForEmbeddedAgentRunEndMock.mockReset();
   enqueueFollowupRunMock.mockReset();
   parkedSteerAdmitMock.mockReset();
@@ -341,8 +346,8 @@ export function resetAgentRunnerMediaTestState() {
   parkedSteerAcceptedMock.mockReset();
   parkedSteerFallbackMock.mockReset();
   parkedSteerConsumeMock.mockReset();
-  parkSteerCandidateMock.mockReset();
-  parkSteerCandidateMock.mockReturnValue({
+  reserveSteerCandidateMock.mockReset();
+  reserveSteerCandidateMock.mockReturnValue({
     admit: parkedSteerAdmitMock,
     accepted: parkedSteerAcceptedMock,
     fallback: parkedSteerFallbackMock,
@@ -384,10 +389,10 @@ export {
   createReplyMediaContextRuntimeMock,
   enqueueFollowupRunMock,
   makeRunReplyAgentParams,
-  parkSteerCandidateMock,
+  reserveSteerCandidateMock,
   parkedSteerConsumeMock,
   parkedSteerFallbackMock,
-  queueEmbeddedAgentMessageWithOutcomeAsyncMock,
+  backendQueueMessageMock,
   resolveOutboundAttachmentFromUrlMock,
   runEmbeddedAgentMock,
   runReplyAgent,

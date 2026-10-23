@@ -1,9 +1,8 @@
 import fs from "node:fs";
-import { homedir } from "node:os";
 import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { fingerprintConfigSnapshotAuthoredConfig } from "../config/config-journal-snapshot.js";
-import { readRecentConfigAuditRecords, type ConfigAuditRecord } from "../config/io.audit.js";
 import { hashConfigRaw, parseConfigJson5 } from "../config/io.read-helpers.js";
 import {
   assertConfigFileWritePathSnapshot,
@@ -21,13 +20,6 @@ import {
 } from "./update-immutable-protection-schema.js";
 
 type ProtectionContext = { env: NodeJS.ProcessEnv; assertCurrent: () => void };
-export type ImmutableProtectionCandidate = {
-  pid: number;
-  generationPath: string;
-  startedAtMs: number;
-  /** Revalidates the live service PID/boot and physical generation, not a receipt token. */
-  assertCurrent: () => void;
-};
 
 function fileIdentity(file: string) {
   const stat = fs.lstatSync(file);
@@ -39,12 +31,7 @@ function fileIdentity(file: string) {
 
 function fingerprint(raw: string, env: NodeJS.ProcessEnv): ConfigFingerprint {
   const parsed = parseConfigJson5(raw);
-  if (
-    !parsed.ok ||
-    parsed.parsed === null ||
-    typeof parsed.parsed !== "object" ||
-    Array.isArray(parsed.parsed)
-  ) {
+  if (!parsed.ok || !isRecord(parsed.parsed)) {
     throw new Error("Immutable update requires a readable object-shaped config.");
   }
   const result = immutableConfigFingerprintSchema.safeParse(
@@ -131,14 +118,6 @@ function isAdditive(
     : isDeepStrictEqual(before, after);
 }
 
-function auditRecords(env: NodeJS.ProcessEnv): ConfigAuditRecord[] {
-  return readRecentConfigAuditRecords({ env, homedir, limit: 512 });
-}
-
-function auditKey(record: ConfigAuditRecord): string {
-  return sha256Hex(JSON.stringify(record));
-}
-
 function readFile(file: ImmutableProtectionSnapshot["config"][number], env: NodeJS.ProcessEnv) {
   assertConfigFileWritePathSnapshot(file.pathProof, fs);
   const before = fileIdentity(file.pathProof.targetPath);
@@ -206,10 +185,9 @@ export async function captureImmutableProtection(
       policyFingerprint: index === 0 ? policyFingerprint(value) : sha256Hex(stableStringify(value)),
     };
   });
-  const newest = auditRecords(env)[0];
   const snapshot: ImmutableProtectionSnapshot = {
     capturedAtMs: Date.now(),
-    auditBoundary: newest ? auditKey(newest) : null,
+    auditBoundary: null,
     state: {
       path: statePath,
       identity: stateIdentity,
@@ -242,29 +220,19 @@ export function assertImmutableProtectionUnchanged(
   context.assertCurrent();
 }
 
-/** Audits establish a contiguous publication chain only after the service owner proves provenance. */
+/** Optional audit receipts do not gate an additive migration with unchanged policy and ownership. */
 export function verifyImmutableProtection(
   snapshot: ImmutableProtectionSnapshot,
-  context: ProtectionContext & {
-    candidate: ImmutableProtectionCandidate;
-  },
+  context: ProtectionContext,
 ): void {
   context.assertCurrent();
-  context.candidate.assertCurrent();
   assertState(snapshot);
-  const recent = auditRecords(context.env);
-  const boundary =
-    snapshot.auditBoundary === null
-      ? recent.length
-      : recent.findIndex((record) => auditKey(record) === snapshot.auditBoundary);
-  const records = (boundary < 0 ? recent : recent.slice(0, boundary)).toReversed();
   for (const file of snapshot.config) {
     const current = readFile(file, context.env);
     if (current.hash === file.hash && isDeepStrictEqual(current.identity, file.identity)) {
       continue;
     }
     if (
-      boundary < 0 ||
       !isAdditive(file.fingerprint, current.fingerprint) ||
       (file === snapshot.config[0]
         ? policyFingerprint(current.fingerprint)
@@ -274,74 +242,17 @@ export function verifyImmutableProtection(
         "Protected configuration changed without an additive, policy-preserving startup migration.",
       );
     }
-    let expectedHash = file.hash;
-    let expectedIdentity = file.identity;
-    let writes = 0;
-    for (const record of records) {
-      if (record.configPath !== file.path && record.configPath !== file.pathProof.targetPath) {
-        continue;
-      }
-      if (record.event === "config.external") {
-        throw new Error("A foreign config write occurred during immutable activation.");
-      }
-      if (
-        record.event !== "config.write" ||
-        record.result === "failed" ||
-        record.result === "rejected"
-      ) {
-        continue;
-      }
-      const ts = Date.parse(record.ts);
-      const previous = {
-        dev: record.previousDev,
-        ino: record.previousIno,
-        mode: record.previousMode,
-        nlink: record.previousNlink,
-        uid: record.previousUid,
-        gid: record.previousGid,
-      };
-      const next = immutableProtectedFileIdentitySchema.safeParse({
-        dev: record.nextDev,
-        ino: record.nextIno,
-        mode: record.nextMode,
-        nlink: record.nextNlink,
-        uid: record.nextUid,
-        gid: record.nextGid,
-      });
-      if (
-        record.pid !== context.candidate.pid ||
-        record.cwd !== context.candidate.generationPath ||
-        (record.origin !== undefined && record.origin !== "doctor") ||
-        !Number.isFinite(ts) ||
-        ts < context.candidate.startedAtMs ||
-        ts < snapshot.capturedAtMs ||
-        ts > Date.now() ||
-        record.previousHash !== expectedHash ||
-        !isDeepStrictEqual(previous, expectedIdentity) ||
-        !next.success ||
-        next.data.uid !== file.identity.uid ||
-        next.data.gid !== file.identity.gid ||
-        next.data.mode !== file.identity.mode ||
-        next.data.dev !== file.identity.dev ||
-        !record.nextHash
-      ) {
-        throw new Error(
-          "Config migration audit does not prove the selected candidate's contiguous, same-owner write chain.",
-        );
-      }
-      expectedHash = record.nextHash;
-      expectedIdentity = next.data;
-      writes++;
-    }
     if (
-      !writes ||
-      expectedHash !== current.hash ||
-      !isDeepStrictEqual(expectedIdentity, current.identity)
+      current.identity.uid !== file.identity.uid ||
+      current.identity.gid !== file.identity.gid ||
+      current.identity.mode !== file.identity.mode ||
+      current.identity.dev !== file.identity.dev
     ) {
-      throw new Error("Config migration is missing its complete config-audit publication receipt.");
+      throw new Error(
+        "Protected config ownership or permissions changed during startup migration.",
+      );
     }
   }
   assertState(snapshot);
-  context.candidate.assertCurrent();
   context.assertCurrent();
 }

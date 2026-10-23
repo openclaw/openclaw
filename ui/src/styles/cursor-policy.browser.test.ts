@@ -1,108 +1,73 @@
-// Control UI tests cover the semantic cursor policy.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { chromium, type BrowserContext, type Locator, type Page } from "playwright";
 import postcss from "postcss";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, expect, it } from "vitest";
 import { readStyleSheet } from "../../../test/helpers/ui-style-fixtures.js";
 import { controlUiHoverGuardPlugin } from "../../config/control-ui-hover-guard.ts";
-import { dockPanelStyles } from "../components/dock-panel-styles.ts";
 import { withBrowserPage } from "../test-helpers/browser-page.ts";
-import {
-  canRunPlaywrightChromium,
-  resolvePlaywrightChromiumExecutablePath,
-} from "../test-helpers/control-ui-e2e.ts";
+import { readStyles, styleFixture } from "./style-fixture.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const describeCursorPolicy = canRunPlaywrightChromium(chromiumExecutablePath)
-  ? describe
-  : describe.skip;
+const fixture = styleFixture("cursor-policy-", { ignoreCloseErrors: true });
 
 // What `DashboardWindowController.installNativeChromeScript` stamps on <html>.
 const NATIVE_HOST_MARKERS = ["openclaw-native-macos", "openclaw-native-web-chrome"] as const;
 
-type CursorCase = {
-  readonly expected: string;
-  readonly selector: string;
-  readonly shadow?: boolean;
-};
-
-const CURSOR_CASES: readonly CursorCase[] = [
-  // State-changing controls use the desktop arrow in every host.
-  { expected: "default", selector: ".btn" },
-  { expected: "default", selector: "#plain-summary" },
-  { expected: "default", selector: "#plain-select" },
-  { expected: "default", selector: "#plain-checkbox" },
-  { expected: "default", selector: "#role-button" },
-  { expected: "default", selector: ".settings-secret__toggle" },
-  { expected: "default", selector: ".nav-item" },
-  { expected: "default", selector: ".nav-item__text" },
-  { expected: "default", selector: ".sidebar-recent-session__link" },
-  { expected: "default", selector: ".sidebar-recent-session__name" },
-  { expected: "default", selector: ".sidebar-online__person" },
-  { expected: "default", selector: ".sidebar-brand__new-thread" },
-  { expected: "default", selector: ".sidebar-new-session" },
-  { expected: "default", selector: ".sidebar-session-catalog-new" },
-  { expected: "default", selector: ".settings-sidebar__item" },
-  { expected: "default", selector: ".settings-sidebar__subitem" },
-  { expected: "default", selector: ".sidebar-issues-panel__navigation-link" },
-  { expected: "default", selector: ".sidebar-approval-row__open-session" },
-  { expected: "default", selector: ".sidebar-footer-build" },
-  { expected: "default", selector: ".sidebar-more-menu a" },
-  // Links and explicit new-tab controls keep the hand.
-  { expected: "pointer", selector: "#real-link" },
-  { expected: "pointer", selector: "#sidebar-external-link" },
-  { expected: "pointer", selector: "#sidebar-help-link" },
-  { expected: "pointer", selector: "#sidebar-new-tab-link" },
-  { expected: "pointer", selector: "#sidebar-new-tab-action" },
-  { expected: "pointer", selector: "#new-tab-link" },
-  { expected: "pointer", selector: "#new-tab-button" },
-  { expected: "pointer", selector: "#shadow-new-tab-button", shadow: true },
-  { expected: "pointer", selector: ".markdown-file-link" },
-  { expected: "pointer", selector: ".markdown-github-item" },
-  // Semantic cursors remain owned by their components.
-  { expected: "text", selector: "#plain-text-input" },
-  { expected: "text", selector: ".chat-pane__session-title-button" },
-  { expected: "grab", selector: ".sidebar-session-group-drag-handle" },
-  { expected: "zoom-in", selector: ".chat-message-image-button" },
-  { expected: "not-allowed", selector: ".btn--ghost:disabled" },
-  { expected: "not-allowed", selector: "#disabled-new-tab-button" },
-  { expected: "default", selector: "#shadow-disabled-new-tab-button", shadow: true },
-  { expected: "wait", selector: ".sidebar-update-card__hold:disabled" },
-  { expected: "default", selector: ".session-tokens" },
-  { expected: "default", selector: ".agent-tools-runtime-chip--more" },
-  { expected: "default", selector: ".chat-assistant-attachment-card[data-openable]" },
+function cursorGroup(expected: string, selectors: string, shadow = false) {
+  return postcss.list.comma(selectors).map((selector) => ({ expected, selector, shadow }));
+}
+const CURSOR_CASES = [
+  ...cursorGroup(
+    "default",
+    `.btn, #plain-summary, #plain-select, #plain-checkbox, #role-button,
+    .settings-secret__toggle, .nav-item, .nav-item__text, .sidebar-recent-session__link,
+    .sidebar-recent-session__name, .sidebar-online__person, .sidebar-new-session,
+    .sidebar-session-catalog-new, .settings-sidebar__item, .settings-sidebar__subitem,
+    .sidebar-issues-panel__navigation-link, .sidebar-approval-row__open-session,
+    .sidebar-footer-build, .agent-tools-runtime-chip--more, .chat-assistant-attachment-card[data-openable]`,
+  ),
+  ...cursorGroup(
+    "pointer",
+    `#real-link, #sidebar-external-link, #sidebar-help-link,
+    #sidebar-new-tab-link, #sidebar-new-tab-action, #new-tab-link, #new-tab-button,
+    .markdown-file-link, .markdown-github-item`,
+  ),
+  ...cursorGroup("pointer", "#shadow-new-tab-button", true),
+  ...cursorGroup("default", "#shadow-disabled-new-tab-button", true),
+  ...cursorGroup("text", "#plain-text-input, .chat-pane__session-title-button"),
+  ...cursorGroup("zoom-in", ".chat-message-image-button"),
+  ...cursorGroup("not-allowed", ".btn--ghost:disabled, #disabled-new-tab-button"),
+  ...cursorGroup("wait", ".sidebar-update-card__hold:disabled"),
 ];
 
 function readUiCss(): string {
-  const css = [
-    "ui/src/styles/base.css",
-    "ui/src/styles/components.css",
-    "ui/src/styles/layout.css",
-    "ui/src/styles/sidebar-update-card.css",
-    "ui/src/styles/sidebar-issues.css",
-    "ui/src/styles/sidebar-markdown.css",
-    "ui/src/styles/sessions.css",
-    "ui/src/styles/settings-controls.css",
-    "ui/src/styles/settings.css",
-    "ui/src/styles/skill-workshop.css",
-    "ui/src/styles/rail-header.css",
-    "ui/src/styles/chat/startup-layout.css",
-    "ui/src/styles/chat/layout.css",
-    "ui/src/styles/chat/message-layout.css",
-    "ui/src/styles/chat/composer-surface.css",
-    "ui/src/styles/chat/composer.css",
-    "ui/src/styles/chat/split-view.css",
-    "ui/src/styles/chat/text.css",
-  ]
-    .map((file) => readStyleSheet(file))
-    .join("\n");
+  const css = readStyles(
+    "styles/base",
+    "styles/components",
+    "styles/layout",
+    "styles/sidebar-update-card",
+    "styles/sidebar-issues",
+    "styles/sidebar-markdown",
+    "styles/sessions",
+    "styles/settings-controls",
+    "styles/settings",
+    "styles/agents",
+    "styles/skill-workshop",
+    "styles/rail-header",
+    "styles/chat/startup-layout",
+    "styles/chat/layout",
+    "styles/chat/message-layout",
+    "styles/chat/composer-surface",
+    "styles/chat/composer",
+    "styles/chat/split-view",
+    "styles/chat/text",
+  );
   return postcss([controlUiHoverGuardPlugin()]).process(css, { from: undefined }).css;
 }
 
-function fixtureDocument(): string {
-  return `<!doctype html><html data-theme-mode="light"><head><style>${readUiCss()}</style></head><body>
+const fixtureDocument =
+  () => `<!doctype html><html data-theme-mode="light"><head><style>${readUiCss()}</style></head><body>
     <main>
       <button class="btn" type="button">Primary</button>
       <button class="btn btn--ghost" type="button" disabled>Ghost disabled</button>
@@ -124,7 +89,6 @@ function fixtureDocument(): string {
       <div class="markdown"><a class="markdown-bare-url" href="https://example.com">Transcript link</a></div>
       <div class="chat-thinking"><a class="markdown-bare-url" href="https://example.com">Reasoning link</a></div>
       <div class="markdown-body"><a class="markdown-bare-url" href="https://example.com">Logbook link</a></div>
-      <div class="chat-session-rail__answer"><a class="markdown-bare-url" href="https://example.com">Answer link</a></div>
       <div class="chat-position-rail__preview-copy" inert>
         <a class="markdown-bare-url" href="https://example.com">Preview URL</a>
         <a id="preview-github-link" class="markdown-github-link" href="https://github.com/example/project">Preview repository</a>
@@ -143,7 +107,6 @@ function fixtureDocument(): string {
         <a class="sidebar-recent-session__link" href="/chat/test"><span class="sidebar-recent-session__name">Session</span></a>
         <a class="sidebar-online__person" href="/activity"><span class="sidebar-online__person-name">Person</span></a>
         <button class="sidebar-online__person" type="button"><span class="sidebar-online__person-name">Viewer</span></button>
-        <a class="sidebar-brand__new-thread" href="/new">New session</a>
         <a class="sidebar-new-session" href="/new">New group session</a>
         <a class="sidebar-session-catalog-new" href="/new">New catalog session</a>
         <a class="sidebar-issues-panel__navigation-link" href="/settings/channels">Channel issue</a>
@@ -157,7 +120,6 @@ function fixtureDocument(): string {
         <a class="settings-sidebar__subitem" href="/settings#theme">Theme</a>
         <a class="sidebar-footer-build" href="/settings/about">Build</a>
       </aside>
-      <div class="sidebar-more-menu"><div class="sidebar-customize-menu__item"><a href="/activity">Activity</a></div></div>
       <div class="sidebar-agent-menu"><div class="sidebar-customize-menu__item"><a id="sidebar-help-link" href="https://example.com/docs" target="_blank">Docs</a></div></div>
       <a id="new-tab-link" class="btn" href="https://example.com/docs" target="_blank">Docs</a>
       <button id="new-tab-button" class="btn" type="button" data-new-tab-action>New tab</button>
@@ -167,27 +129,19 @@ function fixtureDocument(): string {
       <button class="chat-pane__session-title-button" type="button">Session title</button>
       <button class="chat-message-image-button" type="button">Image</button>
       <div class="chat-assistant-attachment-card" data-openable>Attachment</div>
-      <div class="sidebar-session-group-drag-handle"></div>
-      <div class="session-tokens"><span class="session-tokens__value">12k</span></div>
       <span class="agent-tools-runtime-chip--more">+3</span>
       <div class="chat-text"><a class="markdown-file-link">src/index.ts</a></div>
       <div class="chat-text"><a class="markdown-github-link markdown-github-item" data-github-kind="pull" href="https://github.com/openclaw/openclaw/pull/3434" target="_blank">#3434</a></div>
       <div id="shadow-policy-host"><template shadowrootmode="open">
-        <style>${dockPanelStyles.cssText}</style>
+        <style>${readStyleSheet("ui/src/components/dock-panel.css")}</style>
         <button id="shadow-new-tab-button" class="rail-header__action" type="button" data-new-tab-action>New tab</button>
         <button id="shadow-disabled-new-tab-button" class="rail-header__action" type="button" data-new-tab-action disabled>Unavailable new tab</button>
       </template></div>
     </main>
   </body></html>`;
-}
 
-type WindowProbe = {
-  readonly cursors: Record<string, string>;
-  readonly displayMode: string;
-};
-
-async function probeWindow(page: Page): Promise<WindowProbe> {
-  return await page.evaluate((cursorCases: readonly CursorCase[]) => {
+async function probeWindow(page: Page) {
+  return await page.evaluate((cursorCases) => {
     const modes = ["browser", "standalone", "minimal-ui", "window-controls-overlay", "fullscreen"];
     const cursors = cursorCases.map(({ selector, shadow }) => {
       const element = shadow
@@ -207,194 +161,132 @@ async function probeWindow(page: Page): Promise<WindowProbe> {
   }, CURSOR_CASES);
 }
 
-function expectedCursors(): Record<string, string> {
-  return Object.fromEntries(
-    CURSOR_CASES.map((cursorCase) => [cursorCase.selector, cursorCase.expected]),
-  );
+const expectedCursors = Object.fromEntries(CURSOR_CASES.map((row) => [row.selector, row.expected]));
+
+function style(
+  locator: Locator,
+  property: "color" | "textDecorationLine" | "textDecorationThickness",
+) {
+  return locator.evaluate((element, key) => getComputedStyle(element)[key], property);
 }
 
 let fixtureDirectory: string;
 let fixtureFile: string;
-let tabBrowser: Browser;
 let appContext: BrowserContext;
 
 beforeAll(async () => {
-  if (!canRunPlaywrightChromium(chromiumExecutablePath)) {
+  if (!fixture.available) {
     return;
   }
   fixtureDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "cursor-policy-"));
   fixtureFile = path.join(fixtureDirectory, "fixture.html");
   fs.writeFileSync(fixtureFile, fixtureDocument(), "utf8");
-  tabBrowser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
-  try {
-    // `--app=` opens a real Chromium app window, which is the only way to get a
-    // genuine `display-mode: standalone` match; CDP media emulation does not
-    // drive this feature.
-    appContext = await chromium.launchPersistentContext(path.join(fixtureDirectory, "profile"), {
-      args: [`--app=file://${fixtureFile}`],
-      executablePath: chromiumExecutablePath,
-      headless: true,
-    });
-  } catch (error) {
-    await tabBrowser.close().catch(() => {});
-    throw error;
-  }
+  // Only a real app window, not media emulation, proves standalone display mode.
+  appContext = await chromium.launchPersistentContext(path.join(fixtureDirectory, "profile"), {
+    args: [`--app=file://${fixtureFile}`],
+    executablePath: fixture.executablePath,
+    headless: true,
+  });
 });
 
 afterAll(async () => {
   await appContext?.close().catch(() => {});
-  await tabBrowser?.close().catch(() => {});
   if (fixtureDirectory) {
     fs.rmSync(fixtureDirectory, { force: true, recursive: true });
   }
 });
 
-describeCursorPolicy("Control UI cursor policy", () => {
+fixture.describe("Control UI cursor policy", () => {
   it.each([
     { theme: "light", hasTouch: false },
     { theme: "dark", hasTouch: false },
     { theme: "light", hasTouch: true },
     { theme: "dark", hasTouch: true },
   ])("underlines content, not controls ($theme, touch=$hasTouch)", async ({ theme, hasTouch }) => {
-    await withBrowserPage(tabBrowser.newPage({ hasTouch }), async (page) => {
+    await withBrowserPage(fixture.page({ hasTouch }), async (page) => {
       await page.goto(`file://${fixtureFile}`);
       await page.evaluate((mode) => {
         document.documentElement.dataset.themeMode = mode;
       }, theme);
-      expect(
-        await page.locator("#new-tab-link").evaluate((element) => getComputedStyle(element).color),
-      ).toBe(
-        await page
-          .locator("#new-tab-button")
-          .evaluate((element) => getComputedStyle(element).color),
+      expect(await style(page.locator("#new-tab-link"), "color")).toBe(
+        await style(page.locator("#new-tab-button"), "color"),
       );
       const people = await page.locator(".sidebar-online__person").all();
       expect(people).toHaveLength(2);
       for (const person of people) {
         // Ancestor decorations propagate visually without inheriting the computed value.
+        expect(await style(person, "textDecorationLine")).toBe("none");
         expect(
-          await person.evaluate((element) => getComputedStyle(element).textDecorationLine),
-        ).toBe("none");
-        expect(
-          await person
-            .locator(".sidebar-online__person-name")
-            .evaluate((element) => getComputedStyle(element).textDecorationLine),
+          await style(person.locator(".sidebar-online__person-name"), "textDecorationLine"),
         ).toBe("none");
       }
-      for (const [expected, selectors] of [
-        [
-          "none",
-          [
-            "#new-tab-link",
-            "#primary-button-link",
-            "#ghost-button-link",
-            "#role-button-link",
-            "#chat-button-link",
-            ".person-activity-link",
-            ".markdown-github-item",
-            ".markdown-file-link",
-            ".chat-position-rail__preview-copy a",
-          ],
-        ],
-        [
-          "underline",
-          [
-            "#real-link",
-            "#docs-link",
-            "#chat-content-link",
-            "#sidebar-content-link",
-            ".markdown-bare-url:not(.chat-position-rail__preview-copy a)",
-            ".activity-entry__run-link",
-            ".settings-row__value",
-            ".memory-page__link",
-            ".portals-preview__notice-url",
-            ".settings-account",
-            ".transcripts-back",
-          ],
-        ],
-      ] as const) {
-        for (const selector of selectors) {
+      for (const [expected, selectors] of Object.entries({
+        none: `#new-tab-link, #primary-button-link, #ghost-button-link, #role-button-link,
+          #chat-button-link, .person-activity-link, .markdown-github-item, .markdown-file-link,
+          .chat-position-rail__preview-copy a`,
+        underline: `#real-link, #docs-link, #chat-content-link, #sidebar-content-link,
+          .markdown-bare-url:not(.chat-position-rail__preview-copy a), .activity-entry__run-link,
+          .settings-row__value, .memory-page__link, .portals-preview__notice-url,
+          .settings-account, .transcripts-back`,
+      })) {
+        for (const selector of postcss.list.comma(selectors)) {
           const links = await page.locator(selector).all();
           expect(links.length, selector).toBeGreaterThan(0);
           for (const link of links) {
-            expect(
-              await link.evaluate((element) => getComputedStyle(element).textDecorationLine),
-              selector,
-            ).toBe(expected);
+            expect(await style(link, "textDecorationLine"), selector).toBe(expected);
           }
         }
       }
-      const personLink = page.locator("#person-link");
       for (const link of await page.locator(".chat-position-rail__preview-copy a").all()) {
-        expect(await link.evaluate((element) => getComputedStyle(element).color)).toBe(
-          await page
-            .locator(".chat-position-rail__preview-copy")
-            .evaluate((element) => getComputedStyle(element).color),
+        expect(await style(link, "color")).toBe(
+          await style(page.locator(".chat-position-rail__preview-copy"), "color"),
         );
       }
-      if (!hasTouch) {
-        await personLink.hover();
-        expect(
-          await personLink.evaluate((element) => getComputedStyle(element).textDecorationLine),
-        ).toBe("underline");
-        expect(
-          await personLink.evaluate((element) => getComputedStyle(element).textDecorationThickness),
-        ).toBe("2px");
+      for (const [id, decoration] of [
+        ["person-link", "underline"],
+        ["participant-link", "none"],
+      ]) {
+        const link = page.locator(`#${id}`);
+        if (!hasTouch) {
+          await link.hover();
+          expect(await style(link, "textDecorationLine")).toBe(decoration);
+          if (id === "person-link") {
+            expect(await style(link, "textDecorationThickness")).toBe("2px");
+          }
+        }
+        await page.mouse.move(0, 0);
+        await page.keyboard.press("Tab");
+        await link.focus();
+        expect(await style(link, "textDecorationLine")).toBe(decoration);
       }
-      await page.mouse.move(0, 0);
-      await page.keyboard.press("Tab");
-      await personLink.focus();
-      expect(
-        await personLink.evaluate((element) => getComputedStyle(element).textDecorationLine),
-      ).toBe("underline");
-      const participantLink = page.locator("#participant-link");
-      if (!hasTouch) {
-        await participantLink.hover();
-        expect(
-          await participantLink.evaluate((element) => getComputedStyle(element).textDecorationLine),
-        ).toBe("none");
-      }
-      await page.mouse.move(0, 0);
-      await page.keyboard.press("Tab");
-      await participantLink.focus();
-      expect(
-        await participantLink.evaluate((element) => getComputedStyle(element).textDecorationLine),
-      ).toBe("none");
     });
   });
 
-  it("uses semantic cursors in a browser tab", async () => {
-    await withBrowserPage(tabBrowser.newPage(), async (page) => {
-      await page.goto(`file://${fixtureFile}`);
-      const probe = await probeWindow(page);
-
-      expect(probe.displayMode).toBe("browser");
-      expect(probe.cursors).toEqual(expectedCursors());
-    });
-  });
-
-  it("uses the same semantic cursors in a native app host", async () => {
-    await withBrowserPage(tabBrowser.newPage(), async (page) => {
-      await page.goto(`file://${fixtureFile}`);
-      // The macOS dashboard is a plain web view, so it reports display-mode
-      // browser and marks itself with these classes at document end instead.
-      await page.evaluate((markers: readonly string[]) => {
-        document.documentElement.classList.add(...markers);
-      }, NATIVE_HOST_MARKERS);
-      const probe = await probeWindow(page);
-
-      expect(probe.displayMode).toBe("browser");
-      expect(probe.cursors).toEqual(expectedCursors());
-    });
-  });
+  it.each([false, true])(
+    "uses semantic cursors in a browser window (native=%s)",
+    async (native) => {
+      await withBrowserPage(fixture.page(), async (page) => {
+        await page.goto(`file://${fixtureFile}`);
+        if (native) {
+          await page.evaluate((markers: readonly string[]) => {
+            document.documentElement.classList.add(...markers);
+          }, NATIVE_HOST_MARKERS);
+        }
+        expect(await probeWindow(page)).toEqual({
+          displayMode: "browser",
+          cursors: expectedCursors,
+        });
+      });
+    },
+  );
 
   it("uses the same semantic cursors in an installed window", async () => {
     const [page] = appContext.pages();
     expect(page, "Chromium --app window did not expose a page").toBeDefined();
     await page!.waitForLoadState("load");
-    const probe = await probeWindow(page!);
-
-    expect(probe.displayMode).toBe("standalone");
-    expect(probe.cursors).toEqual(expectedCursors());
+    expect(await probeWindow(page!)).toEqual({
+      displayMode: "standalone",
+      cursors: expectedCursors,
+    });
   });
 });

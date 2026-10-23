@@ -3,17 +3,17 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import {
   createFollowupTurnTestTurn,
-  createFollowupTurnTestTypingController,
   executeFollowupTurnForTest,
   getFollowupTurnTestState,
   resetFollowupTurnTestState,
 } from "./followup-turn-execution.test-support.js";
-import { createQueueTestRun } from "./queue.test-helpers.js";
-import { clearFollowupDrainCallback, scheduleFollowupDrain } from "./queue/drain.js";
+import { createQueueTestRun, createQueueSettings } from "./queue.test-helpers.js";
+import { scheduleFollowupDrain } from "./queue/drain.js";
 import { enqueueFollowupRun } from "./queue/enqueue.js";
 import { admitFollowupRunLifecycle, completeFollowupRunLifecycle } from "./queue/lifecycle.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
-import { FollowupRunDeferredError, type FollowupRun, type QueueSettings } from "./queue/types.js";
+import type { FollowupRun } from "./queue/types.js";
+import { createMockTypingController } from "./test-helpers.js";
 
 const state = getFollowupTurnTestState();
 beforeEach(resetFollowupTurnTestState);
@@ -28,12 +28,12 @@ it.each([
   async ({ path, eligible }) => {
     // Keep detached drains from capturing the next case's enqueues.
     const key = `personal-bootstrap-overflow:${path}:${eligible}`;
-    const settings: QueueSettings = {
+    const deferred = path === "deferred retry";
+    const ordinary = path === "ordinary summary";
+    const settings = createQueueSettings({
       mode: "followup",
-      debounceMs: 0,
-      cap: path === "ordinary summary" ? 2 : 1,
-      dropPolicy: "summarize",
-    };
+      cap: ordinary ? 2 : 1,
+    });
     const firstAttempt = createDeferred();
     const releaseFirstAttempt = createDeferred();
     const completed = createDeferred();
@@ -42,40 +42,38 @@ it.each([
     let summaryAttempts = 0;
     let currentOwner = "owner-at-enqueue";
     const tailPrompt = "pending tail";
-    const clear = () => {
-      clearFollowupQueue(key);
-      clearFollowupDrainCallback(key);
-    };
     const enqueue = (prompt: string, sourceEligible: boolean | undefined) => {
-      const source = createQueueTestRun({ prompt });
-      source.personalBootstrapEligible = sourceEligible;
-      source.run.sessionKey = key;
-      source.run.bootstrapUserProfileId = `stale-source-owner-${sources.length}`;
-      source.turnAdoptionLifecycle = {
-        admission: "cancel-only",
-        onAdopted: vi.fn(),
-        onSettled: vi.fn(),
-      };
+      const source = createQueueTestRun(
+        {
+          prompt,
+          personalBootstrapEligible: sourceEligible,
+          turnAdoptionLifecycle: {
+            admission: "cancel-only",
+            onAdopted: vi.fn(),
+            onSettled: vi.fn(),
+          },
+        },
+        { sessionKey: key, bootstrapUserProfileId: `stale-source-owner-${sources.length}` },
+      );
       sources.push(source);
       expect(enqueueFollowupRun(key, source, settings)).toBe(true);
       return source;
     };
-    state.execute.mockImplementation(async (params: AgentTurnParams) => {
+    const execute = state.execute.getMockImplementation()!;
+    state.execute.mockImplementation((params: AgentTurnParams) => {
       executions.push({
         prompt: params.commandBody,
         profile: params.followupRun.run.bootstrapUserProfileId,
       });
-      return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
+      return execute(params);
     });
     const runFollowup = async (queued: FollowupRun) => {
       const summary = queued.prompt.startsWith("[Queue overflow]");
       if (summary) {
         summaryAttempts += 1;
-        if (path === "deferred retry" && summaryAttempts === 1) {
+        if (deferred && summaryAttempts === 1) {
           firstAttempt.resolve();
           await releaseFirstAttempt.promise;
-          // Admission defers before adopting sources or invoking the backend.
-          throw new FollowupRunDeferredError("reply lane busy");
         }
       }
       try {
@@ -94,11 +92,10 @@ it.each([
                   owner: { actor: { type: "human", id: currentOwner } },
                 }),
                 publish: () => undefined,
-                adopt: () => undefined,
               },
             }),
             defaults: {
-              typing: createFollowupTurnTestTypingController(),
+              typing: createMockTypingController(),
               typingMode: "never",
               defaultModel: "claude",
             },
@@ -114,7 +111,7 @@ it.each([
         }
       } catch (error) {
         // Surface detached drain failures through the awaited completion.
-        clear();
+        clearFollowupQueue(key);
         completed.reject(error);
       }
     };
@@ -122,16 +119,16 @@ it.each([
     try {
       const first = enqueue("first summarized request", eligible);
       enqueue("second summarized request", true);
-      if (path === "ordinary summary") {
+      if (ordinary) {
         enqueue("pending predecessor", true);
       }
-      if (path !== "deferred retry") {
+      if (!deferred) {
         enqueue(tailPrompt, true);
       }
       currentOwner = "current-session-owner";
       scheduleFollowupDrain(key, runFollowup);
 
-      if (path === "deferred retry") {
+      if (deferred) {
         await Promise.race([firstAttempt.promise, completed.promise]);
         expect(summaryAttempts).toBe(1);
         expect(executions).toEqual([]);
@@ -141,7 +138,7 @@ it.each([
       }
       const queue = getExistingFollowupQueue(key);
       expect(queue?.droppedCount).toBe(2);
-      if (path === "ordinary summary") {
+      if (ordinary) {
         expect(queue?.summaryElisions).toHaveLength(0);
       } else {
         expect(queue?.summaryElisions).toHaveLength(1);
@@ -151,20 +148,28 @@ it.each([
       releaseFirstAttempt.resolve();
       await completed.promise;
 
-      expect(summaryAttempts).toBe(path === "deferred retry" ? 2 : 1);
-      expect(executions).toHaveLength(path === "ordinary summary" ? 3 : 2);
-      expect(executions[0]?.prompt).toContain("[Queue overflow] Dropped 2 messages due to cap.");
+      expect(summaryAttempts).toBe(deferred ? 2 : 1);
+      expect(executions.map(({ profile }) => profile)).toEqual([
+        eligible ? currentOwner : undefined,
+        ...(path === "compacted sources" ? [currentOwner] : [currentOwner, currentOwner]),
+      ]);
+      expect(executions[0]?.prompt).toContain(
+        deferred
+          ? "[Queue overflow] Dropped 1 message due to cap."
+          : "[Queue overflow] Dropped 2 messages due to cap.",
+      );
+      if (deferred) {
+        // New overflow cannot join an already selected source claim.
+        expect(executions[1]?.prompt).toContain("second summarized request");
+        expect(executions[0]?.prompt).not.toContain("second summarized request");
+      }
       for (const source of sources) {
         expect(source.turnAdoptionLifecycle?.onAdopted).toHaveBeenCalledOnce();
         expect(source.turnAdoptionLifecycle?.onSettled).toHaveBeenCalledOnce();
       }
-      expect(executions.slice(1).map((execution) => execution.profile)).toEqual(
-        path === "ordinary summary" ? [currentOwner, currentOwner] : [currentOwner],
-      );
-      expect(executions[0]?.profile).toBe(eligible ? currentOwner : undefined);
     } finally {
       releaseFirstAttempt.resolve();
-      clear();
+      clearFollowupQueue(key);
     }
   },
 );

@@ -15,7 +15,6 @@ import { parseCliInteger, writeCliJson, writeCliLine } from "./cli-command-io.js
 import {
   callVoiceCallGateway,
   initiateVoiceCall,
-  isUnknownMethod,
   pollContinueGateway,
   resolveContinueTimeout,
   resolveOperationTimeout,
@@ -311,36 +310,32 @@ export function registerVoiceCallCli(params: {
         writeCliJson({ callId });
       });
 
-  root
-    .command("call")
-    .description("Initiate an outbound voice call")
-    .requiredOption("-m, --message <text>", "Message to speak when call connects")
-    .option(
-      "-t, --to <phone>",
-      "Phone number to call (E.164 format, uses config toNumber if not set)",
-    )
-    .option(
-      "--mode <mode>",
-      "Call mode: notify (hangup after message) or conversation (stay open)",
-      "conversation",
-    )
-    .option("--brief <text-or-json>", "Per-call task or structured JSON brief")
-    .option("--brief-file <path>", "Read a structured JSON brief from a file")
-    .action(callAction("voicecall.initiate"));
-
-  root
-    .command("start")
-    .description("Alias for voicecall call")
-    .requiredOption("--to <phone>", "Phone number to call")
-    .option("--message <text>", "Message to speak when call connects")
-    .option(
-      "--mode <mode>",
-      "Call mode: notify (hangup after message) or conversation (stay open)",
-      "conversation",
-    )
-    .option("--brief <text-or-json>", "Per-call task or structured JSON brief")
-    .option("--brief-file <path>", "Read a structured JSON brief from a file")
-    .action(callAction("voicecall.start"));
+  for (const name of ["call", "start"] as const) {
+    const command = root.command(name);
+    if (name === "call") {
+      command
+        .description("Initiate an outbound voice call")
+        .requiredOption("-m, --message <text>", "Message to speak when call connects")
+        .option(
+          "-t, --to <phone>",
+          "Phone number to call (E.164 format, uses config toNumber if not set)",
+        );
+    } else {
+      command
+        .description("Alias for voicecall call")
+        .requiredOption("--to <phone>", "Phone number to call")
+        .option("--message <text>", "Message to speak when call connects");
+    }
+    command
+      .option(
+        "--mode <mode>",
+        "Call mode: notify (hangup after message) or conversation (stay open)",
+        "conversation",
+      )
+      .option("--brief <text-or-json>", "Per-call task or structured JSON brief")
+      .option("--brief-file <path>", "Read a structured JSON brief from a file")
+      .action(callAction(name === "call" ? "voicecall.initiate" : "voicecall.start"));
+  }
 
   root
     .command("continue")
@@ -351,20 +346,10 @@ export function registerVoiceCallCli(params: {
       const gatewayParams = { callId: options.callId, message: options.message };
       const continueTimeoutMs = resolveContinueTimeout(config);
       return managerAction({
-        gatewayCall: async () => {
-          try {
-            return await callVoiceCallGateway("voicecall.continue.start", gatewayParams, {
-              timeoutMs: resolveOperationTimeout(config),
-            });
-          } catch (err) {
-            if (!isUnknownMethod(err, "voicecall.continue.start")) {
-              throw err;
-            }
-            return callVoiceCallGateway("voicecall.continue", gatewayParams, {
-              timeoutMs: continueTimeoutMs,
-            });
-          }
-        },
+        gatewayCall: () =>
+          callVoiceCallGateway("voicecall.continue.start", gatewayParams, {
+            timeoutMs: resolveOperationTimeout(config),
+          }),
         resolveGatewayPayload: (payload) => pollContinueGateway(payload, continueTimeoutMs),
         managerFallback: (manager) => manager.continueCall(options.callId, options.message),
         failureLabel: "continue",
@@ -493,12 +478,11 @@ export function registerVoiceCallCli(params: {
     .action(
       async (options: { mode?: string; port?: string; path?: string; servePath?: string }) => {
         const mode = resolveMode(options.mode ?? "funnel");
-        const servePort = parseCliInteger(
-          options.port ?? String(config.serve.port ?? 3334),
-          "--port",
-          { min: 1, max: MAX_TCP_PORT },
-        );
-        const servePath = options.servePath ?? config.serve.path ?? "/voice/webhook";
+        const servePort = parseCliInteger(options.port ?? String(config.serve.port), "--port", {
+          min: 1,
+          max: MAX_TCP_PORT,
+        });
+        const servePath = options.servePath ?? config.serve.path;
         const tsPath = options.path ?? config.tailscale?.path ?? servePath;
         const streamExposurePaths = resolveVoiceCallStreamExposurePaths(config, {
           publicWebhookPath: tsPath,

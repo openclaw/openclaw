@@ -35,21 +35,17 @@ internal data class CallLogSearchRequest(
 )
 
 internal interface CallLogDataSource {
-  fun hasReadPermission(context: Context): Boolean
+  fun hasReadPermission(): Boolean
 
-  fun search(
-    context: Context,
-    request: CallLogSearchRequest,
-  ): List<CallLogRecord>
+  fun search(request: CallLogSearchRequest): List<CallLogRecord>
 }
 
-private object SystemCallLogDataSource : CallLogDataSource {
-  override fun hasReadPermission(context: Context): Boolean = context.hasPermission(Manifest.permission.READ_CALL_LOG)
+private class SystemCallLogDataSource(
+  private val context: Context,
+) : CallLogDataSource {
+  override fun hasReadPermission(): Boolean = context.hasPermission(Manifest.permission.READ_CALL_LOG)
 
-  override fun search(
-    context: Context,
-    request: CallLogSearchRequest,
-  ): List<CallLogRecord> {
+  override fun search(request: CallLogSearchRequest): List<CallLogRecord> {
     val resolver = context.contentResolver
     val projection =
       arrayOf(
@@ -118,11 +114,11 @@ internal fun buildCallLogNumberLikeSelection(): String = "${CallLog.Calls.NUMBER
 internal fun buildCallLogLikeArg(value: String): String = "%${escapeSqlLikeLiteral(value)}%"
 
 class CallLogHandler internal constructor(
-  private val appContext: Context,
-  private val dataSource: CallLogDataSource = SystemCallLogDataSource,
+  appContext: Context,
+  private val dataSource: CallLogDataSource = SystemCallLogDataSource(appContext),
 ) {
   fun handleCallLogSearch(paramsJson: String?): GatewaySession.InvokeResult {
-    if (!dataSource.hasReadPermission(appContext)) {
+    if (!dataSource.hasReadPermission()) {
       return nodeInvokeError("CALL_LOG_PERMISSION_REQUIRED", "grant Call Log permission")
     }
 
@@ -130,11 +126,8 @@ class CallLogHandler internal constructor(
       parseSearchRequest(paramsJson)
         ?: return nodeInvokeError("INVALID_REQUEST", "expected JSON object")
 
-    return try {
-      val callLogs = dataSource.search(appContext, request)
-      GatewaySession.InvokeResult.ok(Json.encodeToString(mapOf("callLogs" to callLogs)))
-    } catch (err: Throwable) {
-      nodeInvokeError("CALL_LOG_UNAVAILABLE", err.message ?: "call log query failed")
+    return nodeInvokeJson("CALL_LOG_UNAVAILABLE", "call log query failed") {
+      Json.encodeToString(mapOf("callLogs" to dataSource.search(request)))
     }
   }
 

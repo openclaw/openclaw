@@ -8,7 +8,6 @@ import ai.openclaw.app.normalizeSharedAttachmentMimeType
 import ai.openclaw.app.sharedAttachmentKindForMimeType
 import ai.openclaw.app.ui.image.imageSampleSize
 import android.content.ContentResolver
-import android.database.Cursor
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
@@ -134,7 +133,12 @@ private fun sharedAttachmentFileName(
     try {
       resolver
         .query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
-        ?.use { cursor -> cursor.firstString(OpenableColumns.DISPLAY_NAME) }
+        ?.use { cursor ->
+          if (!cursor.moveToFirst()) return@use null
+          val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+          if (index < 0 || cursor.isNull(index)) return@use null
+          cursor.getString(index)?.trim()?.takeIf(String::isNotEmpty)
+        }
     } catch (_: Exception) {
       null
     }
@@ -144,13 +148,6 @@ private fun sharedAttachmentFileName(
     .trim()
     .take(128)
     .ifEmpty { "attachment" }
-}
-
-private fun Cursor.firstString(columnName: String): String? {
-  if (!moveToFirst()) return null
-  val index = getColumnIndex(columnName)
-  if (index < 0 || isNull(index)) return null
-  return getString(index)?.trim()?.takeIf { it.isNotEmpty() }
 }
 
 /** Loads a picked image URI into the bounded JPEG attachment shape sent to chat. */
@@ -172,30 +169,11 @@ internal fun loadSizedImageAttachment(
   val encoded =
     try {
       JpegSizeLimiter.compressToLimit(
-        initialWidth = bitmap.width,
-        initialHeight = bitmap.height,
+        bitmap = bitmap,
         startQuality = CHAT_ATTACHMENT_START_QUALITY,
         maxBytes = maxBytes,
         minSize = 240,
-        encode = { width, height, quality ->
-          val working =
-            if (width == bitmap.width && height == bitmap.height) {
-              bitmap
-            } else {
-              bitmap.scale(width, height, true)
-            }
-          try {
-            val out = ByteArrayOutputStream()
-            if (!working.compress(Bitmap.CompressFormat.JPEG, quality, out)) {
-              throw IllegalStateException("attachment encode failed")
-            }
-            out.toByteArray()
-          } finally {
-            if (working !== bitmap) {
-              working.recycle()
-            }
-          }
-        },
+        errorMessage = "attachment encode failed",
       )
     } finally {
       bitmap.recycle()
@@ -242,13 +220,6 @@ internal fun decodeImageBytes(
   return bitmap
 }
 
-/** Computes Android's power-of-two bitmap sampling size for bounded decode. */
-internal fun computeInSampleSize(
-  width: Int,
-  height: Int,
-  maxDimension: Int,
-): Int = imageSampleSize(width, height, maxDimension, maxSample = 64)
-
 /** Normalizes arbitrary picked-image names to the JPEG file name sent upstream. */
 internal fun normalizeAttachmentFileName(raw: String): String {
   val trimmed = raw.trim()
@@ -271,7 +242,7 @@ private fun decodeOrientedBitmap(
         input,
         null,
         BitmapFactory.Options().apply {
-          inSampleSize = computeInSampleSize(bounds.outWidth, bounds.outHeight, maxDimension)
+          inSampleSize = imageSampleSize(bounds.outWidth, bounds.outHeight, maxDimension, maxSample = 64)
           inPreferredConfig = config
         },
       )

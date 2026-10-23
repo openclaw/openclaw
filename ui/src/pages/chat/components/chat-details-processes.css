@@ -1,0 +1,174 @@
+.chat-details-processes {
+  min-width: 0;
+  color: var(--text);
+  font-size: var(--details-row-font-size, var(--control-ui-text-sm));
+}
+
+.chat-details-processes__list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--details-row-list-gap, 4px);
+}
+
+.chat-details-processes__row {
+  position: relative;
+  min-width: 0;
+  border-radius: 4px;
+}
+
+.chat-details-processes__row:is(:hover, :focus-within) {
+  background: var(--bg-hover);
+}
+
+.chat-details-processes__open {
+  display: flex;
+  align-items: center;
+  gap: var(--details-row-gap, 8px);
+  width: 100%;
+  min-width: 0;
+  min-height: var(--details-row-height, 28px);
+  padding: var(--details-row-padding-block, 4px) var(--details-row-padding, 4px);
+  border: 0;
+  border-radius: inherit;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: var(--cursor-action);
+}
+
+.chat-details-processes__open:focus-visible,
+.chat-details-processes__stop:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.chat-details-processes__icon {
+  position: relative;
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  color: var(--muted);
+}
+
+.chat-details-processes__icon > svg {
+  width: 18px;
+  height: 18px;
+}
+
+.chat-details-processes__badge {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  display: grid;
+  place-items: center;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  corner-shape: round;
+  background: var(--details-surface, var(--card));
+  box-shadow: 0 0 0 1.5px var(--details-surface, var(--card));
+}
+
+.chat-details-processes__badge > svg {
+  width: 8px;
+  height: 8px;
+  stroke-width: 2.5;
+}
+
+.chat-details-processes__badge[data-status="completed"] {
+  color: var(--ok);
+}
+
+.chat-details-processes__badge[data-status="failed"] {
+  color: var(--danger);
+}
+
+.chat-details-processes__spinner {
+  display: block;
+  box-sizing: border-box;
+  width: 8px;
+  height: 8px;
+  border: 1.25px solid color-mix(in srgb, var(--accent) 30%, var(--details-surface, var(--card)));
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  corner-shape: round;
+  animation: btn-spinner-spin 1.5s linear infinite;
+}
+
+.chat-details-processes__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.chat-details-processes__name[data-scrollable="true"] {
+  mask-image: linear-gradient(to right, black calc(100% - 16px), transparent);
+}
+
+.chat-details-processes__row[data-stoppable]:is(:hover, :focus-within, [data-stopping])
+  .chat-details-processes__name {
+  mask-image: linear-gradient(to right, black calc(100% - 42px), transparent calc(100% - 26px));
+}
+
+.chat-details-processes__stop {
+  position: absolute;
+  inset-inline-end: 4px;
+  top: 50%;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  corner-shape: round;
+  background: color-mix(in srgb, var(--danger) 8%, var(--details-surface, var(--card)));
+  color: var(--danger);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.chat-details-processes__stop > svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+  stroke: none;
+}
+
+.chat-details-processes__row:is(:hover, :focus-within, [data-stopping])
+  .chat-details-processes__stop {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.chat-details-processes__stop:hover {
+  background: color-mix(in srgb, var(--danger) 12%, var(--details-surface, var(--card)));
+}
+
+.chat-details-processes__error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--danger);
+}
+
+.chat-details-processes__error > button {
+  flex: none;
+  white-space: nowrap;
+}
+
+.chat-details-processes__error > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-details-processes__spinner {
+    animation: none;
+  }
+}

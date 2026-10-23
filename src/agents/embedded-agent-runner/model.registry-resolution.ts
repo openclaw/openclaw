@@ -1,26 +1,23 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { ModelRegistry as CoreModelRegistry } from "../../llm/model-registry.js";
 import type { Model } from "../../llm/types.js";
-import type { PluginMetadataSnapshotOwnerMaps } from "../../plugins/plugin-metadata-snapshot.types.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { loadAuthProfileStoreForRuntimeAsync, resolveAuthProfileOrder } from "../auth-profiles.js";
 import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
-import { AuthProfileRuntimeReadStaleError } from "../auth-profiles/runtime-persisted-rows.js";
 import { createSelectedAuthProfileUnavailableError } from "../auth-profiles/selection-error.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import { resolveAgentHarnessPolicy } from "../harness/policy.js";
+import { modelTransportRoutesMatch } from "../model-compat-catalog.js";
 import { normalizeStaticProviderModelId } from "../model-ref-shared.js";
 import { normalizeProviderId } from "../model-selection.js";
 import {
   buildSuppressedBuiltInModelError,
   shouldUnconditionallySuppress,
 } from "../model-suppression.js";
-import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-routing.js";
-import { buildConfiguredFallbackModel } from "./model.configured-fallback.js";
+import type { ModelRegistry } from "../sessions/model-registry.js";
 import {
   applyConfiguredProviderOverrides,
   findInlineModelMatch,
-  mergeStaticCatalogInlineModel,
+  mergeCatalogInlineModel,
   resolveConfiguredProviderConfig,
   shouldSuppressConfiguredModel,
 } from "./model.configured-overrides.js";
@@ -40,16 +37,6 @@ type ExplicitModelResolution =
   | { kind: "resolved"; dropOnRuntimeMiss: boolean; model: Model; source: "registry" }
   | { kind: "suppressed" | "unavailable"; error?: string };
 
-function getRegistryProviderMetadataOwners(
-  modelRegistry: CoreModelRegistry,
-): PluginMetadataSnapshotOwnerMaps | undefined {
-  return (
-    modelRegistry as CoreModelRegistry & {
-      getProviderMetadataOwners?: () => PluginMetadataSnapshotOwnerMaps | undefined;
-    }
-  ).getProviderMetadataOwners?.();
-}
-
 export function normalizeConfiguredProviderModel(
   params: Parameters<typeof applyConfiguredProviderOverrides>[0] & { agentDir?: string },
 ): Model | undefined {
@@ -60,7 +47,7 @@ export function normalizeConfiguredProviderModel(
 export function resolveExplicitModelWithRegistry(params: {
   provider: string;
   modelId: string;
-  modelRegistry: CoreModelRegistry;
+  modelRegistry: ModelRegistry;
   cfg?: OpenClawConfig;
   agentDir?: string;
   manifestAlias: ManifestModelCatalogProviderAliasMetadata;
@@ -78,7 +65,7 @@ export function resolveExplicitModelWithRegistry(params: {
   if (shouldUnconditionallySuppress({ provider, id: modelId, config: cfg, workspaceDir })) {
     return { kind: "suppressed" };
   }
-  const providerMetadataOwners = getRegistryProviderMetadataOwners(modelRegistry);
+  const providerMetadataOwners = modelRegistry.getProviderMetadataOwners();
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
   const suppressionError = (baseUrl: string | undefined) =>
     buildSuppressedBuiltInModelError({ provider, id: modelId, config: cfg, baseUrl, workspaceDir });
@@ -91,10 +78,14 @@ export function resolveExplicitModelWithRegistry(params: {
   const inlineModel = inlineMatch?.api ? inlineMatch : undefined;
   const registryModel = params.preparedCatalogModel ?? modelRegistry.find(provider, modelId);
   const staticCatalogModel = inlineModel ? params.getStaticCatalogModel?.() : undefined;
-  // Inline config owns transport and sizing; the captured catalog owns its lower price schedule.
+  // Live facts belong to their route; authored fields still override the catalog donor.
+  const catalogModel =
+    inlineModel && registryModel && modelTransportRoutesMatch(registryModel, inlineModel)
+      ? registryModel
+      : staticCatalogModel;
   const discoveredModel = inlineModel
     ? {
-        ...mergeStaticCatalogInlineModel(staticCatalogModel, inlineModel as Model),
+        ...mergeCatalogInlineModel(catalogModel, inlineModel as Model),
         cost: registryModel?.cost ?? staticCatalogModel?.cost ?? inlineModel.cost,
       }
     : registryModel;
@@ -112,7 +103,7 @@ export function resolveExplicitModelWithRegistry(params: {
     providerConfig,
     providerMetadataOwners,
     preferDiscoveredTransport: Boolean(inlineModel),
-    staticCatalogModel,
+    staticCatalogModel: catalogModel,
   });
   if (!model) {
     return undefined;
@@ -178,35 +169,18 @@ export async function resolveDynamicModelAuthProfile(params: {
       preferredProfile: params.preferredProfile,
     }),
   };
-  const readStore = () => {
-    params.abortSignal?.throwIfAborted();
-    return loadAuthProfileStoreForRuntimeAsync(agentDir, readOptions);
-  };
-  const providers = listOpenAIAuthProfileProvidersForAgentRuntime({
-    provider: params.provider,
-    config: params.cfg,
-  });
-  const store = await readStore().catch(async (error: unknown) => {
-    if (!(error instanceof AuthProfileRuntimeReadStaleError)) {
-      throw error;
-    }
-    // OAuth publication can overlap selection. The rejected reader has joined its cleanup.
-    await error.waitForSettlement?.(params.abortSignal);
-    return readStore();
-  });
+  const store = await loadAuthProfileStoreForRuntimeAsync(agentDir, readOptions);
   params.abortSignal?.throwIfAborted();
   const profileId =
     explicitProfileId ??
-    providers.flatMap((provider) =>
-      resolveAuthProfileOrder({
-        cfg: params.cfg,
-        store,
-        provider,
-        preferredProfile: params.preferredProfile,
-        forModel: params.modelId,
-        includePendingOAuthRefresh: true,
-      }),
-    )[0];
+    resolveAuthProfileOrder({
+      cfg: params.cfg,
+      store,
+      provider: params.provider,
+      preferredProfile: params.preferredProfile,
+      forModel: params.modelId,
+      includePendingOAuthRefresh: true,
+    })[0];
   if (!profileId) {
     return {};
   }
@@ -271,7 +245,7 @@ async function resolvePluginDynamicModelWithRegistry(
     ...params,
     discoveredModel: pluginDynamicModel,
     providerConfig,
-    providerMetadataOwners: getRegistryProviderMetadataOwners(modelRegistry),
+    providerMetadataOwners: modelRegistry.getProviderMetadataOwners(),
     runtimeHooks,
     preferDiscoveredModelMetadata: shouldCompareProviderRuntimeResolvedModel({
       ...params,
@@ -350,7 +324,7 @@ type ResolveModelWithPreparedRegistryParams = {
   assertCurrent?: () => void;
   provider: string;
   modelId: string;
-  modelRegistry: CoreModelRegistry;
+  modelRegistry: ModelRegistry;
   cfg?: OpenClawConfig;
   agentDir?: string;
   agentRuntimeId?: string;
@@ -400,8 +374,8 @@ export async function resolveModelWithPreparedRegistry(
   }
   return params.skipConfiguredFallback
     ? undefined
-    : buildConfiguredFallbackModel({
+    : normalizeConfiguredProviderModel({
         ...params,
-        providerMetadataOwners: getRegistryProviderMetadataOwners(params.modelRegistry),
+        providerMetadataOwners: params.modelRegistry.getProviderMetadataOwners(),
       });
 }

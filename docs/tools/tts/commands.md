@@ -100,6 +100,11 @@ moves the retired global `tts.prefsPath` value into shared machine state.
 Advanced multi-agent setups may still set `agents.entries.<id>.tts.prefsPath`
 when agents intentionally use separate preference stores.
 
+Missing preference files use configured defaults. If a file cannot be read or
+contains malformed JSON, read-only operations warn and use those defaults.
+Preference-changing commands refuse until you repair the file or its permissions,
+so they do not overwrite unread settings.
+
 | Stored field | Effect                                                                           |
 | ------------ | -------------------------------------------------------------------------------- |
 | `auto`       | Local auto-TTS override (`always`, `off`, …)                                     |

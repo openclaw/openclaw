@@ -28,10 +28,7 @@ export function estimateStructuredEmbeddingInputBytes(input: EmbeddingInput): nu
 }
 
 export function splitTextToUtf8ByteLimit(text: string, maxUtf8Bytes: number): string[] {
-  if (maxUtf8Bytes <= 0) {
-    return [text];
-  }
-  if (estimateUtf8Bytes(text) <= maxUtf8Bytes) {
+  if (maxUtf8Bytes <= 0 || estimateUtf8Bytes(text) <= maxUtf8Bytes) {
     return [text];
   }
 

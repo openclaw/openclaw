@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   asPositiveFiniteNumber,
   resolveIntegerOption,
@@ -14,7 +15,7 @@ import { Type, type Static } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { SsrFBlockedError, type LookupFn, type SsrFPolicy } from "../../infra/net/ssrf.js";
-import { logDebug, logWarn } from "../../logger.js";
+import { logWarn } from "../../logger.js";
 import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
 import { runtimeWebSecretOwnerId } from "../../secrets/runtime-web-secret-owner.js";
 import type { RuntimeWebFetchMetadata } from "../../secrets/runtime-web-tools.types.js";
@@ -27,8 +28,13 @@ import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { isRecord } from "../../utils.js";
 import { extractReadableContent } from "../../web-fetch/content-extractors.runtime.js";
 import { resolveWebProviderConfig } from "../../web/provider-runtime-shared.js";
+import { captureAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
+import type { SandboxFsBridge } from "../sandbox/fs-bridge.types.js";
 import { stringEnum } from "../schema/string-enum.js";
-import { writePrivateTempFile } from "../sessions/tools/private-temp-file.js";
+import {
+  writePrivateTempFile,
+  type PrivateTempFileOptions,
+} from "../sessions/tools/private-temp-file.js";
 import { formatFullOutputFooter } from "../sessions/tools/tool-contracts.js";
 import { setToolTerminalPresentation } from "../tool-terminal-presentation.js";
 import type { AnyAgentTool } from "./common.js";
@@ -233,14 +239,6 @@ function formatWebFetchErrorDetail(params: {
   return truncateWebFetchText(text.trim(), DEFAULT_ERROR_MAX_CHARS).text;
 }
 
-function redactUrlForDebugLog(rawUrl: string): string {
-  const parsed = URL.parse(rawUrl);
-  if (!parsed) {
-    return "[invalid-url]";
-  }
-  return parsed.pathname && parsed.pathname !== "/" ? `${parsed.origin}/...` : parsed.origin;
-}
-
 const WEB_FETCH_WRAPPER_WITH_WARNING_OVERHEAD = wrapWebContent("", "web_fetch").length;
 const WEB_FETCH_WRAPPER_NO_WARNING_OVERHEAD = wrapExternalContent("", {
   source: "web_fetch",
@@ -319,6 +317,7 @@ async function spillWebFetchContent(
   wrapped: WebFetchWrappedContent,
   maxChars: number,
   sourceTruncated: boolean,
+  output: PrivateTempFileOptions,
 ): Promise<WebFetchWrappedContent> {
   if (!wrapped.truncated) {
     return sourceTruncated ? { ...wrapped, truncated: true } : wrapped;
@@ -327,10 +326,23 @@ async function spillWebFetchContent(
   // uses this fixed file cap so vanished pages can still be read after truncation.
   const content = truncateUtf16Safe(value, WEB_FETCH_SPILL_MAX_CHARS);
   const spillChars = content.length;
-  const spillPath = await writePrivateTempFile(
-    "openclaw-web-fetch",
-    wrapWebContent(content, "web_fetch"),
-  );
+  let spillPath: string;
+  try {
+    spillPath = await writePrivateTempFile(
+      "openclaw-web-fetch",
+      wrapWebContent(content, "web_fetch"),
+      output,
+    );
+  } catch (error) {
+    output.assertCurrent?.();
+    if (!output.sandbox) {
+      throw error;
+    }
+    const notice = "\n\n[Full output unavailable in sandbox.]";
+    const visible = wrapWebFetchContent(value, maxChars - notice.length);
+    const text = `${visible.text}${notice}`;
+    return { ...visible, truncated: true, text, length: text.length };
+  }
   const spillCapped = value.length > WEB_FETCH_SPILL_MAX_CHARS;
   const isSpillTruncated = sourceTruncated || spillCapped;
   const spillNote = sourceTruncated
@@ -385,6 +397,8 @@ type WebFetchRuntimeParams = {
   lookupFn?: LookupFn;
   signal?: AbortSignal;
   resolveProviderFallback: () => Promise<WebFetchProviderFallback>;
+  output: PrivateTempFileOptions;
+  cacheScope?: string;
 };
 
 function normalizeProviderFinalUrl(value: unknown): string | undefined {
@@ -426,6 +440,7 @@ async function buildWebFetchPayload(params: {
   extractMode: ExtractMode;
   maxChars: number;
   tookMs: number;
+  output: PrivateTempFileOptions;
 }): Promise<Record<string, unknown>> {
   const payload = isRecord(params.payload) ? params.payload : {};
   let metadataTruncated = false;
@@ -470,6 +485,7 @@ async function buildWebFetchPayload(params: {
     wrapWebFetchContent(rawText, bodyMaxChars),
     bodyMaxChars,
     payload.truncated === true,
+    params.output,
   );
   const providerRawLength =
     resolveOptionalIntegerOption(payload.rawLength, { min: 0 }) ?? wrapped.rawLength;
@@ -537,6 +553,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   // Append the operator header set after the existing cache discriminators so
   // requests without custom headers keep their current cache key.
   const cacheDiscriminators = [
+    params.cacheScope ? `sandbox:${params.cacheScope}` : "",
     `user-agent:${sha256Hex(params.userAgent)}`,
     params.providerCacheKey ? `provider:${params.providerCacheKey}` : "",
     params.ssrfPolicy ? `ssrf-policy:${sha256Hex(JSON.stringify(params.ssrfPolicy))}` : "",
@@ -551,7 +568,24 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   );
   const cached = readCache(FETCH_CACHE, cacheKey, params.cacheTtlMs);
   if (cached) {
-    return { ...cached.value, cached: true };
+    const spill = cached.value.spill;
+    const sandbox = params.output.sandbox;
+    const available =
+      !sandbox ||
+      !isRecord(spill) ||
+      typeof spill.path !== "string" ||
+      (
+        await sandbox.bridge?.stat({
+          filePath: spill.path,
+          cwd: sandbox.root,
+          expectedPolicyPath: spill.path,
+          signal: params.signal,
+        })
+      )?.type === "file";
+    params.output.assertCurrent?.();
+    if (available) {
+      return { ...cached.value, cached: true };
+    }
   }
 
   // Preserve the direct fetch's rejection; replacing it with signal.reason would
@@ -560,7 +594,11 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   // Publish only after guard release: cancellation or cleanup failure must not
   // leave a successful cache entry for a call that never returned its content.
   throwIfFetchAborted(params.signal);
-  writeCache(FETCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+  params.output.assertCurrent?.();
+  // Retry a failed sandbox save on the next call; never cache an unavailable spill.
+  if (!params.output.sandbox || !payload.truncated || payload.spill) {
+    writeCache(FETCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+  }
   return payload;
 }
 
@@ -592,6 +630,7 @@ async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<st
       extractMode: params.extractMode,
       maxChars: params.maxChars,
       tookMs,
+      output: params.output,
     });
   }
 
@@ -624,13 +663,6 @@ async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<st
     res = result.response;
     finalUrl = result.finalUrl;
     release = result.release;
-
-    const markdownTokens = res.headers.get("x-markdown-tokens");
-    if (markdownTokens) {
-      logDebug(
-        `[web-fetch] x-markdown-tokens: ${markdownTokens} (${redactUrlForDebugLog(finalUrl)})`,
-      );
-    }
   } catch (error) {
     if (error instanceof SsrFBlockedError || params.signal?.aborted) {
       throw error;
@@ -659,11 +691,12 @@ async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<st
       throw new Error(`Web fetch failed (${res.status}): ${wrappedDetail.text}`);
     }
 
-    const contentType = res.headers.get("content-type") ?? "application/octet-stream";
-    const normalizedContentType = normalizeContentType(contentType) ?? "application/octet-stream";
     const bodyResult = await readResponseText(res, { maxBytes: params.maxResponseBytes });
     throwIfFetchAborted(params.signal);
     const body = bodyResult.text;
+    const normalizedContentType =
+      normalizeContentType(res.headers.get("content-type")) ??
+      (looksLikeHtml(body) ? "text/html" : "application/octet-stream");
     const responseTruncatedWarning = bodyResult.truncated
       ? `Response body incomplete after ${bodyResult.bytesRead} bytes.`
       : undefined;
@@ -722,7 +755,15 @@ async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<st
     ) {
       // Structured +json subtypes are single JSON documents; sequence formats are not.
       try {
-        text = JSON.stringify(JSON.parse(body), null, 2);
+        // Keep pretty-printing without rounding or normalizing numeric source tokens.
+        // Numeric reviver calls always include source context on supported runtimes.
+        text = JSON.stringify(
+          JSON.parse(body, (_key, value: unknown, context?: { source: string }) =>
+            typeof value === "number" ? JSON.rawJSON(context!.source) : value,
+          ),
+          null,
+          2,
+        );
         extractor = "json";
       } catch {
         text = body;
@@ -745,6 +786,7 @@ async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<st
       extractMode: params.extractMode,
       maxChars: params.maxChars,
       tookMs: Date.now() - start,
+      output: params.output,
     });
   } finally {
     if (!res.bodyUsed) {
@@ -759,6 +801,10 @@ async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<st
 export function createWebFetchTool(options?: {
   config?: OpenClawConfig;
   sandboxed?: boolean;
+  sandboxRoot?: string;
+  sandboxFsBridge?: SandboxFsBridge;
+  agentSessionKey?: string;
+  assertInvocationCurrent?: () => void;
   runtimeWebFetch?: RuntimeWebFetchMetadata;
   lateBindRuntimeConfig?: boolean;
   lookupFn?: LookupFn;
@@ -768,6 +814,11 @@ export function createWebFetchTool(options?: {
   if (fetch?.enabled === false) {
     return null;
   }
+  // Saved locations belong to the requesting session and filesystem, even when
+  // another caller fetches the same URL with identical network settings.
+  const cacheScope = options?.sandboxed
+    ? sha256Hex(JSON.stringify([options.agentSessionKey ?? randomUUID(), options.sandboxRoot]))
+    : undefined;
   const tool: AnyAgentTool = {
     label: "Web Fetch",
     name: "web_fetch",
@@ -776,6 +827,12 @@ export function createWebFetchTool(options?: {
     parameters: WebFetchSchema,
     outputSchema: WebFetchOutputSchema,
     execute: async (_toolCallId, args, signal, onUpdate) => {
+      const assertSourceCurrent = captureAgentToolSourceExecutionGuard(signal);
+      const assertCurrent = () => {
+        assertSourceCurrent();
+        options?.assertInvocationCurrent?.();
+      };
+      assertCurrent();
       const {
         config,
         preferRuntimeProviders,
@@ -872,6 +929,14 @@ export function createWebFetchTool(options?: {
           lookupFn: options?.lookupFn,
           signal,
           resolveProviderFallback,
+          cacheScope,
+          output: {
+            ...(options?.sandboxed
+              ? { sandbox: { root: options.sandboxRoot, bridge: options.sandboxFsBridge } }
+              : {}),
+            assertCurrent,
+            signal,
+          },
         });
         return jsonResult(result);
       } finally {

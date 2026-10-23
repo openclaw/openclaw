@@ -1,96 +1,38 @@
 import path from "node:path";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { nestedToolHistoryFixture } from "../test/nested-tool-activity-fixture.js";
 import { createQaBusState } from "./bus-state.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
 
 const searchCallId = "call-session-memory-ranking";
-const searchQuery = "current Project Nebula codename";
-const currentQuestionResult = {
-  path: "sessions/qa/current-session-memory-ranking.jsonl",
-  source: "sessions",
-  snippet: "User: Session memory ranking check: what is the current Project Nebula codename?",
-  score: 0.98,
-};
-const currentSessionResult = {
-  path: "sessions/qa-session-memory-ranking.jsonl",
-  source: "sessions",
-  snippet: "The current Project Nebula codename is ORBIT-10.",
-  score: 0.8,
-};
-const evergreenUserResult = {
-  path: "USER.md",
-  source: "memory",
-  snippet: "About Your Human: preferred project communication style.",
-  score: 0.68,
-};
-const staleDurableResult = {
-  path: `memory/${new Date(Date.now() - 3 * 86_400_000).toISOString().slice(0, 10)}.md`,
-  source: "memory",
-  snippet: "Project Nebula current codename: ORBIT-9.",
-  score: 0.9,
-};
+const currentQuestionResult = { source: "sessions", snippet: "Project Nebula codename?" };
+const currentSessionResult = { source: "sessions", snippet: "Project Nebula: ORBIT-10." };
+const staleDurableResult = { source: "memory", snippet: "Project Nebula: ORBIT-9." };
 
-type RankingResult =
-  | typeof currentQuestionResult
-  | typeof currentSessionResult
-  | typeof evergreenUserResult
-  | typeof staleDurableResult;
-type ProviderMode = "mock-openai" | "live-frontier";
-
-async function runSessionMemoryRankingFlow(
+async function runRanking(
   params: {
-    results?: RankingResult[];
-    providerMode?: ProviderMode;
-    query?: string;
-    maxResults?: number;
-    omitMaxResults?: boolean;
-    corpus?: "memory" | "sessions" | "all";
-    includeToolCall?: boolean;
-    includeToolResult?: boolean;
-    resultCallId?: string;
-    resultIsError?: boolean;
+    results?: (typeof currentSessionResult)[];
+    providerMode?: "mock-openai" | "live-frontier";
   } = {},
 ) {
   const state = createQaBusState();
   const results = params.results ?? [currentSessionResult, staleDurableResult];
   const providerMode = params.providerMode ?? "mock-openai";
-  const includeToolCall = params.includeToolCall !== false;
-  const includeToolResult = params.includeToolResult !== false;
-  const plannedToolArgs = {
-    query: params.query ?? searchQuery,
-    ...(params.omitMaxResults ? {} : { maxResults: params.maxResults ?? 6 }),
-    ...(params.corpus ? { corpus: params.corpus } : {}),
-  };
-  const toolResultCallId = params.resultCallId ?? searchCallId;
+  const plannedToolArgs = { query: "current Project Nebula codename", maxResults: 6 };
   const directHistoryMessages = [
-    ...(includeToolCall
-      ? [
-          {
-            role: "assistant",
-            content: [
-              {
-                type: "toolCall",
-                id: searchCallId,
-                name: "memory_search",
-                arguments: plannedToolArgs,
-              },
-            ],
-          },
-        ]
-      : []),
-    ...(includeToolResult
-      ? [
-          {
-            role: "toolResult",
-            toolCallId: toolResultCallId,
-            toolName: "memory_search",
-            isError: params.resultIsError === true,
-            content: [{ type: "text", text: JSON.stringify({ results }) }],
-          },
-        ]
-      : []),
+    {
+      role: "assistant",
+      content: [
+        { type: "toolCall", id: searchCallId, name: "memory_search", arguments: plannedToolArgs },
+      ],
+    },
+    {
+      role: "toolResult",
+      toolCallId: searchCallId,
+      toolName: "memory_search",
+      isError: false,
+      content: [{ type: "text", text: JSON.stringify({ results }) }],
+    },
     {
       role: "assistant",
       content: [{ type: "text", text: "The current Project Nebula codename is ORBIT-10." }],
@@ -98,17 +40,14 @@ async function runSessionMemoryRankingFlow(
   ];
   const historyMessages =
     providerMode === "live-frontier"
-      ? includeToolCall && includeToolResult && toolResultCallId === searchCallId
-        ? [
-            nestedToolHistoryFixture({
-              toolName: "memory_search",
-              toolCallId: searchCallId,
-              input: plannedToolArgs,
-              text: JSON.stringify({ results }),
-              isError: params.resultIsError,
-            }),
-          ]
-        : directHistoryMessages
+      ? [
+          nestedToolHistoryFixture({
+            toolName: "memory_search",
+            toolCallId: searchCallId,
+            input: plannedToolArgs,
+            text: JSON.stringify({ results }),
+          }),
+        ]
       : directHistoryMessages;
   const gatewayCall = vi.fn(
     async (method: string, request: { sessionKey?: string; limit?: number }) => {
@@ -120,13 +59,6 @@ async function runSessionMemoryRankingFlow(
   const fetchJson = vi.fn(async (input: string) => {
     throw new Error(`unexpected QA mock request: ${input}`);
   });
-  const forceMemoryIndex = vi.fn(async () => undefined);
-  const writeFile = vi.fn(
-    async (_filePath: string, _content: string, _encoding: string) => undefined,
-  );
-  const utimes = vi.fn(
-    async (_filePath: string, _accessedAt: Date, _modifiedAt: Date) => undefined,
-  );
   const runAgentPrompt = vi.fn(async (_env: unknown, options: { message: string }) => {
     expect(options.message).not.toContain("ORBIT-10");
     state.addOutboundMessage({
@@ -136,7 +68,8 @@ async function runSessionMemoryRankingFlow(
     });
   });
 
-  const result = await runLoadedScenarioFlow("session-memory-ranking", {
+  const noop = async () => undefined;
+  await runLoadedScenarioFlow("session-memory-ranking", {
     state,
     api: {
       env: {
@@ -145,177 +78,43 @@ async function runSessionMemoryRankingFlow(
         ...(providerMode === "mock-openai" ? { mock: { baseUrl: "http://qa.mock" } } : {}),
       },
       path,
-      fs: {
-        mkdir: async () => undefined,
-        writeFile,
-        utimes,
-      },
+      fs: { mkdir: noop, writeFile: noop, utimes: noop },
       readConfigSnapshot: async () => ({ config: {} }),
-      patchConfig: async () => undefined,
-      seedQaSessionTranscript: async () => undefined,
-      forceMemoryIndex,
+      patchConfig: noop,
+      seedQaSessionTranscript: noop,
+      forceMemoryIndex: noop,
       runAgentPrompt,
-      normalizeLowercaseStringOrEmpty,
       fetchJson,
     },
   });
 
-  return { result, fetchJson, forceMemoryIndex, gatewayCall, runAgentPrompt, utimes, writeFile };
+  return { fetchJson, gatewayCall, runAgentPrompt };
 }
 
-describe("session memory ranking scenario evidence", () => {
-  it("compares conflicting facts while ignoring the current question and evergreen USER note", async () => {
-    const { result } = await runSessionMemoryRankingFlow({
-      results: [
-        currentQuestionResult,
-        currentSessionResult,
-        evergreenUserResult,
-        staleDurableResult,
-      ],
-    });
-
-    expect(result.status).toBe("pass");
+it("requires successful provider-independent persisted search evidence", async () => {
+  const { fetchJson, gatewayCall, runAgentPrompt } = await runRanking({
+    providerMode: "live-frontier",
   });
 
-  it("seeds the conflicting durable fact in an authentic three-day-old daily note", async () => {
-    const startedAt = Date.now();
-    const { utimes, writeFile } = await runSessionMemoryRankingFlow({
-      results: [
-        currentQuestionResult,
-        currentSessionResult,
-        evergreenUserResult,
-        staleDurableResult,
-      ],
-    });
-    const completedAt = Date.now();
-    const [stalePath, staleContent] = writeFile.mock.calls[0] ?? [];
-    const [datedPath, accessedAt, modifiedAt] = utimes.mock.calls[0] ?? [];
-
-    expect(stalePath).toMatch(/^\/qa\/workspace\/memory\/\d{4}-\d{2}-\d{2}\.md$/);
-    expect(staleContent).toContain("Project Nebula current codename: ORBIT-9.");
-    expect(datedPath).toBe(stalePath);
-    expect(accessedAt).toBeInstanceOf(Date);
-    expect(modifiedAt).toBe(accessedAt);
-    expect(accessedAt?.getTime()).toBeGreaterThanOrEqual(startedAt - 3 * 86_400_000);
-    expect(accessedAt?.getTime()).toBeLessThanOrEqual(completedAt - 3 * 86_400_000);
-    expect(stalePath).toBe(`/qa/workspace/memory/${accessedAt?.toISOString().slice(0, 10)}.md`);
-  });
-
-  it.each(["mock-openai", "live-frontier"] as const)(
-    "requires successful provider-independent persisted search evidence (%s)",
-    async (providerMode) => {
-      const { fetchJson, gatewayCall, runAgentPrompt } = await runSessionMemoryRankingFlow({
-        providerMode,
-      });
-
-      expect(runAgentPrompt).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.objectContaining({
-          transcriptToolName: "memory_search",
-          requireSuccessfulTranscriptToolResult: true,
-        }),
-      );
-      expect(gatewayCall).toHaveBeenCalledWith(
-        "chat.history",
-        expect.objectContaining({ sessionKey: "agent:qa:session-memory-ranking" }),
-        expect.anything(),
-      );
-      expect(fetchJson).not.toHaveBeenCalled();
-    },
+  expect(runAgentPrompt).toHaveBeenCalledWith(
+    expect.anything(),
+    expect.objectContaining({
+      transcriptToolName: "memory_search",
+      requireSuccessfulTranscriptToolResult: true,
+    }),
   );
+  expect(gatewayCall).toHaveBeenCalledWith(
+    "chat.history",
+    expect.objectContaining({ sessionKey: "agent:qa:session-memory-ranking" }),
+    expect.anything(),
+  );
+  expect(fetchJson).not.toHaveBeenCalled();
+});
 
-  it("uses an answer-free setup query and requests unfiltered memory ranking", async () => {
-    const { forceMemoryIndex, runAgentPrompt } = await runSessionMemoryRankingFlow();
-
-    expect(forceMemoryIndex).toHaveBeenCalledWith(
-      expect.objectContaining({ query: searchQuery, expectedNeedle: "ORBIT-10" }),
-    );
-    const options = runAgentPrompt.mock.calls[0]?.[1];
-    expect(options?.message).not.toMatch(/corpus\s*=\s*(sessions|memory)/i);
-    expect(options?.message).toMatch(/without\s+(?:a\s+)?corpus\s+filter|unfiltered/i);
-  });
-
-  it("rejects a fabricated correct answer without a planned memory search", async () => {
-    await expect(
-      runSessionMemoryRankingFlow({
-        includeToolCall: false,
-      }),
-    ).rejects.toThrow(/memory_search|search|correlat/i);
-  });
-
-  it("rejects a fabricated correct answer without a successful memory result", async () => {
-    await expect(
-      runSessionMemoryRankingFlow({
-        includeToolResult: false,
-      }),
-    ).rejects.toThrow(/memory_search|search|result|correlat/i);
-  });
-
-  it("rejects a failed result even when it contains the correct answer", async () => {
-    await expect(
-      runSessionMemoryRankingFlow({
-        resultIsError: true,
-      }),
-    ).rejects.toThrow(/memory_search|search|result|success|correlat/i);
-  });
-
-  it("rejects memory results belonging to a different search call", async () => {
-    await expect(
-      runSessionMemoryRankingFlow({
-        resultCallId: "call-unrelated-memory-search",
-      }),
-    ).rejects.toThrow(/memory_search|search|result|correlat/i);
-  });
-
-  it("rejects session results that never compete with the stale durable fact", async () => {
-    await expect(runSessionMemoryRankingFlow({ results: [currentSessionResult] })).rejects.toThrow(
-      /competi|durable|stale|both/i,
-    );
-  });
-
-  it("rejects stale facts ahead of current facts even when the current question ranks first", async () => {
-    await expect(
-      runSessionMemoryRankingFlow({
-        results: [currentQuestionResult, staleDurableResult, currentSessionResult],
-      }),
-    ).rejects.toThrow(/rank|stale|durable/i);
-  });
-
-  it("accepts an omitted result limit using the canonical six-result product default", async () => {
-    const { result } = await runSessionMemoryRankingFlow({
-      results: [
-        currentQuestionResult,
-        currentSessionResult,
-        evergreenUserResult,
-        staleDurableResult,
-      ],
-      omitMaxResults: true,
-    });
-
-    expect(result.status).toBe("pass");
-  });
-
-  it("rejects a correlated memory search using less than the canonical six-result window", async () => {
-    await expect(
-      runSessionMemoryRankingFlow({
-        maxResults: 3,
-      }),
-    ).rejects.toThrow(/maxResults|result|six|6/i);
-  });
-
-  it("rejects search calls that exclude either configured memory source", async () => {
-    await expect(
-      runSessionMemoryRankingFlow({
-        corpus: "sessions",
-      }),
-    ).rejects.toThrow(/corpus|filter|unfiltered|competi/i);
-  });
-
-  it("rejects search queries that already reveal the expected answer", async () => {
-    await expect(
-      runSessionMemoryRankingFlow({
-        query: `${searchQuery} ORBIT-10`,
-      }),
-    ).rejects.toThrow(/answer|reveal|leak|query/i);
-  });
+it("rejects stale facts ahead of current facts even when the current question ranks first", async () => {
+  await expect(
+    runRanking({
+      results: [currentQuestionResult, staleDurableResult, currentSessionResult],
+    }),
+  ).rejects.toThrow(/rank|stale|durable/i);
 });

@@ -2,7 +2,7 @@
 // @vitest-environment-options {"url":"https://control.example/"}
 import { afterEach, describe, expect, it } from "vitest";
 import type { BoardWidget } from "../types.ts";
-import "./website.ts";
+import "./website.tsx";
 
 function widget(url: string): BoardWidget {
   return {

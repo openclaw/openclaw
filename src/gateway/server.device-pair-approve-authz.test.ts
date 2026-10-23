@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { expect, test } from "vitest";
 import type { WebSocket } from "ws";
 import {
   getPairedDevice,
@@ -20,11 +20,6 @@ import {
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
-await Promise.all([
-  import("./server.js"),
-  import("../infra/device-identity.js"),
-  import("../infra/device-pairing.js"),
-]);
 
 const CONTROL_UI_CLIENT = {
   id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
@@ -40,22 +35,17 @@ const TRUSTED_PROXY_HEADERS = {
   "x-forwarded-user": "operator@example.com",
 };
 
-type PairingSession = {
-  ws: WebSocket;
-  requestId: string;
-  deviceId: string;
-};
 async function withPairingSession(
   options: {
     name: string;
     auth: "device" | "shared" | "proxy";
     admin?: boolean;
     self?: boolean;
-    role: "operator" | "node";
+    role?: "operator" | "node";
     roles?: string[];
-    scopes: string[];
+    scopes?: string[];
   },
-  run: (session: PairingSession) => Promise<void>,
+  run: (ws: WebSocket, requestId: string, deviceId: string) => Promise<void>,
 ) {
   const callerScopes = options.admin ? ["operator.admin"] : ["operator.pairing"];
   let started: Awaited<ReturnType<typeof startServerWithClient>>;
@@ -98,9 +88,9 @@ async function withPairingSession(
     const request = await requestDevicePairing({
       deviceId: pending.identity.deviceId,
       publicKey: pending.publicKey,
-      role: options.role,
+      role: options.role ?? "operator",
       roles: options.roles,
-      scopes: options.scopes,
+      scopes: options.scopes ?? ["operator.pairing"],
       clientId: GATEWAY_CLIENT_NAMES.TEST,
       clientMode: GATEWAY_CLIENT_MODES.TEST,
     });
@@ -114,7 +104,7 @@ async function withPairingSession(
       deviceIdentityPath: approver.identityPath,
       scopes: callerScopes,
     });
-    await run({ ws, requestId: request.request.requestId, deviceId: pending.identity.deviceId });
+    await run(ws, request.request.requestId, pending.identity.deviceId);
   } finally {
     ws?.close();
     started.ws.close();
@@ -122,101 +112,43 @@ async function withPairingSession(
     started.envSnapshot.restore();
   }
 }
-async function expectApprovalDenied({ ws, requestId, deviceId }: PairingSession) {
-  const approve = await rpcReq(ws, "device.pair.approve", { requestId });
-  expect(approve.ok).toBe(false);
-  expect(approve.error?.message).toBe("device pairing approval denied");
-  expect(await getPairedDevice(deviceId)).toBeNull();
-}
-
-describe("gateway device.pair.approve caller scope guard", () => {
-  test("rejects approving device scopes above the caller session scopes", async () => {
-    await withPairingSession(
-      {
-        name: "approve-attacker",
-        auth: "device",
-        self: true,
-        role: "operator",
-        scopes: ["operator.admin"],
-      },
-      async ({ ws, requestId, deviceId }) => {
-        const approve = await rpcReq(ws, "device.pair.approve", { requestId });
-        expect(approve.ok).toBe(false);
-        expect(approve.error?.message).toBe("missing scope: operator.admin");
-        expect((await getPairedDevice(deviceId))?.approvedScopes).toEqual(["operator.admin"]);
-      },
-    );
-  });
-  test("allows operator-role approval from a non-admin shared-auth session", async () => {
-    await withPairingSession(
-      {
-        name: "approve-shared-operator-approver",
-        auth: "shared",
-        role: "operator",
-        scopes: ["operator.pairing"],
-      },
-      async ({ ws, requestId, deviceId }) => {
-        expect((await rpcReq(ws, "device.pair.approve", { requestId })).ok).toBe(true);
-        const paired = await getPairedDevice(deviceId);
-        expect(paired?.role).toBe("operator");
-        expect(paired?.tokens?.operator?.scopes).toEqual(["operator.pairing"]);
-      },
-    );
-  });
-  test("rejects mixed operator/node approval from a non-admin shared-auth session", async () => {
-    await withPairingSession(
-      {
-        name: "approve-shared-mixed-attacker",
-        auth: "shared",
-        role: "operator",
-        roles: ["operator", "node"],
-        scopes: ["operator.pairing"],
-      },
-      expectApprovalDenied,
-    );
-  });
-  test("rejects node-role approval from a non-admin trusted-proxy Control UI session", async () => {
-    await withPairingSession(
-      { name: "approve-proxy-node-attacker", auth: "proxy", role: "node", scopes: [] },
-      expectApprovalDenied,
-    );
-  });
-  test("allows node-role approval from an admin trusted-proxy Control UI session", async () => {
-    await withPairingSession(
-      { name: "approve-proxy-node-admin", auth: "proxy", admin: true, role: "node", scopes: [] },
-      async ({ ws, requestId, deviceId }) => {
-        expect((await rpcReq(ws, "device.pair.approve", { requestId })).ok).toBe(true);
-        const paired = await getPairedDevice(deviceId);
-        expect(paired?.role).toBe("node");
-        expect(paired?.tokens?.node?.role).toBe("node");
-      },
-    );
-  });
-  test("rejects approving another device from a non-admin paired-device session", async () => {
-    await withPairingSession(
-      {
-        name: "approve-cross-device-attacker",
-        auth: "device",
-        role: "operator",
-        scopes: ["operator.pairing"],
-      },
-      expectApprovalDenied,
-    );
-  });
-  test("rejects rejecting another device from a non-admin paired-device session", async () => {
-    await withPairingSession(
-      {
-        name: "reject-cross-device-attacker",
-        auth: "device",
-        role: "operator",
-        scopes: ["operator.pairing"],
-      },
-      async ({ ws, requestId }) => {
-        const reject = await rpcReq(ws, "device.pair.reject", { requestId });
-        expect(reject.ok).toBe(false);
-        expect(reject.error?.message).toBe("device pairing rejection denied");
-        expect((await getPendingDevicePairing(requestId))?.requestId).toBe(requestId);
-      },
-    );
-  });
-});
+const errors = {
+  scope: "missing scope: operator.admin",
+  approval: "device pairing approval denied",
+  rejection: "device pairing rejection denied",
+};
+type PairingCase = Parameters<typeof withPairingSession>[0] & {
+  reject?: boolean;
+  error?: keyof typeof errors;
+};
+test.each<PairingCase>([
+  { name: "scope upgrade", auth: "device", self: true, scopes: ["operator.admin"], error: "scope" },
+  { name: "mixed roles", auth: "shared", roles: ["operator", "node"], error: "approval" },
+  { name: "proxy node", auth: "proxy", role: "node", scopes: [], error: "approval" },
+  { name: "cross-device approval", auth: "device", error: "approval" },
+  { name: "proxy admin approval", auth: "proxy", admin: true, role: "node", scopes: [] },
+  { name: "cross-device rejection", auth: "device", reject: true, error: "rejection" },
+])("device pairing: $name", (options) =>
+  withPairingSession(options, async (ws, requestId, deviceId) => {
+    const result = await rpcReq(ws, options.reject ? "device.pair.reject" : "device.pair.approve", {
+      requestId,
+    });
+    if (options.error) {
+      expect(result).toMatchObject({ ok: false, error: { message: errors[options.error] } });
+    } else {
+      expect(result.ok).toBe(true);
+    }
+    if (options.reject) {
+      expect((await getPendingDevicePairing(requestId))?.requestId).toBe(requestId);
+    } else if (options.self) {
+      expect((await getPairedDevice(deviceId))?.approvedScopes).toEqual(["operator.admin"]);
+    } else if (options.admin) {
+      expect(await getPairedDevice(deviceId)).toMatchObject({
+        role: "node",
+        tokens: { node: { role: "node" } },
+      });
+    } else {
+      expect(await getPairedDevice(deviceId)).toBeNull();
+    }
+  }),
+);

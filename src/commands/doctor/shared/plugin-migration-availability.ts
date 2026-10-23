@@ -8,6 +8,7 @@ import { isPathInside } from "../../../infra/path-guards.js";
 import { resolveUpdateRehearsalRoot } from "../../../infra/update-rehearsal-paths.js";
 import { normalizePluginsConfig } from "../../../plugins/config-state.js";
 import { withPluginMetadataSnapshotScope } from "../../../plugins/current-plugin-metadata-snapshot.js";
+import { createBlockedPluginDiagnosticLookup } from "../../../plugins/discovery-availability.js";
 import { resolvePluginDoctorContractArtifact } from "../../../plugins/doctor-contract-artifact.js";
 import { createInstalledPluginIndexScopeLookup } from "../../../plugins/installed-plugin-index-scope-lookup.js";
 import { resolveInstalledPluginIndexStateDatabaseOptions } from "../../../plugins/installed-plugin-index-store-path.js";
@@ -20,6 +21,7 @@ import {
 } from "../../../plugins/official-external-plugin-catalog.js";
 import { isPayloadMissing } from "../../../plugins/payload-verification.js";
 import { createPluginCache, withPluginCache } from "../../../plugins/plugin-cache.js";
+import { normalizePluginPolicyId } from "../../../plugins/plugin-policy-id.js";
 import {
   isArtifactPreservingStateRead,
   withOpenClawStateDatabaseReadSnapshot,
@@ -38,9 +40,10 @@ import {
 export type PluginMigrationInspection = {
   requiredPluginIds: readonly string[];
   inspectionRequiredPluginIds: readonly string[];
-  statelessPluginIds: readonly string[];
+  statelessPlugins: readonly { id: string; version?: string }[];
   runtimePluginAliases: readonly string[];
   unavailablePluginIds?: readonly string[];
+  discoveryBlockedPluginIds?: readonly string[];
   replacementPluginIds?: Readonly<Record<string, string>>;
 };
 
@@ -73,9 +76,19 @@ export async function inspectPluginMigrationAvailability(params: {
       return withPluginMetadataSnapshotScope(
         metadata,
         async () => {
-          const configuredPluginIds = collectConfiguredPluginIds(params.cfg, env);
+          // Config policy keys are canonical; manifest, install and migration identities are exact.
+          const manifestIdsByPolicyId = new Map(
+            metadata.plugins.map((plugin) => [normalizePluginPolicyId(plugin.id), plugin.id]),
+          );
+          const manifestId = (id: string) =>
+            manifestIdsByPolicyId.get(normalizePluginPolicyId(id)) ?? id;
+          const configuredPluginIds = new Set(
+            [...collectConfiguredPluginIds(params.cfg, env)].map(manifestId),
+          );
           const configuredChannelIds = collectConfiguredChannelIds(params.cfg, env);
-          const blockedPluginIds = collectBlockedPluginIds(params.cfg);
+          const blockedPluginIds = new Set(
+            [...collectBlockedPluginIds(params.cfg)].map(manifestId),
+          );
           const context = await resolveConfiguredPluginInstallContext({
             cfg: params.cfg,
             env,
@@ -92,7 +105,15 @@ export async function inspectPluginMigrationAvailability(params: {
             configuredChannelOwnerPluginIds: context.configuredChannelOwnerPluginIds,
             blockedPluginIds,
           });
-          const inspectedIds = new Set([...selected, ...(params.retainedPluginIds ?? [])]);
+          const findBlockedPluginDiagnostic = createBlockedPluginDiagnosticLookup({
+            diagnostics: metadata.diagnostics,
+            config: params.cfg,
+            env,
+          });
+          const inspectedIds = new Set([
+            ...selected,
+            ...(params.retainedPluginIds ?? []).map(manifestId),
+          ]);
           const requiredPluginIds: string[] = [];
           const inspectionRequiredPluginIds: string[] = [];
           const statelessCandidates = new Set<string>();
@@ -123,8 +144,9 @@ export async function inspectPluginMigrationAvailability(params: {
           }
           const requiredIds = new Set(requiredPluginIds);
           const inspectionRequiredIds = new Set(inspectionRequiredPluginIds);
-          const statelessPluginIds: string[] = [];
+          const statelessPlugins: { id: string; version?: string }[] = [];
           const unavailablePluginIds: string[] = [];
+          const discoveryBlockedPluginIds: string[] = [];
           const normalizedConfig = normalizePluginsConfig(params.cfg.plugins);
           const pending = [...inspectedIds].toSorted().flatMap((pluginId) => {
             if (!passesManifestOwnerBasePolicy({ plugin: { id: pluginId }, normalizedConfig })) {
@@ -133,7 +155,12 @@ export async function inspectPluginMigrationAvailability(params: {
             }
             const plugin = metadata.plugins.find((candidate) => candidate.id === pluginId);
             const bundled = context.bundledPluginsById.has(pluginId);
+            const blocked = plugin ? undefined : findBlockedPluginDiagnostic(pluginId);
+            if (blocked) {
+              discoveryBlockedPluginIds.push(pluginId);
+            }
             const unavailable =
+              Boolean(blocked) ||
               !context.knownIds.has(pluginId) ||
               (Object.hasOwn(context.records, pluginId) &&
                 isPayloadMissing(env, context.records[pluginId]?.installPath)) ||
@@ -144,10 +171,13 @@ export async function inspectPluginMigrationAvailability(params: {
             }
             // A private rehearsal copy is already bound to an explicit local payload. The
             // updating parent does not own an install record for that copy, so waiting for
-            // package convergence would hide its Doctor contract from the canary. Ordinary
+            // package convergence would hide its Doctor contract from the canary. A present
+            // `source: "path"` install is operator-managed: package convergence skips it, so
+            // waiting would only move the same contract to a second Doctor. Unrecorded
             // config paths stay deferred because their source may be stale during an update.
             const availableWithoutPackageConvergence =
-              bundled ||
+              (bundled && !blocked) ||
+              (!unavailable && context.records[pluginId]?.source === "path") ||
               (plugin?.origin === "config" &&
                 rehearsalRoot !== undefined &&
                 isPathInside(rehearsalRoot, plugin.rootDir) &&
@@ -156,7 +186,10 @@ export async function inspectPluginMigrationAvailability(params: {
               availableWithoutPackageConvergence || (!params.deferInstallation && !unavailable);
             if (available && plugin && statelessCandidates.has(pluginId)) {
               // Installation-only confirmation reads metadata; it need not activate a channel.
-              statelessPluginIds.push(pluginId);
+              statelessPlugins.push({
+                id: pluginId,
+                version: plugin.packageVersion ?? plugin.version,
+              });
             }
             if (!selected.has(pluginId) || available) {
               return [];
@@ -173,10 +206,12 @@ export async function inspectPluginMigrationAvailability(params: {
                   pluginId,
                   compatibilityMigrationPaths: plugin?.configContracts?.compatibilityMigrationPaths,
                 }),
-                reason: params.deferInstallation
-                  ? "Package convergence must wait until the updating parent releases its install records."
-                  : "The configured plugin package is missing or has not converged.",
-                command: "openclaw update repair",
+                reason: blocked
+                  ? "The configured plugin is present but blocked. Fix the blocked plugin path before retrying its data/settings upgrade."
+                  : params.deferInstallation
+                    ? "Package convergence must wait until the updating parent releases its install records."
+                    : "The configured plugin package is missing or has not converged.",
+                command: blocked ? "openclaw doctor --fix" : "openclaw update repair",
               },
             ];
           });
@@ -200,7 +235,7 @@ export async function inspectPluginMigrationAvailability(params: {
               replacementPluginIds[pluginId] = replacementPluginId;
             }
           }
-          const statelessIds = new Set(statelessPluginIds);
+          const statelessIds = new Set(statelessPlugins.map((plugin) => plugin.id));
           const runtimePluginAliases = collectConfiguredRuntimeIds(params.cfg).filter((runtime) => {
             if (
               selected.has(runtime) ||
@@ -218,8 +253,9 @@ export async function inspectPluginMigrationAvailability(params: {
             pending,
             requiredPluginIds: requiredPluginIds.toSorted(),
             inspectionRequiredPluginIds: inspectionRequiredPluginIds.toSorted(),
-            statelessPluginIds,
+            statelessPlugins,
             runtimePluginAliases,
+            discoveryBlockedPluginIds,
             // The updating parent still owns package availability until convergence resumes.
             ...(!params.deferInstallation ? { unavailablePluginIds, replacementPluginIds } : {}),
           };

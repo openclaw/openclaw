@@ -10,6 +10,67 @@ sidebarTitle: "Model helpers"
 
 Call a model, resolve model-selection policy, and resolve provider auth without importing host internals. Part of the [Plugin runtime helpers](/plugins/sdk-runtime) reference.
 
+## Requester-admitted model catalog
+
+Feature-detect `api.runtime.capabilities?.includes("requester-model-catalog-v1")` before using the
+requester-bound `runtimeContext.models?.list()` reader. Command registrations
+opt in with `runtimeCapabilities: ["models"]`; tool factories receive the reader
+in their version-2 context. Older hosts, unauthorized commands, and invocations
+without an exact admitted requester/session leave it `undefined`.
+
+```typescript
+api.registerCommand({
+  name: "model-catalog",
+  description: "Show models admitted for this requester",
+  ...(api.runtime.capabilities?.includes("requester-model-catalog-v1")
+    ? { runtimeCapabilities: ["models"] as const }
+    : {}),
+  async handler(ctx) {
+    const catalog = await ctx.runtimeContext?.models?.list();
+    if (!catalog || catalog.state === "pending") {
+      return { text: "The requester model catalog is not prepared yet." };
+    }
+    return { text: catalog.models.map((model) => `${model.provider}/${model.id}`).join("\n") };
+  },
+});
+```
+
+The result contains an opaque `revision`, `state: "prepared" | "pending"`, and
+`models` with `id`, `provider`, `name`, optional `thinkingLevels` (level IDs), and
+optional `fastModes` (`false`, `true`, or `"auto"`). Restricted requesters also
+receive `selectionPolicy: { restricted: true, defaultModel: string | null }`.
+For a prepared result, a null default means there is no currently admitted
+default. While pending, it may also mean the default is not known yet.
+`fastModes` covers the boolean/`"auto"` fast toggle, not service tiers or
+`"ultrafast"`; absence means the prepared catalog makes no fast-toggle claim.
+No canonical model family metadata is currently exposed; do not infer families
+from model names.
+
+This is the safe projection of the same saved-session, prepared inventory and
+role policy used by session-scoped `models.list`, without needing a Gateway
+client. Only prepared, available and manually selectable rows are included, including
+the current model when its native harness or inference worker owns authentication.
+Active-placement facts are read only from the invocation's bound Gateway context.
+A headless invocation without that context uses prepared host authentication and
+configured worker requirements only; it cannot infer an active worker placement
+or borrow another Gateway's authentication facts. This is admission metadata,
+not an inference health check. Pending inventory is
+never proof of availability. The reader does not trigger
+discovery or auth refresh, accept model/session/agent selectors, return auth
+profiles or credentials, or expose `apiKeySupported`. It cannot change a model
+or grant permission for a later inference request.
+
+Keep the reader within its command or tool invocation. `list()` can reject when
+config, auth/catalog publication, or the saved session changes during the read.
+Discard that result and retry once in the same still-admitted invocation; the
+next call selects the current config and published catalog instead of remaining
+pinned to a retired auth owner. If no current catalog is published yet it returns
+`pending`. A second rejection should be shown as temporarily unavailable, not
+retried in a loop. Session reset, requester revocation, plugin retirement, and
+invocation completion can permanently invalidate that reader; obtain a new
+admitted invocation rather than retaining it. Treat revisions as equality tokens
+for the public projection, not durable authorization or global catalog identity.
+
 ## Protected model egress for standalone commands
 
 `withConfiguredModelEgress` from `openclaw/plugin-sdk/secret-egress-runtime`
@@ -77,6 +138,18 @@ host.
 
 ## Low-level completions
 
+`resolveApiKeyForProfile` from `openclaw/plugin-sdk/agent-runtime` returns a
+non-enumerable `readCurrentCredential` capability for personal accounts and for
+persisted shared or agent profiles using `chatgpt-token-sharing`. Retain it with
+the resolved token and call it synchronously at the transport's final
+authorization boundary, after asynchronous preparation. Validate the returned
+credential against the selected profile and expected identity; an absent
+credential must prevent dispatch. It reads Gateway-owned facts without SQL,
+rejects pending or unavailable authority, and remains valid after resolution
+completes. Personal-account reconnect retires old capabilities; an ordinary OAuth
+refresh publishes its new credential through the same owner. Profiles without a
+retained authority capability return `null`.
+
 The `complete` and `completeSimple` helpers from `openclaw/plugin-sdk/llm` accept
 an optional fourth `assertCurrent` callback. It runs after transport setup and
 immediately before provider dispatch. A thrown error or an aborted
@@ -109,6 +182,15 @@ Backend adapters retain protocol validation and special-mode handling.
       reasoning: "high",
     });
     ```
+
+    Direct-provider completions record credential failures using the same auth-profile
+    health policy as agent turns and try the next eligible profile. Each profile is
+    attempted at most once per completion. Explicit `model@profile` pins and
+    provider-bound credentials stay pinned. When the pool is exhausted, the last
+    provider error still resolves with `stopReason: "error"`; callers should check
+    that field before using the text. Successful requests clear the selected
+    profile's failure state for that model. Retries retain the original runtime
+    lease and repeat authorization checks before dispatch.
 
     `maxTokens` and `temperature` are advisory sampling hints. The selected
     provider, CLI, or harness applies them when its transport exposes an
@@ -148,6 +230,11 @@ Backend adapters retain protocol validation and special-mode handling.
     callers can distinguish authorization, invalid isolated input, unsupported
     or unavailable runtimes, aborts, timeouts, rejected output, and other
     completion failures without matching message text.
+
+    `LLM_RUNTIME_LIFECYCLE` means the host refused the completion because a
+    plugin or model runtime is reloading or has retired; no inference ran.
+    Keep the work and retry it from a fresh plugin operation after the reload
+    completes, instead of treating it as a provider failure.
 
     Provider orchestration can also acquire the configured local-service
     lifecycle before issuing an HTTP request:
@@ -207,7 +294,7 @@ Backend adapters retain protocol validation and special-mode handling.
     flattened for Responses, including any supplied `strict` value.
 
     Set `reasoning` to request a reasoning effort for the selected model. The
-    host accepts the canonical thinking levels (`off`, `minimal`, `low`,
+    host accepts the standard thinking levels (`off`, `minimal`, `low`,
     `medium`, `high`, `xhigh`, `adaptive`, `max`, and `ultra`). Direct completions
     map `adaptive` to `medium` and `ultra` to `max`; the selected provider transport
     maps each effort to its supported wire value. Explicit `off` reaches the
@@ -236,7 +323,7 @@ Backend adapters retain protocol validation and special-mode handling.
   <Accordion title="api.runtime.modelAuth">
     Model and provider auth resolution.
 
-    Synchronous profile operations are also available: `resolveProviderIdForAuth`, `ensureAuthProfileStore`, `resolveAuthProfileOrder`, `listProfilesForProvider`, and `isProviderApiKeyConfigured`. They use the canonical host auth policy. Supply the owning agent directory when reading agent profiles, and use `readOnly: true` and `allowKeychainPrompt: false` for non-interactive profile inspection. Profile stores and resolved credentials must not be logged.
+    Synchronous profile operations are also available: `resolveProviderIdForAuth`, `ensureAuthProfileStore`, `resolveAuthProfileOrder`, `listProfilesForProvider`, and `isProviderApiKeyConfigured`. They use the shared host auth policy. Supply the owning agent directory when reading agent profiles, and use `readOnly: true` and `allowKeychainPrompt: false` for non-interactive profile inspection. Profile stores and resolved credentials must not be logged.
 
     Capability factories should construct descriptors only. Keep credential inspection and resolution in the callbacks that need them, rather than performing them while registering a provider.
 

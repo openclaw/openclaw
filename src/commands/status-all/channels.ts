@@ -1,20 +1,24 @@
-// Builds channel status rows and account details for `openclaw status --all`.
 // This layer stays plugin-generic: channel-specific auth rules live in plugin config/status hooks.
 
 import fs from "node:fs";
+import { sha256HexPrefixCore } from "@openclaw/normalization-core/node-crypto";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import {
   resolveInspectedChannelAccount,
   type ChannelAccountInspectionResult,
 } from "../../channels/account-inspection.js";
+import { resolveChannelAllowFrom } from "../../channels/account-resolution.js";
 import { hasConfiguredUnavailableCredentialStatus } from "../../channels/account-snapshot-fields.js";
-import { formatChannelAllowFrom } from "../../channels/account-summary.js";
+import {
+  buildChannelAccountNotes,
+  formatChannelAllowFrom,
+} from "../../channels/account-summary.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { resolveReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import { formatChannelStatusState } from "../../channels/plugins/status-state.js";
-import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import {
   getRuntimeChannelAccounts,
@@ -25,7 +29,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatPhoneNumberForCli } from "../../infra/phone-number-presentation.js";
 import { listExplicitConfiguredChannelIdsForConfig } from "../../plugins/channel-plugin-ids.js";
 import { resolveMissingOfficialExternalChannelPluginRepairHints } from "../../plugins/official-external-plugin-repair-hints.js";
-import { summarizeTokenConfig } from "./channels-token-summary.js";
 import { formatTimeAgo } from "./format.js";
 
 type ChannelRow = {
@@ -40,149 +43,18 @@ type ChannelAccountRow = ChannelAccountInspectionResult & {
   accountId: string;
 };
 
-function existsSyncMaybe(p: string | undefined): boolean | null {
-  const path = normalizeOptionalString(p) ?? "";
-  if (!path) {
-    return null;
+function summarizeSources(sources: Array<string | undefined>): string {
+  const counts = new Map<string, number>();
+  for (const source of sources) {
+    const key = source?.trim() || "unknown";
+    counts.set(key, (counts.get(key) ?? 0) + 1);
   }
-  try {
-    return fs.existsSync(path);
-  } catch {
-    return null;
-  }
-}
-
-const formatAccountLabel = (params: { accountId: string; name?: string }) => {
-  const base = params.accountId || "default";
-  if (params.name?.trim()) {
-    return `${base} (${params.name.trim()})`;
-  }
-  return base;
-};
-
-const buildAccountNotes = (params: {
-  plugin: ChannelPlugin;
-  cfg: OpenClawConfig;
-  entry: ChannelAccountRow;
-  liveCredentialAvailable?: boolean;
-}) => {
-  const { plugin, cfg, entry } = params;
-  const notes: string[] = [];
-  const snapshot = entry.snapshot;
-  if (snapshot.enabled === false) {
-    notes.push("disabled");
-  }
-  if (snapshot.dmPolicy) {
-    notes.push(`dm:${snapshot.dmPolicy}`);
-  }
-  for (const [label, source] of [
-    ["token", snapshot.tokenSource],
-    ["bot", snapshot.botTokenSource],
-    ["app", snapshot.appTokenSource],
-    ["signing", snapshot.signingSecretSource],
-  ]) {
-    if (source && source !== "none") {
-      notes.push(`${label}:${source}`);
-    }
-  }
-  if (entry.kind === "unavailable") {
-    notes.push("secret unavailable in this command path");
-  } else if (params.liveCredentialAvailable) {
-    notes.push("credential available in gateway runtime");
-  } else if (hasConfiguredUnavailableCredentialStatus(entry.account)) {
-    notes.push("secret unavailable in this command path");
-  }
-  if (snapshot.baseUrl) {
-    notes.push(snapshot.baseUrl);
-  }
-  if (snapshot.port != null) {
-    notes.push(`port:${snapshot.port}`);
-  }
-  if (snapshot.cliPath) {
-    notes.push(`cli:${snapshot.cliPath}`);
-  }
-  if (snapshot.dbPath) {
-    notes.push(`db:${snapshot.dbPath}`);
-  }
-
-  const unavailable =
-    entry.kind === "unavailable" || hasConfiguredUnavailableCredentialStatus(entry.account);
-  const allowFrom = unavailable
-    ? snapshot.allowFrom
-    : (plugin.config.resolveAllowFrom?.({ cfg, accountId: snapshot.accountId }) ??
-      snapshot.allowFrom);
-  if (allowFrom?.length) {
-    // Cap allow-list output so large channel policies do not dominate the status table.
-    const allowInternationalDigits =
-      plugin.configSchema?.uiHints?.allowFrom?.presentation === "phone-number";
-    const formatted = formatChannelAllowFrom({
-      plugin,
-      cfg,
-      accountId: snapshot.accountId,
-      allowFrom,
-    })
-      .slice(0, 3)
-      .map((allowEntry) => formatPhoneNumberForCli(allowEntry, { allowInternationalDigits }));
-    if (formatted.length > 0) {
-      notes.push(`allow:${formatted.join(",")}`);
-    }
-  }
-
-  return notes;
-};
-
-function resolveLinkFields(summary: unknown): {
-  statusState: string | null;
-  linked: boolean | null;
-  authAgeMs: number | null;
-  selfE164: string | null;
-} {
-  // Plugin summaries are optional extension data; normalize only the fields the core table understands.
-  const rec = asRecord(summary);
-  const statusState = typeof rec.statusState === "string" ? rec.statusState : null;
-  const linked = typeof rec.linked === "boolean" ? rec.linked : null;
-  const authAgeMs = typeof rec.authAgeMs === "number" ? rec.authAgeMs : null;
-  const self = asRecord(rec.self);
-  const selfE164 = typeof self.e164 === "string" && self.e164.trim() ? self.e164.trim() : null;
-  return { statusState, linked, authAgeMs, selfE164 };
-}
-
-function collectMissingPaths(accounts: ChannelAccountRow[]): string[] {
-  const missing: string[] = [];
-  for (const entry of accounts) {
-    const accountRec = asRecord(entry.account);
-    const snapshotRec = asRecord(entry.snapshot);
-    for (const key of [
-      "tokenFile",
-      "botTokenFile",
-      "appTokenFile",
-      "cliPath",
-      "dbPath",
-      "authDir",
-    ]) {
-      // Account config and snapshots can each expose file-backed credential paths.
-      const raw =
-        (accountRec[key] as string | undefined) ?? (snapshotRec[key] as string | undefined);
-      const ok = existsSyncMaybe(raw);
-      if (ok === false) {
-        missing.push(String(raw));
-      }
-    }
-  }
-  return missing;
-}
-
-function isLikelyDependencyTreeCorruption(message: string): boolean {
-  return /(?:cannot find (?:module|package)|module_not_found|err_module_not_found|enoent|enotempty|missing package|failed to resolve)/iu.test(
-    message,
+  return (
+    [...counts.entries()]
+      .toSorted((a, b) => b[1] - a[1])
+      .map(([key, count]) => `${key}${count > 1 ? `×${count}` : ""}`)
+      .join("+") || "unknown"
   );
-}
-
-function formatLoadFailureDetail(message: string): string {
-  const reason = isLikelyDependencyTreeCorruption(message)
-    ? "dependency tree corrupted"
-    : "registration failed";
-  return `plugin load failed: ${reason}; run openclaw doctor --fix`;
 }
 
 /** Builds the `status --all` channel summary and per-account detail tables. */
@@ -263,12 +135,148 @@ export async function buildChannelsTable(
           })
         : defaultEntry?.snapshot;
 
-    const link = resolveLinkFields(summary);
-    const missingPaths = collectMissingPaths(enabledAccounts);
-    const tokenSummary = summarizeTokenConfig({
-      accounts: accountsForTokenSummary,
-      showSecrets,
-    });
+    // Plugin summaries are optional extension data; normalize only the fields the core table understands.
+    const linkRecord = asRecord(summary);
+    const statusState = typeof linkRecord.statusState === "string" ? linkRecord.statusState : null;
+    const summaryLinked = typeof linkRecord.linked === "boolean" ? linkRecord.linked : null;
+    const authAgeMs = typeof linkRecord.authAgeMs === "number" ? linkRecord.authAgeMs : null;
+    const self = asRecord(linkRecord.self);
+    const selfE164 = typeof self.e164 === "string" && self.e164.trim() ? self.e164.trim() : null;
+    const link = { statusState, linked: summaryLinked, authAgeMs, selfE164 };
+    const missingPaths: string[] = [];
+    for (const entry of enabledAccounts) {
+      const accountRec = asRecord(entry.account);
+      const snapshotRec = asRecord(entry.snapshot);
+      for (const key of [
+        "tokenFile",
+        "botTokenFile",
+        "appTokenFile",
+        "cliPath",
+        "dbPath",
+        "authDir",
+      ]) {
+        // Account config and snapshots can each expose file-backed credential paths.
+        const raw = accountRec[key] ?? snapshotRec[key];
+        const path = normalizeOptionalString(raw);
+        if (!path) {
+          continue;
+        }
+        try {
+          if (!fs.existsSync(path)) {
+            missingPaths.push(String(raw));
+          }
+        } catch {
+          // An inspection failure does not establish that the path is missing.
+        }
+      }
+    }
+    const tokenSummary = ((): { state: "ok" | "setup" | "warn" | null; detail: string | null } => {
+      const enabled = accountsForTokenSummary.filter((a) => a.enabled);
+      if (enabled.length === 0) {
+        return { state: null, detail: null };
+      }
+
+      const accountRecs = enabled.map((a) => asRecord(a.account));
+      // Token field names are plugin-owned; infer credential mode from exposed fields.
+      const hasBotTokenField = accountRecs.some((r) => "botToken" in r);
+      const hasAppTokenField = accountRecs.some((r) => "appToken" in r);
+      const hasSigningSecretField = accountRecs.some(
+        (r) => "signingSecret" in r || "signingSecretSource" in r || "signingSecretStatus" in r,
+      );
+      const hasTokenField = accountRecs.some((r) => "token" in r);
+      if (!hasBotTokenField && !hasAppTokenField && !hasSigningSecretField && !hasTokenField) {
+        return { state: null, detail: null };
+      }
+
+      const httpMode =
+        hasBotTokenField &&
+        hasSigningSecretField &&
+        accountRecs.every((rec) => typeof rec.mode === "string" && rec.mode.trim() === "http");
+      const unavailable = enabled.filter((a) =>
+        hasConfiguredUnavailableCredentialStatus(a.account),
+      );
+      const tokenHint = (account: unknown, key: string) => {
+        const value = asRecord(account)[key];
+        if (typeof value !== "string" || !value.trim()) {
+          return "";
+        }
+        const token = value.trim();
+        if (!showSecrets) {
+          // Stable fingerprints let operators compare tokens without leaking them.
+          return `sha256:${sha256HexPrefixCore(token, 8)} · len ${token.length}`;
+        }
+        return token.length <= 10
+          ? `${token} · len ${token.length}`
+          : `${sliceUtf16Safe(token, 0, 4)}…${sliceUtf16Safe(token, -4)} · len ${token.length}`;
+      };
+      const paired = httpMode || (hasBotTokenField && hasAppTokenField);
+      const tokenKey = hasBotTokenField ? "botToken" : "token";
+      const secondaryKey = httpMode ? "signingSecret" : "appToken";
+      const secondaryLabel = httpMode ? "signing" : "app";
+      const label = paired
+        ? httpMode
+          ? "credentials"
+          : "tokens"
+        : hasBotTokenField
+          ? "bot token"
+          : "token";
+      const need = paired ? ` (need bot+${secondaryLabel})` : "";
+      const hasCredential = (rec: Record<string, unknown>, key: string) =>
+        Boolean(normalizeOptionalString(rec[key])) ||
+        (httpMode && rec[`${key}Status`] === "available");
+      const ready = enabled.filter((a) => {
+        const rec = asRecord(a.account);
+        return hasCredential(rec, tokenKey) && (!paired || hasCredential(rec, secondaryKey));
+      });
+      const partial = paired
+        ? enabled.filter((a) => {
+            const rec = asRecord(a.account);
+            return hasCredential(rec, tokenKey) !== hasCredential(rec, secondaryKey);
+          }).length
+        : 0;
+
+      // HTTP reports unavailable credentials first; socket mode prioritizes incomplete pairs.
+      if (unavailable.length > 0 && (httpMode || partial === 0)) {
+        return {
+          state: "warn",
+          detail: `configured ${httpMode ? "http credentials" : label} unavailable in this command path · accounts ${unavailable.length}`,
+        };
+      }
+      if (partial > 0) {
+        return { state: "warn", detail: `partial ${label}${need} · accounts ${partial}` };
+      }
+      if (ready.length === 0) {
+        return { state: "setup", detail: `no ${label}${need}` };
+      }
+
+      if (paired) {
+        const botSources = summarizeSources(ready.map((a) => a.snapshot.botTokenSource ?? "none"));
+        const secondarySources = summarizeSources(
+          ready.map(
+            (a) => a.snapshot[httpMode ? "signingSecretSource" : "appTokenSource"] ?? "none",
+          ),
+        );
+        const botHint = tokenHint(ready[0]?.account, "botToken");
+        const secondaryHint = tokenHint(ready[0]?.account, secondaryKey);
+        const hint =
+          botHint || secondaryHint
+            ? ` (bot ${botHint || "?"}, ${secondaryLabel} ${secondaryHint || "?"})`
+            : "";
+        return {
+          state: "ok",
+          detail: `${label} ok (bot ${botSources}, ${secondaryLabel} ${secondarySources})${hint} · accounts ${ready.length}/${enabled.length}`,
+        };
+      }
+
+      const source = hasBotTokenField
+        ? "config"
+        : summarizeSources(ready.map((a) => a.snapshot.tokenSource));
+      const hint = tokenHint(ready[0]?.account, tokenKey);
+      return {
+        state: "ok",
+        detail: `${label} ${source}${hint ? ` (${hint})` : ""} · accounts ${ready.length}/${enabled.length}`,
+      };
+    })();
 
     const issues = plugin.status?.collectStatusIssues
       ? plugin.status.collectStatusIssues(accounts.map((a) => a.snapshot))
@@ -276,138 +284,166 @@ export async function buildChannelsTable(
 
     const label = plugin.meta.label ?? plugin.id;
 
-    const state = (() => {
-      // Precedence matches operator actionability: disabled, local file breakage, plugin issues, auth, link.
+    const status = ((): Pick<ChannelRow, "state" | "detail"> => {
+      // Resolve shared precedence once; link details can still accompany unavailable credentials.
       if (!anyEnabled) {
-        return "off";
-      }
-      if (
-        missingPaths.length > 0 ||
-        issues.length > 0 ||
-        unavailableConfiguredAccounts.length > 0 ||
-        configurationUnknown ||
-        link.statusState === "unstable"
-      ) {
-        return "warn";
-      }
-      if (link.linked === false) {
-        return "setup";
-      }
-      if (tokenSummary.state) {
-        return tokenSummary.state;
-      }
-      return link.linked === true || configuredAccounts.length > 0 ? "ok" : "setup";
-    })();
-
-    const detail = (() => {
-      if (!anyEnabled) {
-        if (!defaultEntry) {
-          return "disabled";
-        }
-        return defaultEntry.kind === "resolved"
-          ? (plugin.config.disabledReason?.(defaultEntry.account, cfg) ?? "disabled")
-          : (defaultEntry.snapshot.stateReason ?? "disabled");
+        const detail = !defaultEntry
+          ? "disabled"
+          : defaultEntry.kind === "resolved"
+            ? (plugin.config.disabledReason?.(defaultEntry.account, cfg) ?? "disabled")
+            : (defaultEntry.snapshot.stateReason ?? "disabled");
+        return { state: "off", detail };
       }
       if (missingPaths.length > 0) {
-        return `missing file (${missingPaths[0]})`;
+        return { state: "warn", detail: `missing file (${missingPaths[0]})` };
       }
       if (issues.length > 0) {
-        return issues[0]?.message ?? "misconfigured";
+        return { state: "warn", detail: issues[0]?.message ?? "misconfigured" };
       }
       if (configurationUnknown) {
-        return "configuration status unavailable";
+        return { state: "warn", detail: "configuration status unavailable" };
       }
-      if (link.statusState || link.linked !== null) {
-        if (link.statusState && link.statusState !== "linked") {
-          return formatChannelStatusState(link.statusState);
+      const state =
+        unavailableConfiguredAccounts.length > 0 || link.statusState === "unstable"
+          ? "warn"
+          : link.linked === false
+            ? "setup"
+            : (tokenSummary.state ??
+              (link.linked === true || configuredAccounts.length > 0 ? "ok" : "setup"));
+      const detail = (() => {
+        if (link.statusState || link.linked !== null) {
+          if (link.statusState && link.statusState !== "linked") {
+            return formatChannelStatusState(link.statusState);
+          }
+          const linked = link.statusState === "linked" || link.linked === true;
+          const base = link.statusState
+            ? formatChannelStatusState(link.statusState)
+            : linked
+              ? "linked"
+              : "not linked";
+          const extra: string[] = [];
+          if (linked && link.selfE164) {
+            extra.push(formatPhoneNumberForCli(link.selfE164));
+          }
+          if (linked && link.authAgeMs != null && link.authAgeMs >= 0) {
+            extra.push(`auth ${formatTimeAgo(link.authAgeMs)}`);
+          }
+          if (accounts.length > 1 || plugin.meta.forceAccountBinding) {
+            extra.push(`accounts ${accounts.length || 1}`);
+          }
+          return extra.length > 0 ? `${base} · ${extra.join(" · ")}` : base;
         }
-        const linked = link.statusState === "linked" || link.linked === true;
-        const base = link.statusState
-          ? formatChannelStatusState(link.statusState)
-          : linked
-            ? "linked"
-            : "not linked";
-        const extra: string[] = [];
-        if (linked && link.selfE164) {
-          extra.push(formatPhoneNumberForCli(link.selfE164));
-        }
-        if (linked && link.authAgeMs != null && link.authAgeMs >= 0) {
-          extra.push(`auth ${formatTimeAgo(link.authAgeMs)}`);
-        }
-        if (accounts.length > 1 || plugin.meta.forceAccountBinding) {
-          extra.push(`accounts ${accounts.length || 1}`);
-        }
-        return extra.length > 0 ? `${base} · ${extra.join(" · ")}` : base;
-      }
 
-      if (unavailableConfiguredAccounts.length > 0) {
-        if (tokenSummary.detail?.includes("unavailable")) {
+        if (unavailableConfiguredAccounts.length > 0) {
+          if (tokenSummary.detail?.includes("unavailable")) {
+            return tokenSummary.detail;
+          }
+          return `configured credentials unavailable in this command path · accounts ${unavailableConfiguredAccounts.length}`;
+        }
+
+        if (tokenSummary.detail) {
           return tokenSummary.detail;
         }
-        return `configured credentials unavailable in this command path · accounts ${unavailableConfiguredAccounts.length}`;
-      }
 
-      if (tokenSummary.detail) {
-        return tokenSummary.detail;
-      }
-
-      if (configuredAccounts.length > 0) {
-        const head = "configured";
-        if (accounts.length <= 1 && !plugin.meta.forceAccountBinding) {
-          return head;
+        if (configuredAccounts.length > 0) {
+          const head = "configured";
+          if (accounts.length <= 1 && !plugin.meta.forceAccountBinding) {
+            return head;
+          }
+          return `${head} · accounts ${configuredAccounts.length}/${enabledAccounts.length || 1}`;
         }
-        return `${head} · accounts ${configuredAccounts.length}/${enabledAccounts.length || 1}`;
-      }
 
-      const reason =
-        defaultEntry?.kind === "resolved" && plugin.config.unconfiguredReason
-          ? plugin.config.unconfiguredReason(defaultEntry.account, cfg)
-          : defaultEntry?.snapshot.stateReason;
-      return reason ?? "not configured";
+        const reason =
+          defaultEntry?.kind === "resolved" && plugin.config.unconfiguredReason
+            ? plugin.config.unconfiguredReason(defaultEntry.account, cfg)
+            : defaultEntry?.snapshot.stateReason;
+        return reason ?? "not configured";
+      })();
+      return { state, detail };
     })();
 
     rows.push({
       id: plugin.id,
       label,
       enabled: anyEnabled,
-      state,
-      detail,
+      ...status,
     });
 
     if (configuredAccounts.length > 0) {
       details.push({
         title: `${label} accounts`,
         columns: ["Account", "Status", "Notes"],
-        rows: configuredAccounts.map((entry) => {
-          const liveCredentialAvailable = hasRuntimeCredentialAvailable({
-            liveAccounts,
-            accountId: entry.accountId,
-          });
-          const notes = buildAccountNotes({
-            plugin,
-            cfg,
-            entry,
-            liveCredentialAvailable,
-          });
-          return {
-            Account: formatAccountLabel({
+        rows: await Promise.all(
+          configuredAccounts.map(async (entry) => {
+            const liveCredentialAvailable = hasRuntimeCredentialAvailable({
+              liveAccounts,
               accountId: entry.accountId,
-              name: entry.snapshot.name,
-            }),
-            Status:
-              entry.enabled &&
-              entry.kind !== "unavailable" &&
-              (!hasConfiguredUnavailableCredentialStatus(entry.account) || liveCredentialAvailable)
-                ? "OK"
-                : "WARN",
-            Notes: notes.join(" · "),
-          };
-        }),
+            });
+            const snapshot = entry.snapshot;
+            const unavailable =
+              entry.kind === "unavailable" ||
+              hasConfiguredUnavailableCredentialStatus(entry.account);
+            const notes = buildChannelAccountNotes(
+              snapshot,
+              entry.kind === "unavailable"
+                ? "secret unavailable in this command path"
+                : liveCredentialAvailable
+                  ? "credential available in gateway runtime"
+                  : unavailable
+                    ? "secret unavailable in this command path"
+                    : undefined,
+            );
+            const allowFrom = unavailable
+              ? snapshot.allowFrom
+              : ((await resolveChannelAllowFrom({ plugin, cfg, accountId: snapshot.accountId })) ??
+                snapshot.allowFrom);
+            if (allowFrom?.length) {
+              // Cap allow-list output so large channel policies do not dominate the status table.
+              const allowInternationalDigits =
+                plugin.configSchema?.uiHints?.allowFrom?.presentation === "phone-number";
+              const formatted = formatChannelAllowFrom({
+                plugin,
+                cfg,
+                accountId: snapshot.accountId,
+                allowFrom,
+              })
+                .slice(0, 3)
+                .map((allowEntry) =>
+                  formatPhoneNumberForCli(allowEntry, { allowInternationalDigits }),
+                );
+              if (formatted.length > 0) {
+                notes.push(`allow:${formatted.join(",")}`);
+              }
+            }
+            return {
+              Account: entry.snapshot.name?.trim()
+                ? `${entry.accountId || "default"} (${entry.snapshot.name.trim()})`
+                : entry.accountId || "default",
+              Status:
+                entry.enabled &&
+                entry.kind !== "unavailable" &&
+                (!hasConfiguredUnavailableCredentialStatus(entry.account) ||
+                  liveCredentialAvailable)
+                  ? "OK"
+                  : "WARN",
+              Notes: notes.join(" · "),
+            };
+          }),
+        ),
       });
     }
   }
 
   const visibleChannelIds = new Set(rows.map((row) => row.id));
+  const addFallbackRow = (
+    id: ChannelId,
+    state: ChannelRow["state"],
+    detail: string,
+    label = id,
+  ) => {
+    rows.push({ id, label, enabled: true, state, detail });
+    visibleChannelIds.add(id);
+  };
   const loadFailuresByChannel = new Map(
     readOnlyPlugins.loadFailures.map((failure) => [failure.channelId, failure] as const),
   );
@@ -422,14 +458,13 @@ export async function buildChannelsTable(
     if (!failure) {
       continue;
     }
-    rows.push({
-      id: channelId,
-      label: channelId,
-      enabled: true,
-      state: "warn",
-      detail: formatLoadFailureDetail(failure.message),
-    });
-    visibleChannelIds.add(channelId);
+    const reason =
+      /(?:cannot find (?:module|package)|module_not_found|err_module_not_found|enoent|enotempty|missing package|failed to resolve)/iu.test(
+        failure.message,
+      )
+        ? "dependency tree corrupted"
+        : "registration failed";
+    addFallbackRow(channelId, "warn", `plugin load failed: ${reason}; run openclaw doctor --fix`);
   }
 
   const explicitConfiguredChannelIds = new Set([
@@ -448,14 +483,12 @@ export async function buildChannelsTable(
     }).map((hint) => [hint.channelId, hint]),
   );
   const addFastModeRow = (channelId: string) => {
-    rows.push({
-      id: channelId,
-      label: sanitizeForLog(channelId).trim() || "configured-channel",
-      enabled: true,
-      state: "setup",
-      detail: "configured; status unavailable in fast mode",
-    });
-    visibleChannelIds.add(channelId);
+    addFallbackRow(
+      channelId,
+      "setup",
+      "configured; status unavailable in fast mode",
+      sanitizeForLog(channelId).trim() || "configured-channel",
+    );
   };
   for (const channelId of missingCandidateChannelIds) {
     if (visibleChannelIds.has(channelId)) {
@@ -469,14 +502,12 @@ export async function buildChannelsTable(
       }
       continue;
     }
-    rows.push({
-      id: channelId,
-      label: hint.label,
-      enabled: true,
-      state: "warn",
-      detail: `plugin not installed - run ${hint.installCommand} or ${hint.doctorFixCommand}`,
-    });
-    visibleChannelIds.add(channelId);
+    addFallbackRow(
+      channelId,
+      "warn",
+      `plugin not installed - run ${hint.installCommand} or ${hint.doctorFixCommand}`,
+      hint.label,
+    );
   }
 
   if (!includeSetupFallbackPlugins) {

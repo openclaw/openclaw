@@ -22,7 +22,15 @@ function isUpdateChannelOnlyRoot(value: unknown): boolean {
   return updateKeys.length === 1 && typeof update.channel === "string";
 }
 
+const inheritedAnomalyReason = "inherited-config-anomaly";
+
+export function createInheritedConfigAnomalySignature(hash: string): string {
+  return `${hash}:${inheritedAnomalyReason}`;
+}
+
 export function resolveConfigObserveSuspiciousReasons(params: {
+  hash?: string;
+  lastObservedSuspiciousSignature?: string | null;
   bytes: number;
   hasMeta: boolean;
   gatewayMode: string | null;
@@ -45,6 +53,14 @@ export function resolveConfigObserveSuspiciousReasons(params: {
   }
   if (baseline.gatewayMode && isUpdateChannelOnlyRoot(params.parsed)) {
     reasons.push("update-channel-only-root");
+  }
+  // Metadata stamping can conceal the original loss without restoring user data.
+  if (
+    reasons.length === 0 &&
+    params.hash &&
+    params.lastObservedSuspiciousSignature === createInheritedConfigAnomalySignature(params.hash)
+  ) {
+    reasons.push(inheritedAnomalyReason);
   }
   return reasons;
 }

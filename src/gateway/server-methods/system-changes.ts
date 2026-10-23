@@ -192,13 +192,12 @@ function toConfigCandidate(
       at: parseDateStringTimestampMs(value.ts) ?? record.createdAt,
       kind: value.event === "config.external" ? "external-edit" : "config-write",
       source,
-      summary:
+      summary: summarizePaths(
         value.event === "config.external"
-          ? summarizePaths("Configuration edited outside OpenClaw", changedPaths)
-          : summarizePaths(
-              CONFIG_WRITE_PREFIXES.get(source) ?? "Configuration updated",
-              changedPaths,
-            ),
+          ? "Configuration edited outside OpenClaw"
+          : (CONFIG_WRITE_PREFIXES.get(source) ?? "Configuration updated"),
+        changedPaths,
+      ),
       ...(changedPaths ? { changedPaths } : {}),
       ...(value.event === "config.external" && !value.valid ? { invalid: true } : {}),
       ...(value.event === "config.external" && value.opaqueChange ? { opaqueChange: true } : {}),
@@ -325,26 +324,13 @@ function isWithinCollapseWindow(operationAt: number, configAt: number): boolean 
   return delay >= 0 && delay <= COLLAPSE_MAX_DELAY_MS;
 }
 
-function appendPendingCollapse(
-  pending: readonly PendingCollapse[],
-  marker: PendingCollapse,
-): PendingCollapse[] {
-  const next = [...pending, marker];
-  // Keep the cursor bounded. A dropped marker can reveal a rare duplicate
-  // config-write row, but never hides a newer visible history entry.
-  return next.length <= MAX_PENDING_COLLAPSES ? next : next.slice(-MAX_PENDING_COLLAPSES);
-}
-
-function consumePendingCollapse(
-  pending: readonly PendingCollapse[],
-  candidate: ChangeCandidate,
-): { pending: PendingCollapse[]; suppressed: boolean } {
+function consumePendingCollapse(pending: PendingCollapse[], candidate: ChangeCandidate): boolean {
   if (
     candidate.entry.kind !== "config-write" ||
     candidate.entry.source !== "system-agent" ||
     !candidate.transition
   ) {
-    return { pending: [...pending], suppressed: false };
+    return false;
   }
   const sequence = candidate.position.sequence;
   let markerIndex = -1;
@@ -362,12 +348,10 @@ function consumePendingCollapse(
     }
   }
   if (markerIndex < 0) {
-    return { pending: [...pending], suppressed: false };
+    return false;
   }
-  return {
-    pending: pending.filter((_, index) => index !== markerIndex),
-    suppressed: true,
-  };
+  pending.splice(markerIndex, 1);
+  return true;
 }
 
 function mergeCandidates(params: {
@@ -387,7 +371,7 @@ function mergeCandidates(params: {
   let configIndex = 0;
   let systemBefore: number | undefined;
   let configBefore: number | undefined;
-  let pendingCollapse = [...params.pendingCollapse];
+  const pendingCollapse = [...params.pendingCollapse];
   const entries: ChangeCandidate[] = [];
 
   while (true) {
@@ -403,14 +387,10 @@ function mergeCandidates(params: {
       break;
     }
 
-    if (next === config) {
-      const collapse = consumePendingCollapse(pendingCollapse, config);
-      pendingCollapse = collapse.pending;
-      if (collapse.suppressed) {
-        configBefore = config.position.sequence;
-        configIndex += 1;
-        continue;
-      }
+    if (next === config && consumePendingCollapse(pendingCollapse, config)) {
+      configBefore = config.position.sequence;
+      configIndex += 1;
+      continue;
     }
     if (entries.length >= params.limit) {
       break;
@@ -421,7 +401,11 @@ function mergeCandidates(params: {
       systemBefore = system.position.sequence;
       systemIndex += 1;
       if (system.pendingCollapse) {
-        pendingCollapse = appendPendingCollapse(pendingCollapse, system.pendingCollapse);
+        pendingCollapse.push(system.pendingCollapse);
+        // Dropped markers can reveal duplicate config rows, never hide newer history.
+        if (pendingCollapse.length > MAX_PENDING_COLLAPSES) {
+          pendingCollapse.shift();
+        }
       }
     } else {
       configBefore = config!.position.sequence;
@@ -446,25 +430,16 @@ async function initialBefore<T>(latest: AuditStore<T>["latest"]): Promise<number
 
 export async function listSystemChanges(
   params: SystemChangesListParams,
-  options: {
-    env?: NodeJS.ProcessEnv;
-    systemStore?: AuditStore<SystemAgentAuditEntry>;
-    configStore?: AuditStore<ConfigAuditRecord>;
-  } = {},
 ): Promise<SystemChangesListResult> {
-  const env = options.env ?? process.env;
-  const systemStore =
-    options.systemStore ??
-    createSqliteAuditRecordReader<SystemAgentAuditEntry>({
-      scope: SYSTEM_AGENT_AUDIT_SCOPE,
-      env,
-    });
-  const configStore =
-    options.configStore ??
-    createSqliteAuditRecordReader<ConfigAuditRecord>({
-      scope: CONFIG_AUDIT_SCOPE,
-      env,
-    });
+  const env = process.env;
+  const systemStore: AuditStore<SystemAgentAuditEntry> = createSqliteAuditRecordReader({
+    scope: SYSTEM_AGENT_AUDIT_SCOPE,
+    env,
+  });
+  const configStore: AuditStore<ConfigAuditRecord> = createSqliteAuditRecordReader({
+    scope: CONFIG_AUDIT_SCOPE,
+    env,
+  });
   const cursor = params.beforeCursor
     ? decodeCursor(params.beforeCursor)
     : {
@@ -523,17 +498,15 @@ export async function listSystemChanges(
   // remaining config record has passed the cursor and none was a partner.
   const pendingCollapse =
     configScan.exhausted && !merged.hasBufferedConfigEntries ? [] : merged.pendingCollapse;
-  const next = { ...cursor };
-  if (!merged.hasBufferedSystemEntries) {
-    next.systemAgentBefore = systemScan.nextBeforeSequence;
-  } else if (merged.systemBefore !== undefined) {
-    next.systemAgentBefore = merged.systemBefore;
-  }
-  if (!merged.hasBufferedConfigEntries) {
-    next.configBefore = configScan.nextBeforeSequence;
-  } else if (merged.configBefore !== undefined) {
-    next.configBefore = merged.configBefore;
-  }
+  const next = {
+    ...cursor,
+    systemAgentBefore: merged.hasBufferedSystemEntries
+      ? (merged.systemBefore ?? cursor.systemAgentBefore)
+      : systemScan.nextBeforeSequence,
+    configBefore: merged.hasBufferedConfigEntries
+      ? (merged.configBefore ?? cursor.configBefore)
+      : configScan.nextBeforeSequence,
+  };
   if (pendingCollapse.length > 0) {
     next.pendingCollapse = pendingCollapse;
   } else {

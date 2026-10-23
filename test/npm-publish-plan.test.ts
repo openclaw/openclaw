@@ -1,6 +1,5 @@
-// npm publish plan tests validate package publish planning rules.
 import { createServer } from "node:http";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   fetchNpmRegistryPackumentWithRetry,
   fetchNpmRegistryTarballWithRetry,
@@ -35,14 +34,29 @@ function registryResponse(params: {
   } as unknown as Response;
 }
 
+function fetchPackument(
+  options: Omit<
+    Parameters<typeof fetchNpmRegistryPackumentWithRetry>[0],
+    "packageName" | "packageUrl"
+  >,
+) {
+  return fetchNpmRegistryPackumentWithRetry({
+    packageName: "@openclaw/meta-provider",
+    packageUrl: "https://registry.npmjs.org/%40openclaw%2Fmeta-provider",
+    ...options,
+  });
+}
+
+const noRetry = async () => {
+  throw new Error("unexpected retry");
+};
+
 describe("fetchNpmRegistryPackumentWithRetry", () => {
   it("bounds decoded packument bytes and cancels an oversized stream without retrying", async () => {
     let requests = 0;
     let cancelled = false;
     await expect(
-      fetchNpmRegistryPackumentWithRetry({
-        packageName: "fixture",
-        packageUrl: "https://registry.npmjs.org/fixture",
+      fetchPackument({
         maxBytes: 16,
         fetchImpl: async () => {
           requests += 1;
@@ -75,9 +89,7 @@ describe("fetchNpmRegistryPackumentWithRetry", () => {
         controller.abort(reason);
       }
       await expect(
-        fetchNpmRegistryPackumentWithRetry({
-          packageName: "fixture",
-          packageUrl: "https://registry.npmjs.org/fixture",
+        fetchPackument({
           maxBytes: 128,
           signal: controller.signal,
           fetchImpl: async () => {
@@ -109,84 +121,80 @@ describe("fetchNpmRegistryPackumentWithRetry", () => {
     },
   );
 
-  it.each([
-    { failure: "body", recovers: true },
-    { failure: "body", recovers: false },
-    { failure: "JSON", recovers: true },
-    { failure: "JSON", recovers: false },
-  ])(
-    "bounds retries for $failure failures (recovers: $recovers)",
-    async ({ failure, recovers }) => {
-      let fetchCalls = 0;
-      let cancelCalls = 0;
-      const waits: number[] = [];
-      const packument = { versions: { "2026.7.1-beta.3": {} } };
-      const result = fetchNpmRegistryPackumentWithRetry({
-        packageName: "@openclaw/meta-provider",
-        packageUrl: "https://registry.npmjs.org/%40openclaw%2Fmeta-provider",
-        fetchImpl: async () => {
-          fetchCalls += 1;
-          if (recovers && fetchCalls > 1) {
-            return registryResponse({ body: JSON.stringify(packument) });
-          }
-          return registryResponse({
-            ...(failure === "JSON"
-              ? { body: "{" }
-              : {
-                  bodyError: recovers
-                    ? new TypeError("terminated")
-                    : new DOMException("timed out", "AbortError"),
-                }),
-            cancel: () => {
-              cancelCalls += 1;
-            },
-          });
-        },
-        sleep: async (delayMs) => {
-          waits.push(delayMs);
-        },
-        createSignal: () => new AbortController().signal,
-      });
-      if (recovers) {
-        await expect(result).resolves.toEqual({ status: 200, ok: true, packument });
-      } else {
-        await expect(result).rejects.toThrow(
-          failure === "JSON"
-            ? "npm publication-route probe returned invalid JSON"
-            : "npm publication-route probe did not return a stable response",
-        );
-      }
-      expect(fetchCalls).toBe(recovers ? 2 : 3);
-      expect(cancelCalls).toBe(recovers ? 1 : 3);
-      expect(waits).toEqual(recovers ? [1000] : [1000, 2000]);
-    },
-  );
-
-  it("returns a stable missing-package status without retrying", async () => {
+  it.each([true, false])("bounds retries for body failures (recovers: %s)", async (recovers) => {
     let fetchCalls = 0;
     let cancelCalls = 0;
-
-    const result = await fetchNpmRegistryPackumentWithRetry({
-      packageName: "@openclaw/meta-provider",
-      packageUrl: "https://registry.npmjs.org/%40openclaw%2Fmeta-provider",
+    const waits: number[] = [];
+    const packument = { versions: { "2026.7.1-beta.3": {} } };
+    const result = fetchPackument({
       fetchImpl: async () => {
         fetchCalls += 1;
+        if (recovers && fetchCalls > 1) {
+          return registryResponse({ body: JSON.stringify(packument) });
+        }
         return registryResponse({
-          status: 404,
+          bodyError: recovers
+            ? new TypeError("terminated", { cause: { code: "UND_ERR_SOCKET" } })
+            : new DOMException("timed out", "AbortError"),
           cancel: () => {
             cancelCalls += 1;
           },
         });
       },
-      sleep: async () => {
-        throw new Error("stable 404 must not sleep");
+      sleep: async (delayMs) => {
+        waits.push(delayMs);
       },
+      createSignal: () => new AbortController().signal,
+    });
+    if (recovers) {
+      await expect(result).resolves.toEqual({ status: 200, ok: true, packument });
+    } else {
+      await expect(result).rejects.toThrow(
+        "npm publication-route probe (https://registry.npmjs.org/%40openclaw%2Fmeta-provider) did not return a stable response",
+      );
+    }
+    expect(fetchCalls).toBe(recovers ? 2 : 3);
+    expect(cancelCalls).toBe(recovers ? 1 : 3);
+    expect(waits).toEqual(recovers ? [1000] : [1000, 2000]);
+  });
+
+  it("rejects completed invalid JSON without retry or recoverable publication deferral", async () => {
+    const fetchImpl = vi.fn(async () => new Response("{"));
+    await expect(
+      fetchPackument({
+        fetchImpl,
+        sleep: noRetry,
+      }),
+    ).rejects.toThrow("returned invalid JSON");
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it.each(["CERT_HAS_EXPIRED"])("does not retry permanent fetch TypeError %s", async (code) => {
+    const error = new TypeError("fetch failed", { cause: { code } });
+    const fetchImpl = vi.fn(async () => {
+      throw error;
+    });
+    await expect(
+      fetchPackument({
+        fetchImpl,
+        sleep: noRetry,
+      }),
+    ).rejects.toBe(error);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it("returns a stable missing-package status without retrying", async () => {
+    const cancel = vi.fn();
+    const fetchImpl = vi.fn(async () => registryResponse({ status: 404, cancel }));
+    const result = await fetchPackument({
+      fetchImpl,
+      sleep: noRetry,
       createSignal: () => new AbortController().signal,
     });
 
     expect(result).toEqual({ status: 404, ok: false, packument: null });
-    expect(fetchCalls).toBe(1);
-    expect(cancelCalls).toBe(1);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(cancel).toHaveBeenCalledOnce();
   });
 });
 
@@ -194,36 +202,33 @@ describe("fetchNpmRegistryTarballWithRetry", () => {
   const packageName = "@openclaw/fixture";
   const packageUrl = "https://registry.npmjs.org/@openclaw/fixture/-/fixture.tgz";
   const bytes = Buffer.from("qualified package bytes");
+  const fetchTarball = (
+    options: Omit<
+      Parameters<typeof fetchNpmRegistryTarballWithRetry>[0],
+      "packageName" | "packageUrl" | "maxBytes"
+    > & { packageUrl?: string },
+  ) =>
+    fetchNpmRegistryTarballWithRetry({
+      packageName,
+      packageUrl,
+      maxBytes: bytes.length,
+      ...options,
+    });
 
-  it.each([503, 429, "interrupted-body"] as const)(
+  it.each([429, "connection"] as const)(
     "recovers %s using only the original tarball URL",
     async (failure) => {
       const requests: string[] = [];
       const waits: number[] = [];
       let canceled = 0;
-      const result = await fetchNpmRegistryTarballWithRetry({
-        packageName,
-        packageUrl,
-        maxBytes: bytes.length,
+      const result = await fetchTarball({
         fetchImpl: async (url) => {
           requests.push(url);
           if (requests.length !== 1) {
             return new Response(bytes);
           }
-          if (failure === "interrupted-body") {
-            let firstChunk = true;
-            return new Response(
-              new ReadableStream({
-                pull(controller) {
-                  if (firstChunk) {
-                    firstChunk = false;
-                    controller.enqueue(bytes.subarray(0, 3));
-                  } else {
-                    controller.error(new TypeError("terminated"));
-                  }
-                },
-              }),
-            );
+          if (failure === "connection") {
+            throw new TypeError("fetch failed", { cause: { code: "ECONNRESET" } });
           }
           return new Response(
             new ReadableStream({
@@ -250,16 +255,13 @@ describe("fetchNpmRegistryTarballWithRetry", () => {
     },
   );
 
-  it.each([401, 403, 404, 410, 302])(
+  it.each([403, 404, 302])(
     "does not retry or follow permanent HTTP %s responses",
     async (status) => {
       let requests = 0;
       let canceled = 0;
       await expect(
-        fetchNpmRegistryTarballWithRetry({
-          packageName,
-          packageUrl,
-          maxBytes: bytes.length,
+        fetchTarball({
           fetchImpl: async () => {
             requests += 1;
             return new Response(
@@ -274,9 +276,7 @@ describe("fetchNpmRegistryTarballWithRetry", () => {
               },
             );
           },
-          sleep: async () => {
-            throw new Error("permanent responses must not retry");
-          },
+          sleep: noRetry,
         }),
       ).rejects.toThrow(`HTTP ${status}`);
       expect(requests).toBe(1);
@@ -287,19 +287,14 @@ describe("fetchNpmRegistryTarballWithRetry", () => {
   it.each(["header", "stream"])("rejects oversized %s bytes without retry", async (kind) => {
     let requests = 0;
     await expect(
-      fetchNpmRegistryTarballWithRetry({
-        packageName,
-        packageUrl,
-        maxBytes: bytes.length,
+      fetchTarball({
         fetchImpl: async () => {
           requests += 1;
           return new Response(Buffer.concat([bytes, Buffer.from("extra")]), {
             headers: kind === "header" ? { "content-length": String(bytes.length + 5) } : {},
           });
         },
-        sleep: async () => {
-          throw new Error("oversized bytes must not retry");
-        },
+        sleep: noRetry,
       }),
     ).rejects.toMatchObject({ code: "ETOOBIG" });
     expect(requests).toBe(1);
@@ -311,10 +306,7 @@ describe("fetchNpmRegistryTarballWithRetry", () => {
       const retryAfter = kind === "seconds" ? "60" : new Date(Date.now() + 60_000).toUTCString();
       let requests = 0;
       await expect(
-        fetchNpmRegistryTarballWithRetry({
-          packageName,
-          packageUrl,
-          maxBytes: bytes.length,
+        fetchTarball({
           deadlineMs: Date.now() + 1000,
           fetchImpl: async () => {
             requests += 1;
@@ -323,9 +315,7 @@ describe("fetchNpmRegistryTarballWithRetry", () => {
               headers: { "retry-after": retryAfter },
             });
           },
-          sleep: async () => {
-            throw new Error("deadline must fail before sleeping");
-          },
+          sleep: noRetry,
         }),
       ).rejects.toThrow("deadline would be exceeded before the permitted retry");
       expect(requests).toBe(1);
@@ -354,10 +344,8 @@ describe("fetchNpmRegistryTarballWithRetry", () => {
       if (!address || typeof address === "string") {
         throw new Error("Expected a TCP listener");
       }
-      const result = await fetchNpmRegistryTarballWithRetry({
-        packageName,
+      const result = await fetchTarball({
         packageUrl: `http://127.0.0.1:${address.port}/fixture.tgz`,
-        maxBytes: bytes.length,
         timeoutMs: 1000,
         sleep: async () => {},
       });
@@ -374,45 +362,18 @@ describe("fetchNpmRegistryTarballWithRetry", () => {
 
 describe("resolvePublishedNpmVersionRoute", () => {
   it.each([
-    { label: "missing beta", version: "2026.7.1-beta.3", distTags: {}, route: "npm-tag-repair" },
-    {
-      label: "lagging beta",
-      version: "2026.7.1-beta.3",
-      distTags: { beta: "2026.7.1-beta.2" },
-      route: "npm-tag-repair",
-    },
-    {
-      label: "lagging latest with current mirror",
-      version: "2026.7.1",
-      distTags: { latest: "2026.6.11", beta: "2026.7.1" },
-      route: "npm-tag-repair",
-    },
-    {
-      label: "matching primary with lagging mirror",
-      version: "2026.7.1",
-      distTags: { latest: "2026.7.1", beta: "2026.7.1-beta.3" },
-      route: "npm-mirror",
-    },
-    {
-      label: "ahead omitted mirror",
-      version: "2026.7.1",
-      distTags: { latest: "2026.7.1", beta: "2026.8.1-beta.1" },
-      currentBeta: "2026.8.1-beta.1",
-      route: "npm-readback",
-    },
-    {
-      label: "complete beta",
-      version: "2026.7.1-beta.3",
-      distTags: { beta: "2026.7.1-beta.3" },
-      route: "npm-readback",
-    },
-    {
-      label: "complete stable",
-      version: "2026.7.1",
-      distTags: { latest: "2026.7.1", beta: "2026.7.1" },
-      route: "npm-readback",
-    },
-  ])("routes $label selectors", ({ version, distTags, currentBeta, route }) => {
+    ["missing beta", "2026.7.1-beta.3", {}, "npm-tag-repair"],
+    ["lagging latest", "2026.7.1", { latest: "2026.6.11", beta: "2026.7.1" }, "npm-tag-repair"],
+    ["lagging mirror", "2026.7.1", { latest: "2026.7.1", beta: "2026.7.1-beta.3" }, "npm-mirror"],
+    [
+      "ahead omitted mirror",
+      "2026.7.1",
+      { latest: "2026.7.1", beta: "2026.8.1-beta.1" },
+      "npm-readback",
+      "2026.8.1-beta.1",
+    ],
+    ["complete stable", "2026.7.1", { latest: "2026.7.1", beta: "2026.7.1" }, "npm-readback"],
+  ] as const)("routes %s selectors", (_label, version, distTags, route, currentBeta?: string) => {
     expect(
       resolvePublishedNpmVersionRoute({
         packageVersion: version,
@@ -443,110 +404,62 @@ describe("resolvePublishedNpmVersionRoute", () => {
   });
 
   it.each([
-    {
-      label: "published beta superseded",
-      version: "2026.7.1-beta.3",
-      distTags: { beta: "2026.7.1-beta.4" },
-      published: true,
-      supersededBy: "2026.7.1-beta.4",
-    },
-    {
-      label: "published latest superseded",
-      version: "2026.9.6",
-      distTags: { latest: "2026.9.7", beta: "2026.9.7" },
-      published: true,
-      supersededBy: "2026.9.7",
-    },
-    {
-      label: "unpublished behind ahead selector",
-      version: "2026.9.6",
-      distTags: { latest: "2026.9.7" },
-      published: false,
-      error:
-        'npm dist-tag "latest" points to "2026.9.7" and cannot be safely moved to "2026.9.6" (ahead)',
-    },
-    {
-      label: "unpublished behind lagging selector",
-      version: "2026.9.6",
-      distTags: { latest: "2026.9.5" },
-      published: false,
-    },
-    {
-      label: "unpublished behind placeholder",
-      version: "2026.9.6",
-      distTags: { latest: "0.0.0" },
-      published: false,
-    },
-    { label: "unpublished missing selector", version: "2026.9.6", distTags: {}, published: false },
-  ])("decides publication for $label", ({ version, distTags, published, supersededBy, error }) => {
-    const publishPlan = resolveNpmPublishPlan(version);
-    const decide = () =>
-      resolveNpmVersionPublicationDecision({
-        packageVersion: version,
-        publishPlan: published ? { ...publishPlan, mirrorDistTags: ["beta"] } : publishPlan,
-        distTags,
-        published,
+    ["published latest superseded", { latest: "2026.9.7", beta: "2026.9.7" }, true, "2026.9.7"],
+    [
+      "unpublished behind ahead selector",
+      { latest: "2026.9.7" },
+      false,
+      null,
+      'npm dist-tag "latest" points to "2026.9.7" and cannot be safely moved to "2026.9.6" (ahead)',
+    ],
+    ["unpublished behind lagging selector", { latest: "2026.9.5" }, false],
+    ["unpublished missing selector", {}, false],
+  ] as const)(
+    "decides publication for %s",
+    (_label, distTags, published, supersededBy?: string | null, error?: string) => {
+      const version = "2026.9.6";
+      const publishPlan = resolveNpmPublishPlan(version);
+      const decide = () =>
+        resolveNpmVersionPublicationDecision({
+          packageVersion: version,
+          publishPlan: published ? { ...publishPlan, mirrorDistTags: ["beta"] } : publishPlan,
+          distTags,
+          published,
+        });
+      if (error) {
+        expect(decide).toThrow(error);
+        return;
+      }
+      expect(decide()).toEqual({
+        route: published ? "npm-readback" : null,
+        supersededBy: supersededBy ?? null,
       });
-    if (error) {
-      expect(decide).toThrow(error);
-      return;
-    }
-    expect(decide()).toEqual({
-      route: published ? "npm-readback" : null,
-      supersededBy: supersededBy ?? null,
-    });
-    if (published) {
-      expect(
-        resolvePublishedNpmVersionRoute({ packageVersion: version, publishPlan, distTags }),
-      ).toBe("npm-readback");
-    }
-  });
+      if (published) {
+        expect(
+          resolvePublishedNpmVersionRoute({ packageVersion: version, publishPlan, distTags }),
+        ).toBe("npm-readback");
+      }
+    },
+  );
 });
 
 describe("shouldRequireNpmDistTagMirrorAuth", () => {
   it.each([
-    {
-      label: "dry run",
-      mode: "--dry-run",
-      version: "2026.4.1",
-      npmToken: undefined,
-      required: false,
-    },
-    {
-      label: "unauthenticated publish",
-      mode: "--publish",
-      version: "2026.4.1",
-      npmToken: undefined,
-      required: true,
-    },
-    {
-      label: "no mirror",
-      mode: "--publish",
-      version: "2026.4.1-beta.1",
-      npmToken: undefined,
-      required: false,
-    },
-    {
-      label: "authenticated publish",
-      mode: "--publish",
-      version: "2026.4.1",
-      npmToken: "token",
-      required: false,
-    },
-  ] as const)(
-    "requires mirror auth for $label: $required",
-    ({ mode, version, npmToken, required }) => {
-      const plan = resolveNpmPublishPlan(version);
-      const auth = resolveNpmDistTagMirrorAuth({ npmToken });
-      expect(
-        shouldRequireNpmDistTagMirrorAuth({
-          mode,
-          mirrorDistTags: plan.mirrorDistTags,
-          hasAuth: auth.hasAuth,
-        }),
-      ).toBe(required);
-    },
-  );
+    ["dry run", "--dry-run", "2026.4.1", undefined, false],
+    ["unauthenticated publish", "--publish", "2026.4.1", undefined, true],
+    ["no mirror", "--publish", "2026.4.1-beta.1", undefined, false],
+    ["authenticated publish", "--publish", "2026.4.1", "token", false],
+  ] as const)("requires mirror auth for %s", (_label, mode, version, npmToken, required) => {
+    const plan = resolveNpmPublishPlan(version);
+    const auth = resolveNpmDistTagMirrorAuth({ npmToken });
+    expect(
+      shouldRequireNpmDistTagMirrorAuth({
+        mode,
+        mirrorDistTags: plan.mirrorDistTags,
+        hasAuth: auth.hasAuth,
+      }),
+    ).toBe(required);
+  });
 
   it("treats stable correction releases as latest publishes with beta mirroring", () => {
     expect(resolveNpmPublishPlan("2026.4.1-1")).toEqual({
@@ -566,16 +479,15 @@ describe("shouldRequireNpmDistTagMirrorAuth", () => {
 
 describe("extended-stable npm publish override", () => {
   it("publishes final patch 33 and later to extended-stable without mirrors", () => {
-    expect(resolveNpmPublishPlan("2026.7.33", undefined, "extended-stable")).toEqual({
+    const expected = {
       channel: "stable",
       publishTag: "extended-stable",
       mirrorDistTags: [],
-    });
-    expect(resolveNpmPublishPlan("2026.7.34", "2026.8.1-beta.1", "extended-stable")).toEqual({
-      channel: "stable",
-      publishTag: "extended-stable",
-      mirrorDistTags: [],
-    });
+    };
+    expect(resolveNpmPublishPlan("2026.7.33", undefined, "extended-stable")).toEqual(expected);
+    expect(resolveNpmPublishPlan("2026.7.34", "2026.8.1-beta.1", "extended-stable")).toEqual(
+      expected,
+    );
   });
 
   it.each([

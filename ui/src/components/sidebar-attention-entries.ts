@@ -3,18 +3,13 @@ import type { NavigationRouteId } from "../app-navigation.ts";
 import type { ScopeUpgradeState } from "../app/device-scope-upgrade-availability.ts";
 import type { ExecApprovalRequest } from "../app/exec-approval.ts";
 import type { CustodianAlert } from "./custodian-alert-contract.ts";
-import type { IconName } from "./icons.ts";
+import type { IconName } from "./icon-data.ts";
 import {
   resolveScopeUpgradeDismissal,
   type SidebarAttentionDismissal,
   type SidebarAttentionKind,
 } from "./sidebar-attention-dismissals.ts";
 import type { IssueTab } from "./sidebar-issues-tabs.ts";
-
-type SidebarAttentionItemKind = Exclude<
-  SidebarAttentionKind,
-  "scopeUpgrade" | "updateAvailable" | "outbox"
->;
 
 type SidebarInboxEntryBase<
   Category extends Exclude<IssueTab, "all">,
@@ -28,7 +23,7 @@ type SidebarInboxEntryBase<
 
 export type SidebarAttentionItem = SidebarInboxEntryBase<"automations" | "system"> & {
   type: "attention";
-  kind: SidebarAttentionItemKind;
+  kind: Exclude<SidebarAttentionKind, "scopeUpgrade" | "updateAvailable" | "outbox">;
   icon: IconName;
   label: string;
   detail: string;

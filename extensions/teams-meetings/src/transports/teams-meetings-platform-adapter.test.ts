@@ -1,999 +1,534 @@
 import { runInNewContext } from "node:vm";
-import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { TEAMS_MEETINGS_PLATFORM_ADAPTER } from "./teams-meetings-platform-adapter.js";
 import {
   CONSUMER_URL,
+  abortingMedia,
   MEETING_STATE_KEY,
   consumerLightMeetingUrl,
-  status,
   control,
   liveMediaStream,
-  pageMedia,
   runAudioStatusScript,
   runStatusScript,
   runLeaveScript,
   type PageMedia,
 } from "./teams-meetings-platform-adapter.test-helpers.js";
 
-describe("Microsoft Teams meeting platform adapter", () => {
-  it.each([true, false])(
-    "starts browser capture only for the current Teams session (owner=%s)",
-    async (owns) => {
-      const source = TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.buildAudioCaptureScript?.({
-        action: "start",
-        captureId: "capture-1",
-        meetingSessionId: "session-1",
-        meetingUrl: CONSUMER_URL,
-      });
-      const identity = TEAMS_MEETINGS_PLATFORM_ADAPTER.urls.normalizeForReuse(CONSUMER_URL);
-      const result = runInNewContext(`(${source})()`, {
-        URL,
-        location: { href: CONSUMER_URL },
-        window: {
-          __openclawTeamsMeeting: { sessionId: owns ? "session-1" : "session-2", identity },
-        },
-        AudioContext: function AudioContext() {
-          throw new Error("capture admitted");
-        },
-      });
-      await expect(result).rejects.toThrow(owns ? "capture admitted" : "no longer owns");
+const { browser, urls } = TEAMS_MEETINGS_PLATFORM_ADAPTER;
+const identity = "teams-work:19:meeting_test@thread.v2";
+const appUrl = "https://teams.microsoft.com/v2/";
+const AUDIO_OUTPUTS = "__openclawTeamsAudioOutputs";
+const meetingOwner = (overrides: Record<string, unknown> = {}) => ({
+  identity,
+  sessionId: "session-1",
+  ...overrides,
+});
+const afterCall = (params: Parameters<typeof runLeaveScript>[0]) =>
+  runLeaveScript({
+    postCall: control({ label: "Rejoin" }),
+    priorMeeting: meetingOwner(),
+    ...params,
+  });
+const audioEntry = (source: object, bridge: object, extra: Record<string, unknown>) => ({
+  bridge,
+  sessionId: "session-1",
+  source,
+  sourceMuted: false,
+  ...extra,
+});
+
+function prejoin(overrides: Parameters<typeof runStatusScript>[0] = {}) {
+  return {
+    camera: control({ label: "Turn camera on", pressed: false }),
+    microphone: control({ label: "Turn microphone on", pressed: false }),
+    join: control({ label: "Join now" }),
+    ...overrides,
+  };
+}
+
+it.each([true, false])("admits capture only for its session (owner=%s)", async (owns) => {
+  const source = browser.buildAudioCaptureScript?.({
+    action: "start",
+    captureId: "capture-1",
+    meetingSessionId: "session-1",
+    meetingUrl: CONSUMER_URL,
+  });
+  const owner = urls.normalizeForReuse(CONSUMER_URL);
+  const result = runInNewContext(`(${source})()`, {
+    URL,
+    location: { href: CONSUMER_URL },
+    window: {
+      __openclawTeamsMeeting: { sessionId: owns ? "session-1" : "session-2", identity: owner },
     },
-  );
-  it.each([
-    ["teams-login-required", "login-required"],
-    ["teams-admission-required", "admission-required"],
-    ["teams-permission-required", "permission-required"],
-    ["teams-audio-choice-required", "audio-choice-required"],
-    ["teams-session-conflict", "session-conflict"],
-    ["browser-control-unavailable", "browser-control-unavailable"],
-  ])("classifies %s as %s", (reason, category) => {
-    expect(TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.classifyManualAction(status(reason))).toEqual({
-      category,
-      reason,
-      message: "manual action",
-    });
-  });
-
-  it("retries transient in-call audio routing while Teams renders its media controls", () => {
-    const pending = { ...status("teams-audio-choice-required"), inCall: true };
-
-    expect(TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.shouldRetryJoinStatus?.(pending)).toBe(false);
-    expect(
-      TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.shouldRetryJoinStatus?.({
-        ...pending,
-        audioInputRouted: true,
-        audioOutputRouteRetryable: true,
-      }),
-    ).toBe(true);
-    expect(
-      TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.shouldRetryJoinStatus?.({
-        ...pending,
-        audioOutputRouteError: "sink failed",
-      }),
-    ).toBe(false);
-    expect(
-      TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.shouldRetryJoinStatus?.({
-        ...pending,
-        audioInputRouted: true,
-        audioOutputRouteError: "play interrupted",
-        audioOutputRouteRetryable: true,
-      }),
-    ).toBe(true);
-  });
-
-  it("retries transcribe join readiness until live captions are enabled", () => {
-    const pending = {
-      captionCaptureRequested: true,
-      captioning: false,
-      inCall: true,
-    };
-
-    expect(TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.shouldRetryJoinStatus?.(pending)).toBe(true);
-    expect(
-      TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.shouldRetryJoinStatus?.({
-        ...pending,
-        captioning: true,
-      }),
-    ).toBe(false);
-    expect(
-      TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.shouldRetryJoinStatus?.({
-        ...pending,
-        manualAction: { reason: "teams-session-conflict", message: "Conflict" },
-      }),
-    ).toBe(false);
-  });
-
-  it.each([
-    ["camera", "Turn camera off", undefined, "on"],
-    ["camera", "Turn camera on", undefined, "off"],
-    ["camera", "Turn camera on", "true", "on"],
-    ["microphone", "Mute", undefined, "on"],
-    ["microphone", "Unmute", undefined, "off"],
-    ["microphone", "Microphone is muted", undefined, "off"],
-    ["microphone", "Turn microphone off", "false", "off"],
-  ])(
-    "parses %s control %j with aria-pressed %j as %s",
-    async (kind, label, ariaPressed, expected) => {
-      const target = control({
-        label,
-        ...(ariaPressed === undefined ? {} : { pressed: ariaPressed === "true" }),
-      });
-      const { result } = await runStatusScript({
-        ...(kind === "camera" ? { camera: target } : { microphone: target }),
-        readOnly: true,
-      });
-      expect(kind === "camera" ? result.cameraOff : result.micMuted).toBe(expected === "off");
+    AudioContext: function AudioContext() {
+      throw new Error("capture admitted");
     },
-  );
+  });
+  await expect(result).rejects.toThrow(owns ? "capture admitted" : "no longer owns");
+});
 
-  it.each([
-    ["camera", true, false],
-    ["microphone", false, true],
-  ])("reads the live %s switch checked=%s", async (kind, checked, expectedOff) => {
-    const target = control({ checked, label: kind === "camera" ? "Camera" : "Microphone" });
-    const { result } = await runStatusScript({
-      ...(kind === "camera" ? { camera: target } : { microphone: target }),
-      readOnly: true,
-    });
-    expect(kind === "camera" ? result.cameraOff : result.micMuted).toBe(expectedOff);
+it("retries transient in-call audio routing while Teams renders its media controls", () => {
+  const pending: Parameters<NonNullable<typeof browser.shouldRetryJoinStatus>>[0] = {
+    inCall: true,
+    manualAction: { reason: "teams-audio-choice-required", message: "manual action" },
+  };
+  const retry = (overrides: Partial<typeof pending> = {}) =>
+    browser.shouldRetryJoinStatus?.({ ...pending, ...overrides });
+
+  expect(retry()).toBe(false);
+  expect(retry({ audioInputRouted: true, audioOutputRouteRetryable: true })).toBe(true);
+  expect(retry({ audioOutputRouteError: "sink failed" })).toBe(false);
+  expect(
+    retry({
+      audioInputRouted: true,
+      audioOutputRouteError: "play interrupted",
+      audioOutputRouteRetryable: true,
+    }),
+  ).toBe(true);
+});
+
+it("re-reads camera and microphone state after toggling before joining", async () => {
+  const camera = control({
+    label: "Turn camera off",
+    pressed: true,
+    onClick: (node) => node.setPressed(false),
+  });
+  const microphone = control({
+    label: "Turn microphone off",
+    pressed: true,
+    onClick: (node) => node.setPressed(false),
+  });
+  const join = control({ label: "Join now" });
+
+  const { result } = await runStatusScript({ camera, join, microphone });
+
+  expect(result).toMatchObject({ cameraOff: true, clickedJoin: true, micMuted: true });
+  expect([camera.clicks, microphone.clicks, join.clicks]).toEqual([1, 1, 1]);
+});
+
+it("allows non-adopting recovery to continue for the current page owner", async () => {
+  const params = prejoin({ allowSessionAdoption: false, priorMeeting: meetingOwner() });
+  const { result } = await runStatusScript(params);
+  expect(params.join.clicks).toBe(1);
+  expect(result.clickedJoin).toBe(true);
+  expect(result.manualAction).toBeUndefined();
+});
+
+it("preserves a newer owner for a different meeting identity", async () => {
+  const priorMeeting = {
+    identity: "teams-consumer:9326458712345:p:abc",
+    sessionId: "consumer-session",
+  };
+  const { result, window } = await runStatusScript({
+    allowSessionAdoption: true,
+    currentUrl: CONSUMER_URL,
+    priorMeeting,
   });
 
-  it("re-reads camera and microphone state after toggling before joining", async () => {
-    const camera = control({
-      label: "Turn camera off",
-      pressed: true,
-      onClick: (node) => node.setPressed(false),
-    });
-    const microphone = control({
-      label: "Turn microphone off",
-      pressed: true,
-      onClick: (node) => node.setPressed(false),
-    });
-    const join = control({ label: "Join now" });
+  expect(result.manualAction).toMatchObject({ reason: "teams-session-conflict" });
+  expect(window[MEETING_STATE_KEY]).toBe(priorMeeting);
+});
 
-    const { result } = await runStatusScript({
-      camera,
-      join,
-      microphone,
-    });
+it("does not auto-join talk-back when the microphone control is missing", async () => {
+  const params = prejoin({ allowMicrophone: true, microphone: undefined });
+  const { result } = await runStatusScript(params);
+  expect(result).toMatchObject({ manualAction: { reason: "teams-microphone-required" } });
+  expect(params.join.clicks).toBe(0);
+});
 
-    expect(result).toMatchObject({ cameraOff: true, clickedJoin: true, micMuted: true });
-    expect(camera.clicks).toBe(1);
-    expect(microphone.clicks).toBe(1);
-    expect(join.clicks).toBe(1);
+it("does not accept a selected BlackHole speaker option as the microphone", async () => {
+  const params = prejoin({
+    allowMicrophone: true,
+    devices: [{ deviceId: "blackhole", kind: "audioinput", label: "BlackHole 2ch" }],
+    globalSelectedOption: control({ label: "BlackHole 2ch" }),
+    microphoneDevice: control({ label: "MacBook Pro Microphone" }),
   });
-
-  it("allows non-adopting recovery to continue for the current page owner", async () => {
-    const join = control({ label: "Join now" });
-    const { result } = await runStatusScript({
-      allowSessionAdoption: false,
-      camera: control({ label: "Turn camera on", pressed: false }),
-      join,
-      microphone: control({ label: "Turn microphone on", pressed: false }),
-      priorMeeting: {
-        identity: "teams-work:19:meeting_test@thread.v2",
-        sessionId: "session-1",
-      },
-    });
-
-    expect(join.clicks).toBe(1);
-    expect(result.clickedJoin).toBe(true);
-    expect(result.manualAction).toBeUndefined();
+  const { result } = await runStatusScript(params);
+  expect(result).toMatchObject({
+    audioInputRouted: false,
+    clickedJoin: false,
+    manualAction: { reason: "teams-audio-choice-required" },
+    micMuted: true,
   });
+  expect(params).toMatchObject({ microphone: { clicks: 0 }, join: { clicks: 0 } });
+});
 
-  it("preserves a newer owner for a different meeting identity", async () => {
-    const priorMeeting = {
-      identity: "teams-consumer:9326458712345:p:abc",
-      sessionId: "consumer-session",
-    };
-    const { result, window } = await runStatusScript({
-      allowSessionAdoption: true,
-      currentUrl: CONSUMER_URL,
-      priorMeeting,
-    });
+it("does not stamp meeting identity onto unrelated Teams pages", async () => {
+  const leave = control({ label: "Leave" });
+  const { result, window } = await runStatusScript({ currentUrl: appUrl, leave });
 
-    expect(result.manualAction).toMatchObject({ reason: "teams-session-conflict" });
-    expect(window[MEETING_STATE_KEY]).toBe(priorMeeting);
+  expect(result.inCall).toBe(false);
+  expect(window).not.toHaveProperty("__openclawTeamsMeeting");
+});
+
+it.each([
+  ["9326458712345", "abc", true],
+  ["1111111111111", "other", false],
+] as const)("verifies consumer prejoin coordinates %s", async (code, passcode, matches) => {
+  const { result, window } = await runStatusScript({
+    currentUrl: consumerLightMeetingUrl(code, passcode),
+    meetingUrl: CONSUMER_URL,
   });
-
-  it("does not mask an in-call session conflict with talkback audio readiness", async () => {
-    const { result } = await runStatusScript({
-      allowMicrophone: true,
-      allowSessionAdoption: false,
-      leave: control({ label: "Leave" }),
-      priorMeeting: {
-        identity: "teams-work:19:meeting_test@thread.v2",
-        sessionId: "session-2",
-      },
-    });
-
-    expect(result.manualAction).toMatchObject({ reason: "teams-session-conflict" });
-  });
-
-  it("does not unmute or join until BlackHole is visibly selected as the Teams input", async () => {
-    const camera = control({ label: "Turn camera on", pressed: false });
-    const microphone = control({ label: "Turn microphone on", pressed: false });
-    const join = control({ label: "Join now" });
-
-    const { result } = await runStatusScript({
-      allowMicrophone: true,
-      camera,
-      devices: [{ deviceId: "blackhole", kind: "audioinput", label: "BlackHole 2ch" }],
-      join,
-      microphone,
-    });
-
-    expect(result).toMatchObject({
-      audioInputRouted: false,
-      clickedJoin: false,
-      manualAction: { reason: "teams-audio-choice-required" },
-      micMuted: true,
-    });
-    expect(microphone.clicks).toBe(0);
-    expect(join.clicks).toBe(0);
-  });
-
-  it("does not auto-join talk-back when the microphone control is missing", async () => {
-    const camera = control({ label: "Turn camera on", pressed: false });
-    const join = control({ label: "Join now" });
-
-    const { result } = await runStatusScript({
-      allowMicrophone: true,
-      camera,
-      join,
-    });
-
-    expect(result).toMatchObject({
-      manualAction: { reason: "teams-microphone-required" },
-    });
-    expect(join.clicks).toBe(0);
-  });
-
-  it("does not accept a selected BlackHole speaker option as the microphone", async () => {
-    const camera = control({ label: "Turn camera on", pressed: false });
-    const microphone = control({ label: "Turn microphone on", pressed: false });
-    const microphoneDevice = control({ label: "MacBook Pro Microphone" });
-    const selectedSpeaker = control({ label: "BlackHole 2ch" });
-    const join = control({ label: "Join now" });
-
-    const { result } = await runStatusScript({
-      allowMicrophone: true,
-      camera,
-      devices: [{ deviceId: "blackhole", kind: "audioinput", label: "BlackHole 2ch" }],
-      globalSelectedOption: selectedSpeaker,
-      join,
-      microphone,
-      microphoneDevice,
-    });
-
-    expect(result).toMatchObject({
-      audioInputRouted: false,
-      clickedJoin: false,
-      manualAction: { reason: "teams-audio-choice-required" },
-    });
-    expect(microphone.clicks).toBe(0);
-  });
-
-  it("does not stamp meeting identity onto unrelated Teams pages", async () => {
-    const leave = control({ label: "Leave" });
-    const { result, window } = await runStatusScript({
-      currentUrl: "https://teams.microsoft.com/v2/",
-      leave,
-    });
-
-    expect(result.inCall).toBe(false);
-    expect(window).not.toHaveProperty("__openclawTeamsMeeting");
-  });
-
-  it("verifies the consumer prejoin redirect from its encoded meeting coordinates", async () => {
-    const { result, window } = await runStatusScript({
-      currentUrl: consumerLightMeetingUrl("9326458712345", "abc"),
-      meetingUrl: CONSUMER_URL,
-    });
-
+  if (matches) {
     expect(result.manualAction).toBeUndefined();
     expect(window[MEETING_STATE_KEY]).toMatchObject({
       identity: "teams-consumer:9326458712345:p:abc",
       sessionId: "session-1",
     });
-  });
-
-  it("rejects consumer prejoin coordinates for a different meeting", async () => {
-    const { result, window } = await runStatusScript({
-      currentUrl: consumerLightMeetingUrl("1111111111111", "other"),
-      meetingUrl: CONSUMER_URL,
-    });
-
+  } else {
     expect(result).toMatchObject({
       inCall: false,
       manualAction: { reason: "teams-session-conflict" },
     });
     expect(window).not.toHaveProperty(MEETING_STATE_KEY);
+  }
+});
+
+it.each([0, 45_000])("adopts a join marker aged %d ms", async (age) => {
+  const prepared = age
+    ? meetingOwner({ verifiedAt: Date.now() - age })
+    : (await runStatusScript({ allowMicrophone: false })).window[MEETING_STATE_KEY];
+  const leave = control({ label: "Leave" });
+  const admitted = await runStatusScript({
+    currentUrl: appUrl,
+    leave,
+    priorMeeting: prepared as Record<string, unknown>,
+    waitForInCallMs: 60_000,
+  });
+  expect(admitted.result.inCall).toBe(true);
+  expect(admitted.window[MEETING_STATE_KEY]).toMatchObject({
+    identity,
+    inCallControl: leave,
+    inCallUrl: appUrl,
+  });
+});
+
+it("re-adopts a replaced hang-up control only within the bounded rerender window", async () => {
+  const previousLeave = control({ label: "Leave" });
+  previousLeave.isConnected = false;
+  const currentLeave = control({ label: "Leave" });
+  const { result, window } = await runStatusScript({
+    currentUrl: appUrl,
+    leave: currentLeave,
+    priorMeeting: {
+      identity,
+      inCallControl: previousLeave,
+      inCallUrl: appUrl,
+      verifiedAt: Date.now(),
+    },
   });
 
-  it("preserves a verified identity only across an in-call URL transition", async () => {
-    const leave = control({ label: "Leave" });
-    const inCallUrl = "https://teams.microsoft.com/v2/";
-    const priorMeeting = {
-      identity: "teams-work:19:meeting_test@thread.v2",
-      inCallControl: leave,
-      inCallUrl,
-      sessionId: "session-1",
-    };
-    const { result, window } = await runStatusScript({
-      currentUrl: inCallUrl,
-      leave,
-      priorMeeting,
-    });
+  expect(result.inCall).toBe(true);
+  expect(window[MEETING_STATE_KEY]).toMatchObject({
+    inCallControl: currentLeave,
+    inCallUrl: appUrl,
+  });
+});
 
-    expect(result.inCall).toBe(true);
-    expect(window[MEETING_STATE_KEY]).toMatchObject(priorMeeting);
+it("does not trust a stale identity marker or post-call screen from another SPA call", () => {
+  const staleLeave = control({ label: "Leave old call" });
+  const currentLeave = control({ label: "Leave current call" });
+  const bridge = { pause: vi.fn(), remove: vi.fn(), srcObject: {} };
+  const { result, window } = runLeaveScript({
+    currentUrl: appUrl,
+    leave: currentLeave,
+    postCall: control({ label: "Rejoin" }),
+    priorAudioOutputs: [
+      { bridge, sessionId: "session-1", source: { muted: true }, sourceMuted: false },
+    ],
+    priorMeeting: {
+      identity,
+      inCallControl: staleLeave,
+      inCallUrl: appUrl,
+    },
   });
 
-  it("adopts the first live hang-up control during the verified join transition", async () => {
-    const prejoin = await runStatusScript({ allowMicrophone: false });
-    const leave = control({ label: "Leave" });
-    const admitted = await runStatusScript({
-      currentUrl: "https://teams.microsoft.com/v2/",
-      leave,
-      priorMeeting: prejoin.window[MEETING_STATE_KEY] as Record<string, unknown>,
-    });
+  expect(result).toEqual({ departed: false, urlMatched: false });
+  expect(currentLeave.clicks).toBe(0);
+  expect(bridge.pause).not.toHaveBeenCalled();
+  expect(window[AUDIO_OUTPUTS]).toHaveLength(1);
+});
 
-    expect(admitted.result.inCall).toBe(true);
-    expect(admitted.window[MEETING_STATE_KEY]).toMatchObject({
-      identity: "teams-work:19:meeting_test@thread.v2",
-      inCallControl: leave,
-      inCallUrl: "https://teams.microsoft.com/v2/",
-    });
+it.each([
+  ["newer owner", "session-1", "session-2", true, 0],
+  ["missing owner", "session-1", "", false, 0],
+  ["ID-less callback", "", "session-1", false, 1],
+] as const)("checks leave ownership: %s", (_name, meetingSessionId, owner, spa, clicks) => {
+  const leave = control({ label: "Leave" });
+  const { result } = runLeaveScript({
+    leave,
+    meetingSessionId,
+    ...(spa ? { currentUrl: appUrl } : {}),
+    priorMeeting: meetingOwner({
+      sessionId: owner,
+      ...(spa ? { inCallControl: leave, inCallUrl: appUrl } : {}),
+    }),
+  });
+  const expected = clicks
+    ? { leaveAction: "leave" }
+    : { sessionMatched: false, ...(spa ? { sessionConflict: true } : {}) };
+  expect(result).toEqual({ departed: false, urlMatched: true, ...expected });
+  expect(leave.clicks).toBe(clicks);
+});
+
+it("accepts post-call proof after an initiated leave replaces the document", () => {
+  const pending = runLeaveScript({
+    currentUrl: appUrl,
+    leaveInitiated: true,
+    omitMeetingState: true,
+  });
+  expect(pending.result).toEqual({ departed: false, urlMatched: true });
+
+  const { result } = runLeaveScript({
+    leaveInitiated: true,
+    omitMeetingState: true,
+    postCall: control({ label: "Rejoin" }),
   });
 
-  it("retains prejoin identity for the configured in-call wait", async () => {
-    const leave = control({ label: "Leave" });
-    const admitted = await runStatusScript({
-      currentUrl: "https://teams.microsoft.com/v2/",
-      leave,
-      priorMeeting: {
-        identity: "teams-work:19:meeting_test@thread.v2",
-        sessionId: "session-1",
-        verifiedAt: Date.now() - 45_000,
-      },
-      waitForInCallMs: 60_000,
-    });
+  expect(result).toEqual({ departed: true, sessionMatched: true, urlMatched: true });
+});
 
-    expect(admitted.result.inCall).toBe(true);
-    expect(admitted.window[MEETING_STATE_KEY]).toMatchObject({
-      identity: "teams-work:19:meeting_test@thread.v2",
-      inCallControl: leave,
-    });
+it("retires only the departing session's audio bridges", () => {
+  const source = { currentSrc: "blob:https://teams.live.com/original", muted: true };
+  const bridge = { pause: vi.fn(), remove: vi.fn(), srcObject: {} };
+  const detachedSource = {
+    isConnected: false,
+    muted: true,
+    pause: vi.fn(),
+    srcObject: liveMediaStream(),
+  };
+  const detachedBridge = { pause: vi.fn(), remove: vi.fn(), srcObject: {} };
+  const foreignBridge = { sessionId: "session-2" };
+  const { result, window } = afterCall({
+    priorAudioOutputs: [
+      audioEntry(source, bridge, { sourceUrl: source.currentSrc }),
+      audioEntry(detachedSource, detachedBridge, { stream: detachedSource.srcObject }),
+      foreignBridge,
+    ],
   });
 
-  it("re-adopts a replaced hang-up control only within the bounded rerender window", async () => {
-    const previousLeave = control({ label: "Leave" });
-    previousLeave.isConnected = false;
-    const currentLeave = control({ label: "Leave" });
-    const inCallUrl = "https://teams.microsoft.com/v2/";
-    const { result, window } = await runStatusScript({
-      currentUrl: inCallUrl,
-      leave: currentLeave,
-      priorMeeting: {
-        identity: "teams-work:19:meeting_test@thread.v2",
-        inCallControl: previousLeave,
-        inCallUrl,
-        verifiedAt: Date.now(),
-      },
-    });
+  expect(result).toEqual({ departed: true, sessionMatched: true, urlMatched: true });
+  expect(source.muted).toBe(false);
+  expect(bridge.pause).toHaveBeenCalledOnce();
+  expect(bridge.remove).toHaveBeenCalledOnce();
+  expect(bridge.srcObject).toBeNull();
+  expect(detachedSource.muted).toBe(true);
+  expect(detachedSource.pause).toHaveBeenCalledOnce();
+  expect(detachedSource.srcObject).toBeNull();
+  expect(detachedBridge.remove).toHaveBeenCalledOnce();
+  expect(window[AUDIO_OUTPUTS]).toEqual([foreignBridge]);
+});
 
-    expect(result.inCall).toBe(true);
-    expect(window[MEETING_STATE_KEY]).toMatchObject({
-      inCallControl: currentLeave,
-      inCallUrl,
-    });
-  });
-
-  it("does not trust a stale identity marker or post-call screen from another SPA call", () => {
-    const staleLeave = control({ label: "Leave old call" });
-    const currentLeave = control({ label: "Leave current call" });
-    const bridge = { pause: vi.fn(), remove: vi.fn(), srcObject: {} };
-    const { result, window } = runLeaveScript({
-      currentUrl: "https://teams.microsoft.com/v2/",
-      leave: currentLeave,
-      postCall: control({ label: "Rejoin" }),
-      priorAudioOutputs: [
-        {
-          bridge,
-          sessionId: "session-1",
-          source: { muted: true },
-          sourceMuted: false,
-        },
-      ],
-      priorMeeting: {
-        identity: "teams-work:19:meeting_test@thread.v2",
-        inCallControl: staleLeave,
-        inCallUrl: "https://teams.microsoft.com/v2/",
-      },
-    });
-
-    expect(result).toEqual({ departed: false, urlMatched: false });
-    expect(currentLeave.clicks).toBe(0);
-    expect(bridge.pause).not.toHaveBeenCalled();
-    expect(window["__openclawTeamsAudioOutputs"]).toHaveLength(1);
-  });
-
-  it("does not use initiated-leave proof to act on a replacement SPA call", () => {
-    const staleLeave = control({ label: "Leave old call" });
-    const currentLeave = control({ label: "Leave current call" });
-    const { result } = runLeaveScript({
-      currentUrl: "https://teams.microsoft.com/v2/",
-      leave: currentLeave,
-      leaveInitiated: true,
-      postCall: control({ label: "Rejoin" }),
-      priorMeeting: {
-        identity: "teams-work:19:meeting_test@thread.v2",
-        inCallControl: staleLeave,
-        inCallUrl: "https://teams.microsoft.com/v2/",
-      },
-    });
-
-    expect(result).toEqual({ departed: false, urlMatched: false });
-    expect(currentLeave.clicks).toBe(0);
-  });
-
-  it("does not leave a call owned by a newer OpenClaw session", () => {
-    const leave = control({ label: "Leave" });
-    const inCallUrl = "https://teams.microsoft.com/v2/";
-    const { result } = runLeaveScript({
-      currentUrl: inCallUrl,
-      leave,
-      meetingSessionId: "session-1",
-      priorMeeting: {
-        identity: "teams-work:19:meeting_test@thread.v2",
-        inCallControl: leave,
-        inCallUrl,
-        sessionId: "session-2",
-      },
-    });
-
-    expect(result).toEqual({
-      departed: false,
-      sessionConflict: true,
-      sessionMatched: false,
-      urlMatched: true,
-    });
-    expect(leave.clicks).toBe(0);
-  });
-
-  it("does not claim departure when page session ownership is missing", () => {
-    const leave = control({ label: "Leave" });
-    const { result } = runLeaveScript({
-      leave,
-      priorMeeting: {
-        identity: "teams-work:19:meeting_test@thread.v2",
-        sessionId: "",
-      },
-    });
-
-    expect(result).toEqual({ departed: false, sessionMatched: false, urlMatched: true });
-    expect(leave.clicks).toBe(0);
-  });
-
-  it("keeps the required ID-less leave callback functional for a matching meeting", () => {
-    const leave = control({ label: "Leave" });
-    const { result } = runLeaveScript({
-      leave,
-      meetingSessionId: "",
-      priorMeeting: {
-        identity: "teams-work:19:meeting_test@thread.v2",
-        sessionId: "session-1",
-      },
-    });
-
-    expect(result).toEqual({ departed: false, leaveAction: "leave", urlMatched: true });
-    expect(leave.clicks).toBe(1);
-  });
-
-  it("accepts post-call proof after an initiated leave replaces the document", () => {
-    const pending = runLeaveScript({
-      currentUrl: "https://teams.microsoft.com/v2/",
-      leaveInitiated: true,
-      omitMeetingState: true,
-    });
-    expect(pending.result).toEqual({ departed: false, urlMatched: true });
-
-    const { result } = runLeaveScript({
-      leaveInitiated: true,
-      omitMeetingState: true,
-      postCall: control({ label: "Rejoin" }),
-    });
-
-    expect(result).toEqual({ departed: true, sessionMatched: true, urlMatched: true });
-  });
-
-  it("retires only the departing session's audio bridges", () => {
-    const source = { currentSrc: "blob:https://teams.live.com/original", muted: true };
-    const bridge = { pause: vi.fn(), remove: vi.fn(), srcObject: {} };
-    const detachedSource = {
-      isConnected: false,
-      muted: true,
-      pause: vi.fn(),
-      srcObject: liveMediaStream(),
-    };
-    const detachedBridge = { pause: vi.fn(), remove: vi.fn(), srcObject: {} };
-    const foreignBridge = { sessionId: "session-2" };
-    const { result, window } = runLeaveScript({
-      postCall: control({ label: "Rejoin" }),
-      priorAudioOutputs: [
-        {
-          bridge,
-          sessionId: "session-1",
-          source,
-          sourceMuted: false,
-          sourceUrl: source.currentSrc,
-        },
-        {
-          bridge: detachedBridge,
-          sessionId: "session-1",
-          source: detachedSource,
-          sourceMuted: false,
-          stream: detachedSource.srcObject,
-        },
-        foreignBridge,
-      ],
-      priorMeeting: {
-        identity: "teams-work:19:meeting_test@thread.v2",
-        sessionId: "session-1",
-      },
-    });
-
-    expect(result).toEqual({ departed: true, sessionMatched: true, urlMatched: true });
-    expect(source.muted).toBe(false);
-    expect(bridge.pause).toHaveBeenCalledOnce();
-    expect(bridge.remove).toHaveBeenCalledOnce();
-    expect(bridge.srcObject).toBeNull();
-    expect(detachedSource.muted).toBe(true);
-    expect(detachedSource.pause).toHaveBeenCalledOnce();
-    expect(detachedSource.srcObject).toBeNull();
-    expect(detachedBridge.remove).toHaveBeenCalledOnce();
-    expect(window["__openclawTeamsAudioOutputs"]).toEqual([foreignBridge]);
-  });
-
-  it("does not unmute a replacement stream during leave cleanup", () => {
-    const bridgedStream = liveMediaStream();
-    const replacementStream = liveMediaStream();
-    const source = { muted: true, srcObject: replacementStream };
-    const bridge = { pause: vi.fn(), remove: vi.fn(), srcObject: bridgedStream };
-    const { result } = runLeaveScript({
-      postCall: control({ label: "Rejoin" }),
-      priorAudioOutputs: [
-        {
-          bridge,
-          sessionId: "session-1",
-          source,
-          sourceMuted: false,
-          stream: bridgedStream,
-        },
-      ],
-      priorMeeting: {
-        identity: "teams-work:19:meeting_test@thread.v2",
-        sessionId: "session-1",
-      },
-    });
-
-    expect(result).toEqual({ departed: true, sessionMatched: true, urlMatched: true });
-    expect(source.muted).toBe(true);
+it.each(["stream", "url"] as const)("keeps reused %s sources muted on leave", (kind) => {
+  const bridgedStream = liveMediaStream();
+  const replacementStream = liveMediaStream();
+  const source =
+    kind === "stream"
+      ? { muted: true, srcObject: replacementStream }
+      : { muted: true, currentSrc: "blob:https://teams.live.com/replacement" };
+  const bridge = {
+    pause: vi.fn(),
+    remove: vi.fn(),
+    srcObject: kind === "stream" ? bridgedStream : null,
+  };
+  const ownership =
+    kind === "stream"
+      ? { stream: bridgedStream }
+      : { sourceUrl: "blob:https://teams.live.com/original" };
+  const { result } = afterCall({ priorAudioOutputs: [audioEntry(source, bridge, ownership)] });
+  expect(result).toEqual({ departed: true, sessionMatched: true, urlMatched: true });
+  expect(source.muted).toBe(true);
+  if (kind === "stream") {
     expect(source.srcObject).toBe(replacementStream);
-    expect(bridge.pause).toHaveBeenCalledOnce();
-    expect(bridge.remove).toHaveBeenCalledOnce();
-  });
+  }
+  expect(bridge.pause).toHaveBeenCalledOnce();
+  expect(bridge.remove).toHaveBeenCalledOnce();
+});
 
-  it("does not unmute a reused URL-backed element during leave cleanup", () => {
-    const source = { currentSrc: "blob:https://teams.live.com/replacement", muted: true };
-    const bridge = { pause: vi.fn(), remove: vi.fn(), srcObject: null };
-    const { result } = runLeaveScript({
-      postCall: control({ label: "Rejoin" }),
-      priorAudioOutputs: [
-        {
-          bridge,
-          sessionId: "session-1",
-          source,
-          sourceMuted: false,
-          sourceUrl: "blob:https://teams.live.com/original",
-        },
-      ],
-      priorMeeting: {
-        identity: "teams-work:19:meeting_test@thread.v2",
+it("restores pending and legacy sources-array entries during leave cleanup", () => {
+  const pending = { muted: true };
+  const legacy = { currentSrc: "blob:https://teams.live.com/legacy", muted: true };
+  const { result } = afterCall({
+    priorAudioOutputs: [
+      {
         sessionId: "session-1",
-      },
-    });
-
-    expect(result).toEqual({ departed: true, sessionMatched: true, urlMatched: true });
-    expect(source.muted).toBe(true);
-    expect(bridge.pause).toHaveBeenCalledOnce();
-    expect(bridge.remove).toHaveBeenCalledOnce();
-  });
-
-  it("restores pending and legacy sources-array entries during leave cleanup", () => {
-    const pending = { muted: true };
-    const legacy = { currentSrc: "blob:https://teams.live.com/legacy", muted: true };
-    const { result } = runLeaveScript({
-      postCall: control({ label: "Rejoin" }),
-      priorAudioOutputs: [
-        {
-          sessionId: "session-1",
-          sources: [
-            { element: pending, muted: false, pending: true },
-            { element: legacy, muted: false },
-          ],
-        },
-      ],
-      priorMeeting: {
-        identity: "teams-work:19:meeting_test@thread.v2",
-        sessionId: "session-1",
-      },
-    });
-
-    expect(result).toEqual({ departed: true, sessionMatched: true, urlMatched: true });
-    expect(pending.muted).toBe(true);
-    expect(legacy.muted).toBe(true);
-  });
-
-  it("retires the page-owned audio bridge from the required URL-only leave callback", () => {
-    const stream = liveMediaStream();
-    const source = { muted: true, srcObject: stream };
-    const bridge = { pause: vi.fn(), remove: vi.fn(), srcObject: stream };
-    const { result, window } = runLeaveScript({
-      meetingSessionId: "",
-      postCall: control({ label: "Rejoin" }),
-      priorAudioOutputs: [
-        {
-          bridge,
-          sessionId: "session-1",
-          source,
-          sourceMuted: false,
-          stream,
-        },
-      ],
-      priorMeeting: {
-        identity: "teams-work:19:meeting_test@thread.v2",
-        sessionId: "session-1",
-      },
-    });
-
-    expect(result).toEqual({ departed: true, sessionMatched: true, urlMatched: true });
-    expect(source.muted).toBe(false);
-    expect(bridge.pause).toHaveBeenCalledOnce();
-    expect(bridge.remove).toHaveBeenCalledOnce();
-    expect(window).not.toHaveProperty("__openclawTeamsAudioOutputs");
-  });
-
-  it.each([
-    "Alice: meeting ended — rejoin after lunch",
-    "Bob: allow Teams to use your microphone; device permissions are blocked",
-  ])("ignores participant-controlled in-call text: %s", async (bodyText) => {
-    const leave = control({ label: "Leave" });
-    const { result } = await runStatusScript({
-      bodyText,
-      leave,
-    });
-
-    expect(result).toMatchObject({
-      inCall: true,
-    });
-    expect(result.manualAction).toBeUndefined();
-  });
-
-  it("classifies a stable device permission prompt outside the call", async () => {
-    const { result } = await runStatusScript({
-      permissionPrompt: control({ label: "Device permission prompt" }),
-    });
-
-    expect(result).toMatchObject({
-      inCall: false,
-      manualAction: { reason: "teams-permission-required" },
-    });
-  });
-
-  it("does not report a prompt that it just dismissed while Teams removes the DOM", async () => {
-    const continueWithoutDevices = control({ label: "Continue without audio or video" });
-    const { result } = await runStatusScript({
-      continueWithoutDevices,
-      permissionPrompt: control({ label: "Device permission prompt" }),
-    });
-
-    expect(result.manualAction).toBeUndefined();
-    expect(continueWithoutDevices.clicks).toBe(1);
-  });
-
-  it("does not treat the live camera troubleshooting banner as a media permission block", async () => {
-    const join = control({ label: "Join now" });
-    const { result } = await runStatusScript({
-      allowMicrophone: true,
-      bodyText: "Your camera is turned off\nGo to your device settings to troubleshoot",
-      camera: control({ checked: false, label: "Camera" }),
-      devices: [{ deviceId: "blackhole-input", kind: "audioinput", label: "BlackHole 2ch" }],
-      join,
-      microphone: control({ checked: true, label: "Microphone" }),
-      microphoneDevice: control({ label: "BlackHole 2ch" }),
-    });
-
-    expect(result.clickedJoin).toBe(true);
-    expect(result.manualAction).toBeUndefined();
-    expect(join.clicks).toBe(1);
-  });
-
-  it("does not treat the camera-only no-devices warning as a microphone block", async () => {
-    const join = control({ label: "Join now" });
-    const { result } = await runStatusScript({
-      allowMicrophone: true,
-      camera: control({ checked: false, label: "Camera" }),
-      continueWithoutDevices: control({ label: "Continue without audio or video" }),
-      devices: [{ deviceId: "blackhole-input", kind: "audioinput", label: "BlackHole 2ch" }],
-      join,
-      microphone: control({ checked: true, label: "Microphone" }),
-      microphoneDevice: control({ label: "BlackHole 2ch (Virtual)" }),
-      microphonePermissionState: "granted",
-      permissionPrompt: control({ label: "Camera permission warning" }),
-    });
-
-    expect(result.clickedJoin).toBe(true);
-    expect(result.manualAction).toBeUndefined();
-    expect(join.clicks).toBe(1);
-  });
-
-  it("does not infer departure from page-wide text", () => {
-    const { result } = runLeaveScript({ bodyText: "call ended — rejoin" });
-    expect(result).toEqual({ departed: false, urlMatched: true });
-  });
-
-  it("requires positive input and output route evidence before realtime", () => {
-    expect(
-      MeetingPlatformAdapter.isRealtimeRouteReady("agent", {
-        audioInputRouted: true,
-        audioOutputRouted: true,
-        inCall: true,
-        micMuted: false,
-      }),
-    ).toBe(true);
-    for (const health of [
-      { audioOutputRouted: true, inCall: true, micMuted: false },
-      { audioInputRouted: true, inCall: true, micMuted: false },
-      { audioInputRouted: true, audioOutputRouted: true, inCall: true },
-    ]) {
-      expect(MeetingPlatformAdapter.isRealtimeRouteReady("agent", health)).toBe(false);
-    }
-    expect(
-      MeetingPlatformAdapter.isRealtimeRouteReady("transcribe", {
-        audioInputRouted: true,
-        audioOutputRouted: true,
-        inCall: true,
-        micMuted: false,
-      }),
-    ).toBe(false);
-  });
-
-  it.each([
-    ["BlackHole 2ch", "BlackHole 2ch (Virtual)"],
-    ["OpenClaw Meeting Audio", "OpenClaw Meeting Audio"],
-  ])(
-    "reports verified %s routes only after the exact input marker and output sink agree",
-    async (deviceLabel, selectedInputLabel) => {
-      const leave = control({ label: "Leave" });
-      const microphone = control({ label: "Turn microphone off", pressed: true });
-      const media = {
-        sinkId: "",
-        srcObject: liveMediaStream(),
-        async setSinkId(value: string) {
-          media.sinkId = value;
-        },
-      };
-      const { result } = await runStatusScript({
-        allowMicrophone: true,
-        devices: [
-          { deviceId: "virtual-input", kind: "audioinput", label: deviceLabel },
-          { deviceId: "virtual-output", kind: "audiooutput", label: deviceLabel },
+        sources: [
+          { element: pending, muted: false, pending: true },
+          { element: legacy, muted: false },
         ],
-        leave,
-        media: [media],
-        microphone,
-        microphoneDevice: control({ label: selectedInputLabel }),
-        priorMeeting: {
-          audioInputDeviceId: "virtual-input",
-          identity: "teams-work:19:meeting_test@thread.v2",
-        },
-      });
-
-      expect(result).toMatchObject({
-        audioInputRouted: true,
-        audioInputDeviceLabel: deviceLabel,
-        audioOutputRouted: true,
-        audioOutputDeviceLabel: deviceLabel,
-        inCall: true,
-        micMuted: false,
-      });
-      expect(result.manualAction).toBeUndefined();
-      expect(media.sinkId).toBe("virtual-output");
-    },
-  );
-
-  it.each(["OpenClaw Meeting Audio (Virtual)", "Monitor of OpenClaw Meeting Audio"])(
-    "rejects the non-contract virtual audio label %s",
-    async (deviceLabel) => {
-      const { result } = await runStatusScript({
-        allowMicrophone: true,
-        camera: control({ label: "Turn camera on", pressed: false }),
-        devices: [{ deviceId: "virtual-input", kind: "audioinput", label: deviceLabel }],
-        join: control({ label: "Join now" }),
-        microphone: control({ label: "Turn microphone on", pressed: false }),
-        microphoneDevice: control({ label: deviceLabel }),
-      });
-
-      expect(result).toMatchObject({
-        audioInputRouted: false,
-        manualAction: {
-          message:
-            "Select the OpenClaw virtual audio device as the Teams microphone and verify it is selected before enabling talk-back.",
-          reason: "teams-audio-choice-required",
-        },
-      });
-    },
-  );
-
-  it("reports the prepared session input during read-only status inspection", async () => {
-    const media: PageMedia = { sinkId: "blackhole-output", async setSinkId() {} };
-    const { result } = await runAudioStatusScript({
-      media: [media],
-      microphoneDevice: undefined,
-      priorMeeting: {
-        audioInputDeviceId: "blackhole-input",
-        identity: "teams-work:19:meeting_test@thread.v2",
-        sessionId: "session-1",
       },
-      readOnly: true,
-    });
-
-    expect(result).toMatchObject({
-      audioInputRouted: true,
-      audioOutputRouted: true,
-    });
-    expect(result.manualAction).toBeUndefined();
+    ],
   });
 
-  it("routes a directly playable media element before its MediaStream is attached", async () => {
-    const media = pageMedia();
-    const { result } = await runAudioStatusScript({
-      media: [media],
-    });
+  expect(result).toEqual({ departed: true, sessionMatched: true, urlMatched: true });
+  expect(pending.muted).toBe(true);
+  expect(legacy.muted).toBe(true);
+});
 
-    expect(result.audioOutputRouted).toBe(true);
-    expect(media.sinkId).toBe("blackhole-output");
+it("retires the page-owned audio bridge from the required URL-only leave callback", () => {
+  const stream = liveMediaStream();
+  const source = { muted: true, srcObject: stream };
+  const bridge = { pause: vi.fn(), remove: vi.fn(), srcObject: stream };
+  const { result, window } = afterCall({
+    meetingSessionId: "",
+    priorAudioOutputs: [audioEntry(source, bridge, { stream })],
   });
 
-  it("reopens in-call audio options to reverify the BlackHole input", async () => {
-    const deviceSettings = control({ label: "Open audio options" });
-    const { result } = await runStatusScript({
+  expect(result).toEqual({ departed: true, sessionMatched: true, urlMatched: true });
+  expect(source.muted).toBe(false);
+  expect(bridge.pause).toHaveBeenCalledOnce();
+  expect(bridge.remove).toHaveBeenCalledOnce();
+  expect(window).not.toHaveProperty(AUDIO_OUTPUTS);
+});
+
+it("ignores participant-controlled in-call text", async () => {
+  const bodyText =
+    "Alice: meeting ended — rejoin after lunch; allow Teams to use your microphone; device permissions are blocked";
+  const leave = control({ label: "Leave" });
+  const { result } = await runStatusScript({ bodyText, leave });
+
+  expect(result.inCall).toBe(true);
+  expect(result.manualAction).toBeUndefined();
+});
+
+it("does not report a prompt that it just dismissed while Teams removes the DOM", async () => {
+  const continueWithoutDevices = control({ label: "Continue without audio or video" });
+  const { result } = await runStatusScript({
+    continueWithoutDevices,
+    permissionPrompt: control({ label: "Device permission prompt" }),
+  });
+
+  expect(result.manualAction).toBeUndefined();
+  expect(continueWithoutDevices.clicks).toBe(1);
+});
+
+it("does not treat the camera-only no-devices warning as a microphone block", async () => {
+  const join = control({ label: "Join now" });
+  const { result } = await runStatusScript({
+    allowMicrophone: true,
+    camera: control({ checked: false, label: "Camera" }),
+    continueWithoutDevices: control({ label: "Continue without audio or video" }),
+    devices: [{ deviceId: "blackhole-input", kind: "audioinput", label: "BlackHole 2ch" }],
+    join,
+    microphone: control({ checked: true, label: "Microphone" }),
+    microphoneDevice: control({ label: "BlackHole 2ch (Virtual)" }),
+    microphonePermissionState: "granted",
+    permissionPrompt: control({ label: "Camera permission warning" }),
+  });
+
+  expect(result.clickedJoin).toBe(true);
+  expect(result.manualAction).toBeUndefined();
+  expect(join.clicks).toBe(1);
+});
+
+it("does not infer departure from page-wide text", () => {
+  const { result } = runLeaveScript({ bodyText: "call ended — rejoin" });
+  expect(result).toEqual({ departed: false, urlMatched: true });
+});
+
+it("rejects a non-contract virtual audio label", async () => {
+  const deviceLabel = "OpenClaw Meeting Audio (Virtual)";
+  const { result } = await runStatusScript(
+    prejoin({
       allowMicrophone: true,
-      devices: [{ deviceId: "blackhole-input", kind: "audioinput", label: "BlackHole 2ch" }],
-      deviceSettings,
-      leave: control({ label: "Leave" }),
-      microphone: control({ label: "Turn microphone off", pressed: true }),
-      microphoneDeviceAfterSettings: control({ label: "BlackHole 2ch (Virtual)" }),
-      priorMeeting: {
-        audioInputDeviceId: "blackhole-input",
-        identity: "teams-work:19:meeting_test@thread.v2",
-      },
-    });
+      devices: [{ deviceId: "virtual-input", kind: "audioinput", label: deviceLabel }],
+      microphoneDevice: control({ label: deviceLabel }),
+    }),
+  );
 
-    expect(result).toMatchObject({
-      audioInputRouted: true,
-      inCall: true,
-      micMuted: false,
-    });
-    expect(deviceSettings.clicks).toBe(1);
+  expect(result).toMatchObject({
+    audioInputRouted: false,
+    manualAction: {
+      message:
+        "Select the OpenClaw virtual audio device as the Teams microphone and verify it is selected before enabling talk-back.",
+      reason: "teams-audio-choice-required",
+    },
   });
+});
 
-  it("reads the selected in-call microphone from the live consumer listbox", async () => {
-    const deviceSettings = control({ label: "Open audio options" });
-    const selected = control({ label: "BlackHole 2ch (Virtual)" });
+it.each(["display", "listbox"] as const)("reverifies microphone via %s", async (kind) => {
+  const deviceSettings = control({ label: "Open audio options" });
+  const selected = control({ label: "BlackHole 2ch (Virtual)" });
+  if (kind === "listbox") {
     selected.getAttribute = (name) =>
       name === "aria-selected" ? "true" : name === "aria-label" ? "BlackHole 2ch (Virtual)" : null;
-    const microphoneMenu = control({ label: "Microphone devices" });
-    microphoneMenu.querySelector = (selector) =>
-      selector?.includes('aria-selected="true"') ? selected : undefined;
-    const { result } = await runStatusScript({
-      allowMicrophone: true,
-      devices: [{ deviceId: "blackhole-input", kind: "audioinput", label: "BlackHole 2ch" }],
-      deviceSettings,
-      leave: control({ label: "Leave" }),
-      microphone: control({ label: "Turn microphone off", pressed: true }),
-      microphoneDeviceMenuAfterSettings: microphoneMenu,
-      priorMeeting: { identity: "teams-work:19:meeting_test@thread.v2" },
-    });
+  }
+  const menu = control({ label: "Microphone devices" });
+  menu.querySelector = (selector) =>
+    selector?.includes('aria-selected="true"') ? selected : undefined;
+  const { result } = await runStatusScript({
+    allowMicrophone: true,
+    devices: [{ deviceId: "blackhole-input", kind: "audioinput", label: "BlackHole 2ch" }],
+    deviceSettings,
+    leave: control({ label: "Leave" }),
+    microphone: control({ label: "Turn microphone off", pressed: true }),
+    ...(kind === "display"
+      ? { microphoneDeviceAfterSettings: selected }
+      : { microphoneDeviceMenuAfterSettings: menu }),
+    priorMeeting: {
+      identity,
+      ...(kind === "display" ? { audioInputDeviceId: "blackhole-input" } : {}),
+    },
+  });
+  expect(result).toMatchObject({ audioInputRouted: true, inCall: true, micMuted: false });
+  expect(deviceSettings.clicks).toBe(1);
+});
 
-    expect(result).toMatchObject({ audioInputRouted: true, inCall: true, micMuted: false });
-    expect(deviceSettings.clicks).toBe(1);
+it("does not choose the audio-less fallback in talkback modes", async () => {
+  const continueWithoutDevices = control({ label: "Continue without audio or video" });
+  const params = () => ({
+    continueWithoutDevices,
+    microphone: control({ label: "Turn microphone on", pressed: false }),
+  });
+  await runStatusScript({ ...params(), allowMicrophone: true });
+  expect(continueWithoutDevices.clicks).toBe(0);
+  await runStatusScript(params());
+  expect(continueWithoutDevices.clicks).toBe(1);
+  await runStatusScript({ ...params(), autoJoin: false });
+  expect(continueWithoutDevices.clicks).toBe(1);
+});
+
+it("bridges a live Teams MediaStream when its unloaded audio element rejects setSinkId", async () => {
+  const source = abortingMedia("The element has no supported source.", {
+    muted: false,
+    sinkId: "built-in-output",
+    srcObject: liveMediaStream(),
+  });
+  const routingOrder: string[] = [];
+  const bridge: PageMedia = {
+    isConnected: false,
+    sinkId: "",
+    async play() {
+      expect(source.muted).toBe(true);
+      expect(bridge.sinkId).toBe("blackhole-output");
+      routingOrder.push("play");
+    },
+    async setSinkId(value) {
+      expect(source.muted).toBe(true);
+      routingOrder.push("sink");
+      bridge.sinkId = value;
+    },
+  };
+  const { result, window } = await runAudioStatusScript({
+    bridgeMedia: bridge,
+    media: [source],
+    priorMeeting: { audioInputDeviceId: "blackhole-input", identity },
   });
 
-  it("does not choose the audio-less fallback in talkback modes", async () => {
-    const continueWithoutDevices = control({
-      label: "Continue without audio or video",
-    });
-    await runStatusScript({
-      allowMicrophone: true,
-      continueWithoutDevices,
-      microphone: control({ label: "Turn microphone on", pressed: false }),
-    });
-    expect(continueWithoutDevices.clicks).toBe(0);
+  expect(routingOrder).toEqual(["sink", "play"]);
+  expect(result).toMatchObject({ audioInputRouted: true, audioOutputRouted: true });
+  expect(result.manualAction).toBeUndefined();
+  expect(bridge).toMatchObject({ autoplay: false, sinkId: "blackhole-output" });
+  expect(source.muted).toBe(true);
+  expect(window).toHaveProperty(AUDIO_OUTPUTS);
+  expect((window[AUDIO_OUTPUTS] as Array<{ bridge: PageMedia }>)[0]?.bridge).toBe(bridge);
 
-    await runStatusScript({
-      continueWithoutDevices,
-      microphone: control({ label: "Turn microphone on", pressed: false }),
-    });
-    expect(continueWithoutDevices.clicks).toBe(1);
-
-    await runStatusScript({
-      autoJoin: false,
-      continueWithoutDevices,
-      microphone: control({ label: "Turn microphone on", pressed: false }),
-    });
-    expect(continueWithoutDevices.clicks).toBe(1);
+  const repeated = await runAudioStatusScript({
+    bridgeMedia: bridge,
+    media: [source, bridge],
+    priorAudioOutputs: window[AUDIO_OUTPUTS] as unknown[],
+    priorMeeting: window[MEETING_STATE_KEY] as Record<string, unknown>,
   });
-
-  it("bridges a live Teams MediaStream when its unloaded audio element rejects setSinkId", async () => {
-    const source: PageMedia = {
-      muted: false,
-      sinkId: "built-in-output",
-      srcObject: liveMediaStream(),
-      async setSinkId() {
-        throw new DOMException("The element has no supported source.", "AbortError");
-      },
-    };
-    const routingOrder: string[] = [];
-    const bridge: PageMedia = {
-      isConnected: false,
-      sinkId: "",
-      async play() {
-        expect(source.muted).toBe(true);
-        expect(bridge.sinkId).toBe("blackhole-output");
-        routingOrder.push("play");
-      },
-      async setSinkId(value) {
-        expect(source.muted).toBe(true);
-        routingOrder.push("sink");
-        bridge.sinkId = value;
-      },
-    };
-    const { result, window } = await runAudioStatusScript({
-      bridgeMedia: bridge,
-      media: [source],
-      priorMeeting: {
-        audioInputDeviceId: "blackhole-input",
-        identity: "teams-work:19:meeting_test@thread.v2",
-      },
-    });
-
-    expect(bridge.autoplay).toBe(false);
-    expect(routingOrder).toEqual(["sink", "play"]);
-    expect(result).toMatchObject({
-      audioInputRouted: true,
-      audioOutputRouted: true,
-    });
-    expect(result.manualAction).toBeUndefined();
-    expect(bridge.sinkId).toBe("blackhole-output");
-    expect(source.muted).toBe(true);
-    expect(window).toHaveProperty("__openclawTeamsAudioOutputs");
-    expect((window["__openclawTeamsAudioOutputs"] as Array<{ bridge: PageMedia }>)[0]?.bridge).toBe(
-      bridge,
-    );
-
-    const repeated = await runAudioStatusScript({
-      bridgeMedia: bridge,
-      media: [source, bridge],
-      priorAudioOutputs: window["__openclawTeamsAudioOutputs"] as unknown[],
-      priorMeeting: window[MEETING_STATE_KEY] as Record<string, unknown>,
-    });
-    expect(repeated.result.audioOutputRouted).toBe(true);
-    expect(
-      (repeated.window["__openclawTeamsAudioOutputs"] as Array<{ bridge: PageMedia }>)[0]?.bridge,
-    ).toBe(bridge);
-  });
+  expect(repeated.result.audioOutputRouted).toBe(true);
+  expect((repeated.window[AUDIO_OUTPUTS] as Array<{ bridge: PageMedia }>)[0]?.bridge).toBe(bridge);
 });

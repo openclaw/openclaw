@@ -2,7 +2,7 @@ import { vi } from "vitest";
 import type { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import type { SessionEntryCurrentFacts } from "../../../config/sessions/session-entry-current.types.js";
 import type { InternalSessionEntry as SessionEntry } from "../../../config/sessions/types.js";
-import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
+import { createMockGatewayRecoveryRuntime } from "../../../gateway/server-recovery-runtime.test-support.js";
 import {
   createSubagentRunRecord,
   type SubagentRunRecordOverrides,
@@ -22,8 +22,9 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../../config/config.js", () => ({
   getRuntimeConfig: () => ({ session: { store: undefined } }),
 }));
-vi.mock("../../../config/sessions.js", () => ({
-  resolveAgentIdFromSessionKey: () => "main",
+// mock-isolation: Recovery owns worker-backed session facts; isolate the store locator.
+vi.mock("../../../config/sessions/paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../config/sessions/paths.js")>()),
   resolveSessionStorePathCore: () => mocks.storePath,
 }));
 vi.mock("../../../config/sessions/session-accessor.sqlite-replacement-projection.js", () => ({
@@ -41,11 +42,15 @@ vi.mock("../../../config/sessions/session-entry-read-runtime.js", () => ({
   },
 }));
 
-vi.mock("../../../config/sessions/session-entry-current-runtime.js", () => ({
+vi.mock("../../../config/sessions/session-entry-current-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../../config/sessions/session-entry-current-runtime.js")
+  >()),
   captureSessionEntryCurrentRead: (scope: { sessionKey: string }) => ({
     source: {
       agentId: "main",
-      path: mocks.storePath,
+      // An admitted reader retains the physical database, even for a logical sessions.json scope.
+      path: "/tmp/openclaw-subagent-recovery/agents/main/agent/openclaw-agent.sqlite",
       databaseIdentity: "recovery-fixture",
       sessionKey: scope.sessionKey,
     },
@@ -56,24 +61,16 @@ vi.mock("../../../config/sessions/session-entry-current-runtime.js", () => ({
 
 const childSessionKey = "agent:main:subagent:restart-child";
 const dispatchAgent = vi.fn();
-const gatewayRuntime: GatewayRecoveryRuntime = {
-  prepareRestartRecovery: () => undefined,
-  dispatchSessionMethod: vi.fn(),
-  dispatchAgent: dispatchAgent as GatewayRecoveryRuntime["dispatchAgent"],
-  waitForAgent: vi.fn(),
-  sendRecoveryNotice: vi.fn(),
-};
+const gatewayRuntime = createMockGatewayRecoveryRuntime({ dispatchAgent });
 const warn = vi.fn();
 
 function run(overrides: Partial<SubagentRunRecordOverrides> = {}): SubagentRunRecord {
   return createSubagentRunRecord({
     runId: "original-run",
     childSessionKey,
-    requesterSessionKey: "agent:main:main",
-    requesterDisplayKey: "main",
+    childSessionIdentity: { sessionId: "session-id", lifecycleRevision: "session-revision" },
     requesterOrigin: { channel: "qa-channel", to: "qa-requester", accountId: "default" },
     task: "finish the restart-safe task",
-    cleanup: "keep",
     createdAt: Date.now() - 60_000,
     startedAt: Date.now() - 55_000,
     ...overrides,
@@ -108,6 +105,7 @@ export const restartRecoveryTestHarness = {
     mocks.entries = {
       [childSessionKey]: {
         sessionId: "session-id",
+        lifecycleRevision: "session-revision",
         updatedAt: Date.now(),
         abortedLastRun: true,
       },

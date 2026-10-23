@@ -33,16 +33,8 @@ export type OpenAIToolProjection = {
 };
 
 type OpenAIResponsesToolChoice = ResponseCreateParamsStreaming["tool_choice"];
-type OpenAIResponsesAllowedToolChoice = Extract<
-  OpenAIResponsesToolChoice,
-  { type: "allowed_tools" }
->;
 type OpenAICompletionsSdkToolChoice =
   OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming["tool_choice"];
-type OpenAICompletionsAllowedToolChoice = Extract<
-  OpenAICompletionsSdkToolChoice,
-  { type: "allowed_tools" }
->;
 export type OpenAICompletionsToolChoice = Exclude<
   OpenAICompletionsSdkToolChoice,
   { type: "custom" }
@@ -85,6 +77,9 @@ function projectOpenAIToolDescriptors(
   const diagnostics: OpenAIToolProjectionDiagnostic[] = [];
   for (let toolIndex = 0; toolIndex < inputToolCount; toolIndex += 1) {
     let tool: OpenAIToolDescriptor;
+    let name: string | undefined;
+    let parameters: unknown;
+    let readPath = `tool[${toolIndex}]`;
     try {
       const candidate = tools[toolIndex];
       if (!candidate) {
@@ -92,45 +87,29 @@ function projectOpenAIToolDescriptors(
         continue;
       }
       tool = candidate;
-    } catch {
-      diagnostics.push(unreadableToolDiagnostic(toolIndex));
-      continue;
-    }
-
-    let name: unknown;
-    try {
-      name = tool.name;
-    } catch {
-      diagnostics.push({
-        toolIndex,
-        violations: [`tool[${toolIndex}].name is unreadable`],
-      });
-      continue;
-    }
-    if (typeof name !== "string" || !name) {
-      diagnostics.push({
-        toolIndex,
-        violations: [`tool[${toolIndex}].name is empty`],
-      });
-      continue;
-    }
-
-    let parameters: unknown;
-    try {
+      readPath += ".name";
+      const nameValue = tool.name;
+      if (typeof nameValue !== "string" || !nameValue) {
+        diagnostics.push({ toolIndex, violations: [`${readPath} is empty`] });
+        continue;
+      }
+      name = nameValue;
+      readPath = `${name}.parameters`;
       parameters = tool.parameters;
     } catch {
       diagnostics.push({
         toolIndex,
-        toolName: name,
-        violations: [`${name}.parameters is unreadable`],
+        ...(name ? { toolName: name } : {}),
+        violations: [`${readPath} is unreadable`],
       });
       continue;
     }
     const prepared = schemas
-      ? prepareRuntimeToolInputSchema(parameters ?? {}, `${name}.parameters`)
+      ? prepareRuntimeToolInputSchema(parameters ?? {}, `${name}.parameters`, name)
       : undefined;
     const schemaProjection =
-      prepared?.projection ?? projectRuntimeToolInputSchema(parameters ?? {}, `${name}.parameters`);
+      prepared?.projection ??
+      projectRuntimeToolInputSchema(parameters ?? {}, `${name}.parameters`, name);
     if (!isRecord(schemaProjection.schema) || schemaProjection.violations.length > 0) {
       diagnostics.push({
         toolIndex,
@@ -233,8 +212,11 @@ function reconcileToolChoice(
   if ((mode !== "auto" && mode !== "required") || !Array.isArray(tools)) {
     return choice;
   }
-  const responseTools: OpenAIResponsesAllowedToolChoice["tools"] = [];
-  const completionTools: OpenAICompletionsAllowedToolChoice["allowed_tools"]["tools"] = [];
+  const responseTools: Extract<OpenAIResponsesToolChoice, { type: "allowed_tools" }>["tools"] = [];
+  const completionTools: Extract<
+    OpenAICompletionsSdkToolChoice,
+    { type: "allowed_tools" }
+  >["allowed_tools"]["tools"] = [];
   for (const tool of tools) {
     if (!isRecord(tool) || tool.type !== "function") {
       if (responses) {

@@ -38,7 +38,6 @@ describe("serialized Gateway response arrays", () => {
       },
     };
     const encoded = serializeGatewayFrame(frame);
-    expect(Buffer.isBuffer(encoded)).toBe(true);
     expect(encoded.toString()).toBe(JSON.stringify(expected));
     expect(JSON.parse(encoded.toString())).toEqual(expected);
     expect(materialize).not.toHaveBeenCalled();

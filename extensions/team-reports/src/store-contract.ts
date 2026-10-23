@@ -9,6 +9,15 @@ import type {
   SummaryDocument,
 } from "./types.js";
 
+export const TEAM_REPORTS_WRITES = new Set<string>([
+  "resetActivity",
+  "appendActivity",
+  "upsertPeriod",
+  "startRun",
+  "finishRun",
+  "prune",
+]);
+
 export type ReportPerson = Pick<
   PersonReport,
   "login" | "aliases" | "display" | "affiliation" | "roleGroup" | "roleLabel" | "access" | "areas"
@@ -92,7 +101,6 @@ export type TeamReportsOperations = {
   };
   latestSourceWarnings: { input: undefined; output: string[] };
   latestPeople: { input: undefined; output: { key: string; members: ReportPerson[] } | undefined };
-  getDayReports: { input: { sinceMs: number; untilMs: number }; output: ReportDocument[] };
   listPersonDays: {
     input: { login: string; options: { since?: string; until?: string; limit?: number } };
     output: PersonDay[];

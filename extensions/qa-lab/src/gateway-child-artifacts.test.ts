@@ -15,16 +15,18 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { qaGatewayCleanupRuntimeEntrypoint } from "./gateway-child-artifacts-runtime.test-support.js";
 import { cleanupQaGatewayTempRoots } from "./gateway-child-artifacts.js";
-import { buildQaRuntimeEnv } from "./gateway-child-env.js";
+import { createQaGatewaySetupHarness } from "./gateway-child-setup.test-support.js";
 import { resolveQaNodeExecPath } from "./node-exec.js";
 import { readQaAuthProfiles, writeQaAuthProfiles } from "./providers/shared/auth-store.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 import { runQaScenarioCommandLifecycle } from "./test-file-scenario-command-lifecycle.js";
 
 const dirs = createTempDirHarness();
+const setup = createQaGatewaySetupHarness();
 const runtimeRoots: string[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
+  await setup.cleanup();
   for (const tempRoot of runtimeRoots.splice(0)) {
     await cleanupQaGatewayTempRoots({ tempRoot });
   }
@@ -33,9 +35,12 @@ afterEach(async () => {
 
 describe("cleanupQaGatewayTempRoots", () => {
   it("removes child scratch and compiler caches without touching the parent temp directory", async () => {
-    const tempRoot = await fs.realpath(await dirs.makeTempDir("qa-child-temp-"));
     const parentTemp = await fs.realpath(await dirs.makeTempDir("qa-parent-temp-"));
     const inheritedTemp = { TMPDIR: parentTemp, TMP: parentTemp, TEMP: parentTemp };
+    const { tempRoot, env, lifetime } = await setup.prepare(
+      { runtimeEnvPatch: inheritedTemp },
+      { ...inheritedTemp, NODE_DISABLE_COMPILE_CACHE: undefined, NODE_COMPILE_CACHE: undefined },
+    );
     const result = await runQaScenarioCommandLifecycle({
       command: await resolveQaNodeExecPath(),
       args: [
@@ -58,19 +63,7 @@ console.log(JSON.stringify({ scratch, cache }));
 `,
       ],
       cwd: tempRoot,
-      env: buildQaRuntimeEnv({
-        baseEnv: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, ...inheritedTemp },
-        runtimeEnvPatch: inheritedTemp,
-        configPath: path.join(tempRoot, "openclaw.json"),
-        gatewayToken: "qa-token",
-        homeDir: path.join(tempRoot, "home"),
-        stateDir: path.join(tempRoot, "state"),
-        tempRoot,
-        xdgConfigHome: path.join(tempRoot, "xdg-config"),
-        xdgDataHome: path.join(tempRoot, "xdg-data"),
-        xdgCacheHome: path.join(tempRoot, "xdg-cache"),
-        developmentSourceRoot: null,
-      }),
+      env,
     });
     expect(result, result.failureMessage).toMatchObject({ exitCode: 0, stderr: "" });
     const { scratch, cache } = JSON.parse(result.stdout) as {
@@ -84,7 +77,7 @@ console.log(JSON.stringify({ scratch, cache }));
       withFileTypes: true,
     });
     expect(cacheEntries.some((entry) => entry.isFile())).toBe(true);
-    await cleanupQaGatewayTempRoots({ tempRoot });
+    expect(await lifetime.stop()).toEqual({ process: "never-spawned", errors: [] });
     await expect(fs.stat(tempRoot)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await fs.readdir(parentTemp)).toEqual([]);
   });
@@ -183,7 +176,7 @@ console.log(JSON.stringify({ scratch, cache }));
         stateDir,
         profiles: { fake: { type: "api_key", provider: "openai", key: "qa-synthetic" } },
       });
-      readQaAuthProfiles(agentDir);
+      await readQaAuthProfiles(agentDir);
       const agent = openOpenClawAgentDatabase({
         agentId: "qa",
         env,

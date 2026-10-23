@@ -1,9 +1,9 @@
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { bindAgentToolExecutionLocation } from "../agents/agent-tool-metadata.js";
-import { prepareCoreToolPolicy } from "../agents/prepared-tool-surface.js";
 import type { BoundAgentRunSessionTarget } from "../agents/run-session-target.types.js";
 import { createToolSurfacePresentationForTest } from "../agents/tool-surface-plan.test-support.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import type { WorkerInferenceExecutor } from "../gateway/worker-environments/connection-identity.js";
 import type { WorkerSessionTurnClaim } from "../gateway/worker-environments/placement-record.js";
 import type { WorkerSessionPlacementStore } from "../gateway/worker-environments/placement-store.js";
 import {
@@ -11,19 +11,20 @@ import {
   bindWorkerTurnCapabilities,
 } from "../gateway/worker-environments/placement-turn-claim-events.js";
 import { createWorkerGatewayToolRuntime } from "../gateway/worker-environments/worker-gateway-tool-runtime.js";
-import { captureWorkerTurnTranscriptSource } from "../gateway/worker-environments/worker-turn-transcript-target.js";
+import { prepareWorkerTurnTranscriptSource } from "../gateway/worker-environments/worker-turn-transcript-target.js";
 import {
   claimAgentRunDelegatedAuthority,
   registerAgentRunContext,
   releaseAgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
 import type { WorkerLaunchPlan } from "./launch-descriptor.js";
-import { createWorkerPlacementTools } from "./worker-placement-tools.js";
+import { prepareWorkerPlacementForTest } from "./worker-tool-surface.test-support.js";
 
 export async function bindWorkerFixtureTurnSource(
   store: WorkerSessionPlacementStore,
   claim: WorkerSessionTurnClaim,
   target: BoundAgentRunSessionTarget,
+  inference: WorkerInferenceExecutor,
 ) {
   const entry = loadSessionEntry(target);
   if (!entry || entry.sessionId !== claim.sessionId) {
@@ -34,66 +35,40 @@ export async function bindWorkerFixtureTurnSource(
     expectedLifecycleRevision: entry.lifecycleRevision,
     expectedWriterRunId: entry.activeWriterRunId,
   };
-  const assertSourceCurrent = captureWorkerTurnTranscriptSource(sessionTarget);
-  const operationalRunInstance = createOperationalRunInstanceRef(claim.runId);
-  const authority = claimAgentRunDelegatedAuthority(operationalRunInstance, assertSourceCurrent);
+  const assertCurrent = await prepareWorkerTurnTranscriptSource(sessionTarget);
+  const runInstance = createOperationalRunInstanceRef(claim.runId);
+  const authority = claimAgentRunDelegatedAuthority(runInstance, assertCurrent);
   const lifetime = new AbortController();
-  let disposed = false;
-  const dispose = () => {
-    if (disposed) {
+  const dispose = async () => {
+    if (lifetime.signal.aborted) {
       return;
     }
-    disposed = true;
     lifetime.abort();
     // Placement settlement or fixture database close owns the durable claim.
     releaseAgentRunDelegatedAuthority(authority);
+    await assertCurrent.release();
   };
   try {
     registerAgentRunContext(claim.runId, target, authority.claimId);
-    await bindWorkerTurnOwner(
-      store,
-      claim,
-      undefined,
-      operationalRunInstance,
-      sessionTarget,
-      assertSourceCurrent,
-    );
+    await bindWorkerTurnOwner(store, claim, undefined, runInstance, sessionTarget, assertCurrent);
   } catch (error) {
-    dispose();
+    await dispose();
     throw error;
   }
   let assignment: WorkerLaunchPlan["assignment"];
   bindWorkerTurnCapabilities(store, claim, {
+    inference,
     toolSurface: createWorkerGatewayToolRuntime({
-      assertCurrent: assertSourceCurrent,
+      assertCurrent,
       signal: lifetime.signal,
       prepare: async () => {
-        const policy = prepareCoreToolPolicy({
-          agentId: assignment.agentId,
-          modelProvider: assignment.modelRef.provider,
-          modelId: assignment.modelRef.model,
-          ...(assignment.permissionMode
-            ? {
-                sessionPermissionPolicy: {
-                  mode: assignment.permissionMode,
-                  root: assignment.workspaceDir,
-                },
-              }
-            : {}),
-        });
-        const tools = createWorkerPlacementTools({
-          policy,
-          cwd: assignment.workspaceDir,
-          containmentRoot: assignment.workerContainmentRoot ?? assignment.workspaceDir,
-          execAuthority: assignment.toolAuthority.exec,
-          permissionMode: assignment.permissionMode,
-          agentId: assignment.agentId,
-          sessionKey: `worker:${claim.sessionId}`,
+        const { tools: available, policy } = prepareWorkerPlacementForTest({
+          assignment,
           sessionId: claim.sessionId,
           runId: claim.runId,
-        }).filter((tool) =>
-          assignment.toolAuthority.allowedToolNames.some((name) => name === tool.name),
-        );
+        });
+        const allowed = assignment.toolAuthority.allowedToolNames;
+        const tools = available.filter((tool) => allowed.includes(tool.name));
         for (const tool of tools) {
           bindAgentToolExecutionLocation(tool, { kind: "placement" });
         }
@@ -102,7 +77,7 @@ export async function bindWorkerFixtureTurnSource(
     }),
   });
   return {
-    operationalRunInstance,
+    operationalRunInstance: runInstance,
     setToolAssignment(value: WorkerLaunchPlan["assignment"]) {
       assignment = value;
     },

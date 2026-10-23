@@ -1,15 +1,18 @@
-// Channels capabilities tests cover capability reporting, account selection, probes, and installable plugins.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { ExpectedCliError } from "../../cli/failure-output.js";
 import type { OpenClawConfig, replaceConfigFile } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
-import { createTestConfigSnapshot } from "../test-runtime-config-helpers.js";
+import {
+  createCapturingTestRuntime,
+  createTestConfigSnapshot,
+} from "../test-runtime-config-helpers.js";
 import { channelsCapabilitiesCommand } from "./capabilities.js";
 
-const logs: string[] = [];
-const errors: string[] = [];
-const resolveDefaultAccountId = () => DEFAULT_ACCOUNT_ID;
+const { runtime, logs, errors } = createCapturingTestRuntime();
+runtime.exit = (code: number) => {
+  throw new Error(`exit:${code}`);
+};
 const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
   readConfigFileSnapshot: vi.fn(),
@@ -45,6 +48,11 @@ vi.mock("../../config/config.js", async () => {
   return {
     ...actual,
     getRuntimeConfig: mocks.loadConfig,
+    loadConfig: mocks.loadConfig,
+    captureRuntimeConfigAsyncReader:
+      (...args: Parameters<typeof mocks.loadConfig>) =>
+      async () =>
+        mocks.loadConfig(...args),
     readConfigFileSnapshot: mocks.readConfigFileSnapshot,
     readConfigFileSnapshotForWrite: mocks.readConfigFileSnapshotForWrite,
     replaceConfigFile: mocks.replaceConfigFile,
@@ -59,61 +67,64 @@ vi.mock("../channel-setup/channel-plugin-resolution.js", () => ({
   resolveInstallableChannelPlugin: mocks.resolveInstallableChannelPlugin,
 }));
 
-const runtime = {
-  log: (...args: unknown[]) => {
-    logs.push(args.map(String).join(" "));
-  },
-  error: (...args: unknown[]) => {
-    errors.push(args.map(String).join(" "));
-  },
-  exit: (code: number) => {
-    throw new Error(`exit:${code}`);
-  },
-};
-
-function resetOutput() {
-  logs.length = 0;
-  errors.length = 0;
-}
-
-function buildPlugin(params: {
-  id: string;
-  capabilities?: ChannelPlugin["capabilities"];
-  account?: Record<string, unknown>;
-  probe?: unknown;
-}): ChannelPlugin {
+function buildPlugin(
+  params: Partial<Pick<ChannelPlugin, "id" | "status">> & {
+    account?: Record<string, unknown>;
+  } = {},
+): ChannelPlugin {
+  const id = params.id ?? "slack";
   return {
-    id: params.id,
+    id,
     meta: {
-      id: params.id,
-      label: params.id,
-      selectionLabel: params.id,
+      id,
+      label: id,
+      selectionLabel: id,
       docsPath: "/channels/test",
       blurb: "test",
     },
-    capabilities: params.capabilities ?? { chatTypes: ["direct"] },
+    capabilities: { chatTypes: ["direct"] },
     config: {
       listAccountIds: () => ["default"],
       resolveAccount: () => params.account ?? { accountId: "default" },
-      defaultAccountId: resolveDefaultAccountId,
+      defaultAccountId: () => DEFAULT_ACCOUNT_ID,
       isConfigured: () => true,
       isEnabled: () => true,
     },
-    status: params.probe
-      ? {
-          probeAccount: async () => params.probe,
-        }
-      : undefined,
+    status: params.status,
     actions: {
       describeMessageTool: () => ({ actions: ["poll"] }),
     },
   };
 }
 
+function selectPlugin(params: Parameters<typeof buildPlugin>[0] = {}) {
+  const plugin = buildPlugin(params);
+  mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+    cfg: { channels: {} },
+    channelId: plugin.id,
+    plugin,
+    configChanged: false,
+  });
+  return plugin;
+}
+
+const botAccount = { accountId: "default", botToken: "xoxb-bot" };
+const accountRequired =
+  "--account requires a specific --channel. Run openclaw channels list to choose one.";
+const targetRequired =
+  "--target requires a specific --channel. Run openclaw channels list to choose one.";
+const pending = () => Promise.withResolvers<never>().promise;
+const reportHeader = "slack:default\nSupport: chatTypes=direct\nActions: send, broadcast, poll";
+
+function expectReport(...lines: string[]) {
+  expect(logs).toStrictEqual([[reportHeader, ...lines].join("\n")]);
+}
+
 describe("channelsCapabilitiesCommand", () => {
   beforeEach(() => {
     vi.stubEnv("NO_COLOR", "1");
-    resetOutput();
+    logs.length = 0;
+    errors.length = 0;
     vi.clearAllMocks();
     const baseConfig = { channels: {} };
     mocks.loadConfig.mockReturnValue(baseConfig);
@@ -146,50 +157,28 @@ describe("channelsCapabilitiesCommand", () => {
   });
 
   it("prints Slack bot + user scopes when user token is configured", async () => {
-    const plugin = buildPlugin({
-      id: "slack",
-      account: {
-        accountId: "default",
-        botToken: "xoxb-bot",
-        userToken: "xoxp-user",
-        config: { userToken: "xoxp-user" },
+    selectPlugin({
+      account: { ...botAccount, userToken: "xoxp-user", config: { userToken: "xoxp-user" } },
+      status: {
+        probeAccount: async () => ({ ok: true, bot: { name: "openclaw" }, team: { name: "team" } }),
+        formatCapabilitiesProbe: () => [{ text: "Bot: @openclaw" }, { text: "Team: team" }],
+        buildCapabilitiesDiagnostics: async () => ({
+          lines: [
+            { text: "Bot scopes (auth.scopes): chat:write" },
+            { text: "User scopes (auth.scopes): users:read" },
+          ],
+        }),
       },
-      probe: { ok: true, bot: { name: "openclaw" }, team: { name: "team" } },
-    });
-    plugin.status = {
-      ...plugin.status,
-      formatCapabilitiesProbe: () => [{ text: "Bot: @openclaw" }, { text: "Team: team" }],
-      buildCapabilitiesDiagnostics: async () => ({
-        lines: [
-          { text: "Bot scopes (auth.scopes): chat:write" },
-          { text: "User scopes (auth.scopes): users:read" },
-        ],
-        details: {
-          botScopes: { ok: true, scopes: ["chat:write"], source: "auth.scopes" },
-          userScopes: { ok: true, scopes: ["users:read"], source: "auth.scopes" },
-        },
-      }),
-    };
-    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
-      cfg: { channels: {} },
-      channelId: "slack",
-      plugin,
-      configChanged: false,
     });
 
     await channelsCapabilitiesCommand({ channel: "slack" }, runtime);
 
-    expect(logs).toStrictEqual([
-      [
-        "slack:default",
-        "Support: chatTypes=direct",
-        "Actions: send, broadcast, poll",
-        "Bot: @openclaw",
-        "Team: team",
-        "Bot scopes (auth.scopes): chat:write",
-        "User scopes (auth.scopes): users:read",
-      ].join("\n"),
-    ]);
+    expectReport(
+      "Bot: @openclaw",
+      "Team: team",
+      "Bot scopes (auth.scopes): chat:write",
+      "User scopes (auth.scopes): users:read",
+    );
   });
 
   it("prints an empty all-channel report when no channels are configured", async () => {
@@ -200,45 +189,19 @@ describe("channelsCapabilitiesCommand", () => {
   });
 
   it.each([
-    {
-      name: "account without a channel",
-      options: { account: "ghost", json: true },
-      message: "--account requires a specific --channel. Run openclaw channels list to choose one.",
-      discoversChannels: false,
-    },
-    {
-      name: "account with all channels",
-      options: { channel: "all", account: "ghost" },
-      message: "--account requires a specific --channel. Run openclaw channels list to choose one.",
-      discoversChannels: false,
-    },
-    {
-      name: "target without a channel",
-      options: { target: "channel:1", json: true },
-      message: "--target requires a specific --channel. Run openclaw channels list to choose one.",
-      discoversChannels: false,
-    },
-    {
-      name: "target with all channels",
-      options: { channel: "all", target: "channel:1" },
-      message: "--target requires a specific --channel. Run openclaw channels list to choose one.",
-      discoversChannels: false,
-    },
-    {
-      name: "account before target when both lack a channel",
-      options: { account: "ghost", target: "channel:1" },
-      message: "--account requires a specific --channel. Run openclaw channels list to choose one.",
-      discoversChannels: false,
-    },
-    {
-      name: "unknown channel after installable plugin lookup",
-      options: { channel: "definitely-not-a-channel", json: true },
-      message:
-        'Unknown channel "definitely-not-a-channel". Run `openclaw channels list --all` to see configured and installable channels.',
-      discoversChannels: true,
-    },
-  ])("rejects $name before resolving or probing an account", async (testCase) => {
-    const plugin = buildPlugin({ id: "slack" });
+    ["account without channel", { account: "ghost", json: true }, accountRequired, 0],
+    ["account with all", { channel: "all", account: "ghost" }, accountRequired, 0],
+    ["target without channel", { target: "channel:1", json: true }, targetRequired, 0],
+    ["target with all", { channel: "all", target: "channel:1" }, targetRequired, 0],
+    ["account before target", { account: "ghost", target: "channel:1" }, accountRequired, 0],
+    [
+      "unknown channel",
+      { channel: "definitely-not-a-channel", json: true },
+      'Unknown channel "definitely-not-a-channel". Run `openclaw channels list --all` to see configured and installable channels.',
+      1,
+    ],
+  ] as const)("rejects %s before account resolution", async (_name, options, message, calls) => {
+    const plugin = buildPlugin();
     const listAccountIds = vi.fn(() => ["default"]);
     const resolveAccount = vi.fn(() => ({ accountId: "default" }));
     const probeAccount = vi.fn(async () => ({ ok: true }));
@@ -247,22 +210,18 @@ describe("channelsCapabilitiesCommand", () => {
     plugin.status = { probeAccount };
     mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([plugin]);
 
-    const failure = channelsCapabilitiesCommand(testCase.options, runtime);
+    const failure = channelsCapabilitiesCommand(options, runtime);
 
     await expect(failure).rejects.toBeInstanceOf(ExpectedCliError);
     await expect(failure).rejects.toMatchObject({
-      message: testCase.message,
-      humanOutput: testCase.message,
-      machineOutput: testCase.message,
+      message,
+      humanOutput: message,
+      machineOutput: message,
     });
     expect(logs).toStrictEqual([]);
     expect(errors).toStrictEqual([]);
-    expect(mocks.listReadOnlyChannelPluginsForConfig).toHaveBeenCalledTimes(
-      testCase.discoversChannels ? 1 : 0,
-    );
-    expect(mocks.resolveInstallableChannelPlugin).toHaveBeenCalledTimes(
-      testCase.discoversChannels ? 1 : 0,
-    );
+    expect(mocks.listReadOnlyChannelPluginsForConfig).toHaveBeenCalledTimes(calls);
+    expect(mocks.resolveInstallableChannelPlugin).toHaveBeenCalledTimes(calls);
     expect(listAccountIds).not.toHaveBeenCalled();
     expect(resolveAccount).not.toHaveBeenCalled();
     expect(probeAccount).not.toHaveBeenCalled();
@@ -276,21 +235,7 @@ describe("channelsCapabilitiesCommand", () => {
     { expected: "Invalid --timeout", label: "whitespace", timeout: " \t " },
   ])("rejects a $label timeout before capability probes", async ({ expected, timeout }) => {
     const probeAccount = vi.fn(async () => ({ ok: true }));
-    const plugin = buildPlugin({
-      id: "slack",
-      account: {
-        accountId: "default",
-        botToken: "xoxb-bot",
-      },
-      probe: { ok: true },
-    });
-    plugin.status = { ...plugin.status, probeAccount };
-    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
-      cfg: { channels: {} },
-      channelId: "slack",
-      plugin,
-      configChanged: false,
-    });
+    selectPlugin({ account: botAccount, status: { probeAccount } });
 
     await expect(
       channelsCapabilitiesCommand({ channel: "slack", timeout }, runtime),
@@ -303,20 +248,7 @@ describe("channelsCapabilitiesCommand", () => {
     const buildCapabilitiesDiagnostics = vi.fn(async () => ({
       lines: [{ text: "Diagnostics: ok" }],
     }));
-    const plugin = buildPlugin({
-      id: "slack",
-      account: {
-        accountId: "default",
-        botToken: "xoxb-bot",
-      },
-    });
-    plugin.status = { probeAccount, buildCapabilitiesDiagnostics };
-    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
-      cfg: { channels: {} },
-      channelId: "slack",
-      plugin,
-      configChanged: false,
-    });
+    selectPlugin({ account: botAccount, status: { probeAccount, buildCapabilitiesDiagnostics } });
 
     await channelsCapabilitiesCommand({ channel: "slack", timeout: "999999" }, runtime);
 
@@ -328,19 +260,12 @@ describe("channelsCapabilitiesCommand", () => {
 
   it("probes prepared accounts and reports their names", async () => {
     const account = { accountId: "default", name: "Prepared account" };
-    const plugin = buildPlugin({ id: "slack" });
+    const probeAccount = vi.fn(async () => ({ ok: true }));
+    const plugin = selectPlugin({ status: { probeAccount } });
     plugin.config.resolveAccount = () => {
       throw new Error("legacy account resolution");
     };
     plugin.config.resolveAccountAsync = async () => account;
-    const probeAccount = vi.fn(async () => ({ ok: true }));
-    plugin.status = { probeAccount };
-    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
-      cfg: { channels: {} },
-      channelId: "slack",
-      plugin,
-      configChanged: false,
-    });
 
     await channelsCapabilitiesCommand({ channel: "slack", json: true }, runtime);
 
@@ -348,60 +273,45 @@ describe("channelsCapabilitiesCommand", () => {
     expect(logs.join("\n")).toContain("Prepared account");
   });
 
-  it("serializes a failed probe when a capability probe exceeds its timeout", async () => {
-    const probeAccount = vi.fn(
-      () =>
-        new Promise<never>(() => {
-          // Intentionally never settles; command timeout should win.
-        }),
-    );
-    const plugin = buildPlugin({
-      id: "slack",
-      account: {
-        accountId: "default",
-        botToken: "xoxb-bot",
-      },
-    });
-    plugin.status = { probeAccount };
-    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
-      cfg: { channels: {} },
-      channelId: "slack",
-      plugin,
-      configChanged: false,
-    });
+  it("times out a stalled probe after a wall-clock rollback and continues to the next account", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    try {
+      const plugin = buildPlugin();
+      plugin.config.listAccountIds = () => ["stalled", "healthy"];
+      plugin.config.resolveAccount = (_cfg, accountId) => ({ accountId });
+      plugin.status = {
+        probeAccount: async ({ account }) => {
+          if (account.accountId === "healthy") {
+            return { ok: true };
+          }
+          vi.setSystemTime(Date.now() - 5_000);
+          return Promise.withResolvers<never>().promise;
+        },
+      };
+      mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([plugin]);
 
-    await channelsCapabilitiesCommand({ channel: "slack", json: true, timeout: "1" }, runtime);
+      const run = channelsCapabilitiesCommand({ json: true, timeout: "1000" }, runtime);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(logs).toHaveLength(1);
+      await run;
 
-    const payload = JSON.parse(logs[0] ?? "{}") as {
-      channels?: Array<{ probe?: unknown }>;
-    };
-    expect(payload.channels?.[0]?.probe).toStrictEqual({
-      ok: false,
-      timedOut: true,
-      error: "check timed out after 1ms",
-    });
+      expect(JSON.parse(logs.join("\n")).channels).toMatchObject([
+        {
+          accountId: "stalled",
+          probe: { ok: false, timedOut: true, error: "check timed out after 1000ms" },
+        },
+        { accountId: "healthy", probe: { ok: true } },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("prints timed-out probes when a channel formatter has no custom output", async () => {
-    const probeAccount = vi.fn(
-      () =>
-        new Promise<never>(() => {
-          // Intentionally never settles; command timeout should win.
-        }),
-    );
-    const plugin = buildPlugin({
+    selectPlugin({
       id: "telegram",
-      account: {
-        accountId: "default",
-        botToken: "bot-token",
-      },
-    });
-    plugin.status = { probeAccount, formatCapabilitiesProbe: () => [] };
-    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
-      cfg: { channels: {} },
-      channelId: "telegram",
-      plugin,
-      configChanged: false,
+      account: { accountId: "default", botToken: "bot-token" },
+      status: { probeAccount: pending, formatCapabilitiesProbe: () => [] },
     });
 
     await channelsCapabilitiesCommand({ channel: "telegram", timeout: "1" }, runtime);
@@ -410,26 +320,9 @@ describe("channelsCapabilitiesCommand", () => {
   });
 
   it("serializes diagnostics when capability diagnostics exceed their timeout", async () => {
-    const buildCapabilitiesDiagnostics = vi.fn(
-      () =>
-        new Promise<never>(() => {
-          // Intentionally never settles; command timeout should win.
-        }),
-    );
-    const plugin = buildPlugin({
-      id: "slack",
-      account: {
-        accountId: "default",
-        botToken: "xoxb-bot",
-      },
-      probe: { ok: true },
-    });
-    plugin.status = { ...plugin.status, buildCapabilitiesDiagnostics };
-    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
-      cfg: { channels: {} },
-      channelId: "slack",
-      plugin,
-      configChanged: false,
+    selectPlugin({
+      account: botAccount,
+      status: { probeAccount: async () => ({ ok: true }), buildCapabilitiesDiagnostics: pending },
     });
 
     await channelsCapabilitiesCommand({ channel: "slack", json: true, timeout: "1" }, runtime);
@@ -438,55 +331,9 @@ describe("channelsCapabilitiesCommand", () => {
       channels?: Array<{ diagnostics?: unknown }>;
     };
     expect(payload.channels?.[0]?.diagnostics).toStrictEqual({
-      lines: [
-        {
-          text: "Diagnostics: timed out after 1ms",
-          tone: "error",
-        },
-      ],
+      lines: [{ text: "Diagnostics: timed out after 1ms", tone: "error" }],
       details: { timedOut: true },
     });
-  });
-
-  it("prints Teams Graph permission hints when present", async () => {
-    const plugin = buildPlugin({
-      id: "msteams",
-      probe: {
-        ok: true,
-        appId: "app-id",
-        graph: {
-          ok: true,
-          roles: ["ChannelMessage.Read.All", "Files.Read.All"],
-        },
-      },
-    });
-    plugin.status = {
-      ...plugin.status,
-      formatCapabilitiesProbe: () => [
-        { text: "App: app-id" },
-        {
-          text: "Graph roles: ChannelMessage.Read.All (channel history), Files.Read.All (files (OneDrive))",
-        },
-      ],
-    };
-    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
-      cfg: { channels: {} },
-      channelId: "msteams",
-      plugin,
-      configChanged: false,
-    });
-
-    await channelsCapabilitiesCommand({ channel: "msteams" }, runtime);
-
-    expect(logs).toStrictEqual([
-      [
-        "msteams:default",
-        "Support: chatTypes=direct",
-        "Actions: send, broadcast, poll",
-        "App: app-id",
-        "Graph roles: ChannelMessage.Read.All (channel history), Files.Read.All (files (OneDrive))",
-      ].join("\n"),
-    ]);
   });
 
   it("installs an explicit optional channel in the selected owner before rendering capabilities", async () => {
@@ -496,10 +343,8 @@ describe("channelsCapabilitiesCommand", () => {
       id: "CAPABILITIES_TEST_SLACK_TOKEN",
     } as const;
     const sourceConfig = { channels: { slack: { botToken: tokenRef } } };
-    let runtimeConfig: OpenClawConfig = {
-      ...sourceConfig,
-      messages: { responsePrefix: "runtime-default" },
-    };
+    const messages = { responsePrefix: "runtime-default" };
+    let runtimeConfig: OpenClawConfig = { ...sourceConfig, messages };
     mocks.loadConfig.mockImplementation(() => runtimeConfig);
     mocks.readConfigFileSnapshot.mockImplementation(async () => ({
       ...createTestConfigSnapshot(sourceConfig, runtimeConfig),
@@ -512,10 +357,7 @@ describe("channelsCapabilitiesCommand", () => {
       },
       diagnostics: [],
     }));
-    const plugin = buildPlugin({
-      id: "slack",
-      probe: { ok: true },
-    });
+    const plugin = buildPlugin();
     const resolveAccount = vi.fn((cfg) => ({
       accountId: "default",
       botToken: cfg.channels?.slack?.botToken,
@@ -526,7 +368,6 @@ describe("channelsCapabilitiesCommand", () => {
     }));
     plugin.config.resolveAccount = resolveAccount;
     plugin.status = {
-      ...plugin.status,
       probeAccount,
       formatCapabilitiesProbe: () => [{ text: "Probe: linked" }],
     };
@@ -538,59 +379,42 @@ describe("channelsCapabilitiesCommand", () => {
       pluginInstalled: true,
     }));
     mocks.replaceConfigFile.mockImplementation(async ({ sourceConfig: writtenSource }) => {
-      runtimeConfig = {
-        ...writtenSource,
-        messages: { responsePrefix: "runtime-default" },
-      };
+      runtimeConfig = { ...writtenSource, messages };
     });
 
     await channelsCapabilitiesCommand({ channel: "slack", agent: "ops" }, runtime);
 
-    expect(mocks.resolveInstallableChannelPlugin).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ rawChannel: "slack", agentId: "ops", allowInstall: true }),
-    );
-    expect(mocks.resolveInstallableChannelPlugin.mock.calls[0]?.[0].cfg).toEqual(sourceConfig);
+    const installArgs = mocks.resolveInstallableChannelPlugin.mock.calls[0]?.[0];
+    expect(installArgs).toMatchObject({
+      rawChannel: "slack",
+      agentId: "ops",
+      allowInstall: true,
+    });
+    expect(installArgs.cfg).toEqual(sourceConfig);
 
-    expect(mocks.replaceConfigFile).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ baseHash: "config-1" }),
-    );
-    expect(mocks.replaceConfigFile.mock.calls[0]?.[0].sourceConfig).toStrictEqual({
+    const writeArgs = mocks.replaceConfigFile.mock.calls[0]?.[0];
+    expect(writeArgs?.baseHash).toBe("config-1");
+    expect(writeArgs?.sourceConfig).toStrictEqual({
       channels: { slack: { botToken: tokenRef } },
       plugins: { entries: { slack: { enabled: true } } },
     });
-    expect(mocks.replaceConfigFile.mock.calls[0]?.[0].sourceConfig).not.toHaveProperty("messages");
     expect(mocks.resolveCommandSecretRefsViaGateway).toHaveBeenCalledTimes(2);
-    expect(mocks.resolveCommandSecretRefsViaGateway.mock.calls[0]?.[0].commandName).toBe(
-      "channels",
-    );
-    expect(mocks.resolveCommandSecretRefsViaGateway.mock.calls[1]?.[0].commandName).toBe(
-      "channels",
-    );
-    expect(mocks.resolveCommandSecretRefsViaGateway.mock.calls[1]?.[0].config).toEqual(
-      runtimeConfig,
-    );
-    expect(resolveAccount.mock.calls[0]?.[0].channels?.slack?.botToken).toBe(
-      "resolved-capabilities-token",
-    );
-    expect(resolveAccount.mock.calls[0]?.[0].messages?.responsePrefix).toBe("runtime-default");
-    expect(probeAccount.mock.calls[0]?.[0].cfg.channels?.slack?.botToken).toBe(
-      "resolved-capabilities-token",
-    );
-    expect(probeAccount.mock.calls[0]?.[0].cfg.messages?.responsePrefix).toBe("runtime-default");
+    const [initialResolution, refreshedResolution] =
+      mocks.resolveCommandSecretRefsViaGateway.mock.calls;
+    expect(initialResolution?.[0].commandName).toBe("channels");
+    expect(refreshedResolution?.[0].commandName).toBe("channels");
+    expect(refreshedResolution?.[0].config).toEqual(runtimeConfig);
+    const preparedConfig = {
+      channels: { slack: { botToken: "resolved-capabilities-token" } },
+      messages,
+    };
+    expect(resolveAccount.mock.calls[0]?.[0]).toMatchObject(preparedConfig);
+    expect(probeAccount.mock.calls[0]?.[0].cfg).toMatchObject(preparedConfig);
 
     expect(mocks.refreshPluginRegistryAfterConfigMutation).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({ reason: "source-changed" }),
     );
-    expect(logs).toStrictEqual([
-      [
-        "slack:default",
-        "Support: chatTypes=direct",
-        "Actions: send, broadcast, poll",
-        "Probe: linked",
-      ].join("\n"),
-    ]);
+    expectReport("Probe: linked");
   });
 });

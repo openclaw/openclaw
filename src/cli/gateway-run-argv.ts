@@ -5,6 +5,7 @@ import {
   WINDOWS_TASK_SUPERVISOR_FLAG,
 } from "../daemon/windows-task-supervisor-contract.js";
 import {
+  consumeKnownOptionToken,
   consumeRootCommandOptionToken,
   getCommandArgsWithRootOptions,
   getCommandPositionalsWithRootOptions,
@@ -14,42 +15,7 @@ import {
 export { isForegroundGatewayRunArgv } from "../../gateway-run-argv.mjs";
 
 export function consumeGatewayRunOptionToken(args: ReadonlyArray<string>, index: number): number {
-  const arg = args[index];
-  if (!arg || arg === "--" || !arg.startsWith("-")) {
-    return 0;
-  }
-  const equalsIndex = arg.indexOf("=");
-  const flag = equalsIndex === -1 ? arg : arg.slice(0, equalsIndex);
-  if (GATEWAY_RUN_BOOLEAN_FLAGS.has(flag)) {
-    return equalsIndex === -1 ? 1 : 0;
-  }
-  if (!GATEWAY_RUN_VALUE_FLAGS.has(flag)) {
-    return 0;
-  }
-  if (equalsIndex !== -1) {
-    return arg.slice(equalsIndex + 1).trim() ? 1 : 0;
-  }
-  return isValueToken(args[index + 1]) ? 2 : 0;
-}
-
-function consumeGatewayRunPreBootstrapOptionToken(
-  args: ReadonlyArray<string>,
-  index: number,
-): number {
-  const rootConsumed = consumeRootCommandOptionToken(args, index);
-  if (rootConsumed > 0) {
-    return rootConsumed;
-  }
-  const consumed = consumeGatewayRunOptionToken(args, index);
-  if (consumed > 0) {
-    return consumed;
-  }
-  const arg = args[index];
-  if (arg && GATEWAY_RUN_VALUE_FLAGS.has(arg) && args[index + 1] !== undefined) {
-    // Required values can look like flags; consume them before considering destructive options.
-    return 2;
-  }
-  return 0;
+  return consumeKnownOptionToken(args, index, GATEWAY_RUN_BOOLEAN_FLAGS, GATEWAY_RUN_VALUE_FLAGS);
 }
 
 export function consumeGatewayFastPathRootOptionToken(
@@ -84,12 +50,8 @@ export function resolveGatewayCommandPath(argv: string[], depth = 2): string[] |
   return positionals ? ["gateway", ...positionals] : null;
 }
 
-export function resolveGatewayCatalogCommandPath(argv: string[]): string[] | null {
-  return resolveGatewayCommandPath(argv, 2);
-}
-
 export function isGatewayRunInvocationArgv(argv: string[]): boolean {
-  const commandPath = resolveGatewayCatalogCommandPath(argv);
+  const commandPath = resolveGatewayCommandPath(argv);
   return (
     commandPath?.length === 1 ||
     (commandPath?.length === 2 && commandPath[0] === "gateway" && commandPath[1] === "run")
@@ -119,7 +81,11 @@ export function resolveGatewayRunPreBootstrapOptions(
       sawRun = true;
       continue;
     }
-    const consumed = consumeGatewayRunPreBootstrapOptionToken(args, index);
+    const consumed =
+      consumeRootCommandOptionToken(args, index) ||
+      consumeGatewayRunOptionToken(args, index) ||
+      // Required values can look like flags; consume them before considering destructive options.
+      (arg && GATEWAY_RUN_VALUE_FLAGS.has(arg) && args[index + 1] !== undefined ? 2 : 0);
     if (consumed > 0) {
       if (arg === "--force") {
         force = true;

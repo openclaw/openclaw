@@ -76,7 +76,6 @@ type ResolvePairingSetupOptions = {
   forceSecure?: boolean;
   bootstrapProfile?: DeviceBootstrapProfileInput;
   issuedBootstrap?: { token: string; expiresAtMs: number; setupId: string };
-  pairingBaseDir?: string;
   runCommandWithTimeout?: PairingSetupCommandRunner;
   networkInterfaces?: () => ReturnType<typeof os.networkInterfaces>;
   localTlsFingerprint?: string;
@@ -288,16 +287,16 @@ function resolvePairingSetupAuthLabel(
     }
     return { label: mode };
   }
+  // Setup codes carry their own bounded bootstrap credential. Proxy-only
+  // ingress retains its label even when a password serves local direct callers.
+  if (mode === "trusted-proxy") {
+    return { label: "trusted-proxy" };
+  }
   if (token) {
     return { label: "token" };
   }
   if (password) {
     return { label: "password" };
-  }
-  // Setup codes carry their own bounded bootstrap credential. Proxy-only
-  // ingress does not need an unrelated shared secret to issue that handoff.
-  if (mode === "trusted-proxy") {
-    return { label: "trusted-proxy" };
   }
   if (mode === "none") {
     return {
@@ -556,7 +555,6 @@ export async function resolvePairingSetupFromConfig(
   const issued =
     options.issuedBootstrap ??
     (await issueDevicePairSetupBootstrapToken({
-      baseDir: options.pairingBaseDir,
       profile: issuedBootstrapProfile,
     }));
 

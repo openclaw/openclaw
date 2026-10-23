@@ -8,8 +8,6 @@ import {
   createMemoryWikiCompiledCacheStore,
   loadMemoryWikiCompiledCache,
   readMemoryWikiDashboardState,
-  reconcileMemoryWikiCompiledCacheOwner,
-  resolveMemoryWikiCompiledCacheGeneration,
   writeMemoryWikiCompiledCache,
   type MemoryWikiCompiledCacheSnapshot,
 } from "./compiled-cache.js";
@@ -20,22 +18,15 @@ import { buildMemoryWikiOverview, projectMemoryWikiOverviewItem } from "./wiki-o
 
 function createSnapshot(body: string): MemoryWikiCompiledCacheSnapshot {
   const text = body.slice(0, 700);
-  const page: WikiPageSummary = {
-    absolutePath: "/wiki/entities/snapshot.md",
-    relativePath: "entities/snapshot.md",
-    kind: "entity",
+  const shared = {
     title: text,
-    hasFrontmatter: true,
+    kind: "entity" as const,
     aliases: [text],
     sourceIds: [text],
-    linkTargets: [],
-    claims: [{ text, evidence: [] }],
     contradictions: [text],
     questions: [text],
-    relationships: [{ targetTitle: text, note: text }],
     bestUsedFor: [text],
     notEnoughFor: [text],
-    bridgeAgentIds: [],
     personCard: {
       handles: [text],
       socials: [text],
@@ -46,22 +37,24 @@ function createSnapshot(body: string): MemoryWikiCompiledCacheSnapshot {
       notEnoughFor: [text],
     },
   };
+  const page: WikiPageSummary = {
+    ...shared,
+    absolutePath: "/wiki/entities/snapshot.md",
+    relativePath: "entities/snapshot.md",
+    hasFrontmatter: true,
+    linkTargets: [],
+    claims: [{ text, evidence: [] }],
+    relationships: [{ targetTitle: text, note: text }],
+    bridgeAgentIds: [],
+  };
   return {
     digest: {
       claimCount: 1,
       contradictionCount: 1,
       pages: [
         {
-          title: page.title,
-          kind: page.kind,
+          ...shared,
           path: page.relativePath,
-          aliases: page.aliases,
-          sourceIds: page.sourceIds,
-          questions: page.questions,
-          contradictions: page.contradictions,
-          bestUsedFor: page.bestUsedFor,
-          notEnoughFor: page.notEnoughFor,
-          personCard: page.personCard,
           relationshipCount: 1,
           topRelationships: page.relationships,
           claimCount: 1,
@@ -150,7 +143,6 @@ describe("Memory Wiki compiled publication ownership", () => {
       const topClaim = digestPage.topClaims[0];
       assert.ok(relationship && topClaim);
       const serialized = JSON.stringify(snapshot);
-      const generation = resolveMemoryWikiCompiledCacheGeneration(snapshot);
       const identity = {
         vaultGeneration: "vault-generation",
         compiledCachePublicationId: "publication",
@@ -158,16 +150,14 @@ describe("Memory Wiki compiled publication ownership", () => {
       await writeMemoryWikiCompiledCache(
         config,
         snapshot,
-        generation,
         identity.compiledCachePublicationId,
         null,
         async () => {
           await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
           // Publication must use the already-persisted payload, not serialize a
           // possibly changed compiler input again after its asynchronous gates.
-          claim.text = "changed during validation";
+          claim.text = "changed during commit";
         },
-        async () => {},
         async () => identity,
       );
 
@@ -179,7 +169,6 @@ describe("Memory Wiki compiled publication ownership", () => {
       const [blob] = blobs;
       assert.ok(blob);
       expect(gunzipSync(blob).toString("utf8")).toBe(serialized);
-      expect(resolveMemoryWikiCompiledCacheGeneration(cached)).toBe(generation);
 
       // Cover nested digest, claim, and both dashboard payloads, not just the
       // original overview snippet. None may remain shared with compiler state.
@@ -208,12 +197,10 @@ describe("Memory Wiki compiled publication ownership", () => {
         identity.vaultGeneration,
         identity.compiledCachePublicationId,
       );
-      await reconcileMemoryWikiCompiledCacheOwner(config, async () => identity);
       const reloaded = await loadMemoryWikiCompiledCache(config);
       assert.ok(reloaded);
       expect(reloaded).toEqual(cached);
       expect(JSON.stringify(reloaded)).toBe(serialized);
-      expect(resolveMemoryWikiCompiledCacheGeneration(reloaded)).toBe(generation);
     },
   );
 });

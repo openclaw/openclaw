@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -32,12 +32,12 @@ function publication(key: string): PreferencePublication {
   return current;
 }
 
-export function publishUserPreferencesChange(db: DatabaseSync): void {
+export function publishUserPreferencesChange(db: EngineConnection): void {
   const current = publication(requireOpenClawStateDatabaseIdentity({ db }).key);
   const commit = () => {
     current.revision = {};
   };
-  if (!stageSqliteTransactionState(db, { stage: () => {}, rollback: () => {}, commit })) {
+  if (!stageSqliteTransactionState(db, { commit })) {
     commit();
   }
 }

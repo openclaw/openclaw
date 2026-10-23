@@ -1,16 +1,13 @@
 import { randomUUID } from "node:crypto";
-import {
-  isExactAttachedEnvironment,
-  type WorkerDispatchPlacement,
-} from "./placement-dispatch-failure.js";
-import { resolvePriorWorkspaceResultConflict } from "./placement-dispatch-pending-results.js";
-import type { WorkerPlacementMoveIntent } from "./placement-move-intent.js";
+import type { WorkerDispatchPlacement } from "./placement-dispatch-failure.js";
+import type { WorkerPlacementMoveIntent } from "./placement-move-intent.types.js";
 import type {
   WorkerPlacementReclaimBarriers,
   WorkerReclaimPlacement,
 } from "./placement-reclaim-contract.js";
 import { placementTurnOwner, reportPlacementTransition } from "./placement-record.js";
 import type { PlacementRecoveryDeps } from "./placement-recovery-contract.js";
+import { isExactAttachedEnvironment } from "./placement-target.js";
 import { completeWorkerWorkspaceTeardown } from "./placement-teardown.js";
 import { findPendingWorkerWorkspaceResult } from "./placement-workspace-result.js";
 import type {
@@ -31,6 +28,7 @@ import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {
   createWorkspaceResultJournal,
   finalizeWorkspaceResultConflicts,
+  resolvePriorWorkspaceResultConflict,
   settleStagedWorkspaceResult,
 } from "./workspace-result-settlement.js";
 import {
@@ -125,6 +123,43 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
       reclaim: async (workspace, current, reauthorize) => {
         if (current.state === "reclaimed") {
           return current;
+        }
+        if (workspace.kind === "device-folder") {
+          if (moveIntent || request.recoverToGateway) {
+            throw new Error(
+              "Device folders cannot move to the Gateway; reconnect the original device.",
+            );
+          }
+          const claimId = `reclaim-${randomUUID()}`;
+          const claim = await placements.claimReclaimWorkspaceResult(
+            {
+              sessionId: current.sessionId,
+              sessionKey: current.sessionKey,
+              agentId: current.agentId,
+              claimId,
+              runId: claimId,
+              owner: placementTurnOwner(current),
+            },
+            undefined,
+            reauthorize,
+          );
+          reauthorize?.();
+          await placements.acceptWorkspaceResult(claim);
+          await placements.closeWorkerTurnToolState(claim);
+          reauthorize?.();
+          // Destroy stops the worker and releases its private state, never the user-owned folder.
+          await environments.destroy(current.environmentId);
+          const completed = await completeWorkerWorkspaceTeardown({
+            placements,
+            turnClaim: claim,
+            environmentId: current.environmentId,
+            ownerEpoch: current.activeOwnerEpoch,
+          });
+          reportPlacementTransition(onTransition, completed);
+          await environments
+            .stopTunnel(current.environmentId, current.activeOwnerEpoch)
+            .catch(() => undefined);
+          return completed;
         }
         const root = sessionWorkspaceRoot(workspace);
         const journalPlacement = { ...current };
@@ -264,14 +299,12 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                         journal,
                         stagedResult: {
                           ref: reclaimResultRef,
-                          record: (ref) => {
+                          record: (ref, workspaceId) => {
                             assertCurrent();
                             return placements.recordStagedWorkspaceResult(
                               reclaimClaim,
                               ref,
-                              workspace.kind === "repository"
-                                ? workspace.repository.workspaceId
-                                : undefined,
+                              workspaceId,
                               assertCurrent,
                             );
                           },
@@ -300,7 +333,7 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                       current,
                     );
                     reauthorize?.();
-                    const finalized = await finalizeWorkspaceResultConflicts({
+                    const conflictRetained = await finalizeWorkspaceResultConflicts({
                       assertCurrent: recovery.assertCurrent,
                       placements,
                       turnClaim: reclaimClaim,
@@ -319,7 +352,7 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                       turnClaim: reclaimClaim,
                       workspace,
                       stagedResultRef: recordedStagedResultRef,
-                      conflictRetained: finalized.conflictRetained,
+                      conflictRetained,
                       beforeComplete: async () => {
                         assertCurrent();
                         if (
@@ -347,19 +380,11 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                           turnClaim: reclaimClaim,
                           environmentId: current.environmentId,
                           ownerEpoch: current.activeOwnerEpoch,
-                          operationId: moveIntent?.operationId,
+                          move: moveIntent,
                         });
                         // Publish the committed owner before cleanup refs and the tunnel can yield.
                         reportPlacementTransition(onTransition, completed);
                         return completed;
-                      },
-                      validateCompleted: (completed) => {
-                        const expectedState = moveIntent ? "local" : "reclaimed";
-                        if (completed.state !== expectedState) {
-                          throw new Error(
-                            `Cloud worker teardown did not produce ${expectedState} placement`,
-                          );
-                        }
                       },
                     });
                   } finally {

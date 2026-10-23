@@ -197,7 +197,7 @@ async function cancelMatrixSelfVerificationOnFailure(params: {
   crypto: MatrixCryptoActionFacade;
   request: MatrixVerificationSummary | undefined;
 }): Promise<void> {
-  if (!params.request || typeof params.crypto.cancelVerification !== "function") {
+  if (!params.request) {
     return;
   }
   await params.crypto
@@ -220,7 +220,7 @@ async function completeMatrixSelfVerification(params: {
   let ownerVerification = initial[0];
   if (!ownerVerification.verified || !initial[1].published) {
     if (!ownerVerification.verified) {
-      await params.client.trustOwnIdentityAfterSelfVerification?.();
+      await params.client.trustOwnIdentityAfterSelfVerification();
     }
     ownerVerification = await waitForMatrixSelfVerificationTrustStatus({
       client: params.client,
@@ -425,7 +425,7 @@ export async function confirmMatrixVerificationSas(
     // from the bot side so Element X clears the "Verify" prompt without
     // waiting for a passive sync tick. Non-self verifications are a no-op.
     if (summary.isSelfVerification && summary.completed && !summary.error) {
-      await client.trustOwnIdentityAfterSelfVerification?.();
+      await client.trustOwnIdentityAfterSelfVerification();
     }
     return summary;
   });
@@ -459,23 +459,19 @@ export async function getMatrixVerificationStatus(
   opts: MatrixActionClientOpts & { includeRecoveryKey?: boolean } = {},
 ) {
   const readiness = opts.readiness ?? "prepared";
-  return await withResolvedActionClient(
-    { ...opts, readiness: "none" },
-    async (client) => {
-      const preflight = await readMatrixVerificationStatus(client, opts);
-      if (readiness === "none" || preflight.serverDeviceKnown === false) {
-        return preflight;
-      }
-      if (readiness === "started") {
-        await client.start();
-      } else {
-        await client.prepareForOneOff();
-      }
-      await client.refreshOwnDeviceKeys();
-      return await readMatrixVerificationStatus(client, opts);
-    },
-    "discard",
-  );
+  return await withResolvedActionClient({ ...opts, readiness: "none" }, async (client) => {
+    const preflight = await readMatrixVerificationStatus(client, opts);
+    if (readiness === "none" || preflight.serverDeviceKnown === false) {
+      return preflight;
+    }
+    if (readiness === "started") {
+      await client.start();
+    } else {
+      await client.prepareForOneOff();
+    }
+    await client.refreshOwnDeviceKeys();
+    return await readMatrixVerificationStatus(client, opts);
+  });
 }
 
 async function readMatrixVerificationStatus(

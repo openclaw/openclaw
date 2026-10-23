@@ -11,9 +11,9 @@ describe("command discovery English loading", () => {
       surface: "palette search",
       load: () => import("../components/command-palette-catalog-search.ts"),
     },
-    { surface: "session transcript search", load: () => import("../pages/sessions/view.ts") },
+    { surface: "session transcript search", load: () => import("../pages/sessions/view.tsx") },
     { surface: "slash commands", load: () => import("../lib/chat/commands.ts") },
-    { surface: "shortcut help", load: () => import("../lib/keyboard-shortcut-catalog.ts") },
+    { surface: "shortcut help", load: () => import("../components/keyboard-shortcuts-dialog.tsx") },
   ])("registers fallback copy before $surface reads it", async ({ load }) => {
     const { manager } = await loadI18n();
     expect(manager.t("palette.placeholder")).toBe("Search or start a task…");

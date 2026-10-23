@@ -1,9 +1,7 @@
-// Audits code paths for deep safety risks that require manual review.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CodeSafetySummaryCache } from "./audit.deep.runtime.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
 
-/** Collect plugin and installed-skill code safety findings when deep audit is enabled. */
 export async function collectDeepCodeSafetyFindings(params: {
   cfg: OpenClawConfig;
   stateDir: string;

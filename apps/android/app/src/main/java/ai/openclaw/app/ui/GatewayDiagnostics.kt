@@ -80,19 +80,8 @@ internal fun gatewayAuthRecoveryLabel(problem: GatewayConnectionProblem?): Strin
 
 /** Returns the exact host command for one node's approval state when available. */
 internal fun gatewayNodeApprovalCommand(approval: GatewayNodeCapabilityApproval): String? {
-  val requestId =
-    when (approval) {
-      is GatewayNodeCapabilityApproval.PendingApproval -> approval.requestId
-
-      is GatewayNodeCapabilityApproval.PendingReapproval -> approval.requestId
-
-      GatewayNodeCapabilityApproval.Unapproved -> null
-
-      GatewayNodeCapabilityApproval.Loading,
-      GatewayNodeCapabilityApproval.Unsupported,
-      GatewayNodeCapabilityApproval.Approved,
-      -> return null
-    }
+  if (!nodeCapabilityApprovalNeedsUserAction(approval)) return null
+  val requestId = approvalRequestId(approval)
   return normalizeGatewayApprovalRequestId(requestId)?.let { "openclaw nodes approve $it" } ?: "openclaw nodes status"
 }
 

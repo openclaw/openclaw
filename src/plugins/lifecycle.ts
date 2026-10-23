@@ -121,8 +121,6 @@ export type PluginLifecycleRuntimeApply = (params: {
   waitForDrain?: boolean;
   drainSignal?: AbortSignal;
   expectedSourceDigests?: Readonly<Record<string, string>>;
-  /** Canonical install owners whose committed contents may already be running. */
-  expectedInstallHashes?: Readonly<Record<string, string>>;
   /** Private invoker authority; never part of the published runtime receipt. */
   assertInvokerOwned?: () => void;
 }) => Promise<PluginRuntimeApplication>;

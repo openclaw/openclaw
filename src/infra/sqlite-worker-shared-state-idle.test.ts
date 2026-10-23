@@ -1,13 +1,12 @@
 import { channel } from "node:diagnostics_channel";
 import { once } from "node:events";
-import { performance } from "node:perf_hooks";
+import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { deserialize } from "node:v8";
-import { Worker, type Transferable } from "node:worker_threads";
+import { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { readConfigMachineStateAsync } from "../state/config-machine-state-async.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -21,10 +20,13 @@ import {
   runOpenClawStateWorkerOperation,
 } from "../state/openclaw-state-worker-store.js";
 import { initializeSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
-import { requireNodeSqlite } from "./node-sqlite.js";
-import type { SqliteWorkerRequest } from "./sqlite-worker-contract.js";
 import * as sqliteWorkers from "./sqlite-worker-store.js";
-import { getSqliteWorkerActorIdentity } from "./sqlite-worker-store.js";
+import {
+  getSqliteWorkerActorIdentity,
+  openSqliteWorkerStore,
+  type SqliteWorkerStore,
+} from "./sqlite-worker-store.js";
+import type { FixtureOperations } from "./sqlite-worker-store.test-support.js";
 
 vi.mock("node:diagnostics_channel", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:diagnostics_channel")>();
@@ -36,59 +38,75 @@ vi.mock("node:diagnostics_channel", async (importOriginal) => {
   };
 });
 
-// Keep the shared-state owner on the fixture backend across reopenings.
-vi.mock("./runtime-worker-url.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./runtime-worker-url.js")>();
-  const { runtimeProcessEntrypoints } = await import("./runtime-process-entrypoints.js");
-  const { storageProcessTestEntrypoints } =
-    await import("./storage-process-runtime.test-support.js");
-  return {
-    ...actual,
-    resolveRuntimeWorkerUrl: (params: Parameters<typeof actual.resolveRuntimeWorkerUrl>[0]) =>
-      params.sourceWorkerName === runtimeProcessEntrypoints.sharedStateStore.sourceWorkerName
-        ? actual.resolveRuntimeWorkerUrl(storageProcessTestEntrypoints.sharedStateIdleFixture)
-        : actual.resolveRuntimeWorkerUrl(params),
-  };
-});
-
+const pending: Promise<unknown>[] = [];
+const releases: (() => void)[] = [];
+const closers: (() => unknown)[] = [];
+function track<T>(promise: Promise<T>): Promise<T> {
+  pending.push(promise);
+  return promise;
+}
+function maintenanceScope() {
+  const scope = createOpenClawDatabaseMaintenanceScope();
+  closers.push(() => scope.close());
+  return scope;
+}
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
+    releases.splice(0).forEach((release) => release());
+    await Promise.allSettled(pending.splice(0));
+    await Promise.allSettled(closers.splice(0).map((close) => Promise.resolve().then(close)));
+    await Promise.allSettled(pending.splice(0));
     vi.restoreAllMocks();
     await closeOpenClawStateDatabaseAsync();
     cleanup();
   }),
 );
 const minute = 60_000;
-
-async function fixture(mode: "healthy" | "local-reader" | "unsettled-inspection" = "healthy") {
-  const now = performance.now.bind(performance);
-  let elapsed = 0;
-  vi.spyOn(performance, "now").mockImplementation(() => now() + elapsed);
-  const timers = vi.spyOn(globalThis, "setTimeout");
-  const open = async (context: OpenClawStateWorkerContext) => {
-    const messages = vi.spyOn(Worker.prototype, "postMessage");
-    try {
-      // Exercise native idle ownership without preparing the unrelated task-flow runtime.
-      const read = () =>
-        executeOpenClawStateWorker(context, {
-          type: "deviceIdentity.read",
-          input: { identityKey: `idle-fixture:${mode}` },
-        });
-      expect(await read()).toBeNull();
-      const worker = messages.mock.contexts[0];
-      if (!(worker instanceof Worker)) {
-        throw new Error("Expected the canonical shared-state worker");
-      }
-      return { context, worker, read };
-    } finally {
-      messages.mockRestore();
-    }
-  };
-  const first = await open(
-    captureOpenClawStateWorkerContext({
-      env: { OPENCLAW_STATE_DIR: dirs.make("openclaw-worker-idle-") },
-    }),
+const contextFor = (prefix: string) =>
+  captureOpenClawStateWorkerContext({
+    env: { OPENCLAW_STATE_DIR: dirs.make(prefix) },
+  });
+const openCleanup = (context: OpenClawStateWorkerContext) =>
+  openOpenClawStateWorkerCleanupStore(
+    context.admission.databasePath,
+    context,
+    context.admission.assertCurrent,
+    context.admission.identity,
   );
+
+function pause() {
+  const entered = createDeferredCore();
+  const resume = createDeferredCore();
+  releases.push(resume.resolve);
+  return {
+    entered: entered.promise,
+    resume: resume.resolve,
+    wait: async () => {
+      entered.resolve();
+      await resume.promise;
+    },
+  };
+}
+
+async function maintenancePair(prefix: string) {
+  const env = { OPENCLAW_STATE_DIR: dirs.make(prefix) };
+  const firstScope = maintenanceScope();
+  const peerScope = maintenanceScope();
+  const firstContext = firstScope.run(() => captureOpenClawStateWorkerContext({ env }));
+  const peerContext = peerScope.run(() => captureOpenClawStateWorkerContext({ env }));
+  const first = await openClient(firstContext);
+  const peer = await openClient(peerContext);
+  expect(peer.actor).toBe(first.actor);
+  return { firstScope, firstContext, peerContext, first, peer, worker: first.worker };
+}
+
+const readContext = (context: OpenClawStateWorkerContext) =>
+  runOpenClawStateWorkerOperation(context, (scope) => scope.execute(read));
+
+async function fixture() {
+  const timers = vi.spyOn(globalThis, "setTimeout");
+  const open = (context: OpenClawStateWorkerContext) => openClient(context, "idle-fixture:healthy");
+  const first = await open(contextFor("openclaw-worker-idle-"));
   const scheduled = (delay: number) => {
     const index = timers.mock.calls.findLastIndex(
       (call) => typeof call[1] === "number" && call[1] <= delay && call[1] > delay - 1_000,
@@ -105,28 +123,13 @@ async function fixture(mode: "healthy" | "local-reader" | "unsettled-inspection"
       callback();
     };
   };
-  return {
-    ...first,
-    open,
-    scheduled,
-    advance: (duration: number) => {
-      elapsed += duration;
-    },
-  };
+  return { ...first, open, scheduled };
 }
 
 it("retains pressure retirement across path close and releases its subscription after drainage", async () => {
   const pressure = channel("openclaw.memory.critical");
-  const env = { OPENCLAW_STATE_DIR: dirs.make("openclaw-worker-idle-pressure-") };
-  const context = captureOpenClawStateWorkerContext({ env });
-  await expect(
-    openOpenClawStateWorkerCleanupStore(
-      context.admission.databasePath,
-      context,
-      context.admission.assertCurrent,
-      context.admission.identity,
-    ),
-  ).resolves.toBeUndefined();
+  const context = contextFor("openclaw-worker-idle-pressure-");
+  await expect(openCleanup(context)).resolves.toBeUndefined();
   expect(pressure.hasSubscribers).toBe(false);
   await expect(
     runOpenClawStateWorkerOperation(context, (scope) => scope.execute(read), {
@@ -147,7 +150,9 @@ it("retains pressure retirement across path close and releases its subscription 
   await closeOpenClawStateDatabaseAsync();
   expect(pressure.hasSubscribers).toBe(false);
 
-  const reopened = await first.open(captureOpenClawStateWorkerContext({ env }));
+  const reopened = await first.open(
+    captureOpenClawStateWorkerContext({ env: context.environment }),
+  );
   expect(pressure.hasSubscribers).toBe(true);
   const reopenedExited = once(reopened.worker, "exit");
   pressure.publish({});
@@ -156,524 +161,289 @@ it("retains pressure retirement across path close and releases its subscription 
   expect(pressure.hasSubscribers).toBe(false);
 });
 
-it("retains the original healthy worker after one minute and closes it after 30 minutes", async () => {
+it("reuses the original worker until its 30-minute idle deadline, resetting it on real work", async () => {
   const f = await fixture();
-  f.advance(minute);
-  f.scheduled(minute)();
-  // Joining a real call also joins the original owner's retirement, if it retired at one minute.
-  expect(await f.read()).toBeNull();
-  expect(f.worker.threadId).not.toBe(-1);
-  f.advance(minute);
-  f.scheduled(minute)();
-  await vi.waitFor(() => expect(f.scheduled(29 * minute)).toBeTypeOf("function"));
+  const originalExpiry = f.scheduled(30 * minute);
+  expect(await f.read()).toBeUndefined();
+  originalExpiry();
   expect(f.worker.threadId).not.toBe(-1);
   const exited = once(f.worker, "exit");
-  f.advance(29 * minute);
-  f.scheduled(29 * minute)();
+  f.scheduled(30 * minute)();
   await exited;
-  expect(await f.read()).toBeNull();
-});
-
-it("retires an unavailable actor even when its completed idle result is healthy", async () => {
-  const f = await fixture();
-  const available = vi
-    .spyOn(sqliteWorkers, "isSqliteWorkerStoreAvailable")
-    .mockReturnValueOnce(false);
-  try {
-    f.advance(minute);
-    f.scheduled(minute)();
-    await vi.waitFor(() => expect(f.worker.threadId).toBe(-1));
-    expect(await f.read()).toBeNull();
-  } finally {
-    available.mockRestore();
-  }
-});
-
-it("retires a worker with an untracked local reader and releases its actual WAL pin", async () => {
-  const f = await fixture("local-reader");
-  const { DatabaseSync } = requireNodeSqlite();
-  const writer = new DatabaseSync(f.context.admission.databasePath);
-  try {
-    writer.exec("PRAGMA busy_timeout=0; CREATE TABLE idle_probe (value TEXT)");
-    expect(writer.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()?.busy).toBe(1);
-    const exited = once(f.worker, "exit");
-    f.advance(minute);
-    f.scheduled(minute)();
-    await exited;
-    expect(writer.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()?.busy).toBe(0);
-  } finally {
-    writer.close();
-  }
-});
-
-it("keeps a healthy worker when another connection holds the WAL reader", async () => {
-  const f = await fixture();
-  const { DatabaseSync } = requireNodeSqlite();
-  const writer = new DatabaseSync(f.context.admission.databasePath);
-  const reader = new DatabaseSync(f.context.admission.databasePath);
-  try {
-    writer.exec("PRAGMA busy_timeout=0; CREATE TABLE idle_probe (value TEXT)");
-    reader.exec("BEGIN");
-    reader.prepare("SELECT * FROM sqlite_schema").get();
-    writer.exec("INSERT INTO idle_probe VALUES ('after-reader')");
-    expect(writer.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()?.busy).toBe(1);
-    f.advance(minute);
-    f.scheduled(minute)();
-    await vi.waitFor(() => expect(f.scheduled(29 * minute)).toBeTypeOf("function"));
-    expect(f.worker.threadId).not.toBe(-1);
-    expect(await f.read()).toBeNull();
-    expect(f.worker.threadId).not.toBe(-1);
-  } finally {
-    if (reader.isTransaction) {
-      reader.exec("ROLLBACK");
-    }
-    reader.close();
-    writer.close();
-  }
-});
-
-it("ignores an inspection result and old expiry when real work resumes", async () => {
-  const f = await fixture();
-  const postMessage = f.worker.postMessage.bind(f.worker);
-  const dispatched = createDeferredCore();
-  let resume: (() => void) | undefined;
-  const send = vi
-    .spyOn(f.worker, "postMessage")
-    .mockImplementation((request: SqliteWorkerRequest, transfers?: readonly Transferable[]) => {
-      if (
-        request.type === "execute" &&
-        deserialize(request.input).type === "database.inspectIdle"
-      ) {
-        resume = () => postMessage(request, transfers);
-        dispatched.resolve();
-        return;
-      }
-      return postMessage(request, transfers);
-    });
-  const oldInspection = f.scheduled(minute);
-  f.advance(minute);
-  oldInspection();
-  await dispatched.promise;
-  const entered = createDeferredCore();
-  const finish = createDeferredCore();
-  const active = runOpenClawStateWorkerOperation(f.context, async (scope) => {
-    entered.resolve();
-    await finish.promise;
-    return scope.execute({
-      type: "deviceIdentity.read",
-      input: { identityKey: "idle-fixture:idle" },
-    });
-  });
-  await entered.promise;
-  send.mockRestore();
-  try {
-    if (!resume) {
-      throw new Error("Expected a held native inspection request");
-    }
-    resume();
-    f.advance(30 * minute);
-    oldInspection();
-    expect(f.worker.threadId).not.toBe(-1);
-  } finally {
-    finish.resolve();
-  }
-  expect(await active).toBeNull();
-  oldInspection();
-  f.advance(minute);
-  f.scheduled(minute)();
-  await vi.waitFor(() => expect(f.scheduled(29 * minute)).toBeTypeOf("function"));
-  expect(f.worker.threadId).not.toBe(-1);
-});
-
-it("replaces a failed idle actor after an enclosing callback settles", async () => {
-  const f = await fixture("unsettled-inspection");
-  const nativePost = f.worker.postMessage.bind(f.worker);
-  let resume: (() => void) | undefined;
-  const send = vi
-    .spyOn(f.worker, "postMessage")
-    .mockImplementation((request: SqliteWorkerRequest, transfers?: readonly Transferable[]) => {
-      if (
-        request.type === "execute" &&
-        deserialize(request.input).type === "database.inspectIdle"
-      ) {
-        // Hold the admitted dispatch before the native inspection executes.
-        send.mockRestore();
-        resume = () => nativePost(request, transfers);
-        return;
-      }
-      return nativePost(request, transfers);
-    });
-  f.advance(minute);
-  f.scheduled(minute)();
-  const entered = createDeferredCore();
-  const finish = createDeferredCore();
-  const escape = createDeferredCore<never>();
-  void escape.promise.catch(() => {});
-  let active: Promise<string> | undefined;
-  try {
-    await vi.waitFor(() => expect(resume).toBeTypeOf("function"));
-    if (!resume) {
-      throw new Error("Expected an admitted native inspection");
-    }
-    active = runOpenClawStateWorkerOperation(f.context, () =>
-      Promise.race([
-        (async () => {
-          entered.resolve();
-          await finish.promise;
-          await expect(f.read()).rejects.toMatchObject({ code: "unavailable" });
-          await expect(
-            openOpenClawStateWorkerCleanupStore(
-              f.context.admission.databasePath,
-              f.context,
-              f.context.admission.assertCurrent,
-              f.context.admission.identity,
-            ).then((store) => store?.close()),
-          ).rejects.toMatchObject({ code: "unavailable" });
-          return "completed without dispatch";
-        })(),
-        escape.promise,
-      ]),
-    );
-    await entered.promise;
-    const exited = once(f.worker, "exit");
-    resume();
-    resume = undefined;
-    await exited;
-    await nextTurn();
-    finish.resolve();
-    let settled = false;
-    void active.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
-    await vi.waitFor(() => expect(settled).toBe(true));
-    expect(await active).toBe("completed without dispatch");
-    await nextTurn();
-    expect(await f.read()).toBeNull();
-  } finally {
-    send.mockRestore();
-    resume?.();
-    finish.resolve();
-    escape.reject(new Error("Release the enclosing fixture after failed observation"));
-    await active?.catch(() => {});
-  }
+  expect(await f.read()).toBeUndefined();
 });
 
 const { explicitSqliteCloseReleasesNativeResources } = await initializeSqliteRuntimeCapabilities();
 const poolIt = explicitSqliteCloseReleasesNativeResources ? it : it.skip;
 const read = {
-  type: "deviceIdentity.read",
-  input: { identityKey: "idle-fixture:idle-custody" },
+  type: "nativeHookRelay.read",
+  input: { relayId: "idle-fixture:idle-custody" },
 } as const;
 
-async function openClient(context: OpenClawStateWorkerContext) {
+async function openClient(
+  context: OpenClawStateWorkerContext,
+  relayId: string = read.input.relayId,
+) {
   const operations = vi.spyOn(sqliteWorkers, "runSqliteWorkerStoreOperation");
+  const messages = vi.spyOn(Worker.prototype, "postMessage");
+  const readRelay = () =>
+    executeOpenClawStateWorker(context, {
+      type: "nativeHookRelay.read",
+      input: { relayId },
+    });
   try {
-    await runOpenClawStateWorkerOperation(context, (scope) => scope.execute(read));
+    // Exercise native idle ownership without preparing the unrelated task-flow runtime.
+    expect(await readRelay()).toBeUndefined();
     const store = operations.mock.calls.at(-1)?.[0];
-    if (!store) {
-      throw new Error("Expected the canonical shared-state client's operation");
+    const worker = messages.mock.contexts[0];
+    if (!store || !(worker instanceof Worker)) {
+      throw new Error("Expected the canonical shared-state client and native worker");
     }
-    return { store, actor: getSqliteWorkerActorIdentity(store) };
+    return { context, store, worker, read: readRelay, actor: getSqliteWorkerActorIdentity(store) };
   } finally {
     operations.mockRestore();
+    messages.mockRestore();
   }
 }
+
+poolIt(
+  "reclaims only an idle shared-state client at 64 and reopens its persisted state",
+  async () => {
+    const context = contextFor("openclaw-worker-capacity-");
+    const first = await openClient(context);
+    const key = "idle-fixture:capacity-reopen";
+    const record = { value: "synthetic-capacity-value" };
+    await executeOpenClawStateWorker(context, {
+      type: "machineState.write",
+      input: { key, value: record },
+    });
+    const maintenance = maintenanceScope();
+    const peerContext = maintenance.run(() =>
+      captureOpenClawStateWorkerContext({ env: context.environment }),
+    );
+    const peer = await openClient(peerContext);
+    expect(peer.actor).toBe(first.actor);
+
+    const fillerPath = path.join(dirs.make("openclaw-worker-capacity-fill-"), "store.sqlite");
+    const fillers: SqliteWorkerStore<FixtureOperations>[] = [];
+    const gate = pause();
+    closers.push(() => Promise.allSettled(fillers.map((store) => store.close())));
+    for (let index = 0; index < 62; index += 1) {
+      fillers.push(
+        await openSqliteWorkerStore<FixtureOperations>({
+          moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
+          databasePath: fillerPath,
+          input: undefined,
+        }),
+      );
+    }
+    const next = contextFor("openclaw-worker-capacity-next-");
+    const active = track(
+      runOpenClawStateWorkerOperation(peerContext, async (scope) => {
+        await gate.wait();
+        return scope.execute(read);
+      }),
+    );
+    await gate.entered;
+    await expect(executeOpenClawStateWorker(next, read)).rejects.toMatchObject({
+      code: "overloaded",
+    });
+    expect(getSqliteWorkerActorIdentity(first.store)).toBe(first.actor);
+    expect(getSqliteWorkerActorIdentity(peer.store)).toBe(first.actor);
+
+    gate.resume();
+    await expect(active).resolves.toBeUndefined();
+    await expect(executeOpenClawStateWorker(next, read)).resolves.toBeUndefined();
+    await expect(first.store.execute(read)).rejects.toMatchObject({ code: "closed" });
+    expect(getSqliteWorkerActorIdentity(peer.store)).toBe(first.actor);
+    await expect(executeOpenClawStateWorker(peerContext, read)).resolves.toBeUndefined();
+
+    await expect(readConfigMachineStateAsync(key, { env: context.environment })).resolves.toEqual(
+      record,
+    );
+    const reopened = await openClient(context);
+    expect(reopened.store).not.toBe(first.store);
+    expect(reopened.actor).toBe(first.actor);
+  },
+);
 
 poolIt("joins expiring idle-client maintenance without retiring a healthy co-user", async () => {
   const f = await fixture();
   const context = f.context;
   const env = context.environment;
   const first = await openClient(context);
-  f.advance(minute);
-  f.scheduled(minute)();
-  await vi.waitFor(() => expect(f.scheduled(29 * minute)).toBeTypeOf("function"));
-  const expire = f.scheduled(29 * minute);
-  const maintenance = createOpenClawDatabaseMaintenanceScope();
-  const resume = createDeferred();
-  const entered = createDeferred();
-  let accepted: Promise<unknown> | undefined;
-  let idleClosing: Promise<void> | undefined;
-  let peerClosing: Promise<void> | undefined;
-  try {
-    const peerContext = maintenance.run(() => captureOpenClawStateWorkerContext({ env }));
-    const peer = await openClient(peerContext);
-    expect(peer.actor).toBe(first.actor);
-    accepted = sqliteWorkers.runSqliteWorkerStoreOperation(
+  const expire = f.scheduled(30 * minute);
+  const maintenance = maintenanceScope();
+  const gate = pause();
+  const peerContext = maintenance.run(() => captureOpenClawStateWorkerContext({ env }));
+  const peer = await openClient(peerContext);
+  expect(peer.actor).toBe(first.actor);
+  const accepted = track(
+    sqliteWorkers.runSqliteWorkerStoreOperation(
       first.store,
       async (scope) => {
-        entered.resolve();
-        await resume.promise;
+        await gate.wait();
         return scope.execute(read);
       },
       context,
-    );
-    await Promise.race([entered.promise, accepted]);
+    ),
+  );
+  await Promise.race([gate.entered, accepted]);
 
-    f.advance(29 * minute);
-    expire();
-    await expect(first.store.execute(read)).rejects.toMatchObject({ code: "closed" });
-    expect(getSqliteWorkerActorIdentity(peer.store)).toBe(first.actor);
-    let idleClosed = false;
-    idleClosing = first.store.close().then(() => {
-      idleClosed = true;
-    });
-    await expect(
-      runOpenClawStateWorkerOperation(peerContext, (scope) => scope.execute(read)),
-    ).resolves.toBeNull();
-    expect(idleClosed).toBe(false);
-    expect(f.worker.threadId).not.toBe(-1);
+  expire();
+  await expect(first.store.execute(read)).rejects.toMatchObject({ code: "closed" });
+  expect(getSqliteWorkerActorIdentity(peer.store)).toBe(first.actor);
+  const idleClosed = vi.fn();
+  const idleClosing = track(first.store.close().then(idleClosed));
+  await expect(readContext(peerContext)).resolves.toBeUndefined();
+  expect(idleClosed).not.toHaveBeenCalled();
+  expect(f.worker.threadId).not.toBe(-1);
 
-    resume.resolve();
-    await expect(accepted).resolves.toBeNull();
-    await idleClosing;
-    expect(getSqliteWorkerActorIdentity(peer.store)).toBe(first.actor);
-    await expect(
-      runOpenClawStateWorkerOperation(peerContext, (scope) => scope.execute(read)),
-    ).resolves.toBeNull();
+  gate.resume();
+  await expect(accepted).resolves.toBeUndefined();
+  await idleClosing;
+  expect(getSqliteWorkerActorIdentity(peer.store)).toBe(first.actor);
+  await expect(readContext(peerContext)).resolves.toBeUndefined();
 
-    expect(f.worker.threadId).not.toBe(-1);
-    peerClosing = maintenance.close();
-    await peerClosing;
-    expect(f.worker.threadId).toBe(-1);
-  } finally {
-    resume.resolve();
-    await Promise.allSettled([accepted, idleClosing, peerClosing, maintenance.close()]);
-  }
+  expect(f.worker.threadId).not.toBe(-1);
+  await maintenance.close();
+  expect(f.worker.threadId).toBe(-1);
 });
 
 poolIt.each([undefined, "agent-resources", "shared-handles"] as const)(
   "joins a tracked maintenance callback before retiring its failed actor and idle co-user (during resource cleanup: %s)",
   async (duringCleanup) => {
-    const env = { OPENCLAW_STATE_DIR: dirs.make("openclaw-worker-maintenance-drain-") };
-    const firstScope = createOpenClawDatabaseMaintenanceScope();
-    const peerScope = createOpenClawDatabaseMaintenanceScope();
-    const firstContext = firstScope.run(() => captureOpenClawStateWorkerContext({ env }));
-    const peerContext = peerScope.run(() => captureOpenClawStateWorkerContext({ env }));
-    const entered = createDeferredCore();
-    const resume = createDeferredCore();
-    const messages = vi.spyOn(Worker.prototype, "postMessage");
+    const { firstScope, firstContext, first, peer, worker } = await maintenancePair(
+      "openclaw-worker-maintenance-drain-",
+    );
+    const gate = pause();
     let accepted: Promise<string> | undefined;
-    let closing: Promise<unknown> | undefined;
-    let stopped: Promise<number> | undefined;
-    try {
-      const first = await openClient(firstContext);
-      const peer = await openClient(peerContext);
-      expect(first.actor === peer.actor).toBe(true);
-      const worker = messages.mock.contexts.find((candidate) => candidate instanceof Worker);
-      messages.mockRestore();
-      if (!(worker instanceof Worker)) {
-        throw new Error("Expected the shared native worker");
-      }
-      const startAccepted = async () => {
-        accepted = runOpenClawStateWorkerOperation(firstContext, async () => {
-          entered.resolve();
-          await resume.promise;
+    const startAccepted = async () => {
+      accepted = track(
+        runOpenClawStateWorkerOperation(firstContext, async () => {
+          await gate.wait();
           return "accepted callback completed";
-        });
-        await Promise.race([entered.promise, accepted]);
-      };
-      if (duringCleanup) {
-        firstScope.own({}, duringCleanup, startAccepted);
-      } else {
-        await startAccepted();
-      }
-      let closed = false;
-      closing = firstScope.close().then(
-        () => {
-          closed = true;
-        },
-        (error: unknown) => {
-          closed = true;
-          return error;
-        },
-      );
-      await Promise.race([
-        entered.promise,
-        closing.then(() => {
-          throw new Error("Maintenance closed before its tracked callback entered");
         }),
-      ]);
-      await nextTurn();
-      expect(closed).toBe(false);
-      expect(getSqliteWorkerActorIdentity(peer.store) === first.actor).toBe(true);
-
-      stopped = worker.terminate();
-      await stopped;
-      expect(closed).toBe(false);
-      await expect(peer.store.execute(read)).rejects.toMatchObject({ code: "unavailable" });
-      resume.resolve();
-      await expect(accepted).resolves.toBe("accepted callback completed");
-      await closing;
-      // Observe the old client directly: a fresh shared-owner call could retire it itself.
-      await expect(peer.store.execute(read)).rejects.toMatchObject({ code: "closed" });
-    } finally {
-      messages.mockRestore();
-      resume.resolve();
-      await Promise.allSettled([accepted, stopped, closing, firstScope.close(), peerScope.close()]);
+      );
+      await Promise.race([gate.entered, accepted]);
+    };
+    if (duringCleanup) {
+      firstScope.own({}, duringCleanup, startAccepted);
+    } else {
+      await startAccepted();
     }
+    const closed = vi.fn();
+    const closing = track(firstScope.close().then(closed, closed));
+    await Promise.race([
+      gate.entered,
+      closing.then(() => {
+        throw new Error("Maintenance closed before its tracked callback entered");
+      }),
+    ]);
+    await nextTurn();
+    expect(closed).not.toHaveBeenCalled();
+    expect(getSqliteWorkerActorIdentity(peer.store) === first.actor).toBe(true);
+
+    await track(worker.terminate());
+    expect(closed).not.toHaveBeenCalled();
+    await expect(peer.store.execute(read)).rejects.toMatchObject({ code: "unavailable" });
+    gate.resume();
+    await expect(accepted).resolves.toBe("accepted callback completed");
+    await closing;
+    // Observe the old client directly: a fresh shared-owner call could retire it itself.
+    await expect(peer.store.execute(read)).rejects.toMatchObject({ code: "closed" });
   },
 );
 
 poolIt.each(["ordinary", "cleanup"] as const)(
   "reopens an idle failed actor through %s without waiting for its other maintenance client to close",
   async (entrypoint) => {
-    const env = { OPENCLAW_STATE_DIR: dirs.make("openclaw-worker-idle-reopen-") };
-    const firstScope = createOpenClawDatabaseMaintenanceScope();
-    const peerScope = createOpenClawDatabaseMaintenanceScope();
-    const firstContext = firstScope.run(() => captureOpenClawStateWorkerContext({ env }));
-    const peerContext = peerScope.run(() => captureOpenClawStateWorkerContext({ env }));
-    const messages = vi.spyOn(Worker.prototype, "postMessage");
-    let stopped: Promise<number> | undefined;
-    let cleanupStore: Awaited<ReturnType<typeof openOpenClawStateWorkerCleanupStore>>;
-    try {
-      const first = await openClient(firstContext);
-      const peer = await openClient(peerContext);
-      expect(first.actor === peer.actor).toBe(true);
-      const worker = messages.mock.contexts.find((candidate) => candidate instanceof Worker);
-      messages.mockRestore();
-      if (!(worker instanceof Worker)) {
-        throw new Error("Expected the shared native worker");
-      }
-      stopped = worker.terminate();
-      await stopped;
-      await expect(peer.store.execute(read)).rejects.toMatchObject({ code: "unavailable" });
+    const { firstContext, first, peer, worker } = await maintenancePair(
+      "openclaw-worker-idle-reopen-",
+    );
+    await track(worker.terminate());
+    await expect(peer.store.execute(read)).rejects.toMatchObject({ code: "unavailable" });
 
-      const reopened =
-        entrypoint === "ordinary"
-          ? (await openClient(firstContext)).store
-          : (cleanupStore = await openOpenClawStateWorkerCleanupStore(
-              firstContext.admission.databasePath,
-              firstContext,
-              firstContext.admission.assertCurrent,
-              firstContext.admission.identity,
-            ));
-      if (!reopened) {
-        throw new Error("Expected cleanup to retain the existing shared database");
-      }
-      expect(getSqliteWorkerActorIdentity(reopened) === first.actor).toBe(false);
-      await expect(peer.store.execute(read)).rejects.toMatchObject({ code: "closed" });
-      await cleanupStore?.close();
-      cleanupStore = undefined;
-      await expect(
-        runOpenClawStateWorkerOperation(firstContext, (scope) => scope.execute(read)),
-      ).resolves.toBeNull();
-    } finally {
-      messages.mockRestore();
-      await Promise.allSettled([
-        stopped,
-        cleanupStore?.close(),
-        firstScope.close(),
-        peerScope.close(),
-      ]);
+    const reopened =
+      entrypoint === "ordinary"
+        ? (await openClient(firstContext)).store
+        : await openCleanup(firstContext);
+    if (!reopened) {
+      throw new Error("Expected cleanup to retain the existing shared database");
     }
+    if (entrypoint === "cleanup") {
+      closers.push(() => reopened.close());
+    }
+    expect(getSqliteWorkerActorIdentity(reopened) === first.actor).toBe(false);
+    await expect(peer.store.execute(read)).rejects.toMatchObject({ code: "closed" });
+    if (entrypoint === "cleanup") {
+      await reopened.close();
+    }
+    await expect(readContext(firstContext)).resolves.toBeUndefined();
   },
 );
 
-poolIt("joins adopted actor custody instead of its earlier per-client failure", async () => {
-  const env = { OPENCLAW_STATE_DIR: dirs.make("openclaw-worker-adopted-retirement-") };
-  const firstScope = createOpenClawDatabaseMaintenanceScope();
-  const peerScope = createOpenClawDatabaseMaintenanceScope();
-  const firstContext = firstScope.run(() => captureOpenClawStateWorkerContext({ env }));
-  const peerContext = peerScope.run(() => captureOpenClawStateWorkerContext({ env }));
-  const entered = createDeferredCore();
-  const resume = createDeferredCore();
-  const terminationEntered = createDeferredCore();
-  const allowNativeExit = createDeferredCore();
-  const nativeExited = createDeferredCore();
-  const messages = vi.spyOn(Worker.prototype, "postMessage");
-  let accepted: Promise<string> | undefined;
-  let firstClosing: Promise<void> | undefined;
-  let canonicalClosing: Promise<boolean> | undefined;
+function holdWorkerExit(worker: Worker) {
+  const gate = pause();
+  const exited = createDeferredCore();
+  worker.once("exit", () => exited.resolve());
+  const terminate = worker.terminate.bind(worker);
   let termination: Promise<number> | undefined;
-  let nativeTerminate: (() => Promise<number>) | undefined;
-  let restoreTerminate: (() => void) | undefined;
-  let worker: Worker | undefined;
-  try {
-    const first = await openClient(firstContext);
-    const peer = await openClient(peerContext);
-    expect(first.actor === peer.actor).toBe(true);
-    const observedWorker = messages.mock.contexts.find((candidate) => candidate instanceof Worker);
-    messages.mockRestore();
-    if (!(observedWorker instanceof Worker)) {
-      throw new Error("Expected the shared native worker");
-    }
-    worker = observedWorker;
-    worker.once("exit", () => nativeExited.resolve());
-    nativeTerminate = worker.terminate.bind(worker);
-    const terminate = nativeTerminate;
-    const terminating = vi.spyOn(worker, "terminate").mockImplementation(() => {
-      terminationEntered.resolve();
-      return (termination ??= allowNativeExit.promise.then(terminate));
-    });
-    restoreTerminate = () => terminating.mockRestore();
-    accepted = runOpenClawStateWorkerOperation(peerContext, async () => {
-      entered.resolve();
-      await resume.promise;
+  vi.spyOn(worker, "terminate").mockImplementation(
+    () => (termination ??= track(gate.wait().then(terminate))),
+  );
+  return { ...gate, exited: exited.promise, finished: () => termination };
+}
+
+poolIt("joins adopted actor custody instead of its earlier per-client failure", async () => {
+  const { firstScope, firstContext, peerContext, first, peer, worker } = await maintenancePair(
+    "openclaw-worker-adopted-retirement-",
+  );
+  const gate = pause();
+  const exit = holdWorkerExit(worker);
+  const accepted = track(
+    runOpenClawStateWorkerOperation(peerContext, async () => {
+      await gate.wait();
       return "accepted callback completed";
-    });
-    await Promise.race([entered.promise, accepted]);
+    }),
+  );
+  await Promise.race([gate.entered, accepted]);
 
-    // Exercise the broker's Worker-error boundary, keeping real native exit separately gated.
-    const original = new Error("Synthetic actor failure before native exit");
-    worker.emit("error", original);
-    await terminationEntered.promise;
-    await expect(peer.store.execute(read)).rejects.toMatchObject({
-      code: "unavailable",
-      message: original.message,
-    });
-    expect(worker.threadId).not.toBe(-1);
+  // Exercise the broker's Worker-error boundary, keeping real native exit separately gated.
+  const original = new Error("Synthetic actor failure before native exit");
+  worker.emit("error", original);
+  await exit.entered;
+  await expect(peer.store.execute(read)).rejects.toMatchObject({
+    code: "unavailable",
+    message: original.message,
+  });
+  expect(worker.threadId).not.toBe(-1);
 
-    // This first close releases its reference, then waits for the failed Worker's native exit.
-    firstClosing = firstScope.close();
-    const firstOutcome = firstClosing.then(
-      () => ({ settled: true }),
-      (error: unknown) => ({ settled: true, error }),
-    );
-    await expect(first.store.execute(read)).rejects.toMatchObject({ code: "closed" });
-    await nextTurn();
+  // This first close releases its reference, then waits for the failed Worker's native exit.
+  const firstClosing = track(firstScope.close());
+  const firstOutcome = Promise.allSettled([firstClosing]);
+  await expect(first.store.execute(read)).rejects.toMatchObject({ code: "closed" });
+  await nextTurn();
 
-    // The last tracked co-user starts actor retirement and adopts the pending first close.
-    resume.resolve();
-    await expect(accepted).resolves.toBe("accepted callback completed");
-    await expect(peer.store.execute(read)).rejects.toMatchObject({ code: "closed" });
-    canonicalClosing = closeOpenClawStateDatabaseByPathAsync(firstContext.admission.databasePath);
-    let canonicalSettled = false;
-    const canonicalOutcome = canonicalClosing.then(
-      () => {
-        canonicalSettled = true;
-      },
-      () => {
-        canonicalSettled = true;
-      },
-    );
-    await nextTurn();
-    expect(canonicalSettled).toBe(false);
-    expect(worker.threadId).not.toBe(-1);
+  // The last tracked co-user starts actor retirement and adopts the pending first close.
+  gate.resume();
+  await expect(accepted).resolves.toBe("accepted callback completed");
+  await expect(peer.store.execute(read)).rejects.toMatchObject({ code: "closed" });
+  const canonicalClosing = track(
+    closeOpenClawStateDatabaseByPathAsync(firstContext.admission.databasePath),
+  );
+  const canonicalSettled = vi.fn();
+  const canonicalOutcome = canonicalClosing.then(canonicalSettled, canonicalSettled);
+  await nextTurn();
+  expect(canonicalSettled).not.toHaveBeenCalled();
+  expect(worker.threadId).not.toBe(-1);
 
-    allowNativeExit.resolve();
-    await termination;
-    await nativeExited.promise;
-    await firstOutcome;
-    await canonicalOutcome;
-    expect(worker.threadId).toBe(-1);
-    // Canonical close joins discharged custody without replaying the prior operation failure.
-    await expect(canonicalClosing).resolves.toBeTypeOf("boolean");
-  } finally {
-    messages.mockRestore();
-    resume.resolve();
-    allowNativeExit.resolve();
-    await Promise.allSettled([accepted, firstClosing, canonicalClosing, termination]);
-    restoreTerminate?.();
-    if (worker && worker.threadId !== -1) {
-      await nativeTerminate?.();
-      await nativeExited.promise;
-    }
-    await Promise.allSettled([firstScope.close(), peerScope.close()]);
-    await closeOpenClawStateDatabaseAsync();
-  }
+  exit.resume();
+  await exit.finished();
+  await exit.exited;
+  await firstOutcome;
+  await canonicalOutcome;
+  expect(worker.threadId).toBe(-1);
+  // Canonical close joins discharged custody without replaying the prior operation failure.
+  await expect(canonicalClosing).resolves.toBeTypeOf("boolean");
 });

@@ -9,7 +9,7 @@ import {
 } from "../../infra/agent-events.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { SessionWorkAdmissionLease } from "../../sessions/session-lifecycle-admission.js";
+import type { SessionEffectRef } from "../../sessions/session-controller.lifecycle.js";
 import type { prepareAgentCommandExecutionIdentity } from "../agent-command-execution-identity.js";
 import { shouldPersistCurrentRunSessionCleanup } from "../agent-command-restart-recovery.js";
 import { buildMainSessionRecoverySettlementPatch } from "../main-session-recovery/main-session-recovery-clear.js";
@@ -37,7 +37,7 @@ export async function finishAgentCommandCleanup(params: {
   beforeTerminalDelivery: AgentCommandOpts["beforeTerminalDelivery"];
   reportCommitted: () => void;
   preparedRunAdmission: ReturnType<typeof prepareAgentCommandExecutionIdentity> | undefined;
-  sessionWorkAdmission: SessionWorkAdmissionLease | undefined;
+  sessionWorkAdmission: SessionEffectRef | undefined;
   cleanupInternalModelRunTargets: () => Promise<void>;
   releaseForeground: (() => void) | undefined;
 }): Promise<void> {
@@ -73,7 +73,7 @@ export async function finishAgentCommandCleanup(params: {
       const persisted = await patchSessionEntryCore(
         { agentId: params.prepared.sessionAgentId, sessionKey, storePath },
         (current) => {
-          if (!shouldPersistCurrentRunSessionCleanup(current, params.runOwnedSessionId)) {
+          if (!shouldPersistCurrentRunSessionCleanup(current, params.runOwnedSessionId, runId)) {
             return null;
           }
           if (ownsDeliveryClaim(current)) {
@@ -82,6 +82,7 @@ export async function finishAgentCommandCleanup(params: {
               ...buildMainSessionRecoverySettlementPatch({
                 entry: current,
                 recordTerminalSource: true,
+                clearRecoveryState: current.abortedLastRun !== true,
                 terminalRunId: runId,
                 terminalDeliveryEvidence: params.terminalDeliveryEvidence,
               }),
@@ -128,7 +129,7 @@ export async function finishAgentCommandCleanup(params: {
     }
   } finally {
     try {
-      await params.beforeTerminalDelivery?.();
+      await params.beforeTerminalDelivery?.(undefined, params.terminalEvent.data?.error);
     } finally {
       clearAgentRunContext(params.prepared.runId, params.lifecycleGeneration);
       params.sessionWorkAdmission?.release();

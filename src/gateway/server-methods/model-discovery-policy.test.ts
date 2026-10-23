@@ -3,7 +3,9 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { contextBudgetStatusFixture } from "../../config/sessions/context-budget.test-support.js";
 import {
   appendTranscriptMessage,
@@ -11,12 +13,13 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import { prepareOperatorModelPresentation } from "../operator-model-presentation.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { READ_SCOPE, SESSION_WRITE_SCOPE } from "../operator-scopes.js";
@@ -54,14 +57,9 @@ function createFixture(
       providers: {
         example: {
           baseUrl: "https://example.invalid",
-          models: catalog.map<ModelDefinitionConfig>(({ id, name }) => ({
-            id,
-            name,
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            maxTokens: 4096,
-          })),
+          models: catalog.map(({ id, name }) =>
+            modelDefinition(id, { name, reasoning: false, maxTokens: 4096 }),
+          ),
         },
       },
     },
@@ -156,6 +154,7 @@ describe("operator model discovery at registered reads", () => {
       };
       f.role.modelPolicy = expected.policy;
       await state.writeConfig(f.cfg);
+      setRuntimeConfigSnapshot(f.cfg);
       const scope = { agentId: "main", sessionKey: "agent:main:model-default" };
       await upsertSessionEntryCore(scope, {
         sessionId: "model-default",
@@ -205,6 +204,9 @@ describe("operator model discovery at registered reads", () => {
       };
       const f = createFixture(diagnostics);
       await state.writeConfig(f.cfg);
+      setRuntimeConfigSnapshot(f.cfg);
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      prepareGatewayRecipientProfile(f.client);
       const read = async (method: "models.list" | "chat.metadata", view?: string) => {
         const respond = await f.request(method, { agentId: "main", ...(view ? { view } : {}) });
         expect(respond.mock.calls).toHaveLength(1);
@@ -319,6 +321,7 @@ describe("operator model discovery at registered reads", () => {
         expectDefined(f.cfg.models?.providers?.example, "example provider").apiKey =
           "synthetic-key";
         await state.writeConfig(f.cfg);
+        setRuntimeConfigSnapshot(f.cfg);
         const respond = await f.request("models.list", { agentId: "main", view: "configured" });
         expect(respond.mock.calls[0]?.[0]).toBe(true);
         const { defaultModels } = expectDefined(
@@ -343,6 +346,7 @@ describe("operator model discovery at registered reads", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const f = createFixture();
       await state.writeConfig(f.cfg);
+      setRuntimeConfigSnapshot(f.cfg);
       const entered = createDeferred();
       const release = createDeferred();
       f.readChatMetadata.mockImplementationOnce(async () => {
@@ -379,6 +383,7 @@ describe("operator model discovery at registered reads", () => {
         fallbacks: ["example/fallback"],
       };
       await state.writeConfig(f.cfg);
+      setRuntimeConfigSnapshot(f.cfg);
       const tentative = structuredClone(f.cfg);
       const tentativeRole = expectDefined(
         tentative.gateway?.roles?.definitions.visitor,

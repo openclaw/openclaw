@@ -148,6 +148,18 @@ export function scanExecSafeBinTrustedDirHints(
   return hits;
 }
 
+function collectLimitedWarnings<T>(
+  hits: T[],
+  format: (hit: T) => string,
+  remainder: string,
+): string[] {
+  const lines = hits.slice(0, 5).map(format);
+  if (hits.length > 5) {
+    lines.push(`- ${hits.length - 5} more ${remainder}`);
+  }
+  return lines;
+}
+
 export function collectExecSafeBinCoverageWarnings(params: {
   hits: ExecSafeBinCoverageHit[];
   doctorFixCommand: string;
@@ -159,35 +171,26 @@ export function collectExecSafeBinCoverageWarnings(params: {
     (hit) => hit.kind === "missingProfile" && !hit.isInterpreter,
   );
   const riskyHits = params.hits.filter((hit) => hit.kind === "riskySemantics");
-  const lines: string[] = [];
-  const appendWarnings = (
-    hits: ExecSafeBinCoverageHit[],
-    format: (hit: ExecSafeBinCoverageHit) => string,
-    remainder: string,
-  ) => {
-    lines.push(...hits.slice(0, 5).map(format));
-    if (hits.length > 5) {
-      lines.push(`- ${hits.length - 5} more ${remainder}`);
-    }
-  };
-  appendWarnings(
-    interpreterHits,
-    (hit) =>
-      `- ${sanitizeForLog(hit.scopePath)}.safeBins includes interpreter/runtime '${sanitizeForLog(hit.bin)}' without profile.`,
-    "interpreter/runtime safeBins entries are missing profiles.",
-  );
-  appendWarnings(
-    customHits,
-    (hit) =>
-      `- ${sanitizeForLog(hit.scopePath)}.safeBins entry '${sanitizeForLog(hit.bin)}' is missing safeBinProfiles.${sanitizeForLog(hit.bin)}.`,
-    "custom safeBins entries are missing profiles.",
-  );
-  appendWarnings(
-    riskyHits,
-    (hit) =>
-      `- ${sanitizeForLog(hit.scopePath)}.safeBins includes '${sanitizeForLog(hit.bin)}': ${sanitizeForLog(hit.warning ?? "prefer explicit allowlist entries or approval-gated runs.")}`,
-    "safeBins entries should not use the low-risk safeBins fast path.",
-  );
+  const lines = [
+    ...collectLimitedWarnings(
+      interpreterHits,
+      (hit) =>
+        `- ${sanitizeForLog(hit.scopePath)}.safeBins includes interpreter/runtime '${sanitizeForLog(hit.bin)}' without profile.`,
+      "interpreter/runtime safeBins entries are missing profiles.",
+    ),
+    ...collectLimitedWarnings(
+      customHits,
+      (hit) =>
+        `- ${sanitizeForLog(hit.scopePath)}.safeBins entry '${sanitizeForLog(hit.bin)}' is missing safeBinProfiles.${sanitizeForLog(hit.bin)}.`,
+      "custom safeBins entries are missing profiles.",
+    ),
+    ...collectLimitedWarnings(
+      riskyHits,
+      (hit) =>
+        `- ${sanitizeForLog(hit.scopePath)}.safeBins includes '${sanitizeForLog(hit.bin)}': ${sanitizeForLog(hit.warning ?? "prefer explicit allowlist entries or approval-gated runs.")}`,
+      "safeBins entries should not use the low-risk safeBins fast path.",
+    ),
+  ];
   if (customHits.length > 0) {
     lines.push(
       `- Run "${params.doctorFixCommand}" to scaffold missing custom safeBinProfiles entries.`,
@@ -202,15 +205,12 @@ export function collectExecSafeBinTrustedDirHintWarnings(
   if (hits.length === 0) {
     return [];
   }
-  const lines = hits
-    .slice(0, 5)
-    .map(
-      (hit) =>
-        `- ${sanitizeForLog(hit.scopePath)}.safeBins entry '${sanitizeForLog(hit.bin)}' resolves to '${sanitizeForLog(hit.resolvedPath)}' outside trusted safe-bin dirs.`,
-    );
-  if (hits.length > 5) {
-    lines.push(`- ${hits.length - 5} more safeBins entries resolve outside trusted safe-bin dirs.`);
-  }
+  const lines = collectLimitedWarnings(
+    hits,
+    (hit) =>
+      `- ${sanitizeForLog(hit.scopePath)}.safeBins entry '${sanitizeForLog(hit.bin)}' resolves to '${sanitizeForLog(hit.resolvedPath)}' outside trusted safe-bin dirs.`,
+    "safeBins entries resolve outside trusted safe-bin dirs.",
+  );
   lines.push(
     "- If intentional, add the binary directory to tools.exec.safeBinTrustedDirs (global or agent scope).",
   );
@@ -253,8 +253,5 @@ export function maybeRepairExecSafeBinProfiles(cfg: OpenClawConfig): {
     }
   }
 
-  if (changes.length === 0 && warnings.length === 0) {
-    return { config: cfg, changes: [], warnings: [] };
-  }
-  return { config: next, changes, warnings };
+  return { config: changes.length > 0 || warnings.length > 0 ? next : cfg, changes, warnings };
 }

@@ -7,10 +7,7 @@ import type {
   SessionsProcessesListResult,
   SessionsProcessesStopResult,
 } from "../../../packages/gateway-protocol/src/schema/session-processes.js";
-import {
-  createOpenClawTestInstance,
-  type OpenClawTestInstance,
-} from "../../../test/helpers/openclaw-test-instance.ts";
+import type { OpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import type { SessionsListResult } from "../api/types.ts";
 import type { ChatHistoryResult } from "../pages/chat/chat-history-snapshot.ts";
@@ -18,9 +15,9 @@ import { pairControlUiPage } from "../test-helpers/control-ui-browser-pairing.ts
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
-import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import {
   backgroundWorkFixture as fixture,
+  createBackgroundWorkInstance,
   observeBackgroundWorkRpc,
   startBackgroundWorkProvider,
   type BackgroundWorkRpc,
@@ -71,44 +68,7 @@ const suite = createControlUiE2eSuite({
         saveProof,
       );
     try {
-      instance = await createOpenClawTestInstance({
-        name: "background-work",
-        env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined, VITEST: undefined },
-        config: {
-          gateway: { controlUi: { enabled: true } },
-          cron: { enabled: false },
-          // Exercise ordinary shell exec and native spawn, not Code Mode discovery.
-          tools: {
-            profile: "full",
-            codeMode: false,
-            toolSearch: false,
-            exec: { host: "gateway", mode: "full", notifyOnExit: false },
-          },
-          agents: {
-            ownership: "explicit",
-            defaults: {
-              model: "background-fixture/parent",
-              modelPolicy: { allow: ["background-fixture/*"] },
-            },
-            entries: { main: { identity: { name: "Background work fixture" } } },
-          },
-          models: {
-            catalogRefresh: { enabled: false },
-            providers: {
-              "background-fixture": {
-                api: "openai-responses",
-                apiKey: "synthetic-background-fixture-key",
-                baseUrl: "http://127.0.0.1:" + provider.port + "/v1",
-                models: [
-                  { id: "parent", name: "Fixture parent" },
-                  { id: "child", name: "Fixture child" },
-                ],
-              },
-            },
-          },
-          plugins: { allow: [] },
-        },
-      });
+      instance = await createBackgroundWorkInstance(provider.port);
       await instance.startGateway();
       return { baseUrl: "http://127.0.0.1:" + instance.port + "/", close: cleanup };
     } catch (error) {
@@ -151,15 +111,20 @@ async function capture(page: Page, name: string, focus: Locator) {
     name + " interaction must fit the viewport",
   ).toBe(true);
   const visibleText = (await page.locator("body").textContent()) ?? "";
+  // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText separately proves rendered visible text.
+  const renderedText = await page.locator("body").innerText();
   // Synthetic content only. Never retain handoffs, fixture secrets or private fixture paths.
-  for (const secret of [
-    instance.gatewayToken,
-    instance.hookToken,
-    instance.stateDir,
-    instance.homeDir,
-    "synthetic-background-fixture-key",
-  ]) {
-    expect(visibleText.includes(secret), name + " contains private fixture data").toBe(false);
+  for (const [category, secret] of [
+    ["gatewayToken", instance.gatewayToken],
+    ["hookToken", instance.hookToken],
+    ["stateDir", instance.stateDir],
+    ["homeDir", instance.homeDir],
+    ["fixtureKey", "synthetic-background-fixture-key"],
+  ] as const) {
+    expect(
+      visibleText.includes(secret),
+      `${category}: visible-text-match=${renderedText.includes(secret)}`,
+    ).toBe(false);
   }
   expect(new URL(page.url()).hash).toBe("");
   expect(await page.locator(".community-invite-card:visible").count()).toBe(0);
@@ -187,6 +152,19 @@ suite.define(() => {
         });
         const page = await context.newPage();
         const wire = observeBackgroundWorkRpc(page, signal);
+        // The scenario aborts before closing the page, including native test timeouts.
+        const logFailure = () =>
+          console.error(
+            "[background-work-real-gateway] failure",
+            JSON.stringify({
+              stage: proof.stage,
+              parentRequests: provider.parentRequests(),
+              parentPending: provider.parentIsPending(),
+              processOpen: provider.processIsOpen(),
+              rpc: wire.diagnostics(),
+            }),
+          );
+        signal.addEventListener("abort", logFailure, { once: true });
         proof.stage = "create parent and pair browser";
         await runCli([
           "gateway",
@@ -202,7 +180,6 @@ suite.define(() => {
         ]);
         await pairControlUiPage(page, runCli);
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, fixture.key));
-        await enterControlUiSession(page);
         await waitForControlUiGatewayReady(page);
         const parent = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
         const composer = parent.getByRole("textbox", { name: "Chat composer", exact: true });
@@ -234,6 +211,7 @@ suite.define(() => {
           await provider.wait(gate, signal);
         }
         await composer.fill(fixture.draft);
+        proof.stage = "persist parent draft";
         await waitForCommittedComposerDraft(
           page,
           "chat:v3:" + fixture.key + "\u0000agent:main",
@@ -255,12 +233,16 @@ suite.define(() => {
         proof.stage = "independent subagent list and transcript";
         await openChatSidePanelType(page, "Subagents");
         const subagents = parent.locator("openclaw-chat-subagents-panel");
-        const childOpen = subagents.getByRole("button", { name: fixture.childLabel, exact: true });
+        const childOpen = subagents
+          .locator(".subagents-desktop__open")
+          .filter({ has: page.getByText(fixture.childLabel, { exact: true }) });
+        proof.stage = "wait for child row";
         await childOpen.waitFor();
         const childKey = await childOpen
           .locator("xpath=ancestor::*[@data-session-key]")
           .getAttribute("data-session-key");
         expect(childKey).toMatch(/^agent:main:subagent:/);
+        proof.stage = "wait for child roster response";
         const roster = payloadOf(
           await wire.waitFor(
             (rpc) =>
@@ -280,11 +262,13 @@ suite.define(() => {
         await capture(page, "desktop-subagents-list", childOpen);
         await childOpen.click();
         const detail = subagents.locator(".chat-subagent-detail");
+        proof.stage = "wait for child task transcript";
         await detail.getByText(fixture.childTask, { exact: false }).waitFor();
+        proof.stage = "observe child in-flight startup response";
         const history = payloadOf(
           await wire.waitFor(
             (rpc) =>
-              rpc.request.method === "chat.history" &&
+              rpc.request.method === "chat.startup" &&
               paramsOf(rpc).sessionKey === childKey &&
               Boolean((rpc.response.payload as ChatHistoryResult | undefined)?.inFlightRun),
           ),
@@ -293,7 +277,9 @@ suite.define(() => {
         proof.childHistory = { runId: run.runId, sessionAbortable: run.sessionAbortable ?? false };
         expect(run.runId).toBeTruthy();
         expect(run.runId).not.toBe(parentRunId);
+        proof.stage = "render child streaming progress";
         provider.writeChildProgress();
+        proof.stage = "wait for child progress";
         await detail.getByText(fixture.childText, { exact: true }).waitFor();
         const childStop = detail.getByRole("button", { name: "Stop generating", exact: true });
         await childStop.waitFor();
@@ -304,6 +290,7 @@ suite.define(() => {
         proof.stage = "independent process list and retained output";
         await openChatSidePanelType(page, "Processes");
         const processes = parent.locator("openclaw-chat-processes-panel");
+        proof.stage = "wait for process list with retained output";
         const processList = payloadOf(
           await wire.waitFor(
             (rpc) =>
@@ -319,7 +306,7 @@ suite.define(() => {
         expect(processRow).toMatchObject({ status: "running", canStop: true, truncated: false });
         const processOpen = processes.getByRole("button", { name: processRow.name, exact: true });
         await processOpen.click();
-        await processes.getByRole("heading", { name: "Recent output", exact: true }).waitFor();
+        await processes.getByLabel("Recent output", { exact: true }).waitFor();
         expect(await processes.locator("pre").textContent()).toContain(fixture.output);
         const processStop = processes.getByRole("button", {
           name: "Stop " + processRow.name,
@@ -343,10 +330,18 @@ suite.define(() => {
         proof.stage = "mobile child Stop through history-owned exact run";
         await page.setViewportSize({ width: 390, height: 844 });
         await switchTab("Subagents");
-        await childStop.waitFor();
-        await capture(page, "mobile-subagent-transcript", childStop);
+        const mobileChildStop = detail.getByRole("button", {
+          name: `Stop ${fixture.childLabel}`,
+          exact: true,
+        });
+        await mobileChildStop.waitFor();
+        await capture(page, "mobile-subagent-transcript", mobileChildStop);
         const beforeChildStop = wire.completed.length;
-        await childStop.click();
+        await mobileChildStop.click();
+        await page
+          .getByRole("dialog", { name: "Stop subagent?", exact: true })
+          .getByRole("button", { name: "Stop subagent", exact: true })
+          .click();
         const stoppedChild = await wire.waitFor(
           (rpc) => ["chat.abort", "sessions.abort"].includes(rpc.request.method),
           beforeChildStop,
@@ -379,8 +374,9 @@ suite.define(() => {
             runIds: expect.arrayContaining([run.runId]),
           });
         }
+        proof.stage = "settle child provider cancellation";
         await provider.wait(provider.childClosed, signal);
-        await childStop.waitFor({ state: "hidden" });
+        await mobileChildStop.waitFor({ state: "hidden" });
         expect(provider.processIsOpen(), "child Stop must not stop parent exec").toBe(true);
         await assertParent();
         proof.childStop = {
@@ -391,8 +387,9 @@ suite.define(() => {
         };
         await detail.getByRole("button", { name: "Back to Subagents", exact: true }).click();
         await subagents
-          .locator(".chat-subagents__finished")
-          .getByRole("button", { name: fixture.childLabel, exact: true })
+          .getByRole("list", { name: "Finished", exact: true })
+          .locator(".chat-subagents-mobile__open")
+          .filter({ has: page.getByText(fixture.childLabel, { exact: true }) })
           .waitFor();
 
         proof.stage = "mobile exact process Stop and retained terminal output";
@@ -420,6 +417,7 @@ suite.define(() => {
         expect(payloadOf(stoppedProcess) as SessionsProcessesStopResult).toEqual({
           requested: true,
         });
+        proof.stage = "settle process cancellation and observe terminal response";
         await provider.wait(provider.processClosed, signal);
         const terminal = (
           payloadOf(
@@ -444,7 +442,7 @@ suite.define(() => {
         await processes.getByText("Stopped", { exact: true }).waitFor();
         await processStop.waitFor({ state: "hidden" });
         await processes.getByRole("button", { name: "Back to Processes", exact: true }).click();
-        const finishedToggle = processes.getByRole("button", { name: "Finished (1)", exact: true });
+        const finishedToggle = processes.getByRole("button", { name: "Finished 1", exact: true });
         await finishedToggle.waitFor();
         expect(await finishedToggle.getAttribute("aria-expanded")).toBe("false");
         expect(await processOpen.count()).toBe(0);
@@ -467,7 +465,6 @@ suite.define(() => {
         proof.stage = "reload parent with independent panels and durable draft";
         await page.setViewportSize({ width: 1440, height: 1000 });
         await page.reload();
-        await enterControlUiSession(page);
         await waitForControlUiGatewayReady(page);
         await composer.waitFor();
         await assertParent();
@@ -492,6 +489,7 @@ suite.define(() => {
         proof.stage = "complete";
         proof.complete = true;
         await saveProof();
+        signal.removeEventListener("abort", logFailure);
       },
     });
   }, 120_000);

@@ -14,6 +14,7 @@ import {
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { selectFileAction } from "./chat-file-actions.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -279,7 +280,7 @@ suite.define(() => {
               );
               expect(await panel.locator(".cm-editor").count()).toBe(0);
               const tab = page
-                .locator(".side-panel__header wa-tab")
+                .locator(".side-panel__header .tabstrip-tab")
                 .filter({ hasText: "page.html" });
               expect(await tab.count()).toBe(1);
               const originalFrame = await outer.elementHandle();
@@ -346,10 +347,10 @@ suite.define(() => {
               ).toBe(true);
               expect(await outer.getAttribute("src")).toBe(originalOuterUrl);
               expect(await gateway.getRequests("canvas.document.preview")).toHaveLength(1);
-              await panel.getByRole("button", { name: "Source", exact: true }).click();
+              await selectFileAction(panel, "Source");
               await panel.locator(".cm-editor").waitFor();
               const editor = await panel.locator(".cm-editor").elementHandle();
-              await panel.getByRole("button", { name: "Preview", exact: true }).click();
+              await selectFileAction(panel, "Preview");
               expect(await originalFrame!.evaluate((frame) => frame.isConnected)).toBe(true);
               expect(await document.getByRole("textbox", { name: "Local note" }).inputValue()).toBe(
                 "Retain this page",
@@ -392,7 +393,7 @@ suite.define(() => {
               }
               await page.setViewportSize({ width: 1440, height: 1000 });
               const attachmentFrame = await outer.elementHandle();
-              await panel.getByRole("button", { name: "Source", exact: true }).click();
+              await selectFileAction(panel, "Source");
               expect(await panel.locator("pre:visible").textContent()).toBe(attachmentSource);
               expect(await panel.locator("a[download]").getAttribute("href")).toBe(mediaUrl);
               await tab.click();
@@ -401,12 +402,12 @@ suite.define(() => {
               expect(await document.getByRole("textbox", { name: "Local note" }).inputValue()).toBe(
                 "Retain this page",
               );
-              await panel.getByRole("button", { name: "Edit file", exact: true }).click();
+              await selectFileAction(panel, "Edit file");
               await panel.locator('.cm-content[contenteditable="true"]').fill(editedSource);
-              await panel.getByRole("button", { name: "Preview", exact: true }).click();
+              await selectFileAction(panel, "Preview");
               await document.getByRole("heading", { name: "Unsaved HTML draft" }).waitFor();
               expect(await gateway.getRequests("sessions.files.set")).toEqual([]);
-              await panel.getByRole("button", { name: "Source", exact: true }).click();
+              await selectFileAction(panel, "Source");
               expect(await editor!.evaluate((element) => element.isConnected)).toBe(true);
               expect(await panel.locator(".cm-content").textContent()).toContain(
                 "Unsaved HTML draft",
@@ -414,7 +415,7 @@ suite.define(() => {
               expect(
                 await panel.getByRole("button", { name: "Save", exact: true }).isEnabled(),
               ).toBe(true);
-              await panel.getByRole("button", { name: "Preview", exact: true }).click();
+              await selectFileAction(panel, "Preview");
               await page.locator("a.markdown-file-link").filter({ hasText: "line two" }).click();
               await panel.locator(".cm-editor:visible").waitFor();
               expect(

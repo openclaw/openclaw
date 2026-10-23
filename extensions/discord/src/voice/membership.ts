@@ -184,7 +184,11 @@ export class DiscordVoiceMembershipTracker {
     action: "inferred-present" | "joined" | "left",
   ): void {
     const rosterLines = formatDiscordVoiceParticipantStateLines(
-      this.roster(entry, state.botUserId, state.inferredUserIds),
+      collectDiscordVoiceParticipants({
+        states: this.listStates(entry) ?? [],
+        botUserId: state.botUserId,
+        additionalUserIds: state.inferredUserIds,
+      }),
     );
     const presence =
       action === "inferred-present"
@@ -228,19 +232,6 @@ export class DiscordVoiceMembershipTracker {
     logger.warn(
       `discord voice: participant notification failed guild=${entry.guildId} channel=${entry.channelId}: ${formatErrorMessage(err)}`,
     );
-  }
-
-  private roster(
-    entry: VoiceSessionEntry,
-    botUserId?: string,
-    additionalUserIds?: ReadonlySet<string>,
-  ) {
-    const states = this.listStates(entry) ?? [];
-    return collectDiscordVoiceParticipants({
-      states,
-      botUserId,
-      additionalUserIds,
-    });
   }
 
   private initialRosterEvent(entry: VoiceSessionEntry, lines: string[]): string {

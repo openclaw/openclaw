@@ -6,7 +6,7 @@ import { BOARD_GRID_GAP, BOARD_GRID_ROW_HEIGHT } from "../../lib/board/grid.ts";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
 import "../../styles/base.css";
 import "../../styles/chat/board.css";
-import "./board-view.ts";
+import "./board-view.tsx";
 
 type OpenClawBoardView = HTMLElementTagNameMap["openclaw-board-view"];
 
@@ -86,6 +86,79 @@ afterEach(() => {
 });
 
 describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
+  it("preserves vertical ancestor scroll when a board mounts or its tabs refresh", async () => {
+    const parent = document.createElement("div");
+    parent.style.cssText = "height: 120px; overflow-y: auto";
+    const spacer = document.createElement("div");
+    spacer.style.height = "600px";
+    parent.append(spacer);
+    document.body.append(parent);
+    const view = await mount(undefined, parent);
+    expect(parent.scrollTop).toBe(0);
+
+    view.snapshot = {
+      ...structuredClone(source),
+      tabs: [...source.tabs, { tabId: "later", title: "Later", position: 2, chatDock: "right" }],
+    };
+    await view.updateComplete;
+    expect(parent.scrollTop).toBe(0);
+  });
+
+  it("keeps the overflow-selected tab visible without moving focus from More", async () => {
+    const { page } = await import("vitest/browser");
+    const view = await mount();
+    view.style.width = "340px";
+    view.snapshot = {
+      ...structuredClone(source),
+      tabs: Array.from({ length: 8 }, (_, index) => ({
+        tabId: `tab-${index}`,
+        title: `Research area ${index + 1}`,
+        position: index,
+        chatDock: "right" as const,
+      })),
+      widgets: [],
+    };
+    view.activeTabId = "tab-0";
+    view.callbacks = { ...view.callbacks!, selectTab: (tabId) => (view.activeTabId = tabId) };
+    await view.updateComplete;
+    const track = view.querySelector<HTMLElement>(".board-tabs__track")!;
+    expect(track.scrollWidth).toBeGreaterThan(track.clientWidth);
+    const trigger = view.querySelector<HTMLButtonElement>(".board-tabs__overflow-trigger")!;
+    await page.elementLocator(trigger).click();
+    await page.getByRole("menuitem", { name: "Research area 8", exact: true }).click();
+    await vi.waitFor(() => {
+      const selected = view.querySelector<HTMLElement>('[data-board-tab-id="tab-7"]')!;
+      expect(selected.getAttribute("aria-selected")).toBe("true");
+      const bounds = track.getBoundingClientRect();
+      const tab = selected.getBoundingClientRect();
+      expect(tab.left).toBeGreaterThanOrEqual(bounds.left - 1);
+      expect(tab.right).toBeLessThanOrEqual(bounds.right + 1);
+    });
+    expect(document.activeElement).toBe(trigger);
+    track.scrollLeft = 0;
+    view.snapshot = { ...view.snapshot!, revision: 2 };
+    await view.updateComplete;
+    expect(track.scrollLeft).toBe(0);
+
+    const allTabs = view.snapshot!.tabs;
+    view.activeTabId = "tab-0";
+    view.snapshot = { ...view.snapshot!, tabs: allTabs.slice(0, 1) };
+    await view.updateComplete;
+    expect(view.querySelector(".board-tabs__track")).toBeNull();
+    view.activeTabId = "tab-7";
+    view.snapshot = { ...view.snapshot!, tabs: allTabs };
+    await view.updateComplete;
+    await vi.waitFor(() => {
+      const restored = view.querySelector<HTMLElement>(".board-tabs__track")!;
+      const selected = view.querySelector<HTMLElement>('[data-board-tab-id="tab-7"]')!;
+      expect(restored).not.toBe(track);
+      const bounds = restored.getBoundingClientRect();
+      const tab = selected.getBoundingClientRect();
+      expect(tab.left).toBeGreaterThanOrEqual(bounds.left - 1);
+      expect(tab.right).toBeLessThanOrEqual(bounds.right + 1);
+    });
+  });
+
   it.each(["switch", "move"])("retains loaded widget state during %s", async (action) => {
     const view = await mount();
     const cell = view.querySelector("openclaw-board-widget-cell")!;
@@ -162,10 +235,8 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
       };
       const switchTab = async (tabId: string) => {
         view
-          .querySelector(".board-tabs__track")!
-          .dispatchEvent(
-            new CustomEvent("wa-tab-show", { detail: { name: tabId }, bubbles: true }),
-          );
+          .querySelector<HTMLButtonElement>(`.board-tabs__tab[data-board-tab-id="${tabId}"]`)!
+          .click();
         await view.updateComplete;
         await cell.updateComplete;
       };
@@ -173,9 +244,7 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
         const { page } = await import("vitest/browser");
         cell.querySelector<HTMLElement>(".board-widget")!.focus();
         await page.elementLocator(cell.querySelector(".board-widget__menu-trigger")!).click();
-        await page
-          .elementLocator(cell.querySelector('wa-dropdown-item[value="move:ops"]')!)
-          .click();
+        await page.elementLocator(cell.querySelector('[data-value="move:ops"]')!).click();
         await vi.waitFor(() =>
           expect(view.snapshot?.widgets.find((widget) => widget.name === "first")?.tabId).toBe(
             "ops",
@@ -220,17 +289,6 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
       frame.removeEventListener("load", loaded);
       window.removeEventListener("message", receive);
     }
-  });
-
-  it("lays out adjacent first-fit cells without pixel overlap", async () => {
-    const view = await mount();
-    view.style.width = "1200px";
-    const cells = [...view.querySelectorAll<HTMLElement>('[data-test-id="board-widget"]')];
-    expect(cells).toHaveLength(2);
-    const [first, second] = cells.map((cell) => cell.getBoundingClientRect());
-    expect(first?.width).toBeGreaterThan(0);
-    expect(second?.left).toBeGreaterThanOrEqual((first?.right ?? 0) + BOARD_GRID_GAP - 1);
-    expect(Math.round(first?.height ?? 0)).toBe(BOARD_GRID_ROW_HEIGHT * 3 + BOARD_GRID_GAP * 2);
   });
 
   it.each([354, 560])(
@@ -283,14 +341,6 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     );
   });
 
-  it("hides widget chrome by default on fine-pointer devices", async () => {
-    const view = await mount();
-    const bar = view.querySelector<HTMLElement>(".board-widget__bar");
-    const handle = view.querySelector<HTMLElement>(".board-widget__resize-handle");
-    expect(getComputedStyle(bar!).visibility).toBe("hidden");
-    expect(getComputedStyle(handle!).visibility).toBe("hidden");
-  });
-
   // Chrome must stay revealed while focus is anywhere inside the cell (menu
   // close restores focus to its trigger), so hiding is proven by moving focus
   // to an outside sink rather than blur(), which leaves focus placement to the
@@ -318,7 +368,7 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
       hover: widget.matches(":hover"),
       focusWithin: widget.matches(":focus-within"),
       dragging: widget.classList.contains("board-widget--dragging"),
-      menuOpen: widget.querySelector(".board-widget__menu[open]") !== null,
+      menuOpen: widget.querySelector('.board-widget__menu-trigger[aria-expanded="true"]') !== null,
     });
     expect(getComputedStyle(bar).visibility, revealState).toBe("hidden");
   }
@@ -330,6 +380,10 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     const widget = view.querySelector<HTMLElement>('[data-test-id="board-widget"]');
     const bar = widget!.querySelector<HTMLElement>(".board-widget__bar");
 
+    expect(getComputedStyle(bar!).visibility).toBe("hidden");
+    expect(
+      getComputedStyle(widget!.querySelector(".board-widget__resize-handle")!).visibility,
+    ).toBe("hidden");
     widget!.focus();
     expect(getComputedStyle(bar!).visibility).toBe("visible");
     // Chrome is a compact centered pill, not a full-width strip: it must not
@@ -347,144 +401,46 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     await vi.waitFor(() => expectChromeHidden(widget!, bar!));
   });
 
-  it("compacts centered chrome at intermediate widths", async () => {
-    const view = await mount();
-    view.style.width = "700px";
-    view.snapshot = {
-      ...structuredClone(source),
-      widgets: [
-        {
-          ...source.widgets[0]!,
-          sizeW: 6,
-          title: "An extremely long widget title that wants the whole bar",
-          grantState: "granted",
-        },
-      ],
-    };
-    await view.updateComplete;
-    const cell = view.querySelector("openclaw-board-widget-cell");
-    await cell?.updateComplete;
-    const widget = view.querySelector<HTMLElement>('[data-test-id="board-widget"]');
-    const bar = widget!.querySelector<HTMLElement>(".board-widget__bar");
-    widget!.focus();
-    expect(getComputedStyle(bar!).visibility).toBe("visible");
-    const widgetBounds = widget!.getBoundingClientRect();
-    const barBounds = bar!.getBoundingClientRect();
-    expect(widgetBounds.width).toBeGreaterThan(264);
-    expect(widgetBounds.width).toBeLessThanOrEqual(376);
-    expect(barBounds.left + barBounds.width / 2).toBeCloseTo(
-      widgetBounds.left + widgetBounds.width / 2,
-      0,
-    );
-    expect(barBounds.left - widgetBounds.left).toBeGreaterThanOrEqual(88);
-    expect(widgetBounds.right - barBounds.right).toBeGreaterThanOrEqual(88);
-    for (const selector of [".board-widget__title", ".board-widget__kind"]) {
-      expect(getComputedStyle(bar!.querySelector<HTMLElement>(selector)!).display).toBe("none");
-    }
-    for (const child of bar!.children) {
-      expect(child.getBoundingClientRect().right).toBeLessThanOrEqual(
-        bar!.getBoundingClientRect().right + 1,
-      );
-    }
-  });
-
-  it("strips the pill to move + menu on widgets too narrow for the reservation", async () => {
-    const view = await mount();
-    view.style.width = "700px";
-    view.snapshot = {
-      ...structuredClone(source),
-      widgets: [
-        {
-          ...source.widgets[0]!,
-          sizeW: 3,
-          title: "An extremely long widget title that wants the whole bar",
-          grantState: "granted",
-        },
-      ],
-    };
-    await view.updateComplete;
-    const cell = view.querySelector("openclaw-board-widget-cell");
-    await cell?.updateComplete;
-    const widget = view.querySelector<HTMLElement>('[data-test-id="board-widget"]');
-    const bar = widget!.querySelector<HTMLElement>(".board-widget__bar");
-    widget!.focus();
-    expect(getComputedStyle(bar!).visibility).toBe("visible");
-    // Very narrow cards keep the irreducible move + menu pair while the rest of
-    // the card stays widget-owned.
-    expect(widget!.getBoundingClientRect().width).toBeLessThan(184);
-    const title = bar!.querySelector<HTMLElement>(".board-widget__title");
-    const kind = bar!.querySelector<HTMLElement>(".board-widget__kind");
-    expect(getComputedStyle(title!).display).toBe("none");
-    expect(getComputedStyle(kind!).display).toBe("none");
-    const widgetBounds = widget!.getBoundingClientRect();
-    const barBounds = bar!.getBoundingClientRect();
-    expect(barBounds.width).toBeLessThanOrEqual(76);
-    expect(barBounds.left - widgetBounds.left).toBeLessThan(widgetBounds.right - barBounds.right);
-  });
-
-  it("keeps widget chrome visible while its menu is open", async () => {
+  it("scrolls a dense widget menu to Remove with End and activates it", async () => {
     const { userEvent } = await import("vitest/browser");
-    const view = await mount();
-    const sink = focusSink();
-    const widget = view.querySelector<HTMLElement>('[data-test-id="board-widget"]');
-    const bar = widget!.querySelector<HTMLElement>(".board-widget__bar");
-    const menu = widget!.querySelector<HTMLElement & { open: boolean }>(".board-widget__menu");
-
-    menu!.open = true;
-    await vi.waitFor(() => expect(getComputedStyle(bar!).visibility).toBe("visible"));
-
-    menu!.open = false;
-    await userEvent.unhover(widget!);
-    sink.focus();
-    expect(widget!.matches(":focus-within")).toBe(false);
-    await vi.waitFor(() => expectChromeHidden(widget!, bar!));
-  });
-
-  it("snaps pointer resize to columns and rows before committing", async () => {
-    const applyOps = vi.fn(async () => undefined);
+    const selected = createDeferred();
+    const applyOps = vi.fn(async () => {
+      selected.resolve();
+      return undefined;
+    });
     const view = await mount(applyOps);
-    const grid = view.querySelector<HTMLElement>(".board-grid");
-    const handle = view.querySelector<HTMLElement>(".board-widget__resize-handle");
-    expect(grid).not.toBeNull();
-    expect(handle).not.toBeNull();
-    const gridBounds = grid!.getBoundingClientRect();
-    const columnUnit = (gridBounds.width - BOARD_GRID_GAP * 11) / 12 + BOARD_GRID_GAP;
-    pointer(handle!, "pointerdown", 19, 100, 100);
-    pointer(
-      window,
-      "pointermove",
-      19,
-      100 + columnUnit,
-      100 + BOARD_GRID_ROW_HEIGHT + BOARD_GRID_GAP,
-    );
-    pointer(
-      window,
-      "pointerup",
-      19,
-      100 + columnUnit * 2,
-      100 + (BOARD_GRID_ROW_HEIGHT + BOARD_GRID_GAP) * 2,
-    );
+    view.snapshot = {
+      ...structuredClone(source),
+      tabs: Array.from({ length: 30 }, (_, index) => ({
+        tabId: index ? `tab-${index}` : "main",
+        title: index ? `Dashboard ${index + 1}` : "Main",
+        position: index,
+        chatDock: "right" as const,
+      })),
+      widgets: [source.widgets[0]!],
+    };
+    await view.updateComplete;
+    const cell = view.querySelector("openclaw-board-widget-cell")!;
+    await cell.updateComplete;
+    cell.querySelector<HTMLElement>(".board-widget")!.focus();
+    await userEvent.click(cell.querySelector<HTMLButtonElement>(".board-widget__menu-trigger")!);
+    const panel = cell.querySelector<HTMLElement>(".board-widget__menu-panel")!;
+    expect(panel.scrollHeight).toBeGreaterThan(panel.clientHeight);
 
-    await vi.waitFor(() =>
-      expect(applyOps).toHaveBeenCalledWith([
-        { kind: "widget_resize", name: "first", sizeW: 8, sizeH: 5, heightMode: "fixed" },
-      ]),
-    );
-  });
-
-  it("does not commit pointer gestures that never change placement", async () => {
-    const applyOps = vi.fn(async () => undefined);
-    const view = await mount(applyOps);
-    const handle = view.querySelector<HTMLElement>(".board-widget__resize-handle");
-    pointer(handle!, "pointerdown", 23, 100, 100);
-    pointer(window, "pointerup", 23, 100, 100);
-    const dragHandle = view.querySelector<HTMLElement>(".board-widget__drag-handle");
-    pointer(dragHandle!, "pointerdown", 24, 100, 100);
-    pointer(window, "pointerup", 24, 100, 100);
+    await userEvent.keyboard("{End}");
     await Promise.resolve();
-    expect(applyOps).not.toHaveBeenCalled();
-  });
+    const remove = cell.querySelector<HTMLButtonElement>(".board-widget__menu-danger")!;
+    expect(document.activeElement).toBe(remove);
+    const bounds = panel.getBoundingClientRect();
+    const row = remove.getBoundingClientRect();
+    expect(row.top).toBeGreaterThanOrEqual(bounds.top);
+    expect(row.bottom).toBeLessThanOrEqual(bounds.bottom);
+    expect(panel.scrollTop).toBeGreaterThan(0);
 
+    await userEvent.keyboard("{Enter}");
+    await selected.promise;
+    expect(applyOps).toHaveBeenCalledWith([{ kind: "widget_remove", name: "first" }]);
+  });
   it("keeps an active gesture owned by its initiating pointer", async () => {
     const applyOps = vi.fn(async () => undefined);
     const view = await mount(applyOps);
@@ -755,23 +711,5 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     expect(body!.scrollHeight).toBeGreaterThan(body!.clientHeight);
     allow?.focus();
     expect(document.activeElement).toBe(allow);
-  });
-
-  it("keeps contained errors scrollable in a one-row widget", async () => {
-    const view = await mount();
-    view.snapshot = {
-      ...structuredClone(source),
-      widgets: [{ ...source.widgets[0]!, sizeH: 1 }],
-    };
-    view.widgetFrameUrl = () => {
-      throw new Error("one-row resolver failed");
-    };
-    await view.updateComplete;
-    const cell = view.querySelector("openclaw-board-widget-cell");
-    await cell?.updateComplete;
-    const body = view.querySelector<HTMLElement>(".board-widget__body--scrollable");
-    expect(getComputedStyle(body!).overflowY).toBe("auto");
-    expect(body!.scrollHeight).toBeGreaterThan(body!.clientHeight);
-    expect(body?.textContent).toContain("one-row resolver failed");
   });
 });

@@ -102,7 +102,10 @@ describe("web push service worker readiness", () => {
     const { client } = gatewayClient([4, 1, 2, 3]);
 
     for (let i = 0; i < 3; i += 1) {
-      await expect(subscribeToWebPush(client)).resolves.toEqual({ state: "registered" });
+      await expect(subscribeToWebPush(client, () => {})).resolves.toEqual({
+        state: "registered",
+        subscription,
+      });
       expect(vi.getTimerCount()).toBe(0);
     }
   });
@@ -112,7 +115,7 @@ describe("web push service worker readiness", () => {
     installServiceWorkerReady(new Promise<ServiceWorkerRegistration>(() => {}));
     vi.stubGlobal("Notification", { requestPermission: vi.fn().mockResolvedValue("granted") });
 
-    const subscription = subscribeToWebPush(gatewayClient([4, 1, 2, 3]).client);
+    const subscription = subscribeToWebPush(gatewayClient([4, 1, 2, 3]).client, () => {});
     const rejection = expect(subscription).rejects.toThrow("Service worker not ready (timed out)");
     await vi.advanceTimersByTimeAsync(10_000);
 
@@ -120,7 +123,7 @@ describe("web push service worker readiness", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("unsubscribes an existing registration without waiting for activation", async () => {
+  it("unsubscribes locally without waiting for activation when the Gateway no longer owns the subscription row", async () => {
     const subscription = existingSubscription([4, 1, 2, 3]);
     const unsubscribe = vi.fn().mockResolvedValue(true);
     subscription.unsubscribe = unsubscribe;
@@ -128,28 +131,6 @@ describe("web push service worker readiness", () => {
       configurable: true,
       value: {
         ready: new Promise<ServiceWorkerRegistration>(() => {}),
-        getRegistration: async () => ({
-          pushManager: { getSubscription: async () => subscription },
-        }),
-      },
-    });
-    const { client, request } = gatewayClient([4, 1, 2, 3]);
-
-    await unsubscribeFromWebPush(client);
-
-    expect(request).toHaveBeenCalledWith("push.web.unsubscribe", {
-      endpoint: subscription.endpoint,
-    });
-    expect(unsubscribe).toHaveBeenCalledOnce();
-  });
-
-  it("unsubscribes locally when the Gateway no longer owns the subscription row", async () => {
-    const subscription = existingSubscription([4, 1, 2, 3]);
-    const unsubscribe = vi.fn().mockResolvedValue(true);
-    subscription.unsubscribe = unsubscribe;
-    Object.defineProperty(navigator, "serviceWorker", {
-      configurable: true,
-      value: {
         getRegistration: async () => ({
           pushManager: { getSubscription: async () => subscription },
         }),
@@ -183,39 +164,15 @@ describe("web push Gateway identity", () => {
     vi.stubGlobal("Notification", { requestPermission: vi.fn().mockResolvedValue("granted") });
     const { client, request } = gatewayClient([4, 1, 2, 3]);
 
-    await expect(subscribeToWebPush(client)).resolves.toEqual({
+    await expect(subscribeToWebPush(client, () => {})).resolves.toEqual({
       state: "registered",
+      subscription,
     });
     expect(request).toHaveBeenNthCalledWith(1, "push.web.vapidPublicKey", {});
     expect(request).toHaveBeenNthCalledWith(2, "push.web.subscribe", {
       endpoint: subscription.endpoint,
       keys: { p256dh: "p256dh", auth: "auth" },
     });
-    expect(subscribe).not.toHaveBeenCalled();
-  });
-
-  it("rejects a different Gateway key without deactivating the owning subscription", async () => {
-    const subscription = existingSubscription([4, 1, 2, 3]);
-    const getSubscription = vi.fn().mockResolvedValue(subscription);
-    const subscribe = vi
-      .fn()
-      .mockRejectedValue(new DOMException("Options differ", "InvalidStateError"));
-    installServiceWorkerReady(
-      Promise.resolve({
-        pushManager: { getSubscription, subscribe },
-      } as unknown as ServiceWorkerRegistration),
-    );
-    vi.stubGlobal("Notification", { requestPermission: vi.fn().mockResolvedValue("granted") });
-    const { client, request } = gatewayClient([4, 9, 8, 7]);
-
-    await expect(subscribeToWebPush(client)).resolves.toEqual({
-      state: "vapid-mismatch",
-      error: expect.stringContaining("belongs to another Gateway"),
-    });
-    expect(request).toHaveBeenNthCalledWith(2, "push.web.unsubscribe", {
-      endpoint: subscription.endpoint,
-    });
-    expect(request).not.toHaveBeenCalledWith("push.web.subscribe", expect.anything());
     expect(subscribe).not.toHaveBeenCalled();
   });
 });

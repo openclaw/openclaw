@@ -72,22 +72,16 @@ function renderTelegramTableIsland(block: MessagePresentationTableBlock): string
   const caption = block.caption.trim()
     ? `<caption>${escapeTelegramTableCellText(block.caption)}</caption>`
     : "";
-  const headerRow = block.headers
-    .map((header) => `<th>${escapeTelegramTableCellText(header)}</th>`)
-    .join("");
-  const bodyRows = block.rows
-    .map(
-      (row) =>
-        `<tr>${row
-          .map((cell, index) =>
-            index === block.rowHeaderColumnIndex
-              ? `<th>${escapeTelegramTableCellText(cell)}</th>`
-              : `<td>${escapeTelegramTableCellText(cell)}</td>`,
-          )
-          .join("")}</tr>`,
-    )
-    .join("");
-  return `<table>${caption}<thead><tr>${headerRow}</tr></thead><tbody>${bodyRows}</tbody></table>`;
+  const renderRow = (cells: readonly (string | number)[], header: "all" | number | undefined) =>
+    `<tr>${cells
+      .map((cell, index) => {
+        const tag = header === "all" || index === header ? "th" : "td";
+        return `<${tag}>${escapeTelegramTableCellText(cell)}</${tag}>`;
+      })
+      .join("")}</tr>`;
+  const headerRow = renderRow(block.headers, "all");
+  const bodyRows = block.rows.map((row) => renderRow(row, block.rowHeaderColumnIndex)).join("");
+  return `<table>${caption}<thead>${headerRow}</thead><tbody>${bodyRows}</tbody></table>`;
 }
 
 // Context blocks are low-emphasis by contract; italics is Telegram's closest
@@ -151,55 +145,6 @@ export const applyTextToPayload = (payload: ReplyPayload, text: string): ReplyPa
         copyReplyPayloadMetadata(payload, { ...payload, text }),
       );
 
-function partitionTelegramPresentationBlocks(params: {
-  presentation: MessagePresentation;
-  presentationControlsSelected: boolean;
-  buttonOptions: TelegramButtonBuildOptions;
-}): {
-  fallbackBlocks: MessagePresentation["blocks"];
-  nativeControlBlocks: MessagePresentationInteractiveBlock[];
-} {
-  const fallbackBlocks: MessagePresentation["blocks"] = [];
-  const nativeControlBlocks: MessagePresentationInteractiveBlock[] = [];
-  const partitionControls = <T>(
-    controls: readonly T[],
-    blockFor: (controls: T[]) => MessagePresentationInteractiveBlock,
-  ): boolean => {
-    const native: T[] = [];
-    const fallback: T[] = [];
-    for (const control of controls) {
-      const buttons = buildTelegramPresentationButtons(
-        { blocks: [blockFor([control])] },
-        params.buttonOptions,
-      );
-      (buttons?.length ? native : fallback).push(control);
-    }
-    if (native.length > 0) {
-      nativeControlBlocks.push(blockFor(native));
-    }
-    if (fallback.length > 0) {
-      fallbackBlocks.push(blockFor(fallback));
-    }
-    return fallback.length > 0;
-  };
-  for (const block of params.presentation.blocks) {
-    if (!params.presentationControlsSelected || !isMessagePresentationInteractiveBlock(block)) {
-      fallbackBlocks.push(block);
-      continue;
-    }
-    if (block.type === "buttons") {
-      partitionControls(block.buttons, (buttons) => ({ type: "buttons", buttons }));
-    } else if (
-      !partitionControls(block.options, (options) => ({ ...block, options })) &&
-      block.placeholder
-    ) {
-      // Telegram maps selects to buttons, so retain the select prompt in message text.
-      fallbackBlocks.push({ type: "text", text: block.placeholder });
-    }
-  }
-  return { fallbackBlocks, nativeControlBlocks };
-}
-
 /** Convert portable presentation into the one Telegram payload shape used by every send funnel. */
 export function canonicalizeTelegramPresentationPayload(
   payload: ReplyPayload,
@@ -238,11 +183,44 @@ export function canonicalizeTelegramPresentationPayload(
     buttonOptions,
   );
   const presentationControlsSelected = existingButtons === undefined;
-  const { fallbackBlocks, nativeControlBlocks } = partitionTelegramPresentationBlocks({
-    presentation,
-    presentationControlsSelected,
-    buttonOptions,
-  });
+  const fallbackBlocks: MessagePresentation["blocks"] = [];
+  const nativeControlBlocks: MessagePresentationInteractiveBlock[] = [];
+  const partitionControls = <T>(
+    controls: readonly T[],
+    blockFor: (controls: T[]) => MessagePresentationInteractiveBlock,
+  ): boolean => {
+    const native: T[] = [];
+    const fallback: T[] = [];
+    for (const control of controls) {
+      const buttons = buildTelegramPresentationButtons(
+        { blocks: [blockFor([control])] },
+        buttonOptions,
+      );
+      (buttons?.length ? native : fallback).push(control);
+    }
+    if (native.length > 0) {
+      nativeControlBlocks.push(blockFor(native));
+    }
+    if (fallback.length > 0) {
+      fallbackBlocks.push(blockFor(fallback));
+    }
+    return fallback.length > 0;
+  };
+  for (const block of presentation.blocks) {
+    if (!presentationControlsSelected || !isMessagePresentationInteractiveBlock(block)) {
+      fallbackBlocks.push(block);
+      continue;
+    }
+    if (block.type === "buttons") {
+      partitionControls(block.buttons, (buttons) => ({ type: "buttons", buttons }));
+    } else if (
+      !partitionControls(block.options, (blockOptions) => ({ ...block, options: blockOptions })) &&
+      block.placeholder
+    ) {
+      // Telegram maps selects to buttons, so retain the select prompt in message text.
+      fallbackBlocks.push({ type: "text", text: block.placeholder });
+    }
+  }
   // Only native labels are clipped; unavailable controls retain their full text.
   const presentationButtons = buildTelegramPresentationButtons(
     adaptMessagePresentationForChannel({
@@ -258,11 +236,10 @@ export function canonicalizeTelegramPresentationPayload(
   );
   const buttons = existingButtons ?? presentationButtons;
 
+  const fallbackPresentation = { ...presentation, blocks: fallbackBlocks };
   const fallbackText = richTables
-    ? renderTelegramRichFallbackText({ ...presentation, blocks: fallbackBlocks })
-    : renderMessagePresentationFallbackText({
-        presentation: { ...presentation, blocks: fallbackBlocks },
-      });
+    ? renderTelegramRichFallbackText(fallbackPresentation)
+    : renderMessagePresentationFallbackText({ presentation: fallbackPresentation });
   const currentText =
     resolveLegacyInteractiveTextFallback({ text: payload.text, interactive })?.trim() ?? "";
   const textIsFallback = payload.presentationTextMode === "fallback";

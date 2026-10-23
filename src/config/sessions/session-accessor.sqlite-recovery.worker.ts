@@ -3,7 +3,6 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contra
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.js";
 import {
   normalizeLifecycleTarget,
-  readSessionIdentitySnapshot,
   resolveLifecyclePrimaryEntry,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
@@ -67,8 +66,8 @@ export function recoverRestartTombstoneInDatabase(
     return {
       result: {
         status: "existing",
-        sourceEntry: structuredClone(source),
-        successorEntry: structuredClone(linked),
+        sourceEntry: source,
+        successorEntry: linked,
         successorKey: recoveredSessionKey,
       },
     };
@@ -139,26 +138,30 @@ export function recoverRestartTombstoneInDatabase(
   };
   delete nextSource.pinnedAt;
 
-  const identityKeys = [sourceTarget.canonicalKey, successorTarget.canonicalKey];
-  const previousIdentity = readSessionIdentitySnapshot(database, identityKeys);
-  writeSessionEntry(database, successorTarget.canonicalKey, params.successorEntry);
-  writeSessionEntry(database, sourceTarget.canonicalKey, nextSource, {
-    previousEntry: source,
+  const successor = writeSessionEntry(
+    database,
+    successorTarget.canonicalKey,
+    params.successorEntry,
+    { canonicalPreviousEntry: null },
+  );
+  const writtenSource = writeSessionEntry(database, sourceTarget.canonicalKey, nextSource, {
+    canonicalPreviousEntry: source,
   });
-  const currentIdentity = readSessionIdentitySnapshot(database, identityKeys);
-  const result: RestartTombstoneRecoveryResult = {
-    status: "created",
-    sourceEntry: structuredClone(nextSource),
-    successorEntry: structuredClone(params.successorEntry),
-    successorKey: successorTarget.canonicalKey,
-  };
   return {
-    result,
+    result: {
+      status: "created",
+      sourceEntry: nextSource,
+      successorEntry: params.successorEntry,
+      successorKey: successorTarget.canonicalKey,
+    },
     publication: prepareSessionEntryReplacementPublication(
       {
         pendingArchiveRecovery: false,
-        previous: previousIdentity,
-        current: currentIdentity,
+        previous: new Map([[sourceTarget.canonicalKey, source]]),
+        current: new Map([
+          [successorTarget.canonicalKey, successor],
+          [sourceTarget.canonicalKey, writtenSource],
+        ]),
         maintenancePlans: [],
         membershipInvalidatedKeys: [],
       },

@@ -36,9 +36,7 @@ it.each(["dispose", "disposeAsync"] as const)(
     const pending = capture[method]();
     try {
       expect([...owned].filter((id) => cache[id] !== undefined)).toEqual([]);
-      for (const id of preserved) {
-        expect(cache[id]).toBe(record);
-      }
+      expect(preserved.every((id) => cache[id] === record)).toBe(true);
     } finally {
       await pending;
       for (const id of [...owned, ...preserved]) {
@@ -50,7 +48,6 @@ it.each(["dispose", "disposeAsync"] as const)(
 
 function capturedPackage(root: string, links: string[] = []): PluginPackageCapture {
   return {
-    destination: path.resolve(root),
     capturedRoot: path.resolve(root),
     sourceRoot: path.resolve(root),
     links: new Set(links.map((link) => path.resolve(link))),
@@ -62,23 +59,27 @@ function capturedPackage(root: string, links: string[] = []): PluginPackageCaptu
 
 describe("captured package lookup", () => {
   const directory = path.resolve("fixture");
+  const packagesOf = (...owners: PluginPackageCapture[]) =>
+    new Map(owners.map((owner) => [owner.capturedRoot, owner]));
+  const lookup = (packages: ReadonlyMap<string, PluginPackageCapture>, filename: string) =>
+    findPluginCapturedPackage(packages, filename, directory);
   it.each([
-    { suffix: "", matches: true },
-    { suffix: "/lib/module.js", matches: true },
-    { suffix: "/./lib/../module.js", matches: true },
-    { suffix: "//lib///module.js", matches: true },
-    { suffix: "/../outside/module.js", matches: false },
-    { suffix: "-other/module.js", matches: false },
-    { suffix: "/node_modules", matches: false },
-    { suffix: "/lib/node_modules/dependency/module.js", matches: false },
-    { suffix: "/node_modules-other/module.js", matches: true },
-    { suffix: "/lib/node_modules.js", matches: true },
-    { suffix: "/ümlaut/module.js", matches: true },
-  ])("preserves package containment for '$suffix'", ({ suffix, matches }) => {
+    ["", true],
+    ["/lib/module.js", true],
+    ["/./lib/../module.js", true],
+    ["//lib///module.js", true],
+    ["/../outside/module.js", false],
+    ["-other/module.js", false],
+    ["/node_modules", false],
+    ["/lib/node_modules/dependency/module.js", false],
+    ["/node_modules-other/module.js", true],
+    ["/lib/node_modules.js", true],
+    ["/ümlaut/module.js", true],
+  ] as const)("preserves package containment for '%s'", (suffix, matches) => {
     const owner = capturedPackage("fixture/owner");
-    const packages = new Map([[owner.capturedRoot, owner]]);
+    const packages = packagesOf(owner);
     const filename = owner.capturedRoot + suffix.replaceAll("/", path.sep);
-    expect(findPluginCapturedPackage(packages, filename, directory)).toEqual(
+    expect(lookup(packages, filename)).toEqual(
       matches ? { owner, root: owner.capturedRoot } : undefined,
     );
   });
@@ -88,19 +89,13 @@ describe("captured package lookup", () => {
     const nested = capturedPackage(path.join(parent.capturedRoot, "lib"));
     const link = path.join(parent.capturedRoot, "node_modules", "@scope", "dependency");
     const dependency = capturedPackage("fixture/dependency", [link]);
-    const packages = new Map([
-      [parent.capturedRoot, parent],
-      [nested.capturedRoot, nested],
-      [dependency.capturedRoot, dependency],
-    ]);
+    const packages = packagesOf(parent, nested, dependency);
 
-    expect(
-      findPluginCapturedPackage(packages, path.join(nested.capturedRoot, "module.js"), directory),
-    ).toEqual({
+    expect(lookup(packages, path.join(nested.capturedRoot, "module.js"))).toEqual({
       owner: parent,
       root: parent.capturedRoot,
     });
-    expect(findPluginCapturedPackage(packages, path.join(link, "module.js"), directory)).toEqual({
+    expect(lookup(packages, path.join(link, "module.js"))).toEqual({
       owner: dependency,
       root: link,
     });
@@ -110,14 +105,14 @@ describe("captured package lookup", () => {
     const owner = capturedPackage("fixture/owner");
     const link = path.resolve("fixture/late-link");
     const filename = path.join(link, "module.js");
-    const packages = new Map([[owner.capturedRoot, owner]]);
-    expect(findPluginCapturedPackage(packages, filename, directory)).toBeUndefined();
+    const packages = packagesOf(owner);
+    expect(lookup(packages, filename)).toBeUndefined();
     owner.links.add(link);
-    expect(findPluginCapturedPackage(packages, filename, directory)).toEqual({ owner, root: link });
+    expect(lookup(packages, filename)).toEqual({ owner, root: link });
     owner.links.delete(link);
-    expect(findPluginCapturedPackage(packages, filename, directory)).toBeUndefined();
+    expect(lookup(packages, filename)).toBeUndefined();
     owner.links.add(link);
     packages.delete(owner.capturedRoot);
-    expect(findPluginCapturedPackage(packages, filename, directory)).toBeUndefined();
+    expect(lookup(packages, filename)).toBeUndefined();
   });
 });

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import {
   collectLifecycleIdentityChanges,
   prepareCommittedSessionEntryRemovals,
@@ -26,8 +27,10 @@ export function collectReclamationDeletionEntries(
               (upsert) => upsert.sessionKey === sessionKey,
             ),
         )
-      : result?.kind === "maintenance-finalize"
-        ? result.value.committedEntries
+      : plan.kind === "maintenance-finalize" && result?.kind === "maintenance-finalize"
+        ? result.value.committedEntryIndices.map((index) =>
+            expectDefined(plan.entries[index], "Missing committed maintenance entry"),
+          )
         : plan.entries;
   const removed =
     result?.kind === "lifecycle-projection-commit"
@@ -36,6 +39,34 @@ export function collectReclamationDeletionEntries(
   return entries.flatMap(({ sessionKey, expectedEntry: entry }) =>
     entry && (!removed || removed.has(sessionKey)) ? [{ sessionKey, entry }] : [],
   );
+}
+
+export function collectReclamationEntryReplacement(
+  plan: SessionNativeBindingDeletion["plan"],
+  result: SqliteSessionReclamationResult,
+) {
+  const changedKeys =
+    result.kind === "entry" && !result.value.deleted
+      ? []
+      : collectReclamationChangedSessionKeys(plan, result);
+  const removedEntries = collectReclamationDeletionEntries(plan, result);
+  const identities =
+    plan.kind === "lifecycle-projection-commit" && result.kind === "lifecycle-projection-commit"
+      ? collectLifecycleIdentityChanges(plan.input.projected, result.value.removedSessionKeys)
+      : {
+          previous: new Map(removedEntries.map(({ sessionKey, entry }) => [sessionKey, entry])),
+          current: new Map<string, SessionEntry>(),
+        };
+  return changedKeys.length > 0
+    ? {
+        ...identities,
+        pendingArchiveRecovery:
+          result.kind === "lifecycle-projection-commit" ? result.value.pendingArchives : false,
+        membershipInvalidatedKeys: changedKeys,
+        maintenancePlans:
+          result.kind === "lifecycle-projection-commit" ? result.value.maintenancePlans : [],
+      }
+    : undefined;
 }
 
 export function prepareReclamationPublication(
@@ -54,7 +85,9 @@ export function prepareReclamationPublication(
     return prepareCommittedSessionEntryRemovals(
       plan.agentId,
       databaseIdentity,
-      result.value.committedEntries,
+      result.value.committedEntryIndices.map((index) =>
+        expectDefined(plan.entries[index], "Missing committed maintenance entry"),
+      ),
     );
   }
   if (plan.kind === "lifecycle-artifacts") {
@@ -67,6 +100,9 @@ export function collectReclamationChangedSessionKeys(
   plan: SqliteSessionReclamationPlan,
   result: SqliteSessionReclamationResult,
 ): string[] {
+  if (result.kind === "history-eviction" && !result.value.deleted) {
+    return [];
+  }
   switch (result.kind) {
     case "lifecycle-projection-commit":
       return [
@@ -78,15 +114,18 @@ export function collectReclamationChangedSessionKeys(
           maintenance.archivedEntries.map(({ sessionKey }) => sessionKey),
         ),
       ];
-    case "deletion-plan":
     case "lifecycle-projection-plan":
-    case "lifecycle-projection-count":
       return [];
     case "maintenance-plan":
       return result.value.archivedEntries.map(({ sessionKey }) => sessionKey);
     case "maintenance-finalize":
-      return result.value.committedEntries.map(({ sessionKey }) => sessionKey);
-    case "maintenance-preservation-required":
+      if (plan.kind !== "maintenance-finalize") {
+        throw new Error("SQLite maintenance result has no matching plan");
+      }
+      return result.value.committedEntryIndices.map(
+        (index) =>
+          expectDefined(plan.entries[index], "Missing committed maintenance entry").sessionKey,
+      );
     case "maintenance-plan-stale":
     case "maintenance-statistics":
     case "maintenance-age":

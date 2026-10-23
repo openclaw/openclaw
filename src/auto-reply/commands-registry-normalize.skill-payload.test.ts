@@ -61,14 +61,18 @@ describe("skill payload normalization", () => {
     }
   });
 
-  it("keeps non-skill multiline policies and outer payload trimming unchanged", () => {
+  it("preserves free-text arguments while retaining other commands' multiline policies", () => {
     const cases = [
-      ["/side first\n\n    second", "/btw first"],
+      ["/side first\n\n    second", "/btw first\n\n    second"],
+      ["/btw\nwhy does this fail?", "/btw\nwhy does this fail?"],
+      ["/loop 10m check:\n- CI\n- deploy", "/loop 10m check:\n- CI\n- deploy"],
       ["/id\n\n    ignored", "/whoami"],
+      ["/model example\n    ignored", "/model example"],
       ["/reset soft\n\n    re-read\tpersona files", "/reset soft re-read persona files"],
       ["/learn first\n\n    second", "/learn first\nsecond"],
       ["/goal set first\n\n    second", "/goal set first\n\n    second"],
       ["/steer first\n\n    second", "/steer first\n\n    second"],
+      ["/followup first\n\n    second", "/followup first\n\n    second"],
       ["  /skill demo_skill first\n    second\n  ", "/skill demo_skill first\n    second"],
     ] as const;
     for (const [raw, expected] of cases) {

@@ -2,8 +2,6 @@ import type { MediaPlaceholderTextFact } from "openclaw/plugin-sdk/channel-inbou
 import {
   createMessageReceiptFromOutboundResults,
   type MessageReceipt,
-  type MessageReceiptPartKind,
-  type MessageReceiptSourceResult,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
@@ -149,81 +147,6 @@ function buildTargetParams(target: SignalTarget): SignalTargetParams {
   return { username: [target.username] };
 }
 
-function createSignalSendReceipt(params: {
-  messageId: string;
-  timestamp?: number;
-  target: SignalTarget;
-  kind: MessageReceiptPartKind;
-  replyToId?: string;
-  nativeReplyStatus?: "sent" | "fallback";
-}): MessageReceipt {
-  const messageId = params.messageId.trim();
-  const results: MessageReceiptSourceResult[] =
-    messageId && messageId !== "unknown"
-      ? [
-          {
-            channel: "signal",
-            messageId,
-            meta: {
-              targetType: params.target.type,
-              ...(params.replyToId
-                ? {
-                    replyToId: params.replyToId,
-                    nativeReplyStatus: params.nativeReplyStatus ?? "sent",
-                  }
-                : {}),
-            },
-          },
-        ]
-      : [];
-  if (results[0]) {
-    if (params.timestamp != null) {
-      results[0].timestamp = params.timestamp;
-    }
-    if (params.target.type === "group") {
-      results[0].chatId = params.target.groupId;
-    } else if (params.target.type === "recipient") {
-      results[0].toJid = params.target.recipient;
-    } else {
-      results[0].toJid = params.target.username;
-    }
-  }
-  return createMessageReceiptFromOutboundResults({
-    results,
-    kind: params.kind,
-    ...(params.replyToId ? { replyToId: params.replyToId } : {}),
-  });
-}
-
-function parseSignalReplyTimestamp(raw: string | null | undefined): number | undefined {
-  const value = normalizeOptionalString(raw);
-  if (!value || !/^\d+$/.test(value)) {
-    return undefined;
-  }
-  return asPositiveSafeInteger(Number(value));
-}
-
-function resolveSignalQuoteParams(opts: SignalSendOpts):
-  | {
-      replyToId: string;
-      params: Record<string, unknown>;
-    }
-  | undefined {
-  const timestamp = parseSignalReplyTimestamp(opts.replyToId);
-  const author = normalizeOptionalString(opts.replyToAuthor);
-  if (timestamp === undefined || !author) {
-    return undefined;
-  }
-  return {
-    replyToId: String(timestamp),
-    params: {
-      quoteTimestamp: timestamp,
-      quoteAuthor: author,
-      quoteMessage: opts.replyToBody ?? "",
-    },
-  };
-}
-
 export async function sendMessageSignal(
   to: string,
   text: string,
@@ -238,23 +161,13 @@ export async function sendMessageSignal(
   const target = parseTarget(to);
   const targetAuthor = normalizeOptionalString(account);
   const targetAuthorUuid = normalizeOptionalString(accountInfo.config.accountUuid);
-  const outboundText = text ?? "";
-  let message = outboundText;
+  let message = text;
   let outboundMedia: MediaPlaceholderTextFact | undefined;
   let textStyles: SignalTextStyleRange[] = [];
   const textMode = opts.textMode ?? "markdown";
-  const maxBytes = (() => {
-    if (typeof opts.maxBytes === "number") {
-      return opts.maxBytes;
-    }
-    if (typeof accountInfo.config.mediaMaxMb === "number") {
-      return accountInfo.config.mediaMaxMb * 1024 * 1024;
-    }
-    if (typeof cfg.agents?.defaults?.mediaMaxMb === "number") {
-      return cfg.agents.defaults.mediaMaxMb * 1024 * 1024;
-    }
-    return 8 * 1024 * 1024;
-  })();
+  const maxBytes =
+    opts.maxBytes ??
+    (accountInfo.config.mediaMaxMb ?? cfg.agents?.defaults?.mediaMaxMb ?? 8) * 1024 * 1024;
 
   let attachments: string[] | undefined;
   if (opts.mediaUrl?.trim()) {
@@ -304,7 +217,23 @@ export async function sendMessageSignal(
 
   Object.assign(params, buildTargetParams(target));
 
-  const quote = resolveSignalQuoteParams(opts);
+  const rawReplyToId = normalizeOptionalString(opts.replyToId);
+  const quoteTimestamp =
+    rawReplyToId && /^\d+$/.test(rawReplyToId)
+      ? asPositiveSafeInteger(Number(rawReplyToId))
+      : undefined;
+  const quoteAuthor = normalizeOptionalString(opts.replyToAuthor);
+  const quote =
+    quoteTimestamp !== undefined && quoteAuthor
+      ? {
+          replyToId: String(quoteTimestamp),
+          params: {
+            quoteTimestamp,
+            quoteAuthor,
+            quoteMessage: opts.replyToBody ?? "",
+          },
+        }
+      : undefined;
   const sendOpts = {
     baseUrl,
     timeoutMs: opts.timeoutMs,
@@ -314,23 +243,19 @@ export async function sendMessageSignal(
   };
   let nativeReplyStatus: "sent" | "fallback" | undefined;
   let result: SignalSendRpcResult | undefined;
-  if (quote) {
-    try {
-      result = await signalRpcRequest<SignalSendRpcResult>(
-        "send",
-        { ...params, ...quote.params },
-        sendOpts,
-      );
-      nativeReplyStatus = "sent";
-    } catch (error) {
-      if (!isSignalQuoteMetadataRejection(error)) {
-        throw error;
-      }
-      result = await signalRpcRequest<SignalSendRpcResult>("send", params, sendOpts);
-      nativeReplyStatus = "fallback";
+  try {
+    result = await signalRpcRequest<SignalSendRpcResult>(
+      "send",
+      quote ? { ...params, ...quote.params } : params,
+      sendOpts,
+    );
+    nativeReplyStatus = quote ? "sent" : undefined;
+  } catch (error) {
+    if (!quote || !isSignalQuoteMetadataRejection(error)) {
+      throw error;
     }
-  } else {
     result = await signalRpcRequest<SignalSendRpcResult>("send", params, sendOpts);
+    nativeReplyStatus = "fallback";
   }
   assertSignalRecipientDelivery(result, target);
   const timestamp = result?.timestamp;
@@ -347,15 +272,32 @@ export async function sendMessageSignal(
       sourceTimestamp: timestamp,
     });
   }
+  const receiptMessageId = messageId.trim();
   return {
     messageId,
     timestamp,
-    receipt: createSignalSendReceipt({
-      messageId,
-      target,
+    receipt: createMessageReceiptFromOutboundResults({
+      results:
+        receiptMessageId && receiptMessageId !== "unknown"
+          ? [
+              {
+                channel: "signal",
+                messageId: receiptMessageId,
+                ...(timestamp != null ? { timestamp } : {}),
+                ...(target.type === "group"
+                  ? { chatId: target.groupId }
+                  : { toJid: target.type === "recipient" ? target.recipient : target.username }),
+                meta: {
+                  targetType: target.type,
+                  ...(quote
+                    ? { replyToId: quote.replyToId, nativeReplyStatus: nativeReplyStatus ?? "sent" }
+                    : {}),
+                },
+              },
+            ]
+          : [],
       kind: attachments && attachments.length > 0 ? "media" : "text",
-      ...(quote ? { replyToId: quote.replyToId, nativeReplyStatus } : {}),
-      ...(timestamp != null ? { timestamp } : {}),
+      ...(quote ? { replyToId: quote.replyToId } : {}),
     }),
   };
 }

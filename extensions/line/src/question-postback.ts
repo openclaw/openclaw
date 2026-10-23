@@ -24,7 +24,6 @@ export function buildLineQuestionPostbackData(callback: LineQuestionPostback): s
   return Buffer.byteLength(data, "utf8") <= POSTBACK_DATA_MAX_BYTES ? data : undefined;
 }
 
-/** Reads a question choice back out of inbound postback data, if it carries one. */
 export function parseLineQuestionPostbackData(data: string): LineQuestionPostback | undefined {
   if (!data.includes(QUESTION_ID_PARAM)) {
     return undefined;
@@ -38,7 +37,16 @@ export function parseLineQuestionPostbackData(data: string): LineQuestionPostbac
   if (!rawIndex || !/^\d+$/.test(rawIndex)) {
     return undefined;
   }
-  return { questionId, optionIndex: Number(rawIndex) };
+  const optionIndex = Number(rawIndex);
+  if (!Number.isSafeInteger(optionIndex)) {
+    return undefined;
+  }
+  return { questionId, optionIndex };
+}
+
+/** Returns whether a postback claims to be a question callback, even if malformed. */
+export function isLineQuestionPostbackData(data: string): boolean {
+  return new URLSearchParams(data).has(QUESTION_ID_PARAM);
 }
 
 /**

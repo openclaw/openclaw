@@ -26,13 +26,11 @@ export type ContextEngineTurnAttemptFacts = {
   promptError: boolean;
   aborted: boolean;
   yieldAborted: boolean;
-  isHeartbeat?: boolean;
   runtimeContext?: ContextEngineTurnRuntimeContext;
 };
 
 export async function drainPendingContextEngineTurnsBeforeRun(params: {
   admission: TranscriptTurnBoundary["admission"] | undefined;
-  isHeartbeat?: boolean;
   lease: ContextEngineLogicalTurnLease;
   recorder?: UserTurnTranscriptRecorder;
   sessionTarget?: ContextEngineSessionTarget;
@@ -73,14 +71,40 @@ export async function drainPendingContextEngineTurnsBeforeRun(params: {
       engineId: params.lease.effectiveEngineId,
       ownerPluginId: params.lease.effectiveEnginePluginId,
     };
+    const retainAdmission = <T>(
+      admission: TranscriptTurnBoundary["admission"],
+      write: () => Promise<T>,
+    ) => {
+      // Register cleanup before synchronously joining the writer FIFO.
+      const pending = new Promise<T>((resolve) => {
+        params.lease.onDispose(
+          JSON.stringify([databasePath, admission.logicalTurnId]),
+          async () => {
+            // The database decides whether an uncertain write reached host acceptance.
+            await pending.catch(() => {});
+            if (await store.discardIntent({ ...owner, admission })) {
+              warn(
+                `[context-engine] discarded unaccepted turn advancement: ${admission.logicalTurnId}: run ended without host acceptance`,
+              );
+            }
+          },
+        );
+        resolve(write());
+      });
+      return pending;
+    };
     // One worker transaction recovers, checks for advanceable rows, and records a
     // known admission when none remain; only pending work needs the drain.
-    const prepared = await store.prepareRun({
-      ...owner,
-      admission: params.admission,
-      isHeartbeat: params.isHeartbeat === true,
-      sessionId: target.sessionId,
-    });
+    const sessionId = target.sessionId;
+    const prepare = () =>
+      store.prepareRun({
+        ...owner,
+        admission: params.admission,
+        sessionId,
+      });
+    const prepared = await (params.admission
+      ? retainAdmission(params.admission, prepare)
+      : prepare());
     for (const message of prepared.warnings) {
       warn(message);
     }
@@ -99,7 +123,11 @@ export async function drainPendingContextEngineTurnsBeforeRun(params: {
         return;
       }
     }
-    const enqueueAdmission = (admission: TranscriptTurnBoundary["admission"]) => {
+    const enqueueAdmission = async (admission: TranscriptTurnBoundary["admission"]) => {
+      // Transcript fallback may persist after its provider run has already ended.
+      if (params.lease.disposed) {
+        return;
+      }
       if (
         admission.agentId !== target.agentId ||
         admission.sessionId !== target.sessionId ||
@@ -108,11 +136,7 @@ export async function drainPendingContextEngineTurnsBeforeRun(params: {
       ) {
         throw new Error("context-engine transcript target changed before provider dispatch");
       }
-      return store.enqueueIntent({
-        ...owner,
-        admission,
-        isHeartbeat: params.isHeartbeat === true,
-      });
+      await retainAdmission(admission, () => store.enqueueIntent({ ...owner, admission }));
     };
     if (params.admission) {
       if (!prepared.admitted) {
@@ -133,32 +157,6 @@ export async function drainPendingContextEngineTurnsBeforeRun(params: {
     warn(`[context-engine] failed to retry pending turn advancement: ${message}`);
     params.lease.degradeBeforeStart(
       "pending durable turn advancement could not be checked before the next turn",
-    );
-  }
-}
-
-export async function discardContextEngineTurnAttemptIntent(params: {
-  facts: ContextEngineTurnAttemptFacts;
-  lease: ContextEngineLogicalTurnLease;
-  warn?: (message: string) => void;
-}): Promise<void> {
-  const warn = params.warn ?? console.warn;
-  try {
-    const admission = params.facts.boundary.admission;
-    await openContextEngineTurnOutboxWorkerStore({
-      agentId: admission.agentId,
-      path: admission.storePath,
-      sessionKey: admission.sessionKey,
-      sessionId: admission.sessionId,
-    }).discardIntent({
-      admission,
-      engineId: params.lease.effectiveEngineId,
-      ownerPluginId: params.lease.effectiveEnginePluginId,
-    });
-  } catch (error) {
-    rethrowIncognitoSessionError(error);
-    warn(
-      `[context-engine] failed to discard unaccepted turn intent: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
 }
@@ -202,7 +200,6 @@ export async function finalizeAcceptedContextEngineTurn(params: {
   }
   const warn = params.warn ?? console.warn;
   if (params.facts.promptError || params.facts.aborted || params.facts.yieldAborted) {
-    await discardContextEngineTurnAttemptIntent({ facts: params.facts, lease: params.lease, warn });
     return;
   }
   try {
@@ -220,7 +217,6 @@ export async function finalizeAcceptedContextEngineTurn(params: {
     const accepted = {
       boundary: params.facts.boundary,
       engineId: params.lease.effectiveEngineId,
-      isHeartbeat: params.facts.isHeartbeat === true,
       ownerPluginId: params.lease.effectiveEnginePluginId,
       runtimeContext: params.facts.runtimeContext,
     };
@@ -249,19 +245,23 @@ export async function finalizeAcceptedContextEngineTurn(params: {
         sessionFile: turn.admission.sessionKey,
         reason: "turn",
         runtimeContext: turn.runtimeContext,
+        runtimeSettings: turn.runtimeSettings,
         config: params.config,
         onDeferredMaintenance: (promise) => params.lease.deferDisposalUntil(promise),
       });
     };
-    await drainContextEngineTurnOutbox({
-      store,
-      engine: params.lease.engine,
-      engineId: params.lease.effectiveEngineId,
-      ownerPluginId: params.lease.effectiveEnginePluginId,
-      sessionId: admission.sessionId,
-      onCommitted,
-      warn,
-    });
+    const drainSession = (sessionId: string, limit?: number) =>
+      drainContextEngineTurnOutbox({
+        store,
+        engine: params.lease.engine,
+        engineId: params.lease.effectiveEngineId,
+        ownerPluginId: params.lease.effectiveEnginePluginId,
+        sessionId,
+        ...(limit === undefined ? {} : { limit }),
+        onCommitted,
+        warn,
+      });
+    await drainSession(admission.sessionId);
     // Prioritize the accepted session, then preserve one bounded retry opportunity per
     // other pending session without immediately retrying a failed accepted-session row.
     const retrySessionIds = await store.listPendingSessions({
@@ -273,16 +273,7 @@ export async function finalizeAcceptedContextEngineTurn(params: {
       if (sessionId === admission.sessionId) {
         continue;
       }
-      await drainContextEngineTurnOutbox({
-        store,
-        engine: params.lease.engine,
-        engineId: params.lease.effectiveEngineId,
-        ownerPluginId: params.lease.effectiveEnginePluginId,
-        sessionId,
-        limit: 1,
-        onCommitted,
-        warn,
-      });
+      await drainSession(sessionId, 1);
     }
     // Finish draining before maintenance can read engine state. Replayed rows use their own
     // target and latest model facts; one offer per session lets the scheduler own coalescing.

@@ -4,12 +4,14 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import * as agentEvents from "../../../infra/agent-events.js";
 import {
   rotateAgentEventLifecycleGeneration,
   type AgentEventPayload,
 } from "../../../infra/agent-events.js";
 import { SqliteWorkerError } from "../../../infra/sqlite-worker-contract.js";
 import * as operationAdmission from "../../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
@@ -21,6 +23,7 @@ import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
 import * as databaseLifecycle from "../../../state/openclaw-state-db-cache.js";
 import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../../agent-run-terminal-outcome.js";
 import { runSpawnPipeline } from "../../spawn-pipeline.js";
+import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import { createSubagentRegistryListener } from "./subagent-registry-listener.js";
 import { createPendingLifecycleScheduler } from "./subagent-registry-pending-lifecycle.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
@@ -38,6 +41,7 @@ import type { SubagentCompletionRequest } from "./subagent-registry.types.js";
 
 afterEach(() => {
   resetGatewayWorkAdmission();
+  vi.restoreAllMocks();
 });
 
 const mocks = vi.hoisted(() => ({
@@ -192,12 +196,10 @@ it("rejects and terminalizes an intent superseded while descriptor admission wai
   });
 });
 
-it.each(["recorded child", "persisted store owner"] as const)(
-  "terminalizes a committed intent after a definite descriptor refusal using its %s usage",
-  async (owner) => {
+it.each(["main", "research"] as const)(
+  "terminalizes a committed intent using its recorded child usage with %s as the configured store owner",
+  async (configuredStoreOwner) => {
     await withQueuedRegistrationFixture(async (f) => {
-      const recordedChild = owner === "recorded child";
-      const configuredStoreOwner = recordedChild ? "main" : "research";
       const cfg = {
         session: { store: path.join(resolveStateDir(), "queued-registration-sessions.sqlite") },
         agents: {
@@ -208,7 +210,11 @@ it.each(["recorded child", "persisted store owner"] as const)(
       } satisfies OpenClawConfig;
       f.options.getRuntimeConfig = () => cfg;
       f.registration.childSessionKey = "global";
-      f.registration.childAgentId = recordedChild ? "research" : undefined;
+      f.registration.childAgentId = "research";
+      f.registration.sessionEntry = {
+        sessionId: "research-collector-session",
+        lifecycleRevision: "research-collector-lifecycle",
+      };
       f.registration.queuedLaunch!.request.sessionKey = "global";
       for (const [agentId, inputTokens, outputTokens] of [
         ["main", 11, 13],
@@ -288,22 +294,21 @@ it.each(["open", "restart", "suspend"] as const)(
         .mockImplementation((params) => f.track(release.promise.then(() => preserve(params))));
       let emit: ((event: AgentEventPayload) => void) | undefined;
       const complete = vi.fn(async () => {});
-      const warn = vi.fn();
+      const warn = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
+      vi.spyOn(agentEvents, "onAgentEvent").mockImplementation((handler) => {
+        emit = handler;
+        return () => {};
+      });
       const listener = createSubagentRegistryListener({
         runs: f.runs,
         pendingLifecycle: createPendingLifecycleScheduler({
           runs: f.runs,
           completeInBackground: vi.fn(),
         }),
-        onAgentEvent: (handler) => {
-          emit = handler;
-          return () => {};
-        },
         resumeRequesterSettleWake: vi.fn(),
         adoptPausedSubagentRunIntoSuccessor: async () => false,
         refreshFrozenResultFromSession: async () => {},
         completeSubagentRunWithRecovery: complete,
-        warn,
       });
       const dispatch = async () => {
         const settleRootWork = observeRootWork();
@@ -362,21 +367,21 @@ it.each([false, true])(
     await withQueuedRegistrationFixture(async (f) => {
       await f.register();
       let emit: ((event: AgentEventPayload) => void) | undefined;
+      vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
+      vi.spyOn(agentEvents, "onAgentEvent").mockImplementation((handler) => {
+        emit = handler;
+        return () => {};
+      });
       const listener = createSubagentRegistryListener({
         runs: f.runs,
         pendingLifecycle: createPendingLifecycleScheduler({
           runs: f.runs,
           completeInBackground: vi.fn(),
         }),
-        onAgentEvent: (handler) => {
-          emit = handler;
-          return () => {};
-        },
         resumeRequesterSettleWake: vi.fn(),
         adoptPausedSubagentRunIntoSuccessor: async () => false,
         refreshFrozenResultFromSession: async () => {},
         completeSubagentRunWithRecovery: async () => {},
-        warn: vi.fn(),
       });
       listener.ensure();
       try {
@@ -436,19 +441,18 @@ it.each(["pending", "already dispatched", "next attempt"] as const)(
         runs: f.runs,
         completeInBackground,
       });
-      const warn = vi.fn();
+      const warn = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
+      vi.spyOn(agentEvents, "onAgentEvent").mockImplementation((handler) => {
+        emit = handler;
+        return () => {};
+      });
       const listener = createSubagentRegistryListener({
         runs: f.runs,
         pendingLifecycle,
-        onAgentEvent: (handler) => {
-          emit = handler;
-          return () => {};
-        },
         resumeRequesterSettleWake: vi.fn(),
         adoptPausedSubagentRunIntoSuccessor: async () => false,
         refreshFrozenResultFromSession: async () => {},
         completeSubagentRunWithRecovery: async () => {},
-        warn,
       });
       const restarted = createDeferred();
       const stop = subscribeSubagentRunChanges("persistence", () => {
@@ -500,6 +504,8 @@ it.each(["pending", "already dispatched", "next attempt"] as const)(
         await vi.advanceTimersByTimeAsync(AGENT_RUN_TERMINAL_RETRY_GRACE_MS);
         expect(warn).not.toHaveBeenCalled();
         expect(f.current().execution).toMatchObject({ status: "running", startedAt: 20 });
+        expect(f.scope.canLaunch()).toBe(false);
+        expect(f.scope.canAcceptLaunch()).toBe(true);
         if (timing === "pending") {
           expect(completeInBackground).not.toHaveBeenCalled();
         } else {
@@ -528,19 +534,14 @@ it.each(["transaction", "commit"] as const)(
     await withQueuedRegistrationFixture(async (f) => {
       await f.register();
       const original = f.current();
-      const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
       let rotated = false;
-      const admission = vi
-        .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit, attachment) =>
-          createAdmission((request, grant) => {
-            if (request.stage === stage && !rotated) {
-              rotated = true;
-              rotateAgentEventLifecycleGeneration();
-            }
-            admit(request, grant);
-          }, attachment),
-        );
+      const admission = probe.admission(operationAdmission, (request, grant, admit) => {
+        if (request.stage === stage && !rotated) {
+          rotated = true;
+          rotateAgentEventLifecycleGeneration();
+        }
+        admit(request, grant);
+      });
       try {
         await expect(
           f.manager.startQueuedSubagentRun(original.runId, "accepted-run"),
@@ -555,25 +556,6 @@ it.each(["transaction", "commit"] as const)(
       } finally {
         admission.mockRestore();
       }
-    });
-  },
-);
-
-it.each(["running", "terminal"] as const)(
-  "retains acceptance authority after a %s lifecycle publication",
-  async (status) => {
-    await withQueuedRegistrationFixture(async (f) => {
-      await f.register();
-      await f.change((draft) => {
-        draft.execution = {
-          ...draft.execution,
-          status,
-          startedAt: 10,
-          ...(status === "terminal" ? { endedAt: 20 } : {}),
-        };
-      });
-      expect(f.scope.canLaunch()).toBe(false);
-      expect(f.scope.canAcceptLaunch()).toBe(true);
     });
   },
 );

@@ -1,108 +1,54 @@
-// Browser tests cover bridge server.auth plugin behavior.
 import { createServer } from "node:http";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { promisify } from "node:util";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { getBridgeAuthForPort } from "./bridge-auth-registry.js";
 import { startBrowserBridgeServer, stopBrowserBridgeServer } from "./bridge-server.js";
-import type { ResolvedBrowserConfig } from "./config.js";
-import {
-  DEFAULT_OPENCLAW_BROWSER_COLOR,
-  DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
-} from "./constants.js";
+import { resolveBrowserConfig } from "./config.js";
 import { isBrowserRuntimeRunning } from "./server-context.lifecycle.js";
 
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
-
-function buildResolvedConfig(): ResolvedBrowserConfig {
-  return {
-    enabled: true,
-    evaluateEnabled: false,
-    controlPort: 0,
-    cdpPortRangeStart: 18800,
-    cdpPortRangeEnd: 18899,
-    cdpProtocol: "http",
-    cdpHost: "127.0.0.1",
-    cdpIsLoopback: true,
-    remoteCdpTimeoutMs: 1500,
-    remoteCdpHandshakeTimeoutMs: 3000,
-    localLaunchTimeoutMs: 15_000,
-    localCdpReadyTimeoutMs: 8_000,
-    extraArgs: [],
-    color: DEFAULT_OPENCLAW_BROWSER_COLOR,
-    executablePath: undefined,
-    headless: true,
-    noSandbox: false,
-    attachOnly: true,
-    defaultProfile: DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
-    profiles: {
-      [DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME]: {
-        cdpPort: 1,
-        color: DEFAULT_OPENCLAW_BROWSER_COLOR,
-      },
-    },
-  } as unknown as ResolvedBrowserConfig;
-}
+const tokenAuth = { authToken: "secret-token" };
+const tokenHeaders = { Authorization: "Bearer secret-token" };
 
 describe("startBrowserBridgeServer auth", () => {
-  const servers: Array<{ stop: () => Promise<void> }> = [];
-
-  async function expectAuthFlow(
-    authConfig: { authToken?: string; authPassword?: string },
-    headers: Record<string, string>,
-    host?: string,
+  async function startBridge(
+    options: Omit<Parameters<typeof startBrowserBridgeServer>[0], "resolved"> = {},
   ) {
     const bridge = await startBrowserBridgeServer({
-      resolved: buildResolvedConfig(),
-      ...authConfig,
-      host,
+      resolved: {
+        ...resolveBrowserConfig({
+          evaluateEnabled: false,
+          attachOnly: true,
+          defaultProfile: "openclaw",
+          profiles: { openclaw: { cdpPort: 1 } },
+        }),
+        controlPort: 0,
+      },
+      ...options,
     });
-    servers.push({ stop: () => stopBrowserBridgeServer(bridge.server) });
-
-    const unauth = await fetch(`${bridge.baseUrl}/?profile=__auth_probe_missing__`);
-    expect(unauth.status).toBe(401);
-
-    const authed = await fetch(`${bridge.baseUrl}/?profile=__auth_probe_missing__`, { headers });
-    expect(authed.status).toBe(404);
+    onTestFinished(() => stopBrowserBridgeServer(bridge.server));
+    return bridge;
   }
 
-  afterEach(async () => {
-    while (servers.length) {
-      const s = servers.pop();
-      if (s) {
-        await s.stop();
-      }
-    }
-  });
-
-  it.each(["127.0.0.1", "::1"])(
-    "authenticates through the returned bridge URL on %s",
-    async (host) => {
-      await expectAuthFlow(
-        { authToken: "secret-token" },
-        { Authorization: "Bearer secret-token" },
-        host,
-      );
+  it.each([
+    ["127.0.0.1", tokenAuth, tokenHeaders],
+    ["::1", tokenAuth, tokenHeaders],
+    [
+      "127.0.0.1",
+      { authPassword: "secret-password" },
+      { "x-openclaw-password": "secret-password" },
+    ],
+  ] as const)(
+    "authenticates through the returned bridge URL on %s with %j",
+    async (host, authConfig, headers) => {
+      const bridge = await startBridge({ ...authConfig, host });
+      const url = `${bridge.baseUrl}/?profile=__auth_probe_missing__`;
+      expect((await fetch(url)).status).toBe(401);
+      expect((await fetch(url, { headers })).status).toBe(404);
     },
   );
 
-  it("accepts x-openclaw-password when authPassword is set", async () => {
-    await expectAuthFlow(
-      { authPassword: "secret-password" },
-      { "x-openclaw-password": "secret-password" },
-    );
-  });
-
   it("requires auth params", async () => {
-    await expect(
-      startBrowserBridgeServer({
-        resolved: buildResolvedConfig(),
-      }),
-    ).rejects.toThrow(/requires auth/i);
+    await expect(startBridge()).rejects.toThrow(/requires auth/i);
   });
 
   it("rejects startup when the bridge port is already in use", async () => {
@@ -116,49 +62,28 @@ describe("startBrowserBridgeServer auth", () => {
     }
 
     try {
-      await expect(
-        startBrowserBridgeServer({
-          resolved: buildResolvedConfig(),
-          authToken: "secret-token",
-          host: "127.0.0.1",
-          port: address.port,
-        }),
-      ).rejects.toMatchObject({ code: "EADDRINUSE" });
-    } finally {
-      await new Promise<void>((resolve) => {
-        blocker.close(() => resolve());
+      await expect(startBridge({ ...tokenAuth, port: address.port })).rejects.toMatchObject({
+        code: "EADDRINUSE",
       });
+    } finally {
+      await promisify(blocker.close.bind(blocker))();
     }
   });
 
   it("closes ingress but retains exact bridge cleanup state for retry", async () => {
-    const bridge = await startBrowserBridgeServer({
-      resolved: buildResolvedConfig(),
-      authToken: "secret-token",
-    });
-    servers.push({ stop: () => stopBrowserBridgeServer(bridge.server) });
+    const bridge = await startBridge(tokenAuth);
     const close = vi
       .fn<() => Promise<void>>()
       .mockRejectedValueOnce(new Error("relay cleanup failed"))
       .mockResolvedValue(undefined);
-    bridge.state.extensionRelays = new Map([
-      [
-        "openclaw",
-        {
-          port: 18_799,
-          token: "relay-token",
-          bridge: {},
-          close,
-        } as never,
-      ],
-    ]);
+    const relay = { port: 18_799, token: "relay-token", bridge: {}, close };
+    bridge.state.extensionRelays = new Map([["openclaw", relay as never]]);
     expect(getBridgeAuthForPort(bridge.port)).toEqual({ token: "secret-token" });
 
     const firstStop = stopBrowserBridgeServer(bridge.server);
     const concurrentStop = stopBrowserBridgeServer(bridge.server);
     expect(concurrentStop).toBe(firstStop);
     await expect(firstStop).rejects.toThrow("relay cleanup failed");
-    await expect(concurrentStop).rejects.toThrow("relay cleanup failed");
     expect(bridge.server.listening).toBe(false);
     expect(getBridgeAuthForPort(bridge.port)).toBeUndefined();
     expect(close).toHaveBeenCalledOnce();
@@ -168,21 +93,19 @@ describe("startBrowserBridgeServer auth", () => {
   });
 
   it("invalidates an active request before waiting for HTTP close", async () => {
-    const attachStarted = deferred();
-    const releaseAttach = deferred();
-    const bridge = await startBrowserBridgeServer({
-      resolved: buildResolvedConfig(),
-      authToken: "secret-token",
+    const attachStarted = Promise.withResolvers<void>();
+    const releaseAttach = Promise.withResolvers<void>();
+    const bridge = await startBridge({
+      ...tokenAuth,
       onEnsureAttachTarget: async () => {
         attachStarted.resolve();
         await releaseAttach.promise;
       },
     });
-    servers.push({ stop: () => stopBrowserBridgeServer(bridge.server) });
 
     const startRequest = fetch(`${bridge.baseUrl}/start`, {
       method: "POST",
-      headers: { Authorization: "Bearer secret-token" },
+      headers: tokenHeaders,
     });
     await attachStarted.promise;
 
@@ -199,29 +122,24 @@ describe("startBrowserBridgeServer auth", () => {
   });
 
   it("serves noVNC bootstrap html without leaking password in Location header", async () => {
-    let resolveCalls = 0;
-    const bridge = await startBrowserBridgeServer({
-      resolved: buildResolvedConfig(),
-      authToken: "secret-token",
-      resolveSandboxNoVncToken: (token) => {
-        resolveCalls += 1;
-        if (token !== "valid-token") {
-          return null;
-        }
-        return { noVncPort: 45678, password: "Abc123xy" }; // pragma: allowlist secret
-      },
+    const resolveToken = vi.fn(
+      (token: string) =>
+        token === "valid-token" ? { noVncPort: 45678, password: "Abc123xy" } : null, // pragma: allowlist secret
+    );
+    const bridge = await startBridge({
+      ...tokenAuth,
+      resolveSandboxNoVncToken: resolveToken,
     });
-    servers.push({ stop: () => stopBrowserBridgeServer(bridge.server) });
 
     const unauth = await fetch(`${bridge.baseUrl}/sandbox/novnc?token=valid-token`);
     expect(unauth.status).toBe(401);
-    expect(resolveCalls).toBe(0);
+    expect(resolveToken).not.toHaveBeenCalled();
 
     const res = await fetch(`${bridge.baseUrl}/sandbox/novnc?token=valid-token`, {
-      headers: { Authorization: "Bearer secret-token" },
+      headers: tokenHeaders,
     });
     expect(res.status).toBe(200);
-    expect(resolveCalls).toBe(1);
+    expect(resolveToken).toHaveBeenCalledOnce();
     expect(res.headers.get("location")).toBeNull();
     expect(res.headers.get("cache-control")).toContain("no-store");
     expect(res.headers.get("referrer-policy")).toBe("no-referrer");

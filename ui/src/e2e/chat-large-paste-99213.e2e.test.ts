@@ -2,133 +2,43 @@
 // real chat composer and verify chat.send receives it without overflowing base64 handling.
 import { copyFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { crc32 } from "node:zlib";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createRequireRecord } from "../../../test/helpers/record.js";
+import type { BrowserContext, Locator, Page } from "playwright";
+import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { controlUiE2eWaitTimeoutMs, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
-  canRunPlaywrightChromium,
-  controlUiE2eWaitTimeoutMs,
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+  chatMessage,
+  createChatFlowE2eSuite,
+  requireRecord,
+  requireString,
+} from "./chat-flow.test-support.ts";
+import { sizedOutboxPng } from "./chat-outbox-payloads.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const suite = createChatFlowE2eSuite();
 const viewport = { height: 900, width: 1280 };
 
-let server: ControlUiE2eServer;
-
 type RecordedPage = {
-  browser: Browser;
   context: BrowserContext;
   page: Page;
   rawVideoDir: string;
 };
 
-const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
-
-function requireString(value: unknown, label: string): string {
-  if (typeof value !== "string" || !value) {
-    throw new Error(`Expected non-empty ${label}`);
-  }
-  return value;
-}
-
-function requireArray(value: unknown, label: string): unknown[] {
-  if (!Array.isArray(value)) {
-    throw new Error(`Expected ${label} to be an array`);
-  }
-  return value;
-}
-
-function uint32(value: number): Uint8Array {
-  return Uint8Array.of(
-    (value >>> 24) & 0xff,
-    (value >>> 16) & 0xff,
-    (value >>> 8) & 0xff,
-    value & 0xff,
-  );
-}
-
-function ascii(value: string): Uint8Array {
-  return new TextEncoder().encode(value);
-}
-
-function chunk(type: string, payload: Uint8Array): Uint8Array {
-  const typeBytes = ascii(type);
-  const crcInput = new Uint8Array(typeBytes.length + payload.length);
-  crcInput.set(typeBytes, 0);
-  crcInput.set(payload, typeBytes.length);
-  const result = new Uint8Array(12 + payload.length);
-  result.set(uint32(payload.length), 0);
-  result.set(typeBytes, 4);
-  result.set(payload, 8);
-  result.set(uint32(crc32(crcInput)), 8 + payload.length);
-  return result;
-}
-
-function concatBytes(parts: Uint8Array[]): Uint8Array {
-  const result = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
-  let offset = 0;
-  for (const part of parts) {
-    result.set(part, offset);
-    offset += part.length;
-  }
-  return result;
-}
-
-function createLargePngBytes(targetBytes: number): Uint8Array {
-  const signature = Uint8Array.of(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a);
-  const ihdr = chunk("IHDR", Uint8Array.of(0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0));
-  const idat = chunk(
-    "IDAT",
-    Uint8Array.of(0x78, 0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0xf0, 0x1f, 0x00, 0x05, 0x00, 0x01, 0xff),
-  );
-  const iend = chunk("IEND", new Uint8Array());
-  const fixedBytes = signature.length + ihdr.length + idat.length + iend.length + 12;
-  const payload = new Uint8Array(Math.max(0, targetBytes - fixedBytes));
-  for (let i = 0; i < payload.length; i += 1) {
-    payload[i] = 0x41 + (i % 26);
-  }
-  return concatBytes([signature, ihdr, chunk("tEXt", payload), idat, iend]);
-}
-
-function toBase64(bytes: Uint8Array): string {
-  return Buffer.from(bytes).toString("base64");
-}
-
 async function newRecordedPage(artifactDir: string, label: string): Promise<RecordedPage> {
   const rawVideoDir = createControlUiE2eArtifactDir(`${label}-raw`, artifactDir);
-  const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  let context: BrowserContext | undefined;
-  let page: Page | undefined;
-  try {
-    context = await browser.newContext({
-      locale: "en-US",
-      permissions: ["clipboard-read", "clipboard-write"],
-      recordVideo: {
-        dir: rawVideoDir,
-        size: viewport,
-      },
-      serviceWorkers: "block",
-      viewport,
-    });
-    page = await context.newPage();
-    page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
-    return { browser, context, page, rawVideoDir };
-  } catch (error) {
-    await page?.close().catch(() => {});
-    await context?.close().catch(() => {});
-    await browser.close().catch(() => {});
-    throw error;
-  }
+  const context = await suite.newBrowserContext({
+    locale: "en-US",
+    permissions: ["clipboard-read", "clipboard-write"],
+    recordVideo: {
+      dir: rawVideoDir,
+      size: viewport,
+    },
+    serviceWorkers: "block",
+    viewport,
+  });
+  const page = await context.newPage();
+  page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
+  return { context, page, rawVideoDir };
 }
 
 async function closeRecordedPage(
@@ -137,72 +47,51 @@ async function closeRecordedPage(
   label: string,
 ): Promise<string[]> {
   const video = recorded.page.video();
-  const videos: string[] = [];
-  try {
-    await recorded.context.close();
-    if (video) {
-      const rawVideoPath = await video.path();
-      const videoPath = path.join(artifactDir, `${label}.webm`);
-      await copyFile(rawVideoPath, videoPath);
-      videos.push(videoPath);
-      // Failed finalization leaves the raw recording available for inspection.
-      await rm(recorded.rawVideoDir, { force: true, recursive: true });
-    }
-  } finally {
-    await recorded.browser.close().catch(() => {});
+  await suite.closeBrowserContext(recorded.context);
+  if (!video) {
+    return [];
   }
-  return videos;
+  const videoPath = path.join(artifactDir, `${label}.webm`);
+  await copyFile(await video.path(), videoPath);
+  // Failed finalization leaves the raw recording available for inspection.
+  await rm(recorded.rawVideoDir, { force: true, recursive: true });
+  return [videoPath];
 }
 
-describeControlUiE2e("Control UI #99213 large screenshot paste proof", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(
-        `Playwright Chromium is not installed or cannot start at ${chromiumExecutablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH to a compatible browser, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
-      );
-    }
-    server = await startControlUiE2eServer();
-  });
-
-  afterAll(async () => {
-    await server?.close();
-  });
-
+suite.define(() => {
   it("sends a roughly 2 MB PNG without overlapping transcript rows", async () => {
     const artifactDir = createControlUiE2eArtifactDir("chat-large-paste-99213");
-    const pngBytes = createLargePngBytes(1_901_669);
-    const imageBase64 = toBase64(pngBytes);
+    const pngBytes = sizedOutboxPng(1_901_669, 255);
+    const imageBase64 = Buffer.from(pngBytes).toString("base64");
     const dataUrl = `data:image/png;base64,${imageBase64}`;
     const prompt = "proof: large Control UI clipboard image";
     const recorded = await newRecordedPage(artifactDir, "large-paste");
+    const page = recorded.page;
+    const previousReply = "The existing assistant reply is taller than the virtualizer estimate.";
+    const finalReply = "Large screenshot paste proof received.";
     const screenshots: string[] = [];
+    const capture = async (name: string, target: Locator) => {
+      const destination = path.join(artifactDir, name);
+      await writeFile(
+        destination,
+        await takeControlUiViewportScreenshot(page, page.locator(".shell"), [target]),
+      );
+      screenshots.push(destination);
+    };
     let videos: string[];
 
     try {
-      const gateway = await installMockGateway(recorded.page, {
+      const gateway = await installMockGateway(page, {
         historyMessages: [
-          {
-            content: [
-              {
-                text: [
-                  "The existing assistant reply is taller than the virtualizer estimate.",
-                  "",
-                  "- First line of the existing answer.",
-                  "- Second line of the existing answer.",
-                  "- Third line of the existing answer.",
-                  "- Fourth line of the existing answer.",
-                  "- Fifth line of the existing answer.",
-                ].join("\n"),
-                type: "text",
-              },
-            ],
-            role: "assistant",
-            timestamp: Date.now(),
-          },
+          chatMessage(
+            "assistant",
+            `${previousReply}\n\n${["First", "Second", "Third", "Fourth", "Fifth"].map((ordinal) => `- ${ordinal} line of the existing answer.`).join("\n")}`,
+            { timestamp: Date.now() },
+          ),
         ],
       });
 
-      await recorded.page.goto(`${server.baseUrl}chat`);
+      await recorded.page.goto(`${suite.server.baseUrl}chat`);
       await recorded.page
         .getByText("The existing assistant reply is taller than the virtualizer estimate.")
         .waitFor({ timeout: 10_000 });
@@ -216,26 +105,22 @@ describeControlUiE2e("Control UI #99213 large screenshot paste proof", () => {
 
       await recorded.page.locator(".chat-attachment-thumb").waitFor({ state: "visible" });
       await composer.fill(prompt);
-      const pasteScreenshot = path.join(artifactDir, "01-pasted-large-image.png");
-      await writeFile(
-        pasteScreenshot,
-        await takeControlUiViewportScreenshot(recorded.page, recorded.page.locator(".shell"), [
-          recorded.page.locator(".chat-attachment-thumb"),
-        ]),
-      );
-      screenshots.push(pasteScreenshot);
+      await capture("01-pasted-large-image.png", page.locator(".chat-attachment-thumb"));
 
       await recorded.page.getByRole("button", { name: "Send message" }).click();
       const sendRequest = await gateway.waitForRequest("chat.send");
-      const params = requireRecord(sendRequest.params, "chat.send params");
-      const attachments = requireArray(params.attachments, "chat.send attachments");
-      expect(params.message).toBe(prompt);
-      expect(attachments).toHaveLength(1);
-      const attachment = requireRecord(attachments[0], "chat.send attachment");
-      expect(attachment.type).toBe("image");
-      expect(attachment.mimeType).toBe("image/png");
-      expect(attachment.fileName).toBe("pasted-image.png");
-      expect(requireString(attachment.content, "attachment content")).toBe(imageBase64);
+      const params = requireRecord(sendRequest.params);
+      expect(params).toMatchObject({
+        message: prompt,
+        attachments: [
+          {
+            type: "image",
+            mimeType: "image/png",
+            fileName: "pasted-image.png",
+            content: imageBase64,
+          },
+        ],
+      });
 
       const assistantRow = recorded.page
         .getByText("The existing assistant reply is taller than the virtualizer estimate.")
@@ -257,21 +142,10 @@ describeControlUiE2e("Control UI #99213 large screenshot paste proof", () => {
         .toBeGreaterThanOrEqual(0);
 
       const runId = requireString(params.idempotencyKey, "chat send idempotency key");
-      await gateway.emitChatFinal({ runId, text: "Large screenshot paste proof received." });
-      await recorded.page
-        .locator(".chat-thread-inner")
-        .getByText("Large screenshot paste proof received.")
-        .waitFor({ timeout: 10_000 });
-      const sentScreenshot = path.join(artifactDir, "02-sent-large-image.png");
-      await writeFile(
-        sentScreenshot,
-        await takeControlUiViewportScreenshot(recorded.page, recorded.page.locator(".shell"), [
-          recorded.page
-            .locator(".chat-thread-inner")
-            .getByText("Large screenshot paste proof received."),
-        ]),
-      );
-      screenshots.push(sentScreenshot);
+      await gateway.emitChatFinal({ runId, text: finalReply });
+      const finalRow = page.locator(".chat-thread-inner").getByText(finalReply);
+      await finalRow.waitFor({ timeout: 10_000 });
+      await capture("02-sent-large-image.png", finalRow);
     } finally {
       videos = await closeRecordedPage(recorded, artifactDir, "large-paste");
     }

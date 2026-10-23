@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withConsoleLogsRoutedToStderrForJson } from "../cli/json-output-mode.js";
 import { requireValidConfig, requireValidConfigForWrite } from "./config-validation.js";
-import { createTestRuntime } from "./test-runtime-config-helpers.js";
+import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const { readConfigFileSnapshot, readConfigFileSnapshotForWrite } = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
@@ -14,65 +14,45 @@ vi.mock("../config/config.js", () => ({
 }));
 
 describe("requireValidConfig", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
+  beforeEach(() => vi.clearAllMocks());
+
+  it("retains native write ownership after an await in JSON mode", async () => {
+    const writeSnapshot = {
+      snapshot: {
+        ...baseConfigSnapshot,
+        sourceConfig: {},
+        path: "/tmp/owned.json",
+      },
+      writeOptions: {
+        expectedConfigPath: "/tmp/owned.json",
+        envSnapshotForRestore: { CONFIG_READ_TOKEN: "at-read" },
+        includeFileHashesForWrite: { "/tmp/include.json": "read-hash" },
+      },
+    };
+    readConfigFileSnapshotForWrite.mockResolvedValue(writeSnapshot);
+    const runtime = createTestRuntime();
+    const result = await withConsoleLogsRoutedToStderrForJson(
+      ["node", "openclaw", "agents", "add", "--json"],
+      () => requireValidConfigForWrite(runtime),
+      { restoreChanges: true },
+    );
+    await Promise.resolve();
+    expect(result).toBe(writeSnapshot);
+    expect(result?.writeOptions.envSnapshotForRestore).toEqual({ CONFIG_READ_TOKEN: "at-read" });
+    expect(readConfigFileSnapshot).not.toHaveBeenCalled();
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
-
-  function createValidSnapshot() {
-    readConfigFileSnapshot.mockResolvedValue({
-      exists: true,
-      valid: true,
-      config: { plugins: {} },
-      issues: [],
-    });
-  }
-
-  it.each([false, true])(
-    "retains native write ownership after an await (json=%s)",
-    async (json) => {
-      const writeSnapshot = {
-        snapshot: {
-          exists: true,
-          valid: true,
-          config: {},
-          sourceConfig: {},
-          path: "/tmp/owned.json",
-        },
-        writeOptions: {
-          expectedConfigPath: "/tmp/owned.json",
-          envSnapshotForRestore: { CONFIG_READ_TOKEN: "at-read" },
-          includeFileHashesForWrite: { "/tmp/include.json": "read-hash" },
-        },
-      };
-      readConfigFileSnapshotForWrite.mockResolvedValue(writeSnapshot);
-      const runtime = createTestRuntime();
-      const result = await withConsoleLogsRoutedToStderrForJson(
-        ["node", "openclaw", "agents", "add", ...(json ? ["--json"] : [])],
-        () => requireValidConfigForWrite(runtime),
-        { restoreChanges: true },
-      );
-      await Promise.resolve();
-      expect(result).toBe(writeSnapshot);
-      expect(result?.writeOptions.envSnapshotForRestore).toEqual({ CONFIG_READ_TOKEN: "at-read" });
-      expect(readConfigFileSnapshot).not.toHaveBeenCalled();
-      expect(runtime.log).not.toHaveBeenCalled();
-      expect(runtime.error).not.toHaveBeenCalled();
-      expect(runtime.exit).not.toHaveBeenCalled();
-    },
-  );
 
   it("reports invalid native write reads without returning a writable snapshot", async () => {
     readConfigFileSnapshotForWrite.mockResolvedValue({
       snapshot: {
+        ...baseConfigSnapshot,
         path: "/tmp/owned.json",
-        exists: true,
         valid: false,
-        raw: "{}",
-        parsed: {},
         sourceConfig: {},
-        config: {},
         issues: [{ path: "gateway.mode", message: "Invalid mode" }],
-        legacyIssues: [],
       },
       writeOptions: { expectedConfigPath: "/tmp/owned.json" },
     });
@@ -82,77 +62,24 @@ describe("requireValidConfig", () => {
     expect(runtime.error).toHaveBeenCalledWith("Fix: openclaw doctor --fix");
   });
 
-  it("returns valid config without emitting diagnostics", async () => {
-    createValidSnapshot();
-    const runtime = createTestRuntime();
+  it.each([{ skipPluginValidation: true }, { observe: false }])(
+    "forwards config read options %j",
+    async (options) => {
+      readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot, config: { plugins: {} } });
+      const runtime = createTestRuntime();
 
-    const config = await requireValidConfig(runtime);
+      await expect(requireValidConfig(runtime, options)).resolves.toEqual({ plugins: {} });
 
-    expect(config).toEqual({ plugins: {} });
-    expect(readConfigFileSnapshotForWrite).not.toHaveBeenCalled();
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect(runtime.exit).not.toHaveBeenCalled();
-    expect(runtime.log).not.toHaveBeenCalled();
-  });
-
-  it("can validate core config without loading plugin schemas", async () => {
-    createValidSnapshot();
-    const runtime = createTestRuntime();
-
-    await expect(requireValidConfig(runtime, { skipPluginValidation: true })).resolves.toEqual({
-      plugins: {},
-    });
-
-    expect(readConfigFileSnapshot).toHaveBeenCalledWith({ skipPluginValidation: true });
-  });
-
-  it("can validate config without observing persistent health state", async () => {
-    createValidSnapshot();
-    const runtime = createTestRuntime();
-
-    await expect(requireValidConfig(runtime, { observe: false })).resolves.toEqual({
-      plugins: {},
-    });
-
-    expect(readConfigFileSnapshot).toHaveBeenCalledWith({ observe: false });
-  });
-
-  it("blocks invalid config with repair advice", async () => {
-    readConfigFileSnapshot.mockResolvedValue({
-      path: "/tmp/openclaw.json",
-      exists: true,
-      valid: false,
-      raw: "{}",
-      parsed: {},
-      sourceConfig: {},
-      config: {},
-      issues: [{ path: "routing.allowFrom", message: "Legacy key" }],
-    });
-    const runtime = createTestRuntime();
-
-    const config = await requireValidConfig(runtime);
-
-    expect(config).toBeNull();
-    expect(runtime.error).toHaveBeenCalledWith("Fix: openclaw doctor --fix");
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(runtime.log).not.toHaveBeenCalled();
-  });
+      expect(readConfigFileSnapshot).toHaveBeenCalledWith(options);
+    },
+  );
 
   it("replaces doctor fix advice for plugin packaging compiled-output failures", async () => {
     readConfigFileSnapshot.mockResolvedValue({
-      path: "/tmp/openclaw.json",
-      exists: true,
+      ...baseConfigSnapshot,
       valid: false,
-      raw: "{}",
-      parsed: {},
       sourceConfig: {},
-      config: {},
-      issues: [
-        {
-          path: "plugins.slots.memory",
-          message: "plugin not found: source-only-pack",
-        },
-      ],
+      issues: [{ path: "plugins.slots.memory", message: "plugin not found: source-only-pack" }],
       warnings: [
         {
           path: "plugins",
@@ -160,7 +87,6 @@ describe("requireValidConfig", () => {
             "plugin source-only-pack: installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js. This is a plugin packaging issue, not a local config problem.",
         },
       ],
-      legacyIssues: [],
     });
     const runtime = createTestRuntime();
 

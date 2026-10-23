@@ -6,7 +6,7 @@ import { createModelSelectionState } from "./model-selection.js";
 
 vi.mock("../../agents/auth-profiles.runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/auth-profiles.runtime.js")>()),
-  ensureAuthProfileStore: () => ({ version: 1, profiles: {} }),
+  ensureAuthProfileStoreAsync: () => ({ version: 1, profiles: {} }),
 }));
 
 const PROVIDER = "chutes";

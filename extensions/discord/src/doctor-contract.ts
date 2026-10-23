@@ -30,7 +30,7 @@ const streamingAliasMigration = defineChannelAliasMigration({
   streaming: {
     // Runtime mode resolution dropped legacy streamMode reads; the doctor
     // resolver keeps them so migration preserves configured intent.
-    defaultMode: "off",
+    defaultMode: "progress",
     includePreviewChunk: true,
   },
   // Discord's account merge replaces the root streaming object wholesale

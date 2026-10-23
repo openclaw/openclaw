@@ -2,11 +2,13 @@
 
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import * as responseBytes from "./chat-response-bytes.ts";
+import "./chat-detail-panel.tsx";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
-import "./chat-detail-panel.ts";
 
 const PDF_PREVIEW_MAX_BYTES = 16 * 1024 * 1024;
+const source = "/__openclaw__/assistant-media?mediaTicket=pdf-preview";
 
 async function mountAttachment(
   overrides: Partial<Extract<SidebarContent, { kind: "attachment" }>> = {},
@@ -19,7 +21,7 @@ async function mountAttachment(
     kind: "attachment",
     attachmentKind: "document",
     title: "brief.pdf",
-    src: "/__openclaw__/assistant-media?mediaTicket=pdf-preview",
+    src: source,
     mimeType: "application/pdf",
     ...overrides,
   };
@@ -84,9 +86,7 @@ it.each(["metadata", "header", "timeout"] as const)(
     if (failure === "metadata") {
       expect(fetchMock).not.toHaveBeenCalled();
       const download = panel.querySelector<HTMLAnchorElement>("a[download]");
-      expect(download?.getAttribute("href")).toBe(
-        "/__openclaw__/assistant-media?mediaTicket=pdf-preview",
-      );
+      expect(download?.getAttribute("href")).toBe(source);
       expect(download?.download).toBe("brief.pdf");
     } else if (failure === "header") {
       expect(cancel).toHaveBeenCalledOnce();
@@ -112,20 +112,19 @@ it("aborts an interrupted PDF load and reloads it after reconnect", async () => 
 
   await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
   panel.remove();
-  expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+  await waitForSolid(() => expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true));
   document.body.append(panel);
   await vi.waitFor(() => expect(panel.querySelector("iframe")).not.toBeNull());
   expect(fetchMock).toHaveBeenCalledTimes(2);
   expect(objectUrls.createObjectURL).toHaveBeenCalledOnce();
   expect(objectUrls.revokeObjectURL).not.toHaveBeenCalled();
   const frame = panel.querySelector<HTMLIFrameElement>("iframe")!;
-  expect(frame.className).toBe("sidebar-pdf-preview__frame");
+  expect(frame).toMatchObject({ className: "sidebar-pdf-preview__frame", title: "brief.pdf" });
   expect(frame.getAttribute("src")).toBe("blob:pdf-preview");
-  expect(frame.title).toBe("brief.pdf");
   expect(panel.querySelector(".sidebar-file-toolbar")).toBeNull();
   expect(panel.querySelector("object")).toBeNull();
   expect(fetchMock).toHaveBeenCalledWith(
-    "/__openclaw__/assistant-media?mediaTicket=pdf-preview",
+    source,
     expect.objectContaining({ credentials: "same-origin", redirect: "error" }),
   );
 });
@@ -151,15 +150,14 @@ it.each(["unchanged", "changed", "failed", "identity", "oversized"] as const)(
       });
     vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(new Response("%PDF-1.7")));
     const panel = await mountAttachment({ sourceIdentity: "attachment:brief" });
-    const preview = panel.querySelector("openclaw-chat-pdf-preview")!;
-    await preview.updateComplete;
     await originalReadStarted.promise;
     const bytes = new TextEncoder().encode("%PDF-1.7 original").buffer;
     original.resolve(bytes);
     await original.promise;
-    await preview.updateComplete;
+    await waitForSolid(() =>
+      expect(panel.querySelector("iframe")?.getAttribute("src")).toBe("blob:original"),
+    );
     const frame = panel.querySelector("iframe")!;
-    expect(frame?.getAttribute("src")).toBe("blob:original");
 
     panel.content = {
       ...panel.content,
@@ -169,15 +167,16 @@ it.each(["unchanged", "changed", "failed", "identity", "oversized"] as const)(
       sizeBytes: change === "oversized" ? PDF_PREVIEW_MAX_BYTES + 1 : undefined,
     };
     await panel.updateComplete;
-    await preview.updateComplete;
-    if (change === "identity" || change === "oversized") {
-      expect(frame.isConnected).toBe(false);
-      expect(urls.revokeObjectURL).toHaveBeenCalledWith("blob:original");
-    } else {
-      expect(panel.querySelector("iframe")).toBe(frame);
-      expect(frame.getAttribute("src")).toBe("blob:original");
-      expect(urls.revokeObjectURL).not.toHaveBeenCalled();
-    }
+    await waitForSolid(() => {
+      if (change === "identity" || change === "oversized") {
+        expect(frame.isConnected).toBe(false);
+        expect(urls.revokeObjectURL).toHaveBeenCalledWith("blob:original");
+      } else {
+        expect(panel.querySelector("iframe")).toBe(frame);
+        expect(frame.getAttribute("src")).toBe("blob:original");
+        expect(urls.revokeObjectURL).not.toHaveBeenCalled();
+      }
+    });
     if (change === "oversized") {
       expect(readBytes).toHaveBeenCalledOnce();
       expect(panel.querySelector("[role=alert]")).not.toBeNull();
@@ -194,20 +193,49 @@ it.each(["unchanged", "changed", "failed", "identity", "oversized"] as const)(
           : bytes.slice(0),
     );
     await refreshed.promise;
-    await preview.updateComplete;
-    if (change === "unchanged") {
-      expect(panel.querySelector("iframe")).toBe(frame);
-      expect(frame.getAttribute("src")).toBe("blob:original");
-      expect(urls.createObjectURL).toHaveBeenCalledOnce();
-      expect(urls.revokeObjectURL).not.toHaveBeenCalled();
-    } else {
-      expect(urls.revokeObjectURL).toHaveBeenCalledWith("blob:original");
-      if (change === "failed") {
-        expect(panel.querySelector("iframe")).toBeNull();
-        expect(panel.querySelector("a[download]")?.getAttribute("href")).toContain("renewed");
+    await waitForSolid(() => {
+      if (change === "unchanged") {
+        expect(panel.querySelector("iframe")).toBe(frame);
+        expect(frame.getAttribute("src")).toBe("blob:original");
+        expect(urls.createObjectURL).toHaveBeenCalledOnce();
+        expect(urls.revokeObjectURL).not.toHaveBeenCalled();
       } else {
-        expect(panel.querySelector("iframe")?.getAttribute("src")).toBe("blob:replacement");
+        expect(urls.revokeObjectURL).toHaveBeenCalledWith("blob:original");
+        if (change === "failed") {
+          expect(panel.querySelector("iframe")).toBeNull();
+          expect(panel.querySelector("a[download]")?.getAttribute("href")).toContain("renewed");
+        } else {
+          expect(panel.querySelector("iframe")?.getAttribute("src")).toBe("blob:replacement");
+          if (change === "changed") {
+            expect(panel.querySelector("iframe")).toBe(frame);
+          }
+        }
       }
+    });
+
+    if (change === "failed") {
+      const recovered = createDeferred<ArrayBuffer | null>();
+      readBytes.mockImplementationOnce(() => recovered.promise);
+      panel.content = {
+        ...panel.content,
+        src: "/__openclaw__/assistant-media?mediaTicket=recovered",
+      };
+      await panel.updateComplete;
+      await waitForSolid(() => {
+        expect(readBytes).toHaveBeenCalledTimes(3);
+        expect(panel.querySelector(".sidebar-attachment-preview__loading")).not.toBeNull();
+        expect(panel.querySelector("[role=alert]")).toBeNull();
+        expect(panel.querySelector("iframe")).toBeNull();
+      });
+      recovered.resolve(bytes.slice(0));
+      await recovered.promise;
+      await waitForSolid(() => {
+        expect(panel.querySelector("iframe")?.getAttribute("src")).toBe("blob:replacement");
+        expect(panel.querySelector("iframe")).not.toBe(frame);
+        expect(urls.createObjectURL).toHaveBeenCalledTimes(2);
+        expect(urls.revokeObjectURL).toHaveBeenCalledExactlyOnceWith("blob:original");
+        expect(panel.querySelector("[role=alert]")).toBeNull();
+      });
     }
   },
 );

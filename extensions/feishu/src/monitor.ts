@@ -5,7 +5,7 @@ import { listEnabledFeishuAccounts, resolveFeishuRuntimeAccount } from "./accoun
 import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
 
 type MonitorFeishuOpts = {
-  config?: ClawdbotConfig;
+  config: ClawdbotConfig;
   runtime?: RuntimeEnv;
   channelRuntime?: PluginRuntime["channel"];
   abortSignal?: AbortSignal;
@@ -22,11 +22,8 @@ export type FeishuStatusSink = ReturnType<typeof createAccountStatusSink>;
 
 const loadMonitorAccountRuntime = createLazyRuntimeModule(() => import("./monitor.account.js"));
 
-export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promise<void> {
+export async function monitorFeishuProvider(opts: MonitorFeishuOpts): Promise<void> {
   const cfg = opts.config;
-  if (!cfg) {
-    throw new Error("Config is required for Feishu monitor");
-  }
 
   const log = opts.runtime?.log ?? console.log;
 

@@ -14,6 +14,7 @@ const GOOGLE_ANTIGRAVITY_PROVIDER_ID = "google-antigravity";
 const GEMINI_3_PRO_RE = /^gemini-3(?:\.\d+)?-pro(?:-|$)/;
 const GEMINI_3_FLASH_LITE_RE = /^gemini-3(?:\.\d+)?-flash-lite(?:-|$)/;
 const GEMINI_3_FLASH_RE = /^gemini-3(?:\.\d+)?-flash(?:-|$)/;
+const GEMINI_4_RE = /^gemini-4(?:[.-]|$)/;
 const GEMINI_PRO_LATEST_ID = "gemini-pro-latest";
 const GEMINI_FLASH_LATEST_ID = "gemini-flash-latest";
 const GEMINI_FLASH_LITE_LATEST_ID = "gemini-flash-lite-latest";
@@ -22,6 +23,7 @@ const GEMINI_3_1_PRO_TEMPLATE_IDS = ["gemini-3.1-pro-preview", "gemini-3-pro-pre
 const GEMINI_3_1_FLASH_LITE_TEMPLATE_IDS = ["gemini-3.1-flash-lite"] as const;
 const GEMINI_3_1_FLASH_TEMPLATE_IDS = ["gemini-3-flash-preview", "gemini-2.5-flash"] as const;
 const GEMINI_3_FLASH_ANTIGRAVITY_TEMPLATE_IDS = ["gemini-3-flash"] as const;
+const GEMINI_4_TEMPLATE_IDS = ["gemini-4-argon"] as const;
 const GOOGLE_PROVIDER_PREFIX = "google/";
 const GOOGLE_NON_TEXT_MODEL_ID_MARKERS = ["-image", "-tts", "-live", "native-audio"] as const;
 
@@ -88,28 +90,6 @@ function templateIdsForProvider(
   return family[0];
 }
 
-function buildGoogleTemplateSources(params: {
-  providerId: string;
-  templateProviderId?: string;
-  family: GoogleForwardCompatFamily;
-}) {
-  const defaultTemplateProviderId = params.templateProviderId?.trim()
-    ? params.templateProviderId
-    : isGoogleGeminiCliProvider(params.providerId)
-      ? "google"
-      : GOOGLE_GEMINI_CLI_PROVIDER_ID;
-  const preferredExternalFirst =
-    isGoogleGeminiCliProvider(params.providerId) && params.family[3] === true;
-  const orderedTemplateProviderIds = preferredExternalFirst
-    ? [defaultTemplateProviderId, params.providerId]
-    : [params.providerId, defaultTemplateProviderId];
-
-  return normalizeUniqueTrimmedStringList(orderedTemplateProviderIds).map((providerId) => ({
-    providerId,
-    templateIds: templateIdsForProvider(providerId, params.family),
-  }));
-}
-
 type FamilyForwardCompatCase = Parameters<
   typeof resolveFamilyForwardCompatModel
 >[0]["cases"][number];
@@ -160,6 +140,10 @@ const GOOGLE_FORWARD_COMPAT_CASES: readonly GoogleForwardCompatCase[] = [
     ],
   },
   {
+    match: (id) => GEMINI_4_RE.test(id),
+    family: [GEMINI_4_TEMPLATE_IDS, GEMINI_4_TEMPLATE_IDS],
+  },
+  {
     match: (id) => id.startsWith(GEMMA_PREFIX),
     // Gemma has no dedicated catalog template; approximate with the Gemini flash family.
     family: [GEMINI_3_1_FLASH_TEMPLATE_IDS, GEMINI_3_1_FLASH_TEMPLATE_IDS],
@@ -204,7 +188,6 @@ export function resolveGoogleStaticModelId(
 
 export function resolveGoogleGeminiForwardCompatModel(params: {
   providerId: string;
-  templateProviderId?: string;
   ctx: ProviderResolveDynamicModelContext;
 }): ProviderRuntimeModel | undefined {
   const trimmed = normalizeGeminiProRequestId(params.ctx.modelId.trim());
@@ -219,11 +202,19 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
     cases: GOOGLE_FORWARD_COMPAT_CASES.map(({ family, match, patch }) => ({
       match,
       get templateSources() {
-        return buildGoogleTemplateSources({
-          providerId: params.providerId,
-          templateProviderId: params.templateProviderId,
-          family,
-        });
+        const selectedProviderId = params.providerId;
+        const defaultTemplateProviderId = isGoogleGeminiCliProvider(selectedProviderId)
+          ? "google"
+          : GOOGLE_GEMINI_CLI_PROVIDER_ID;
+        const preferredExternalFirst =
+          isGoogleGeminiCliProvider(selectedProviderId) && family[3] === true;
+        const orderedTemplateProviderIds = preferredExternalFirst
+          ? [defaultTemplateProviderId, selectedProviderId]
+          : [selectedProviderId, defaultTemplateProviderId];
+        return normalizeUniqueTrimmedStringList(orderedTemplateProviderIds).map((providerId) => ({
+          providerId,
+          templateIds: templateIdsForProvider(providerId, family),
+        }));
       },
       patch,
     })),
@@ -235,6 +226,7 @@ export function isModernGoogleModel(modelId: string): boolean {
   return (
     lower.startsWith("gemini-2.5") ||
     lower.startsWith("gemini-3") ||
+    GEMINI_4_RE.test(lower) ||
     lower === GEMINI_PRO_LATEST_ID ||
     lower === GEMINI_FLASH_LATEST_ID ||
     lower === GEMINI_FLASH_LITE_LATEST_ID ||

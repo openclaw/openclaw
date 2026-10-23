@@ -1,6 +1,11 @@
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { copyPluginToolMeta } from "../plugins/tool-metadata.js";
-import { isCompletionReportInputProvenance } from "../sessions/input-provenance.js";
+import {
+  isCompletionReportInputProvenance,
+  normalizeInputProvenance,
+} from "../sessions/input-provenance.js";
+import { hasVerifiedRequesterCompletionHandoff } from "./requester-tool-policy.js";
+import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
 import { createRuntimeToolMatcher } from "./tool-policy-match.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
@@ -9,7 +14,9 @@ import { ToolAuthorizationError } from "./tools/common.js";
 
 const log = createSubsystemLogger("agents/delegation-capability");
 
-export type DelegationCapability = "full" | "report_only";
+// Host-only continuations retain tools fenced by OpenClaw at their final effect;
+// native collaboration cannot inherit that settlement authority.
+export type DelegationCapability = "full" | "host_only" | "report_only";
 
 const NEW_DELEGATION_TOOL_NAMES = new Set([
   "codex_session_send",
@@ -34,15 +41,35 @@ export function resolveDelegationCapability(params: {
   inputProvenance: unknown;
   disableTools?: boolean;
   toolsAllow?: string[];
+  requesterContinuation?: Omit<
+    Parameters<typeof hasVerifiedRequesterCompletionHandoff>[0],
+    "inputProvenance"
+  >;
 }): DelegationCapability {
   if (!isCompletionReportInputProvenance(params.inputProvenance)) {
     return "full";
   }
-  if (params.fallbackActive || params.disableTools === true) {
+  if (params.disableTools === true) {
     return "report_only";
   }
+  const permitted = params.fallbackActive ? "host_only" : "full";
+  if (params.fallbackActive) {
+    const continuation = params.requesterContinuation;
+    // A private live settle batch resumes the requester's unfinished work, not
+    // a frozen result relay. Keep its existing lineage/policy and effect-time
+    // revocation fences; provenance or an active Goal alone grants nothing.
+    if (
+      !continuation?.trustedInternalHandoff?.settleBatch ||
+      !hasVerifiedRequesterCompletionHandoff({
+        ...continuation,
+        inputProvenance: normalizeInputProvenance(params.inputProvenance),
+      })
+    ) {
+      return "report_only";
+    }
+  }
   if (params.toolsAllow === undefined) {
-    return "full";
+    return permitted;
   }
 
   // Native harness delegation is outside the dynamic-tool allowlist, so carry
@@ -50,7 +77,42 @@ export function resolveDelegationCapability(params: {
   const delegationAllowed = [...NEW_DELEGATION_TOOL_NAMES].some(
     createRuntimeToolMatcher(params.toolsAllow),
   );
-  return delegationAllowed ? "full" : "report_only";
+  return delegationAllowed ? permitted : "report_only";
+}
+
+/** Prepare lineage through its worker owner only for supported requester continuations. */
+export function prepareDelegationCapability(params: {
+  fallbackActive: boolean;
+  run: Pick<
+    Parameters<typeof hasVerifiedRequesterCompletionHandoff>[0],
+    "config" | "inputProvenance" | "trustedInternalHandoff"
+  > & {
+    disableTools?: boolean;
+    toolsAllow?: string[];
+  };
+  sessionKey: string;
+  sessionId: string;
+  modelProvider: string;
+  modelId: string;
+}): DelegationCapability | Promise<DelegationCapability> {
+  const { run } = params;
+  const input = {
+    fallbackActive: params.fallbackActive,
+    inputProvenance: run.inputProvenance,
+    disableTools: run.disableTools,
+    toolsAllow: run.toolsAllow,
+    requesterContinuation: {
+      config: run.config,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      modelProvider: params.modelProvider,
+      modelId: params.modelId,
+      trustedInternalHandoff: run.trustedInternalHandoff,
+    },
+  };
+  return params.fallbackActive && run.trustedInternalHandoff?.settleBatch
+    ? withPreparedSessionCapabilityRead(() => resolveDelegationCapability(input))
+    : resolveDelegationCapability(input);
 }
 
 function readToolAction(params: unknown): string {

@@ -1,7 +1,3 @@
-import {
-  asDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
@@ -19,12 +15,9 @@ const QUICK_ACTION_MENU_KEYS = new Set(["quick-actions", "quick_actions", "launc
 
 function createQuickActionLauncherCard(params: {
   operatorOpenId: string;
-  chatId?: string;
   expiresAt: number;
-  chatType?: "p2p" | "group";
-  sessionKey?: string;
 }): Record<string, unknown> {
-  const context = buildFeishuCardInteractionContext(params);
+  const context = buildFeishuCardInteractionContext({ ...params, chatType: "p2p" });
   return buildFeishuActionCard({
     title: "Quick actions",
     template: "indigo",
@@ -75,23 +68,12 @@ export async function maybeHandleFeishuQuickActionMenu(params: {
   operatorOpenId: string;
   runtime?: RuntimeEnv;
   accountId?: string;
-  now?: number;
 }): Promise<boolean> {
   if (!QUICK_ACTION_MENU_KEYS.has(normalizeOptionalLowercaseString(params.eventKey) ?? "")) {
     return false;
   }
 
-  const now = asDateTimestampMs(params.now ?? Date.now());
-  const expiresAt =
-    now === undefined
-      ? undefined
-      : resolveExpiresAtMsFromDurationMs(FEISHU_QUICK_ACTION_CARD_TTL_MS, { nowMs: now });
-  if (expiresAt === undefined) {
-    params.runtime?.log?.(
-      `feishu[${params.accountId ?? "default"}]: failed to open quick-action launcher for ${params.operatorOpenId}: invalid expiry clock`,
-    );
-    return false;
-  }
+  const expiresAt = Date.now() + FEISHU_QUICK_ACTION_CARD_TTL_MS;
   try {
     await sendCardFeishu({
       cfg: params.cfg,
@@ -99,7 +81,6 @@ export async function maybeHandleFeishuQuickActionMenu(params: {
       card: createQuickActionLauncherCard({
         operatorOpenId: params.operatorOpenId,
         expiresAt,
-        chatType: "p2p",
       }),
       accountId: params.accountId,
     });

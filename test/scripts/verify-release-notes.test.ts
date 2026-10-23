@@ -33,6 +33,7 @@ import {
   withoutExcludedContributionRecords,
 } from "../../.agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs";
 import { splitChangelog, writeReleaseChangelog } from "../../scripts/lib/release-changelog.mjs";
+import { renderGithubReleaseNotes } from "../../scripts/render-github-release-notes.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -81,6 +82,7 @@ function runVerifier(
   cwd: string,
   {
     base = "HEAD",
+    version = "2026.7.1",
     target = "HEAD",
     mainRef = target,
     manifest,
@@ -90,7 +92,8 @@ function runVerifier(
     preload,
     env = {},
   }: {
-    base?: string;
+    base?: string | null;
+    version?: string;
     target?: string;
     mainRef?: string | null;
     manifest?: string;
@@ -106,13 +109,12 @@ function runVerifier(
     [
       ...(preload ? ["--import", preload] : []),
       verifier,
-      "--base",
-      base,
+      ...(base === null ? [] : ["--base", base]),
       "--target",
       target,
       ...(mainRef === null ? [] : ["--main-ref", mainRef]),
       "--version",
-      "2026.7.1",
+      version,
       ...(manifest ? ["--manifest", manifest] : []),
       ...(write ? ["--write-ledger"] : []),
       ...(json ? ["--json"] : []),
@@ -123,6 +125,180 @@ function runVerifier(
 }
 
 describe("release-note verification", () => {
+  it("rejects an off-branch generation target before release-note discovery", () => {
+    const cwd = tempDirs.make("openclaw-off-branch-notes-");
+    git(cwd, ["init", "-q", "-b", "main"]);
+    git(cwd, ["config", "commit.gpgsign", "false"]);
+    writeFileSync(join(cwd, "CHANGELOG.md"), createReleaseNotesFixtureLines().join("\n"));
+    splitChangelog({ rootDir: cwd });
+    git(cwd, ["add", "."]);
+    git(cwd, ["commit", "-qm", "docs: seed changelog"]);
+    const base = git(cwd, ["rev-parse", "HEAD"]);
+    git(cwd, ["branch", "release/2026.7.1", base]);
+    writeFileSync(join(cwd, "off-branch.txt"), "wrong worktree\n");
+    git(cwd, ["add", "off-branch.txt"]);
+    git(cwd, ["commit", "-qm", "docs: prepare notes elsewhere"]);
+
+    const result = runVerifier(cwd, {
+      base,
+      target: "HEAD",
+      extraArgs: ["--release-branch", "release/2026.7.1"],
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "is not reachable from canonical release branch release/2026.7.1",
+    );
+    expect(readdirSync(join(cwd, ".git"))).not.toContain("openclaw-release-cache");
+  });
+
+  it("initializes a missing target section before writing its contribution record", () => {
+    const cwd = tempDirs.make("openclaw-initial-release-notes-");
+    git(cwd, ["init", "-q"]);
+    git(cwd, ["config", "commit.gpgsign", "false"]);
+    writeFileSync(
+      join(cwd, "CHANGELOG.md"),
+      createReleaseNotesFixtureLines().join("\n").replace("2026.7.1", "2026.6.11"),
+    );
+    splitChangelog({ rootDir: cwd });
+    git(cwd, ["add", "."]);
+    git(cwd, ["commit", "-qm", "docs: seed changelog"]);
+    const target = git(cwd, ["rev-parse", "HEAD"]);
+    const version = "2026.7.1-beta.1";
+
+    const result = runVerifier(cwd, { base: target, target, version });
+
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+    expect(readFileSync(join(cwd, `CHANGELOG/${version}.md`), "utf8")).toContain(
+      [`## ${version}`, "", "### Highlights", "", "### Changes", "", "### Fixes"].join("\n"),
+    );
+    expect(readFileSync(join(cwd, `CHANGELOG/records/${version}.md`), "utf8")).toContain(
+      "0 in-range PRs + 0 retained seed-only PRs = 0 unique PRs",
+    );
+  });
+
+  it("verifies extended-stable GitHub notes with their regular-stable context", () => {
+    const cwd = tempDirs.make("openclaw-extended-stable-notes-");
+    const bin = join(cwd, "bin");
+    mkdirSync(bin);
+    git(cwd, ["init", "-q", "-b", "main"]);
+    const version = "2026.8.35";
+    const tag = `v${version}`;
+    const regularStableVersion = "2026.9.5";
+    const changelog = createReleaseNotesFixtureLines().join("\n").replace("2026.7.1", version);
+    writeFileSync(join(cwd, "CHANGELOG.md"), changelog);
+    git(cwd, ["add", "CHANGELOG.md"]);
+    git(cwd, ["commit", "-qm", "initial"]);
+    const target = git(cwd, ["rev-parse", "HEAD"]);
+    const verifiedChangelog = [
+      changelog,
+      "",
+      "### Complete contribution record",
+      "",
+      `This audited record covers the complete HEAD..${target} history: 0 in-range PRs + 0 retained seed-only PRs = 0 unique PRs.`,
+    ].join("\n");
+    writeFileSync(join(cwd, "CHANGELOG.md"), verifiedChangelog);
+    const body = renderGithubReleaseNotes({
+      changelog: verifiedChangelog,
+      version,
+      tag,
+      repository: "openclaw/openclaw",
+      regularStableVersion,
+    }).body;
+    const gh = join(bin, "gh");
+    writeFileSync(
+      gh,
+      `#!${process.execPath}\nprocess.stdout.write(${JSON.stringify(JSON.stringify({ id: 1, body }))});\n`,
+    );
+    chmodSync(gh, 0o755);
+
+    const result = runVerifier(cwd, {
+      version,
+      write: false,
+      extraArgs: [
+        "--release-tag",
+        tag,
+        "--check-github",
+        "--regular-stable-version",
+        regularStableVersion,
+      ],
+      env: { PATH: `${bin}:${process.env.PATH}` },
+    });
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    expect(JSON.parse(result.stdout).github).toMatchObject([{ tag, matches: true }]);
+  });
+
+  it.each([
+    { previous: "2026.6.11", divergent: false },
+    { previous: "2026.7.1-beta.2", divergent: false },
+    { previous: "2026.6.11", divergent: true },
+    { previous: "2026.7.1-beta.2", divergent: true },
+  ])(
+    "freezes npm beta $previous (divergent=$divergent) and reuses it after publication",
+    ({ previous, divergent }) => {
+      const cwd = tempDirs.make("openclaw-npm-beta-notes-");
+      git(cwd, ["init", "-q"]);
+      git(cwd, ["config", "commit.gpgsign", "false"]);
+      const version = "2026.7.1-beta.3";
+      writeFileSync(
+        join(cwd, "CHANGELOG.md"),
+        `## ${version}\n\n### Highlights\n\n### Changes\n\n### Fixes\n`,
+      );
+      splitChangelog({ rootDir: cwd });
+      git(cwd, ["add", "."]);
+      git(cwd, ["commit", "-qm", "docs: prepare delta"]);
+      const target = git(cwd, ["rev-parse", "HEAD"]);
+      if (divergent) {
+        git(cwd, ["checkout", "-qb", "shipped"]);
+        writeReleaseChangelog({
+          rootDir: cwd,
+          version: previous,
+          section: `## ${previous}\n\n### Complete contribution record\n\nThis audited record covers the complete ${target}..${target} history: 0 in-range PRs + 0 retained seed-only PRs = 0 unique PRs.\n`,
+        });
+        git(cwd, ["add", "."]);
+        git(cwd, ["commit", "-qm", "docs: shipped record"]);
+        git(cwd, ["tag", `v${previous}`]);
+        git(cwd, ["checkout", "-q", "--detach", target]);
+      } else {
+        git(cwd, ["tag", `v${previous}`]);
+      }
+      const npm = join(cwd, "npm");
+      writeFileSync(
+        npm,
+        `#!${process.execPath}\nconsole.log(JSON.stringify(process.env.TEST_NPM_BETA));\n`,
+      );
+      chmodSync(npm, 0o755);
+      const manifest = join(cwd, "manifest.json");
+      const env = { PATH: `${cwd}:${process.env.PATH}`, TEST_NPM_BETA: previous };
+      const result = runVerifier(cwd, { base: null, version, target, manifest, env });
+      expect(result.status, result.stderr || result.stdout).toBe(0);
+      const capturedBase = divergent ? target : `v${previous}`;
+      expect(JSON.parse(readFileSync(manifest, "utf8"))).toMatchObject({
+        base: capturedBase,
+        target,
+        version,
+      });
+      const record = readFileSync(join(cwd, `CHANGELOG/records/${version}.md`), "utf8");
+      expect(record).toContain(`${capturedBase}..${target}`);
+      if (divergent) {
+        expect(record).toContain(`Shipped baseline exclusions: v${previous} (0 PRs).`);
+      }
+      const publishedEnv = { ...env, TEST_NPM_BETA: version };
+      const refused = runVerifier(cwd, { base: "npm-beta", version, target, env: publishedEnv });
+      expect(refused.status).not.toBe(0);
+      expect(refused.stderr).toContain("reuse the previously captured --base tag");
+      const recovery = runVerifier(cwd, {
+        base: `v${previous}`,
+        version,
+        target,
+        write: false,
+        env: publishedEnv,
+      });
+      expect(recovery.status, recovery.stderr || recovery.stdout).toBe(0);
+    },
+  );
+
   it("refuses docs mirrors before source or GitHub work and preserves frozen records", () => {
     const cwd = tempDirs.make("openclaw-mirror-generation-");
     writeFileSync(
@@ -589,6 +765,45 @@ process.exitCode = errors.length ? 1 : 0;
         () => false,
       ),
     ).toThrow("references non-main PR #104905");
+  });
+
+  it("validates release provenance PRs that shipped-ref subtraction left unresolved", () => {
+    const releaseCommit = "a".repeat(40);
+    const mainCommit = "b".repeat(40);
+    const overrides = new Map([[releaseCommit, [104905]]]);
+    const mainNode = {
+      __typename: "PullRequest",
+      baseRefName: "main",
+      mergeCommit: { oid: "c".repeat(40) },
+      mergedAt: "2026-07-12T00:00:00Z",
+    };
+    const requested: number[][] = [];
+    const resolveWith = (node?: unknown) => (numbers: number[]) => {
+      requested.push(numbers);
+      return new Map(node ? [[104905, node]] : []);
+    };
+
+    expect(() =>
+      validateReleaseProvenanceOverrides(
+        overrides,
+        new Map(),
+        mainCommit,
+        () => true,
+        resolveWith(mainNode),
+      ),
+    ).not.toThrow();
+    expect(requested).toEqual([[104905]]);
+    for (const node of [{ ...mainNode, baseRefName: "release/2026.7.1" }, undefined]) {
+      expect(() =>
+        validateReleaseProvenanceOverrides(
+          overrides,
+          new Map(),
+          mainCommit,
+          () => true,
+          resolveWith(node),
+        ),
+      ).toThrow("references non-main PR #104905");
+    }
   });
 
   it.each(["backports", "ambiguous", "direct"])(
@@ -1831,6 +2046,7 @@ Atomics.wait = function (...args) {
 
     expect(result.status).toBe(1);
     expect(result.stdout).toContain("1 errors");
+    expect(result.stdout).toContain("- ### Highlights must contain 5-8 top-level bullets; found 1");
     expect(JSON.parse(readFileSync(manifestPath, "utf8"))).toMatchObject({
       schemaVersion: 3,
       version: "2026.7.1",

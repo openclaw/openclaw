@@ -31,6 +31,7 @@ export function gatewayResponseError(message: string): GatewayProtocolRequestErr
   return error;
 }
 export const requestStartupProbe = vi.fn<ConfiguredGatewayLocalProbe["requestHttp"]>();
+export const requestReadinessProbe = vi.fn<ConfiguredGatewayLocalProbe["requestHttp"]>();
 
 vi.mock("../../gateway/local-http-probe.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../gateway/local-http-probe.js")>();
@@ -42,8 +43,21 @@ vi.mock("../../gateway/local-http-probe.js", async (importOriginal) => {
       const probe = actual.createConfiguredGatewayLocalProbe(...args);
       return {
         ...probe,
-        requestHttp: (params: Parameters<ConfiguredGatewayLocalProbe["requestHttp"]>[0]) =>
-          params.pathname === "/startupz" ? requestStartupProbe(params) : probe.requestHttp(params),
+        requestHttp: (params: Parameters<ConfiguredGatewayLocalProbe["requestHttp"]>[0]) => {
+          if (params.pathname === "/startupz") {
+            return requestStartupProbe(params);
+          }
+          // Only intercept readiness endpoints when a test provides an explicit
+          // implementation; otherwise fall through to the real loopback transport
+          // so existing real-HTTP readiness tests keep exercising real sockets.
+          if (
+            (params.pathname === "/healthz" || params.pathname === "/readyz") &&
+            requestReadinessProbe.getMockImplementation() !== undefined
+          ) {
+            return requestReadinessProbe(params);
+          }
+          return probe.requestHttp(params);
+        },
       };
     },
   };
@@ -154,12 +168,47 @@ export function makeGatewayService(
   } as unknown as GatewayService;
 }
 
-export function firstCallArg(mock: { mock: { calls: unknown[][] } }): unknown {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error("Expected first mock call");
-  }
-  return call[0];
+export function portUsage(
+  listeners: PortUsage["listeners"] = [],
+  overrides: Partial<PortUsage> = {},
+): PortUsage {
+  return {
+    port: 18789,
+    status: listeners.length ? "busy" : "free",
+    listeners,
+    hints: [],
+    ...overrides,
+  };
+}
+
+export function ownerLease(pid: number, state: "live" | "dead" = "live", startedAt = 1000) {
+  return {
+    owner: `owner-${pid}`,
+    pid,
+    host: "gateway-test-host",
+    startedAt,
+    port: 18789,
+    mode: "supervised" as const,
+    supervisor: { kind: "schtasks" as const, name: "OpenClaw Gateway" },
+    state,
+    expired: state === "dead",
+  };
+}
+
+export async function waitForRunningGateway(
+  options: Partial<
+    Extract<
+      Parameters<typeof import("./restart-health.js").waitForGatewayHealthyRestart>[0],
+      { service: unknown }
+    >
+  > = {},
+) {
+  const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+  return waitForGatewayHealthyRestart({
+    service: makeGatewayService({ status: "running", pid: 8000 }),
+    port: 18789,
+    ...options,
+  });
 }
 
 const previousGatewayLockIdentity: GatewayLockIdentity = {
@@ -259,6 +308,7 @@ export async function waitForStoppedFreeGatewayRestart(
 export function resetRestartHealthMocks() {
   requestStartupProbe.mockReset();
   requestStartupProbe.mockResolvedValue(null);
+  requestReadinessProbe.mockReset();
   monotonicClock.nowMs = 0;
   vi.spyOn(performance, "now").mockImplementation(() => monotonicClock.nowMs);
   inspectPortUsage.mockReset();

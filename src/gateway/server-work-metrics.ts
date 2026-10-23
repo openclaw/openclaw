@@ -5,8 +5,8 @@ import {
 } from "../infra/gateway-active-work.js";
 import { onGatewayWorkMetricsChanged } from "../infra/gateway-work-metrics-events.js";
 import {
+  gatewayWorkMetricsDemand,
   hasGatewayWorkMetricsListeners,
-  onGatewayWorkMetricsDemand,
   publishGatewayWorkMetrics,
 } from "../infra/gateway-work-metrics.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
@@ -56,7 +56,7 @@ export function startGatewayWorkMetrics(params: {
     }
     await projection.withSelectionPreparation(async () => {
       do {
-        await projection.prepareSelection(true);
+        await projection.prepareSelection({ yieldForCatalog: true });
         if (stopped || !needed() || projection !== getSessionRowProjection(params.context)) {
           return;
         }
@@ -70,9 +70,9 @@ export function startGatewayWorkMetrics(params: {
       });
       const selection = runSynchronousWork(selectSessionEntries(filters));
       const sessions = { running: 0, queued: 0 };
-      for (const [key, entry] of selection.entries) {
+      for (const [key] of selection.entries) {
         const target = prepared.getTarget(key)!;
-        const active = presentation.active(target.key, entry, target.agentId)!;
+        const active = presentation.active(target)!;
         sessions[active.status === "queued" ? "queued" : "running"]++;
       }
       const { agentRuns, chatRuns, queuedTurns } = createGatewayActiveWorkSnapshot(
@@ -125,14 +125,14 @@ export function startGatewayWorkMetrics(params: {
     scheduled.unref();
   };
   const unsubscribeWorkChanges = onGatewayWorkMetricsChanged(changed);
-  const unsubscribeDemand = onGatewayWorkMetricsDemand(changed);
+  gatewayWorkMetricsDemand.onChanged = changed;
   changed();
   return {
     stop: async () => {
       stopped = true;
       unsubscribeSessionChanges?.();
       unsubscribeWorkChanges();
-      unsubscribeDemand();
+      gatewayWorkMetricsDemand.onChanged = () => {};
       if (scheduled) {
         clearImmediate(scheduled);
         scheduled = undefined;

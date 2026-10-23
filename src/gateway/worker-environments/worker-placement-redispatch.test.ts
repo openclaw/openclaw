@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as runtimeConfig from "../../config/runtime-snapshot.js";
 import { ACTIVE_PLACEMENT } from "./placement-dispatch-coordinator.test-support.js";
 import { createDispatchEnvironmentFixtures } from "./placement-dispatch-test-fixtures.js";
 import type { WorkerEnvironmentPlacementFacts } from "./placement-read-projection.types.js";
@@ -8,51 +9,38 @@ import { createWorkerPlacementRedispatch } from "./worker-placement-redispatch.j
 const placement = { ...ACTIVE_PLACEMENT, state: "reclaimed" as const };
 const dispatchOptions = { assertCurrent: () => {} };
 const { ready } = createDispatchEnvironmentFixtures();
-const profileSnapshot = {
-  machineClass: "large",
-  install: "bundle",
-  settings: { region: "parent", device: "paired-node" },
-} as const;
+const environmentBase = { ...ready, environmentId: placement.environmentId };
+const { sessionId, sessionKey, agentId } = placement;
+const profileSnapshot = { settings: { region: "parent" } } as const;
 
-function reader(
+const reader = (
   record: WorkerSessionPlacementRecord,
   environment: WorkerEnvironmentPlacementFacts | undefined,
-) {
-  return {
-    readProjection: async () => ({
-      placements: new Map([[record.sessionId, record]]),
-      environments: new Map(environment ? [[environment.environmentId, environment]] : []),
-      moves: new Map(),
-      pendingResults: new Map(),
-      workspaceJournalOwnerSessionIds: new Set<string>(),
-      workspaceResultReconcilingSessionIds: new Set<string>(),
-      workspaceRecoveryPendingSessionIds: new Set<string>(),
-    }),
-  };
-}
+) => ({
+  readProjection: async () => ({
+    placements: new Map([[record.sessionId, record]]),
+    environments: new Map(environment ? [[environment.environmentId, environment]] : []),
+    moves: new Map(),
+    pendingResults: new Map(),
+    workspaceJournalOwnerSessionIds: new Set<string>(),
+    workspaceResultReconcilingSessionIds: new Set<string>(),
+    workspaceRecoveryPendingSessionIds: new Set<string>(),
+  }),
+});
 
 describe("createWorkerPlacementRedispatch", () => {
+  beforeEach(() => runtimeConfig.setRuntimeConfigSnapshot({}));
+  afterEach(runtimeConfig.clearRuntimeConfigSnapshot);
   it.each([
-    { providerId: "fake", nodeDeviceId: null, executionMode: "worker-turn", state: "reclaimed" },
-    {
-      providerId: "device",
-      nodeDeviceId: "paired-node",
-      executionMode: "worker-turn",
-      state: "reclaimed",
-    },
-    {
-      providerId: "crabbox",
-      nodeDeviceId: "retired-node",
-      executionMode: "remote-exec",
-      state: "failed",
-    },
+    ["fake", null, "worker-turn", "reclaimed"],
+    ["device", "paired-node", "worker-turn", "reclaimed"],
+    ["crabbox", "retired-node", "remote-exec", "failed"],
   ] as const)(
-    "preserves the $state $providerId profile and resolves its $executionMode destination",
-    async ({ providerId, nodeDeviceId, executionMode, state }) => {
+    "preserves %s profile (%s) for %s redispatch from %s",
+    async (providerId, nodeDeviceId, executionMode, state) => {
       const profileId = `profile-${providerId}`;
       const environment = {
-        ...ready,
-        environmentId: placement.environmentId,
+        ...environmentBase,
         state: "destroyed" as const,
         providerId,
         nodeDeviceId,
@@ -67,31 +55,22 @@ describe("createWorkerPlacementRedispatch", () => {
         requiredNodeCommands: executionMode === "remote-exec" ? ["codex.exec-server.stdio.v1"] : [],
         consumesWorkerSlot: executionMode === "worker-turn",
       };
-      const resolveDevicePlacementRequirement = vi.fn(async () => requirement);
+      const resolveRequirement = vi.fn(async () => requirement);
       const dispatch = vi.fn(async () => ACTIVE_PLACEMENT);
       const redispatch = createWorkerPlacementRedispatch({
         placements: reader(source, environment),
         dispatch,
-        resolveDevicePlacementRequirement,
+        resolveDevicePlacementRequirement: resolveRequirement,
       });
 
       await expect(redispatch(source, dispatchOptions)).resolves.toBe(ACTIVE_PLACEMENT);
-      const identity = {
-        sessionId: placement.sessionId,
-        sessionKey: placement.sessionKey,
-        agentId: placement.agentId,
-        executionMode,
-      };
+      const identity = { sessionId, sessionKey, agentId, executionMode };
+      const { generation, environmentId, activeOwnerEpoch } = source;
       expect(dispatch).toHaveBeenCalledExactlyOnceWith(
         {
           ...identity,
           profileId,
-          expectedPlacement: {
-            state,
-            generation: source.generation,
-            environmentId: source.environmentId,
-            activeOwnerEpoch: source.activeOwnerEpoch,
-          },
+          expectedPlacement: { state, generation, environmentId, activeOwnerEpoch },
           inheritedProfile: { providerId, profileSnapshot },
           ...(nodeDeviceId ? { devicePlacement: requirement } : {}),
           ...(providerId === "device" ? { deviceId: nodeDeviceId } : {}),
@@ -100,26 +79,17 @@ describe("createWorkerPlacementRedispatch", () => {
         dispatchOptions.assertCurrent,
         undefined,
       );
-      if (nodeDeviceId) {
-        expect(resolveDevicePlacementRequirement).toHaveBeenCalledExactlyOnceWith(identity);
-      } else {
-        expect(resolveDevicePlacementRequirement).not.toHaveBeenCalled();
-      }
+      expect(resolveRequirement.mock.calls).toEqual(nodeDeviceId ? [[identity]] : []);
     },
   );
 
   it.each([
-    {
-      environment: {
-        ...ready,
-        environmentId: placement.environmentId,
-        providerId: "device",
-        nodeDeviceId: "paired-node",
-      },
-      reason: "authoritative runtime requirement",
-    },
-    { environment: undefined, reason: "has no environment record" },
-  ])("rejects redispatch without $reason", async ({ environment, reason }) => {
+    [
+      { ...environmentBase, providerId: "device", nodeDeviceId: "paired-node" },
+      "authoritative runtime requirement",
+    ],
+    [undefined, "has no environment record"],
+  ] as const)("rejects redispatch without %s: %s", async (environment, reason) => {
     const dispatch = vi.fn();
     const redispatch = createWorkerPlacementRedispatch({
       placements: reader(placement, environment),

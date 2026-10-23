@@ -4,8 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   listConversations,
-  registerConversationAddresses,
-  resolveConversationRegistryScope,
+  prepareConversationRegistryScope,
 } from "../config/sessions/conversation-registry.js";
 import { listSessionEntriesCore } from "../config/sessions/session-accessor.entry.js";
 import {
@@ -13,6 +12,8 @@ import {
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as channelResolution from "../infra/outbound/channel-resolution.js";
+import * as outboundSession from "../infra/outbound/outbound-session.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -35,7 +36,7 @@ afterEach(async () => {
   tempDirs.cleanup();
 });
 
-function createDirectory(
+async function createDirectory(
   params: { agentId?: string; physicalAgentId?: string; peerIds?: string[] } = {},
 ) {
   const agentId = params.agentId ?? "main";
@@ -47,11 +48,9 @@ function createDirectory(
     agents: { entries: { [agentId]: {} } },
     session: { store: storePath },
   };
-  const scope = resolveConversationRegistryScope({ config, agentId });
+  const scope = await prepareConversationRegistryScope({ config, agentId });
   const routed = createDeferredCore();
   const deps = {
-    listConversations,
-    registerConversationAddresses,
     resolveOutboundChannelPlugin: () => ({
       ...createChannelTestPluginBase({ id: "reef" }),
       directory: {
@@ -75,7 +74,19 @@ function createDirectory(
       };
     },
   };
-  return { agentId, config, deps, routed, scope, stateDir, storePath };
+  vi.spyOn(channelResolution, "resolveOutboundChannelPlugin").mockImplementation(
+    deps.resolveOutboundChannelPlugin,
+  );
+  vi.spyOn(outboundSession, "resolveOutboundSessionRoute").mockImplementation((input) =>
+    deps.resolveOutboundSessionRoute(input),
+  );
+  const list = (overrides: Partial<Parameters<typeof runGatewayConversationList>[0]> = {}) =>
+    runGatewayConversationList({ config, agentId, channel: "reef", limit: 10, ...overrides });
+  const expectStored = async (count: number) => {
+    expect(await listConversations(scope)).toHaveLength(count);
+    expect(listSessionEntriesCore(scope)).toEqual([]);
+  };
+  return { config, deps, routed, scope, storePath, list, expectStored };
 }
 
 describe("conversation directory write admission", () => {
@@ -83,37 +94,39 @@ describe("conversation directory write admission", () => {
     "rechecks route ownership after waiting for the writer: %s",
     async (eligibility) => {
       const peerIds = ["peer", "peer-two", "peer-three"];
-      const fixture = createDirectory({ peerIds });
+      const fixture = await createDirectory({ peerIds });
       let currentConfig = fixture.config;
       const release = createDeferredCore();
       const blocker = runOpenClawAgentWriteAdmission(
         toDatabaseOptions(resolveSqliteReadScope(fixture.scope)),
         () => release.promise,
       );
-      let settled = false;
-      const result = runGatewayConversationList(
-        {
-          config: fixture.config,
-          readCurrentConfig: () => currentConfig,
-          agentId: fixture.agentId,
-          channel: "reef",
-          limit: 10,
-        },
-        fixture.deps,
-      ).then(
-        (value) => {
-          settled = true;
-          return { value };
-        },
-        (error: unknown) => {
-          settled = true;
-          return { error };
+      const settled = vi.fn();
+      let forcedUnavailable = false;
+      const prepare = routeOwnership.prepareConversationRouteEligibilitiesForAgent;
+      vi.spyOn(routeOwnership, "prepareConversationRouteEligibilitiesForAgent").mockImplementation(
+        async (input) => {
+          const prepared = await prepare(input);
+          return {
+            ...prepared,
+            read: () =>
+              forcedUnavailable
+                ? input.conversations.map(() => "unavailable" as const)
+                : prepared.read(),
+          };
         },
       );
+      const result = fixture
+        .list({ readCurrentConfig: () => currentConfig })
+        .then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        )
+        .finally(settled);
       try {
         await fixture.routed.promise;
         await setImmediate();
-        expect(settled).toBe(false);
+        expect(settled).not.toHaveBeenCalled();
         expect(await listConversations(fixture.scope)).toEqual([]);
         if (eligibility === "denied") {
           currentConfig = {
@@ -122,10 +135,7 @@ describe("conversation directory write admission", () => {
             bindings: [{ type: "route", agentId: "finance", match: { channel: "reef" } }],
           };
         } else if (eligibility === "unavailable") {
-          vi.spyOn(
-            routeOwnership,
-            "resolveConversationRouteEligibilitiesForAgent",
-          ).mockImplementation(({ conversations }) => conversations.map(() => "unavailable"));
+          forcedUnavailable = true;
         }
         release.resolve();
         await blocker;
@@ -134,21 +144,17 @@ describe("conversation directory write admission", () => {
             error: new Error("Conversation route ownership is temporarily unavailable"),
           });
         } else {
+          const conversations =
+            eligibility === "eligible"
+              ? expect.arrayContaining(
+                  peerIds.map((id) => expect.objectContaining({ target: `reef:${id}` })),
+                )
+              : [];
           await expect(result).resolves.toMatchObject({
-            value: {
-              conversations:
-                eligibility === "eligible"
-                  ? expect.arrayContaining(
-                      peerIds.map((id) => expect.objectContaining({ target: `reef:${id}` })),
-                    )
-                  : [],
-            },
+            value: { conversations },
           });
         }
-        expect(await listConversations(fixture.scope)).toHaveLength(
-          eligibility === "eligible" ? peerIds.length : 0,
-        );
-        expect(listSessionEntriesCore(fixture.scope)).toEqual([]);
+        await fixture.expectStored(eligibility === "eligible" ? peerIds.length : 0);
       } finally {
         release.resolve();
         await blocker;
@@ -160,7 +166,7 @@ describe("conversation directory write admission", () => {
   it.each(["environment", "working directory"] as const)(
     "keeps a shared physical store and logical route when the %s changes during discovery",
     async (changed) => {
-      const fixture = createDirectory({
+      const fixture = await createDirectory({
         agentId: "logical-agent",
         physicalAgentId: "schema-owner",
       });
@@ -175,10 +181,7 @@ describe("conversation directory write admission", () => {
         ...fixture.config,
         session: { store: path.relative(process.cwd(), fixture.storePath) },
       };
-      const result = runGatewayConversationList(
-        { config, agentId: fixture.agentId, channel: "reef", limit: 10 },
-        fixture.deps,
-      );
+      const result = fixture.list({ config });
       try {
         await fixture.routed.promise;
         const otherDirectory = tempDirs.make("conversation-directory-moved-");
@@ -191,8 +194,7 @@ describe("conversation directory write admission", () => {
         await expect(result).resolves.toMatchObject({
           conversations: [expect.objectContaining({ target: "reef:peer" })],
         });
-        expect(await listConversations(fixture.scope)).toHaveLength(1);
-        expect(listSessionEntriesCore(fixture.scope)).toEqual([]);
+        await fixture.expectStored(1);
       } finally {
         releaseRoute.resolve();
         await result;

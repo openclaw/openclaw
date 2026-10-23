@@ -1,5 +1,4 @@
 /**
- * Agent cleanup timeout guard.
  *
  * Bounds cleanup without certifying automatic ownership after timeout or failure.
  */

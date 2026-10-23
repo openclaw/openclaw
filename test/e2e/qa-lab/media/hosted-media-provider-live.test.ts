@@ -1,4 +1,3 @@
-// Hosted media provider live producer tests cover QA evidence wiring.
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -16,18 +15,31 @@ import {
 } from "./hosted-media-provider-live.js";
 
 const SOURCE_PATH = "test/e2e/qa-lab/media/hosted-media-provider-live.ts";
+const cli = (args: string) => parseArgs(args.split(" "));
 const loadShellEnvFallbackMock = vi.fn();
 const collectProviderApiKeysMock = vi.fn((provider: string) =>
   process.env[`TEST_AUTH_${provider.toUpperCase()}`] ? ["test-key"] : [],
 );
-
-function requirePlanEntry(plan: SuiteRunPlan[], suiteId: string) {
-  const entry = plan.find((candidate) => candidate.suite.id === suiteId);
-  if (!entry) {
-    throw new Error(`expected ${suiteId} run plan entry`);
-  }
-  return entry;
-}
+const planDependencies = {
+  collectProviderApiKeysImpl: collectProviderApiKeysMock,
+  getProviderEnvVarsImpl: (provider: string) => [`TEST_AUTH_${provider.toUpperCase()}`],
+  loadShellEnvFallbackImpl: loadShellEnvFallbackMock,
+};
+const emptyPlan = (): SuiteRunPlan[] => [
+  {
+    providers: [],
+    skippedReason: "no providers with usable auth",
+    suite: MEDIA_SUITES.image,
+  },
+];
+const hostedOptions = (suite: string, ...args: string[]) =>
+  parseHostedMediaOptions([
+    "--suite",
+    suite,
+    "--artifact-base",
+    path.join(os.tmpdir(), "openclaw-hosted-media-live-test", suite),
+    ...args,
+  ]);
 
 afterEach(() => {
   collectProviderApiKeysMock.mockClear();
@@ -37,34 +49,19 @@ afterEach(() => {
 
 describe("hosted media provider live QA producer", () => {
   it("builds the image live media command with provider filters from env", () => {
-    const options = parseHostedMediaOptions([
-      "--suite",
-      "image",
-      "--artifact-base",
-      ".artifacts/qa-e2e/image",
-      "--providers-env",
-      "OPENCLAW_QA_HOSTED_MEDIA_PROVIDERS",
-    ]);
     const command = buildHostedMediaCommand({
       env: { OPENCLAW_QA_HOSTED_MEDIA_PROVIDERS: "openai,google" },
-      options,
+      options: hostedOptions("image", "--providers-env", "OPENCLAW_QA_HOSTED_MEDIA_PROVIDERS"),
     });
 
-    expect(command.args).toContain(SOURCE_PATH);
-    expect(command.args).toContain("image");
-    expect(command.args).toContain("--image-providers");
-    expect(command.args).toContain("openai,google");
+    expect(command.args).toEqual(
+      expect.arrayContaining([SOURCE_PATH, "image", "--image-providers", "openai,google"]),
+    );
     expect(command.env.OPENCLAW_LIVE_VIDEO_GENERATION_FULL_MODES).toBeUndefined();
   });
 
   it("forces full video modes so reference image and video inputs are covered", () => {
-    const options = parseHostedMediaOptions([
-      "--suite",
-      "video",
-      "--artifact-base",
-      ".artifacts/qa-e2e/video",
-    ]);
-    const command = buildHostedMediaCommand({ env: {}, options });
+    const command = buildHostedMediaCommand({ env: {}, options: hostedOptions("video") });
 
     expect(command.args).toContain("video");
     expect(command.env.OPENCLAW_LIVE_VIDEO_GENERATION_FULL_MODES).toBe("1");
@@ -80,14 +77,9 @@ describe("hosted media provider live QA producer", () => {
   });
 
   it("binds video provider coverage from the scenario catalog", () => {
-    const artifactBase = path.join(os.tmpdir(), "openclaw-hosted-media-live-test");
-    const options = parseHostedMediaOptions(["--suite", "video", "--artifact-base", artifactBase]);
     const evidence = buildHostedMediaEvidence({
-      options,
-      result: {
-        durationMs: 10,
-        status: "pass",
-      },
+      options: hostedOptions("video"),
+      result: { durationMs: 10, status: "pass" },
     });
 
     expect(evidence.entries[0]?.coverage).toEqual([
@@ -99,43 +91,30 @@ describe("hosted media provider live QA producer", () => {
 });
 
 describe("hosted media provider live CLI", () => {
-  it("rejects unknown global providers for the selected suites", () => {
-    expect(() =>
-      parseArgs(["image", "--providers", "definitely-not-a-provider", "--all-providers"]),
-    ).toThrow("Unknown provider(s) for selected media suite(s): definitely-not-a-provider");
+  it.each([
+    [
+      "--providers",
+      "definitely-not-a-provider",
+      "Unknown provider(s) for selected media suite(s): definitely-not-a-provider",
+    ],
+    ["--image-providers", "runway", "Unknown image provider(s): runway"],
+    ["--music-providers", "fal", "Provider filter(s) target unselected media suite(s): music"],
+  ])("rejects invalid image selection %s=%s", (flag, provider, error) => {
+    expect(() => cli(`image ${flag} ${provider} --all-providers`)).toThrow(error);
   });
 
-  it("rejects unknown suite-specific providers", () => {
-    expect(() => parseArgs(["image", "--image-providers", "runway", "--all-providers"])).toThrow(
-      "Unknown image provider(s): runway",
-    );
-  });
-
-  it("accepts providers supported by the wrapped live suites", () => {
+  it.each([
+    ["image", "openrouter"],
+    ["music", "fal,openrouter"],
+    ["video", "openrouter"],
+  ] as const)("accepts %s providers %s", (suite, providers) => {
     expect(
-      parseArgs(["image", "--image-providers", "openrouter", "--all-providers"]).suiteProviders
-        .image,
-    ).toEqual(new Set(["openrouter"]));
-    expect(
-      parseArgs(["music", "--music-providers", "fal,openrouter", "--all-providers"]).suiteProviders
-        .music,
-    ).toEqual(new Set(["fal", "openrouter"]));
-    expect(
-      parseArgs(["video", "--video-providers", "openrouter", "--all-providers"]).suiteProviders
-        .video,
-    ).toEqual(new Set(["openrouter"]));
-  });
-
-  it("rejects suite-specific provider filters for unselected suites", () => {
-    expect(() => parseArgs(["image", "--music-providers", "fal", "--all-providers"])).toThrow(
-      "Provider filter(s) target unselected media suite(s): music",
-    );
+      cli(`${suite} --${suite}-providers ${providers} --all-providers`).suiteProviders[suite],
+    ).toEqual(new Set(providers.split(",")));
   });
 
   it("passes single-dash Vitest args after the option separator", () => {
-    expect(
-      parseArgs(["image", "--all-providers", "--project", "tooling", "--", "-t", "media-smoke"]),
-    ).toMatchObject({
+    expect(cli("image --all-providers --project tooling -- -t media-smoke")).toMatchObject({
       suites: ["image"],
       requireAuth: false,
       passthroughArgs: ["--project", "tooling", "-t", "media-smoke"],
@@ -143,14 +122,7 @@ describe("hosted media provider live CLI", () => {
   });
 
   it("fails explicit suite selections that auth filtering would skip", () => {
-    const options = parseArgs([
-      "image",
-      "music",
-      "--image-providers",
-      "openai",
-      "--music-providers",
-      "minimax",
-    ]);
+    const options = cli("image music --image-providers openai --music-providers minimax");
     const skipped = findSkippedExplicitProviderSelections(options, [
       { suite: MEDIA_SUITES.image, providers: ["openai"] },
       {
@@ -164,7 +136,7 @@ describe("hosted media provider live CLI", () => {
   });
 
   it("does not fail global provider filters for suites without provider overlap", () => {
-    const options = parseArgs(["image", "music", "video", "--providers", "openai"]);
+    const options = cli("image music video --providers openai");
     const skipped = findSkippedExplicitProviderSelections(options, [
       { suite: MEDIA_SUITES.image, providers: ["openai"] },
       {
@@ -178,99 +150,42 @@ describe("hosted media provider live CLI", () => {
     expect(skipped).toEqual([]);
   });
 
-  it("fails default live media runs when auth filtering leaves no providers", async () => {
-    await expect(
-      runCli(["image"], {
-        buildRunPlanImpl: () => [
-          {
-            providers: [],
-            skippedReason: "no providers with usable auth",
-            suite: MEDIA_SUITES.image,
-          },
-        ],
-      }),
-    ).resolves.toBe(1);
-  });
-
-  it("allows empty live media runs only with an explicit escape hatch", async () => {
-    await expect(
-      runCli(["image", "--allow-empty"], {
-        buildRunPlanImpl: () => [
-          {
-            providers: [],
-            skippedReason: "no providers with usable auth",
-            suite: MEDIA_SUITES.image,
-          },
-        ],
-      }),
-    ).resolves.toBe(0);
+  it.each([
+    { args: ["image"], exit: 1 },
+    { args: ["image", "--allow-empty"], exit: 0 },
+  ])("empty run $args exits $exit", async ({ args, exit }) => {
+    await expect(runCli(args, { buildRunPlanImpl: emptyPlan })).resolves.toBe(exit);
   });
 
   it("defaults to all suites with auth filtering", async () => {
-    vi.stubEnv("TEST_AUTH_OPENAI", "1");
-    vi.stubEnv("TEST_AUTH_GOOGLE", "1");
-    vi.stubEnv("TEST_AUTH_KIE", "1");
-    vi.stubEnv("TEST_AUTH_MINIMAX", "1");
-    vi.stubEnv("TEST_AUTH_FAL", "1");
-    vi.stubEnv("TEST_AUTH_VYDRA", "1");
+    for (const provider of ["OPENAI", "GOOGLE", "KIE", "MINIMAX", "FAL", "VYDRA"]) {
+      vi.stubEnv(`TEST_AUTH_${provider}`, "1");
+    }
+    const plan = await buildRunPlan(parseArgs([]), planDependencies);
 
-    const plan = await buildRunPlan(parseArgs([]), {
-      collectProviderApiKeysImpl: collectProviderApiKeysMock,
-      getProviderEnvVarsImpl: (provider) => [`TEST_AUTH_${provider.toUpperCase()}`],
-      loadShellEnvFallbackImpl: loadShellEnvFallbackMock,
-    });
-
-    expect(plan.map((entry) => entry.suite.id)).toEqual(["image", "music", "video"]);
-    expect(requirePlanEntry(plan, "image").providers).toEqual([
-      "fal",
-      "google",
-      "minimax",
-      "openai",
-      "vydra",
-    ]);
-    expect(requirePlanEntry(plan, "music").providers).toEqual(["fal", "google", "minimax"]);
-    expect(requirePlanEntry(plan, "video").providers).toEqual([
-      "google",
-      "kie",
-      "minimax",
-      "vydra",
+    expect(plan.map(({ suite, providers }) => [suite.id, providers])).toEqual([
+      ["image", "fal,google,minimax,openai,vydra".split(",")],
+      ["music", ["fal", "google", "minimax"]],
+      ["video", "google,kie,minimax,vydra".split(",")],
     ]);
   });
 
   it("supports suite-specific provider filters without auth narrowing", async () => {
     const plan = await buildRunPlan(
-      parseArgs([
-        "video",
-        "--video-providers",
-        "fal,google,kie,novita,pixverse,runway,zai",
-        "--all-providers",
-      ]),
-      {
-        collectProviderApiKeysImpl: collectProviderApiKeysMock,
-        getProviderEnvVarsImpl: (provider) => [`TEST_AUTH_${provider.toUpperCase()}`],
-        loadShellEnvFallbackImpl: loadShellEnvFallbackMock,
-      },
+      cli("video --video-providers fal,google,kie,novita,pixverse,runway,zai --all-providers"),
+      planDependencies,
     );
 
-    expect(plan).toHaveLength(1);
-    const [entry] = plan;
-    expect(entry?.suite.id).toBe("video");
-    expect(entry?.providers).toEqual([
-      "fal",
-      "google",
-      "kie",
-      "novita",
-      "pixverse",
-      "runway",
-      "zai",
+    expect(plan).toMatchObject([
+      { suite: { id: "video" }, providers: "fal,google,kie,novita,pixverse,runway,zai".split(",") },
     ]);
   });
 
   it("forwards quiet flags separately from passthrough args", () => {
-    const options = parseArgs(["image", "--quiet", "--reporter", "dot"]);
-
-    expect(options.suites).toEqual(["image"]);
-    expect(options.quietArgs).toEqual(["--quiet"]);
-    expect(options.passthroughArgs).toEqual(["--reporter", "dot"]);
+    expect(cli("image --quiet --reporter dot")).toMatchObject({
+      suites: ["image"],
+      quietArgs: ["--quiet"],
+      passthroughArgs: ["--reporter", "dot"],
+    });
   });
 });

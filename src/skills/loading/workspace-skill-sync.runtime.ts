@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { root, type Root } from "@openclaw/fs-safe/root";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { resolveSandboxPath } from "../../agents/sandbox-paths.js";
 import { canonicalizePath } from "../../agents/utils/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -66,8 +66,7 @@ function parseSyncedSkillsManifest(value: unknown): SyncedSkillsManifest | null 
     typeof value.skillsVersion !== "number" ||
     !Number.isFinite(value.skillsVersion) ||
     typeof value.skillRootsFingerprint !== "string" ||
-    !Array.isArray(value.entryKeys) ||
-    !value.entryKeys.every((entry) => typeof entry === "string")
+    !isStringArray(value.entryKeys)
   ) {
     return null;
   }
@@ -196,11 +195,6 @@ export async function syncWorkspaceSkills(params: {
     const skillRoots = skillsSnapshot?.skillRoots;
     const executionWorkspaceFileHost = resolveSkillSnapshotExecutionFileHost(skillsSnapshot);
     const sourceWorkspace = skillRoots?.agentWorkspaceDir ?? sourceDir;
-    const sourceScope = {
-      executionWorkspaceDir: skillRoots?.executionWorkspaceDir,
-      executionWorkspaceFileHost,
-      agentId: params.agentId,
-    };
     // Names and versions do not identify a source tree. Both reuse paths must
     // bind its full discovery context, or shared sandboxes retain another owner's bytes.
     const skillRootsFingerprint = sha256Hex(
@@ -221,10 +215,12 @@ export async function syncWorkspaceSkills(params: {
     assertCurrent?.();
     const target = await root(targetSkillsDir, { assertBeforeMutation: assertCurrent });
     assertCurrent?.();
+    await target.write(".gitignore", "*\n", { mode: 0o644, durable: false });
+    assertCurrent?.();
     const manifest = parseSyncedSkillsManifest(await tryReadJson<unknown>(manifestPath));
     assertCurrent?.();
-    let sourceVersion = getSkillsResourceVersion(sourceWorkspace, sourceScope);
-    let skillsVersion = getSkillsSnapshotVersion(skillRoots?.agentWorkspaceDir ?? sourceDir);
+    const sourceVersion = getSkillsResourceVersion(sourceWorkspace);
+    const skillsVersion = getSkillsSnapshotVersion(sourceWorkspace);
     const expectedManifestKey =
       skillsSnapshot?.version === skillsVersion
         ? resolveSyncedSkillsManifestKey({
@@ -257,23 +253,12 @@ export async function syncWorkspaceSkills(params: {
       ...(skillsSnapshot?.skillFilter ? { skillFilter: skillsSnapshot.skillFilter } : {}),
       ...(skillsSnapshot?.skillOverrides ? { skillOverrides: skillsSnapshot.skillOverrides } : {}),
     };
-    let entries: SkillEntry[];
-    for (;;) {
-      sourceVersion = getSkillsResourceVersion(sourceWorkspace, sourceScope);
-      skillsVersion = getSkillsSnapshotVersion(skillRoots?.agentWorkspaceDir ?? sourceDir);
-      entries = await prepareWorkspaceSkills(skillRoots?.agentWorkspaceDir ?? sourceDir, {
-        ...loadOptions,
-        executionWorkspaceDir: skillRoots?.executionWorkspaceDir,
-        executionWorkspaceFileHost,
-      });
-      assertCurrent?.();
-      if (
-        getSkillsSnapshotVersion(sourceWorkspace) === skillsVersion &&
-        getSkillsResourceVersion(sourceWorkspace, sourceScope) === sourceVersion
-      ) {
-        break;
-      }
-    }
+    const entries = await prepareWorkspaceSkills(sourceWorkspace, {
+      ...loadOptions,
+      executionWorkspaceDir: skillRoots?.executionWorkspaceDir,
+      executionWorkspaceFileHost,
+    });
+    assertCurrent?.();
     if (skillsSnapshot?.librarySelections?.length) {
       const selectedNames = new Set(skillsSnapshot.skills.map((skill) => skill.name));
       const selectedEntries = await prepareSkillLibrarySelection(
@@ -340,7 +325,7 @@ export async function syncWorkspaceSkills(params: {
     const children = await fsp.readdir(targetSkillsDir);
     assertCurrent?.();
     for (const child of children) {
-      if (!preservedDestinations.has(child)) {
+      if (child !== ".gitignore" && !preservedDestinations.has(child)) {
         const stat = await fsp.lstat(path.join(targetSkillsDir, child));
         assertCurrent?.();
         if (stat.isDirectory()) {
@@ -416,7 +401,10 @@ export async function syncWorkspaceSkills(params: {
         skillsVersion,
       };
       assertCurrent?.();
-      await target.writeJson(SYNCED_SKILLS_MANIFEST_NAME, nextManifest, { trailingNewline: true });
+      await target.writeJson(SYNCED_SKILLS_MANIFEST_NAME, nextManifest, {
+        trailingNewline: true,
+        durable: false,
+      });
       assertCurrent?.();
       syncedSkillsUsageCache.set(targetSkillsDir, {
         destinations: new Map(

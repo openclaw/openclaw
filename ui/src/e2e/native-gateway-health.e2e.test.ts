@@ -1,8 +1,6 @@
-import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -10,36 +8,17 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "native Gateway health" });
 const snapshot: NativeGatewaysSnapshot = {
   currentId: "profile:team",
-  gateways: [
-    {
-      id: "primary",
-      name: "Local Gateway",
-      kind: "local",
-      isPrimary: true,
-      canPromote: false,
-      health: "ok",
-    },
-    {
-      id: "profile:team",
-      name: "Team",
-      kind: "remote",
-      isPrimary: false,
-      canPromote: true,
-      health: "unknown",
-    },
-    {
-      id: "profile:studio",
-      name: "Studio",
-      kind: "remote",
-      isPrimary: false,
-      canPromote: true,
-      health: "unknown",
-    },
-  ],
+  gateways: ["primary", "profile:team", "profile:studio"].map((id) => ({
+    id,
+    name: id === "profile:team" ? "Team" : id,
+    kind: id === "primary" ? "local" : "remote",
+    isPrimary: id === "primary",
+    canPromote: id !== "primary",
+    health: id === "primary" ? "ok" : "unknown",
+  })),
 };
 
-// Chromium models only the native host boundary. The production application owns
-// the handshake and health report; no test writes a successful health report.
+// Model the native host boundary only; the application owns handshake and health reports.
 async function installNativeHost(page: Page) {
   await page.addInitScript((initial) => {
     type HealthReport = { gatewayUrl: string; health: "ok" | "error" | "unknown" };
@@ -84,26 +63,27 @@ async function installNativeHost(page: Page) {
 }
 
 function gatewayRow(page: Page, id: string): Locator {
-  return page.locator(`wa-dropdown-item[value="gateway:${encodeURIComponent(id)}"]`);
+  return page.locator(`[data-value="gateway:${encodeURIComponent(id)}"]`);
 }
 
 async function assertSelectionUnchanged(page: Page) {
   const primary = gatewayRow(page, "primary");
   const team = gatewayRow(page, "profile:team");
   const studio = gatewayRow(page, "profile:studio");
-  expect(await primary.getAttribute("aria-checked")).toBe("false");
-  expect(await primary.locator(".sidebar-gateway-primary").textContent()).toBe("primary");
-  expect(await primary.locator(".sidebar-gateway-check").count()).toBe(0);
-  expect(await team.getAttribute("aria-checked")).toBe("true");
-  expect(await team.locator(".sidebar-gateway-check").count()).toBe(1);
-  expect(await team.locator(".sidebar-gateway-primary").count()).toBe(0);
-  expect(await studio.getAttribute("aria-checked")).toBe("false");
-  expect(await studio.locator(".sidebar-gateway-health").getAttribute("data-health")).toBe(
-    "unknown",
-  );
-  expect(await studio.locator(".sidebar-gateway-health").getAttribute("aria-label")).toBe(
-    "Unknown status",
-  );
+  const health = studio.locator(".sidebar-gateway-health");
+  expect(
+    await Promise.all([
+      primary.getAttribute("aria-checked"),
+      primary.locator(".sidebar-gateway-primary").textContent(),
+      primary.locator(".sidebar-gateway-check").count(),
+      team.getAttribute("aria-checked"),
+      team.locator(".sidebar-gateway-check").count(),
+      team.locator(".sidebar-gateway-primary").count(),
+      studio.getAttribute("aria-checked"),
+      health.getAttribute("data-health"),
+      health.getAttribute("aria-label"),
+    ]),
+  ).toEqual(["false", "primary", 0, "true", 1, 0, "false", "unknown", "Unknown status"]);
   expect(await page.evaluate(() => Reflect.get(window, "nativeGatewayActions"))).toEqual([]);
 }
 
@@ -117,59 +97,47 @@ suite.define(() => {
         serviceWorkers: "block",
       },
       async ({ page }) => {
-        const proof = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()
-          ? createControlUiE2eArtifactDir("native-gateway-health")
-          : undefined;
         await installNativeHost(page);
-        const gateway = await installMockGateway(page, {
-          presenceUsers: [
-            { self: true, id: "proof-user", name: "Alex", email: "alex@example.test" },
-          ],
-          assistantName: "Assistant",
-          agentModel: "example/sample-model",
-          models: [{ id: "sample-model", name: "Sample model", provider: "example" }],
-          sessions: [],
-          historyMessages: [],
-        });
+        const gateway = await installMockGateway(page, { sessions: [], historyMessages: [] });
         await page.goto(`${suite.server.baseUrl}new`);
         await waitForControlUiGatewayReady(page);
         expect((await gateway.getRequests("connect")).length).toBeGreaterThan(0);
         await page.locator(".sidebar-identity-card").click();
+        const switcher = page.locator('[data-value="command:gateways"]');
+        await switcher.click();
+        await page.getByRole("menu", { name: "Team", exact: true }).waitFor({ state: "visible" });
+        const currentHealth = switcher.locator(".sidebar-gateway-health");
         const teamHealth = gatewayRow(page, "profile:team").locator(".sidebar-gateway-health");
-        await expect.poll(() => teamHealth.getAttribute("data-health")).toBe("ok");
-        expect(await teamHealth.getAttribute("aria-label")).toBe("Connected");
         const identity = page.locator(".sidebar-identity-card");
-        expect(await identity.locator(".sidebar-gateway-health").count()).toBe(0);
-        await expect.poll(() => identity.locator(".gateway-status__label").count()).toBe(0);
-        await assertSelectionUnchanged(page);
-        await page.mouse.move(1100, 850);
-        if (proof) {
-          await page.screenshot({
-            path: path.join(proof, "after-connected.png"),
-            animations: "disabled",
-          });
+        const footer = page.locator(".sidebar-shell__footer .gateway-status");
+        let firstConnectCount = 0;
+        for (const [phase, health, label] of [
+          ["after-connected", "ok", "Connected"],
+          ["connection-lost", "error", "Unreachable"],
+          ["after-reconnected", "ok", "Connected"],
+        ]) {
+          if (phase === "connection-lost") {
+            firstConnectCount = (await gateway.getRequests("connect")).length;
+            await gateway.setOnline(false);
+          } else if (phase === "after-reconnected") {
+            await gateway.setOnline(true);
+            await gateway.waitForRequest("connect", { after: firstConnectCount });
+            await waitForControlUiGatewayReady(page);
+          }
+          await expect.poll(() => teamHealth.getAttribute("data-health")).toBe(health);
+          expect(await teamHealth.getAttribute("aria-label")).toBe(label);
+          await expect.poll(() => currentHealth.getAttribute("data-health")).toBe(health);
+          await expect
+            .poll(() => identity.getAttribute("data-connection-status"))
+            .toBe(health === "ok" ? "connected" : "reconnecting");
+          if (health === "ok") {
+            expect(await identity.locator(".sidebar-gateway-health").count()).toBe(0);
+            await footer.waitFor({ state: "detached" });
+          } else {
+            await footer.getByText("Reconnecting…", { exact: true }).waitFor();
+          }
+          await assertSelectionUnchanged(page);
         }
-
-        const firstConnectCount = (await gateway.getRequests("connect")).length;
-        await gateway.setOnline(false);
-        await expect.poll(() => teamHealth.getAttribute("data-health")).toBe("error");
-        expect(await teamHealth.getAttribute("aria-label")).toBe("Unreachable");
-        await assertSelectionUnchanged(page);
-        if (proof) {
-          await page.screenshot({
-            path: path.join(proof, "connection-lost.png"),
-            animations: "disabled",
-          });
-        }
-
-        await gateway.setOnline(true);
-        await gateway.waitForRequest("connect", { after: firstConnectCount });
-        await waitForControlUiGatewayReady(page);
-        await expect.poll(() => teamHealth.getAttribute("data-health")).toBe("ok");
-        expect(await teamHealth.getAttribute("aria-label")).toBe("Connected");
-        await assertSelectionUnchanged(page);
-        expect(await identity.locator(".sidebar-gateway-health").count()).toBe(0);
-        await expect.poll(() => identity.locator(".gateway-status__label").count()).toBe(0);
         const reportedHealth = await page.evaluate(() => {
           const reports = Reflect.get(window, "nativeHealthReports") as Array<{ health: string }>;
           return reports.map((report) => report.health);
@@ -180,12 +148,6 @@ suite.define(() => {
         const socketUrls = await gateway.getSocketUrls();
         expect(new Set(socketUrls).size).toBe(1);
         expect(new URL(socketUrls[0]!).host).toBe(new URL(suite.server.baseUrl).host);
-        if (proof) {
-          await page.screenshot({
-            path: path.join(proof, "after-reconnected.png"),
-            animations: "disabled",
-          });
-        }
       },
     );
   });

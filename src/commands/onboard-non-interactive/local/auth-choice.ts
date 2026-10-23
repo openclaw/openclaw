@@ -2,7 +2,7 @@ import type { ApiKeyCredential } from "../../../agents/auth-profiles/types.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
 import { quoteCliArg } from "../../../cli/quote-cli-arg.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import type { SecretInput } from "../../../config/types.secrets.js";
+import { hasConfiguredSecretInput, type SecretInput } from "../../../config/types.secrets.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveManifestDeprecatedProviderAuthChoice } from "../../../plugins/provider-auth-choices.js";
 import type {
@@ -11,7 +11,7 @@ import type {
   ProviderResolveNonInteractiveApiKeyParams,
 } from "../../../plugins/provider-authentication.types.js";
 import { resolveDeprecatedProviderInstallCatalogEntry } from "../../../plugins/provider-install-catalog.js";
-import type { RuntimeEnv } from "../../../runtime.js";
+import { ExitError, type RuntimeEnv } from "../../../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract.js";
 import { resolveLegacyOnboardAuthChoice } from "../../auth-choice-legacy.js";
 import { formatAuthChoiceChoicesForCli } from "../../auth-choice-options.js";
@@ -22,6 +22,8 @@ import {
   CustomApiError,
   parseNonInteractiveCustomApiFlags,
   resolveCustomProviderId,
+  resolveCustomProviderNoAuth,
+  resolveNonInteractiveCustomApiModelIds,
 } from "../../onboard-custom-config.js";
 import { rejectOnboardingOption } from "../../onboard-options.js";
 import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
@@ -108,11 +110,12 @@ export async function applyNonInteractiveAuthChoice(params: {
       ...(paramsLocal.metadata ? { metadata: paramsLocal.metadata } : {}),
     };
   };
-  const legacyChoice = resolveLegacyOnboardAuthChoice(authChoice, {
+  const providerLookup = {
     config: nextConfig,
     workspaceDir: params.target.workspaceDir,
     env: process.env,
-  });
+  };
+  const legacyChoice = resolveLegacyOnboardAuthChoice(authChoice, providerLookup);
   if (legacyChoice.deprecated) {
     // Only provider aliases normalize here; the onboarding entry point owns
     // the separate oauth spelling before local dispatch.
@@ -120,17 +123,11 @@ export async function applyNonInteractiveAuthChoice(params: {
     authChoice = legacyChoice.authChoice;
   }
 
-  const deprecatedChoice = resolveManifestDeprecatedProviderAuthChoice(authChoice, {
-    config: nextConfig,
-    workspaceDir: params.target.workspaceDir,
-    env: process.env,
-  });
+  const deprecatedChoice = resolveManifestDeprecatedProviderAuthChoice(authChoice, providerLookup);
   const deprecatedInstallChoice = deprecatedChoice
     ? undefined
     : resolveDeprecatedProviderInstallCatalogEntry(authChoice, {
-        config: nextConfig,
-        workspaceDir: params.target.workspaceDir,
-        env: process.env,
+        ...providerLookup,
         includeUntrustedWorkspacePlugins: false,
       });
   const replacementChoiceId = deprecatedChoice?.choiceId ?? deprecatedInstallChoice?.choiceId;
@@ -140,11 +137,7 @@ export async function applyNonInteractiveAuthChoice(params: {
     );
   }
 
-  const validAuthChoices = formatAuthChoiceChoicesForCli({
-    config: nextConfig,
-    workspaceDir: params.target.workspaceDir,
-    env: process.env,
-  }).split("|");
+  const validAuthChoices = formatAuthChoiceChoicesForCli(providerLookup).split("|");
   if (!validAuthChoices.includes(authChoice) && !authChoice.startsWith("provider-plugin:")) {
     return reject(
       `Unknown --auth-choice ${JSON.stringify(authChoice)}. Valid choices: ${validAuthChoices.join(", ")}.`,
@@ -185,6 +178,7 @@ export async function applyNonInteractiveAuthChoice(params: {
         modelId: opts.customModelId,
         compatibility: opts.customCompatibility,
         apiKey: opts.customApiKey,
+        noAuth: opts.customNoAuth,
         providerId: opts.customProviderId,
         supportsImageInput: opts.customImageInput,
       });
@@ -193,14 +187,30 @@ export async function applyNonInteractiveAuthChoice(params: {
         baseUrl: customAuth.baseUrl,
         providerId: customAuth.providerId,
       });
-      const resolvedCustomApiKey = await resolveApiKey({
-        provider: resolvedProviderId.providerId,
-        flagValue: customAuth.apiKey,
-        flagName: "--custom-api-key",
-        envVar: "CUSTOM_API_KEY",
-        envVarName: "CUSTOM_API_KEY",
-        required: false,
+      // No-auth selection must not resolve ambient credentials: keeping the
+      // env/flag key alive would serialize it next to auth: "none" and crash
+      // the replacement branch (which expects a staged profile).
+      const noAuth = resolveCustomProviderNoAuth({
+        ...customAuth,
+        config: nextConfig,
+        providerId: resolvedProviderId.providerId,
+        apiKey: customAuth.apiKey ?? process.env.CUSTOM_API_KEY?.trim(),
       });
+      const resolvedCustomApiKey = noAuth
+        ? undefined
+        : await resolveApiKey({
+            provider: resolvedProviderId.providerId,
+            flagValue: customAuth.apiKey,
+            flagName: "--custom-api-key",
+            envVar: "CUSTOM_API_KEY",
+            envVarName: "CUSTOM_API_KEY",
+            allowProfile:
+              !opts.customModelIds &&
+              !hasConfiguredSecretInput(
+                nextConfig.models?.providers?.[resolvedProviderId.providerId]?.apiKey,
+              ),
+            required: false,
+          });
       let customApiKeyInput: SecretInput | undefined;
       if (
         resolvedCustomApiKey &&
@@ -218,26 +228,33 @@ export async function applyNonInteractiveAuthChoice(params: {
         }
         customApiKeyInput = stored;
       }
+      const modelIds = await resolveNonInteractiveCustomApiModelIds({
+        ...customAuth,
+        config: nextConfig,
+        noAuth,
+        apiKey: resolvedCustomApiKey?.key,
+        agentDir: params.target.agentDir,
+        modelIds: opts.customModelIds,
+      });
       const result = applyCustomApiConfig({
         config: nextConfig,
-        baseUrl: customAuth.baseUrl,
-        modelId: customAuth.modelId,
-        compatibility: customAuth.compatibility,
+        ...customAuth,
+        modelId: modelIds[0] ?? "",
+        modelIds: customAuth.modelId ? undefined : modelIds,
+        preserveExistingModelMetadata: !customAuth.modelId,
         apiKey: customApiKeyInput,
-        providerId: customAuth.providerId,
-        supportsImageInput: customAuth.supportsImageInput,
         target: params.target,
       });
-      if (result.providerIdRenamedFrom && result.providerId) {
+      if (resolvedProviderId.providerIdRenamedFrom) {
         runtime.log(
-          `Custom provider ID "${result.providerIdRenamedFrom}" already exists for a different base URL. Using "${result.providerId}".`,
+          `Custom provider ID "${resolvedProviderId.providerIdRenamedFrom}" already exists for a different base URL. Using "${result.providerId}".`,
         );
       }
       if (customApiKeyInput !== undefined && resolvedCustomApiKey?.source !== "profile") {
         const { isSetupCredentialReplacement, saveSetupCredential } =
           await import("../../../system-agent/setup-inference-credentials.js");
         if (
-          isSetupCredentialReplacement({
+          await isSetupCredentialReplacement({
             provider: result.providerId,
             baseConfig,
             agentDir: params.target.agentDir,
@@ -260,6 +277,9 @@ export async function applyNonInteractiveAuthChoice(params: {
       }
       return result.config;
     } catch (err) {
+      if (err instanceof ExitError) {
+        throw err;
+      }
       const message =
         err instanceof CustomApiError &&
         (err.code === "missing_required" || err.code === "invalid_compatibility")

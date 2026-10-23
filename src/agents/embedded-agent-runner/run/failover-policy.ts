@@ -59,15 +59,6 @@ function isTerminalFormatFailure(params: {
   );
 }
 
-function shouldRotatePrompt(params: PromptDecisionParams): boolean {
-  return (
-    params.failoverFailure &&
-    params.failoverReason !== "timeout" &&
-    params.failoverReason !== "tls_certificate" &&
-    !isTerminalFormatFailure(params)
-  );
-}
-
 function isAssistantTimeoutFailure(params: AssistantDecisionParams): boolean {
   return (
     params.terminal.kind === "timeout" &&
@@ -83,9 +74,6 @@ function isConcreteNonTimeoutAssistantFailure(params: AssistantDecisionParams): 
 }
 
 function shouldRotateAssistant(params: AssistantDecisionParams): boolean {
-  if (params.terminal.kind === "timeout" && params.terminal.source === "run_budget") {
-    return false;
-  }
   const timeoutFailure = isAssistantTimeoutFailure(params);
   const harnessOwnedTimeout =
     params.harnessOwnsTransport && (timeoutFailure || params.failoverReason === "timeout");
@@ -166,8 +154,11 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
       }
       return surfaceError;
     }
-    shouldRotate = shouldRotatePrompt(params);
     shouldFallback = params.failoverFailure && !isTerminalFormatFailure(params);
+    shouldRotate =
+      shouldFallback &&
+      params.failoverReason !== "timeout" &&
+      params.failoverReason !== "tls_certificate";
   } else {
     if (
       params.signalOwnedInterruption ||
@@ -176,6 +167,15 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
       isTerminalFormatFailure(params)
     ) {
       return surfaceError;
+    }
+    if (params.terminal.kind === "timeout" && params.terminal.source === "run_budget") {
+      // This attempt spent its budget; only a replay-safe prompt can move to
+      // the next configured model. The caller owns replay and settlement checks.
+      return params.terminal.phase === "prompt" &&
+        !params.harnessOwnsTransport &&
+        params.fallbackConfigured
+        ? { action: "fallback_model", reason: "timeout" }
+        : { action: "continue_normal" };
     }
     if (params.failoverFailure && params.failoverReason === "tls_certificate") {
       return params.fallbackConfigured

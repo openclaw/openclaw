@@ -6,6 +6,7 @@ import {
 import {
   appendTextDeltaToAssistantMessage,
   PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
+  REPETITIVE_OUTPUT_ERROR_CODE,
 } from "@openclaw/llm-core";
 import type {
   AssistantMessage,
@@ -13,6 +14,8 @@ import type {
   Context,
   ToolResultMessage,
 } from "@openclaw/llm-core";
+import { AssistantRepetitionGuard } from "./assistant-repetition-guard.js";
+import { REPETITIVE_OUTPUT_ERROR_MESSAGE } from "./errors.js";
 import { uuidv7 } from "./harness/session/uuid.js";
 import { copyInternalToolResultState } from "./internal-hooks.js";
 import {
@@ -21,6 +24,9 @@ import {
   runAgentCoreStream,
 } from "./runtime-deps.js";
 import { createStreamSteering } from "./stream-steering.js";
+import { mergeToolExecutionFailure } from "./tool-batch-completion.js";
+import type { FinalizedToolCallOutcome } from "./tool-call-outcome.js";
+import { resolveAgentAssistantTurnId } from "./tool-execution-context.js";
 import { normalizeCoreContextMessages } from "./turn-interruption.js";
 import { withToolResultContentSource } from "./turn-taint.js";
 import type {
@@ -45,6 +51,7 @@ export type AsyncToolBatchScheduling = {
 
 export type ExecutedToolCallBatch = {
   messages: ToolResultMessage[];
+  terminalToolCallIds: string[];
   steeringMessages: AgentMessage[];
   terminate: boolean;
   terminateRun: boolean;
@@ -52,10 +59,8 @@ export type ExecutedToolCallBatch = {
   fatal?: { error: unknown };
 };
 
-type AssistantMessageUpdateEvent = Extract<AssistantMessageEvent, { contentIndex: number }>;
-
 function resolveAssistantMessageUpdate(
-  event: AssistantMessageUpdateEvent,
+  event: Extract<AssistantMessageEvent, { contentIndex: number }>,
   currentMessage: AssistantMessage,
 ): AssistantMessage {
   if ("partial" in event && event.partial) {
@@ -71,7 +76,11 @@ function removeNonExecutableToolCalls(message: AssistantMessage): AssistantMessa
   if (message.stopReason === "toolUse") {
     return message;
   }
-  const content = message.content.filter((item) => item.type !== "toolCall" || item.async);
+  const failed = message.stopReason === "aborted" || message.stopReason === "error";
+  // Executed async calls already own earlier fragments; a failed tail cannot admit another call.
+  const content = message.content.filter(
+    (item) => item.type !== "toolCall" || (!failed && item.async),
+  );
   return content.length === message.content.length
     ? message
     : replaceCompactionReplayOwnerContent(message, content);
@@ -87,6 +96,38 @@ function ensureToolTurnIdentity(message: AssistantMessage): AssistantMessage {
   }
   // message_end persists this local identity before any tool can execute.
   return { ...message, turnId: uuidv7() };
+}
+
+export function emitToolExecutionStart(
+  batch: { emit: AgentEventSink },
+  toolCall: AgentToolCall,
+  hideFromChannelProgress: boolean,
+): ReturnType<AgentEventSink> {
+  return batch.emit({
+    type: "tool_execution_start",
+    toolCallId: toolCall.id,
+    toolName: toolCall.name,
+    args: toolCall.arguments,
+    ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
+  });
+}
+
+export async function emitToolExecutionEnd(
+  finalized: FinalizedToolCallOutcome,
+  batch: { emit: AgentEventSink; assistantMessage: AssistantMessage },
+): Promise<void> {
+  const assistantTurnId = resolveAgentAssistantTurnId(batch.assistantMessage);
+  await batch.emit({
+    type: "tool_execution_end",
+    toolCallId: finalized.toolCall.id,
+    ...(assistantTurnId ? { assistantTurnId } : {}),
+    toolName: finalized.toolCall.name,
+    result: finalized.result,
+    isError: finalized.isError,
+    executionStarted: finalized.executionStarted,
+    ...(finalized.errorKind ? { errorKind: finalized.errorKind } : {}),
+    ...(finalized.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
+  });
 }
 
 export async function emitToolResultMessage(
@@ -167,10 +208,13 @@ export async function streamAgentResponse(
   const executionSignal = signal
     ? AbortSignal.any([signal, executionAbort.signal])
     : executionAbort.signal;
+  const modelAbort = new AbortController();
+  const requestSignal = AbortSignal.any([executionSignal, modelAbort.signal]);
   const abortFailedResponse = (message?: AssistantMessage) => {
     if (
       message &&
       (message.stopReason === "error" || message.stopReason === "aborted") &&
+      message.errorCode !== REPETITIVE_OUTPUT_ERROR_CODE &&
       !isResponsesOutputLimitToolCallError(message)
     ) {
       executionAbort.abort(new Error(message.errorMessage ?? "Model response interrupted"));
@@ -249,25 +293,31 @@ export async function streamAgentResponse(
         }
       })
       .catch((error: unknown) => {
-        executionFailure ??= { error };
+        executionFailure = mergeToolExecutionFailure(executionFailure, error);
         executionAbort.abort(error);
       })
       .finally(releaseAdmission);
     executions = Promise.all([previousExecutions, execution]).then(() => {});
   };
+  let responseFailure: ExecutedToolCallBatch["fatal"];
   try {
     const stream = streamFunction(config.model, llmContext, {
       ...config,
       apiKey: resolvedApiKey,
-      signal: executionSignal,
+      signal: requestSignal,
       onActiveResponse: steering.onActiveResponse,
-      asyncToolExecution: true,
+      // Async results reach the model only when it calls sessions_yield, the result
+      // collector. Without it (cron runs) the model would answer before any result.
+      asyncToolExecution: llmContext.tools?.some((tool) => tool.name === "sessions_yield") === true,
     });
 
     return await runAgentCoreStream(
       stream,
       async () => {
         const response = await stream;
+        const repetitionGuard = config.repetitionGuard?.(config.model)
+          ? new AssistantRepetitionGuard()
+          : undefined;
         let partialMessage: AssistantMessage | null = null;
         let partialIndex: number | undefined;
         let committedContentCount = 0;
@@ -281,18 +331,6 @@ export async function streamAgentResponse(
                 message,
                 message.content.slice(committedContentCount),
               );
-        const updatePartial = async (message: AssistantMessage) => {
-          const fragment = remainingFragment(message);
-          if (partialIndex === undefined) {
-            partialIndex = context.messages.length;
-            context.messages.push(fragment);
-            await emit({ type: "message_start", message: { ...fragment } });
-          } else {
-            context.messages[partialIndex] = fragment;
-          }
-          return fragment;
-        };
-
         const commitFragment = async (message: AssistantMessage) => {
           if (partialIndex === undefined) {
             context.messages.push(message);
@@ -311,7 +349,9 @@ export async function streamAgentResponse(
             case "start": {
               const message = event.partial;
               partialMessage = message;
-              await updatePartial(message);
+              partialIndex = context.messages.length;
+              context.messages.push(message);
+              await emit({ type: "message_start", message: { ...message } });
               break;
             }
 
@@ -325,12 +365,38 @@ export async function streamAgentResponse(
             case "toolcall_delta":
             case "toolcall_end":
               if (partialMessage) {
+                // Only updates assembled here prove appends; provider snapshots can correct text.
+                const priorBlock = partialMessage.content[event.contentIndex];
+                const append =
+                  repetitionGuard && event.type === "text_delta" && event.partial === undefined
+                    ? {
+                        offset: priorBlock?.type === "text" ? priorBlock.text.length : 0,
+                        delta: event.delta,
+                      }
+                    : undefined;
                 const message = resolveAssistantMessageUpdate(event, partialMessage);
                 partialMessage = message;
                 if (event.contentIndex < committedContentCount) {
                   break;
                 }
-                const fragment = await updatePartial(message);
+                const stopped = repetitionGuard?.check(
+                  message,
+                  committedContentCount,
+                  event.type === "toolcall_end" ? undefined : event.contentIndex,
+                  append,
+                );
+                if (stopped) {
+                  modelAbort.abort(new Error(REPETITIVE_OUTPUT_ERROR_MESSAGE));
+                  return await finalizeAssistantMessage(stopped);
+                }
+                const fragment = remainingFragment(message);
+                if (partialIndex === undefined) {
+                  partialIndex = context.messages.length;
+                  context.messages.push(fragment);
+                  await emit({ type: "message_start", message: { ...fragment } });
+                } else {
+                  context.messages[partialIndex] = fragment;
+                }
                 const fragmentEvent = {
                   ...event,
                   contentIndex: event.contentIndex - committedContentCount,
@@ -351,9 +417,14 @@ export async function streamAgentResponse(
                 ) {
                   const prefix = prepareAssistantMessage(
                     ensureToolTurnIdentity({
-                      ...replaceCompactionReplayOwnerContent(
-                        message,
-                        message.content.slice(committedContentCount, event.contentIndex + 1),
+                      // Persistence takes ownership and freezes nested values. Detach the
+                      // completed prefix from the provider's still-mutable stream, after
+                      // replay checkpoints have been reindexed using original block identity.
+                      ...structuredClone(
+                        replaceCompactionReplayOwnerContent(
+                          message,
+                          message.content.slice(committedContentCount, event.contentIndex + 1),
+                        ),
                       ),
                       ...(streamedTurnId ? { turnId: streamedTurnId } : {}),
                       stopReason: "toolUse",
@@ -385,9 +456,22 @@ export async function streamAgentResponse(
         return await finalizeAssistantMessage();
 
         async function finalizeAssistantMessage(terminal?: AssistantMessage) {
-          // Output-limit recovery drains admitted tools; other failures fence queued starts.
-          abortFailedResponse(terminal);
-          const result = await response.result();
+          const stoppedTerminal =
+            terminal?.errorCode === REPETITIVE_OUTPUT_ERROR_CODE
+              ? terminal
+              : terminal && repetitionGuard?.check(terminal, committedContentCount);
+          if (stoppedTerminal) {
+            modelAbort.abort(new Error(REPETITIVE_OUTPUT_ERROR_MESSAGE));
+          }
+          // Classify first: repetition drains admitted tools even in a provider error snapshot.
+          abortFailedResponse(stoppedTerminal ?? terminal);
+          const providerResult = await response.result();
+          const stopped =
+            stoppedTerminal ?? repetitionGuard?.check(providerResult, committedContentCount);
+          if (stopped) {
+            modelAbort.abort(new Error(REPETITIVE_OUTPUT_ERROR_MESSAGE));
+          }
+          const result = stopped ? { ...stopped, usage: providerResult.usage } : providerResult;
           abortFailedResponse(result);
           const outputLimit = isResponsesOutputLimitToolCallError(result);
           if (outputLimit) {
@@ -429,9 +513,37 @@ export async function streamAgentResponse(
       },
       runtime,
     );
+  } catch (error) {
+    responseFailure = { error };
+    throw error;
   } finally {
     executionAbort.abort(new Error("Model response closed"));
     await executions;
-    await steering.finish();
+    if (executionFailure) {
+      responseFailure = mergeToolExecutionFailure(responseFailure, executionFailure.error);
+    }
+    if (responseFailure) {
+      for (const batch of batches) {
+        if (batch.fatal) {
+          responseFailure = mergeToolExecutionFailure(responseFailure, batch.fatal.error);
+        }
+      }
+    }
+    try {
+      await steering.finish();
+    } catch (error) {
+      if (!responseFailure) {
+        for (const batch of batches) {
+          if (batch.fatal) {
+            responseFailure = mergeToolExecutionFailure(responseFailure, batch.fatal.error);
+          }
+        }
+      }
+      responseFailure = mergeToolExecutionFailure(responseFailure, error);
+    }
+    if (responseFailure) {
+      // oxlint-disable-next-line eslint/no-unsafe-finally -- Rethrow the primary and drained failures together.
+      throw responseFailure.error;
+    }
   }
 }

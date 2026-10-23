@@ -1,9 +1,13 @@
-import { render, type ReactiveElement } from "lit";
 import { describe, expect, it } from "vitest";
 import { updateConfigFormValue } from "../lib/config/config-draft-model.ts";
 import { createInitialConfigState } from "../lib/config/config-state-model.ts";
-import { renderAnalyzedFormFixture } from "../test-helpers/config-form-fixtures.ts";
-import { analyzeConfigSchema, type JsonSchema } from "./config-form.ts";
+import {
+  renderAnalyzedFormFixture,
+  disposeConfigFormFixture,
+} from "../test-helpers/config-form-fixtures.tsx";
+import { flush } from "../test-helpers/solid-settle.ts";
+import { analyzeConfigSchema } from "./config-form.analyze.ts";
+import type { JsonSchema } from "./config-form.shared.ts";
 import baseStyles from "../styles/base.css?inline";
 
 function mountForm(
@@ -42,7 +46,7 @@ function mountForm(
     state,
     container,
     close: () => {
-      render(null, container);
+      disposeConfigFormFixture(container);
       container.remove();
     },
   };
@@ -67,7 +71,10 @@ describe.runIf("__vitest_browser__" in globalThis)("config array row drafts", ()
         { enabled: false, values: initial },
       );
       try {
-        const inputs = () => Array.from(container.querySelectorAll<HTMLInputElement>("input"));
+        const inputs = () =>
+          Array.from(
+            container.querySelectorAll<HTMLInputElement>(".cfg-array input.settings-input"),
+          );
         const second = inputs()[1]!;
         await page.elementLocator(second).fill("x");
         expect(second.getAttribute("aria-invalid")).toBe("true");
@@ -75,7 +82,9 @@ describe.runIf("__vitest_browser__" in globalThis)("config array row drafts", ()
           second.addEventListener("blur", () => resolve(), { once: true });
         });
         const action = container.querySelector<HTMLElement>(
-          scenario === "unrelated edit" ? "wa-switch" : "button[aria-label='Remove item']",
+          scenario === "unrelated edit"
+            ? '.settings-toggle__input[role="switch"]'
+            : "button[aria-label='Remove item']",
         )!;
         await page.elementLocator(action).click();
         await blurred;
@@ -142,8 +151,8 @@ describe.runIf("__vitest_browser__" in globalThis)("config array row drafts", ()
           kind === "object"
             ? "openclaw-config-form-structured-draft"
             : "openclaw-config-form-collection-draft";
-        const draft = Array.from(container.querySelectorAll<ReactiveElement>(hostSelector)).at(-1)!;
-        await draft.updateComplete;
+        const draft = Array.from(container.querySelectorAll<HTMLElement>(hostSelector)).at(-1)!;
+        flush();
         const details = draft.querySelector("details") ?? draft.closest("details");
         if (details && !details.open) {
           await page.elementLocator(details.querySelector("summary")!).click();
@@ -237,15 +246,15 @@ describe.runIf("__vitest_browser__" in globalThis)("config collection removal fo
         ?.closest(".settings-row")
         ?.querySelector<HTMLInputElement>("input[aria-label^='Key: ']")?.value;
     try {
-      await focusRemoveControl(container, removeControls(container, "Remove entry")[1]);
+      await focusRemoveControl(container, removeControls(container, "Remove entry: beta")[0]);
       await userEvent.keyboard("{Enter}");
       expect(state.configForm).toEqual({ settings: { values: { alpha: "a", gamma: "c" } } });
-      expect(document.activeElement?.getAttribute("aria-label")).toBe("Remove entry");
+      expect(document.activeElement?.getAttribute("aria-label")).toBe("Remove entry: gamma");
       expect(focusedKey()).toBe("gamma");
 
       await userEvent.keyboard("{Enter}");
       expect(state.configForm).toEqual({ settings: { values: { alpha: "a" } } });
-      expect(document.activeElement?.getAttribute("aria-label")).toBe("Remove entry");
+      expect(document.activeElement?.getAttribute("aria-label")).toBe("Remove entry: alpha");
       expect(focusedKey()).toBe("alpha");
 
       await userEvent.keyboard("{Enter}");
@@ -299,7 +308,7 @@ describe.runIf("__vitest_browser__" in globalThis)("config collection removal fo
       "map",
       { type: "object", additionalProperties: { type: "string" } },
       { alpha: "a" },
-      "Remove entry",
+      "Remove entry: alpha",
     ],
   ] as const)(
     "keeps focus on the %s Remove control when its owner rejects the removal",

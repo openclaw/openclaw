@@ -8,6 +8,8 @@ title: "General troubleshooting"
 
 Triage front door. 2 minutes to a diagnosis, then jump to the deep page.
 
+For official OpenClaw support, visit [community.openclaw.ai](https://community.openclaw.ai/). See [Get support](/help/support) for safe diagnostics and separate bug and security reporting routes.
+
 ## First 60 seconds
 
 Run this ladder in order:
@@ -121,10 +123,10 @@ Avoid these policy shapes unless you also maintain the matching upgrade rule:
 - Freezing OpenClaw-owned plugins to one exact old version (for example, only
   `@openclaw/*@2026.5.3`).
 - Blocking by source kind alone (every npm, network, or `request.mode:
-"update"` request).
+  "update"` request).
 - Treating the policy command as optional: when `security.installPolicy` is
   enabled, a missing, slow, unreadable, or permission-blocked policy
-  executable fails closed.
+  executable blocks the install.
 - Approving versions without checking the request's `openclawVersion` against
   plugin candidate metadata.
 
@@ -250,7 +252,7 @@ Each branch is the title of an accordion below.
     - `origin not allowed` → browser `Origin` is not allowed for the Control UI gateway target.
     - `AUTH_TOKEN_MISMATCH` with `canRetryWithDeviceToken=true` → one trusted device-token retry may occur automatically, reusing the paired token's cached scopes.
     - repeated `unauthorized` after that retry → wrong token/password, auth mode mismatch, or stale paired device token.
-    - `too many failed authentication attempts (retry later)` → repeated failures from that browser `Origin` are temporarily locked out; other localhost origins use separate buckets. See [Dashboard/Control UI connectivity](/gateway/troubleshooting#dashboard-control-ui-connectivity) for the Tailscale Serve concurrent-retry nuance.
+    - `too many failed authentication attempts (retry later)` → repeated failures from that browser `Origin` are temporarily locked out; other localhost origins use separate buckets. See [Dashboard/Control UI connectivity](/gateway/troubleshooting#dashboard-control-ui-connectivity) for the Tailscale Serve concurrent-retry details.
     - `gateway connect failed:` → UI targets the wrong URL/port, or the gateway is unreachable.
 
     Deep pages: [Dashboard/Control UI connectivity](/gateway/troubleshooting#dashboard-control-ui-connectivity), [Control UI](/web/control-ui), [Authentication](/gateway/authentication)
@@ -328,9 +330,9 @@ Each branch is the title of an accordion below.
 
     - `cron: scheduler disabled; jobs will not run automatically` → cron is disabled.
     - `heartbeat skipped` reason `quiet-hours` → outside configured active hours.
-    - `heartbeat skipped` reason `empty-heartbeat-file` → heartbeat monitor scratch contains only blank, comment, header, fence, or empty-checklist scaffolding.
+    - `heartbeat skipped` reason `empty-heartbeat-file` → heartbeat monitor scratch contains only blank, comment, header, fence, or empty-checklist markup.
     - `heartbeat skipped` reason `alerts-disabled` → `showOk`, `showAlerts`, and `useIndicator` are all off.
-    - `requests-in-flight` → main lane busy; heartbeat wake deferred.
+    - `requests-in-flight` → the heartbeat's target session is busy; heartbeat wake dropped or deferred.
     - `unknown accountId` → heartbeat delivery target account does not exist.
 
     Deep pages: [Cron and heartbeat delivery](/gateway/troubleshooting#cron-and-heartbeat-delivery), [Scheduled tasks: Troubleshooting](/automation/cron-jobs#troubleshooting), [Heartbeat](/gateway/heartbeat)

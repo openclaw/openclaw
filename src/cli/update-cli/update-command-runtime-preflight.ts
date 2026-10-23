@@ -51,6 +51,8 @@ export type PackageRuntimePreflight = {
 };
 
 export async function resolvePackageRuntimePreflight(params: {
+  /** Read-only target admission before staging; activation retains capability and identity checks. */
+  engineOnly?: boolean;
   channel?: UpdateChannel;
   requestedChannel?: UpdateChannel | null;
   target?: { version: string; nodeEngine: string | null };
@@ -120,19 +122,23 @@ export async function resolvePackageRuntimePreflight(params: {
         activationRuntime?.path === (await tryRealpathOrResolve(process.execPath)));
     // Bun has its own capability contract; its emulated Node version is not an engine.
     if (currentBun || isBunRuntime(selected)) {
+      if (params.engineOnly) {
+        return ok(unchanged());
+      }
       const runtimeEnv = buildRuntimeProbeEnv(params.service?.serviceEnv ?? process.env);
       try {
         if (!activationRuntime) {
           throw captureError;
         }
         activationRuntime = { ...activationRuntime, kind: "bun", env: runtimeEnv };
-        const runtime = await resolveBunRuntimeInfo(activationRuntime.path, undefined, runtimeEnv);
+        const runtime = await resolveBunRuntimeInfo(activationRuntime.path, runtimeEnv);
         if (runtime.status === "probe-failed") {
           throw runtime.error;
         }
         if (runtime.status !== "supported") {
           throw new Error(
-            runtime.sqliteSelectionError ?? "Bun 1.4+ with WAL-reset-safe node:sqlite is required.",
+            runtime.sqliteSelectionError ??
+              "Bun 1.4.3+ with WAL-reset-safe node:sqlite is required.",
           );
         }
         // Finalization keeps the updater runtime; service recovery cannot replace it.
@@ -150,28 +156,40 @@ export async function resolvePackageRuntimePreflight(params: {
       nodeRunner: nodeRunner ? (activationRuntime?.path ?? nodeRunner) : undefined,
       timeoutMs: params.timeoutMs,
     });
-    const satisfies = runtime.failure
-      ? false
-      : nodeVersionSatisfiesEngine(runtime.version, target.nodeEngine);
+    const satisfies =
+      runtime.failure && !params.engineOnly
+        ? false
+        : nodeVersionSatisfiesEngine(runtime.version, target.nodeEngine);
     const targetVersion = target.version;
-    const unchangedRuntime = { ...unchanged(), activationRuntime, targetVersion };
-    const keepCurrentRuntime = (): Result<PackageRuntimePreflight, string> =>
-      activationRuntime ? ok(unchangedRuntime) : resultError(coerceErrorMessage(captureError));
+    const runtimeResult = (
+      capturedRuntime: PackageActivationRuntime | undefined,
+      selectedRunner = nodeRunner,
+      replacedNodeRunner?: string,
+    ): Result<PackageRuntimePreflight, string> =>
+      capturedRuntime
+        ? ok({
+            ...(selectedRunner ? { nodeRunner: selectedRunner } : {}),
+            activationRuntime: capturedRuntime,
+            ...(replacedNodeRunner ? { replacedNodeRunner } : {}),
+            targetVersion,
+          })
+        : resultError(coerceErrorMessage(captureError));
     if (satisfies === true) {
-      return keepCurrentRuntime();
+      return params.engineOnly ? ok(unchanged()) : runtimeResult(activationRuntime);
     }
     const canRefreshCurrentService =
       params.service?.running && verdict?.kind === "owned" && verdict.refreshDefinition;
-    const fallbackNodeRunner =
-      params.fallbackNodeRunner ??
-      (params.shouldRestart &&
-      !process.versions.bun &&
-      nodeRunner &&
-      (params.alreadyCurrent
-        ? canRefreshCurrentService
-        : await gatewayServiceCommandUsesRoot({ root: params.root }))
-        ? resolveNodeRunner()
-        : undefined);
+    const fallbackNodeRunner = params.engineOnly
+      ? undefined
+      : (params.fallbackNodeRunner ??
+        (params.shouldRestart &&
+        !process.versions.bun &&
+        nodeRunner &&
+        (params.alreadyCurrent
+          ? canRefreshCurrentService
+          : await gatewayServiceCommandUsesRoot({ root: params.root }))
+          ? resolveNodeRunner()
+          : undefined));
     if (nodeRunner && fallbackNodeRunner && fallbackNodeRunner !== nodeRunner) {
       const fallbackActivationRuntime = captureRuntime(fallbackNodeRunner);
       const fallbackRuntime = await resolvePackageRuntimeForPreflight({
@@ -182,21 +200,13 @@ export async function resolvePackageRuntimePreflight(params: {
         ? false
         : nodeVersionSatisfiesEngine(fallbackRuntime.version, target.nodeEngine);
       if (fallbackSatisfies === true) {
-        if (!fallbackActivationRuntime) {
-          return resultError(coerceErrorMessage(captureError));
-        }
-        return ok({
-          nodeRunner: fallbackNodeRunner,
-          activationRuntime: fallbackActivationRuntime,
-          replacedNodeRunner: nodeRunner,
-          targetVersion,
-        });
+        return runtimeResult(fallbackActivationRuntime, fallbackNodeRunner, nodeRunner);
       }
     }
     if (satisfies !== false) {
-      return keepCurrentRuntime();
+      return params.engineOnly ? ok(unchanged()) : runtimeResult(activationRuntime);
     }
-    if (params.runtimeRecovery && target.nodeEngine) {
+    if (!params.engineOnly && params.runtimeRecovery && target.nodeEngine) {
       const { resolveTargetNodeRuntime } =
         await import("./update-command-node-runtime-resolution.js");
       const recovered = await resolveTargetNodeRuntime({
@@ -207,14 +217,9 @@ export async function resolvePackageRuntimePreflight(params: {
       if (recovered) {
         const recoveredRuntime = captureRuntime(recovered);
         if (!recoveredRuntime) {
-          return resultError(coerceErrorMessage(captureError));
+          return runtimeResult(recoveredRuntime);
         }
-        return ok({
-          nodeRunner: recovered,
-          activationRuntime: recoveredRuntime,
-          replacedNodeRunner: nodeRunner ?? resolveNodeRunner(),
-          targetVersion,
-        });
+        return runtimeResult(recoveredRuntime, recovered, nodeRunner ?? resolveNodeRunner());
       }
     }
     const runtimePath = runtime.nodeRunner ?? process.execPath;
@@ -282,6 +287,10 @@ export async function resolvePackageRuntimePreflight(params: {
       : recommendation
         ? "Select a published OpenClaw version before installing it under a supported Node runtime."
         : `No Node version satisfies both this range and this updater's supported range (${SUPPORTED_NODE_VERSION_RANGE}). This candidate version cannot be run by this updater with a supported Node release; install a supported Node and select a compatible OpenClaw target.`;
+    const serviceHint =
+      params.engineOnly && nodeRunner
+        ? `Gateway service Node ${runtime.version ?? "unknown"} at ${runtimePath} requires ${target.nodeEngine}. Install ${recommendation ? `Node ${recommendation}` : "a compatible Node runtime"} and update that service definition, then retry; changing the shell's Node alone does not update the service.`
+        : undefined;
     const diagnostics = createUpdatePreflightDiagnostics({
       check: "node-runtime",
       code: "node-runtime-preflight",
@@ -294,7 +303,7 @@ export async function resolvePackageRuntimePreflight(params: {
         verdict?.kind === "owned" || verdict?.kind === "unresolved"
           ? await tryRealpathOrResolve(verdict.root)
           : undefined,
-      remedy: [runtime.failure, upgrade].filter(Boolean).join("\n"),
+      remedy: [runtime.failure, upgrade, serviceHint].filter(Boolean).join("\n"),
     });
     return {
       ...(recoverySteps ? { recoverySteps } : {}),

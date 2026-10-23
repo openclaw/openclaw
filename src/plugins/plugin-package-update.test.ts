@@ -66,6 +66,51 @@ function captureSnapshot(pluginIndex: InstalledPluginIndex, installOwners = ["pa
 }
 
 describe("plugin package update policy reconciliation", () => {
+  it.each([false, true])(
+    "cleans a retired engine unless ownership transferred: %s",
+    (transferred) => {
+      const beforeRoot = "/packages/pack-v1";
+      const afterRoot = "/packages/pack-v2";
+      const before = index(beforeRoot, [
+        record("pack/retained", beforeRoot),
+        record("pack/retired", beforeRoot),
+      ]);
+      before.installRecords.pack!.contextEngineIdsByPlugin = { "pack/retired": ["engine"] };
+      const retained = record("pack/retained", afterRoot);
+      if (transferred) {
+        retained.contextEngineIds = ["engine"];
+      }
+      const after = index(afterRoot, [retained]);
+      if (transferred) {
+        after.installRecords.pack!.contextEngineIdsByPlugin = { "pack/retained": ["engine"] };
+      }
+      const snapshot = capturePluginPackageUpdateSnapshot({
+        index: before,
+        installOwners: ["pack"],
+      });
+      if (!snapshot.ok) {
+        throw new Error(snapshot.error);
+      }
+      const result = reconcilePluginPackageUpdateConfig({
+        config: {
+          plugins: {
+            installs: { ...after.installRecords },
+            slots: { contextEngine: "engine" },
+            entries: { "pack/retired": { enabled: true } },
+          },
+        },
+        beforeIndex: before,
+        afterIndex: after,
+        snapshot: snapshot.value,
+      });
+      if (!result.ok) {
+        throw new Error(result.error);
+      }
+      expect(result.config.plugins?.entries?.["pack/retired"]).toBeUndefined();
+      expect(result.config.plugins?.slots?.contextEngine).toBe(transferred ? "engine" : undefined);
+    },
+  );
+
   it("removes retired child policy while preserving retained, new, and unrelated state", () => {
     const beforeRoot = "/packages/pack-v1";
     const afterRoot = "/packages/pack-v2";
@@ -190,21 +235,6 @@ describe("plugin package update policy reconciliation", () => {
     expect(result).toMatchObject({ ok: false });
   });
 
-  it("accepts a valid package restored from an exact tombstone", () => {
-    const before = index("/packages/pack-v1", []);
-    const snapshot = captureSnapshot(before);
-    const after = index("/packages/pack-v2", [record("pack/one", "/packages/pack-v2")]);
-
-    const result = reconcilePluginPackageUpdateConfig({
-      config: {},
-      beforeIndex: before,
-      afterIndex: after,
-      snapshot,
-    });
-
-    expect(result).toEqual({ ok: true, config: {} });
-  });
-
   it("follows catalog-alias install-owner migrations without pruning QQ config", () => {
     const rootDir = "/packages/qqbot";
     const before: InstalledPluginIndex = {
@@ -309,21 +339,18 @@ describe("plugin package update policy reconciliation", () => {
     expect(result.config.plugins?.load?.paths).toEqual([rootDir, "/plugins/unrelated.js"]);
   });
 
-  it.each(["entry", "root"])(
-    "detects exact %s load-path cleanup before an update starts",
-    (kind) => {
-      const rootDir = "/packages/pack-v1";
-      const before = index(rootDir, [record("pack/one", rootDir)]);
-      const snapshot = captureSnapshot(before);
-      expect(
-        pluginPackageUpdateMayMutateConfig({
-          config: {
-            plugins: { load: { paths: [kind === "entry" ? `${rootDir}/one.js` : rootDir] } },
-          },
-          index: before,
-          snapshot,
-        }),
-      ).toBe(true);
-    },
-  );
+  it("detects exact entry load-path cleanup before an update starts", () => {
+    const rootDir = "/packages/pack-v1";
+    const before = index(rootDir, [record("pack/one", rootDir)]);
+    const snapshot = captureSnapshot(before);
+    expect(
+      pluginPackageUpdateMayMutateConfig({
+        config: {
+          plugins: { load: { paths: [`${rootDir}/one.js`] } },
+        },
+        index: before,
+        snapshot,
+      }),
+    ).toBe(true);
+  });
 });

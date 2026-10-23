@@ -1,35 +1,45 @@
 import { toUSVString } from "node:util";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import { executeSqliteQuerySync, sqliteStringSet } from "../infra/kysely-sync.js";
+import { jsonArrayTextElement } from "../infra/database-engine/json-values.js";
 import {
+  createSqliteQueryCache,
+  executeSqliteQuerySync,
+  prepareSqliteQuerySync,
+  sqliteStringSet,
+  sqliteStringSetEntries,
+} from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import {
+  assertPluginStateKey,
   createPluginStateError,
   getPluginStateKysely,
   selectPluginStateEntriesInKeyRange,
+  selectLivePluginStateRows,
   iteratePluginStateEntries,
   parseStoredJson,
   rowToEntry,
   type PluginStateDatabase,
+  type PluginStateReadRow,
 } from "./plugin-state-store.kernel.js";
 import {
   PluginStateStoreError,
   type PluginStateEntry,
-  type PluginStateKeyRange,
+  type PluginStateKeyRangeParams,
 } from "./plugin-state-store.types.js";
 
 export function lookupPluginStateEntries(
   store: PluginStateDatabase,
   params: { pluginId: string; namespace: string; keys: readonly string[] },
 ): Array<Result<unknown, PluginStateStoreError>> {
+  for (const key of params.keys) {
+    assertPluginStateKey(store.db, key, "lookup");
+  }
   const now = Date.now();
   const rows = executeSqliteQuerySync(
     store.db,
-    getPluginStateKysely(store.db)
-      .selectFrom("plugin_state_entries")
+    selectLivePluginStateRows(store.db, { ...params, now })
       .select(["entry_key", "value_json"])
-      .where("plugin_id", "=", params.pluginId)
-      .where("namespace", "=", params.namespace)
-      .where("entry_key", "in", sqliteStringSet(params.keys))
-      .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", now)])),
+      .where("entry_key", "in", sqliteStringSet(params.keys)),
   ).rows;
   const values = new Map(rows.map((row) => [row.entry_key, row.value_json]));
   return params.keys.map((key): Result<unknown, PluginStateStoreError> => {
@@ -71,11 +81,6 @@ export function listPluginStateEntries(
   return entries;
 }
 
-export type PluginStateKeyRangeParams = {
-  pluginId: string;
-  namespace: string;
-} & PluginStateKeyRange;
-
 export function validatePluginStateKeyRange(params: PluginStateKeyRangeParams): void {
   if (!Number.isSafeInteger(params.limit) || params.limit < 1) {
     throw createPluginStateError({
@@ -113,4 +118,62 @@ export function listPluginStateEntriesInKeyRange(
     order: params.order ?? "asc",
     now: Date.now(),
   }).map((row) => rowToEntry(row, "entries", store.path));
+}
+
+type PluginStateBatchParams = { pluginId: string; entriesJson: string; now: number };
+const pluginStateBatchQuery = createSqliteQueryCache((db: EngineConnection) =>
+  prepareSqliteQuerySync<PluginStateBatchParams, PluginStateReadRow & { position: number }>(
+    db,
+    (parameter) =>
+      getPluginStateKysely(db)
+        .selectFrom(sqliteStringSetEntries(parameter((value) => value.entriesJson)).as("requested"))
+        // Keep requested keys outermost so each row seeks the complete primary key.
+        .crossJoin("plugin_state_entries")
+        .where(
+          "plugin_id",
+          "=",
+          parameter((value) => value.pluginId),
+        )
+        .where((eb) => eb("namespace", "=", jsonArrayTextElement(db, eb.ref("requested.value"), 0)))
+        .where((eb) => eb("entry_key", "=", jsonArrayTextElement(db, eb.ref("requested.value"), 1)))
+        .select([
+          "requested.key as position",
+          "entry_key",
+          "value_json",
+          "created_at",
+          "expires_at",
+        ])
+        .where((eb) =>
+          eb.or([
+            eb("expires_at", "is", null),
+            eb(
+              "expires_at",
+              ">",
+              parameter((value) => value.now),
+            ),
+          ]),
+        ),
+  ),
+);
+
+export function selectPluginStateBatchRows(
+  store: PluginStateDatabase,
+  entries: readonly { pluginId: string; namespace: string; key: string }[],
+  now: number,
+): Array<PluginStateReadRow | undefined> {
+  const first = entries[0];
+  if (!first) {
+    return [];
+  }
+  for (const entry of entries) {
+    assertPluginStateKey(store.db, entry.key, "lookup");
+  }
+  const rows = new Map(
+    pluginStateBatchQuery(store.db)({
+      pluginId: first.pluginId,
+      entriesJson: JSON.stringify(entries.map(({ namespace, key }) => [namespace, key])),
+      now,
+    }).rows.map((row) => [row.position, row]),
+  );
+  return entries.map((_, index) => rows.get(index));
 }

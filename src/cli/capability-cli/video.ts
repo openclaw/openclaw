@@ -4,11 +4,14 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { extensionForMime, normalizeMimeType } from "@openclaw/media-core/mime";
-import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  parseStrictFiniteNumber,
+  parseStrictPositiveInteger,
+} from "@openclaw/normalization-core/number-coercion";
 import type { Command } from "commander";
-import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEnumOptionParser } from "../../shared/enum-option.js";
+import { positiveDurationError } from "../../shared/positive-duration.js";
+import { registerMediaUnderstandingCommand } from "./media-understanding-command.js";
 import type { CapabilityEnvelope } from "./metadata.js";
 import { formatEnvelopeForText } from "./output.js";
 import { registerLocalProvidersCommand, runCapabilityCommand } from "./providers-command.js";
@@ -17,55 +20,6 @@ const GENERATED_VIDEO_DOWNLOAD_TIMEOUT_MS = 120_000;
 
 const parseVideoOption = createEnumOptionParser();
 const VIDEO_RESOLUTIONS = ["360P", "480P", "540P", "720P", "768P", "1080P"] as const;
-
-async function fetchGeneratedVideoDownload(params: {
-  cfg: OpenClawConfig;
-  provider: string;
-  url: string;
-}) {
-  const { assertOkOrThrowHttpError, assertProviderBinaryResponseContent } =
-    await import("../../agents/provider-http-errors.js");
-  const {
-    fetchWithTimeoutGuarded,
-    resolveProviderHttpRequestConfig,
-    sanitizeConfiguredModelProviderRequest,
-  } = await import("../../plugin-sdk/provider-http.js");
-  const providerConfig = params.cfg.models?.providers?.[params.provider];
-  const { allowPrivateNetwork, dispatcherPolicy } = resolveProviderHttpRequestConfig({
-    baseUrl: params.url,
-    defaultBaseUrl: params.url,
-    request: sanitizeConfiguredModelProviderRequest(providerConfig?.request),
-    provider: params.provider,
-    capability: "video",
-    transport: "http",
-  });
-  const result = await fetchWithTimeoutGuarded(
-    params.url,
-    { method: "GET" },
-    GENERATED_VIDEO_DOWNLOAD_TIMEOUT_MS,
-    fetch,
-    {
-      ...(allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
-      ...(dispatcherPolicy ? { dispatcherPolicy } : {}),
-      auditContext: `${params.provider}-generated-video-download`,
-    },
-  );
-  try {
-    await assertOkOrThrowHttpError(
-      result.response,
-      `${params.provider} generated video download failed`,
-    );
-    assertProviderBinaryResponseContent(
-      result.response,
-      `${params.provider} generated video download`,
-      "video",
-    );
-    return result;
-  } catch (error) {
-    await result.release();
-    throw error;
-  }
-}
 
 export function registerVideoCapabilityCommands(capability: Command): void {
   const videoCommand = capability
@@ -105,8 +59,12 @@ export function registerVideoCapabilityCommands(capability: Command): void {
         const output = opts.output as string | undefined;
         const resolution = parseVideoOption(opts.resolution, VIDEO_RESOLUTIONS, "video resolution");
         const durationSeconds = parseStrictFiniteNumber(opts.duration);
-        if (opts.duration !== undefined && durationSeconds === undefined) {
-          throw new Error("--duration must be a finite number");
+        if (
+          opts.duration !== undefined &&
+          (durationSeconds === undefined ||
+            parseStrictPositiveInteger(Math.round(durationSeconds)) === undefined)
+        ) {
+          throw positiveDurationError("--duration", "s");
         }
         const timeoutMs = parseOptionalTimeoutMs(opts.timeoutMs);
         const { getModelsCommandSecretTargetIds } = await import("../command-secret-targets.js");
@@ -143,13 +101,46 @@ export function registerVideoCapabilityCommands(capability: Command): void {
 
             let videoBuffer = video.buffer;
             if (!videoBuffer && video.url) {
-              const download = await fetchGeneratedVideoDownload({
-                cfg,
-                provider: result.provider,
-                url: video.url,
+              const downloadProvider = result.provider;
+              const downloadUrl = video.url;
+              const { assertOkOrThrowHttpError, assertProviderBinaryResponseContent } =
+                await import("../../agents/provider-http-errors.js");
+              const {
+                fetchWithTimeoutGuarded,
+                resolveProviderHttpRequestConfig,
+                sanitizeConfiguredModelProviderRequest,
+              } = await import("../../plugin-sdk/provider-http.js");
+              const providerConfig = cfg.models?.providers?.[downloadProvider];
+              const { allowPrivateNetwork, dispatcherPolicy } = resolveProviderHttpRequestConfig({
+                baseUrl: downloadUrl,
+                defaultBaseUrl: downloadUrl,
+                request: sanitizeConfiguredModelProviderRequest(providerConfig?.request),
+                provider: downloadProvider,
+                capability: "video",
+                transport: "http",
               });
-              const response = download.response;
+              const download = await fetchWithTimeoutGuarded(
+                downloadUrl,
+                { method: "GET" },
+                GENERATED_VIDEO_DOWNLOAD_TIMEOUT_MS,
+                fetch,
+                {
+                  ...(allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
+                  ...(dispatcherPolicy ? { dispatcherPolicy } : {}),
+                  auditContext: `${downloadProvider}-generated-video-download`,
+                },
+              );
               try {
+                await assertOkOrThrowHttpError(
+                  download.response,
+                  `${downloadProvider} generated video download failed`,
+                );
+                assertProviderBinaryResponseContent(
+                  download.response,
+                  `${downloadProvider} generated video download`,
+                  "video",
+                );
+                const response = download.response;
                 if (output && response.body) {
                   const mimeType = normalizeMimeType(video.mimeType);
                   const ext =
@@ -216,93 +207,22 @@ export function registerVideoCapabilityCommands(capability: Command): void {
           model: result.model,
           attempts: result.attempts,
           outputs,
+          ignoredOverrides: result.ignoredOverrides,
         } satisfies CapabilityEnvelope;
       }),
     );
 
-  videoCommand
-    .command("describe")
-    .description("Describe one video file")
-    .requiredOption("--file <path>", "Video file")
-    .option("--agent <id>", "Agent whose model and auth state should be used")
-    .option("--model <provider/model>", "Model override")
-    .option("--json", "Output JSON", false)
-    .action((opts, command) =>
-      runCapabilityCommand(opts.json, formatEnvelopeForText, async () => {
-        const {
-          requireProviderModelOverride,
-          resolveLocalCapabilityAgent,
-          resolveCapabilityAgentOption,
-        } = await import("./shared.js");
-        const file = String(opts.file);
-        const agent = resolveCapabilityAgentOption(command, opts.agent);
-        const { getModelsCommandSecretTargetIds } = await import("../command-secret-targets.js");
-        const { describeVideoFile } = await import("../../media-understanding/runtime.js");
-        const { cfg, agentId, agentDir } = await resolveLocalCapabilityAgent({
-          commandName: "infer video.describe",
-          targetIds: getModelsCommandSecretTargetIds(),
-          agent,
-          surface: "infer video describe",
-        });
-        const activeModel = requireProviderModelOverride(opts.model as string | undefined);
-        const result = await describeVideoFile({
-          filePath: path.resolve(file),
-          cfg,
-          agentId,
-          agentDir,
-          activeModel,
-        });
-        if (!result.text) {
-          throw new Error(`No description returned for video: ${path.resolve(file)}`);
-        }
-        return {
-          ok: true,
-          capability: "video.describe",
-          transport: "local" as const,
-          provider: result.provider,
-          model: result.model,
-          attempts: [],
-          outputs: [{ path: path.resolve(file), text: result.text, kind: "video.description" }],
-        } satisfies CapabilityEnvelope;
-      }),
-    );
+  registerMediaUnderstandingCommand(videoCommand, "video");
 
   registerLocalProvidersCommand(
     videoCommand,
     "List video generation and description providers",
     async (cfg, agentId) => {
-      const { providerHasGenericConfig } = await import("./shared.js");
-      const { resolveModelRefOverride } = await import("../../shared/model-ref-override.js");
-      const { listRuntimeVideoGenerationProviders } =
-        await import("../../video-generation/runtime.js");
-      const { buildMediaUnderstandingRegistry } =
-        await import("../../media-understanding/provider-registry.js");
-      const selectedGenerationProvider = resolveModelRefOverride(
-        resolveAgentModelPrimaryValue(cfg.agents?.defaults?.mediaModels?.video),
-      ).provider;
+      const { listGenerationProviders, listUnderstandingProviders } =
+        await import("./media-providers.js");
       return {
-        generation: listRuntimeVideoGenerationProviders({ config: cfg }).map((provider) => ({
-          available: true,
-          configured:
-            selectedGenerationProvider === provider.id ||
-            providerHasGenericConfig({ cfg, providerId: provider.id, agentId }),
-          selected: selectedGenerationProvider === provider.id,
-          id: provider.id,
-          label: provider.label,
-          defaultModel: provider.defaultModel,
-          models: provider.models ?? [],
-          capabilities: provider.capabilities,
-        })),
-        description: [...buildMediaUnderstandingRegistry(undefined, cfg).values()]
-          .filter((provider) => provider.capabilities?.includes("video"))
-          .map((provider) => ({
-            available: true,
-            configured: providerHasGenericConfig({ cfg, providerId: provider.id, agentId }),
-            selected: false,
-            id: provider.id,
-            capabilities: provider.capabilities,
-            defaultModels: provider.defaultModels,
-          })),
+        generation: await listGenerationProviders("video", cfg, agentId),
+        description: await listUnderstandingProviders("video", cfg, agentId),
       };
     },
   );

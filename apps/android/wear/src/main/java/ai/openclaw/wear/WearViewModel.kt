@@ -2030,27 +2030,15 @@ internal fun Throwable.toWearConversationFailure(): WearConversationFailure =
 
 internal fun wearConversationFailureForConnection(payload: JsonObject?): WearConversationFailure? {
   if (payload.boolean("connected") == true) return null
-  return when (WearConnectionFailure.fromWireValue(payload.string("failure"))) {
-    WearConnectionFailure.Incompatible -> {
-      WearConversationFailure.INCOMPATIBLE
-    }
-
-    WearConnectionFailure.GatewayOffline -> {
-      WearConversationFailure.GATEWAY_OFFLINE
-    }
-
-    null -> {
-      if (payload.string("status")?.contains("update", ignoreCase = true) == true) {
-        // Older protocol-v1 phones only sent status text for incompatibility.
-        WearConversationFailure.INCOMPATIBLE
-      } else {
-        WearConversationFailure.GATEWAY_OFFLINE
-      }
-    }
-  }
+  val failure = WearConnectionFailure.fromWireValue(payload.string("failure"))
+  // Older protocol-v1 phones only sent status text for incompatibility.
+  val incompatible =
+    failure == WearConnectionFailure.Incompatible ||
+      (failure == null && payload.string("status")?.contains("update", ignoreCase = true) == true)
+  return if (incompatible) WearConversationFailure.INCOMPATIBLE else WearConversationFailure.GATEWAY_OFFLINE
 }
 
-private fun Throwable.isConnectivityFailure(): Boolean = this is WearProxyException && code in setOf("phone_unavailable", "unavailable", "timeout")
+private fun Throwable.isConnectivityFailure(): Boolean = toWearConversationFailure() == WearConversationFailure.PHONE_UNAVAILABLE
 
 private const val MAX_TRANSCRIPT_MESSAGES = 20
 private const val MAX_STREAM_CODE_POINTS = 2_000

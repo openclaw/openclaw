@@ -468,9 +468,7 @@ internal class WearEventSourceTracker {
   }
 }
 
-internal class WearEventResyncBuffer(
-  private val capacity: Int = MAX_BUFFERED_EVENTS,
-) {
+internal class WearEventResyncBuffer {
   // The response watermark splits events already captured by a snapshot from
   // later events that raced its delivery. A bounded overflow reappears as a gap.
   private var events: LinkedHashMap<Pair<String?, Long>, WearInboundEvent>? = null
@@ -490,7 +488,7 @@ internal class WearEventResyncBuffer(
   fun append(event: WearInboundEvent) {
     val buffered = events ?: return
     buffered[event.streamId to event.sequence] = event
-    while (buffered.size > capacity) buffered.remove(buffered.keys.first())
+    while (buffered.size > MAX_BUFFERED_EVENTS) buffered.remove(buffered.keys.first())
   }
 
   @Synchronized

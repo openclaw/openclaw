@@ -1,3 +1,4 @@
+import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
 import { toErrorObject } from "../../../infra/errors.js";
 
 /** Marks AbortErrors produced by abortable() so provider aborts stay retryable. */
@@ -87,21 +88,21 @@ export function abortable<T>(signal: AbortSignal, promise: Promise<T>): Promise<
     void promise.catch(() => {});
     return Promise.reject(createAbortableError(signal));
   }
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = () => {
-      signal.removeEventListener("abort", onAbort);
-      reject(createAbortableError(signal));
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-    promise.then(
-      (value) => {
-        signal.removeEventListener("abort", onAbort);
-        resolve(value);
-      },
-      (err: unknown) => {
-        signal.removeEventListener("abort", onAbort);
-        reject(toErrorObject(err, "Non-Error rejection"));
-      },
-    );
-  });
+  return withAbortListener(signal, () => promise, createAbortableError);
+}
+
+/** Start work under an already-checked signal, preserving the caller's abort error contract. */
+export function withAbortListener<T>(
+  signal: AbortSignal,
+  start: () => Promise<T>,
+  createError: (signal: AbortSignal) => Error,
+): Promise<T> {
+  return racePromiseWithAbortSignal(
+    () =>
+      start().catch((err: unknown) => {
+        throw toErrorObject(err, "Non-Error rejection");
+      }),
+    signal,
+    createError,
+  );
 }

@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { TextDecoder } from "node:util";
 import type { Root } from "@openclaw/fs-safe";
@@ -10,6 +10,7 @@ import { pinDirectory, requireDirectorySync } from "./directory-durability.js";
 import { formatErrorMessage } from "./errors.js";
 import {
   LegacyMigrationSourceClaim,
+  readLegacyMigrationSourceSnapshot,
   type LegacyMigrationSourceSnapshot as SourceSnapshot,
 } from "./state-migrations.source-snapshot.js";
 import type { LegacyWorkspaceStateSource } from "./state-migrations.workspace-setup.types.js";
@@ -20,31 +21,23 @@ const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
 
 async function readBoundedRegularFile(params: {
   sourceRoot: Root;
-  relativePath: string;
+  stateDir: string;
   sourcePath: string;
   maxBytes: number;
 }): Promise<SourceSnapshot> {
-  const { buffer, stat } = await params.sourceRoot.read(params.relativePath, {
-    hardlinks: "reject",
-    symlinks: "reject",
+  const snapshot = await readLegacyMigrationSourceSnapshot({
+    stateRoot: params.sourceRoot,
+    stateDir: params.stateDir,
+    sourcePath: params.sourcePath,
     maxBytes: params.maxBytes,
+    label: "workspace",
   });
-  let raw: string;
   try {
-    raw = utf8Decoder.decode(buffer);
+    snapshot.raw = utf8Decoder.decode(snapshot.buffer);
   } catch {
     throw new Error("legacy workspace source is not valid UTF-8");
   }
-  return {
-    sourcePath: params.sourcePath,
-    dev: stat.dev,
-    ino: stat.ino,
-    mtimeMs: stat.mtimeMs,
-    sha256: createHash("sha256").update(buffer).digest("hex"),
-    size: buffer.length,
-    raw,
-    buffer,
-  };
+  return snapshot;
 }
 
 export async function archiveWorkspaceSetupSource(
@@ -74,7 +67,7 @@ export async function archiveWorkspaceSetupSource(
   }
   const archived = await readBoundedRegularFile({
     sourceRoot,
-    relativePath,
+    stateDir: source.rootDir,
     sourcePath: archivePath,
     maxBytes: SETUP_MAX_BYTES,
   });
@@ -98,10 +91,7 @@ export function createLegacySourceClaim(
     readSnapshot: (sourcePath) =>
       readBoundedRegularFile({
         sourceRoot,
-        relativePath:
-          sourcePath === source.sourcePath
-            ? source.relativePath
-            : `${source.relativePath}${CLAIM_SUFFIX}`,
+        stateDir: source.rootDir,
         sourcePath,
         maxBytes:
           source.kind === "setup" ? SETUP_MAX_BYTES : LEGACY_WORKSPACE_ATTESTATION_MAX_BYTES,

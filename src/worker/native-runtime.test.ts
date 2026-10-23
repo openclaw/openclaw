@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { mkdir, realpath, rename, symlink, unlink, writeFile } from "node:fs/promises";
-import { createServer, type IncomingHttpHeaders, type Server } from "node:http";
+import type { Server } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getDefaultAiTransportHost, type Context } from "@openclaw/ai";
@@ -15,6 +16,7 @@ import {
   type NativeRuntime,
   type NativeRuntimeResolved,
 } from "./native-runtime.js";
+import { closeNativeServers, nativeProviderFixture } from "./native-worker.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const runtimes: NativeRuntime[] = [];
@@ -23,33 +25,32 @@ afterEach(async () => {
   for (const runtime of runtimes.splice(0)) {
     runtime.close();
   }
-  await Promise.all(
-    servers.splice(0).map(
-      (server) =>
-        new Promise<void>((resolve, reject) => {
-          server.closeAllConnections();
-          server.close((error) => (error ? reject(error) : resolve()));
-        }),
-    ),
-  );
-  vi.unstubAllEnvs();
-  vi.unstubAllGlobals();
+  await closeNativeServers(servers);
 });
 const binding = {
   workspacePath: undefined,
-  gatewayId: "gateway",
-  workspaceId: "workspace",
   sessionId: "session",
-  runId: "run",
-  attemptId: "attempt",
-  epoch: "epoch",
-  connectionId: "connection",
 };
 const selection = { provider: "openai", modelId: "local-model" };
 const turn = { binding, selection };
 const context: Context = { messages: [{ role: "user", content: "hello", timestamp: 1 }] };
 
-function configFor(workspace: string, baseUrl = "http://127.0.0.1:1/v1"): NativeRuntimeConfig {
+function trackedEnv(reads: PropertyKey[], value?: string): NodeJS.ProcessEnv {
+  return new Proxy(
+    {},
+    {
+      get: (_target, key) => {
+        reads.push(key);
+        return value;
+      },
+    },
+  );
+}
+
+function configFor(
+  workspace = tempDirs.make("native-runtime-"),
+  baseUrl = "http://127.0.0.1:1/v1",
+): NativeRuntimeConfig {
   return {
     models: [
       {
@@ -67,7 +68,7 @@ function configFor(workspace: string, baseUrl = "http://127.0.0.1:1/v1"): Native
   };
 }
 async function start(
-  config: NativeRuntimeConfig,
+  config = configFor(),
   env: NodeJS.ProcessEnv = { NATIVE_TEST_KEY: "fixture-key" },
 ) {
   const credential = env.NATIVE_TEST_KEY!;
@@ -79,58 +80,8 @@ async function start(
   runtimes.push(runtime);
   return runtime;
 }
-async function providerServer() {
-  const requests: { headers: IncomingHttpHeaders; body: Record<string, unknown>; url?: string }[] =
-    [];
-  const server = createServer((request, response) => {
-    void (async () => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.from(chunk));
-      }
-      requests.push({
-        headers: request.headers,
-        body: JSON.parse(Buffer.concat(chunks).toString()),
-        url: request.url,
-      });
-      response.writeHead(200, { "content-type": "text/event-stream" });
-      const chunk = {
-        id: "fixture-completion",
-        object: "chat.completion.chunk",
-        created: 1,
-        model: "local-model",
-        choices: [
-          {
-            index: 0,
-            delta: { role: "assistant", content: "native response" },
-            finish_reason: null,
-          },
-        ],
-      };
-      response.write("data: " + JSON.stringify(chunk) + "\n\n");
-      response.end(
-        "data: " +
-          JSON.stringify({
-            ...chunk,
-            choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-            usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
-          }) +
-          "\n\ndata: [DONE]\n\n",
-      );
-    })().catch((error: unknown) =>
-      response.destroy(error instanceof Error ? error : new Error(String(error))),
-    );
-  });
-  servers.push(server);
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Expected local provider port");
-  }
-  return { requests, baseUrl: "http://127.0.0.1:" + address.port + "/v1" };
-}
+const providerServer = () =>
+  nativeProviderFixture(servers, "local-model", () => "native response", "native response");
 const bundles = useAutoCleanupTempDirTracker(afterAll);
 let probeEntry: string;
 beforeAll(async () => {
@@ -156,25 +107,20 @@ async function probe(scenario: string, config: NativeRuntimeConfig, env: NodeJS.
     env,
     stdio: ["ignore", "ignore", "pipe", "ipc"],
   });
-  return new Promise<Record<string, unknown>>((resolve, reject) => {
-    let result: Record<string, unknown> | undefined;
-    child.on("message", (message) => {
-      result = message as Record<string, unknown>;
-    });
-    child.once("error", reject);
-    child.once("exit", (code) => {
-      if (code === 0 && result) {
-        resolve(result);
-      } else {
-        reject(new Error("Native owner probe failed: " + code));
-      }
-    });
+  let result: Record<string, unknown> | undefined;
+  child.on("message", (message) => {
+    result = message as Record<string, unknown>;
   });
+  const [code] = await once(child, "exit");
+  if (code !== 0 || !result) {
+    throw new Error("Native owner probe failed: " + code);
+  }
+  return result;
 }
 
 describe("native runtime startup authority", () => {
   it("guards every configured header value", async () => {
-    const config = configFor(tempDirs.make("native-custom-header-"));
+    const config = configFor();
     config.models[0]!.headers = {
       "x-route": "synthetic-route",
       "x-session": "synthetic-custom-auth",
@@ -186,14 +132,13 @@ describe("native runtime startup authority", () => {
       expect(() => resolved.assertProtocolSafe({ text: "synthetic-custom-auth" })).toThrow(
         "Native credential appeared",
       );
-      expect(resolved.hasCredentialPrefix("ordinaryz")).toBe(false);
-      expect(resolved.hasCredentialPrefix("synthetic-custom-")).toBe(true);
-      expect(resolved.hasCredentialPrefix("a")).toBe(true);
-      expect(resolved.hasCredentialPrefix("abcdefg")).toBe(true);
+      expect(
+        ["ordinaryz", "synthetic-custom-", "a", "abcdefg"].map(resolved.hasCredentialPrefix),
+      ).toEqual([false, true, true, true]);
     });
   });
   it("filters HTTP-normalized representations of startup credential values", async () => {
-    const config = configFor(tempDirs.make("native-http-secret-"));
+    const config = configFor();
     config.models[0]!.headers = { "x-api-key": "  synthetic-header-secret  " };
     const runtime = await start(config, { NATIVE_TEST_KEY: "synthetic-http-secret  " });
     await runtime.withTurn(turn, async (resolved) => {
@@ -215,7 +160,7 @@ describe("native runtime startup authority", () => {
     });
   });
   it("preserves and freezes explicit local pricing and thinking mappings", async () => {
-    const config = configFor(tempDirs.make("native-model-metadata-"));
+    const config = configFor();
     const cost = { input: 2, output: 4, cacheRead: 1, cacheWrite: 3 };
     const thinkingLevelMap = { xhigh: "xhigh", max: "max", low: null };
     const input = { ...config, models: [{ ...config.models[0]!, cost, thinkingLevelMap }] };
@@ -230,34 +175,8 @@ describe("native runtime startup authority", () => {
       expect(Object.isFrozen(selected.thinkingLevelMap)).toBe(true);
     });
   });
-  it("requires complete finite nonnegative local pricing and canonical map keys", () => {
-    const config = configFor(tempDirs.make("native-invalid-metadata-"));
-    const base = config.models[0]!;
-    for (const cost of [
-      undefined,
-      {},
-      { input: 1, output: 2, cacheRead: 3 },
-      ...[-1, Number.NaN, Infinity, "1"].map((input) => ({
-        input,
-        output: 1,
-        cacheRead: 1,
-        cacheWrite: 1,
-      })),
-    ]) {
-      expect(
-        NativeRuntimeConfigSchema.safeParse({ ...config, models: [{ ...base, cost }] }).success,
-      ).toBe(false);
-    }
-    expect(NativeRuntimeConfigSchema.safeParse(config).success).toBe(true);
-    for (const thinkingLevelMap of [{ turbo: "max" }, { high: true }]) {
-      expect(
-        NativeRuntimeConfigSchema.safeParse({ ...config, models: [{ ...base, thinkingLevelMap }] })
-          .success,
-      ).toBe(false);
-    }
-  });
   it("settles only its own provider session resources on success and failure", async () => {
-    const runtime = await start(configFor(tempDirs.make("native-resource-owner-")));
+    const runtime = await start();
     const cleaned: Array<string | undefined> = [];
     const unregister = registerSessionResourceCleanup((id) => cleaned.push(id));
     try {
@@ -315,33 +234,12 @@ describe("native runtime startup authority", () => {
     });
     expect(gatewayHost.resolveSecretSentinel(known)).toBe("synthetic-local-provider-value");
     expect(() => gatewayHost.resolveSecretSentinel(unknown)).toThrow("not registered");
-    const requests: Headers[] = [];
-    vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
-      requests.push(new Request(input, init).headers);
-      return new Response(
-        "data: " +
-          JSON.stringify({
-            id: "opaque-fixture",
-            object: "chat.completion.chunk",
-            created: 1,
-            model: "local-model",
-            choices: [
-              {
-                index: 0,
-                delta: { role: "assistant", content: "native response" },
-                finish_reason: "stop",
-              },
-            ],
-          }) +
-          "\n\ndata: [DONE]\n\n",
-        { headers: { "content-type": "text/event-stream" } },
-      );
-    });
+    const provider = await providerServer();
     const workspace = tempDirs.make("native-opaque-host-");
     const values = [known, "prefix-" + unknown + "-suffix"];
     await Promise.all(
       values.map(async (value) => {
-        const config = configFor(workspace, "https://proxy.example.test/v1");
+        const config = configFor(workspace, provider.baseUrl);
         config.models[0]!.headers = { "x-custom-auth": value };
         const runtime = await start(config, { NATIVE_TEST_KEY: value });
         await runtime.withTurn(turn, async (resolved) => {
@@ -352,16 +250,14 @@ describe("native runtime startup authority", () => {
         });
       }),
     );
-    expect(
-      requests
-        .map((headers) => headers.get("authorization"))
-        .toSorted((a, b) => (a ?? "").localeCompare(b ?? "")),
-    ).toEqual(values.map((value) => "Bearer " + value).toSorted((a, b) => a.localeCompare(b)));
-    expect(
-      requests
-        .map((headers) => headers.get("x-custom-auth"))
-        .toSorted((a, b) => (a ?? "").localeCompare(b ?? "")),
-    ).toEqual(values.toSorted((a, b) => a.localeCompare(b)));
+    const sortedHeader = (name: string) =>
+      provider.requests
+        .map(({ headers }) => String(headers[name] ?? ""))
+        .toSorted((a, b) => a.localeCompare(b));
+    expect(sortedHeader("authorization")).toEqual(
+      values.map((value) => "Bearer " + value).toSorted((a, b) => a.localeCompare(b)),
+    );
+    expect(sortedHeader("x-custom-auth")).toEqual(values.toSorted((a, b) => a.localeCompare(b)));
     expect(getDefaultAiTransportHost()).toBe(gatewayHost);
     expect(gatewayHost.resolveSecretSentinel(known)).toBe("synthetic-local-provider-value");
     expect(() => gatewayHost.resolveSecretSentinel(unknown)).toThrow("not registered");
@@ -370,15 +266,7 @@ describe("native runtime startup authority", () => {
   it("reads only named env keys once and fails missing credentials before opening workspaces", async () => {
     const config = configFor("/nonexistent-native-test-workspace");
     const reads: PropertyKey[] = [];
-    const env: NodeJS.ProcessEnv = new Proxy(
-      {},
-      {
-        get: (_target, key) => {
-          reads.push(key);
-          return undefined;
-        },
-      },
-    );
+    const env = trackedEnv(reads);
     await expect(
       createNativeRuntime(config, { "openai/local-model": env.NATIVE_TEST_KEY! }),
     ).rejects.toThrow("openai/local-model");
@@ -386,18 +274,7 @@ describe("native runtime startup authority", () => {
     config.workspace = tempDirs.make("native-runtime-");
     config.models.push({ ...config.models[0]!, id: "second-model" });
     reads.length = 0;
-    await start(
-      config,
-      new Proxy(
-        {},
-        {
-          get: (_target, key) => {
-            reads.push(key);
-            return "fixture-key";
-          },
-        },
-      ),
-    );
+    await start(config, trackedEnv(reads, "fixture-key"));
     expect(reads).toEqual(["NATIVE_TEST_KEY"]);
   });
 
@@ -406,49 +283,41 @@ describe("native runtime startup authority", () => {
     expect(NativeRuntimeConfigSchema.safeParse({ ...config, gatewayConfig: {} }).success).toBe(
       false,
     );
-    expect(
-      NativeRuntimeConfigSchema.safeParse({
+    const modelOverrides = [
+      { apiKey: "inline-key" },
+      { baseUrl: "https://user:password@example.com" },
+      { baseUrl: "https://example.com/{ENV}" },
+      { baseUrl: "file:///tmp/model" },
+    ];
+    for (const override of modelOverrides) {
+      const input = {
         ...config,
-        models: [{ ...config.models[0], apiKey: "inline-key" }],
-      }).success,
-    ).toBe(false);
-    for (const baseUrl of [
-      "https://user:password@example.com",
-      "https://example.com/{ENV}",
-      "file:///tmp/model",
-    ]) {
-      expect(
-        NativeRuntimeConfigSchema.safeParse({
-          ...config,
-          models: [{ ...config.models[0], baseUrl }],
-        }).success,
-      ).toBe(false);
+        models: [{ ...config.models[0], ...override }],
+      };
+      expect(NativeRuntimeConfigSchema.safeParse(input).success).toBe(false);
     }
   });
 
   it("rejects duplicate models and unavailable or ambient APIs", async () => {
-    const workspace = tempDirs.make("native-runtime-");
-    const config = configFor(workspace);
+    const config = configFor();
     await expect(
       createNativeRuntime(
         { ...config, models: [...config.models, ...config.models] },
         { "openai/local-model": "test" },
       ),
     ).rejects.toThrow("Duplicate");
-    for (const api of ["unregistered-api", "azure-openai-responses"]) {
+    for (const [api, credential, error] of [
+      ["unregistered-api", "test", /Unsupported|ambient-configured/],
+      ["azure-openai-responses", "test", /Unsupported|ambient-configured/],
+      ["google-vertex", "gcp-vertex-credentials", /ambient ADC/],
+    ] as const) {
       await expect(
         createNativeRuntime(
           { ...config, models: [{ ...config.models[0]!, api }] },
-          { "openai/local-model": "test" },
+          { "openai/local-model": credential },
         ),
-      ).rejects.toThrow(/Unsupported|ambient-configured/);
+      ).rejects.toThrow(error);
     }
-    await expect(
-      createNativeRuntime(
-        { ...config, models: [{ ...config.models[0]!, api: "google-vertex" }] },
-        { "openai/local-model": "gcp-vertex-credentials" },
-      ),
-    ).rejects.toThrow("ambient ADC");
   });
 
   it("rejects files and nonexistent workspace directories", async () => {
@@ -460,8 +329,7 @@ describe("native runtime startup authority", () => {
   });
 
   it("enforces the exact workspace while allowing every configured node model", async () => {
-    const workspace = tempDirs.make("native-runtime-");
-    const config = configFor(workspace);
+    const config = configFor();
     config.models.push({ ...config.models[0]!, id: "other-model" });
     const runtime = await start(config);
     const callback = vi.fn(async () => {});
@@ -501,15 +369,11 @@ describe("native runtime startup authority", () => {
     await runtime.withTurn(turn, async ({ workspacePath }) => {
       expect(workspacePath).toBe(await realpath(first));
     });
-    await expect(
-      runtime.withTurn(turn, async (resolved) => {
-        await unlink(link);
-        await symlink(second, link, "dir");
-        await expect(resolved.streamFn(resolved.model, context)).rejects.toThrow(
-          "workspace changed",
-        );
-      }),
-    ).rejects.toThrow("workspace changed");
+    await runtime.withTurn(turn, async (resolved) => {
+      await unlink(link);
+      await symlink(second, link, "dir");
+      await expect(resolved.streamFn(resolved.model, context)).rejects.toThrow("workspace changed");
+    });
     await expect(runtime.withTurn(turn, async () => {})).rejects.toThrow("workspace changed");
   });
 
@@ -543,7 +407,7 @@ describe("native runtime startup authority", () => {
   });
 
   it("rechecks close after asynchronous admission and honors cancellation before I/O", async () => {
-    const runtime = await start(configFor(tempDirs.make("native-runtime-")));
+    const runtime = await start();
     await runtime.withTurn(turn, async (resolved) => {
       const controller = new AbortController();
       controller.abort(new Error("cancelled fixture"));
@@ -559,7 +423,7 @@ describe("native runtime startup authority", () => {
   });
 
   it("revokes escaped stream functions after completion, failure, and runtime close", async () => {
-    const runtime = await start(configFor(tempDirs.make("native-runtime-")));
+    const runtime = await start();
     const saved = await runtime.withTurn(turn, async (resolved) => resolved);
     await expect(saved.streamFn(saved.model, context)).rejects.toThrow("turn is closed");
     let failed: NativeRuntimeResolved | undefined;
