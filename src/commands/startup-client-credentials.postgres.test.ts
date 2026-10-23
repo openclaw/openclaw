@@ -48,7 +48,9 @@ const missingMessage =
 let runtimeRoot: string;
 
 beforeAll(() => {
-  if (!connection) return;
+  if (!connection) {
+    return;
+  }
   installDatabaseProcessRole("cli-oneshot");
   const entry = resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli);
   runtimeRoot = createBuiltRuntime(
@@ -57,11 +59,15 @@ beforeAll(() => {
   );
 });
 afterAll(async () => {
-  if (!connection || !namespaces.size) return;
+  if (!connection || !namespaces.size) {
+    return;
+  }
   const client = new Client({ connectionString: connection });
   await client.connect();
   try {
-    for (const namespace of namespaces) await client.query(`DROP SCHEMA "${namespace}" CASCADE`);
+    for (const namespace of namespaces) {
+      await client.query(`DROP SCHEMA "${namespace}" CASCADE`);
+    }
   } finally {
     await client.end();
   }
@@ -105,7 +111,9 @@ describe.skipIf(!connection)("PostgreSQL missing credential Doctor CLI recovery"
         withEngineStoreAdmission(() => {
           const state = openOpenClawStateDatabase({ env });
           namespace = getPostgresPhysicalFacts(state.db)?.namespace;
-          if (namespace) namespaces.add(namespace);
+          if (namespace) {
+            namespaces.add(namespace);
+          }
           runSqliteImmediateTransactionSync(state.db, () => {
             state.db
               .prepare(
@@ -169,8 +177,9 @@ describe.skipIf(!connection)("PostgreSQL missing credential Doctor CLI recovery"
         },
       }),
     };
-    for (const [name, bytes] of Object.entries(retained))
+    for (const [name, bytes] of Object.entries(retained)) {
       fs.writeFileSync(path.join(legacy, name), bytes);
+    }
     fs.rmSync(path.dirname(f.local), { recursive: true });
     const refused = await doctor(f);
     expect(refused.code, refused.stderr).toBe(2);
@@ -205,8 +214,9 @@ describe.skipIf(!connection)("PostgreSQL missing credential Doctor CLI recovery"
     expect(later.code, later.stderr).toBe(0);
     expect(loadDeviceIdentityIfPresent({ env: f.env })).toEqual(replacementIdentity);
     expect(receipt(f.env)?.receipt.sharedFile).toEqual(readClientCredentialFileIdentity(f.anchor));
-    for (const [name, bytes] of Object.entries(retained))
+    for (const [name, bytes] of Object.entries(retained)) {
       expect(fs.readFileSync(path.join(legacy, name), "utf8")).toBe(bytes);
+    }
     const client = new Client({ connectionString: connection });
     await client.connect();
     try {
@@ -228,12 +238,13 @@ describe.skipIf(!connection)("PostgreSQL missing credential Doctor CLI recovery"
     "preserves the existing %s store and refusal even with opt-in",
     async (kind) => {
       const f = await bootstrap();
-      if (kind === "corrupt") fs.writeFileSync(f.local, "corrupt credential store");
-      else {
+      if (kind === "corrupt") {
+        fs.writeFileSync(f.local, "corrupt credential store");
+      } else {
         using owner = openClientCredentialCustody(f.env, { migration: true })!;
-        if (kind === "missing receipt")
+        if (kind === "missing receipt") {
           owner.transaction(() => owner.database.exec("DELETE FROM client_credential_migration"));
-        else {
+        } else {
           const stored = readClientCredentialReceipt(owner.database)!;
           stored.receipt.source!.identity = "another-store";
           owner.transaction(() =>
@@ -249,12 +260,14 @@ describe.skipIf(!connection)("PostgreSQL missing credential Doctor CLI recovery"
       expect(explicit.code, explicit.stderr).toBe(2);
       const message = JSON.parse(explicit.stdout).error.message;
       expect(message).toBe(JSON.parse(ordinary.stdout).error.message);
-      if (kind === "missing receipt")
+      if (kind === "missing receipt") {
         expect(message).toBe("Local credential receipt is missing; restore its matching backup.");
-      if (kind === "mismatched")
+      }
+      if (kind === "mismatched") {
         expect(message).toBe(
           "Local credentials do not match the shared database; restore their matched backup.",
         );
+      }
       expect(fs.readFileSync(f.local)).toEqual(before);
     },
     180_000,
