@@ -188,7 +188,9 @@ suite.define(() => {
       const initialView = await page.locator("mcp-app-view").elementHandle();
       await page.evaluate(() => {
         const view = document.querySelector("mcp-app-view");
-        if (!view) throw new Error("Pending App is missing");
+        if (!view) {
+          throw new Error("Pending App is missing");
+        }
         view.restartAfterTeardown();
         view.restartAfterTeardown();
       });
@@ -203,16 +205,22 @@ suite.define(() => {
         await page.evaluate(async () => {
           const pane = document.querySelector("openclaw-chat-pane");
           const context = pane && (Reflect.get(pane, "context") as ApplicationContext);
-          if (!context) throw new Error("Dashboard context is missing");
+          if (!context) {
+            throw new Error("Dashboard context is missing");
+          }
           await context.gateway.loadSelfProfile();
         });
       } else {
-        await page.evaluate(async (change) => {
+        await page.evaluate(async (bindingChange) => {
           const view = document.querySelector("mcp-app-view");
-          if (!view) throw new Error("Pending App is missing");
-          if (change === "session") view.sessionKey = "agent:main:replacement";
-          else if (change === "view") view.viewId = "replacement-view";
-          else {
+          if (!view) {
+            throw new Error("Pending App is missing");
+          }
+          if (bindingChange === "session") {
+            view.sessionKey = "agent:main:replacement";
+          } else if (bindingChange === "view") {
+            view.viewId = "replacement-view";
+          } else {
             await view.teardown();
             view.restartAfterTeardown();
           }
