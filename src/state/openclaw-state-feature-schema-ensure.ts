@@ -28,11 +28,19 @@ export function createOpenClawStateSchemaEnsurer(params: {
   return (options = {}) => {
     const { db } = openOpenClawStateDatabase(options);
     const runWrite = (install: (database: EngineConnection) => void) =>
-      runOpenClawStateWriteTransaction(({ db: txDb }) => install(txDb), options, {
-        operationLabel: params.operationLabel,
-      });
+      runOpenClawStateWriteTransaction(
+        ({ db: txDb }) => {
+          if (isPostgresSqlConnection(txDb)) {
+            ensureStatePostgresFragment(txDb, params.table);
+          } else {
+            install(txDb);
+          }
+        },
+        options,
+        { operationLabel: params.operationLabel },
+      );
     if (isPostgresSqlConnection(db)) {
-      runWrite((txDb) => ensureStatePostgresFragment(txDb, params.table));
+      runWrite(ensure);
     } else {
       ensure(db, runWrite);
     }
