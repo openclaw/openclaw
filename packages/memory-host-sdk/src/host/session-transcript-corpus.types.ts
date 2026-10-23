@@ -25,6 +25,8 @@ export type SessionTranscriptCorpusEntry = {
   contentRevision?: string;
   artifactKind: SessionTranscriptCorpusArtifactKind;
   sessionKey?: string;
+  /** Transcript this session rolled over from under the same session key. */
+  previousSessionId?: string;
   /** Recorded owner of a plugin-managed transcript. */
   pluginOwnerId?: string;
   storePath?: string;
