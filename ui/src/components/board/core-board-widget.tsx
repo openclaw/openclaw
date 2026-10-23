@@ -1,6 +1,7 @@
 import { dynamic } from "@solidjs/web";
 import { createSignal, Errored, lazy, Loading, onSettled, Show } from "solid-js";
 import {
+  cancelStaleChunkRecovery,
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
 } from "../../app/stale-chunk-reload.ts";
@@ -37,12 +38,13 @@ export function CoreBoardWidget(
     <Show when={activated()}>
       <Errored
         fallback={(error, reset) => (
-          <CoreBoardWidgetLoadError
-            error={error()}
-            label={props.contribution.label}
-            active={props.active}
-            reset={reset}
-          />
+          <Show when={props.active}>
+            <CoreBoardWidgetLoadError
+              error={error()}
+              label={props.contribution.label}
+              reset={reset}
+            />
+          </Show>
         )}
       >
         <Loading
@@ -59,21 +61,19 @@ export function CoreBoardWidget(
   );
 }
 
-function CoreBoardWidgetLoadError(props: {
-  error: unknown;
-  label: string;
-  active: boolean;
-  reset: () => void;
-}) {
+function CoreBoardWidgetLoadError(props: { error: unknown; label: string; reset: () => void }) {
   let connected = true;
   onSettled(() => () => {
     connected = false;
+    if (isStaleChunkImportError(props.error)) {
+      cancelStaleChunkRecovery();
+    }
   });
   const retry = async () => {
     const reloading =
       isStaleChunkImportError(props.error) &&
-      (await retryStaleChunkReloadWhenReachable({ canReload: () => connected && props.active }));
-    if (connected && props.active && !reloading) {
+      (await retryStaleChunkReloadWhenReachable({ canReload: () => connected }));
+    if (connected && !reloading) {
       props.reset();
     }
   };

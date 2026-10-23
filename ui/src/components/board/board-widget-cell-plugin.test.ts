@@ -228,12 +228,12 @@ describe("plugin board widget cells", () => {
         ),
       CHUNK_LOAD_WAIT,
     );
+    reportLoad.fail = false;
     cell.active = false;
     await cell.updateComplete;
     cell.active = true;
     await cell.updateComplete;
     expect(cell.querySelector(".lazy-view-error")).not.toBeNull();
-    reportLoad.fail = false;
     cell.querySelector<HTMLButtonElement>(".lazy-view-error__action")!.click();
     await vi.waitFor(
       () =>
