@@ -5,6 +5,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import type { EmbeddedAgentRunResult } from "../embedded-agent-runner/types.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { persistAcpTurnTranscript, persistCliTurnTranscript } from "./transcript-persistence.js";
 
@@ -88,4 +89,22 @@ it.each(["CLI", "ACP"] as const)("recovers full %s answer after a later turn", a
   expect(found?.event).toMatchObject({
     message: { ...assistantMessage(finalText), __openclaw: { runId } },
   });
+});
+
+it("persists the CLI answer instead of delivered progress sends for an optional peer-result turn", async () => {
+  const common = await createSession("Review the worker result");
+  const result = {
+    payloads: [{ text: "Starting." }, { text: "Still working." }],
+    didDeliverSourceReplyViaMessageTool: true,
+    meta: {
+      durationMs: 0,
+      finalAssistantVisibleText: "Starting.\n\nStill working.",
+      finalAssistantRawText: "The worker result is ready.",
+    },
+  } satisfies EmbeddedAgentRunResult;
+
+  await persistCliTurnTranscript({ ...common, result });
+
+  const messages = SessionManager.open(common).buildSessionContext().messages;
+  expect(messages.at(-1)).toMatchObject(assistantMessage("The worker result is ready."));
 });

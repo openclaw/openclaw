@@ -236,6 +236,14 @@ export function resolveCliTranscriptReplyText(result: EmbeddedAgentRunResult): s
   }
   const visibleText = result.meta.finalAssistantVisibleText?.trim();
   if (visibleText) {
+    // Optional peer-result turns can deliver progress through message_tool_only
+    // without attaching transcript mirrors. The delivered text is not the CLI answer.
+    if (result.didDeliverSourceReplyViaMessageTool === true) {
+      return (
+        (result.meta.finalAssistantMessageRawText ?? result.meta.finalAssistantRawText)?.trim() ??
+        ""
+      );
+    }
     return visibleText;
   }
 
