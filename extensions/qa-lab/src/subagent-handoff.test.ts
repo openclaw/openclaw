@@ -28,11 +28,13 @@ async function runHandoff({
   fault,
   childReply = "qa-sidecar",
   deliveredReply = childReply,
+  checkpoint,
   api,
 }: {
   fault?: string;
   childReply?: string;
   deliveredReply?: string;
+  checkpoint?: { customType: string; parentId?: string };
   api?: Record<string, unknown>;
 } = {}) {
   const hasFault = (name: string) => fault === name;
@@ -72,7 +74,20 @@ async function runHandoff({
         : child.childSessionKey,
     },
   });
-  const report = messageEvent("report", hasFault("other branch") ? "request" : delivery.id, reply);
+  const checkpointEntry = checkpoint
+    ? {
+        type: "custom",
+        id: "checkpoint",
+        parentId: checkpoint.parentId ?? delivery.id,
+        customType: checkpoint.customType,
+        data: {},
+      }
+    : undefined;
+  const report = messageEvent(
+    "report",
+    hasFault("other branch") ? "request" : (checkpointEntry?.id ?? delivery.id),
+    reply,
+  );
   return runLoadedScenarioFlow("subagent-handoff", {
     api: {
       randomUUID: () => "this-handoff",
@@ -106,7 +121,7 @@ async function runHandoff({
           expect(childKey).toBe(child.childSessionKey);
           const events = hasFault("parent guessed before completion")
             ? [{ ...report, parentId: "request" }, delivery]
-            : [delivery, report];
+            : [delivery, ...(checkpointEntry ? [checkpointEntry] : []), report];
           return findSubagentHandoffReply(messages, childKey, text, async () => events);
         },
       ),
@@ -140,6 +155,27 @@ it.each([
     expect((await runHandoff({ childReply, deliveredReply })).status).toBe("pass");
   },
 );
+it("follows a cache-TTL checkpoint between settlement and the requester reply", async () => {
+  expect(
+    (
+      await runHandoff({
+        childReply: "River\nstones.",
+        checkpoint: { customType: "openclaw.cache-ttl" },
+      })
+    ).status,
+  ).toBe("pass");
+});
+
+it.each([
+  [
+    "a cache checkpoint on another branch",
+    { customType: "openclaw.cache-ttl", parentId: "request" },
+  ],
+  ["an unrelated custom entry", { customType: "unrelated-custom-entry" }],
+])("refuses to bridge %s", async (_name, checkpoint) => {
+  await expect(runHandoff({ checkpoint })).rejects.toThrow("no matching delivered reply");
+});
+
 it.each([
   ["forbidden", "did not return an accepted child"],
   ...["another run", "child failed", "child yielded", "silent terminal after progress"].map(

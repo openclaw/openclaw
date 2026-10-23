@@ -49,15 +49,24 @@ export async function findSubagentHandoffReply(
 
   const afterDelivery = new Set<string>();
   for (const event of await readRequesterTranscript()) {
-    if (
-      !isRecord(event) ||
-      event.type !== "message" ||
-      typeof event.id !== "string" ||
-      !isRecord(event.message)
-    ) {
+    if (!isRecord(event) || typeof event.id !== "string") {
       continue;
     }
-    const { id, parentId, message } = event;
+    const { id, parentId } = event;
+    // Cache checkpoints advance the transcript leaf without adding a message anchor.
+    if (
+      event.type === "custom" &&
+      event.customType === "openclaw.cache-ttl" &&
+      typeof parentId === "string" &&
+      afterDelivery.has(parentId)
+    ) {
+      afterDelivery.add(id);
+      continue;
+    }
+    if (event.type !== "message" || !isRecord(event.message)) {
+      continue;
+    }
+    const { message } = event;
     if (message.role === "user") {
       const p = message.provenance;
       if (
