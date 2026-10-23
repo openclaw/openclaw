@@ -7,6 +7,7 @@ import {
   type RootFileCopyBatchSync,
   type RootFileOpenBatchSync,
 } from "@openclaw/fs-safe/advanced";
+import { hasErrnoCode } from "../infra/errno.js";
 import { isPathInside } from "../infra/path-guards.js";
 import type { createPluginGenerationReceipt } from "./plugin-generation-receipt.js";
 import type { PluginRecoverySource } from "./plugin-generation-source-lookup.js";
@@ -57,6 +58,25 @@ export function linkPluginGenerationDependency(link: string, target: string): bo
     process.emitWarning(`Replacing plugin dependency link ${link}`);
   }
   return true;
+}
+
+/** Native child imports can follow host identity without borrowing parent resolver hooks. */
+export function linkPluginGenerationHostModule(link: string, target: string): boolean {
+  if (fs.lstatSync(link, { throwIfNoEntry: false })) {
+    return false;
+  }
+  fs.mkdirSync(path.dirname(link), { recursive: true, mode: 0o700 });
+  try {
+    fs.symlinkSync(target, link, "file");
+    return true;
+  } catch (error) {
+    // Directory junctions can work where file links are denied. Keep the
+    // existing parent redirect; never copy a second SDK graph.
+    if (!["EPERM", "EACCES", "ENOSYS", "ENOTSUP"].some((code) => hasErrnoCode(error, code))) {
+      throw error;
+    }
+    return false;
+  }
 }
 
 export function createPluginSourceLinkCapture() {
