@@ -517,6 +517,7 @@ it("transcribes only an authorized voice sender with forum echo routing and untr
     {
       OriginatingTo: "telegram:-10042001:topic:99",
       AccountId: "default",
+      MessageSid: String(voice.message_id + 1),
       ChatType: "group",
       MessageThreadId: 99,
     },
@@ -535,12 +536,14 @@ it("preserves named-account DM topic voice echo routing without a group mention"
   transcribe.mockResolvedValue("hello from a voice note");
   await receive(await inputBot(cfg, true, "atlas"), {
     ...voiceMessage(false),
+    message_id: 901,
     message_thread_id: 77,
   });
   expectVoiceInput(
     {
       OriginatingTo: "telegram:42001",
       AccountId: "atlas",
+      MessageSid: "901",
       ChatType: "direct",
       MessageThreadId: 77,
     },
