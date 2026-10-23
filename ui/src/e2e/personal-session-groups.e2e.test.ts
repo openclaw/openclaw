@@ -323,6 +323,54 @@ suite.define(() => {
     });
   });
 
+  it("keeps a long membership list scrollable with visible completion actions", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 600 } }, async ({ page }) => {
+      const rows = Array.from({ length: 60 }, (_, index) =>
+        createControlUiSessionRow(
+          index === 0 ? key : `agent:main:project-${index}`,
+          index === 0 ? "Reliability Tracker" : `Project ${index} ${"long-name-".repeat(20)}`,
+          Date.now() - index,
+        ),
+      );
+      const gateway = await installMockGateway(page, {
+        sessionKey: key,
+        operatorScopes: ["operator.sessions.read"],
+        sessions: rows,
+        methodResponses: { "sessions.list": sessionsListResponse(rows) },
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
+      await page.getByRole("button", { name: "New personal group", exact: true }).click();
+      const dialog = page.getByRole("dialog", { name: "New personal group", exact: true });
+      await dialog.getByLabel("Group name", { exact: true }).fill("Long list");
+      const choices = dialog.getByRole("group", { name: "Sessions", exact: true });
+      await expect
+        .poll(() => choices.evaluate((element) => element.scrollHeight > element.clientHeight))
+        .toBe(true);
+      const save = dialog.getByRole("button", { name: "Save", exact: true });
+      await expect
+        .poll(() =>
+          dialog.evaluate((element) =>
+            [element.querySelector("input"), element.querySelector('button[type="submit"]')].every(
+              (control) => {
+                const rect = control!.getBoundingClientRect();
+                return rect.top >= 0 && rect.bottom <= innerHeight;
+              },
+            ),
+          ),
+        )
+        .toBe(true);
+      await expect
+        .poll(() => choices.evaluate((element) => element.scrollWidth <= element.clientWidth))
+        .toBe(true);
+      await choices.getByRole("checkbox").last().check();
+      await save.click();
+      await dialog.waitFor({ state: "hidden" });
+      await page.getByRole("list", { name: "Long list", exact: true }).getByRole("link").waitFor();
+      expect(await gateway.getRequests("sessions.patch")).toEqual([]);
+      expect(await gateway.getRequests("sessions.groups.put")).toEqual([]);
+    });
+  });
+
   it("resolves off-page members without revealing unavailable saved references", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const selected = createControlUiSessionRow(key, "Reliability Tracker", Date.now());

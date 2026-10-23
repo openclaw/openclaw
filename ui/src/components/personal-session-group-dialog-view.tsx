@@ -36,7 +36,7 @@ export function PersonalSessionGroupDialogView(props: {
       onModal-cancel={() => props.finish()}
     >
       <form
-        class="exec-approval-card personal-session-group-dialog"
+        class="exec-approval-card exec-approval-card--modal exec-approval-modal-stack personal-session-group-dialog"
         onSubmit={(event) => {
           event.preventDefault();
           if (!label().trim()) {
@@ -76,11 +76,15 @@ export function PersonalSessionGroupDialogView(props: {
             onInput={(event) => setQuery(event.currentTarget.value)}
           />
         </label>
-        <fieldset class="personal-session-group-dialog__sessions">
-          <legend>{t("sessionsView.personalGroupSessions")}</legend>
+        <div
+          role="group"
+          aria-label={t("sessionsView.personalGroupSessions")}
+          class="exec-approval-modal-content stack personal-session-group-dialog__sessions"
+        >
+          <span class="muted">{t("sessionsView.personalGroupSessions")}</span>
           <For each={rows()} keyed={(row) => row.key}>
             {(row) => (
-              <label class="personal-session-group-dialog__session">
+              <label class="field checkbox personal-session-group-dialog__session">
                 <input
                   type="checkbox"
                   checked={selected().has(row().key)}
@@ -104,7 +108,7 @@ export function PersonalSessionGroupDialogView(props: {
           <Show when={rows().length === 0}>
             <p class="muted">{t("sessionsView.personalGroupNoMatches")}</p>
           </Show>
-        </fieldset>
+        </div>
         <Show when={error()}>
           <div role="alert" class="exec-approval-error">
             {error()}

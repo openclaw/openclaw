@@ -15,7 +15,6 @@ import { renderSessionTree as SessionTree } from "./app-sidebar-session-row-rend
 import { showPersonalSessionGroupDialog } from "./personal-session-group-dialog.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Menu } from "./solid/menu.tsx";
-import "../styles/personal-session-groups.css";
 
 registerEnglishCatalog(registerSessionOrganizationEnglish);
 
@@ -69,10 +68,6 @@ function PersonalGroups(props: { host: SidebarSessionListHost }) {
       }
       const group = id ? groups().find((item) => item.id === id) : undefined;
       if (id && !group) {
-        return;
-      }
-      if (!id && groups().length >= 100) {
-        showToast({ message: t("sessionsView.personalGroupLimit") });
         return;
       }
       const candidates = [...props.host.reconciledSidebarZone().sessionRows.values()].filter(
@@ -152,11 +147,13 @@ function PersonalGroups(props: { host: SidebarSessionListHost }) {
   };
   return (
     <div class="sidebar-recent-sessions personal-session-groups">
-      <div class="personal-session-groups__heading">
-        <span>{t("sessionsView.personalGroups")}</span>
+      <div class="sidebar-recent-sessions__head personal-session-groups__heading">
+        <span class="sidebar-session-group-status sidebar-recent-sessions__label-text">
+          {t("sessionsView.personalGroups")}
+        </span>
         <button
           type="button"
-          class="sidebar-session-group-actions"
+          class="sidebar-session-toolbar__button"
           aria-label={t("sessionsView.personalGroupNew")}
           title={t("sessionsView.personalGroupNew")}
           disabled={!props.host.connected || Boolean(props.host.sidebarSnapshot)}
@@ -202,7 +199,7 @@ function PersonalGroups(props: { host: SidebarSessionListHost }) {
             onDrop={(event: DragEvent) => drop(event, group().id)}
           >
             <div
-              class="personal-session-groups__header"
+              class="sidebar-recent-sessions__head sidebar-recent-sessions__head--draggable personal-session-groups__header"
               draggable="true"
               onDragStart={(event: DragEvent) => {
                 if (event.dataTransfer) {
@@ -221,20 +218,22 @@ function PersonalGroups(props: { host: SidebarSessionListHost }) {
                 }
                 onClick={() => props.host.togglePersonalSessionGroup(group().id)}
               >
-                <Icon
-                  name={
-                    props.host.collapsedPersonalSessionGroups.has(group().id)
-                      ? "chevronRight"
-                      : "chevronDown"
-                  }
-                />
+                <span class="sidebar-session-group-toggle__lead sidebar-session-group-toggle__icon">
+                  <Icon
+                    name={
+                      props.host.collapsedPersonalSessionGroups.has(group().id)
+                        ? "chevronRight"
+                        : "chevronDown"
+                    }
+                  />
+                </span>
                 <span class="sidebar-recent-sessions__label-text">{group().label}</span>
               </button>
               <Menu
                 id={`personal-group-${group().id}`}
                 label={t("sessionsView.personalGroupOptions", { group: group().label })}
                 trigger={<Icon name="moreHorizontal" />}
-                triggerClass="sidebar-session-group-actions"
+                triggerClass="sidebar-session-toolbar__button"
                 panelClass="session-menu"
                 items={[
                   { id: "edit", label: t("sessionsView.personalGroupEditMenu") },

@@ -1,4 +1,4 @@
-import { lazy, Loading } from "solid-js";
+import { lazy } from "solid-js";
 import type { PersonalSessionGroupDialogOptions } from "./personal-session-group-dialog-view.tsx";
 import { withPromiseModalHost } from "./promise-modal-host.ts";
 
@@ -19,13 +19,9 @@ export function showPersonalSessionGroupDialog(
   active = true;
   return withPromiseModalHost<void>(
     { signal: options.signal, value: undefined },
-    ({ render, finish }) => {
-      render(() => (
-        <Loading>
-          <PersonalSessionGroupDialogView options={options} finish={finish} />
-        </Loading>
-      ));
-      return PersonalSessionGroupDialogView.preload().then(() => undefined);
+    async ({ render, finish }) => {
+      await PersonalSessionGroupDialogView.preload();
+      render(() => <PersonalSessionGroupDialogView options={options} finish={finish} />);
     },
   ).finally(() => {
     active = false;

@@ -27,7 +27,6 @@ const enSessionOrganization = {
     personalGroupChanged: "This group changed. Reopen it before saving your edits.",
     personalGroupCapacity:
       "Personal groups are full. Remove a group or some sessions before adding more.",
-    personalGroupLimit: "You can create up to 100 personal groups.",
     pullRequestCount: en.sessionsView.pullRequestCount,
     advanced: "Advanced",
     searchGroups: "Search groups",

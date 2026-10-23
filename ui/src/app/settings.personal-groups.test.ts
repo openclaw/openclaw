@@ -50,7 +50,7 @@ it("normalizes browser input and serializes only bounded labels and references",
   const oversized = Array.from({ length: 110 }, (_, index) => ({
     id: "group-" + index,
     label: "🐚".repeat(40),
-    sessionKeys: Array.from({ length: 510 }, (_, key) => "session-" + key + "🐚".repeat(20)),
+    sessionKeys: Array.from({ length: 510 }, (_entry, key) => "session-" + key + "🐚".repeat(20)),
   }));
   const next = patchSettings({ personalSessionGroups: oversized });
   const groups = next.personalSessionGroups!;
