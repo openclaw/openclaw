@@ -1,12 +1,15 @@
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import { loadTranscriptEvents, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
-import { readTranscriptEventMessage } from "../config/sessions/session-accessor.sqlite-read.js";
+import {
+  readTranscriptEventId,
+  readTranscriptEventMessage,
+} from "../config/sessions/session-accessor.sqlite-read.js";
 import {
   resolveSqliteScope,
   toDatabaseOptions,
@@ -82,7 +85,9 @@ async function createTarget() {
   return { config, generation, scope, commit, replace, admit, ...scope };
 }
 
-it("commits during an active turn, preserves append order, and deduplicates retry", async () => {
+it("commits during an active turn, preserves append order, and deduplicates retry", async ({
+  signal,
+}) => {
   const target = await createTarget();
   const started = createDeferred();
   const finish = createDeferred();
@@ -114,11 +119,7 @@ it("commits during an active turn, preserves append order, and deduplicates retr
   const unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
   const commit = target.commit({ signal: controller.signal });
   try {
-    const [first, retry] = await withTestTimeout(
-      Promise.all([commit, target.commit()]),
-      750,
-      "background result waited for the running turn",
-    );
+    const [first, retry] = await withinTest(Promise.all([commit, target.commit()]), signal);
     expect(first).toMatchObject({ ok: true });
     expect(retry).toEqual(first);
     await expect(
@@ -153,7 +154,7 @@ it("commits during an active turn, preserves append order, and deduplicates retr
     const continued = await loadTranscriptEvents(target.scope);
     expect(continued).toHaveLength(4);
     expect(continued[3]).toMatchObject({
-      parentId: continued[2].id,
+      parentId: readTranscriptEventId(continued[2]),
       message: { role: "assistant", content: [{ type: "text", text: "Turn continued" }] },
     });
   } finally {
@@ -194,7 +195,9 @@ it("cancels a background result queued behind a mutation without retaining custo
   }
 });
 
-it("releases background-result write custody during suspension while the turn runs", async () => {
+it("releases background-result write custody during suspension while the turn runs", async ({
+  signal,
+}) => {
   const target = await createTarget();
   const started = createDeferred();
   const finishTurn = createDeferred();
@@ -215,7 +218,7 @@ it("releases background-result write custody during suspension while the turn ru
   });
   let suspensionId: string | undefined;
   try {
-    await withTestTimeout(committed.promise, 750, "result did not reach persistence during turn");
+    await withinTest(committed.promise, signal);
     const suspension = prepareGatewaySuspend({
       requestId: "background-result-drain",
       drain: true,
@@ -234,7 +237,7 @@ it("releases background-result write custody during suspension while the turn ru
       writeCustody: [{ phase: "session-mutation", count: 1 }],
     });
     finishCommit.resolve();
-    await withTestTimeout(completion, 750, "result retained write custody during suspension");
+    await withinTest(completion, signal);
     expect(getGatewaySuspendStatus(suspensionId)).toMatchObject({
       status: "draining",
       writeCustody: [],
