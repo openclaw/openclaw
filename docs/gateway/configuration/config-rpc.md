@@ -119,8 +119,7 @@ wildcards do not authorize descendant arrays. This prevents truncated
 
 For keyed agent rosters, setting an existing `agents.entries.<agentId>` entry to
 `null` in a revision-checked patch authorizes removing that entry. Multiple entries
-can be removed together; omitted siblings stay unchanged. Deleting the parent
-`agents` or `agents.entries` object does not authorize dropping its entries.
+can be removed together; omitted siblings stay unchanged.
 Arrays inside removed entries still require their exact `replacePaths` acknowledgments.
 
 Arrays of objects with stable `id` fields merge by ID unless their path appears

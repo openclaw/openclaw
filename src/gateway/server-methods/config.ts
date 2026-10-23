@@ -947,7 +947,7 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!preparedSecretsSnapshot) {
       return;
     }
-    // Only explicit keyed nulls authorize removal; omissions and parent removal do not.
+    // Only explicit keyed nulls populate the writer's roster-removal grant.
     const allowedAgentRosterRemovals: string[] = [];
     const sourceEntries = sourceConfig.agents?.entries;
     const patchEntries = normalizedPatch.agents?.entries;

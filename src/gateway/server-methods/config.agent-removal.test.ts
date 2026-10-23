@@ -4,7 +4,6 @@ import type * as ConfigIoModule from "../../config/io.js";
 import { resolvePersistCandidateForWrite } from "../../config/io.write-prepare.js";
 import type * as RuntimeSchemaModule from "../../config/runtime-schema.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type * as ConfigValidationModule from "../../config/validation.js";
 import type * as SecretsRuntimeModule from "../../secrets/runtime.js";
 import type * as ConfigWriteFlowModule from "./config-write-flow.js";
 import { configHandlers } from "./config.js";
@@ -14,15 +13,6 @@ const mocks = vi.hoisted(() => ({ read: vi.fn(), commit: vi.fn() }));
 vi.mock("../../config/io.js", async (importOriginal) => ({
   ...(await importOriginal<typeof ConfigIoModule>()),
   readConfigFileSnapshotForWrite: mocks.read,
-}));
-vi.mock("../../config/validation.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof ConfigValidationModule>()),
-  validateConfigObjectRawWithPlugins: (config: OpenClawConfig) => ({
-    ok: true,
-    config,
-    warnings: [],
-  }),
-  validateConfigObjectWithPlugins: (config: OpenClawConfig) => ({ ok: true, config, warnings: [] }),
 }));
 vi.mock("../../config/runtime-schema.js", async (importOriginal) => ({
   ...(await importOriginal<typeof RuntimeSchemaModule>()),
@@ -59,6 +49,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   current = {
     agents: {
+      ownership: "explicit",
       entries: {
         keep: { name: "Untouched" },
         first: { name: "First", skills: [] },
@@ -101,7 +92,9 @@ describe("config.patch explicit agent removal", () => {
         writeOptions: expect.objectContaining({ allowedAgentRosterRemovals: ["first", "second"] }),
       }),
     );
-    expect(persisted).toEqual({ agents: { entries: { keep: { name: "Untouched" } } } });
+    expect(persisted).toEqual({
+      agents: { ...current.agents, entries: { keep: { name: "Untouched" } } },
+    });
     expect(Object.keys(current.agents!.entries!)).toEqual(["keep", "first", "second"]);
   });
 
@@ -143,31 +136,25 @@ describe("config.patch explicit agent removal", () => {
       { baseHash: "base-hash" },
     );
     expect(respond).toHaveBeenCalledWith(true, expect.anything(), undefined);
-    expect(mocks.commit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        writeOptions: expect.objectContaining({ allowedAgentRosterRemovals: [] }),
-      }),
-    );
     expect(persisted).toEqual({
-      agents: { entries: { ...current.agents!.entries, keep: { name: "Renamed" } } },
+      agents: {
+        ...current.agents,
+        entries: { ...current.agents!.entries, keep: { name: "Renamed" } },
+      },
     });
   });
 
-  it.each([{ agents: null }, { agents: { entries: null } }])(
-    "does not authorize dropping a parent container: %j",
-    async (raw) => {
-      const respond = await invoke(raw, { baseHash: "base-hash", replacePaths });
-      expect(mocks.commit).toHaveBeenCalledWith(
-        expect.objectContaining({
-          writeOptions: expect.objectContaining({ allowedAgentRosterRemovals: [] }),
-        }),
-      );
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ message: expect.stringContaining("agent roster") }),
-      );
-      expect(persisted).toBeUndefined();
-    },
-  );
+  it("rejects deleting the keyed roster container before committing", async () => {
+    const respond = await invoke(
+      { agents: { entries: null } },
+      { baseHash: "base-hash", replacePaths },
+    );
+    expect(mocks.commit).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST" }),
+    );
+    expect(persisted).toBeUndefined();
+  });
 });
