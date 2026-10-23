@@ -7,10 +7,7 @@ import {
 import type { SessionActorHotState, SessionActorOutcome } from "./session-actor-contract.js";
 import type { PreparedSessionTranscriptHydration } from "./session-history-read.types.js";
 import type { SessionTranscriptAuthority } from "./session-transcript-authority.types.js";
-import {
-  sameSessionTranscriptContextVersion,
-  type SessionTranscriptContextVersion,
-} from "./session-transcript-context-version.types.js";
+import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import { transcriptEventContextEligibility } from "./session-transcript-projection-append.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import { isCanonicalSessionTranscriptEntry } from "./transcript-tree.js";
@@ -53,6 +50,17 @@ export type SessionActorTranscriptReplica = {
       }
   );
 };
+
+export function sameSessionActorTranscriptVersion(
+  left: SessionTranscriptContextVersion,
+  right: SessionTranscriptContextVersion,
+): boolean {
+  return (
+    left.generation === right.generation &&
+    left.rawSeq === right.rawSeq &&
+    left.updatedAt === right.updatedAt
+  );
+}
 
 function simplePath(rows: SessionActorTranscriptRow[], parent: string | null = null) {
   let activeLeafEntryId = parent;
@@ -254,7 +262,7 @@ export function rewriteSessionActorTranscriptReplica(
   if (
     !previous ||
     previous.sessionId !== postimage.entry?.sessionId ||
-    !sameSessionTranscriptContextVersion(previous.version, rewrite.before)
+    !sameSessionActorTranscriptVersion(previous.version, rewrite.before)
   ) {
     return undefined;
   }
@@ -320,11 +328,11 @@ export function seedSessionActorTranscriptContext(
   limits: Limits,
   admission?: UserTurnTranscriptAdmissionReceipt,
 ): SessionActorTranscriptReplica | undefined {
-  if (!sameSessionTranscriptContextVersion(hot.transcript.version, prepared.snapshot.version)) {
+  if (!sameSessionActorTranscriptVersion(hot.transcript.version, prepared.snapshot.version)) {
     return retained;
   }
   const current: SessionActorTranscriptReplica =
-    retained && sameSessionTranscriptContextVersion(retained.version, hot.transcript.version)
+    retained && sameSessionActorTranscriptVersion(retained.version, hot.transcript.version)
       ? retained
       : {
           version: hot.transcript.version,
@@ -400,11 +408,11 @@ export function advanceSessionActorTranscriptReplica(
         rows: rewrite.rows,
       })
     : previous;
-  const unchanged = sameSessionTranscriptContextVersion(before, transcript.after);
+  const unchanged = sameSessionActorTranscriptVersion(before, transcript.after);
   const retained =
     projected &&
     projected.sessionId === postimage.entry?.sessionId &&
-    sameSessionTranscriptContextVersion(projected.version, before)
+    sameSessionActorTranscriptVersion(projected.version, before)
       ? projected
       : undefined;
   const appendedAnchors = transcript.appendedMessages.flatMap((message) => message.anchor ?? []);
@@ -476,7 +484,7 @@ export function readSessionActorTranscriptContext(
     !retained ||
     !context ||
     retained.sessionId !== hot.entry?.sessionId ||
-    !sameSessionTranscriptContextVersion(retained.version, hot.transcript.version) ||
+    !sameSessionActorTranscriptVersion(retained.version, hot.transcript.version) ||
     context.limits.maxBytes !== limits.maxBytes ||
     context.limits.maxEvents !== limits.maxEvents
   ) {

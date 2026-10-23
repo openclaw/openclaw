@@ -6,10 +6,7 @@ import { getSessionKysely } from "./session-accessor.sqlite-scope-helpers.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { readHotSessionTranscriptSnapshot } from "./session-cold-storage-read.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
-import {
-  sameSessionTranscriptContextVersion,
-  type SessionTranscriptContextVersion,
-} from "./session-transcript-context-version.types.js";
+import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import {
   TRANSCRIPT_PAYLOAD_SLICE_BYTES,
   transcriptEventReadBytesSql,
@@ -64,7 +61,7 @@ export function readTranscriptExportInSlices<
   const first = transaction((database) => {
     const snapshot =
       batchHead?.deferred &&
-      sameSessionTranscriptContextVersion(
+      isSameTranscriptContextVersion(
         readTranscriptContextVersionInTransaction(database, sessionId),
         batchHead.deferred.version,
       )
@@ -99,7 +96,7 @@ export function readTranscriptExportInSlices<
       break;
     }
     const next = transaction((database) =>
-      sameSessionTranscriptContextVersion(
+      isSameTranscriptContextVersion(
         readTranscriptContextVersionInTransaction(database, sessionId),
         deferred.version,
       )
@@ -151,4 +148,15 @@ function readTranscriptPayloadSlice(
     }
     return slice;
   });
+}
+
+function isSameTranscriptContextVersion(
+  left: SessionTranscriptContextVersion,
+  right: SessionTranscriptContextVersion,
+): boolean {
+  return (
+    left.generation === right.generation &&
+    left.rawSeq === right.rawSeq &&
+    left.updatedAt === right.updatedAt
+  );
 }

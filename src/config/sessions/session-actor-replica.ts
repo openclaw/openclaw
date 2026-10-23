@@ -37,6 +37,7 @@ import { readSessionActorTranscriptAnchors } from "./session-actor-transcript-an
 import {
   advanceSessionActorTranscriptReplica,
   rewriteSessionActorTranscriptReplica,
+  sameSessionActorTranscriptVersion,
   type SessionActorTranscriptReplica,
 } from "./session-actor-transcript-replica.js";
 import { isSessionEntryPublicationSourceCurrent } from "./session-entry-publication-source.js";
@@ -44,7 +45,6 @@ import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js"
 import type { SessionRowDatabaseFacts } from "./session-row-facts.types.js";
 import type { SessionTranscriptAnchorSelection } from "./session-transcript-anchor-read.kernel.js";
 import { readPreparedSessionTranscriptChange } from "./session-transcript-authority.js";
-import { sameSessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import type { SessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts.types.js";
 
 const MAX_SNAPSHOTS = 128;
@@ -232,7 +232,7 @@ export function ensureReplicaSubscription(): void {
           if (
             previousTranscript &&
             previousTranscript.sessionId === prepared.actorPostimage.entry?.sessionId &&
-            sameSessionTranscriptContextVersion(
+            sameSessionActorTranscriptVersion(
               previousTranscript.version,
               prepared.actorPostimage.transcript.version,
             )
@@ -325,7 +325,7 @@ function retainSnapshot(
   if (
     previousTranscript &&
     previousTranscript.sessionId === state.entry?.sessionId &&
-    sameSessionTranscriptContextVersion(previousTranscript.version, state.transcript.version)
+    sameSessionActorTranscriptVersion(previousTranscript.version, state.transcript.version)
   ) {
     retainTranscript(cell, previousTranscript);
   }
