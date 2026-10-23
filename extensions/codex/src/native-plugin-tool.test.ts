@@ -46,8 +46,11 @@ function toolFixture(
     workspaceDir: params.workspaceDir,
   };
   const request = vi.fn(async (..._args: RequestArgs) => catalog());
+  const readAsync = vi.fn<CodexAppServerBindingStore["readAsync"]>(async (identity) =>
+    read(identity),
+  );
   const tool = createCodexPluginsTool({
-    bindingStore: { read, readAsync: async (identity) => read(identity) },
+    bindingStore: { read, readAsync },
     context,
     getPluginConfig: () => ({
       appServer: { defaultWorkspaceDir: params.configWorkspaceDir },
@@ -62,13 +65,52 @@ function toolFixture(
       { cwds: [cwd] },
       options,
     );
-  return { tool, request, read, context, expectWorkspace };
+  return { tool, request, read, readAsync, context, expectWorkspace };
 }
 
-it("is available only for owner turns even when native plugin policy is disabled", () => {
-  expect(toolFixture().tool?.name).toBe("codex_plugins");
-  expect(toolFixture({ owner: false }).tool).toBeNull();
+it("keeps owner/nonowner/owner declarations stable and gates nonowner execution", async () => {
+  const owner = toolFixture();
+  const nonowner = toolFixture({ owner: false });
+  const ownerAgain = toolFixture();
+  const declaration = ({ tool }: ReturnType<typeof toolFixture>) =>
+    JSON.stringify({ name: tool.name, description: tool.description, parameters: tool.parameters });
+  expect(declaration(nonowner)).toBe(declaration(owner));
+  expect(declaration(ownerAgain)).toBe(declaration(owner));
+  await expect(nonowner.tool.execute("denied", {})).resolves.toMatchObject({
+    details: { gated: true },
+  });
+  expect(nonowner.readAsync).not.toHaveBeenCalled();
+  expect(nonowner.read).not.toHaveBeenCalled();
+  expect(nonowner.request).not.toHaveBeenCalled();
 });
+
+it.each(["before-execute", "binding-read", "catalog-response"] as const)(
+  "rejects owner revocation at %s without subsequent protected work",
+  async (timing) => {
+    const { tool, context, readAsync, read, request } = toolFixture();
+    if (timing === "before-execute") {
+      context.senderIsOwner = false;
+    } else if (timing === "binding-read") {
+      readAsync.mockImplementationOnce(async () => {
+        context.senderIsOwner = false;
+        return undefined;
+      });
+    } else {
+      request.mockImplementationOnce(async () => {
+        context.senderIsOwner = false;
+        return catalog();
+      });
+    }
+    await expect(tool.execute("revoked", {})).rejects.toThrow("owner-authorized sender");
+    expect(request).toHaveBeenCalledTimes(timing === "catalog-response" ? 1 : 0);
+    if (timing !== "catalog-response") {
+      expect(read).not.toHaveBeenCalled();
+    }
+    if (timing === "before-execute") {
+      expect(readAsync).not.toHaveBeenCalled();
+    }
+  },
+);
 
 it("uses the bound workspace, exposes bounded untrusted metadata, and never installs", async () => {
   const { tool, request, expectWorkspace } = toolFixture({
@@ -110,7 +152,7 @@ it.each(["workspaceDir", "configWorkspaceDir"] as const)("falls back to %s", asy
   expectWorkspace("/fallback/workspace");
 });
 
-it.each(["metadata", "thread", "workspace", "config"] as const)(
+it.each(["metadata", "thread", "workspace", "config", "owner"] as const)(
   "revalidates plugin discovery after a %s change",
   async (change) => {
     const { tool, request, read, context } = toolFixture({ bindingCwd: "/bound/company" });
@@ -124,6 +166,9 @@ it.each(["metadata", "thread", "workspace", "config"] as const)(
       });
       if (change === "config") {
         context.config = { ...context.config };
+      }
+      if (change === "owner") {
+        context.senderIsOwner = false;
       }
       expect(options.assertCurrent).toBeTypeOf("function");
       options.assertCurrent!();

@@ -9,6 +9,7 @@ import type {
   PluginStateKeyedStore,
   PluginStateSyncKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { gateAgentToolExecution } from "openclaw/plugin-sdk/tool-plugin";
 import { registerCodexCliMetadata } from "./cli-metadata.js";
 import {
   createCodexAppServerAgentHarness,
@@ -238,23 +239,30 @@ export default definePluginEntry({
         {
           contextVersion: 2,
           create: (context) => {
-            if (context.senderIsOwner !== true) {
-              return [];
-            }
             const resolveToolRuntimeConfig = () =>
               context.getRuntimeConfig?.() ??
               context.runtimeConfig ??
               context.config ??
               resolveCurrentConfig();
-            return createCodexSupervisionTools({
+            const tools = createCodexSupervisionTools({
               getPluginConfig: () => resolvePluginConfig(resolveToolRuntimeConfig),
               getRuntimeConfig: resolveToolRuntimeConfig,
               resolveAuthProfileId: resolveCodexAppServerAuthProfileIdForAgent,
               withAuthProfileIdAtEffect: withCodexAppServerAuthProfileIdAtEffect,
               resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
-              senderIsOwner: context.senderIsOwner,
+              get senderIsOwner() {
+                return context.senderIsOwner === true;
+              },
               assertInvocationCurrent: context.assertInvocationCurrent,
             });
+            return context.senderIsOwner === true
+              ? tools
+              : tools.map((tool) =>
+                  gateAgentToolExecution(
+                    tool,
+                    "Codex supervision compatibility tools require an owner-authorized sender.",
+                  ),
+                );
           },
         },
         { names: [...CODEX_SUPERVISION_COMPAT_TOOL_NAMES] },

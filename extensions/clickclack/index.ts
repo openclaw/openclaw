@@ -14,5 +14,5 @@ export default defineBundledChannelEntry({
     specifier: "./api.js",
     exportName: "setClickClackRuntime",
   },
-  registerFull: registerClickClackDiscussions,
+  registerCapabilities: registerClickClackDiscussions,
 });

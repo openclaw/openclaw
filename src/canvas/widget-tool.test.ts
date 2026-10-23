@@ -149,10 +149,12 @@ it("uses board-only delivery when inline hosting is disabled", async () => {
     inlineHostEnabled: false,
   });
 
-  expect(tool.description).toContain(
-    "Inline previews are unavailable this turn; set pin=true to save to the session dashboard",
+  expect(tool.description).toBe(
+    createTool({
+      agentSessionKey: "agent:main:board-only",
+      inlineHostEnabled: true,
+    }).description,
   );
-  expect(tool.description).not.toContain("Keep one-off visualizations inline");
   await expect(tool.execute("unpinned", diagram)).rejects.toThrow(
     "inline widget hosting is disabled; set pin=true to place the widget on the session dashboard",
   );
@@ -271,8 +273,8 @@ it("enforces current-presenter source kinds and byte limits in core", async () =
     presenters: [presenter],
     presenterContext: {},
   });
-  expect(tool.parameters).toHaveProperty("properties.kind.enum", ["html"]);
-  expect(tool.description).not.toContain("registered kinds are diagram");
+  expect(tool.parameters).toHaveProperty("properties.kind.enum", ["html", "diagram"]);
+  expect(tool.description).toContain("registered kinds are diagram");
   await expect(
     tool.execute("oversized-current", { title: "Large", widget_code: "123456789" }),
   ).rejects.toThrow("widget_code exceeds maximum size (8 bytes)");

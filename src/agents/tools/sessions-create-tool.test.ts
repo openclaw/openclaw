@@ -50,17 +50,24 @@ beforeEach(() => {
 
 describe("sessions_create", () => {
   it("requires issued session-write authority and rejects a retained revoked source", async () => {
-    expect(createSessionsCreateTool()).toBeNull();
-    expect(
+    const unavailable = [
+      createSessionsCreateTool(),
       createSessionsCreateTool({
         sessionControlAuthority: issueAuthority(["operator.read"]).authority,
       }),
-    ).toBeNull();
+    ];
+    for (const tool of unavailable) {
+      expect((await tool.execute("denied", {})).details).toMatchObject({ gated: true });
+    }
     const { authority, revoke } = issueAuthority();
     const tool = expectDefined(
       createSessionsCreateTool({ sessionControlAuthority: authority }),
       "creation tool",
     );
+    expect(unavailable.map((candidate) => candidate.parameters)).toEqual([
+      tool.parameters,
+      tool.parameters,
+    ]);
     expect(tool.parameters).not.toHaveProperty("properties.action");
     expect(tool.parameters).toHaveProperty("additionalProperties", false);
     expect(() => createSessionsCreateTool({ sessionControlAuthority: { ...authority } })).toThrow(
@@ -235,7 +242,7 @@ describe("sessions_create", () => {
         authority: issueAuthority(["operator.read"]).authority,
       },
     ]) {
-      expect(prepareSandboxSessionTools(params)).toEqual({
+      expect(prepareSandboxSessionTools(params)).toMatchObject({
         policy: params.policy,
         renameOnly: false,
       });

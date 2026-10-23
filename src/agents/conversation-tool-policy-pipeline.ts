@@ -52,6 +52,10 @@ export function resolveConversationToolPolicies(params: {
     groupPolicy: mergePolicyAllowlist(policy.groupPolicy, params.additionalPolicyAllow),
     senderPolicy: mergePolicyAllowlist(policy.senderPolicy, params.additionalPolicyAllow),
     sandboxPolicy: mergePolicyAllowlist(policy.sandboxPolicy, params.additionalPolicyAllow),
+    sandboxSessionPolicy: mergePolicyAllowlist(
+      policy.sandboxSessionPolicy,
+      params.additionalPolicyAllow,
+    ),
     subagentPolicy: mergePolicyAllowlist(policy.subagentPolicy, params.additionalPolicyAllow),
     runtimeToolPolicy: policy.runtimeToolPolicyForInheritance,
     inheritedToolPolicy: mergePolicyAllowlist(

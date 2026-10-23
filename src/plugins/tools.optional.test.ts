@@ -947,55 +947,79 @@ describe("resolvePluginTools optional tools", () => {
     },
   );
 
-  it("preserves frozen factory descriptors and private receivers at the tool availability boundary", async () => {
-    class PrivateTool {
-      readonly name = "fixed_tool";
-      readonly label = "Fixed tool";
-      readonly description = "Fixed tool";
-      readonly parameters = { type: "object", properties: {} };
-      #calls = 0;
-      get calls() {
-        return this.#calls;
+  it.each([false, true])(
+    "preserves frozen factory descriptors and private receivers when capability gated=%s",
+    async (gated) => {
+      class PrivateTool {
+        #name = "fixed_tool";
+        get name() {
+          return this.#name;
+        }
+        readonly requiredClientCaps = ["inline-widgets"];
+        readonly label = "Fixed tool";
+        readonly description = "Fixed tool";
+        #parameters = { type: "object", properties: {} };
+        get parameters() {
+          return this.#parameters;
+        }
+        #calls = 0;
+        get calls() {
+          return this.#calls;
+        }
+        prepareArguments(args: unknown) {
+          this.#calls++;
+          return args;
+        }
+        async execute() {
+          this.#calls++;
+          return { content: [{ type: "text", text: String(this.#calls) }] };
+        }
       }
-      prepareArguments(args: unknown) {
-        this.#calls++;
-        return args;
+      const original = new PrivateTool();
+      Object.defineProperty(original, "execute", {
+        // oxlint-disable-next-line typescript/unbound-method -- The fixture deliberately preserves an unbound method to verify its original receiver.
+        value: original.execute,
+        configurable: false,
+        writable: false,
+        enumerable: true,
+      });
+      Object.freeze(original);
+      const registry = setRegistry([
+        createNamedToolEntry("fixed-owner", "fixed_tool", { factory: () => original }),
+      ]);
+      const [tool] = resolvePluginTools(
+        createResolveToolsParams({ clientCaps: gated ? [] : ["inline-widgets"] }),
+      );
+      expect(tool?.name).toBe(original.name);
+      expect(tool?.parameters).toBe(original.parameters);
+      if (gated) {
+        expect(tool?.prepareArguments).toBeUndefined();
+        expect(tool?.prepareBeforeToolCallParams).toBeUndefined();
+        expect(tool?.finalizeBeforeToolCallParams).toBeUndefined();
+        await expect(tool!.execute("denied", {})).resolves.toMatchObject({
+          details: { gated: true },
+        });
+        expect(original.calls).toBe(0);
+        return;
       }
-      async execute() {
-        this.#calls++;
-        return { content: [{ type: "text", text: String(this.#calls) }] };
-      }
-    }
-    const original = new PrivateTool();
-    Object.defineProperty(original, "execute", {
-      // oxlint-disable-next-line typescript/unbound-method -- The fixture deliberately preserves an unbound method to verify its original receiver.
-      value: original.execute,
-      configurable: false,
-      writable: false,
-      enumerable: true,
-    });
-    Object.freeze(original);
-    const registry = setRegistry([
-      createNamedToolEntry("fixed-owner", "fixed_tool", { factory: () => original }),
-    ]);
-    const [tool] = resolvePluginTools(createResolveToolsParams());
-    expect(tool?.prepareArguments?.({ live: true })).toEqual({ live: true });
-    expect(Object.getPrototypeOf(tool)).toBe(PrivateTool.prototype);
-    const execute = tool!.execute;
-    await expect(execute("live", {})).resolves.toMatchObject({ content: [{ text: "2" }] });
-    expect(Reflect.get(tool!, "calls")).toBe(2);
-    const reflected = Object.getOwnPropertyDescriptor(tool!, "execute")?.value;
-    await expect(reflected("reflected", {})).resolves.toMatchObject({ content: [{ text: "3" }] });
-    const hostValue = () => "host value";
-    Object.defineProperty(tool!, "hostValue", { value: hostValue });
-    expect(Reflect.get(tool!, "hostValue")).toBe(hostValue);
-    expect(Object.getOwnPropertyDescriptor(tool!, "hostValue")?.value).toBe(hostValue);
-    registry.plugins[0]!.enabled = false;
-    expect(() => tool?.prepareArguments?.({ live: false })).toThrow(/no longer active/);
-    await expect(execute("stale", {})).rejects.toThrow(/no longer active/);
-    await expect(reflected("stale-reflected", {})).rejects.toThrow(/no longer active/);
-    expect(original.calls).toBe(3);
-  });
+      expect(tool?.prepareArguments?.({ live: true })).toEqual({ live: true });
+      expect(Object.getPrototypeOf(tool)).toBe(PrivateTool.prototype);
+      const execute = tool!.execute;
+      await expect(execute("live", {})).resolves.toMatchObject({ content: [{ text: "2" }] });
+      expect(Reflect.get(tool!, "calls")).toBe(2);
+      const reflected = Object.getOwnPropertyDescriptor(tool!, "execute")?.value;
+      await expect(reflected("reflected", {})).resolves.toMatchObject({ content: [{ text: "3" }] });
+      const hostValue = () => "host value";
+      Object.defineProperty(tool!, "hostValue", { value: hostValue });
+      expect(Reflect.get(tool!, "hostValue")).toBe(hostValue);
+      expect(Object.getOwnPropertyDescriptor(tool!, "hostValue")?.value).toBe(hostValue);
+      registry.plugins[0]!.enabled = false;
+      expect(() => tool?.prepareArguments?.({ live: false })).toThrow(/no longer active/);
+      await expect(execute("stale", {})).rejects.toThrow(/no longer active/);
+      await expect(reflected("stale-reflected", {})).rejects.toThrow(/no longer active/);
+      expect(original.calls).toBe(3);
+    },
+  );
 
   it.each(["recordless", "disabled", "removed"] as const)(
     "retains the original lifecycle authority for %s tool registrations",
@@ -1889,7 +1913,11 @@ describe("resolvePluginTools optional tools", () => {
         content: [{ type: "text", text: "2:same" }],
       });
       expect(nextFactory).toHaveBeenCalledTimes(2);
-      expect(resolvePluginTools({ ...nextParams, clientCaps: [] })).toEqual([]);
+      const unavailable = resolvePluginTools({ ...nextParams, clientCaps: [] });
+      expect(unavailable[0]?.parameters).toEqual(next[0]?.parameters);
+      expect((await unavailable[0]!.execute("denied", {}, undefined)).details).toMatchObject({
+        gated: true,
+      });
       expect(nextFactory).toHaveBeenCalledTimes(3);
       expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
     },

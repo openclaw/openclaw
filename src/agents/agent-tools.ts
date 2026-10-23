@@ -72,7 +72,7 @@ import {
 import {
   createOpenClawTools,
   createOpenClawToolsWithPreparation,
-  filterToolsByClientCaps,
+  gateToolsByClientCaps,
 } from "./openclaw-tools.js";
 import { filterRequesterYieldTools } from "./openclaw-tools.requester-yield.js";
 import { applySwarmCollectorToolContract } from "./openclaw-tools.swarm.js";
@@ -366,7 +366,7 @@ function* assembleOpenClawCodingTools(
     disableMessageTool: options?.disableMessageTool || options?.swarmCollector,
     requesterAgentIdOverride: executionAgentId,
   };
-  const pluginToolsOnly = filterToolsByClientCaps(
+  const pluginToolsOnly = gateToolsByClientCaps(
     includeOpenClawTools || !includePluginTools
       ? []
       : yield {
@@ -563,7 +563,8 @@ function* assembleOpenClawCodingTools(
   } = resolveTurnToolSurface({
     turnTools: completeTurnTools(messageInvocationPolicy.filter(capabilityProfile, onPolicyFilter)),
     sessionTools:
-      capabilityProfile.policy.requesterPolicySource === "completion-handoff"
+      capabilityProfile.policy.requesterPolicySource === "completion-handoff" ||
+      capabilityProfile.policy.sandboxSessionPolicy !== capabilityProfile.policy.sandboxPolicy
         ? completeTurnTools(messageInvocationPolicy.filter(capabilityProfile, undefined, "session"))
         : undefined,
     ownerOnlyDenied: new Set(ownerOnlyCoreToolDenylist),

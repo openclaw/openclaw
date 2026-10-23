@@ -63,7 +63,7 @@ export function createEmbeddedMessageInvocationPolicy(params: {
   const filter = (
     currentProfile = params.capabilityProfile,
     onFilter?: (event: ToolPolicyFilterEvent) => void,
-    // "session" omits the per-turn completion-handoff replay, which refuses calls instead.
+    // Session declarations retain tools whose per-turn authority refuses execution.
     scope: "turn" | "session" = "turn",
   ): AnyAgentTool[] => {
     const currentPolicies =
@@ -80,7 +80,8 @@ export function createEmbeddedMessageInvocationPolicy(params: {
           // Resource and inherited ceilings belong to the assembled turn.
           groupPolicy: policies.groupPolicy,
           senderPolicy: policies.senderPolicy,
-          sandboxPolicy: policies.sandboxPolicy,
+          sandboxPolicy:
+            scope === "session" ? policies.sandboxSessionPolicy : policies.sandboxPolicy,
           subagentPolicy: policies.subagentPolicy,
           runtimeToolPolicy: policies.runtimeToolPolicy,
           inheritedToolPolicy:

@@ -1,5 +1,10 @@
 /** Invokes current-context plugin tool factories and reports one assembly's timings. */
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import {
+  copyAgentToolAvailability,
+  isAgentToolExecutionAvailable,
+} from "../agents/agent-tool-availability.js";
+import { overrideAgentToolCallbacks } from "../agents/tool-callback-overrides.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { isInvalidConfigError } from "../config/io.invalid-config.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
@@ -71,6 +76,7 @@ export function bindPluginToolCallbacks(
     execute: async (...args: Parameters<AnyAgentTool["execute"]>) => {
       const [toolCallId, params, signal, onUpdate] = args;
       const pending =
+        isAgentToolExecutionAvailable(tool) &&
         memoryAudience &&
         resolveMemoryCapabilityRegistration(registry.memoryCapabilities)?.pluginId ===
           entry.pluginId
@@ -96,59 +102,9 @@ export function bindPluginToolCallbacks(
       ? { prepareArguments: (args: unknown) => invoke(() => prepare.call(tool, args)) }
       : {}),
   };
-  // A shadow preserves frozen factory objects and caller-defined fixed properties without violating Proxy invariants.
-  const wrapped = new Proxy<AnyAgentTool>(Object.create(Object.getPrototypeOf(tool)), {
-    get(target, key, receiver) {
-      if (Object.hasOwn(target, key)) {
-        return Reflect.get(target, key, receiver);
-      }
-      return Object.hasOwn(callbacks, key)
-        ? Reflect.get(callbacks, key)
-        : Reflect.get(tool, key, tool);
-    },
-    has: (target, key) => Reflect.has(target, key) || Reflect.has(tool, key),
-    ownKeys: (target) => [...new Set([...Reflect.ownKeys(tool), ...Reflect.ownKeys(target)])],
-    getOwnPropertyDescriptor(target, key) {
-      const local = Reflect.getOwnPropertyDescriptor(target, key);
-      if (local) {
-        return local;
-      }
-      const source = Reflect.getOwnPropertyDescriptor(tool, key);
-      if (!source) {
-        return undefined;
-      }
-      if (Object.hasOwn(callbacks, key)) {
-        return {
-          configurable: true,
-          enumerable: source.enumerable,
-          writable: true,
-          value: Reflect.get(callbacks, key),
-        };
-      }
-      return "value" in source
-        ? { ...source, configurable: true }
-        : {
-            ...source,
-            configurable: true,
-            get: source.get ? () => Reflect.get(tool, key, tool) : undefined,
-            set: source.set
-              ? (value) => {
-                  Reflect.set(tool, key, value, tool);
-                }
-              : undefined,
-          };
-    },
-    set: (target, key, value, receiver) =>
-      Object.hasOwn(target, key)
-        ? Reflect.set(target, key, value, receiver)
-        : Reflect.set(tool, key, value, tool),
-    deleteProperty: (target, key) =>
-      Object.hasOwn(target, key)
-        ? Reflect.deleteProperty(target, key)
-        : Reflect.deleteProperty(tool, key),
-    preventExtensions: () => false,
-  });
+  const wrapped = overrideAgentToolCallbacks(tool, callbacks);
   copyPluginToolMeta(tool, wrapped);
+  copyAgentToolAvailability(tool, wrapped);
   return wrapped;
 }
 

@@ -8,6 +8,7 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { inspectOpenDictionaryToolSchemas } from "../plugins/tool-schema-diagnostics.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
+import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { prepareConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
@@ -44,6 +45,36 @@ function completionTurn(sourceTool: string): ToolOptions {
   };
 }
 const userTurn = { ...session, runId: "run-user", senderId: "owner", senderIsOwner: true };
+
+it("keeps client and session-creation definitions across owner and completion turns", async () => {
+  const authority = createAdmittedRunOperatorAuthority({
+    profileId: "owner",
+    scopes: ["operator.sessions.write"],
+    signal: new AbortController().signal,
+    assertCurrent: () => {},
+  });
+  const assemble = (attached: boolean) =>
+    createOpenClawTools({
+      config,
+      agentSessionKey: "agent:main:telegram:direct:owner",
+      agentChannel: "telegram",
+      agentTo: "telegram:owner",
+      wrapBeforeToolCallHook: false,
+      clientCaps: attached ? ["ui-commands", "inline-widgets"] : undefined,
+      taskSuggestionDeliveryMode: attached ? "gateway" : undefined,
+      sessionControlAuthority: attached ? authority : undefined,
+    });
+  const owner = assemble(true);
+  const completion = assemble(false);
+  const names = ["screen", "show_widget", "suggest_task", "dismiss_task", "sessions_create"];
+  expect(completion.map((tool) => tool.name)).toEqual(expect.arrayContaining(names));
+  expect(surface(completion)).toEqual(surface(owner));
+  for (const name of names) {
+    const tool = completion.find((candidate) => candidate.name === name)!;
+    expect((await tool.execute("denied-" + name, {})).details).toMatchObject({ gated: true });
+  }
+  expect(surface(assemble(true))).toEqual(surface(owner));
+});
 
 function surface(tools: ReturnType<typeof createOpenClawCodingTools>) {
   return tools.map((tool) =>

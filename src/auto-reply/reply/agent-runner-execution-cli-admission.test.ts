@@ -8,6 +8,7 @@ import { buildCliMcpGrantContext } from "../../agents/cli-runner/mcp-grant-conte
 import { admitCliRunParams } from "../../agents/cli-runner/run-admission.js";
 import { prepareCliRunTerminalReply } from "../../agents/cli-runner/terminal-reply.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
+import { hashCliSessionText, resolveCliSessionReuse } from "../../agents/cli-session.js";
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import {
   installSessionPlacementAdmissionProvider,
@@ -166,7 +167,6 @@ it("reads cold CLI fallback metadata while another connection holds a shared-sta
 
 it.each([
   "ordinary",
-  "preserved",
   "revised",
   "revision-established",
   "retired-placement",
@@ -179,17 +179,11 @@ it.each([
   const placementRetired = kind === "retired-placement";
   const binding = { sessionId: "admitted-native-session", authProfileId: "anthropic:cli" };
   const settledBinding = { ...binding, sessionId: "settled-native-session" };
-  const { scope, entry, followupRun, turn, readBinding } = await sessionFixture(
+  const { scope, entry, turn, readBinding } = await sessionFixture(
     sessionKey,
     kind === "revised" ? { lifecycleRevision: "original" } : {},
     { "claude-cli": binding },
   );
-  if (kind === "preserved") {
-    followupRun.run.inputProvenance = {
-      kind: "inter_session",
-      sourceTool: "exec_approval_followup",
-    };
-  }
   state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
     const first = await runInitialFallbackAttempt(params, CLI.provider, CLI.model);
     if (rejected) {
@@ -259,12 +253,71 @@ it.each([
     cliSessionBinding: binding,
   });
   expect(observedBinding).toEqual(
-    kind === "rejected-clear"
-      ? undefined
-      : kind === "preserved" || rejected
-        ? binding
-        : settledBinding,
+    kind === "rejected-clear" ? undefined : rejected ? binding : settledBinding,
   );
+});
+
+it("reuses a completion's replacement binding when the next completion has the same tools", async () => {
+  const promptToolNamesHash = hashCliSessionText(JSON.stringify(["exec", "read"]));
+  const binding = {
+    sessionId: "previous-native-session",
+    promptToolNamesHash: hashCliSessionText(JSON.stringify(["read"])),
+  };
+  const { followupRun, turn, readBinding } = await sessionFixture(
+    "agent:main:cli-completion-continuity",
+    {},
+    { "claude-cli": binding },
+  );
+  followupRun.run.inputProvenance = {
+    kind: "inter_session",
+    sourceTool: "exec_approval_followup",
+  };
+  const reuseDecisions: ReturnType<typeof resolveCliSessionReuse>[] = [];
+  state.runCliAgentMock.mockImplementation(async (params: RunCliAgentParams) => {
+    reuseDecisions.push(
+      resolveCliSessionReuse({
+        binding: params.cliSessionBinding,
+        authEpochVersion: 1,
+        promptToolNamesHash,
+      }),
+    );
+    return boundReply({
+      sessionId: "replacement-native-session",
+      promptToolNamesHash,
+      resumeCheckpointId: `completion-${reuseDecisions.length}`,
+    });
+  });
+  const settledBindings: unknown[] = [];
+  const uninstall = installSessionPlacementAdmissionProvider(
+    placement(async (_claim, runLocal) => {
+      const result = await runLocal();
+      settledBindings.push(readBinding());
+      return result;
+    }),
+  );
+  onTestFinished(uninstall);
+
+  for (let completion = 0; completion < 2; completion += 1) {
+    useCliFallback();
+    expect((await executeAgentTurn(turn)).kind).toBe("success");
+  }
+
+  expect(reuseDecisions).toEqual([
+    { mode: "invalidate", invalidatedReason: "prompt-tools" },
+    { mode: "reuse", sessionId: "replacement-native-session" },
+  ]);
+  expect(settledBindings).toEqual([
+    {
+      sessionId: "replacement-native-session",
+      promptToolNamesHash,
+      resumeCheckpointId: "completion-1",
+    },
+    {
+      sessionId: "replacement-native-session",
+      promptToolNamesHash,
+      resumeCheckpointId: "completion-2",
+    },
+  ]);
 });
 
 it.each(["success", "claim-aborted", "successor-aborted", "restore-aborted"])(

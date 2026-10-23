@@ -670,7 +670,6 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
           result,
           expectedSession: params.sessionEntry,
           sessionStore: params.sessionStore,
-          preserveBinding: params.preserveCliSessionBinding,
         });
       },
     );

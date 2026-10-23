@@ -42,6 +42,7 @@ export function createLazyExecTool(
     sessionId: defaults?.sessionId,
   });
   const processToolAvailabilityRef = defaults?.processToolAvailabilityRef ?? {};
+  let processToolDeclared = processToolAvailabilityRef.value;
   const execSchema = createExecSchema(defaults);
   const execCompletionSchema = Type.Omit(execSchema, ["yieldMs", "background"]);
   let loadedTool: LoadedExecTool | undefined;
@@ -69,7 +70,7 @@ export function createLazyExecTool(
           presentation?.description ??
           describeExecTool({
             hasCronTool: defaults?.hasCronTool === true,
-            hasProcessTool: processToolAvailabilityRef.value,
+            hasProcessTool: processToolDeclared,
             autoReview: defaults?.mode === "auto",
           })
         );
@@ -77,7 +78,7 @@ export function createLazyExecTool(
       get parameters() {
         return (
           presentation?.parameters ??
-          (processToolAvailabilityRef.value === false ? execCompletionSchema : execSchema)
+          (processToolDeclared === false ? execCompletionSchema : execSchema)
         );
       },
       prepareBeforeToolCallParams: async (...args) =>
@@ -94,7 +95,9 @@ export function createLazyExecTool(
     } as AnyAgentTool,
     {
       prepareBeforeNormalization: true,
-      prepare: (_tool, callableTools) => {
+      prepare: (_tool, callableTools, offeredTools) => {
+        // Session declarations shape the prompt; only current authority enables background execution.
+        processToolDeclared = offeredTools.has("process");
         processToolAvailabilityRef.value = callableTools.has("process");
       },
       executionSchema: presentation?.parameters ? undefined : () => execExecutionSchema,

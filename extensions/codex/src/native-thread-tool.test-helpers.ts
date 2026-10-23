@@ -26,14 +26,13 @@ export function wrapCodexNativeThreadToolRequest(
     const options = args[3];
     await options?.assertCurrentAsync?.();
     options?.assertCurrent?.();
+    // Plain control requests fence dispatch, not response delivery; the tool owns that check.
     const response = await request(...args);
     if (options?.onResponse) {
       await options.onResponse(response, client, {
         assertCurrent: options.assertCurrent ?? (() => undefined),
         assertCurrentAsync: options.assertCurrentAsync,
       });
-    } else {
-      options?.assertCurrent?.();
     }
     return response;
   };

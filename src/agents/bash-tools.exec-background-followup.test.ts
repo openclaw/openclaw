@@ -36,6 +36,8 @@ import {
   createAdmittedRunOperatorAuthority,
   readAdmittedRunOperatorAuthority,
 } from "./admitted-run-context.js";
+import { gateAgentToolExecution } from "./agent-tool-availability.js";
+import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import { waitForExecScope } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
@@ -51,6 +53,7 @@ import {
 import { createProcessTool } from "./bash-tools.process.js";
 import type { RunEmbeddedAgentParams } from "./embedded-agent-runner/run/params.js";
 import { runEmbeddedAgent } from "./embedded-agent.js";
+import { createLazyExecTool } from "./lazy-exec-tool.js";
 import {
   preparePluginToolExecutionCapabilities,
   type PluginToolExecutionCapabilities,
@@ -240,13 +243,28 @@ test.each([
   }
 });
 
-test("does not advertise detached continuation when process is unavailable", async () => {
-  const exec = createExecTool({
+test.each(["absent", "gated"])("waits for completion when process is %s", async (availability) => {
+  const source = createLazyExecTool({
     ...fullGatewayExec,
-    processToolAvailabilityRef: { value: false },
     notifyOnExit: false,
   });
-  const result = await exec.execute("followup-foreground", {
+  const [exec] = finalizeAgentTools({
+    tools: [
+      source,
+      ...(availability === "gated"
+        ? [gateAgentToolExecution(createProcessTool(), "Process is unavailable this turn.")]
+        : []),
+    ],
+    hookContext: {},
+    wrapBeforeToolCallHook: false,
+  });
+  const finalized = expectDefined(exec, "finalized exec tool");
+  for (const field of ["background", "yieldMs"]) {
+    const assertion =
+      availability === "gated" ? expect(finalized.parameters) : expect(finalized.parameters).not;
+    assertion.toHaveProperty(`properties.${field}`);
+  }
+  const result = await finalized.execute("followup-foreground", {
     command: nodeCommand('process.stdout.write("FOREGROUND_COMPLETE")'),
     background: true,
   });

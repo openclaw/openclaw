@@ -19,7 +19,6 @@ import {
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import { recordModelFallbackStop } from "../../agents/model-fallback-stop.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
-import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import {
@@ -525,9 +524,6 @@ export async function runCliFallbackCandidate(
           result: candidateResult,
           expectedSession: sessionEntry,
           sessionStore: turn.activeSessionStore,
-          preserveBinding: shouldPreserveUserFacingSessionStateForInputProvenance(
-            turn.followupRun.run.inputProvenance,
-          ),
         });
       },
     ),

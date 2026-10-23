@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   gateAgentToolExecution,
+  isAgentToolExecutionAvailable,
   markAgentToolExecutionUnavailable,
 } from "./agent-tool-availability.js";
 import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
@@ -45,14 +46,16 @@ export function resolveTurnToolSurface(params: {
 }) {
   const turnAuthorizedNames = new Set(
     params.turnTools
-      .filter((tool) => !params.ownerOnlyDenied.has(tool.name))
+      .filter(
+        (tool) => !params.ownerOnlyDenied.has(tool.name) && isAgentToolExecutionAvailable(tool),
+      )
       .map((tool) => tool.name),
   );
   const turnAuthorized = (tool: { name: string }) => turnAuthorizedNames.has(tool.name);
   const turnPolicyTools = new Map(params.turnTools.map((tool) => [tool.name, tool]));
   const offered = params.sessionTools ?? params.turnTools;
   const tools = offered.map((tool) => {
-    if (turnAuthorized(tool)) {
+    if (turnAuthorized(tool) || !isAgentToolExecutionAvailable(tool)) {
       return tool;
     }
     const ownerOnly = params.ownerOnlyDenied.has(tool.name);

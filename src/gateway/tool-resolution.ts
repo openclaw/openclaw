@@ -238,15 +238,17 @@ export async function resolveGatewayScopedTools(
     classificationAgentId: policyAgentId,
   });
   const sandboxed = sandboxRuntime.sandboxed;
-  const preparedSandboxPolicy = sandboxRuntime.sandboxed ? sandboxRuntime.toolPolicy : undefined;
   const sessionControlAuthority = readAdmittedRunOperatorAuthority(params.admittedRunContext);
-  const { policy: sandboxPolicy, renameOnly: sandboxSessionRenameOnly } =
-    prepareSandboxSessionTools({
-      policy: preparedSandboxPolicy,
-      senderIsOwner:
-        surface === "loopback" && params.admittedRunContext ? params.senderIsOwner : undefined,
-      authority: sessionControlAuthority,
-    });
+  const {
+    policy: sandboxPolicy,
+    sessionPolicy: sandboxSessionPolicy,
+    renameOnly: sandboxSessionRenameOnly,
+  } = prepareSandboxSessionTools({
+    policy: sandboxed ? sandboxRuntime.toolPolicy : undefined,
+    senderIsOwner:
+      surface === "loopback" && params.admittedRunContext ? params.senderIsOwner : undefined,
+    authority: sessionControlAuthority,
+  });
   const excludedToolNames = params.excludeToolNames ? Array.from(params.excludeToolNames) : [];
   const mediatedToolNames = new Set(
     Array.from(params.mediatedToolNames ?? [], (name) => normalizeToolPolicyName(name)).filter(
@@ -304,15 +306,15 @@ export async function resolveGatewayScopedTools(
     agentProviderPolicy,
     groupPolicy,
     senderPolicy,
-    sandboxPolicy,
     subagentPolicy,
   ];
-  const basePolicies = [...sessionPolicies, inheritedToolPolicy];
+  const basePolicies = [...sessionPolicies, sandboxPolicy, inheritedToolPolicy];
   const requestedToolPolicy =
     gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined;
   const requestedPolicies = [...basePolicies, requestedToolPolicy];
   const catalogPolicies = [
     ...sessionPolicies,
+    stableSessionSurface ? sandboxSessionPolicy : sandboxPolicy,
     completionHandoff ? undefined : inheritedToolPolicy,
     requestedToolPolicy,
   ];
@@ -662,7 +664,10 @@ export async function resolveGatewayScopedTools(
           senderPolicy,
           agentId: policyAgentId,
         }),
-        { policy: sandboxPolicy, label: "sandbox tools.allow" },
+        {
+          policy: scope === "session" ? sandboxSessionPolicy : sandboxPolicy,
+          label: "sandbox tools.allow",
+        },
         { policy: subagentPolicy, label: "subagent tools.allow" },
         {
           policy: scope === "session" && completionHandoff ? undefined : inheritedToolPolicy,
@@ -704,9 +709,10 @@ export async function resolveGatewayScopedTools(
   const { tools, exportedTools } = stableSessionSurface
     ? resolveTurnToolSurface({
         turnTools,
-        sessionTools: completionHandoff
-          ? completeTools(filterGatewayToolPolicies(params.cfg, undefined, "session"))
-          : undefined,
+        sessionTools:
+          completionHandoff || sandboxSessionPolicy !== sandboxPolicy
+            ? completeTools(filterGatewayToolPolicies(params.cfg, undefined, "session"))
+            : undefined,
         ownerOnlyDenied: new Set(ownerOnlyGatewayDeny),
         schedulerSystemTurn: isSchedulerSystemTurn(params),
       })

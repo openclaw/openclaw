@@ -37,7 +37,6 @@ export type AgentAttemptParams = Pick<
     cwd?: string;
     body: string;
     transcriptBody?: string;
-    preserveCliSessionBinding?: boolean;
     resolvedThinkLevel: ThinkLevel;
     thinkingExplicit?: boolean;
     fastMode?: FastMode;

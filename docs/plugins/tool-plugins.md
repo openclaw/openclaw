@@ -208,9 +208,14 @@ tool({
 ```
 
 Use `factory` when a tool needs the runtime tool context before it can be
-created - to opt out for a specific run, inspect sandbox state, or bind
-runtime helpers. Metadata stays static even though the concrete tool is built
-at runtime.
+created - to inspect session configuration or bind runtime helpers. Keep names,
+descriptions, and parameter schemas stable across turns. Transient owner, client,
+or delivery availability must gate execution rather than remove a definition.
+Use `gateAgentToolExecution` from `openclaw/plugin-sdk/tool-plugin` for a turn
+that cannot execute a configured tool. The gate preserves its declaration,
+skips argument preparation and execution, and excludes it from callable
+descendant capabilities. It does not grant authority: enabled executors must
+still check live authority before protected work and after awaits.
 
 ```typescript
 tool({
@@ -274,7 +279,8 @@ policy, not authority: a wake is never an owner turn (`senderIsOwner` is not
 Gateway `agent` method accepts exec provenance only from backend callers.
 
 A factory may return a core `AgentTool`, an array of them, or `null` or
-`undefined` to opt out, as the example above does. When it returns a concrete
+`undefined` to opt out for session configuration, as the example above does.
+Do not use this to hide a tool on a completion turn or when a client disconnects. When it returns a concrete
 tool, that tool uses the core runtime signature
 `execute(toolCallId, params, signal?, onUpdate?)` with the tool call ID first.
 That is the opposite argument order from the declarative
@@ -306,12 +312,20 @@ To participate when the exact parent resumes after an explicit `sessions_yield`,
 register an `OpenClawPluginToolFactory<2>` descriptor through `api.registerTool`:
 
 ```typescript
+import { gateAgentToolExecution } from "openclaw/plugin-sdk/tool-plugin";
+
 api.registerTool(
   {
     contextVersion: 2,
     create(context) {
-      if (context.senderIsOwner !== true) return null;
-      return createPrivilegedTool({ assertCurrent: context.assertInvocationCurrent });
+      const assertCurrent = () => {
+        context.assertInvocationCurrent();
+        if (context.senderIsOwner !== true) throw new Error("Owner authority required");
+      };
+      const tool = createPrivilegedTool({ assertCurrent });
+      return context.senderIsOwner === true
+        ? tool
+        : gateAgentToolExecution(tool, "Owner authority required; do not retry this turn.");
     },
   },
   { name: "my_privileged_tool" },

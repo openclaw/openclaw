@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import {
   createPluginStateKeyedStoreForTests,
   createPluginStateSyncKeyedStoreForTests,
@@ -337,7 +337,7 @@ describe("codex plugin", () => {
     expect(registerSessionCatalog).not.toHaveBeenCalled();
   });
 
-  it("registers the five shipped supervision tools only when supervision is enabled", () => {
+  it("keeps supervision declarations stable while gating nonowner execution", async () => {
     const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
     plugin.register(
       createCodexTestApi({
@@ -348,11 +348,32 @@ describe("codex plugin", () => {
 
     const registration = registeredCodexTools(registerTool);
     expect(registration.options).toEqual({ names: [...CODEX_SUPERVISION_COMPAT_TOOL_NAMES] });
-    expect(registration.create({ senderIsOwner: true }).map((tool) => tool.name)).toEqual([
-      ...CODEX_SUPERVISION_COMPAT_TOOL_NAMES,
-    ]);
-    expect(registration.create({ senderIsOwner: false })).toEqual([]);
-    expect(registration.create()).toEqual([]);
+    const owner = registration.create({ senderIsOwner: true });
+    const declaration = (tools: AnyAgentTool[]) =>
+      JSON.stringify(
+        tools.map(({ name, description, parameters }) => ({ name, description, parameters })),
+      );
+    expect(owner.map((tool) => tool.name)).toEqual([...CODEX_SUPERVISION_COMPAT_TOOL_NAMES]);
+    for (const tools of [registration.create({ senderIsOwner: false }), registration.create()]) {
+      expect(declaration(tools)).toBe(declaration(owner));
+      for (const tool of tools) {
+        await expect(tool.execute("denied", {})).resolves.toMatchObject({
+          details: { gated: true },
+        });
+      }
+    }
+    expect(declaration(registration.create({ senderIsOwner: true }))).toBe(declaration(owner));
+
+    // Use the actual context object: the test convenience factory spreads its input.
+    const context = { senderIsOwner: true, assertInvocationCurrent() {} };
+    const retained = registration.factory.create(context);
+    if (!Array.isArray(retained)) {
+      throw new Error("Expected supervision tools");
+    }
+    context.senderIsOwner = false;
+    for (const tool of retained) {
+      await expect(tool.execute("revoked", {})).rejects.toThrow("owner-authorized sender");
+    }
   });
 
   it.each([

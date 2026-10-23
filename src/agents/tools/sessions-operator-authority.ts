@@ -77,24 +77,23 @@ export function prepareSandboxSessionTools(params: {
   policy?: SandboxToolPolicy;
   senderIsOwner?: boolean;
   authority?: AdmittedRunOperatorAuthority;
-}): { policy?: SandboxToolPolicy; renameOnly: boolean } {
+}): { policy?: SandboxToolPolicy; sessionPolicy?: SandboxToolPolicy; renameOnly: boolean } {
   const policy = params.policy;
   const defaultAllow = policy?.[SANDBOX_DEFAULT_TOOL_ALLOW];
-  if (
-    params.senderIsOwner !== false ||
-    !policy ||
-    !defaultAllow ||
-    defaultAllow !== policy.allow ||
-    !hasSessionWriteAuthority(params.authority)
-  ) {
-    return { policy, renameOnly: false };
+  if (!policy || !defaultAllow || defaultAllow !== policy.allow) {
+    return { policy, sessionPolicy: policy, renameOnly: false };
   }
   const added = ["sessions", "sessions_create"].filter((name) => {
     const blocked = classifyToolAgainstSandboxToolPolicy(name, policy);
     return blocked.blockedByAllow && !blocked.blockedByDeny;
   });
+  // Default session declarations do not depend on a particular turn's operator grant.
+  // Only the admitted guest turn receives these additional execution permissions.
+  const sessionPolicy = added.length ? { ...policy, allow: [...defaultAllow, ...added] } : policy;
+  const admitted = params.senderIsOwner === false && hasSessionWriteAuthority(params.authority);
   return {
-    policy: added.length ? { ...policy, allow: [...defaultAllow, ...added] } : policy,
-    renameOnly: added.includes("sessions"),
+    policy: admitted ? sessionPolicy : policy,
+    sessionPolicy,
+    renameOnly: admitted && added.includes("sessions"),
   };
 }

@@ -16,7 +16,7 @@ import type { EmbeddedAgentRunResult } from "./types.js";
 type CliCandidateSettlement = Pick<
   Parameters<typeof persistCliSessionBindingResult>[0],
   "result" | "expectedSession" | "sessionStore"
-> & { preserveBinding?: boolean };
+>;
 
 /** Acquire native continuity after placement admission and settle it before releasing the turn. */
 export function withAdmittedCliCandidate(
@@ -63,12 +63,9 @@ export function withAdmittedCliCandidate(
         sessionEntry: sessionEntry ? { ...sessionEntry } : undefined,
         cliSessionBinding: getCliSessionBinding(sessionEntry, params.provider),
         assertSettlementCurrent,
-        settleResult: async ({ result, expectedSession, sessionStore, preserveBinding }) => {
+        settleResult: async ({ result, expectedSession, sessionStore }) => {
           const classification = params.classifyResult?.(result);
-          if (
-            preserveBinding ||
-            (classification && result.meta.agentMeta?.clearCliSessionBinding !== true)
-          ) {
+          if (classification && result.meta.agentMeta?.clearCliSessionBinding !== true) {
             return result;
           }
           return persistCliSessionBindingResult({

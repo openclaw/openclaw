@@ -50,7 +50,9 @@ describe("native Codex thread tool", () => {
       workspaceDir: path.join(fixture.root, "workspace"),
       sessionKey: "agent:main:telegram:direct:owner",
       sessionId: params?.sessionId === null ? undefined : (params?.sessionId ?? "session-id"),
-      senderIsOwner: params?.owner ?? true,
+      get senderIsOwner() {
+        return params?.owner ?? true;
+      },
     };
     await upsertSessionEntry({
       agentId: "main",
@@ -95,13 +97,89 @@ describe("native Codex thread tool", () => {
     });
   }
 
-  it("materializes only for owner turns with user-home or supervision access", () =>
+  it("keeps owner/nonowner/owner declarations stable with native-home or supervision access", () =>
     withFixture(async () => {
-      expect(await createTool()).not.toBeNull();
-      expect(await createTool({ owner: false })).toBeNull();
+      const owner = await createTool();
+      const request = vi.fn();
+      const readAsync = vi.fn(
+        testCodexAppServerBindingStore.readAsync.bind(testCodexAppServerBindingStore),
+      );
+      const nonowner = await createTool({
+        owner: false,
+        request,
+        bindingStore: { ...testCodexAppServerBindingStore, readAsync },
+      });
+      const declaration = (tool: Awaited<ReturnType<typeof createTool>>) =>
+        JSON.stringify({
+          name: tool?.name,
+          description: tool?.description,
+          parameters: tool?.parameters,
+        });
+      expect(owner?.name).toBe("codex_threads");
+      expect(declaration(nonowner)).toBe(declaration(owner));
+      expect(declaration(await createTool())).toBe(declaration(owner));
+      await expect(nonowner!.execute("denied", { action: "list" })).resolves.toMatchObject({
+        details: { gated: true },
+      });
+      expect(readAsync).not.toHaveBeenCalled();
+      expect(request).not.toHaveBeenCalled();
       expect(await createTool({ homeScope: "agent" })).toBeNull();
+      expect(await createTool({ homeScope: "agent", owner: false })).toBeNull();
       expect(await createTool({ omitHomeScope: true, supervision: true })).not.toBeNull();
     }));
+
+  it.each(["before-execute", "binding-read", "native-read"] as const)(
+    "rejects owner revocation at %s before dispatching a native fork",
+    (timing) =>
+      withFixture(async () => {
+        const params = { owner: true };
+        const readAsync = vi.fn(
+          testCodexAppServerBindingStore.readAsync.bind(testCodexAppServerBindingStore),
+        );
+        const request = vi.fn(async () => {
+          params.owner = false;
+          return { thread: { id: "source-thread", status: { type: "idle" } } };
+        });
+        const tool = await createTool(
+          Object.assign(params, {
+            request,
+            bindingStore: { ...testCodexAppServerBindingStore, readAsync },
+          }),
+        );
+        if (timing === "before-execute") {
+          params.owner = false;
+        } else if (timing === "binding-read") {
+          readAsync.mockImplementationOnce(async () => {
+            params.owner = false;
+            return undefined;
+          });
+        }
+        await expect(
+          tool!.execute("revoked", { action: "fork", thread_id: "source-thread" }),
+        ).rejects.toThrow("owner-authorized sender");
+        expect(request).toHaveBeenCalledTimes(timing === "native-read" ? 1 : 0);
+        if (timing === "before-execute") {
+          expect(readAsync).not.toHaveBeenCalled();
+        }
+      }),
+  );
+
+  it.each(["list", "read"] as const)(
+    "does not return %s data after owner authority is revoked during the response",
+    (action) =>
+      withFixture(async () => {
+        const params = { owner: true };
+        const request = vi.fn(async () => {
+          params.owner = false;
+          return { thread: { id: "private-thread" }, data: [] };
+        });
+        const tool = await createTool(Object.assign(params, { request }));
+        await expect(
+          tool!.execute("revoked-response", { action, thread_id: "private-thread" }),
+        ).rejects.toThrow("owner-authorized sender");
+        expect(request).toHaveBeenCalledTimes(1);
+      }),
+  );
 
   it("routes a private supervised binding through the supervision connection with native auth", () =>
     withFixture(async () => {
@@ -399,53 +477,79 @@ describe("native Codex thread tool", () => {
       });
     }));
 
-  it("forks a native thread and attaches the fork to the OpenClaw session", () =>
-    withFixture(async () => {
-      const request = vi.fn(async (_config, method: string) =>
-        method === CODEX_CONTROL_METHODS.readThread
-          ? { thread: { id: "source-thread", status: { type: "notLoaded" } } }
-          : {
-              thread: { id: "forked-thread", cwd: "/tmp/project", status: { type: "idle" } },
-              model: "gpt-5.5",
-              modelProvider: "openai",
+  it.each([false, true])(
+    "settles an attached native fork when owner closes after commit=%s",
+    (closeAfterCommit) =>
+      withFixture(async () => {
+        const request = vi.fn(async (_config, method: string) =>
+          method === CODEX_CONTROL_METHODS.readThread
+            ? { thread: { id: "source-thread", status: { type: "notLoaded" } } }
+            : {
+                thread: { id: "forked-thread", cwd: "/tmp/project", status: { type: "idle" } },
+                model: "gpt-5.5",
+                modelProvider: "openai",
+              },
+        );
+        const params = { owner: true };
+        const mutate: CodexAppServerBindingStore["mutate"] = async (...args) => {
+          const committed = await testCodexAppServerBindingStore.mutate(...args);
+          if (committed && closeAfterCommit) {
+            params.owner = false;
+          }
+          return committed;
+        };
+        const tool = await createTool(
+          Object.assign(params, {
+            request,
+            sessionId: null,
+            bindingStore: { ...testCodexAppServerBindingStore, mutate },
+          }),
+        );
+
+        const result = await tool
+          ?.execute("call-2", {
+            action: "fork",
+            thread_id: "source-thread",
+          })
+          .then(
+            (value) => ({ value }),
+            (error: unknown) => ({ error }),
+          );
+
+        expect(request).toHaveBeenNthCalledWith(
+          1,
+          { appServer: { homeScope: "user" } },
+          CODEX_CONTROL_METHODS.readThread,
+          { threadId: "source-thread", includeTurns: false },
+          expect.any(Object),
+        );
+        expect(request).toHaveBeenNthCalledWith(
+          2,
+          { appServer: { homeScope: "user" } },
+          CODEX_CONTROL_METHODS.forkThread,
+          { threadId: "source-thread", threadSource: "user", excludeTurns: true },
+          expect.any(Object),
+        );
+        await expect(
+          readCodexAppServerBinding("session-id", { agentDir: path.join(fixture.root, "agent") }),
+        ).resolves.toMatchObject({
+          threadId: "forked-thread",
+          cwd: "/tmp/project",
+          model: "gpt-5.5",
+          modelProvider: "openai",
+          historyCoveredThrough: expect.any(String),
+        });
+        expect(result).toMatchObject({
+          value: {
+            details: {
+              action: "fork",
+              sourceThreadId: "source-thread",
+              attached: true,
             },
-      );
-      const tool = await createTool({ request, sessionId: null });
-
-      const result = await tool?.execute("call-2", {
-        action: "fork",
-        thread_id: "source-thread",
-      });
-
-      expect(request).toHaveBeenNthCalledWith(
-        1,
-        { appServer: { homeScope: "user" } },
-        CODEX_CONTROL_METHODS.readThread,
-        { threadId: "source-thread", includeTurns: false },
-        expect.any(Object),
-      );
-      expect(request).toHaveBeenNthCalledWith(
-        2,
-        { appServer: { homeScope: "user" } },
-        CODEX_CONTROL_METHODS.forkThread,
-        { threadId: "source-thread", threadSource: "user", excludeTurns: true },
-        expect.any(Object),
-      );
-      await expect(
-        readCodexAppServerBinding("session-id", { agentDir: path.join(fixture.root, "agent") }),
-      ).resolves.toMatchObject({
-        threadId: "forked-thread",
-        cwd: "/tmp/project",
-        model: "gpt-5.5",
-        modelProvider: "openai",
-        historyCoveredThrough: expect.any(String),
-      });
-      expect(result?.details).toMatchObject({
-        action: "fork",
-        sourceThreadId: "source-thread",
-        attached: true,
-      });
-    }));
+          },
+        });
+      }),
+  );
 
   it.each([
     {

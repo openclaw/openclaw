@@ -38,12 +38,14 @@ function createTool(
 ) {
   return createCodexSupervisionTools({
     getPluginConfig,
-    senderIsOwner: true,
     env: {},
     resolveAuthProfileId: auth.resolveCodexAppServerAuthProfileIdForAgent,
     withAuthProfileIdAtEffect: auth.withCodexAppServerAuthProfileIdAtEffect,
     resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
     ...options,
+    get senderIsOwner() {
+      return options.senderIsOwner ?? true;
+    },
   }).find((candidate) => candidate.name === name)!;
 }
 
@@ -154,7 +156,8 @@ describe("Codex supervision request lifetime", () => {
   ])(
     "keeps $method bound to current policy through client acquisition",
     async ({ toolName, method }) => {
-      for (const change of ["none", "policy", "endpoint"] as const) {
+      for (const change of ["none", "policy", "endpoint", "owner"] as const) {
+        let senderIsOwner = true;
         let pluginConfig = writeConfig();
         const harness = respondingClient((requestMethod) =>
           requestMethod === "thread/read"
@@ -169,7 +172,11 @@ describe("Codex supervision request lifetime", () => {
             acquiringMutation.resolve();
             return acquired.promise;
           });
-        const tool = createTool(toolName, () => pluginConfig);
+        const tool = createTool(toolName, () => pluginConfig, {
+          get senderIsOwner() {
+            return senderIsOwner;
+          },
+        });
         const mutation = tool.execute("control", { ...sessionParams, text: "continue" });
         void mutation.catch(() => {});
         try {
@@ -178,6 +185,8 @@ describe("Codex supervision request lifetime", () => {
             pluginConfig = writeConfig("codex-a", false);
           } else if (change === "endpoint") {
             pluginConfig = writeConfig("codex-b");
+          } else if (change === "owner") {
+            senderIsOwner = false;
           }
           acquired.resolve(harness.client);
           if (change === "none") {
@@ -186,7 +195,11 @@ describe("Codex supervision request lifetime", () => {
             });
           } else {
             await expect(mutation).rejects.toThrow(
-              change === "policy" ? "write controls are disabled" : "was removed or changed",
+              change === "policy"
+                ? "write controls are disabled"
+                : change === "owner"
+                  ? "owner-authorized sender"
+                  : "was removed or changed",
             );
           }
           expect(

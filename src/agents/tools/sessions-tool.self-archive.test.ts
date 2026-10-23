@@ -332,19 +332,16 @@ describe("sessions tool ownership", () => {
             ? authority("rename-requester", ["operator.sessions.write"])
             : undefined,
       });
-      if (surface === "sandbox") {
-        expect(tool.description).toContain(
-          "Archive and restore are unavailable in this authority context.",
-        );
-        expect(tool.parameters).not.toHaveProperty("properties.archived");
-        return;
-      }
       // Turn authority does not change the definition; the archive call is refused.
       expect(tool.description).toContain(
         "Turns without owner authority are limited when the action runs.",
       );
       await expect(tool.execute("archive", { action: "patch", archived: true })).rejects.toThrow(
-        surface === "rename" ? /current operator write grant/ : /Only assign_owner/,
+        surface === "sandbox"
+          ? /only permits renaming/
+          : surface === "rename"
+            ? /current operator write grant/
+            : /Only assign_owner/,
       );
     },
   );

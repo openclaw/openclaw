@@ -272,7 +272,7 @@ describe("openclaw-tools progress_card gating", () => {
     expect(disabledTools).not.toContain("transcripts");
   });
 
-  it("registers task suggestions only for sessions with an actionable gateway sink", () => {
+  it("keeps task suggestion declarations for sessions without a current gateway sink", () => {
     const withoutSession = createFastToolNames({
       cwd: "/repo",
       taskSuggestionDeliveryMode: "gateway",
@@ -289,8 +289,8 @@ describe("openclaw-tools progress_card gating", () => {
 
     expect(withoutSession).not.toContain("suggest_task");
     expect(withoutSession).not.toContain("dismiss_task");
-    expect(withoutSink).not.toContain("suggest_task");
-    expect(withoutSink).not.toContain("dismiss_task");
+    expect(withoutSink).toContain("suggest_task");
+    expect(withoutSink).toContain("dismiss_task");
     expect(withSink).toEqual(expect.arrayContaining(["suggest_task", "dismiss_task"]));
   });
 
@@ -403,28 +403,29 @@ describe("gateway client capability tool filtering", () => {
     }
   });
 
-  it("hides current-channel widgets when no presenter matches the trusted run facts", () => {
+  it("gates current-channel widgets when no presenter matches the trusted run facts", async () => {
     registerPresenters(widgetPresenter());
 
     try {
-      expect(
-        hasTool(
-          createOpenClawTools({ agentChannel: "discord", agentAccountId: "unconfigured" }),
-          "show_widget",
-        ),
-      ).toBe(false);
-      expect(hasTool(createOpenClawTools({ agentChannel: "slack" }), "show_widget")).toBe(false);
+      for (const options of [
+        { agentChannel: "discord", agentAccountId: "unconfigured" },
+        { agentChannel: "slack" },
+      ]) {
+        const tool = expectToolNamed(createOpenClawTools(options), "show_widget");
+        expect((await tool.execute("unavailable", {})).details).toMatchObject({ gated: true });
+      }
     } finally {
       resetPluginRuntimeStateForTest();
     }
   });
 
-  it("fails closed when current-channel presenter matching is ambiguous", () => {
+  it("fails closed when current-channel presenter matching is ambiguous", async () => {
     const match: WidgetPresenter["match"] = (context) => context.messageChannel === "discord";
     registerPresenters(widgetPresenter({ match }), widgetPresenter({ match }));
 
     try {
-      expect(hasTool(createOpenClawTools({ agentChannel: "discord" }), "show_widget")).toBe(false);
+      const tool = expectToolNamed(createOpenClawTools({ agentChannel: "discord" }), "show_widget");
+      expect((await tool.execute("ambiguous", {})).details).toMatchObject({ gated: true });
     } finally {
       resetPluginRuntimeStateForTest();
     }
@@ -728,7 +729,7 @@ describe("gateway client capability tool filtering", () => {
     ).toBe(false);
   });
 
-  it("does not let tools.allow resurrect a gated tool for a channel run", () => {
+  it("does not let tools.allow authorize a gated tool for a channel run", async () => {
     const tools = createOpenClawCodingTools({
       messageProvider: "telegram",
       disableMessageTool: true,
@@ -742,7 +743,9 @@ describe("gateway client capability tool filtering", () => {
       },
     });
 
-    expect(hasTool(tools, "show_widget")).toBe(false);
+    expect(
+      (await expectToolNamed(tools, "show_widget").execute("denied", {})).details,
+    ).toMatchObject({ gated: true });
   });
 
   it("does not add the core widget tool to plugin-only construction plans", () => {

@@ -11,6 +11,7 @@ import {
   type OpenClawPluginToolContext,
 } from "./plugin-entry.js";
 
+export { gateAgentToolExecution } from "../agents/agent-tool-availability.js";
 export { ToolArgumentValidationError } from "../../packages/agent-core/src/errors.js";
 
 /** An explicitly open dictionary whose unknown-valued keys survive OpenAI compatibility normalization. */

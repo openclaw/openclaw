@@ -7,7 +7,7 @@ import {
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import { applyGatewayToolPolicy } from "./gateway-tool-policy.js";
-import { filterToolsByClientCaps } from "./openclaw-tools.client-caps.js";
+import { gateToolsByClientCaps } from "./openclaw-tools.client-caps.js";
 import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
 import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -23,7 +23,7 @@ export function finalizeOpenClawTools(params: {
 }): AnyAgentTool[] {
   const { options, config, hookAgentId, gatewayCallerAccountId } = params;
   const allTools = applyGatewayToolPolicy(
-    finalizeAgentToolAvailability(filterToolsByClientCaps(params.tools, options?.clientCaps)),
+    finalizeAgentToolAvailability(gateToolsByClientCaps(params.tools, options?.clientCaps)),
     config,
   );
   options?.recordToolPrepStage?.("openclaw-tools:client-capabilities");

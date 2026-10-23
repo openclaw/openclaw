@@ -12,6 +12,7 @@ import {
   asOptionalRecord,
   asSafeIntegerInRange,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { gateAgentToolExecution } from "openclaw/plugin-sdk/tool-plugin";
 import { jsonResult } from "openclaw/plugin-sdk/tool-results";
 import { Type, type TProperties } from "typebox";
 import { CODEX_CONTROL_METHODS, type CodexControlMethod } from "./app-server/capabilities.js";
@@ -136,23 +137,29 @@ function redactNativeThreadResponse(value: unknown): unknown {
   return redacted;
 }
 
-/** Builds the native Codex thread tool only for owner runs with native-home access. */
+/** Keeps the native-home tool definition stable while gating execution on live ownership. */
 export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAgentTool | null {
-  if (options.context.senderIsOwner !== true) {
-    return null;
-  }
   const configured = readCodexPluginConfig(options.getPluginConfig());
   if (configured.appServer?.homeScope !== "user" && configured.supervision?.enabled !== true) {
     return null;
   }
 
-  return {
+  const assertOwnerCurrent = () => {
+    options.context.assertInvocationCurrent?.();
+    if (options.context.senderIsOwner !== true) {
+      throw new Error(
+        "Codex native thread ownership changed; an owner-authorized sender is required.",
+      );
+    }
+  };
+  const tool: AnyAgentTool = {
     name: "codex_threads",
     label: "Codex Threads",
     description:
       "Manage native Codex threads: list, read, fork, rename, archive (confirm:true), unarchive. When supervision is enabled, raw transcript reads and every mutation require their matching supervision policy option.",
     parameters: CodexThreadsParamsSchema,
     async execute(_toolCallId, rawParams) {
+      assertOwnerCurrent();
       const runtimeConfig = () =>
         options.context.getRuntimeConfig?.() ??
         options.context.runtimeConfig ??
@@ -215,6 +222,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
       const run = async (archiveThreadId?: string) => {
         const { captureSessionEntryCurrentCheckAsync, composeSessionEntryCommitGuards } =
           await import("openclaw/plugin-sdk/session-binding-runtime");
+        assertOwnerCurrent();
         prepared =
           sessionKey && agentId
             ? await captureSessionEntryCurrentCheckAsync({
@@ -226,7 +234,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
               })
             : undefined;
         using _ = { [Symbol.dispose]: () => prepared?.release() };
-        options.context.assertInvocationCurrent?.();
+        assertOwnerCurrent();
         const archiveSession = archiveThreadId ? currentSession() : undefined;
         if (archiveThreadId && !archiveSession) {
           throw new Error("cannot safely archive a native Codex thread without a session identity");
@@ -247,6 +255,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
         const { resolveCodexSupervisionAppServerRuntimeOptions } =
           await import("./app-server/config-runtime.js");
         const requestOptions = async (): Promise<CodexControlRequestOptions> => {
+          assertOwnerCurrent();
           const base = {
             agentId,
             agentDir: options.context.agentDir,
@@ -261,7 +270,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
           const binding = identity ? await options.bindingStore.readAsync(identity) : undefined;
           const selection = codexBindingConnectionSelection(binding);
           const assertCurrent = () => {
-            options.context.assertInvocationCurrent?.();
+            assertOwnerCurrent();
             const current = currentSession();
             if (
               runtimeConfig() !== base.config ||
@@ -272,6 +281,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
               throw new Error("Codex native thread ownership changed; retry the request.");
             }
           };
+          assertCurrent();
           if (
             binding?.connectionScope === "supervision" ||
             admissionPlugin.appServer?.homeScope === "user"
@@ -309,7 +319,13 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
         const scopedRequest = async <M extends CodexControlMethod & CodexAppServerRequestMethod>(
           method: M,
           requestParams: CodexAppServerRequestParams<M>,
-        ) => request(admissionPlugin, method, requestParams, await requestOptions());
+        ) => {
+          const currentOptions = await requestOptions();
+          currentOptions.assertCurrent?.();
+          const response = await request(admissionPlugin, method, requestParams, currentOptions);
+          currentOptions.assertCurrent?.();
+          return response;
+        };
         if (action === "list") {
           const cursor = readStringParam(params, "cursor");
           const searchTerm = readStringParam(params, "search");
@@ -355,10 +371,12 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
           return threadResult(response);
         }
 
+        assertOwnerCurrent();
         const session = archiveAdmission?.session ?? currentSession();
         const binding = session
           ? await options.bindingStore.readAsync(currentIdentity(session.sessionId))
           : undefined;
+        assertOwnerCurrent();
         if (archiveAdmission) {
           const { identity, session: admittedSession } = archiveAdmission;
           const archivedBinding = binding;
@@ -385,6 +403,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
               "cannot archive a native Codex thread owned by another OpenClaw session",
             );
           }
+          assertOwnerCurrent();
           await assertCodexArchiveDescendantsUnowned({
             bindingStore: options.bindingStore,
             threadId,
@@ -400,10 +419,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
                 kind: "clear",
                 threadId,
               },
-              composeSessionEntryCommitGuards([
-                options.context.assertInvocationCurrent,
-                prepared?.source,
-              ]),
+              composeSessionEntryCommitGuards([assertOwnerCurrent, prepared?.source]),
             );
           }
           return jsonResult({ action, threadId });
@@ -432,6 +448,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
         } = await import("./app-server/thread-ownership.js");
         const { closeCodexStartupClientBestEffort } =
           await import("./app-server/attempt-client-cleanup.js");
+        forkOptions.assertCurrent?.();
         if (attach) {
           assertCodexBindingMayBeReplaced(binding, "attaching a different native fork");
           // Codex can snapshot an active source as interrupted. Attached forks require a known-safe
@@ -444,6 +461,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
           );
           assertThreadIdle(current, threadId, "fork");
         }
+        forkOptions.assertCurrent?.();
         const response = await request(
           admissionPlugin,
           CODEX_CONTROL_METHODS.forkThread,
@@ -517,6 +535,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
             },
           },
         );
+        // onResponse fences the binding commit; later revocation cannot undo a settled fork.
         const result = {
           action,
           sourceThreadId: threadId,
@@ -537,4 +556,10 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
       return run();
     },
   };
+  return options.context.senderIsOwner === true
+    ? tool
+    : gateAgentToolExecution(
+        tool,
+        "Codex native thread access requires an owner-authorized sender.",
+      );
 }

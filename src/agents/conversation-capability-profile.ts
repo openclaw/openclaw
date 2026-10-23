@@ -128,14 +128,17 @@ export function resolveConversationCapabilityProfile(params: ConversationCapabil
   const messageProvider = params.messageProvider;
   const senderIsOwner = params.senderIsOwner;
   const effective = resolveEffectiveToolPolicy(params);
-  const { policy: sandboxToolPolicy, renameOnly: sandboxSessionRenameOnly } =
-    prepareSandboxSessionTools({
-      policy: resolveSessionPlacementSandboxToolPolicy(params.sandboxToolPolicy, {
-        runId: params.runId,
-        agentId: effective.agentId,
-      }),
-      senderIsOwner,
-    });
+  const {
+    policy: sandboxToolPolicy,
+    sessionPolicy: sandboxSessionPolicy,
+    renameOnly: sandboxSessionRenameOnly,
+  } = prepareSandboxSessionTools({
+    policy: resolveSessionPlacementSandboxToolPolicy(params.sandboxToolPolicy, {
+      runId: params.runId,
+      agentId: effective.agentId,
+    }),
+    senderIsOwner,
+  });
   const trustedGroup = resolveTrustedGroupId({
     sessionKey: params.sessionKey,
     spawnedBy: params.spawnedBy,
@@ -264,6 +267,7 @@ export function resolveConversationCapabilityProfile(params: ConversationCapabil
       groupPolicy,
       senderPolicy,
       sandboxPolicy: sandboxToolPolicy,
+      sandboxSessionPolicy,
       sandboxSessionRenameOnly,
       subagentPolicy,
       inheritedToolPolicy,

@@ -36,11 +36,11 @@ const mocks = vi.hoisted(() => {
 vi.mock("./openclaw-tools.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./openclaw-tools.js")>();
   return {
+    ...actual,
     createOpenClawTools: (options: unknown) => {
       mocks.createOpenClawToolsOptions(options);
       return [AUTOMATIONS_TOOL_NAME, "gateway"].map(mocks.stubTool);
     },
-    filterToolsByClientCaps: actual.filterToolsByClientCaps,
   };
 });
 

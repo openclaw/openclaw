@@ -66,8 +66,14 @@ describe("show_widget current-channel presentation", () => {
     });
 
     expect(tool.requiredClientCaps).toBeUndefined();
-    expect(tool.description).toContain("current channel presenter");
-    expect(tool.description).not.toContain("Keep one-off visualizations inline");
+    expect(tool.description).toBe(
+      createShowWidgetTool({
+        sessionId: "current-channel",
+        inlineClientAvailable: !inlineClient,
+        presenters: [presenter],
+        presenterContext: context,
+      }).description,
+    );
     expect(
       (tool.parameters as { properties?: { kind?: { enum?: string[] } } }).properties?.kind?.enum,
     ).toEqual(["html"]);
@@ -134,10 +140,13 @@ describe("show_widget current-channel presentation", () => {
     };
 
     expect(tool.requiredClientCaps).toBeUndefined();
-    expect(schema.required).toContain("pin");
-    expect(schema.properties?.pin?.const).toBe(true);
-    expect(schema.properties?.presentation?.properties).not.toHaveProperty("target");
-    expect(tool.description).toContain("This surface is pinned-only");
+    const interactive = createShowWidgetTool({
+      sessionId: "scheduled-board-only",
+      agentSessionKey: "agent:main:dashboard:scheduled",
+      inlineClientAvailable: true,
+    });
+    expect(schema).toEqual(interactive.parameters);
+    expect(tool.description).toBe(interactive.description);
 
     await expect(tool.execute("scheduled-unpinned", scheduled)).rejects.toThrow(
       "pin=true is required for this pinned-only widget surface",
@@ -207,7 +216,7 @@ describe("show_widget current-channel presentation", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const tool = createShowWidgetTool({ sessionId: "registered-syntax" });
     expect(tool.description).toContain(
-      "Keep one-off visualizations inline; pin for explicit dashboard requests or multiple non-code visualizations.",
+      "Keep one-off visualizations inline when this turn has a rendering client; follow result.presentation for delivery.",
     );
     expect(tool.description).toContain('Default videos to controls playsinline preload="auto"');
     expect(tool.description).toContain("do not autoplay");

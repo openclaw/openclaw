@@ -29,7 +29,7 @@ export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
   displaySummary?: string;
   /** Keep this tool model-visible; hidden catalog bridges cannot preserve its result contract. */
   catalogMode?: "direct-only";
-  /** Gateway client capabilities required before this tool can be assembled. */
+  /** Gateway client capabilities required to execute this tool, not to declare it. */
   requiredClientCaps?: string[];
   /**
    * Allow a result's `details.sourceReply` to be delivered to the current source as the

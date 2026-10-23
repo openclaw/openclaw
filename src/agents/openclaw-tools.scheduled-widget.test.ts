@@ -14,18 +14,18 @@ function widget(tools: ReturnType<typeof createOpenClawTools>) {
   return tools.find((candidate) => candidate.name === "show_widget");
 }
 
-function expectPinnedOnlySchema(tools: ReturnType<typeof createOpenClawTools>): void {
+function expectStablePinnedAuthoringSchema(tools: ReturnType<typeof createOpenClawTools>): void {
   expect(widget(tools)?.requiredClientCaps).toBeUndefined();
   expect(widget(tools)).toMatchObject({
-    parameters: { required: expect.arrayContaining(["pin"]), properties: { pin: { const: true } } },
+    parameters: { properties: { pin: { type: "boolean" } } },
   });
 }
 
 it.each([undefined, "agent:main:cron:job:run:detached"])(
   "requires a persistent session for recovered authoring (%s)",
-  (agentSessionKey) => {
+  async (agentSessionKey) => {
     const tools = createOpenClawTools({ agentSessionKey, pinnedWidgetAuthoring: true });
-    expect(widget(tools)).toBeUndefined();
+    expect((await widget(tools)!.execute("denied", {})).details).toMatchObject({ gated: true });
   },
 );
 
@@ -41,7 +41,7 @@ it("applies tool policy to recovered dashboard authoring", () => {
       includePluginTools: false,
     },
   };
-  expectPinnedOnlySchema(createOpenClawCodingTools(options));
+  expectStablePinnedAuthoringSchema(createOpenClawCodingTools(options));
   const deniedTools = createOpenClawCodingTools({
     ...options,
     config: { tools: { deny: ["show_widget"] } },
@@ -49,20 +49,12 @@ it("applies tool policy to recovered dashboard authoring", () => {
   expect(widget(deniedTools)).toBeUndefined();
 });
 
-it.each([
-  {},
-  {
-    runtimeToolAllowlist: ["show_widget"],
-    config: { tools: { deny: ["show_widget"] } },
-  },
-])("applies scheduled widget capability and deny policy: %j", (options) => {
+it("gates scheduled widget execution without an authoring capability", async () => {
   const tools = createOpenClawTools({
     agentSessionKey: "agent:main:dashboard:scheduled",
     gatewayCallerScheduled: true,
-    ...options,
   });
-
-  expect(widget(tools)).toBeUndefined();
+  expect((await widget(tools)!.execute("denied", {})).details).toMatchObject({ gated: true });
 });
 
 it("lets a server-authorized canvas cap select pinned widget authoring", () => {
@@ -77,7 +69,7 @@ it("lets a server-authorized canvas cap select pinned widget authoring", () => {
     toolConstructionPlan: plan.codingToolConstructionPlan,
   });
 
-  expectPinnedOnlySchema(tools);
+  expectStablePinnedAuthoringSchema(tools);
 });
 
 it("keeps scheduled turns with a real inline client on the normal widget surface", () => {

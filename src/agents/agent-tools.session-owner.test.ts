@@ -2,8 +2,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
+import { SANDBOX_DEFAULT_TOOL_ALLOW, type SandboxToolPolicy } from "./sandbox/types.js";
+import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
+import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 import * as inProcessGateway from "./tools/in-process-gateway.js";
 import { withSessionToolTestCaller as withCaller } from "./tools/sessions-tool.test-helpers.js";
 
@@ -80,7 +83,8 @@ it("exposes creation only with admitted session-write authority and preserves ex
     signal: new AbortController().signal,
     assertCurrent: () => {},
   });
-  expect(hasCreate()).toBe(false);
+  const gated = assemble().find((tool) => tool.name === "sessions_create")!;
+  expect((await gated.execute("denied", {})).details).toMatchObject({ gated: true });
   await withCaller(async () => {
     const tools = assemble();
     expect(tools.find((tool) => tool.name === "sessions_create")).toBeDefined();
@@ -89,4 +93,48 @@ it("exposes creation only with admitted session-write authority and preserves ex
     expect(hasCreate(["sessions_create"])).toBe(false);
     expect(hasCreate(["sessions"])).toBe(true);
   }, authority);
+});
+
+it("keeps default sandbox declarations stable without widening callable authority", async () => {
+  const allow = ["read"];
+  const sandboxToolPolicy: SandboxToolPolicy = {
+    allow,
+    deny: [],
+    [SANDBOX_DEFAULT_TOOL_ALLOW]: allow,
+  };
+  const authority = createAdmittedRunOperatorAuthority({
+    profileId: "profile-requester",
+    scopes: ["operator.sessions.write"],
+    signal: new AbortController().signal,
+    assertCurrent: () => {},
+  });
+  const surface = (tools: ReturnType<typeof assemble>) =>
+    tools.map(({ name, description, parameters }) => ({ name, description, parameters }));
+  const sandbox = createAgentToolsSandboxContext({
+    workspaceDir: process.cwd(),
+    tools: sandboxToolPolicy,
+    fsBridge: createHostSandboxFsBridge(process.cwd()),
+  });
+  const withoutAuthority = assemble({ sandbox });
+  const withAuthority = await withCaller(async () => assemble({ sandbox }), authority);
+  const ownerTools = await withCaller(
+    async () => assemble({ sandbox, senderIsOwner: true }),
+    authority,
+  );
+  expect(withoutAuthority.map((tool) => tool.name)).toEqual(
+    expect.arrayContaining(["sessions", "sessions_create"]),
+  );
+  expect(surface(withoutAuthority)).toEqual(surface(withAuthority));
+  expect(surface(ownerTools)).toEqual(surface(withAuthority));
+  for (const tools of [withoutAuthority, ownerTools]) {
+    for (const name of ["sessions", "sessions_create"]) {
+      expect(
+        (await tools.find((tool) => tool.name === name)!.execute("denied", {})).details,
+      ).toMatchObject({ gated: true });
+    }
+  }
+  const denied = assemble({
+    sandbox: { ...sandbox, tools: { ...sandboxToolPolicy, deny: ["sessions*"] } },
+  });
+  expect(denied.some((tool) => tool.name.startsWith("sessions"))).toBe(false);
 });
