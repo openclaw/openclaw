@@ -71,7 +71,6 @@ it("keeps an interrupted assignment resumable without pinning its restored paren
   );
   const monitor = new CodexNativeSubagentMonitor(client.client, runtime, {
     retainParentThread: (threadId) => protectCodexAppServerLiveThread(client.client, threadId),
-    recoveryPollDelaysMs: [],
   });
   onTestFinished(async () => {
     await monitor.retireParent(binding.threadId);

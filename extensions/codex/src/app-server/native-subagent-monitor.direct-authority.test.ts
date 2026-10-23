@@ -56,7 +56,6 @@ describe("CodexNativeSubagentMonitor", () => {
         agentDir: "/tmp/codex-resumed-inference-retention",
       });
       const monitor = new CodexNativeSubagentMonitor(client.client, createRuntime(), {
-        recoveryPollDelaysMs: [],
         retainParentThread: (threadId) => protectCodexAppServerLiveThread(client.client, threadId),
       });
       onTestFinished(async () => {
