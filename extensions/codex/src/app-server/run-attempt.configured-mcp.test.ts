@@ -62,6 +62,8 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
   it.each([
     { name: "MCP-only", appTools: [], needsAppRecovery: false },
     { name: "Codex app", appTools: ["codex_apps.notion.fetch"], needsAppRecovery: true },
+    { name: "Codex glob", appTools: ["codex_*"], needsAppRecovery: true },
+    { name: "Codex suffix glob", appTools: ["codex_*fetch"], needsAppRecovery: true },
   ])(
     "scopes scheduled app recovery instructions to the $name tool cap",
     async ({ appTools, needsAppRecovery }) => {
