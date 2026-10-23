@@ -1,6 +1,6 @@
 import {
   clearExpiredCooldowns,
-  ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
   isProfileInCooldown,
   resolveProfilesUnavailableReason,
   type AuthProfileFailureReason,
@@ -38,22 +38,10 @@ type PresenceGateway = {
   updatePresence: (payload: UpdatePresenceData) => void;
 };
 
-function clampPositiveInt(value: unknown, fallback: number, minValue: number): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return fallback;
-  }
-  const rounded = Math.round(value);
-  if (rounded <= 0) {
-    return fallback;
-  }
-  return Math.max(minValue, rounded);
-}
-
 function resolveAutoPresenceConfig(config?: DiscordAutoPresenceConfig) {
-  const intervalMs = clampPositiveInt(config?.intervalMs, DEFAULT_INTERVAL_MS, MIN_INTERVAL_MS);
-  const minUpdateIntervalMs = clampPositiveInt(
-    config?.minUpdateIntervalMs,
-    DEFAULT_MIN_UPDATE_INTERVAL_MS,
+  const intervalMs = Math.max(config?.intervalMs ?? DEFAULT_INTERVAL_MS, MIN_INTERVAL_MS);
+  const minUpdateIntervalMs = Math.max(
+    config?.minUpdateIntervalMs ?? DEFAULT_MIN_UPDATE_INTERVAL_MS,
     MIN_UPDATE_INTERVAL_MS,
   );
 
@@ -64,75 +52,10 @@ function resolveAutoPresenceConfig(config?: DiscordAutoPresenceConfig) {
   };
 }
 
-function resolveAuthAvailability(params: {
-  store: AuthProfileStore;
-  now: number;
-}): DiscordAutoPresenceState {
-  const profileIds = Object.keys(params.store.profiles);
-  if (profileIds.length === 0) {
-    return "degraded";
-  }
-
-  clearExpiredCooldowns(params.store, params.now);
-
-  const hasUsableProfile = profileIds.some(
-    (profileId) => !isProfileInCooldown(params.store, profileId, params.now),
-  );
-  if (hasUsableProfile) {
-    return "healthy";
-  }
-
-  const unavailableReason = resolveProfilesUnavailableReason({
-    store: params.store,
-    profileIds,
-    now: params.now,
-  });
-
-  return unavailableReason !== null && EXHAUSTED_REASONS.has(unavailableReason)
-    ? "exhausted"
-    : "degraded";
-}
-
-function resolveDiscordAutoPresenceUpdate(params: {
-  discordConfig: DiscordPresenceConfig;
-  authStore: AuthProfileStore;
-  gatewayConnected: boolean;
-  now: number;
-}): UpdatePresenceData {
-  const basePresence = resolveDiscordPresenceUpdate(params.discordConfig);
-
-  const availability = resolveAuthAvailability({
-    store: params.authStore,
-    now: params.now,
-  });
-  const state = params.gatewayConnected ? availability : "degraded";
-
-  return state === "healthy"
-    ? { since: null, activities: basePresence.activities, status: "online", afk: false }
-    : resolveDiscordPresenceUpdate({
-        activity: state === "degraded" ? "runtime degraded" : "token exhausted",
-        status: state === "degraded" ? "idle" : "dnd",
-      });
-}
-
-function stablePresenceSignature(payload: UpdatePresenceData): string {
-  return JSON.stringify({
-    status: payload.status,
-    afk: payload.afk,
-    since: payload.since,
-    activities: payload.activities.map((activity) => ({
-      type: activity.type,
-      name: activity.name,
-      state: activity.state,
-      url: activity.url,
-    })),
-  });
-}
-
 type DiscordAutoPresenceController = {
-  start: () => void;
+  start: () => Promise<void>;
   stop: () => Promise<void>;
-  refresh: () => void;
+  refresh: () => Promise<void>;
   enabled: boolean;
 };
 
@@ -141,11 +64,11 @@ export function createDiscordAutoPresenceController(params: {
   accountId: string;
   discordConfig: DiscordPresenceConfig;
   gateway: PresenceGateway;
-  loadAuthStore?: () => AuthProfileStore;
+  loadAuthStore?: () => AuthProfileStore | Promise<AuthProfileStore>;
   log?: (message: string) => void;
 }): DiscordAutoPresenceController {
   const autoCfg = resolveAutoPresenceConfig(params.discordConfig.autoPresence);
-  const loadAuthStore = params.loadAuthStore ?? (() => ensureAuthProfileStore());
+  const loadAuthStore = params.loadAuthStore ?? (() => ensureAuthProfileStoreAsync());
   const now = params.scheduler.now;
 
   const scheduler = params.scheduler.scope();
@@ -153,18 +76,52 @@ export function createDiscordAutoPresenceController(params: {
   let lastAppliedSignature: string | null = null;
   let lastAppliedAt = 0;
 
-  const runEvaluation = (options?: { force?: boolean }) => {
+  const runEvaluation = async (options?: { force?: boolean }) => {
     if (!autoCfg.enabled || scheduler.signal.aborted) {
       return;
     }
     let presence: UpdatePresenceData;
     try {
-      presence = resolveDiscordAutoPresenceUpdate({
-        discordConfig: params.discordConfig,
-        authStore: loadAuthStore(),
-        gatewayConnected: params.gateway.isConnected,
-        now: now(),
-      });
+      const discordConfig = params.discordConfig;
+      const authStore = await loadAuthStore();
+      const gatewayConnected = params.gateway.isConnected;
+      const evaluationNow = now();
+      const basePresence = resolveDiscordPresenceUpdate(discordConfig);
+      function resolveAuthAvailability(): DiscordAutoPresenceState {
+        const profileIds = Object.keys(authStore.profiles);
+        if (profileIds.length === 0) {
+          return "degraded";
+        }
+
+        clearExpiredCooldowns(authStore, evaluationNow);
+
+        const hasUsableProfile = profileIds.some(
+          (profileId) => !isProfileInCooldown(authStore, profileId, evaluationNow),
+        );
+        if (hasUsableProfile) {
+          return "healthy";
+        }
+
+        const unavailableReason = resolveProfilesUnavailableReason({
+          store: authStore,
+          profileIds,
+          now: evaluationNow,
+        });
+
+        return unavailableReason !== null && EXHAUSTED_REASONS.has(unavailableReason)
+          ? "exhausted"
+          : "degraded";
+      }
+      const availability = resolveAuthAvailability();
+      const state = gatewayConnected ? availability : "degraded";
+
+      presence =
+        state === "healthy"
+          ? { since: null, activities: basePresence.activities, status: "online", afk: false }
+          : resolveDiscordPresenceUpdate({
+              activity: state === "degraded" ? "runtime degraded" : "token exhausted",
+              status: state === "degraded" ? "idle" : "dnd",
+            });
     } catch (err) {
       params.log?.(
         warn(
@@ -174,13 +131,13 @@ export function createDiscordAutoPresenceController(params: {
       return;
     }
 
-    if (!params.gateway.isConnected) {
+    if (scheduler.signal.aborted || !params.gateway.isConnected) {
       return;
     }
 
     const forceApply = options?.force === true;
     const ts = now();
-    const signature = stablePresenceSignature(presence);
+    const signature = JSON.stringify(presence);
     if (!forceApply && signature === lastAppliedSignature) {
       return;
     }
@@ -196,18 +153,19 @@ export function createDiscordAutoPresenceController(params: {
   return {
     enabled: autoCfg.enabled,
     refresh: () => runEvaluation({ force: true }),
-    start: () => {
+    start: async () => {
       if (!autoCfg.enabled || started || scheduler.signal.aborted) {
         return;
       }
       started = true;
-      runEvaluation({ force: true });
+      const initialEvaluation = runEvaluation({ force: true });
       scheduler.schedule({
         id: "presence",
         delayMs: autoCfg.intervalMs,
         everyMs: autoCfg.intervalMs,
         run: () => runEvaluation(),
       });
+      await initialEvaluation;
     },
     stop: () => scheduler.stop(),
   };

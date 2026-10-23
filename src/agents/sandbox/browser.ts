@@ -7,7 +7,6 @@ import { deriveDefaultBrowserCdpPortRange } from "../../config/port-defaults.js"
 import { withContainerEnvFile } from "../../infra/container-env-file.js";
 import { isSameSsrFPolicy, type SsrFPolicy } from "../../infra/net/ssrf.js";
 import {
-  type BrowserBridge,
   startBrowserBridgeServer,
   stopBrowserBridgeServer,
 } from "../../plugin-sdk/browser-bridge.js";
@@ -115,56 +114,6 @@ async function waitForSandboxCdp(params: {
     await sleep(Math.min(150, remainingMs));
   }
   return false;
-}
-
-function buildSandboxBrowserResolvedConfig(params: {
-  cdpPort: number;
-  cdpAuthToken: string;
-  headless: boolean;
-  evaluateEnabled: boolean;
-  ssrfPolicy?: SsrFPolicy;
-}): ResolvedBrowserConfig {
-  const cdpHost = "127.0.0.1";
-  const cdpPortRange = deriveDefaultBrowserCdpPortRange(0);
-  return {
-    enabled: true,
-    evaluateEnabled: params.evaluateEnabled,
-    controlPort: 0,
-    cdpProtocol: "http",
-    cdpHost,
-    cdpIsLoopback: true,
-    cdpPortRangeStart: cdpPortRange.start,
-    cdpPortRangeEnd: cdpPortRange.end,
-    remoteCdpTimeoutMs: 1500,
-    remoteCdpHandshakeTimeoutMs: 3000,
-    localLaunchTimeoutMs: 15_000,
-    localCdpReadyTimeoutMs: 8_000,
-    actionTimeoutMs: DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
-    color: DEFAULT_OPENCLAW_BROWSER_COLOR,
-    executablePath: undefined,
-    headless: params.headless,
-    noSandbox: false,
-    attachOnly: true,
-    defaultProfile: DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
-    extraArgs: [],
-    tabCleanup: {
-      enabled: true,
-      idleMinutes: 120,
-      maxTabsPerSession: 8,
-      sweepMinutes: 5,
-    },
-    profiles: {
-      [DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME]: {
-        cdpPort: params.cdpPort,
-        cdpUrl: buildSandboxCdpUrl({
-          cdpPort: params.cdpPort,
-          authToken: params.cdpAuthToken,
-        }),
-        color: DEFAULT_OPENCLAW_BROWSER_COLOR,
-      },
-    },
-    ssrfPolicy: params.ssrfPolicy,
-  };
 }
 
 async function ensureSandboxBrowserImage(image: string) {
@@ -283,10 +232,6 @@ async function ensureSandboxBrowserContainer(
   containerName: string,
 ): Promise<SandboxBrowserContext> {
   let existing = BROWSER_BRIDGES.get(params.scopeKey);
-  const stopExistingForContainer = async () => {
-    await stopCachedBrowserBridgesForContainer(containerName, params.assertCurrent);
-    existing = BROWSER_BRIDGES.get(params.scopeKey);
-  };
   const state = await dockerContainerState(containerName);
   params.assertCurrent?.();
   const browserImage = params.cfg.browser.image;
@@ -333,10 +278,18 @@ async function ensureSandboxBrowserContainer(
   let hasContainer = state.exists;
   let running = state.running;
   let currentHash: string | null = null;
-  let hashMismatch = false;
   const noVncEnabled = isNoVncEnabled(params.cfg.browser);
   let noVncPassword: string | undefined;
   let cdpAuthToken: string | undefined;
+
+  const removeExistingContainer = async () => {
+    await stopCachedBrowserBridgesForContainer(containerName, params.assertCurrent);
+    existing = BROWSER_BRIDGES.get(params.scopeKey);
+    params.assertCurrent?.();
+    await execDocker(["rm", "-f", containerName], { allowFailure: true });
+    hasContainer = false;
+    running = false;
+  };
 
   if (hasContainer) {
     if (noVncEnabled) {
@@ -351,11 +304,7 @@ async function ensureSandboxBrowserContainer(
       defaultRuntime.log(
         `Removing stale sandbox browser container ${containerName} because it lacks the current CDP relay auth contract; it will be recreated.`,
       );
-      await stopExistingForContainer();
-      params.assertCurrent?.();
-      await execDocker(["rm", "-f", containerName], { allowFailure: true });
-      hasContainer = false;
-      running = false;
+      await removeExistingContainer();
     }
   }
 
@@ -368,8 +317,7 @@ async function ensureSandboxBrowserContainer(
     if (!currentHash) {
       currentHash = registryEntry?.configHash ?? null;
     }
-    hashMismatch = !currentHash || currentHash !== expectedHash;
-    if (hashMismatch) {
+    if (!currentHash || currentHash !== expectedHash) {
       const lastUsedAtMs = registryEntry?.lastUsedAtMs;
       const isHot =
         running && (typeof lastUsedAtMs !== "number" || now - lastUsedAtMs < HOT_BROWSER_WINDOW_MS);
@@ -388,11 +336,7 @@ async function ensureSandboxBrowserContainer(
           mountsChanged: !mountsMatch,
         });
       } else {
-        await stopExistingForContainer();
-        params.assertCurrent?.();
-        await execDocker(["rm", "-f", containerName], { allowFailure: true });
-        hasContainer = false;
-        running = false;
+        await removeExistingContainer();
       }
     }
   }
@@ -404,7 +348,7 @@ async function ensureSandboxBrowserContainer(
     createdAtMs: now,
     lastUsedAtMs: now,
     image: browserImage,
-    configHash: hashMismatch && running ? (currentHash ?? undefined) : expectedHash,
+    configHash: currentHash !== expectedHash && running ? (currentHash ?? undefined) : expectedHash,
   };
   if (params.withWorkspace) {
     // Reserve the mount before allocation; a bridge/port failure must not hide
@@ -529,7 +473,6 @@ async function ensureSandboxBrowserContainer(
   }
 
   let bridge = canReuse ? (existing?.bridge ?? null) : null;
-  let createdBridge: BrowserBridge | undefined;
   try {
     if (!bridge) {
       const startTarget = async () => {
@@ -557,20 +500,56 @@ async function ensureSandboxBrowserContainer(
         : undefined;
 
       params.assertCurrent?.();
+      const { headless } = params.cfg.browser;
+      const { evaluateEnabled, ssrfPolicy } = params;
+      const cdpHost = "127.0.0.1";
+      const cdpPortRange = deriveDefaultBrowserCdpPortRange(0);
+      const resolved: ResolvedBrowserConfig = {
+        enabled: true,
+        evaluateEnabled,
+        controlPort: 0,
+        cdpProtocol: "http",
+        cdpHost,
+        cdpIsLoopback: true,
+        cdpPortRangeStart: cdpPortRange.start,
+        cdpPortRangeEnd: cdpPortRange.end,
+        remoteCdpTimeoutMs: 1500,
+        remoteCdpHandshakeTimeoutMs: 3000,
+        localLaunchTimeoutMs: 15_000,
+        localCdpReadyTimeoutMs: 8_000,
+        actionTimeoutMs: DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
+        color: DEFAULT_OPENCLAW_BROWSER_COLOR,
+        executablePath: undefined,
+        headless,
+        noSandbox: false,
+        attachOnly: true,
+        defaultProfile: DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
+        extraArgs: [],
+        tabCleanup: {
+          enabled: true,
+          idleMinutes: 120,
+          maxTabsPerSession: 8,
+          sweepMinutes: 5,
+        },
+        profiles: {
+          [DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME]: {
+            cdpPort: mappedCdp,
+            cdpUrl: buildSandboxCdpUrl({
+              cdpPort: mappedCdp,
+              authToken: cdpAuthToken,
+            }),
+            color: DEFAULT_OPENCLAW_BROWSER_COLOR,
+          },
+        },
+        ssrfPolicy,
+      };
       bridge = await startBrowserBridgeServer({
-        resolved: buildSandboxBrowserResolvedConfig({
-          cdpPort: mappedCdp,
-          cdpAuthToken,
-          headless: params.cfg.browser.headless,
-          evaluateEnabled: params.evaluateEnabled,
-          ssrfPolicy: params.ssrfPolicy,
-        }),
+        resolved,
         authToken: desiredAuthToken,
         authPassword: desiredAuthPassword,
         onEnsureAttachTarget,
         resolveSandboxNoVncToken: consumeNoVncObserverToken,
       });
-      createdBridge = bridge;
       params.assertCurrent?.();
       BROWSER_BRIDGES.set(params.scopeKey, {
         bridge,
@@ -609,10 +588,10 @@ async function ensureSandboxBrowserContainer(
     };
   } catch (error) {
     // Roll back this attempt's bridge even after custody closes; never retire a reused bridge.
-    if (createdBridge) {
+    if (!canReuse && bridge) {
       try {
-        await stopBrowserBridgeServer(createdBridge.server);
-        if (BROWSER_BRIDGES.get(params.scopeKey)?.bridge === createdBridge) {
+        await stopBrowserBridgeServer(bridge.server);
+        if (BROWSER_BRIDGES.get(params.scopeKey)?.bridge === bridge) {
           BROWSER_BRIDGES.delete(params.scopeKey);
         }
       } catch (cleanupError) {

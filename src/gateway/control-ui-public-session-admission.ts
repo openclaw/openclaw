@@ -3,6 +3,7 @@ import { pruneMapToMaxSize } from "../infra/map-size.js";
 import {
   createPublicSessionRepresentationCache,
   type PublicSessionRepresentation,
+  type PublicSessionRepresentationKind,
 } from "./control-ui-public-session-cache.js";
 
 const PUBLIC_SESSION_RATE_WINDOW_MS = 60_000;
@@ -29,11 +30,12 @@ export type ControlUiPublicSessionRequestGate = {
     clientKey: string,
   ): { kind: "ok" } | { kind: "rate-limited"; retryAfterSeconds: number };
   run(params: {
+    kind: PublicSessionRepresentationKind;
     publicationKey: string;
     sessionKey: string;
     requestKey: string;
     config: OpenClawConfig;
-    work: () => Promise<string | null>;
+    work: () => Promise<string | Buffer | null>;
   }): Promise<PublicSessionAdmissionResult>;
 };
 
@@ -185,8 +187,8 @@ export function createControlUiPublicSessionRequestGate(): ControlUiPublicSessio
         };
       }
 
-      const inFlightKey = `${configId(params.config)}:${params.requestKey}`;
-      const cached = cache.get(inFlightKey, params.config);
+      const inFlightKey = `${configId(params.config)}:${params.kind}:${params.requestKey}`;
+      const cached = cache.get(inFlightKey);
       if (cached) {
         return { kind: "ok", value: cached };
       }
@@ -195,7 +197,7 @@ export function createControlUiPublicSessionRequestGate(): ControlUiPublicSessio
         const value = await existing;
         return value === undefined ? { kind: "unavailable" } : { kind: "ok", value };
       }
-      const build = cache.begin(inFlightKey, params.sessionKey, params.config);
+      const build = cache.begin(inFlightKey, params.sessionKey, params.kind);
       const pending = (async () => {
         const release = await acquire(params.publicationKey);
         if (!release) {

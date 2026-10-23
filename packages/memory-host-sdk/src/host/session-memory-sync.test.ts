@@ -1,12 +1,14 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../../../src/config/runtime-snapshot.js";
 import { importSqliteSessionRows } from "../../../../src/config/sessions/session-accessor.sqlite-import.test-support.js";
 import {
   loadTranscriptEventsSync,
   readTranscriptStatsSync,
 } from "../../../../src/config/sessions/session-accessor.sqlite-read.js";
-import { replaceTranscriptEvents } from "../../../../src/config/sessions/session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "../../../../src/config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSessionColdArchivePath } from "../../../../src/config/sessions/session-cold-storage-codec.js";
 import { readSessionColdTranscript } from "../../../../src/config/sessions/session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "../../../../src/config/sessions/session-cold-storage.js";
@@ -41,10 +43,12 @@ describe("memory synchronization of canonical SQLite transcripts", () => {
   let state: OpenClawTestState;
   let cfg: OpenClawConfig;
   let observer: DatabaseSync;
+  let initial: Awaited<ReturnType<typeof acquireManager>>;
   const managers = new Set<RegisteredMemorySearchManager>();
   const sessionId = "memory-revision";
   const sessionKey = `agent:main:chat:${sessionId}`;
   const memoryPath = `sessions/main/${sessionId}.jsonl`;
+  const fts = "memory_index_chunks_fts";
   const scope = () => ({
     agentId: "main",
     sessionId,
@@ -52,7 +56,6 @@ describe("memory synchronization of canonical SQLite transcripts", () => {
     storePath: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
   });
   const events = (color: string) => [
-    { type: "session", id: sessionId, version: 3 },
     {
       type: "message",
       id: "preference",
@@ -64,14 +67,24 @@ describe("memory synchronization of canonical SQLite transcripts", () => {
   const published = () => ({
     source: observer.prepare("SELECT * FROM memory_index_sources WHERE path = ?").all(memoryPath),
     chunks: observer.prepare("SELECT * FROM memory_index_chunks WHERE path = ?").all(memoryPath),
-    fts: observer.prepare("SELECT * FROM memory_index_chunks_fts WHERE path = ?").all(memoryPath),
+    fts: observer.prepare(`SELECT * FROM ${fts} WHERE path = ?`).all(memoryPath),
   });
   const matches = (word: string) =>
     observer
-      .prepare(
-        "SELECT text FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ? AND path = ?",
-      )
+      .prepare(`SELECT text FROM ${fts} WHERE ${fts} MATCH ? AND path = ?`)
       .all(word, memoryPath);
+
+  async function expectRecall(
+    manager: RegisteredMemorySearchManager,
+    color: string,
+    absent?: string,
+  ) {
+    expect(matches(color)).toEqual([{ text: `User: My ${color} preference is documented here.` }]);
+    if (absent) {
+      expect(matches(absent)).toEqual([]);
+    }
+    expect((await manager.search(color)).map((hit) => hit.path)).toContain(memoryPath);
+  }
 
   async function acquireManager(inspectSources = false) {
     const { manager, error } = await getMemorySearchManager({
@@ -80,9 +93,7 @@ describe("memory synchronization of canonical SQLite transcripts", () => {
       purpose: "cli",
       inspectSources,
     });
-    if (!manager?.sync) {
-      throw new Error(error ?? "Expected a synchronizable memory manager");
-    }
+    assert(manager?.sync, error ?? "Expected a synchronizable memory manager");
     managers.add(manager);
     return { manager, sync: manager.sync.bind(manager) };
   }
@@ -114,6 +125,7 @@ describe("memory synchronization of canonical SQLite transcripts", () => {
       },
     };
     await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
     await importSqliteSessionRows({
       ...scope(),
       entry: { sessionId, updatedAt: 1 },
@@ -125,6 +137,9 @@ describe("memory synchronization of canonical SQLite transcripts", () => {
       },
     });
     observer = new DatabaseSync(scope().storePath, { readOnly: true });
+    initial = await acquireManager();
+    await initial.sync({ force: true });
+    expect(matches("violet")).toHaveLength(1);
   });
 
   afterEach(async () => {
@@ -142,18 +157,14 @@ describe("memory synchronization of canonical SQLite transcripts", () => {
   it.each([false, true])(
     "replaces stale recall after a closed-manager equal-size rewrite (legacy hash: %s)",
     async (legacy) => {
-      const original = await acquireManager();
-      await original.sync({ force: true });
-      expect(matches("violet")).toHaveLength(1);
+      const original = initial;
       if (legacy) {
         const entry = await buildSessionEntry(sessionKey, {
           ...scope(),
           updatedAtMs: 1,
           sessionKind: "interactive",
         });
-        if (!entry) {
-          throw new Error("Expected the previously indexed session export");
-        }
+        assert(entry, "Expected the previously indexed session export");
         runOpenClawAgentWriteTransaction(
           ({ db }) => {
             db.prepare(
@@ -178,13 +189,7 @@ describe("memory synchronization of canonical SQLite transcripts", () => {
 
       const restarted = await acquireManager(true);
       await restarted.sync({ reason: "cli" });
-      expect(matches("orange")).toEqual([
-        { text: "User: My orange preference is documented here." },
-      ]);
-      expect(matches("violet")).toEqual([]);
-      expect((await restarted.manager.search("orange")).map((hit) => hit.path)).toContain(
-        memoryPath,
-      );
+      await expectRecall(restarted.manager, "orange", "violet");
       expect(restarted.manager.status().dirty).toBe(false);
       expect(
         observer.prepare("SELECT mtime FROM memory_index_sources WHERE path = ?").get(memoryPath),
@@ -197,19 +202,15 @@ describe("memory synchronization of canonical SQLite transcripts", () => {
   it.each([false, true])(
     "preserves published recall across a cold rebuild (damaged archive: %s)",
     async (damaged) => {
-      const { manager, sync } = await acquireManager();
-      await sync({ force: true });
+      const { manager, sync } = initial;
       const before = published();
-      expect(matches("violet")).toHaveLength(1);
       const canonical = loadTranscriptEventsSync(scope());
       expect(await runSessionColdStorageMaintenance({ config: cfg })).toEqual({
         archivedTranscripts: 1,
         externalizedTranscripts: 0,
       });
       const cold = readSessionColdTranscript(observer, sessionId);
-      if (!cold) {
-        throw new Error("Expected an archived canonical transcript");
-      }
+      assert(cold, "Expected an archived canonical transcript");
       expect(() => loadTranscriptEventsSync(scope())).toThrow(/cold storage/);
       const archivePath = resolveSessionColdArchivePath(scope().storePath, cold.archive_name);
       const archive = await fs.readFile(archivePath);
@@ -222,15 +223,15 @@ describe("memory synchronization of canonical SQLite transcripts", () => {
         await fs.writeFile(archivePath, archive);
       }
 
-      await sync(damaged ? undefined : { force: true });
-      expect(matches("violet")).toEqual([
-        { text: "User: My violet preference is documented here." },
-      ]);
-      expect((await manager.search("violet")).map((hit) => hit.path)).toContain(memoryPath);
+      // Automatic rebuilds retry after the documented 30-second failure cooldown.
+      {
+        using _ = damaged ? vi.spyOn(Date, "now").mockReturnValue(Date.now() + 30_000) : undefined;
+        await sync(damaged ? undefined : { force: true });
+      }
+      await expectRecall(manager, "violet");
       expect(loadTranscriptEventsSync(scope())).toEqual(canonical);
       expect(readSessionColdTranscript(observer, sessionId)).toBeUndefined();
-      expect(manager.status().dirty).toBe(false);
-      expect(manager.status().lastSyncError).toBeUndefined();
+      expect(manager.status()).toMatchObject({ dirty: false, lastSyncError: undefined });
     },
   );
 });

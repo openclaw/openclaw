@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage as errorMessage, toErrorObject } from "../../infra/errors.js";
+import { realpathOrResolve } from "../../infra/path-existence.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { enqueueKeyedTask } from "../../plugin-sdk/keyed-async-queue.js";
@@ -17,11 +17,7 @@ import {
 } from "./git-lock.js";
 import { worktreePathExists } from "./git.js";
 import { readRegistryWorktree, readRegistryWorktrees } from "./registry-read.js";
-import {
-  claimWorktreeRemovalRow,
-  hasLiveWorktreeRunLeaseRow,
-  releaseWorktreeRunLeaseRow,
-} from "./registry.js";
+import { claimWorktreeRemovalRow, releaseWorktreeRunLeaseRow } from "./registry.js";
 import { setWorktreeRunEndCleanupFailure, withWorktreeRunEnd } from "./run-end-lifecycle.js";
 import {
   admitWorktreeRunLeaseRowAsync,
@@ -142,14 +138,6 @@ async function releaseGitLock(cleanup: LeaseCleanup): Promise<boolean> {
   });
 }
 
-async function realpathOrSelf(candidate: string): Promise<string> {
-  try {
-    return await fs.realpath(candidate);
-  } catch {
-    return path.resolve(candidate);
-  }
-}
-
 export async function resolveWorktreeForPath(params: {
   sessionEntry?: { worktree?: { id: string } };
   candidatePaths: Array<string | undefined>;
@@ -174,7 +162,7 @@ export async function resolveWorktreeForPath(params: {
   }
   const bases = new Map<string, string>();
   for (const record of records) {
-    bases.set(record.id, await realpathOrSelf(record.path));
+    bases.set(record.id, await realpathOrResolve(record.path));
   }
   const seen = new Set<string>();
   for (const candidate of params.candidatePaths) {
@@ -182,7 +170,7 @@ export async function resolveWorktreeForPath(params: {
       continue;
     }
     seen.add(candidate);
-    const real = await realpathOrSelf(candidate);
+    const real = await realpathOrResolve(candidate);
     for (const record of records) {
       const base = bases.get(record.id);
       if (base && (real === base || real.startsWith(`${base}${path.sep}`))) {
@@ -324,7 +312,7 @@ async function acquireWorktreeRunLeaseInScope(
 ): Promise<WorktreeRunLease> {
   const env = opts.env ?? process.env;
   const context = opts.source?.context ?? captureOpenClawStateWorkerContext({ env });
-  const observed = opts.source ? structuredClone(opts.source.record) : undefined;
+  const observed = opts.source?.record;
   if (observed && observed.id !== id) {
     throw new Error("Worktree run source belongs to another worktree");
   }
@@ -410,10 +398,6 @@ export function claimWorktreeRemoval(
     startTime: getFileLockProcessStartTime(pid),
     now: Date.now(),
   });
-}
-
-export function hasLiveWorktreeRunLease(env: NodeJS.ProcessEnv, worktreeId: string): boolean {
-  return hasLiveWorktreeRunLeaseRow(env, worktreeId);
 }
 
 const testing = {

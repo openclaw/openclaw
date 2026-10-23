@@ -1,8 +1,6 @@
-// Proves the external Prometheus plugin's managed install and trusted runtime boundary.
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
-import net from "node:net";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
@@ -10,22 +8,20 @@ import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "openclaw/plugin-sdk/process-runtime";
-import {
-  resolvePreferredOpenClawTmpDir,
-  tempWorkspace,
-  type TempWorkspace,
-} from "openclaw/plugin-sdk/temp-path";
-import { stopChildProcess } from "openclaw/plugin-sdk/test-env";
+import { resolvePreferredOpenClawTmpDir, tempWorkspace } from "openclaw/plugin-sdk/temp-path";
+import { acquireTestPortBlock, stopChildProcess } from "openclaw/plugin-sdk/test-env";
 import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
+import manifest from "../package.json" with { type: "json" };
 import { packagingEntrypoints } from "./install-runtime-entrypoints.test-support.mts";
 
 const execFileAsync = promisify(execFile);
 const packageName = "@openclaw/diagnostics-prometheus";
 const pluginId = "diagnostics-prometheus";
+const pluginVersion = manifest.version.trim();
 const repoRoot = path.resolve(import.meta.dirname, "../../..");
 const pluginRoot = path.resolve(import.meta.dirname, "..");
-const tempWorkspaces: TempWorkspace[] = [];
+const cleanups: (() => Promise<unknown>)[] = [];
 const children: ChildProcess[] = [];
 
 afterEach(async () => {
@@ -36,43 +32,13 @@ afterEach(async () => {
   if (errors.length > 0) {
     throw new AggregateError(errors, "failed to stop Prometheus E2E children");
   }
-  await Promise.all(tempWorkspaces.splice(0).map((workspace) => workspace.cleanup()));
+  await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
 });
 
-async function reservePort(): Promise<number> {
-  const server = net.createServer();
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    server.close();
-    throw new Error("failed to reserve a loopback port");
-  }
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-  return address.port;
-}
-
-function isolatedEnv(params: {
-  configPath: string;
-  home: string;
-  registry?: string;
-  stateDir: string;
-}): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    HOME: params.home,
-    USERPROFILE: params.home,
-    OPENCLAW_HOME: params.home,
-    OPENCLAW_STATE_DIR: params.stateDir,
-    OPENCLAW_CONFIG_PATH: params.configPath,
-    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    NODE_ENV: "production",
-    NO_COLOR: "1",
-  };
+function isolatedEnv(root: string, registry?: string) {
+  const home = path.join(root, "home");
+  const stateDir = path.join(root, "state");
+  const env: NodeJS.ProcessEnv = { ...process.env };
   for (const key of [
     "OPENCLAW_BUNDLED_PLUGINS_DIR",
     "OPENCLAW_PLUGIN_CATALOG_PATHS",
@@ -87,11 +53,18 @@ function isolatedEnv(params: {
   ]) {
     delete env[key];
   }
-  if (params.registry) {
-    env.NPM_CONFIG_REGISTRY = params.registry;
-    env.npm_config_registry = params.registry;
-  }
-  return env;
+  return {
+    ...env,
+    HOME: home,
+    USERPROFILE: home,
+    OPENCLAW_HOME: home,
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    NODE_ENV: "production",
+    NO_COLOR: "1",
+    ...(registry && { NPM_CONFIG_REGISTRY: registry, npm_config_registry: registry }),
+  };
 }
 
 async function runCli(args: string[], env: NodeJS.ProcessEnv): Promise<string> {
@@ -105,144 +78,95 @@ async function runCli(args: string[], env: NodeJS.ProcessEnv): Promise<string> {
   return result.stdout;
 }
 
-async function packPlugin(
-  outputDir: string,
-  version: string,
-): Promise<{
-  files: string[];
-  tarballPath: string;
-}> {
+async function spawnLogged(args: string[], logPath: string, env: NodeJS.ProcessEnv, ipc = false) {
+  const log = await fs.open(logPath, "a");
+  const child = spawn(process.execPath, args, {
+    cwd: repoRoot,
+    env,
+    stdio: ["ignore", log.fd, log.fd, ...(ipc ? ["ipc" as const] : [])],
+  });
+  children.push(child);
+  return { child, closeLog: () => log.close() };
+}
+
+async function packPlugin(outputDir: string) {
   const stagingDir = path.join(outputDir, "package-source");
   await fs.cp(pluginRoot, stagingDir, {
     recursive: true,
-    filter: (source) => {
-      const relative = path.relative(pluginRoot, source);
-      const topLevel = relative.split(path.sep)[0];
-      return topLevel !== "dist" && topLevel !== "node_modules";
-    },
+    filter: (source) =>
+      !["dist", "node_modules"].includes(
+        path.relative(pluginRoot, source).split(path.sep)[0] ?? "",
+      ),
   });
-  await execFileAsync(
-    process.execPath,
-    [
-      ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(packagingEntrypoints.runtimeBuild)),
-      stagingDir,
-    ],
-    {
-      cwd: repoRoot,
-      maxBuffer: 2 * 1024 * 1024,
-      timeout: 60_000,
-    },
-  );
-  await execFileAsync(
-    process.execPath,
-    [
-      ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(packagingEntrypoints.packageManifest)),
-      "--run",
-      stagingDir,
-      "--",
-      "npm",
-      "pack",
-      "--ignore-scripts",
-      "--pack-destination",
-      outputDir,
-    ],
-    {
-      cwd: repoRoot,
-      env: {
-        ...process.env,
-        OPENCLAW_PLUGIN_NPM_BUNDLE_DEPENDENCIES: "1",
+  const runPackaging = (entrypoint: keyof typeof packagingEntrypoints, args: string[]) =>
+    execFileAsync(
+      process.execPath,
+      [
+        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(packagingEntrypoints[entrypoint])),
+        ...args,
+      ],
+      {
+        cwd: repoRoot,
+        maxBuffer: 2 * 1024 * 1024,
+        timeout: 60_000,
+        ...(entrypoint === "packageManifest" && {
+          env: { ...process.env, OPENCLAW_PLUGIN_NPM_BUNDLE_DEPENDENCIES: "1" },
+        }),
       },
-      maxBuffer: 2 * 1024 * 1024,
-      timeout: 60_000,
-    },
-  );
-  const tarballPath = path.join(
+    );
+  await runPackaging("runtimeBuild", [stagingDir]);
+  await runPackaging("packageManifest", [
+    "--run",
+    stagingDir,
+    "--",
+    "npm",
+    "pack",
+    "--ignore-scripts",
+    "--pack-destination",
     outputDir,
-    `${packageName.replace(/^@/, "").replace("/", "-")}-${version}.tgz`,
-  );
-  expect((await fs.stat(tarballPath)).isFile()).toBe(true);
+  ]);
+  const tarballPath = path.join(outputDir, `openclaw-${pluginId}-${pluginVersion}.tgz`);
   const entries = await execFileAsync("tar", ["-tzf", tarballPath], {
     maxBuffer: 2 * 1024 * 1024,
     timeout: 60_000,
   });
-  return {
-    files: entries.stdout
-      .trim()
-      .split(/\r?\n/u)
-      .map((file) => file.replace(/^package\//u, "")),
-    tarballPath,
-  };
+  expect(entries.stdout).toMatch(/^package\/dist\/index\.(?:js|mjs|cjs)\r?$/mu);
+  return tarballPath;
 }
 
-async function readPluginVersion(): Promise<string> {
-  const manifest = JSON.parse(await fs.readFile(path.join(pluginRoot, "package.json"), "utf8")) as {
-    version?: unknown;
-  };
-  if (typeof manifest.version !== "string" || !manifest.version.trim()) {
-    throw new Error("diagnostics-prometheus package version is missing");
-  }
-  return manifest.version.trim();
-}
-
-async function startRegistry(params: {
-  root: string;
-  tarballPath: string;
-  version: string;
-  signal: AbortSignal;
-}): Promise<string> {
-  const portFile = path.join(params.root, "registry-port");
-  const logPath = path.join(params.root, "registry.log");
-  const logHandle = await fs.open(logPath, "a");
-  const child = spawn(
-    process.execPath,
+async function startRegistry(root: string, tarballPath: string, signal: AbortSignal) {
+  const { child, closeLog } = await spawnLogged(
     [
       "scripts/e2e/lib/plugins/npm-registry-server.mjs",
-      portFile,
+      path.join(root, "registry-port"),
       packageName,
-      params.version,
-      params.tarballPath,
+      pluginVersion,
+      tarballPath,
     ],
-    {
-      cwd: repoRoot,
-      env: isolatedEnv({
-        configPath: path.join(params.root, "unused.json"),
-        home: params.root,
-        stateDir: path.join(params.root, "unused-state"),
-      }),
-      stdio: ["ignore", logHandle.fd, logHandle.fd, "ipc"],
-    },
+    path.join(root, "registry.log"),
+    isolatedEnv(root),
+    true,
   );
-  children.push(child);
-  const listening = once(child, "message", { signal: params.signal });
-  const closed = once(child, "close", { signal: params.signal });
   const ready = withinTest(
     awaitGateBeforeSettlement(
-      listening,
-      closed,
+      once(child, "message", { signal }),
+      once(child, "close", { signal }),
       "local npm registry exited before publishing its port",
     ),
-    params.signal,
+    signal,
   );
   void ready.catch(() => {});
-  await logHandle.close();
+  await closeLog();
   const [port] = await ready;
   expect(port).toEqual(expect.any(Number));
   return `http://127.0.0.1:${port}`;
 }
 
-async function waitForGateway(params: {
-  child: ChildProcess;
-  logPath: string;
-  port: number;
-}): Promise<void> {
+async function waitForGateway(child: ChildProcess, logPath: string, port: number): Promise<void> {
   const deadline = Date.now() + 60_000;
-  while (Date.now() < deadline) {
-    if (params.child.exitCode !== null || params.child.signalCode !== null) {
-      const logs = await fs.readFile(params.logPath, "utf8").catch(() => "");
-      throw new Error(`Gateway exited before readiness:\n${logs.slice(-8_000)}`);
-    }
+  while (Date.now() < deadline && child.exitCode === null && child.signalCode === null) {
     try {
-      const response = await fetch(`http://127.0.0.1:${params.port}/readyz`, {
+      const response = await fetch(`http://127.0.0.1:${port}/readyz`, {
         signal: AbortSignal.timeout(1_000),
       });
       if (response.ok) {
@@ -253,254 +177,212 @@ async function waitForGateway(params: {
     }
     await delay(200);
   }
-  const logs = await fs.readFile(params.logPath, "utf8").catch(() => "");
-  throw new Error(`Gateway did not become ready:\n${logs.slice(-8_000)}`);
+  const logs = await fs.readFile(logPath, "utf8").catch(() => "");
+  throw new Error(
+    `Gateway did not become ready (exit=${child.exitCode}, signal=${child.signalCode}):\n${logs.slice(-8_000)}`,
+  );
 }
 
-describe("diagnostics-prometheus managed install runtime", () => {
-  it("installs the exact official package and exports metrics at Gateway startup", async ({
-    signal,
-  }) => {
-    const workspace = await tempWorkspace({
-      rootDir: resolvePreferredOpenClawTmpDir(),
-      prefix: "openclaw-prometheus-install-",
-    });
-    tempWorkspaces.push(workspace);
-    const root = workspace.dir;
-    const home = path.join(root, "home");
-    const stateDir = path.join(root, "state");
-    const configPath = path.join(stateDir, "openclaw.json");
-    const gatewayLog = path.join(root, "gateway.log");
-    const gatewayPassword = "prometheus-managed-install-test-password";
-    const gatewayPort = await reservePort();
-    await fs.mkdir(home, { recursive: true });
-    await fs.mkdir(stateDir, { recursive: true });
-    await fs.writeFile(
-      configPath,
-      `${JSON.stringify(
-        {
-          diagnostics: { enabled: true },
-          gateway: {
-            mode: "local",
-            controlUi: { enabled: false },
-            bind: "loopback",
-            port: gatewayPort,
-            trustedProxies: ["127.0.0.1"],
-            auth: {
-              mode: "trusted-proxy",
-              password: gatewayPassword,
-              trustedProxy: {
-                allowLoopback: true,
-                allowUsers: ["restricted-scraper@example.com"],
-                requiredHeaders: ["x-forwarded-proto"],
-                userHeader: "x-forwarded-user",
-              },
-            },
-            roles: {
-              default: "metrics-denied",
-              definitions: {
-                "metrics-denied": {
-                  agents: "*",
-                  scopes: ["operator.approvals"],
-                  sessions: { others: "none" },
-                },
-              },
-            },
+it("installs trusted Prometheus metrics with scoped HTTP access", async ({ signal }) => {
+  const workspace = await tempWorkspace({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "openclaw-prometheus-install-",
+  });
+  cleanups.push(() => workspace.cleanup());
+  const root = workspace.dir;
+  const paths = isolatedEnv(root);
+  const gatewayLog = path.join(root, "gateway.log");
+  const gatewayPassword = "prometheus-managed-install-test-password";
+  const { port: gatewayPort, release } = await acquireTestPortBlock({ offsets: [0], signal });
+  cleanups.push(release);
+  await Promise.all(
+    [paths.HOME, paths.OPENCLAW_STATE_DIR].map((dir) => fs.mkdir(dir, { recursive: true })),
+  );
+  const config = {
+    diagnostics: { enabled: true },
+    gateway: {
+      mode: "local",
+      controlUi: { enabled: false },
+      bind: "loopback",
+      port: gatewayPort,
+      trustedProxies: ["127.0.0.1"],
+      auth: {
+        mode: "trusted-proxy",
+        password: gatewayPassword,
+        trustedProxy: {
+          allowLoopback: true,
+          allowUsers: ["restricted-scraper@example.com"],
+          requiredHeaders: ["x-forwarded-proto"],
+          userHeader: "x-forwarded-user",
+        },
+      },
+      roles: {
+        default: "metrics-denied",
+        definitions: {
+          "metrics-denied": {
+            agents: "*",
+            scopes: ["operator.approvals"],
+            sessions: { others: "none" },
           },
         },
-        null,
-        2,
-      )}\n`,
-      "utf8",
-    );
+      },
+    },
+  };
+  await fs.writeFile(paths.OPENCLAW_CONFIG_PATH, JSON.stringify(config), "utf8");
 
-    const pluginVersion = await readPluginVersion();
-    const packedPlugin = await packPlugin(root, pluginVersion);
-    expect(packedPlugin.files.some((file) => /^dist\/index\.(?:js|mjs|cjs)$/u.test(file))).toBe(
-      true,
-    );
-    const registry = await startRegistry({
-      root,
-      tarballPath: packedPlugin.tarballPath,
-      version: pluginVersion,
-      signal,
-    });
-    const env = isolatedEnv({
-      configPath,
-      home,
-      registry,
-      stateDir,
-    });
+  expect(pluginVersion).not.toBe("");
+  const tarballPath = await packPlugin(root);
+  const registry = await startRegistry(root, tarballPath, signal);
+  const env = isolatedEnv(root, registry);
 
-    await runCli(
-      ["plugins", "install", `npm:${packageName}@${pluginVersion}`, "--accept-capabilities"],
-      env,
-    );
-    const inspect = JSON.parse(
-      await runCli(["plugins", "inspect", pluginId, "--runtime", "--json"], env),
-    ) as {
-      install?: {
-        artifactKind?: unknown;
-        installPath?: unknown;
-        resolvedName?: unknown;
-        resolvedVersion?: unknown;
-        source?: unknown;
-        sourcePath?: unknown;
-      };
-      plugin?: {
-        enabled?: unknown;
-        id?: unknown;
-        origin?: unknown;
-        status?: unknown;
-        trustedOfficialInstall?: unknown;
-      };
-    };
-    expect(inspect.install).toMatchObject({
+  await runCli(
+    ["plugins", "install", `npm:${packageName}@${pluginVersion}`, "--accept-capabilities"],
+    env,
+  );
+  const inspect = JSON.parse(
+    await runCli(["plugins", "inspect", pluginId, "--runtime", "--json"], env),
+  ) as {
+    install?: { artifactKind?: unknown; installPath?: unknown; sourcePath?: unknown };
+    plugin?: { origin?: unknown };
+  };
+  expect(inspect).toMatchObject({
+    install: {
       source: "npm",
       resolvedName: packageName,
       resolvedVersion: pluginVersion,
-    });
-    expect(typeof inspect.install?.installPath).toBe("string");
-    expect(inspect.install?.artifactKind).toBeUndefined();
-    expect(inspect.install?.sourcePath).toBeUndefined();
-    expect(inspect.plugin).toMatchObject({
+    },
+    plugin: {
       id: pluginId,
       enabled: true,
       status: "loaded",
       trustedOfficialInstall: true,
+    },
+  });
+  expect(typeof inspect.install?.installPath).toBe("string");
+  expect(inspect.install?.artifactKind).toBeUndefined();
+  expect(inspect.install?.sourcePath).toBeUndefined();
+  expect(["config", "global"]).toContain(inspect.plugin?.origin);
+
+  const { child: gateway, closeLog } = await spawnLogged(
+    ["openclaw.mjs", "gateway", "run", "--bind", "loopback", "--port", String(gatewayPort)],
+    gatewayLog,
+    env,
+  );
+  const gatewayClosed = once(gateway, "close", { signal });
+  // Setup can fail before this waiter is awaited; afterEach still owns forced cleanup.
+  void gatewayClosed.catch(() => {});
+  await closeLog();
+  await waitForGateway(gateway, gatewayLog, gatewayPort);
+
+  const url = `http://127.0.0.1:${gatewayPort}/api/diagnostics/prometheus`;
+  const unauthenticated = await fetch(url);
+  expect([401, 403]).toContain(unauthenticated.status);
+  const authenticated = await fetch(url, {
+    headers: { authorization: `Bearer ${gatewayPassword}` },
+  });
+  expect(authenticated.status).toBe(200);
+  expect(authenticated.headers.get("content-type")).toContain("text/plain");
+  expect(await authenticated.text()).toContain(
+    'openclaw_telemetry_exporter_total{exporter="diagnostics-prometheus",reason="configured",signal="metrics",status="started"} 1',
+  );
+  const restrictedHeaders = {
+    "x-forwarded-for": "203.0.113.25",
+    "x-forwarded-proto": "https",
+    "x-forwarded-user": "restricted-scraper@example.com",
+  };
+  for (const method of ["GET", "HEAD"]) {
+    const response = await fetch(url, { headers: restrictedHeaders, method });
+    expect({
+      status: response.status,
+      cacheControl: response.headers.get("cache-control"),
+      body: await response.text(),
+    }).toEqual({
+      status: 403,
+      cacheControl: "no-store",
+      body: method === "HEAD" ? "" : "missing scope: operator.read",
     });
-    expect(["config", "global"]).toContain(inspect.plugin?.origin);
-
-    const gatewayLogHandle = await fs.open(gatewayLog, "a");
-    const gateway = spawn(
-      process.execPath,
-      ["openclaw.mjs", "gateway", "run", "--bind", "loopback", "--port", String(gatewayPort)],
-      {
-        cwd: repoRoot,
-        env,
-        stdio: ["ignore", gatewayLogHandle.fd, gatewayLogHandle.fd],
-      },
-    );
-    children.push(gateway);
-    const gatewayClosed = once(gateway, "close", { signal });
-    // Setup can fail before this waiter is awaited; afterEach still owns forced cleanup.
-    void gatewayClosed.catch(() => {});
-    await gatewayLogHandle.close();
-    await waitForGateway({ child: gateway, logPath: gatewayLog, port: gatewayPort });
-
-    const url = `http://127.0.0.1:${gatewayPort}/api/diagnostics/prometheus`;
-    const unauthenticated = await fetch(url);
-    expect([401, 403]).toContain(unauthenticated.status);
-    const authenticated = await fetch(url, {
-      headers: { authorization: `Bearer ${gatewayPassword}` },
-    });
-    const body = await authenticated.text();
-    expect(authenticated.status).toBe(200);
-    expect(authenticated.headers.get("content-type")).toContain("text/plain");
-    expect(body).toContain(
-      'openclaw_telemetry_exporter_total{exporter="diagnostics-prometheus",reason="configured",signal="metrics",status="started"} 1',
-    );
-    const restrictedHeaders = {
-      "x-forwarded-for": "203.0.113.25",
-      "x-forwarded-proto": "https",
-      "x-forwarded-user": "restricted-scraper@example.com",
-    };
-    const restricted = await fetch(url, { headers: restrictedHeaders });
-    const restrictedBody = await restricted.text();
-    expect(restricted.status).toBe(403);
-    expect(restricted.headers.get("cache-control")).toBe("no-store");
-    expect(restrictedBody).toBe("missing scope: operator.read");
-    expect(restrictedBody).not.toContain("openclaw_telemetry_exporter_total");
-
-    const restrictedHead = await fetch(url, { headers: restrictedHeaders, method: "HEAD" });
-    expect(restrictedHead.status).toBe(403);
-    expect(restrictedHead.headers.get("cache-control")).toBe("no-store");
-    expect(restrictedHead.headers.get("content-length")).not.toBe(
-      authenticated.headers.get("content-length"),
-    );
-    expect(await restrictedHead.text()).toBe("");
-    const scrapeEventLoopMetrics = async () => {
-      const response = await fetch(url, {
-        headers: { authorization: `Bearer ${gatewayPassword}` },
-      });
-      expect(response.status).toBe(200);
-      const lines = (await response.text())
-        .split("\n")
-        .filter((line) => line.startsWith("openclaw_gateway_event_loop_"));
-      const value = (name: string) =>
-        Number(
-          lines
-            .find((line) => line.startsWith(`${name} `))
-            ?.split(" ")
-            .at(-1),
-        );
-      return {
-        lines,
-        count: value("openclaw_gateway_event_loop_delay_max_seconds_count"),
-        sum: value("openclaw_gateway_event_loop_delay_max_seconds_sum"),
-        observed: value("openclaw_gateway_event_loop_observed_seconds_total"),
-      };
-    };
-    const readCompletedWindow = async () => {
-      // Healthy monitor windows complete after one second; readiness owns this read.
-      await delay(1_100);
-      const response = await fetch(`http://127.0.0.1:${gatewayPort}/readyz`, {
-        headers: { authorization: `Bearer ${gatewayPassword}` },
-      });
-      expect(response.status).toBe(200);
-      const readiness = (await response.json()) as {
-        ready: boolean;
-        eventLoop?: { intervalMs: number; delayMaxMs: number };
-      };
-      expect(readiness.ready).toBe(true);
-      expect(readiness.eventLoop?.intervalMs).toBeGreaterThanOrEqual(1_000);
-      expect(readiness.eventLoop?.delayMaxMs).toBeGreaterThanOrEqual(0);
-      return readiness.eventLoop!;
-    };
-
-    await readCompletedWindow();
-    // Sampling readiness owns the wait; an HTTP scrape must not race a polling deadline.
-    const firstWindow = await scrapeEventLoopMetrics();
-    expect(firstWindow.count).toBeGreaterThan(0);
-    expect(firstWindow.observed).toBeGreaterThan(0);
-    const nextWindow = await readCompletedWindow();
-    const retainedWindows = await scrapeEventLoopMetrics();
-    expect(retainedWindows.count).toBeGreaterThan(firstWindow.count);
-    // Prometheus renders 12 significant digits; tolerate only serialization rounding.
-    expect(retainedWindows.observed).toBeGreaterThanOrEqual(
-      firstWindow.observed + nextWindow.intervalMs / 1_000 - 1e-9,
-    );
-    expect(retainedWindows.sum).toBeGreaterThanOrEqual(
-      firstWindow.sum + nextWindow.delayMaxMs / 1_000 - 1e-9,
-    );
-    expect(retainedWindows.lines.join("\n")).not.toMatch(/\{(?!le=)/u);
-    // Background health readers may complete windows between full-Gateway scrapes.
-    let previous = retainedWindows;
-    for (let scrape = 0; scrape < 2; scrape++) {
-      const current = await scrapeEventLoopMetrics();
-      expect(current.count).toBeGreaterThanOrEqual(previous.count);
-      expect(current.sum).toBeGreaterThanOrEqual(previous.sum);
-      expect(current.observed).toBeGreaterThanOrEqual(previous.observed);
-      previous = current;
-    }
-    const gatewayLogs = await fs.readFile(gatewayLog, "utf8");
-    expect(gatewayLogs).not.toContain(
-      "diagnostics-prometheus: internal diagnostics capability unavailable",
-    );
-    try {
-      // Graceful stop drains legitimate startup work; the forced reaper is cleanup only.
-      expect(gateway.kill("SIGTERM")).toBe(true);
-      await gatewayClosed;
-      expect(gateway.exitCode).toBe(0);
-      expect(gateway.signalCode).toBeNull();
-    } catch (cause) {
-      const termination = { exitCode: gateway.exitCode, signalCode: gateway.signalCode };
-      // Snapshot termination before reading the log that afterEach will remove.
-      const shutdownLogs = await fs.readFile(gatewayLog, "utf8");
-      throw new Error(
-        `Gateway shutdown failed: ${JSON.stringify(termination)}\n${shutdownLogs.slice(-8_000)}`,
-        { cause },
+    if (method === "HEAD") {
+      expect(response.headers.get("content-length")).not.toBe(
+        authenticated.headers.get("content-length"),
       );
     }
-  }, 300_000);
-});
+  }
+  const scrapeEventLoopMetrics = async (scrapeSignal = signal) => {
+    const response = await fetch(url, {
+      headers: { authorization: `Bearer ${gatewayPassword}` },
+      signal: scrapeSignal,
+    });
+    expect(response.status).toBe(200);
+    const lines = (await response.text())
+      .split("\n")
+      .filter((line) => line.startsWith("openclaw_gateway_event_loop_"));
+    const value = (name: string) => {
+      const metric = lines.find((line) => line.startsWith(`${name} `));
+      return Number(metric?.split(" ").at(-1));
+    };
+    return {
+      lines,
+      count: value("openclaw_gateway_event_loop_delay_max_seconds_count"),
+      sum: value("openclaw_gateway_event_loop_delay_max_seconds_sum"),
+      observed: value("openclaw_gateway_event_loop_observed_seconds_total"),
+    };
+  };
+  const waitForExportedWindow = async (afterCount: number) => {
+    const controller = new AbortController();
+    const waitSignal = AbortSignal.any([signal, controller.signal]);
+    const pending = (async () => {
+      for (;;) {
+        const current = await scrapeEventLoopMetrics(waitSignal);
+        if (current.count > afterCount) {
+          return current;
+        }
+        await delay(100, undefined, { signal: waitSignal });
+      }
+    })();
+    try {
+      return await withinTest(
+        awaitGateBeforeSettlement(
+          pending,
+          gatewayClosed,
+          "Gateway exited before exporting another event-loop window",
+        ),
+        signal,
+      );
+    } finally {
+      // A settlement race does not cancel its work. Stop the request/timer and
+      // settle the loop before Gateway and temporary-state cleanup can begin.
+      controller.abort();
+      await pending.catch(() => {});
+    }
+  };
+
+  // Readiness retains a sampler snapshot; diagnostics reach the exporter asynchronously.
+  // Exact per-window arithmetic belongs to the controlled producer in service.event-loop.test.
+  let previous = { count: 0, sum: 0, observed: 0 };
+  for (let window = 0; window < 2; window++) {
+    const current = await waitForExportedWindow(previous.count);
+    expect(current.count).toBeGreaterThan(previous.count);
+    expect(Number.isFinite(current.sum)).toBe(true);
+    expect(current.sum).toBeGreaterThanOrEqual(previous.sum);
+    expect(Number.isFinite(current.observed)).toBe(true);
+    expect(current.observed).toBeGreaterThan(previous.observed);
+    expect(current.lines.join("\n")).not.toMatch(/\{(?!le=)/u);
+    previous = current;
+  }
+  // Background sampling may publish windows between full-Gateway scrapes.
+  for (let scrape = 0; scrape < 2; scrape++) {
+    const current = await scrapeEventLoopMetrics();
+    expect(current.count).toBeGreaterThanOrEqual(previous.count);
+    expect(current.sum).toBeGreaterThanOrEqual(previous.sum);
+    expect(current.observed).toBeGreaterThanOrEqual(previous.observed);
+    previous = current;
+  }
+  const gatewayLogs = await fs.readFile(gatewayLog, "utf8");
+  expect(gatewayLogs).not.toContain(
+    "diagnostics-prometheus: internal diagnostics capability unavailable",
+  );
+  // Graceful stop drains startup work; the forced reaper is cleanup only.
+  expect(gateway.kill("SIGTERM")).toBe(true);
+  await gatewayClosed;
+  expect(gateway).toMatchObject({ exitCode: 0, signalCode: null });
+}, 300_000);

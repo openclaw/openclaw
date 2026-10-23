@@ -10,6 +10,7 @@ import {
 import { loadBundledCapabilityRuntimeRegistry } from "./bundled-capability-runtime.js";
 import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
 import { isBundledProviderCompatContract } from "./bundled-provider-compat.js";
+import { capabilityCatalogFamilies } from "./capability-catalog.js";
 import type { PluginCapabilityCatalog } from "./capability-catalog.types.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
@@ -255,11 +256,7 @@ function collectRequestedCapabilityProviderIds(params: {
 function shouldScopeCapabilityLoadToRequestedProviders(
   key: CapabilityProviderRegistryKey,
 ): key is keyof PluginCapabilityCatalog {
-  return (
-    key === "speechProviders" ||
-    key === "realtimeTranscriptionProviders" ||
-    key === "realtimeVoiceProviders"
-  );
+  return capabilityCatalogFamilies.some((family) => family === key);
 }
 
 function* capabilityProviderIds(provider: { id: string; aliases?: unknown }) {
@@ -311,6 +308,24 @@ function filterPolicyAllowedCapabilityProviders<K extends CapabilityProviderRegi
       allowBundledProviderCompat: isBundledProviderCompatContract(params.key),
     });
   }) as PluginRegistry[K];
+}
+
+function selectActiveCapabilityProviders<K extends CapabilityProviderRegistryKey>(
+  params: { key: K; cfg?: OpenClawConfig },
+  onSelectedRegistry?: SelectedCapabilityRegistry<K>,
+) {
+  const registry =
+    getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getLoadedRuntimePluginRegistry();
+  const project = onSelectedRegistry?.(registry);
+  const providers = projectCapabilityProviderEntries(
+    filterPolicyAllowedCapabilityProviders({
+      ...params,
+      entries: registry?.[params.key] ?? [],
+      registry,
+    }),
+    project,
+  );
+  return { registry, providers };
 }
 
 function prepareCapabilityProviderLoad<K extends CapabilityProviderRegistryKey>(
@@ -443,17 +458,9 @@ export function preparePluginCapabilityProviderLookup<K extends CapabilityProvid
     return provider ? (projections.get(provider)?.() ?? provider) : undefined;
   };
 
-  const activeRegistry =
-    getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getLoadedRuntimePluginRegistry();
-  const project = selectRegistry?.(activeRegistry);
-  const activeProviders = projectCapabilityProviderEntries(
-    filterPolicyAllowedCapabilityProviders({
-      entries: activeRegistry?.[params.key] ?? [],
-      registry: activeRegistry,
-      cfg: params.cfg,
-      key: params.key,
-    }),
-    project,
+  const { registry: activeRegistry, providers: activeProviders } = selectActiveCapabilityProviders(
+    params,
+    selectRegistry,
   );
   const activeProvider = selectProvider(activeProviders);
   if (activeProvider) {
@@ -509,17 +516,9 @@ export function preparePluginCapabilityProviderResolution<K extends CapabilityPr
     };
   }
 
-  const activeRegistry =
-    getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getLoadedRuntimePluginRegistry();
-  const project = onSelectedRegistry?.(activeRegistry);
-  const activeProviders = projectCapabilityProviderEntries(
-    filterPolicyAllowedCapabilityProviders({
-      entries: activeRegistry?.[params.key] ?? [],
-      registry: activeRegistry,
-      cfg: params.cfg,
-      key: params.key,
-    }),
-    project,
+  const { registry: activeRegistry, providers: activeProviders } = selectActiveCapabilityProviders(
+    params,
+    onSelectedRegistry,
   );
   const requested =
     collectRequestedCapabilityProviderIds({

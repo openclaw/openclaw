@@ -10,6 +10,7 @@ import {
   type PluginDoctorStateMigrationDetection,
   type PluginDoctorStateMigrationInventory,
 } from "../plugins/doctor-contract-registry.js";
+import { sqliteOnlyMigrationNotice } from "../plugins/doctor-migration-applicability.js";
 import { preparePluginDoctorMigrationResources } from "../plugins/doctor-migration-resources.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
@@ -46,6 +47,45 @@ type PluginDoctorPlanCollection = {
   notices: string[];
   assertResourceScope: () => void;
 };
+
+export function createPluginDoctorStateMigrationInput(
+  input: PluginDoctorInput,
+  owner: Pick<
+    DetectedPluginDoctorStateMigrationPlan,
+    "pluginId" | "channelIds" | "trustedForDurableStores"
+  >,
+  repairAuthority?: PluginDoctorRepairAuthority,
+  assertIngressMutationCurrent?: () => void,
+  scope: Pick<PluginDoctorInput, "config" | "env"> = input,
+): Parameters<PluginDoctorStateMigration["detectLegacyState"]>[0] {
+  return {
+    ...input,
+    serviceWorkspaceDir:
+      tryResolveConfiguredAgentWorkspaceDir(scope.config, scope.env) ??
+      resolveDefaultAgentWorkspaceDir(scope.env),
+    context: createPluginDoctorStateMigrationContext({
+      pluginId: owner.pluginId,
+      env: scope.env,
+      config: scope.config,
+      repairAuthority,
+      trustedForDurableStores: owner.trustedForDurableStores ?? true,
+      // Detection receives inspection-only access; mutation exists only inside the
+      // writer's live authority. Untrusted owners never receive the ingress lane.
+      // `?? true` preserves older hand-built hosts; registry entries fix this decision.
+      ...((owner.trustedForDurableStores ?? true)
+        ? {
+            channelIngress: {
+              channelIds: owner.channelIds ?? [],
+              stateDir: input.stateDir,
+              ...(assertIngressMutationCurrent
+                ? { mutation: { assertCurrent: assertIngressMutationCurrent } }
+                : {}),
+            },
+          }
+        : {}),
+    }),
+  };
+}
 
 function pluginInspectionFacts(
   collection: PluginDoctorPlanCollection,
@@ -113,6 +153,7 @@ export async function collectPluginDoctorStateMigrationPlans(
   const otherPhasePluginIds = new Set<string>();
   const requiredPluginIds = new Set<string>();
   const statelessPluginIds = new Set<string>();
+  const unavailablePluginIds = new Set<string>();
   const collected: PluginDoctorPlanCollection = {
     plans,
     inspectedPluginIds,
@@ -132,6 +173,11 @@ export async function collectPluginDoctorStateMigrationPlans(
       validateDeclarations: params.validateDeclarations,
       onInspectedPlugin: (pluginId) => inspectedPluginIds.add(pluginId),
       onInspectedStatelessPlugin: (pluginId) => statelessPluginIds.add(pluginId),
+      onUnavailablePlugin: (pluginId, error) => {
+        unavailablePluginIds.add(pluginId);
+        requiredPluginIds.add(pluginId);
+        params.warnings?.push(`Plugin ${pluginId} is not prepared: ${error.message}`);
+      },
     });
   } catch (error) {
     if (!(error instanceof PluginDoctorStateMigrationDeclarationError)) {
@@ -164,7 +210,9 @@ export async function collectPluginDoctorStateMigrationPlans(
   if (params.plannedActions) {
     const refusal = validatePluginDoctorPlanOrder({
       actions: entries.map(({ pluginId, migration }) => ({ pluginId, id: migration.id })),
-      plannedActions: params.plannedActions,
+      plannedActions: params.plannedActions.filter(
+        (action) => !unavailablePluginIds.has(action.pluginId),
+      ),
     });
     if (refusal) {
       params.warnings?.push(refusal);
@@ -172,6 +220,14 @@ export async function collectPluginDoctorStateMigrationPlans(
       return collected;
     }
   }
+  entries = entries.filter(({ migration }) => {
+    const notice = sqliteOnlyMigrationNotice(migration, config);
+    if (notice) {
+      collected.notices.push(notice);
+      return false;
+    }
+    return true;
+  });
   if (resolveUpdateRehearsalRoot(env)) {
     const scope = await preparePluginDoctorMigrationResources(allEntries, {
       config,
@@ -180,7 +236,7 @@ export async function collectPluginDoctorStateMigrationPlans(
       warnings: [],
       requireLocalResources: true,
     });
-    collected.notices.push(...scope.notices);
+    collected.notices = [...new Set([...collected.notices, ...scope.notices])];
     collected.assertResourceScope = scope.assertCurrent;
     for (const pluginId of scope.deferredPluginIds) {
       inspectedPluginIds.delete(pluginId);
@@ -192,33 +248,12 @@ export async function collectPluginDoctorStateMigrationPlans(
     try {
       params.repairAuthority?.assertCurrent();
       collected.assertResourceScope();
-      detected = await entry.migration.detectLegacyState({
-        ...input,
-        serviceWorkspaceDir:
-          tryResolveConfiguredAgentWorkspaceDir(config, env) ??
-          resolveDefaultAgentWorkspaceDir(env),
-        context: createPluginDoctorStateMigrationContext({
-          pluginId: entry.pluginId,
-          env,
+      detected = await entry.migration.detectLegacyState(
+        createPluginDoctorStateMigrationInput(input, entry, params.repairAuthority, undefined, {
           config,
-          repairAuthority: params.repairAuthority,
-          trustedForDurableStores: entry.trustedForDurableStores ?? true,
-          // Detection runs before exclusive state ownership, so it is handed
-          // inspection-only ingress access and no mutation gate. Untrusted owners get
-          // no ingress lane at all: Doctor must not widen the runtime's durable-store
-          // trust gate.
-          // `?? true` keeps older or hand-built hosts working; a real registry record
-          // always carries the decision explicitly.
-          ...((entry.trustedForDurableStores ?? true)
-            ? {
-                channelIngress: {
-                  channelIds: entry.channelIds ?? [],
-                  stateDir: input.stateDir,
-                },
-              }
-            : {}),
+          env,
         }),
-      });
+      );
     } catch (err) {
       inspectedPluginIds.delete(entry.pluginId);
       params.warnings?.push(`Failed detecting ${entry.migration.label}: ${String(err)}`);
@@ -317,28 +352,14 @@ async function migratePluginDoctorStatePlans(
       try {
         repairAuthority?.assertCurrent();
         assertResourceScope?.();
-        const result = await plan.migration.migrateLegacyState({
-          ...input,
-          serviceWorkspaceDir:
-            tryResolveConfiguredAgentWorkspaceDir(input.config, input.env) ??
-            resolveDefaultAgentWorkspaceDir(input.env),
-          context: createPluginDoctorStateMigrationContext({
-            pluginId: plan.pluginId,
-            env: input.env,
-            config: input.config,
+        const result = await plan.migration.migrateLegacyState(
+          createPluginDoctorStateMigrationInput(
+            input,
+            plan,
             repairAuthority,
-            trustedForDurableStores: plan.trustedForDurableStores ?? true,
-            ...((plan.trustedForDurableStores ?? true)
-              ? {
-                  channelIngress: {
-                    channelIds: plan.channelIds ?? [],
-                    stateDir: input.stateDir,
-                    mutation: { assertCurrent: assertIngressMutationCurrent },
-                  },
-                }
-              : {}),
-          }),
-        });
+            assertIngressMutationCurrent,
+          ),
+        );
         repairAuthority?.assertCurrent();
         changes.push(...result.changes);
         warnings.push(...result.warnings);
@@ -578,6 +599,7 @@ export async function autoMigrateLegacyPluginDoctorState(params: {
   homedir?: () => string;
   log?: MigrationLogger;
   doctorOnlyStateMigrations?: boolean;
+  integrityCheck?: "quick" | "full";
 }): Promise<{
   migrated: boolean;
   skipped: boolean;
@@ -596,7 +618,7 @@ export async function autoMigrateLegacyPluginDoctorState(params: {
   const stateDir = resolveStateDir(env, params.homedir ?? os.homedir);
   const oauthDir = resolveOAuthDir(env, stateDir);
   const stateSchema = await prepareOpenClawStateDatabaseSchema(
-    { env: { ...env, OPENCLAW_STATE_DIR: stateDir } },
+    { env: { ...env, OPENCLAW_STATE_DIR: stateDir }, integrityCheck: params.integrityCheck },
     params.doctorOnlyStateMigrations === true ? "doctor" : "automatic",
   );
   const changes = [...stateDirResult.changes, ...stateSchema.changes];

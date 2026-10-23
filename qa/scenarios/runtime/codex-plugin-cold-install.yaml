@@ -20,7 +20,7 @@ scenario:
     - docs/cli/plugins.md
     - docs/plugins/install-overrides.md
   codeRefs:
-    - src/commands/codex-runtime-plugin-install.ts
+    - src/commands/runtime-plugin-install.ts
     - src/plugins/installed-plugin-index-records.ts
     - scripts/e2e/codex-on-demand-docker.sh
     - scripts/e2e/lib/codex-on-demand/assertions.mjs

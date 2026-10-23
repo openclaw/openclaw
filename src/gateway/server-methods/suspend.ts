@@ -6,8 +6,6 @@ import {
   validateGatewaySuspendResumeParams,
   validateGatewaySuspendStatusParams,
   validateGatewaySuspendHandoffParams,
-  type GatewaySuspendPrepareResult,
-  type GatewaySuspendStatusResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
   armGatewaySuspendHandoff,
@@ -15,32 +13,20 @@ import {
   prepareGatewaySuspend,
   resumeGatewaySuspend,
 } from "../../infra/gateway-suspend-coordinator.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGatewayProcessInstanceId } from "../process-instance.js";
 import { createGatewayServerActiveWorkInspectors } from "../server-active-work.js";
 import type { GatewayRequestContext } from "./shared-types.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import type { GatewayClient, GatewayRequestHandlers, RespondFn } from "./types.js";
+
+const suspendLog = createSubsystemLogger("gateway/suspension");
+
+function callerDescription(client: GatewayClient | null) {
+  return JSON.stringify({ client: client?.connect.client.id, connection: client?.connId });
+}
 
 function invalidParams(method: string) {
   return errorShape(ErrorCodes.INVALID_REQUEST, `invalid ${method} params`);
-}
-
-function schedulerRecoveryError(retryAfterMs: number) {
-  return errorShape(ErrorCodes.UNAVAILABLE, "gateway scheduler recovery is pending", {
-    retryable: true,
-    retryAfterMs,
-    details: { reason: "scheduler-resume-failed" },
-  });
-}
-
-function logDraining(
-  result: GatewaySuspendPrepareResult | GatewaySuspendStatusResult,
-  log: GatewayRequestContext["logGateway"],
-): void {
-  if (result.status === "draining") {
-    log.info(
-      `DRAINING activeCount=${result.activeCount} blockers=${result.blockers.map(({ kind, count }) => `${kind}:${count}`).join(",")} holders=${JSON.stringify(result.blockers.map(({ message }) => message))} custody=${result.writeCustody?.some(({ count }) => count > 0) ? "held" : "clear"}`,
-    );
-  }
 }
 
 function respondSuspendStatus(
@@ -59,16 +45,18 @@ function respondSuspendStatus(
         details: { reason: "gateway-suspension-conflict", expiresAtMs: result.expiresAtMs },
       }),
     );
-  } else if (result.status === "recovering") {
-    respond(false, undefined, schedulerRecoveryError(result.retryAfterMs));
   } else {
-    logDraining(result, context.logGateway);
+    if (result.status === "draining") {
+      context.logGateway.info(
+        `DRAINING activeCount=${result.activeCount} blockers=${result.blockers.map(({ kind, count }) => `${kind}:${count}`).join(",")} holders=${JSON.stringify(result.blockers.map(({ message }) => message))} custody=${result.writeCustody?.some(({ count }) => count > 0) ? "held" : "clear"}`,
+      );
+    }
     respond(true, result);
   }
 }
 
 export const suspendHandlers: GatewayRequestHandlers = {
-  "gateway.suspend.handoff": ({ respond, params, context }) => {
+  "gateway.suspend.handoff": ({ respond, params, context, client }) => {
     if (!validateGatewaySuspendHandoffParams(params)) {
       respond(false, undefined, invalidParams("gateway.suspend.handoff"));
       return;
@@ -102,9 +90,12 @@ export const suspendHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, result.error));
       return;
     }
+    suspendLog.info(
+      `gateway.suspend.handoff leaseId=${JSON.stringify(params.suspensionId)} caller=${callerDescription(client)} result=${result.value.status}`,
+    );
     respond(true, result.value);
   },
-  "gateway.suspend.prepare": async ({ respond, params, context }) => {
+  "gateway.suspend.prepare": async ({ respond, params, context, client }) => {
     if (!validateGatewaySuspendPrepareParams(params)) {
       respond(false, undefined, invalidParams("gateway.suspend.prepare"));
       return;
@@ -112,6 +103,7 @@ export const suspendHandlers: GatewayRequestHandlers = {
     const requestId = params.requestId.trim();
     const result = prepareGatewaySuspend({
       requestId,
+      caller: `gateway.suspend.prepare ${callerDescription(client)}`,
       terminalPolicy: params.terminalPolicy ?? "preserve",
       ...(params.drain === true ? { drain: true } : {}),
       pauseScheduling: () => context.cron.pauseScheduling(),
@@ -132,10 +124,11 @@ export const suspendHandlers: GatewayRequestHandlers = {
       return;
     }
     const suspensionId = params.suspensionId.trim();
+    // Polling reports custody; only the handoff owner decides whether it can stop.
     const result = getGatewaySuspendStatus(suspensionId, params.includeLifecycle === true);
     respondSuspendStatus(result, context, respond, "a different gateway suspension is prepared");
   },
-  "gateway.suspend.resume": async ({ respond, params }) => {
+  "gateway.suspend.resume": async ({ respond, params, client }) => {
     if (!validateGatewaySuspendResumeParams(params)) {
       respond(false, undefined, invalidParams("gateway.suspend.resume"));
       return;
@@ -151,10 +144,6 @@ export const suspendHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      if (result.reason === "scheduler-resume-failed") {
-        respond(false, undefined, schedulerRecoveryError(result.retryAfterMs));
-        return;
-      }
       respond(
         false,
         undefined,
@@ -162,6 +151,9 @@ export const suspendHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    suspendLog.info(
+      `gateway.suspend.resume leaseId=${JSON.stringify(suspensionId)} caller=${callerDescription(client)} resumed=${result.resumed}`,
+    );
     respond(true, result);
   },
 };

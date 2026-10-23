@@ -5,13 +5,15 @@ import { readConfigFileSnapshot } from "../config/io.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import {
   readDeferredPluginMigrations,
-  readDeferredPluginMigrationCompletionsAsync,
   recordDeferredPluginMigrations,
+  type DeferredPluginMigration,
 } from "../infra/deferred-plugin-migrations.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { executeOpenClawStateWorker } from "../state/openclaw-state-worker-store.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createDoctorPluginMigrationPreparation } from "./doctor-config-preflight-plugin-migrations.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
@@ -32,6 +34,18 @@ beforeAll(async () => {
 });
 afterAll(() => restoreRuntime?.());
 
+const writeJson = (file: string, value: unknown) => fs.writeFile(file, JSON.stringify(value));
+function makePending(pluginId: string, overrides: Partial<DeferredPluginMigration> = {}) {
+  return {
+    pluginId,
+    reason: "The plugin has not reported completion.",
+    command: "openclaw update repair",
+    ...overrides,
+  };
+}
+const protectedConfig = (pluginId: string) => [["plugins", "entries", pluginId, "config"]];
+const hasPending = (pluginId: string) => expect.objectContaining({ pluginId });
+
 async function prepareMigrationOwner() {
   const owner = createDoctorPluginMigrationPreparation({
     enabled: true,
@@ -42,7 +56,7 @@ async function prepareMigrationOwner() {
     runWithPluginMetadataSnapshot: (_scope, run) => run(),
     doctorOnlyStateMigrations: true,
   });
-  const snapshot = await readConfigFileSnapshot();
+  const snapshot = await readConfigFileSnapshot(await owner.snapshotOptions());
   await owner.prepare(snapshot);
   await owner.converged([], snapshot, undefined);
   return owner;
@@ -52,53 +66,50 @@ async function readReceipt(home: string, pluginId: string) {
   const databasePath = path.join(home, ".openclaw", "state", "openclaw.sqlite");
   await closeOpenClawStateDatabaseByPathAsync(databasePath);
   const { DatabaseSync } = requireNodeSqlite();
-  const db = new DatabaseSync(databasePath, { readOnly: true });
-  try {
-    const row = db
-      .prepare("SELECT status, report_json FROM migration_runs WHERE id = ?")
-      .get(`deferred-plugin-migration:${pluginId}`);
-    return { status: row?.status, report: JSON.parse(String(row?.report_json)) };
-  } finally {
-    db.close();
-  }
+  using db = new DatabaseSync(databasePath, { readOnly: true });
+  const row = db
+    .prepare("SELECT status, report_json FROM migration_runs WHERE id = ?")
+    .get(`deferred-plugin-migration:${pluginId}`);
+  return { status: row?.status, report: JSON.parse(String(row?.report_json)) };
 }
 
 describe("unavailable plugin migration owners", () => {
   it.each([
     { kind: "object", value: {} },
     { kind: "array", value: [] },
-  ])("keeps an authored empty legacy $kind protected", async ({ value: legacyValue }) => {
-    await withHome(async (home) => {
-      await writeOpenClawConfig(home, {
-        gateway: { mode: "local" },
-        plugins: { enabled: false },
-        legacyFixture: legacyValue,
-      });
-      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
-        await recordDeferredPluginMigrations({
-          pending: [
-            {
-              pluginId: "missing-owner",
-              reason: "Retained compatibility input",
-              command: "openclaw doctor --fix",
-              configPaths: [["legacyFixture"]],
-              validationExcludedPaths: [["legacyFixture"]],
-            },
-          ],
+  ])(
+    "keeps an authored empty legacy $kind protected during Doctor preparation",
+    async ({ value: legacyValue }) => {
+      await withHome(async (home) => {
+        await writeOpenClawConfig(home, {
+          gateway: { mode: "local" },
+          plugins: { enabled: false },
+          legacyFixture: legacyValue,
         });
-        expect((await readConfigFileSnapshot()).valid).toBe(true);
-        const owner = await prepareMigrationOwner();
-        await owner.complete();
-        expect(readDeferredPluginMigrations()).toContainEqual(
-          expect.objectContaining({ pluginId: "missing-owner" }),
-        );
-        expect((await readConfigFileSnapshot()).valid).toBe(true);
-        expect(
-          JSON.parse(await fs.readFile(path.join(home, ".openclaw", "openclaw.json"), "utf8")),
-        ).toHaveProperty("legacyFixture", legacyValue);
+        await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+          await recordDeferredPluginMigrations({
+            pending: [
+              {
+                pluginId: "missing-owner",
+                reason: "Retained compatibility input",
+                command: "openclaw doctor --fix",
+                configPaths: [["legacyFixture"]],
+                validationExcludedPaths: [["legacyFixture"]],
+              },
+            ],
+          });
+          expect((await readConfigFileSnapshot()).valid).toBe(false);
+          const owner = await prepareMigrationOwner();
+          await owner.complete();
+          expect(readDeferredPluginMigrations()).toContainEqual(hasPending("missing-owner"));
+          expect((await readConfigFileSnapshot(await owner.snapshotOptions())).valid).toBe(true);
+          expect(
+            JSON.parse(await fs.readFile(path.join(home, ".openclaw", "openclaw.json"), "utf8")),
+          ).toHaveProperty("legacyFixture", legacyValue);
+        });
       });
-    });
-  });
+    },
+  );
   it("supersedes a replaced QQ Bot owner only after the official successor completes migration", async () => {
     await withHome(async (home) => {
       const pluginId = "openclaw-qqbot";
@@ -109,23 +120,17 @@ describe("unavailable plugin migration owners", () => {
       };
       await writeOpenClawConfig(home, config);
       await fs.mkdir(root, { recursive: true });
-      await fs.writeFile(
-        path.join(root, "package.json"),
-        JSON.stringify({
-          name: "@tencent-connect/openclaw-qqbot",
-          version: "2.0.3",
-          openclaw: { extensions: ["./index.cjs"] },
-        }),
-      );
+      await writeJson(path.join(root, "package.json"), {
+        name: "@tencent-connect/openclaw-qqbot",
+        version: "2.0.3",
+        openclaw: { extensions: ["./index.cjs"] },
+      });
       await fs.writeFile(path.join(root, "index.cjs"), "module.exports = {};\n");
-      await fs.writeFile(
-        path.join(root, "openclaw.plugin.json"),
-        JSON.stringify({
-          id: pluginId,
-          configSchema: { type: "object" },
-          doctorContract: { stateMigrations: [{ id: "retained-state" }] },
-        }),
-      );
+      await writeJson(path.join(root, "openclaw.plugin.json"), {
+        id: pluginId,
+        configSchema: { type: "object" },
+        doctorContract: { stateMigrations: [{ id: "retained-state" }] },
+      });
       const contract = path.join(root, "doctor-contract-api.cjs");
       await fs.writeFile(
         contract,
@@ -146,14 +151,7 @@ describe("unavailable plugin migration owners", () => {
           { config },
         );
         await recordDeferredPluginMigrations({
-          pending: [
-            {
-              pluginId: "qqbot",
-              reason: "The plugin has not reported completion.",
-              command: "openclaw update repair",
-              requiresDoctorInspection: true,
-            },
-          ],
+          pending: [makePending("qqbot", { requiresDoctorInspection: true })],
         });
         const state = createPluginStateKeyedStore<string>("qqbot", {
           namespace: "migration-fixture",
@@ -162,20 +160,21 @@ describe("unavailable plugin migration owners", () => {
         await state.register("retained-input", "synthetic retained state");
         const owner = await prepareMigrationOwner();
         await owner.complete();
-        expect(readDeferredPluginMigrations()).toContainEqual(
-          expect.objectContaining({ pluginId: "qqbot" }),
-        );
+        expect(readDeferredPluginMigrations()).toContainEqual(hasPending("qqbot"));
         await owner.migrate(config);
         await owner.complete();
-        expect(readDeferredPluginMigrations()).not.toContainEqual(
-          expect.objectContaining({ pluginId: "qqbot" }),
-        );
+        expect(readDeferredPluginMigrations()).not.toContainEqual(hasPending("qqbot"));
         expect(await state.lookup("retained-input")).toBe("synthetic retained state");
         expect(await readReceipt(home, "qqbot")).toMatchObject({
           status: "superseded",
           report: { reason: expect.stringContaining('Superseded by plugin "openclaw-qqbot"') },
         });
-        expect(await readDeferredPluginMigrationCompletionsAsync()).toContainEqual({
+        expect(
+          await executeOpenClawStateWorker(captureOpenClawStateWorkerContext(), {
+            type: "plugins.deferredMigrations.completions.read",
+            input: undefined,
+          }),
+        ).toContainEqual({
           pluginId: "qqbot",
           completedAtMs: expect.any(Number),
         });
@@ -192,12 +191,11 @@ describe("unavailable plugin migration owners", () => {
         await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
           await recordDeferredPluginMigrations({
             pending: [
-              {
-                pluginId: "webhooks",
+              makePending("webhooks", {
                 reason: "Retained input",
                 command: "openclaw doctor --fix",
-                configPaths: [["plugins", "entries", "webhooks", "config"]],
-              },
+                configPaths: protectedConfig("webhooks"),
+              }),
             ],
           });
           const configPath = path.join(home, ".openclaw", "openclaw.json");
@@ -206,23 +204,18 @@ describe("unavailable plugin migration owners", () => {
           }
           const owner = await prepareMigrationOwner();
           if (kind === "changed") {
-            await fs.writeFile(
-              configPath,
-              JSON.stringify({
-                ...config,
-                plugins: {
-                  enabled: false,
-                  entries: { webhooks: { config: { routes: ["retained"] } } },
-                },
-              }),
-            );
+            await writeJson(configPath, {
+              ...config,
+              plugins: {
+                enabled: false,
+                entries: { webhooks: { config: { routes: ["retained"] } } },
+              },
+            });
             await expect(owner.complete()).rejects.toThrow("source config changed");
           } else {
             await owner.complete();
           }
-          expect(readDeferredPluginMigrations()).toContainEqual(
-            expect.objectContaining({ pluginId: "webhooks" }),
-          );
+          expect(readDeferredPluginMigrations()).toContainEqual(hasPending("webhooks"));
         });
       });
     },
@@ -239,12 +232,9 @@ describe("unavailable plugin migration owners", () => {
       });
       await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
         await recordDeferredPluginMigrations({
-          pending: pluginIds.map((pluginId) => ({
-            pluginId,
-            reason: "The plugin has not reported completion.",
-            command: "openclaw update repair",
-            configPaths: [["plugins", "entries", pluginId, "config"]],
-          })),
+          pending: pluginIds.map((pluginId) =>
+            makePending(pluginId, { configPaths: protectedConfig(pluginId) }),
+          ),
         });
         // Startup is a reader; Doctor owns settlement of this shipped pending row.
         await runStartupConfigPreflight({ gateway: true, observe: false });
@@ -274,6 +264,59 @@ describe("unavailable plugin migration owners", () => {
       });
     });
   });
+
+  it.skipIf(process.platform === "win32")(
+    "retains the blocked-path diagnosis after Doctor settles migration receipts",
+    async () => {
+      await withHome(async (home) => {
+        const pluginId = "blocked-owner-fixture";
+        const pluginPath = path.join(home, "local-plugin");
+        await fs.mkdir(pluginPath);
+        await writeJson(path.join(pluginPath, "openclaw.plugin.json"), {
+          id: pluginId,
+          configSchema: { type: "object" },
+        });
+        await fs.writeFile(
+          path.join(pluginPath, "index.js"),
+          "throw new Error('must not execute');\n",
+        );
+        await fs.chmod(pluginPath, 0o777);
+        try {
+          await writeOpenClawConfig(home, {
+            gateway: { mode: "local" },
+            plugins: {
+              load: { paths: [pluginPath] },
+              entries: { [pluginId]: { enabled: true, config: { retained: "authored" } } },
+            },
+          });
+          await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+            const result = await runDoctorConfigPreflight(options);
+            const pending = readDeferredPluginMigrations().find(
+              (entry) => entry.pluginId === pluginId,
+            );
+            expect(pending).toMatchObject({
+              reason: expect.stringContaining("present but blocked"),
+              command: "openclaw doctor --fix",
+            });
+            expect(pending?.reason).not.toContain("Install or enable");
+            expect(result.snapshot.sourceConfig.plugins?.entries?.[pluginId]).toEqual({
+              enabled: true,
+              config: { retained: "authored" },
+            });
+            expect(result.stateMigrationStepReceipts).toContainEqual(
+              expect.objectContaining({
+                id: "plugin:blocked-owner-fixture",
+                outcome: "deferred",
+                warnings: [expect.stringContaining("present but blocked")],
+              }),
+            );
+          });
+        } finally {
+          await fs.chmod(pluginPath, 0o755);
+        }
+      });
+    },
+  );
 
   it("keeps retained values and tells Doctor which unavailable plugin to install or enable", async () => {
     await withHome(async (home) => {

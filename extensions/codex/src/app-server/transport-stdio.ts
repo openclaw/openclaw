@@ -1,15 +1,13 @@
-/**
- * Creates and configures stdio-backed Codex app-server transports, including
- * Windows spawn normalization and environment filtering.
- */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
+import { resolveLaunchableNodePath } from "openclaw/plugin-sdk/process-runtime";
 import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
   type WindowsSpawnInvocation,
 } from "openclaw/plugin-sdk/windows-spawn";
+import { appendCodexGitConfigParameters } from "./config-utils.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import { normalizeCodexAppServerArgs } from "./launch-args.js";
 import { resolveManagedCodexNativeCommand } from "./managed-binary.js";
@@ -52,7 +50,7 @@ export function resolveCodexAppServerSpawnInvocation(
     // never let its env shebang choose another Node architecture from PATH.
     return {
       ...resolved,
-      command: process.execPath,
+      command: resolveLaunchableNodePath(),
       argv: [resolved.command, ...resolved.argv],
       resolution: "node-entrypoint",
     };
@@ -62,7 +60,7 @@ export function resolveCodexAppServerSpawnInvocation(
 
 /** Merges app-server environment overrides while honoring clearEnv and unsafe key filtering. */
 export function resolveCodexAppServerSpawnEnv(
-  options: Pick<CodexAppServerStartOptions, "env" | "clearEnv">,
+  options: Pick<CodexAppServerStartOptions, "env" | "clearEnv" | "managedGitConfigParameters">,
   baseEnv: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
 ): NodeJS.ProcessEnv {
@@ -88,14 +86,37 @@ export function resolveCodexAppServerSpawnEnv(
       delete env[key];
     }
   }
+  if (options.managedGitConfigParameters !== undefined) {
+    env.GIT_CONFIG_PARAMETERS = options.managedGitConfigParameters;
+  }
   return env;
+}
+
+/** Keep inherited Git settings in the private process environment, outside thread config. */
+export function withCodexAppServerGitConfig(
+  options: CodexAppServerStartOptions,
+  parameters: string,
+): CodexAppServerStartOptions {
+  const env = resolveCodexAppServerSpawnEnv(options);
+  // Node selects the first sorted casing when Windows receives duplicate environment keys.
+  const key =
+    process.platform === "win32"
+      ? Object.keys(env)
+          .toSorted()
+          .find((name) => name.toUpperCase() === "GIT_CONFIG_PARAMETERS")
+      : "GIT_CONFIG_PARAMETERS";
+  const inherited = key === undefined ? undefined : env[key];
+  return {
+    ...options,
+    managedGitConfigParameters: appendCodexGitConfigParameters(inherited, parameters),
+  };
 }
 
 /** Spawns the Codex app-server process and returns the shared transport interface. */
 export async function createStdioTransport(
   options: CodexAppServerStartOptions,
   baseEnv: NodeJS.ProcessEnv = process.env,
-  assertCurrent?: () => void,
+  assertCurrent?: () => void | Promise<void>,
   onSpawn?: (child: ChildProcessWithoutNullStreams) => void,
 ): Promise<ChildProcessWithoutNullStreams> {
   const isHostedGateway = baseEnv.OPENCLAW_GATEWAY_HOST_LIFELINE?.trim() === "stdin";
@@ -118,7 +139,7 @@ export async function createStdioTransport(
     throw previousFailure;
   }
   const register = await prepareCodexAppServerProcessRegistration();
-  assertCurrent?.();
+  await assertCurrent?.();
   embeddedAgentLog.debug("Codex app-server spawn", {
     command: invocation.command,
     launcher: options.command,
@@ -150,11 +171,11 @@ export async function createStdioTransport(
     // Attach lifecycle observers before inspection can yield to an early exit.
     onSpawn?.(child);
     await register(child);
-    assertCurrent?.();
+    await assertCurrent?.();
     return child;
   } catch (error) {
     await closeCodexAppServerTransportAndWait(child, { drainStdio: true });
-    assertCurrent?.();
+    await assertCurrent?.();
     throw (
       child.startupFailure?.error ??
       recordCodexAppServerSpawnFailure(error, invocation.command, launchKey)

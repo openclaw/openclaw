@@ -40,7 +40,9 @@ export {
 } from "openclaw/plugin-sdk/ssrf-runtime";
 export {
   setMatrixThreadBindingIdleTimeoutBySessionKey,
+  setMatrixThreadBindingIdleTimeoutBySessionKeyAsync,
   setMatrixThreadBindingMaxAgeBySessionKey,
+  setMatrixThreadBindingMaxAgeBySessionKeyAsync,
 } from "./src/matrix/thread-bindings-shared.js";
 export { setMatrixRuntime } from "./src/runtime.js";
 export { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";

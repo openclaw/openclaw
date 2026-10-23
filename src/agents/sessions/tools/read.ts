@@ -1,7 +1,7 @@
 import { constants } from "node:fs";
 import { access as fsAccess, readdir as fsReaddir, stat as fsStat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
-import { readRegularFile } from "@openclaw/fs-safe/advanced";
+import { getKeybindings, type Keybinding } from "@earendil-works/pi-tui";
 import { classifyAttachmentBytes } from "@openclaw/media-core/attachment-classify";
 import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
 import { hasErrnoCode, toErrorObject } from "../../../infra/errors.js";
@@ -14,14 +14,15 @@ import {
 } from "../../../media/media-reference.js";
 import { normalizeNativePathSeparators } from "../../../shared/ignore-rules.js";
 import { levenshteinDistance } from "../../../shared/levenshtein-distance.js";
-import { keyHint, keyText } from "../../modes/interactive/components/keybinding-hints.js";
 import {
   getLanguageFromPath,
   highlightCode,
+  interactiveAgentTheme,
   type Theme,
 } from "../../modes/interactive/theme/theme.js";
 import { getReadmePath } from "../../package-metadata.js";
 import type { AgentTool } from "../../runtime/index.js";
+import { bindAgentToolReplaySafety } from "../../tool-replay-safety.js";
 import type { ToolResultBudget } from "../../tool-result-limits.js";
 import { processImage } from "../../utils/image-resize.js";
 import { detectSupportedImageMimeType } from "../../utils/mime.js";
@@ -39,8 +40,8 @@ import {
   resolveLocalPathToCwd,
   resolveToCwd,
 } from "./path-utils.js";
+import { readLocalFile } from "./read-file.js";
 import { createBoundedReadTextPage } from "./read-page.js";
-import { createReadToolDetails } from "./read-tool-contract.js";
 import {
   getTextOutput,
   invalidArgText,
@@ -54,6 +55,37 @@ import type { ReadToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { readToolInputSchema, readToolOutputSchema } from "./tool-schemas.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize } from "./truncate.js";
+
+function keyText(keybinding: Keybinding): string {
+  return getKeybindings()
+    .getKeys(keybinding)
+    .join("/")
+    .replace(/[^+/]+/g, (part) =>
+      process.platform === "darwin" && part.toLowerCase() === "alt" ? "option" : part,
+    );
+}
+
+function keyHint(keybinding: Keybinding, description: string): string {
+  return (
+    interactiveAgentTheme.fg("dim", keyText(keybinding)) +
+    interactiveAgentTheme.fg("muted", ` ${description}`)
+  );
+}
+
+function createReadToolDetails(
+  content: (TextContent | ImageContent)[],
+  textDetails?: Extract<ReadToolDetails, { kind: "text" | "truncated" }>,
+): ReadToolDetails {
+  const text = content.find((part): part is TextContent => part.type === "text")?.text ?? "";
+  const image = content.find((part): part is ImageContent => part.type === "image");
+  if (image) {
+    return { kind: "image", content: text, mimeType: image.mimeType };
+  }
+  if (textDetails) {
+    return textDetails;
+  }
+  return { kind: "text", content: text };
+}
 
 function normalizeReadError(error: unknown, filePath: string): Error {
   if (hasErrnoCode(error, "EISDIR")) {
@@ -119,7 +151,7 @@ interface ReadOperations {
   resolvePath?: (filePath: string, cwd: string) => string | Promise<string>;
   /** Decode text bytes for this backend. Custom backends default to UTF-8. */
   decodeText?: (params: { buffer: Buffer; absolutePath: string }) => string;
-  readFile: (absolutePath: string) => Promise<Buffer>;
+  readFile: (absolutePath: string, signal?: AbortSignal) => Promise<Buffer>;
   /** Check if file is readable (throw if not) */
   access: (absolutePath: string) => Promise<void>;
   /** Detect image MIME type, return null or undefined for non-images */
@@ -132,7 +164,7 @@ interface ReadOperations {
 const defaultReadOperations: ReadOperations = {
   resolvePath: resolveLocalReadPath,
   decodeText: ({ buffer }) => decodeWindowsTextFileBuffer({ buffer }),
-  readFile: async (filePath) => (await readRegularFile({ filePath })).buffer,
+  readFile: readLocalFile,
   access: assertLocalReadableFile,
 };
 
@@ -361,7 +393,7 @@ export function createReadToolDefinition(
   const autoResizeImages = options?.autoResizeImages ?? true;
   const ops = options?.operations ?? defaultReadOperations;
   const maxBytes = options?.maxBytes ?? DEFAULT_MAX_BYTES;
-  return {
+  const definition: ToolDefinition<typeof readToolInputSchema, ReadToolDetails> = {
     name: "read",
     label: "read",
     description: `Read text/image file (jpg/png/gif/webp/bmp); images attach to model context. Text caps ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB. Continue with offset/limit, or cursor within a long line.`,
@@ -412,7 +444,7 @@ export function createReadToolDefinition(
                   assertFileToolNotAborted(signal);
                   return {
                     ...resolved,
-                    buffer: await ops.readFile(resolved.absolutePath),
+                    buffer: await ops.readFile(resolved.absolutePath, signal),
                   };
                 },
               );
@@ -608,11 +640,12 @@ export function createReadToolDefinition(
       return reuseTextComponent(context.lastComponent, content);
     },
   };
+  return options?.operations ? definition : bindAgentToolReplaySafety(definition, "bounded-read");
 }
 
 export function createReadTool(
   cwd: string,
   options?: ReadToolOptions,
-): AgentTool<typeof readToolInputSchema> {
+): AgentTool<typeof readToolInputSchema, ReadToolDetails> {
   return wrapToolDefinition(createReadToolDefinition(cwd, options));
 }

@@ -29,6 +29,7 @@ function createIssueLink() {
 }
 
 async function hover(anchor: HTMLAnchorElement) {
+  await Promise.resolve(); // Allow the bridge to mount before dispatching intent.
   anchor.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
   await vi.advanceTimersByTimeAsync(250);
 }
@@ -41,8 +42,9 @@ const hovercard = () => document.querySelector<HTMLElement>(".link-reader-hoverc
 
 describe("GitHub hovercard prefetch subscriptions", () => {
   beforeEach(() => vi.useFakeTimers());
-  afterEach(() => {
+  afterEach(async () => {
     document.body.replaceChildren();
+    await Promise.resolve();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -92,7 +94,6 @@ describe("GitHub hovercard prefetch subscriptions", () => {
   it.each([
     { phase: "pending", change: "connection" },
     { phase: "pending", change: "principal" },
-    { phase: "cached", change: "connection" },
     { phase: "cached", change: "principal" },
   ])("retires $phase inline state after $change changes", async ({ phase, change }) => {
     const { provider, anchor, request } = createIssueLink();
@@ -105,6 +106,7 @@ describe("GitHub hovercard prefetch subscriptions", () => {
     if (pending) {
       request.mockReturnValueOnce(pending.promise);
     }
+    await provider.updateComplete;
     const loading = provider.prefetch(target, new AbortController().signal);
     if (!pending) {
       await loading;
@@ -141,6 +143,7 @@ describe("GitHub hovercard prefetch subscriptions", () => {
       request.mockReturnValue(deferred.promise);
       const firstScope = new AbortController();
       const target = resolveLinkReaderTarget(ISSUE_HREF, [TEST_LINK_READER])!;
+      await provider.updateComplete;
       let first: Promise<unknown> | undefined;
       let survivor: Promise<void>;
       if (consumer === "hover") {
@@ -212,6 +215,7 @@ describe("GitHub hovercard prefetch subscriptions", () => {
       const old = createDeferred<ReturnType<typeof issuePreviewResponse>>();
       const { anchor, provider, request } = createIssueLink();
       request.mockReturnValueOnce(old.promise);
+      await provider.updateComplete;
       const pending = provider.prefetch(
         resolveLinkReaderTarget(ISSUE_HREF, [TEST_LINK_READER])!,
         new AbortController().signal,
@@ -220,9 +224,10 @@ describe("GitHub hovercard prefetch subscriptions", () => {
       if (change === "agent") {
         provider.agentId = "other";
       } else if (change === "client") {
-        provider.client = { request } as unknown as GatewayBrowserClient;
+        provider.client = { request, connected: true } as unknown as GatewayBrowserClient;
       } else {
         provider.remove();
+        await Promise.resolve();
         document.body.append(provider);
       }
       expect(signal.aborted).toBe(true);

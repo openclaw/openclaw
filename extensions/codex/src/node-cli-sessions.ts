@@ -2,7 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
+import {
+  floorPositiveFiniteNumber,
+  resolveIntegerOption,
+  timestampMsToIsoString,
+} from "openclaw/plugin-sdk/number-runtime";
 import type {
   OpenClawPluginNodeHostCommand,
   OpenClawPluginNodeInvokePolicy,
@@ -15,8 +19,9 @@ import {
   isRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateWithMarker } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { safeParseJson, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
@@ -197,6 +202,7 @@ export async function resumeCodexCliSessionOnNode(params: {
   sessionId: string;
   agentId?: string;
   sessionKey?: string;
+  storePath?: string;
   prompt: string;
   cwd?: string;
   timeoutMs?: number;
@@ -204,9 +210,14 @@ export async function resumeCodexCliSessionOnNode(params: {
   let catalogAgentId: string | undefined;
   let catalogHomeId: string | undefined;
   if (params.sessionKey) {
+    const storePath =
+      params.storePath ??
+      params.runtime.agent.session.resolveStorePath(undefined, { agentId: params.agentId });
     const { adoptionSessionKeyRest, CODEX_NODE_SESSION_KEY_PREFIX, readNodeSessionMarker } =
       await import("./session-catalog-node-adoption.js");
-    const entry = params.runtime.agent.session.getSessionEntry({
+    const entry = await params.runtime.agent.session.getSessionEntryAsync({
+      agentId: params.agentId,
+      storePath,
       sessionKey: params.sessionKey,
       readConsistency: "latest",
     });
@@ -291,7 +302,10 @@ export function formatCodexCliSessions(params: {
 
 async function listLocalCodexCliSessions(paramsJSON?: string | null): Promise<string> {
   const params = parseJsonRecord(paramsJSON);
-  const limit = normalizeLimit(params.limit);
+  const limit = resolveIntegerOption(params.limit, DEFAULT_SESSION_LIMIT, {
+    min: 1,
+    max: MAX_SESSION_LIMIT,
+  });
   const filter = typeof params.filter === "string" ? params.filter.trim().toLowerCase() : "";
   const codexHome = resolveCodexAppServerUserHomeDir();
   const summaries = await readHistorySessions(codexHome);
@@ -630,23 +644,13 @@ async function readFileMtimeIso(file: string): Promise<string | undefined> {
   }
 }
 
-function normalizeLimit(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value)
-    ? Math.min(MAX_SESSION_LIMIT, Math.max(1, Math.floor(value)))
-    : DEFAULT_SESSION_LIMIT;
-}
-
 function normalizeTimeoutMs(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.min(60 * 60_000, Math.floor(value))
-    : DEFAULT_RESUME_TIMEOUT_MS;
+  const timeoutMs = floorPositiveFiniteNumber(value);
+  return timeoutMs === undefined ? DEFAULT_RESUME_TIMEOUT_MS : Math.min(60 * 60_000, timeoutMs);
 }
 
 function truncateText(value: string, max: number): string {
-  if (value.length <= max) {
-    return value;
-  }
-  return `${truncateUtf16Safe(value, Math.max(0, max - 3))}...`;
+  return truncateWithMarker(value, max, { marker: "...", reserve: 3, trimEnd: false });
 }
 
 function readNodeId(node: CodexCliSessionNodeInfo): string {

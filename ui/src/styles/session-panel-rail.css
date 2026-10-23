@@ -1,0 +1,187 @@
+.sidebar-region--mobile-host {
+  --mobile-panel-rail-height: 40px;
+  --mobile-panel-rail-background: color-mix(in srgb, var(--popover) 70%, var(--bg));
+  --mobile-panel-rail-control: 32px;
+  --mobile-panel-rail-icon: 16px;
+  --mobile-panel-rail-title-size: 14px;
+}
+
+/* Opt-in internal session rails. Parent owners choose presentation from native
+   mobile context, never from a narrow desktop panel's width. */
+.session-panel-rail {
+  display: flex;
+  box-sizing: border-box;
+  min-width: 0;
+  flex: none;
+  align-items: center;
+  gap: var(--session-rail-group-gap, 8px);
+  border-bottom: 1px solid var(--session-rail-border, var(--border));
+  background: var(--session-rail-background, var(--bg-elevated));
+  color: var(--muted-strong);
+  font-size: calc(14px * var(--control-ui-text-scale, 1));
+  line-height: 18px;
+}
+
+.session-panel-rail[data-presentation="desktop"] {
+  --session-rail-height: 40px;
+  --session-rail-target: var(--space-6);
+  --session-rail-icon: var(--rail-header-action-glyph-size);
+  --session-rail-control: var(--rail-header-action-size);
+  --session-rail-inset: 2px;
+  --session-rail-gap: var(--rail-header-action-gap);
+  --session-rail-group-gap: 8px;
+  --session-rail-label-gap: 4px;
+  --session-rail-background: var(--bg);
+  --session-rail-pill: var(--bg-hover);
+  --session-rail-hover: var(--border);
+  --session-rail-border: var(--border);
+  --session-rail-separator: var(--border-strong);
+  /* The native targets set the scale; Review may still need a second row. */
+  min-height: var(--session-rail-height);
+  padding: 3px 8px 4px;
+}
+
+.session-panel-rail[data-presentation="mobile"] {
+  --session-rail-target: 32px;
+  --session-rail-icon: 16px;
+  min-height: 40px;
+  padding: 0 8px;
+  border-bottom-color: var(--border-strong);
+  background: var(--mobile-panel-rail-background);
+  line-height: 20px;
+}
+
+.session-panel-rail .session-panel-rail__group,
+.session-panel-rail .session-panel-rail__actions {
+  display: inline-flex;
+  min-width: 0;
+  flex: none;
+  align-items: center;
+  gap: var(--session-rail-gap, 2px);
+}
+
+.session-panel-rail[data-presentation="mobile"] .session-panel-rail__actions {
+  gap: 4px;
+}
+
+.session-panel-rail .session-panel-rail__actions {
+  gap: var(--session-rail-gap, 8px);
+  margin-inline-start: auto;
+}
+
+.session-panel-rail[data-presentation="desktop"] .session-panel-rail__group {
+  box-sizing: border-box;
+  min-height: var(--session-rail-control);
+  padding: var(--session-rail-inset);
+  border-radius: var(--radius-full);
+  background: var(--session-rail-pill);
+  box-shadow: inset 0 0 0 1px var(--session-rail-border);
+}
+
+.session-panel-rail .session-panel-rail__button {
+  display: inline-flex;
+  box-sizing: border-box;
+  width: var(--session-rail-target);
+  min-width: var(--session-rail-target);
+  height: var(--session-rail-target);
+  min-height: var(--session-rail-target);
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: var(--session-rail-label-gap, 4px);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--muted-strong);
+  font: inherit;
+  white-space: nowrap;
+}
+
+.session-panel-rail .session-panel-rail__button--labelled {
+  width: auto;
+  padding-inline: 8px;
+}
+
+.session-panel-rail .session-panel-rail__button > svg {
+  width: 18px;
+  height: 18px;
+  flex: none;
+}
+
+/* Menu wraps its trigger content; both direct and menu icons share the target. */
+.session-panel-rail[data-presentation="desktop"] .session-panel-rail__button svg,
+.session-panel-rail[data-presentation="desktop"] .session-panel-rail__identity > svg {
+  width: var(--session-rail-icon);
+  height: var(--session-rail-icon);
+  flex: none;
+}
+
+.session-panel-rail[data-presentation="desktop"]
+  .session-panel-rail__button
+  > .oc-menu-item__label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--session-rail-label-gap);
+}
+
+.session-panel-rail
+  .session-panel-rail__button:is(
+    :hover,
+    :focus-visible,
+    [aria-expanded="true"]:not(.session-panel-rail__toggle)
+  ):not(:disabled):not([aria-disabled="true"]) {
+  background: var(--session-rail-hover, var(--bg-hover));
+  color: var(--text);
+}
+
+.session-panel-rail .session-panel-rail__button:focus-visible {
+  outline: var(--control-ui-focus-ring);
+  outline-offset: var(--control-ui-focus-ring-offset);
+}
+
+.session-panel-rail .session-panel-rail__button[aria-pressed="true"] > svg,
+.session-panel-rail .session-panel-rail__toggle[aria-expanded="true"] > svg {
+  color: var(--accent);
+}
+
+.session-panel-rail .session-panel-rail__button:is(:disabled, [aria-disabled="true"]) {
+  opacity: 0.4;
+}
+
+.session-panel-rail .session-panel-rail__separator {
+  width: 1px;
+  height: 16px;
+  flex: none;
+  margin-inline: 2px;
+  background: var(--session-rail-separator, var(--border-strong));
+}
+
+.session-panel-rail .session-panel-rail__identity {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+}
+
+.session-panel-rail .session-panel-rail__title {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: inherit;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Menu triggers wrap their glyph in a label; remove its text baseline so it
+   centers like the neighboring direct-icon buttons. */
+:is(.session-panel-rail, .sidebar-file-mobile__rail) .oc-menu-trigger > .oc-menu-item__label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}

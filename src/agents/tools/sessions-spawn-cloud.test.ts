@@ -5,9 +5,17 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { convertResponsesToolPayload } from "../../../packages/ai/src/providers/openai-responses-tools.js";
 import { SessionsCreateParamsSchema } from "../../../packages/gateway-protocol/src/schema/sessions-create.js";
 import { validateToolArguments } from "../../../packages/llm-core/src/validation.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
-import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import {
+  drainSessionStateForTest,
+  useSessionStoreTempDirs,
+} from "../../test-utils/session-state-cleanup.js";
 import {
   expectRegisteredSubagentRun,
   supportedSpawnModelChoice,
@@ -61,13 +69,18 @@ describe("visible session placement and authority", () => {
     acpRuntimeRegistry = await import("../../acp/runtime/registry.js");
   });
   beforeEach(() => {
+    setRuntimeConfigSnapshot({});
     acpRuntimeRegistry.testing.resetAcpRuntimeBackendsForTests();
     hoisted.prepareModelChoiceMock.mockReset().mockImplementation(supportedSpawnModelChoice);
     hoisted.spawnSubagentDirectMock.mockReset();
     hoisted.spawnAcpDirectMock.mockReset();
     hoisted.runSubagentProgressMock.mockClear();
   });
-  afterEach(() => acpRuntimeRegistry.testing.resetAcpRuntimeBackendsForTests());
+  afterEach(async () => {
+    await drainSessionStateForTest();
+    clearRuntimeConfigSnapshot();
+    acpRuntimeRegistry.testing.resetAcpRuntimeBackendsForTests();
+  });
 
   function mockCallArg(mock: unknown, callIndex: number, argIndex: number, label: string) {
     const calls = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls;
@@ -299,18 +312,20 @@ describe("visible session placement and authority", () => {
         throw new Error("registration unavailable");
       }
     });
+    const config: OpenClawConfig = {
+      session: { store: storePath },
+      agents: {
+        ...(success
+          ? { defaults: { subagents: { model: "mock-provider/child@child-profile" } } }
+          : {}),
+        entries: { main: {} },
+      },
+      cloudWorkers: { profiles: { build: { provider: "fixture", settings: {} } } },
+    };
+    setRuntimeConfigSnapshot(config);
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
-      config: {
-        session: { store: storePath },
-        agents: {
-          ...(success
-            ? { defaults: { subagents: { model: "mock-provider/child@child-profile" } } }
-            : {}),
-          entries: { main: {} },
-        },
-        cloudWorkers: { profiles: { build: { provider: "fixture", settings: {} } } },
-      },
+      config,
       callGateway: callGateway as never,
       registerRun,
       countActiveRuns: () => 0,

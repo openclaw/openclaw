@@ -4,9 +4,8 @@ import {
   type PreparedProviderFailoverOwner,
 } from "./provider-patterns.js";
 import type { FailoverClassification, FailoverReason, FailoverSignal } from "./signal.js";
-export { isCloudCodeAssistFormatError } from "./classify-core.js";
 export { isUnclassifiedNoBodyHttpSignal } from "./classification-rules.js";
-export { isContextOverflowError, isLikelyContextOverflowError } from "./context-overflow.js";
+export { isLikelyContextOverflowError } from "./context-overflow.js";
 export {
   isAuthErrorMessage,
   isBillingErrorMessage,

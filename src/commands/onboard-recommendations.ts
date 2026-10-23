@@ -3,7 +3,7 @@ import {
   resolveConfiguredAgentId,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import {
   createOnboardingRecommendationsStore,
@@ -33,14 +33,14 @@ type BootstrapRecommendation = {
   tier: "recommended" | "optional";
 };
 
-function createDefaultOnboardingRecommendationsStore(
+async function createDefaultOnboardingRecommendationsStore(
   requestedAgentId?: string,
-): OnboardingRecommendationsStore {
+): Promise<OnboardingRecommendationsStore> {
   const requested = requestedAgentId?.trim();
   if (requestedAgentId !== undefined && !requested) {
     throw new Error("--agent must not be blank");
   }
-  const cfg = getRuntimeConfig();
+  const cfg = await captureRuntimeConfigAsyncReader()();
   const agentId = requested ? resolveConfiguredAgentId(cfg, requested) : resolveDefaultAgentId(cfg);
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   return createOnboardingRecommendationsStore({ workspaceDir });
@@ -83,7 +83,7 @@ export async function onboardRecommendationsCommand(
   opts: OnboardRecommendationsOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
-  const store = createDefaultOnboardingRecommendationsStore(opts.agent);
+  const store = await createDefaultOnboardingRecommendationsStore(opts.agent);
   const stored = await store.read();
   const hasLegacyClawHubId = stored?.matches.some(isLegacyBareClawHubId);
   if (hasLegacyClawHubId && stored && stored.acceptedAt == null) {
@@ -122,7 +122,7 @@ export async function acknowledgeOnboardRecommendationsCommand(
   opts: AcknowledgeOnboardRecommendationsOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
-  const store = createDefaultOnboardingRecommendationsStore(opts.agent);
+  const store = await createDefaultOnboardingRecommendationsStore(opts.agent);
   const retryIds = [...new Set(opts.retry ?? [])];
   if (retryIds.length > 0) {
     const record = await store.read();
@@ -161,7 +161,7 @@ export async function refreshOnboardRecommendationsCommand(
   opts: RefreshOnboardRecommendationsOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
-  const store = createDefaultOnboardingRecommendationsStore(opts.agent);
+  const store = await createDefaultOnboardingRecommendationsStore(opts.agent);
   const cleared = await store.clear();
   runtime.log(
     cleared

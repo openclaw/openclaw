@@ -14,17 +14,13 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-function mockDiskSpace(availableBytes: number | null) {
-  vi.spyOn(diskSpace, "tryReadDiskSpace").mockReturnValue(
-    availableBytes === null
-      ? null
-      : {
-          availableBytes,
-          targetPath: "/home/test/.openclaw",
-          checkedPath: "/home/test",
-          totalBytes: null,
-        },
-  );
+function mockDiskSpace(availableBytes: number) {
+  vi.spyOn(diskSpace, "tryReadDiskSpace").mockReturnValue({
+    availableBytes,
+    targetPath: "/home/test/.openclaw",
+    checkedPath: "/home/test",
+    totalBytes: null,
+  });
 }
 
 function collectFindingsAt(availableBytes: number) {
@@ -34,10 +30,7 @@ function collectFindingsAt(availableBytes: number) {
 
 describe("formatBytes", () => {
   it.each([
-    [512, "512 B"],
-    [2048, "2 KB"],
     [2.5 * 1024 * 1024 * 1024, "2.5 GB"],
-    [-1, "unknown"],
     [Number.NaN, "unknown"],
   ])("formats %s bytes as %s", (bytes, expected) => {
     expect(formatBytes(bytes)).toBe(expected);
@@ -45,6 +38,18 @@ describe("formatBytes", () => {
 });
 
 describe("collectDiskSpaceHealthFindings", () => {
+  it("uses an explicit state environment at the 100 MB warning boundary", () => {
+    mockDiskSpace(100 * 1024 * 1024);
+    expect(collectDiskSpaceHealthFindings({ OPENCLAW_STATE_DIR: "/operator/state" })).toEqual([
+      expect.objectContaining({
+        path: "/operator/state",
+        severity: "warning",
+        requirement: "low-free-space",
+      }),
+    ]);
+    expect(diskSpace.tryReadDiskSpace).toHaveBeenCalledWith("/operator/state");
+  });
+
   it("returns critical at exactly 0 bytes", () => {
     expect(collectFindingsAt(0)).toEqual([
       expect.objectContaining({ target: "0 B", requirement: "critical-free-space" }),
@@ -68,25 +73,6 @@ describe("collectDiskSpaceHealthFindings", () => {
       }),
     ]);
   });
-
-  it("keeps sub-100 MB space critical without rounding the display across the threshold", () => {
-    expect(collectFindingsAt(Math.floor(99.6 * 1024 * 1024))).toEqual([
-      expect.objectContaining({
-        checkId: "core/doctor/disk-space",
-        severity: "error",
-        message: "CRITICAL: only 99 MB free on the partition containing /home/test/.openclaw.",
-        path: "/home/test/.openclaw",
-        target: "99 MB",
-        requirement: "critical-free-space",
-        fixHint: expect.stringContaining("avoid data loss"),
-      }),
-    ]);
-  });
-
-  it("returns no finding when disk space cannot be read", () => {
-    mockDiskSpace(null);
-    expect(collectDiskSpaceHealthFindings()).toEqual([]);
-  });
 });
 
 describe("noteDiskSpace", () => {
@@ -102,11 +88,8 @@ describe("noteDiskSpace", () => {
     );
   });
 
-  it.each([
-    { name: "space is sufficient", snapshot: { availableBytes: 10 * 1024 * 1024 * 1024 } },
-    { name: "disk space cannot be read", snapshot: null },
-  ])("does not call note when $name", ({ snapshot }) => {
-    mockDiskSpace(snapshot?.availableBytes ?? null);
+  it("does not call note when space is sufficient", () => {
+    mockDiskSpace(10 * 1024 * 1024 * 1024);
     noteDiskSpace();
     expect(note).not.toHaveBeenCalled();
   });

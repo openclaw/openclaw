@@ -141,10 +141,7 @@ function assertSupportedProcessSandbox(execServer: OpenClawExecServer, record: J
   }
   const sandbox = requireObject(record.sandbox, "process sandbox context");
   const permissions = requireObject(sandbox.permissions, "process sandbox permissions");
-  if (permissions.network !== "restricted") {
-    return;
-  }
-  if (!execServer.networkIsolated) {
+  if (permissions.network === "restricted" && !execServer.networkIsolated) {
     throw new Error("Codex network restrictions cannot be enforced by the sandbox backend.");
   }
 }
@@ -406,10 +403,7 @@ export async function terminateProcess(
   const record = requireObject(params, "process/terminate params");
   const processId = requireString(record.processId, "processId");
   const managed = processes.get(processId);
-  if (!managed) {
-    return { running: false };
-  }
-  return await terminateManagedProcess(managed);
+  return managed ? await terminateManagedProcess(managed) : { running: false };
 }
 
 async function terminateManagedProcess(managed: ManagedProcess): Promise<JsonObject> {

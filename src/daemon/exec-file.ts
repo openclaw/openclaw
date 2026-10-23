@@ -6,6 +6,7 @@ import {
   hasCommandProcessCleanupError,
 } from "../process/exec-result.js";
 import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
+import { withChildProcessOperation } from "../process/spawn-diagnostics.js";
 import { resolveServiceManagerEnv } from "./service-process-env.js";
 import {
   assertGatewayServiceUpdateCurrent,
@@ -19,7 +20,6 @@ export type ExecResult = Pick<SpawnResult, "stdout" | "stderr"> & {
   errorCode?: string;
 };
 
-/** Runs a child process as UTF-8 and returns exit data instead of throwing on nonzero exit. */
 export async function execFileUtf8(
   command: string,
   args: string[],
@@ -36,16 +36,17 @@ export async function execFileUtf8(
     // Scoped dispatch serializes before its parent-currentness check. Ordinary
     // calls retain the existing synchronous assertion and unbound runner.
     const runNative = scopedNative ?? runCommandWithTimeout;
-    const { stdout, stderr, code, termination, signal, cleanup } = await runNative(
-      [command, ...args],
-      {
-        baseEnv: resolveServiceManagerEnv(options.env),
-        // sudo -u can inherit an operator directory the service account cannot enter.
-        cwd: options.cwd ?? (process.platform === "win32" ? undefined : "/"),
-        killSignal: options.killSignal,
-        maxOutputBytes: 1024 * 1024,
-        timeoutMs: options.timeout,
-      },
+    const { stdout, stderr, code, termination, signal, cleanup } = await withChildProcessOperation(
+      "service.manager",
+      () =>
+        runNative([command, ...args], {
+          baseEnv: resolveServiceManagerEnv(options.env),
+          // sudo -u can inherit an operator directory the service account cannot enter.
+          cwd: options.cwd ?? (process.platform === "win32" ? undefined : "/"),
+          killSignal: options.killSignal,
+          maxOutputBytes: 1024 * 1024,
+          timeoutMs: options.timeout,
+        }),
     );
     // Compensation cannot run while an earlier writer may still be active.
     if (scoped && cleanup === "uncertain") {

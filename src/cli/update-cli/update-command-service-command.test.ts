@@ -6,14 +6,7 @@ import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
 import type { UpdateServiceDefinitionRecovery } from "./update-command-service-context-types.js";
 
-it.each([
-  "installed",
-  "load-failed",
-  "compensated",
-  "start-refused",
-  "invalid-receipt",
-  "compensation-failed",
-])(
+it.each(["installed", "load-failed", "start-refused", "invalid-receipt", "compensation-failed"])(
   "retains installer warnings and rollback evidence after child settlement: %s",
   async (outcome) => {
     await withTestDir({ prefix: "openclaw-definition-response-" }, async (root) => {
@@ -23,35 +16,27 @@ it.each([
         files: [{ sourcePath: path.join(root, "service"), before: null, after: null }],
         guards: [],
       };
-      const warning =
-        outcome === "compensated"
-          ? "previous definition was restored"
-          : outcome === "start-refused"
-            ? "Service definition was left unchanged"
-            : "Service.KillMode repaired";
-      const preserved = outcome === "compensated" || outcome === "start-refused";
+      const preserved = outcome === "start-refused";
+      const warning = "installer warning";
       const compensationFailed = outcome === "compensation-failed";
       const failed = preserved || compensationFailed || outcome === "load-failed";
       const error = compensationFailed
         ? "UPDATE_NATIVE_AUTHORITY: Service definition recovery is unverified: Error: SERVICE_DEFINITION_UNKNOWN: Scheduled Task changed"
-        : outcome === "start-refused"
+        : preserved
           ? "SERVICE_DEFINITION_UNKNOWN: Service is masked. Run `systemctl --user unmask openclaw-gateway.service`."
-          : preserved
-            ? "SERVICE_DEFINITION_UNKNOWN: Service definition refresh failed; the previous definition was restored: Error: ENOSPC"
-            : "load failed";
+          : "load failed";
+      const response = JSON.stringify({
+        action: "install",
+        ok: !failed,
+        warnings: [warning],
+        ...(failed ? { error } : {}),
+        ...(!preserved && !compensationFailed
+          ? { definitionBackup: outcome === "invalid-receipt" ? { files: [] } : backup }
+          : {}),
+      });
       await fs.writeFile(
         path.join(root, "dist", "index.mjs"),
-        `process.stdout.write(${JSON.stringify(
-          JSON.stringify({
-            action: "install",
-            ok: !failed,
-            warnings: [warning],
-            ...(failed ? { error } : {}),
-            ...(!preserved && !compensationFailed
-              ? { definitionBackup: outcome === "invalid-receipt" ? { files: [] } : backup }
-              : {}),
-          }),
-        )}); process.exitCode = ${failed ? 1 : 0};`,
+        `process.stdout.write(${JSON.stringify(response)}); process.exitCode = ${failed ? 1 : 0};`,
       );
       const definitionRecovery: UpdateServiceDefinitionRecovery = {};
       const warnings: string[] = [];

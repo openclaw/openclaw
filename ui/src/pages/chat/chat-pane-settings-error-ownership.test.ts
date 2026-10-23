@@ -5,7 +5,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
-import { switchChatThinkingLevel } from "./chat-session.ts";
+import { switchChatSetting } from "./chat-session.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import {
   installTranscriptDomMocks,
@@ -50,8 +50,8 @@ it.each(["confirmed", "rejected"] as const)(
       await sessions.refresh({ agentId: "main", force: true });
       const pane = mount(initial.key);
       await refreshPane(pane);
-      first = switchChatThinkingLevel(pane.state, "off");
-      latest = switchChatThinkingLevel(pane.state, "low");
+      first = switchChatSetting(pane.state, { kind: "thinkingLevel", value: "off" });
+      latest = switchChatSetting(pane.state, { kind: "thinkingLevel", value: "low" });
       expect(patch).toHaveBeenCalledOnce();
       expect(selectedChatSessionRow(pane.state)).toMatchObject({ thinkingLevel: "low" });
 

@@ -67,13 +67,20 @@ export function createManagedHandoffChildReader(
       }
       return readChildren(parent, connection).some((entry) => {
         const child = deps.handle(entry.install_root, entry);
+        // Legacy unbound reservations name the spawner, not a detached group leader.
+        const unbound =
+          child.version === 2 &&
+          child.action.kind === "update" &&
+          !child.action.mutationProtocol &&
+          child.executor.pid === child.helper.pid &&
+          child.executor.startIdentity === child.helper.startIdentity;
         return managedCommandCustody(child)
           ? managedCommandUnsettled(child)
           : child.version === 3 ||
               child.version === 4 ||
               deps.processState(child.helper) !== "dead" ||
               deps.processState(child.executor) !== "dead" ||
-              (process.platform !== "win32" && isChildProcessTreeAlive(child.executor));
+              (!unbound && process.platform !== "win32" && isChildProcessTreeAlive(child.executor));
       });
     },
     readCommandChildren: (roots: readonly string[], connection?: HandoffDatabase) => {

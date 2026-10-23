@@ -150,9 +150,10 @@ function createQaPartitionEvidenceOwner(params: {
     generatedAt: new Date().toISOString(),
     evidenceMode: params.evidenceMode,
   });
-  const initial = createQaEvidenceInvocation(params);
-  const scheduledIds = new Set(initial.anchors.map((anchor) => anchor.id));
-  let current = initial.snapshot(options());
+  const invocation = createQaEvidenceInvocation(params);
+  const scheduledAnchors = invocation.anchors;
+  const scheduledIds = new Set(scheduledAnchors.map((anchor) => anchor.id));
+  let current = invocation.snapshot(options());
   let active = false;
   const parentFailures = new Map<number, string>();
   const rawRowOrder = new Map<string, number>();
@@ -169,21 +170,12 @@ function createQaPartitionEvidenceOwner(params: {
       return { entry, order: rawRowOrder.get(key)! };
     });
   };
-  const restore = () =>
-    createQaEvidenceInvocation({
-      ...params,
-      anchors: resolveQaEvidenceContainment(current.occurrences, current.entries).rootInstances,
-      continuation: current,
-    });
   const receive = (summary: QaEvidenceSummaryV3Json) => {
     const anchors = resolveQaEvidenceContainment(
       summary.occurrences,
       summary.entries,
     ).rootInstances;
-    if (
-      JSON.stringify(anchors.map((item) => item.id)) !==
-      JSON.stringify(initial.anchors.map((item) => item.id))
-    ) {
+    if (JSON.stringify(anchors.map((item) => item.id)) !== JSON.stringify([...scheduledIds])) {
       throw new Error("partition evidence replaced its scheduled instances");
     }
     const child = createQaEvidenceInvocation({
@@ -191,19 +183,17 @@ function createQaPartitionEvidenceOwner(params: {
       anchors,
       continuation: summary,
     });
-    const next = restore();
     for (const [index, anchor] of anchors.entries()) {
       const input = child.childInput(index);
-      next.importChild(index, input);
+      invocation.importChild(index, input);
       if (anchor.scenario?.kind === "instance") {
-        next.select(index, anchor.scenario.resultOccurrenceId);
+        invocation.select(index, anchor.scenario.resultOccurrenceId);
       }
     }
-    current = next.snapshot(options());
+    current = invocation.snapshot(options());
     orderedRows(current.entries);
   };
   const failure = (details: string, final: boolean, status: "fail" | "blocked" = "fail") => {
-    const invocation = restore();
     const diagnostics = buildQaSuiteEvidenceSummary({
       artifactPaths: [],
       // This diagnostic identifies the requested lane, not a connected transport.
@@ -262,7 +252,7 @@ function createQaPartitionEvidenceOwner(params: {
   ) => {
     receive(evidence);
     const selectedIds = new Set(
-      restore().anchors.flatMap((anchor) =>
+      invocation.anchors.flatMap((anchor) =>
         anchor.scenario?.kind === "instance" && anchor.scenario.resultOccurrenceId !== null
           ? [anchor.scenario.resultOccurrenceId]
           : [],
@@ -275,7 +265,6 @@ function createQaPartitionEvidenceOwner(params: {
     ) {
       throw new Error("partition result does not match its selected observation");
     }
-    const invocation = restore();
     const remaining = [...results];
     const normalized: QaUnifiedPartitionResult["scenarioResults"] = [];
     const startedInstances = new Set(
@@ -347,11 +336,11 @@ function createQaPartitionEvidenceOwner(params: {
     return normalized;
   };
   return {
-    anchors: initial.anchors,
+    anchors: scheduledAnchors,
     input() {
       active = true;
       return {
-        evidenceAnchors: restore().anchors,
+        evidenceAnchors: invocation.anchors,
         evidenceContinuation: current,
         onEvidence: receive,
       };
@@ -669,12 +658,10 @@ async function runWeightedUnifiedPartitionTasks(
   let activeWeight = 0;
   return await new Promise<QaUnifiedPartitionResult[]>((resolve, reject) => {
     let firstError: Error | undefined;
-    let finished = false;
     const finishIfSettled = () => {
-      if (finished || activeWeight > 0) {
+      if (activeWeight > 0) {
         return;
       }
-      finished = true;
       if (firstError) {
         reject(firstError);
         return;
@@ -707,26 +694,25 @@ async function runWeightedUnifiedPartitionTasks(
         if (task.exclusiveKey) {
           activeExclusiveKeys.add(task.exclusiveKey);
         }
+        const settle = () => {
+          activeWeight -= taskWeight;
+          if (task.exclusiveKey) {
+            activeExclusiveKeys.delete(task.exclusiveKey);
+          }
+          if (firstError || pending.length === 0) {
+            finishIfSettled();
+          } else {
+            launch();
+          }
+        };
         task.run().then(
           (result) => {
             results[index] = result;
-            activeWeight -= taskWeight;
-            if (task.exclusiveKey) {
-              activeExclusiveKeys.delete(task.exclusiveKey);
-            }
-            if (pending.length === 0 && activeWeight === 0) {
-              finishIfSettled();
-              return;
-            }
-            launch();
+            settle();
           },
           (error: unknown) => {
             firstError = error instanceof Error ? error : new Error(String(error));
-            activeWeight -= taskWeight;
-            if (task.exclusiveKey) {
-              activeExclusiveKeys.delete(task.exclusiveKey);
-            }
-            finishIfSettled();
+            settle();
           },
         );
       }

@@ -27,6 +27,7 @@ type ProviderApiKeyAuthMethodOptions = {
   flagName: `--${string}`;
   envVar: string;
   promptMessage: string;
+  validateApiKey?: (apiKey: string) => string | undefined;
   profileId?: string;
   profileIds?: string[];
   allowProfile?: boolean;
@@ -147,16 +148,26 @@ async function resolveDefaultModel(
 export function createProviderApiKeyAuthMethod(
   params: ProviderApiKeyAuthMethodOptions,
 ): ProviderAuthMethod {
+  const assertValidApiKey = (apiKey: string) => {
+    const error = params.validateApiKey?.(apiKey);
+    if (error) {
+      throw new Error(error);
+    }
+  };
   const resolveNonInteractiveCredential = async (
     ctx: ProviderAuthMethodNonInteractiveValidationContext,
   ) => {
-    return await ctx.resolveApiKey({
+    const resolved = await ctx.resolveApiKey({
       provider: params.providerId,
       flagValue: normalizeOptionalSecretInput(ctx.opts?.[params.optionKey]),
       flagName: params.flagName,
       envVar: params.envVar,
       ...(params.allowProfile === false ? { allowProfile: false } : {}),
     });
+    if (resolved) {
+      assertValidApiKey(resolved.key);
+    }
+    return resolved;
   };
   return {
     id: params.methodId,
@@ -181,6 +192,7 @@ export function createProviderApiKeyAuthMethod(
         noteMessage: params.noteMessage,
         noteTitle: params.noteTitle,
       });
+      assertValidApiKey(apiKey);
       const profileIds = resolveProfileIds(params);
       const defaultModel = await resolveDefaultModel(params, {
         apiKey,

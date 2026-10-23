@@ -68,4 +68,14 @@ describe("Canvas A2UI board documents", () => {
       }),
     ).toThrow("A2UI renderer resource unavailable");
   });
+
+  it("escapes a provisioned renderer URL inside its quoted script attribute", () => {
+    const document = canvasA2UIBoardWidgetKind.composeDocument?.({
+      source: V09_SOURCE,
+      title: "A2UI",
+      resourceUrls: { "/__openclaw__/a2ui/a2ui-v0.9.bundle.js": `/cap/a&b<test>"'` },
+      promptGranted: false,
+    });
+    expect(document).toContain('<script src="/cap/a&amp;b&lt;test&gt;&quot;&#39;"></script>');
+  });
 });

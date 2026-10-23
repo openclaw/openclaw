@@ -9,7 +9,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.unit.dp
 
-// Native counterparts of ui/src/components/icons.ts and icons-tools.ts. Keep the
+// Native counterparts of ui/src/components/icon-data.ts and icon-data-tools.ts. Keep the
 // canonical paths and 24-unit, rounded 2-unit strokes aligned with the Web UI.
 // Lucide/Feather notices: apps/android/THIRD_PARTY_LICENSES/openclaw/licenses/Lucide.txt.
 internal object ClawIcons {
@@ -73,11 +73,6 @@ internal object ClawIcons {
     "M12 5v16M16 13h2M16 9h2",
     "M20.001 19A2 2 0 0 0 22 17V5a2 2 0 0 0-1.999-2L16 3.002A5 5 0 0 0 12 5a5 5 0 0 0-4-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 1.999 2H8a5 5 0 0 1 4 2 5 5 0 0 1 4-2z",
     "M6 13h2M6 9h2",
-  )
-
-  val SkillWorkshop: ImageVector by outline(
-    "Wrench",
-    "M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z",
   )
 
   val OpenClaw: ImageVector by lazy {

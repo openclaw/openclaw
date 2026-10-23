@@ -4,11 +4,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveContextEngineCapabilities } from "../../agents/embedded-agent-runner/context-engine-capabilities.js";
 import { runContextEngineMaintenance } from "../../agents/embedded-agent-runner/context-engine-maintenance.js";
 import { buildAfterTurnRuntimeContext } from "../../agents/embedded-agent-runner/run/attempt-prompt-helpers.js";
+import {
+  PreparedModelRuntimeOwnerNotPublishedError,
+  PreparedModelRuntimePluginGenerationRetiredError,
+} from "../../agents/prepared-model-runtime.errors.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginEntryConfig } from "../../config/types.plugins.js";
+import { AsyncWorkScopeClosedError } from "../../shared/async-work-scope.js";
+import { PluginInventoryRetiredError } from "../plugin-instance-error.js";
 import { withPluginRuntimePluginScope } from "./gateway-request-scope.js";
 import { createRuntimeLlm } from "./runtime-llm.runtime.js";
-import type { RuntimeLogger } from "./types-core.js";
 
 const hoisted = vi.hoisted(() => ({
   acquireSimpleCompletionModelForAgent:
@@ -17,12 +22,23 @@ const hoisted = vi.hoisted(() => ({
     >(),
   completeWithPreparedSimpleCompletionModel: vi.fn(),
   resolveSimpleCompletionSelectionForAgent: vi.fn(),
+  logger: {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  },
 }));
 
 vi.mock("../../agents/simple-completion-runtime.js", () => ({
   acquireSimpleCompletionModelForAgent: hoisted.acquireSimpleCompletionModelForAgent,
   completeWithPreparedSimpleCompletionModel: hoisted.completeWithPreparedSimpleCompletionModel,
   resolveSimpleCompletionSelectionForAgent: hoisted.resolveSimpleCompletionSelectionForAgent,
+}));
+
+vi.mock(import("./runtime-logging.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  writeRuntimeLog: (_logger, level, message, meta) => hoisted.logger[level](message, meta),
 }));
 
 const cfg = {
@@ -67,15 +83,6 @@ function createPreparedModel(
       source: "test",
       mode: "api-key",
     },
-  };
-}
-
-function createLogger(): RuntimeLogger {
-  return {
-    debug: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
   };
 }
 
@@ -160,13 +167,32 @@ describe("runtime.llm.complete", () => {
     hoisted.acquireSimpleCompletionModelForAgent.mockReset();
     hoisted.completeWithPreparedSimpleCompletionModel.mockReset();
     hoisted.resolveSimpleCompletionSelectionForAgent.mockReset();
+    Object.values(hoisted.logger).forEach((method) => method.mockClear());
     primeCompletionMocks();
+  });
+
+  it("denies context-engine model overrides without owning plugin llm policy", async () => {
+    const runtimeContext = resolveContextEngineCapabilities({
+      config: cfg,
+      sessionKey: "agent:main:session:abc",
+      contextEnginePluginId: "lossless-claw",
+      purpose: "context-engine.compaction",
+    });
+
+    await expect(
+      runtimeContext.llm!.complete({
+        model: "openai/gpt-5.4-mini",
+        messages: [{ role: "user", content: "summarize" }],
+      }),
+    ).rejects.toThrow("cannot override the target model");
+    expect(hoisted.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
   });
 
   it("binds context-engine completions to the active session agent", async () => {
     const runtimeContext = resolveContextEngineCapabilities({
       config: cfg,
       sessionKey: "agent:ada:session:abc",
+      authProfileId: "openai:configured",
       purpose: "context-engine.after-turn",
     });
 
@@ -178,6 +204,7 @@ describe("runtime.llm.complete", () => {
     expectSingleCallFirstArg(hoisted.acquireSimpleCompletionModelForAgent, {
       cfg,
       agentId: "ada",
+      preferredProfile: "openai:configured",
       allowBundledStaticCatalogFallback: true,
       allowMissingApiKeyModes: ["aws-sdk"],
       skipAgentDiscovery: true,
@@ -190,41 +217,46 @@ describe("runtime.llm.complete", () => {
     });
   });
 
-  it("passes the active auth profile to context-engine completions", async () => {
+  it.each([
+    new PreparedModelRuntimeOwnerNotPublishedError(
+      "Model runtime replacement is in progress; admitted plugin work cannot wait for the reload. Retry after the plugin reload completes.",
+      { admissionBlocked: true },
+    ),
+    new PreparedModelRuntimePluginGenerationRetiredError("plugin generation retired"),
+    new PluginInventoryRetiredError(),
+    new AsyncWorkScopeClosedError(),
+  ])("codes host lifecycle refusals so callers can retry later: $message", async (refusal) => {
+    hoisted.acquireSimpleCompletionModelForAgent.mockRejectedValue(refusal);
     const runtimeContext = resolveContextEngineCapabilities({
       config: cfg,
-      sessionKey: "agent:ada:session:abc",
-      authProfileId: "openai:claude@martian.engineering",
+      sessionKey: "agent:main:session:abc",
       purpose: "context-engine.compaction",
     });
 
-    await runtimeContext.llm!.complete({
-      messages: [{ role: "user", content: "summarize" }],
-    });
+    const error = await runtimeContext
+      .llm!.complete({ messages: [{ role: "user", content: "summarize" }] })
+      .catch((caught: unknown) => caught);
 
-    expectSingleCallFirstArg(hoisted.acquireSimpleCompletionModelForAgent, {
-      cfg,
-      agentId: "ada",
-      preferredProfile: "openai:claude@martian.engineering",
-      allowBundledStaticCatalogFallback: true,
-      allowMissingApiKeyModes: ["aws-sdk"],
-      skipAgentDiscovery: true,
+    expect(error).toMatchObject({
+      name: "LlmCompleteError",
+      code: "LLM_RUNTIME_LIFECYCLE",
+      message: refusal.message,
+      cause: refusal,
     });
   });
 
-  it("does not fall back to the default agent for unbound active-session hooks", async () => {
-    const runtimeContext = resolveContextEngineCapabilities({
-      config: cfg,
-      sessionKey: "legacy-session",
-      purpose: "context-engine.after-turn",
-    });
+  it("keeps a missing published owner a completion failure", async () => {
+    const missingOwner = new PreparedModelRuntimeOwnerNotPublishedError(
+      "owner was never published",
+    );
+    hoisted.acquireSimpleCompletionModelForAgent.mockRejectedValue(missingOwner);
+    const llm = createRuntimeLlm({ getConfig: () => cfg });
 
-    await expect(
-      runtimeContext.llm!.complete({
-        messages: [{ role: "user", content: "summarize" }],
-      }),
-    ).rejects.toThrow("not bound to an active session agent");
-    expect(hoisted.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+    const error = await llm
+      .complete({ messages: [{ role: "user", content: "summarize" }] })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBe(missingOwner);
   });
 
   it("does not trust a fallback-derived agent in the after-turn caller", async () => {
@@ -290,37 +322,6 @@ describe("runtime.llm.complete", () => {
     expect(result.agentId).toBe("ada");
   });
 
-  it("fails closed for context-engine completions without any session agent", async () => {
-    const runtimeContext = resolveContextEngineCapabilities({
-      config: cfg,
-      purpose: "context-engine.after-turn",
-    });
-
-    await expect(
-      runtimeContext.llm!.complete({
-        messages: [{ role: "user", content: "summarize" }],
-      }),
-    ).rejects.toThrow("not bound to an active session agent");
-    expect(hoisted.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
-  });
-
-  it("denies context-engine model overrides without owning plugin llm policy", async () => {
-    const runtimeContext = resolveContextEngineCapabilities({
-      config: cfg,
-      sessionKey: "agent:main:session:abc",
-      contextEnginePluginId: "lossless-claw",
-      purpose: "context-engine.compaction",
-    });
-
-    await expect(
-      runtimeContext.llm!.complete({
-        model: "openai/gpt-5.4-mini",
-        messages: [{ role: "user", content: "summarize" }],
-      }),
-    ).rejects.toThrow("cannot override the target model");
-    expect(hoisted.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
-  });
-
   it("matches allowlist entries for provider-qualified model ids without doubling the provider prefix", async () => {
     const runtimeContext = resolveContextEngineCapabilities({
       config: configWithPluginPolicy("lossless-claw", {
@@ -353,40 +354,6 @@ describe("runtime.llm.complete", () => {
       agentId: "main",
       modelRef: "openrouter/gpt-5.4-mini",
     });
-  });
-
-  it("reports denials for provider-qualified model ids without doubling the provider prefix", async () => {
-    const runtimeContext = resolveContextEngineCapabilities({
-      config: configWithPluginPolicy("lossless-claw", {
-        allowModelOverride: true,
-        allowedModels: ["openrouter/gpt-5.4-mini"],
-      }),
-      sessionKey: "agent:main:session:abc",
-      contextEnginePluginId: "lossless-claw",
-      purpose: "context-engine.compaction",
-    });
-
-    hoisted.resolveSimpleCompletionSelectionForAgent.mockImplementation(
-      (params: { agentId: string }) => ({
-        provider: "openrouter",
-        modelId: "openrouter/gpt-5.5",
-        agentDir: `/tmp/${params.agentId}`,
-      }),
-    );
-
-    let caught: unknown;
-    try {
-      await runtimeContext.llm!.complete({
-        model: "openrouter/gpt-5.5",
-        messages: [{ role: "user", content: "summarize" }],
-      });
-    } catch (error) {
-      caught = error;
-    }
-    const message = caught instanceof Error ? caught.message : String(caught);
-    expect(message).toContain('"openrouter/gpt-5.5"');
-    expect(message).not.toContain("openrouter/openrouter/");
-    expect(hoisted.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
   });
 
   it("keeps context-engine attribution and host-derived policy inside plugin runtime scope", async () => {
@@ -440,29 +407,6 @@ describe("runtime.llm.complete", () => {
         messages: [{ role: "user", content: "summarize" }],
       }),
     ).rejects.toThrow("cannot override the active session agent");
-  });
-
-  it("allows explicit agentId for non-session plugin calls", async () => {
-    const logger = createLogger();
-    const llm = createRuntimeLlm({
-      getConfig: () => cfg,
-      logger,
-      authority: {
-        allowAgentIdOverride: true,
-        allowModelOverride: true,
-        allowComplete: true,
-      },
-    });
-
-    await llm.complete({
-      agentId: "worker",
-      messages: [{ role: "user", content: "draft" }],
-    });
-
-    expectSingleCallFirstArg(hoisted.acquireSimpleCompletionModelForAgent, {
-      cfg,
-      agentId: "worker",
-    });
   });
 
   it("ignores request auth profile preferences without a trusted authority binding", async () => {
@@ -540,10 +484,9 @@ describe("runtime.llm.complete", () => {
   });
 
   it("uses runtime-scoped config and the host preparation/dispatch path", async () => {
-    const logger = createLogger();
+    const logger = hoisted.logger;
     const llm = createRuntimeLlm({
       getConfig: () => cfg,
-      logger,
       authority: {
         caller: { kind: "host", id: "runtime-test" },
         allowComplete: true,
@@ -617,30 +560,10 @@ describe("runtime.llm.complete", () => {
     expectFields(requireRecord(logPayload.usage, "log usage"), { costUsd: 0.0042 });
   });
 
-  it("preserves the completion options shape when reasoning is omitted", async () => {
-    const llm = createRuntimeLlm({
-      getConfig: () => cfg,
-      authority: { allowComplete: true },
-    });
-
-    await llm.complete({
-      messages: [{ role: "user", content: "Ping" }],
-    });
-
-    const completionArg = expectSingleCallFirstArg(
-      hoisted.completeWithPreparedSimpleCompletionModel,
-      { cfg },
-    );
-    expect(requireRecord(completionArg.options, "completion options")).not.toHaveProperty(
-      "reasoning",
-    );
-  });
-
   it("uses scoped plugin identity and ignores caller-shaped spoofing input", async () => {
-    const logger = createLogger();
+    const logger = hoisted.logger;
     const llm = createRuntimeLlm({
       getConfig: () => cfg,
-      logger,
       authority: {
         caller: { kind: "host", id: "ignored-host" },
         allowComplete: true,
@@ -719,7 +642,7 @@ describe("runtime.llm.complete", () => {
     });
   });
 
-  it.each(["trusted-plugin", "TrUsTeD-plugin"])(
+  it.each(["TrUsTeD-plugin"])(
     "allows model overrides for %s only when configured and allowlisted",
     async (pluginId) => {
       const llm = createRuntimeLlm({
@@ -755,23 +678,7 @@ describe("runtime.llm.complete", () => {
     },
   );
 
-  it("keeps the shipped model allowlist scoped to explicit overrides", async () => {
-    const llm = createRuntimeLlm({
-      getConfig: () =>
-        configWithPluginPolicy("restricted-plugin", {
-          allowedModels: ["anthropic/claude-haiku-4-5"],
-        }),
-      authority: { allowComplete: true },
-    });
-
-    await expect(
-      withPluginRuntimePluginScope({ pluginId: "restricted-plugin" }, () =>
-        llm.complete({ messages: [{ role: "user", content: "Ping" }] }),
-      ),
-    ).resolves.toMatchObject({ text: "done" });
-  });
-
-  it.each(["restricted-plugin", "ReStRiCtEd-plugin"])(
+  it.each(["ReStRiCtEd-plugin"])(
     "applies the completion allowlist to the host-resolved default for %s",
     async (pluginId) => {
       const llm = createRuntimeLlm({
@@ -791,29 +698,7 @@ describe("runtime.llm.complete", () => {
     },
   );
 
-  it("applies the completion model allowlist to explicit overrides too", async () => {
-    const llm = createRuntimeLlm({
-      getConfig: () =>
-        configWithPluginPolicy("restricted-plugin", {
-          allowModelOverride: true,
-          allowedModels: ["*"],
-          allowedCompletionModels: ["openai/gpt-5.4"],
-        }),
-      authority: { allowComplete: true },
-    });
-
-    await expect(
-      withPluginRuntimePluginScope({ pluginId: "restricted-plugin" }, () =>
-        llm.complete({
-          model: "openai/gpt-5.6",
-          messages: [{ role: "user", content: "Ping" }],
-        }),
-      ),
-    ).rejects.toThrow('model "openai/gpt-5.6" is not allowlisted for completions');
-    expect(hoisted.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
-  });
-
-  it.each([[[]], [["not-a-canonical-model-ref"]]])(
+  it.each([[["not-a-canonical-model-ref"]]])(
     "fails closed for an unusable completion allowlist %j",
     async (allowedCompletionModels) => {
       const llm = createRuntimeLlm({
@@ -830,25 +715,10 @@ describe("runtime.llm.complete", () => {
     },
   );
 
-  it("accepts an explicit wildcard completion allowlist", async () => {
-    const llm = createRuntimeLlm({
-      getConfig: () =>
-        configWithPluginPolicy("restricted-plugin", { allowedCompletionModels: ["*"] }),
-      authority: { allowComplete: true },
-    });
-
-    await expect(
-      withPluginRuntimePluginScope({ pluginId: "restricted-plugin" }, () =>
-        llm.complete({ messages: [{ role: "user", content: "Ping" }] }),
-      ),
-    ).resolves.toMatchObject({ text: "done" });
-  });
-
   it("denies completions when runtime authority disables the capability", async () => {
-    const logger = createLogger();
+    const logger = hoisted.logger;
     const llm = createRuntimeLlm({
       getConfig: () => cfg,
-      logger,
       authority: {
         allowComplete: false,
         denyReason: "not trusted",

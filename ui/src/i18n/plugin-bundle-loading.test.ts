@@ -21,7 +21,7 @@ it("loads bundle fallback copy with the skill preview without replacing the acti
   expect(manager.t("filePreview.label")).toBe("Support files");
 
   await manager.setLocale("de");
-  await import("../pages/plugins/skill-preview.ts");
+  await import("../pages/plugins/skill-preview.tsx");
 
   expect(manager.t("filePreview.bundle.binary")).toBe("Binärdatei");
   expect(manager.t("filePreview.bundle.too-large")).toBe(

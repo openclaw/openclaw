@@ -27,7 +27,7 @@ const CODEX_BOOTSTRAP_CONTEXT_ORDER = new Map<string, number>([
   ["memory.md", 60],
 ]);
 
-export type CodexBootstrapFile = Awaited<
+type CodexBootstrapFile = Awaited<
   ReturnType<typeof prepareAgentWorkspaceContext>
 >["bootstrapFiles"][number];
 export type CodexWorkspaceBootstrapContext = {
@@ -293,6 +293,6 @@ export function getCodexContextFileBasename(filePath: string): string {
   return normalizeCodexContextFilePath(filePath).split("/").pop() ?? "";
 }
 
-export function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
+export function isNonEmptyString(value: string | undefined): value is string {
+  return Boolean(value);
 }

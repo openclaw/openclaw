@@ -93,6 +93,7 @@ export type MarkdownFileLinkTarget = {
   path: string;
   line?: number | null;
   sessionKey?: string;
+  messageEntryId?: string;
 };
 
 export function markdownFileLinkFromEvent(event: Event): MarkdownFileLinkTarget | null {
@@ -107,10 +108,14 @@ export function markdownFileLinkFromEvent(event: Event): MarkdownFileLinkTarget 
   }
   const line = link.dataset.fileLine;
   const sessionKey = link.closest<HTMLElement>("[data-file-session-key]")?.dataset.fileSessionKey;
+  const messageEntryId =
+    link.closest<HTMLElement>("[data-file-entry-id]")?.dataset.fileEntryId ??
+    (!sessionKey ? link.closest<HTMLElement>("[data-entry-id]")?.dataset.entryId : undefined);
   return {
     path,
     line: line ? Number.parseInt(line, 10) : null,
     ...(sessionKey ? { sessionKey } : {}),
+    ...(messageEntryId ? { messageEntryId } : {}),
   };
 }
 

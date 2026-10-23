@@ -3,7 +3,6 @@ import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog
 import type {
   ModelCatalogCost,
   ModelCatalogModel,
-  ModelCatalogTieredCost,
   NormalizedModelCatalogRow,
 } from "@openclaw/model-catalog-core/model-catalog-types";
 import {
@@ -101,27 +100,13 @@ export function readManifestProviderDefaultModelRef(
   return defaultModel ? buildModelCatalogRef(providerId, defaultModel) : undefined;
 }
 
-function cloneManifestCatalogTieredCost(
-  tier: ModelCatalogTieredCost,
-): NonNullable<ModelDefinitionConfig["cost"]["tieredPricing"]>[number] {
-  return {
-    input: tier.input,
-    output: tier.output,
-    cacheRead: tier.cacheRead,
-    cacheWrite: tier.cacheWrite,
-    range: tier.range.length === 1 ? [tier.range[0]] : [tier.range[0], tier.range[1]],
-  };
-}
-
 function cloneManifestCatalogCost(cost: ModelCatalogCost): ModelDefinitionConfig["cost"] {
   return {
     input: cost.input ?? 0,
     output: cost.output ?? 0,
     cacheRead: cost.cacheRead ?? 0,
     cacheWrite: cost.cacheWrite ?? 0,
-    ...(cost.tieredPricing
-      ? { tieredPricing: cost.tieredPricing.map(cloneManifestCatalogTieredCost) }
-      : {}),
+    ...(cost.tieredPricing ? { tieredPricing: cost.tieredPricing } : {}),
   };
 }
 
@@ -134,7 +119,11 @@ function buildManifestCatalogModelInput(
       `Manifest modelCatalog row ${model.id} uses unsupported runtime input document`,
     );
   }
-  return model.input?.filter((item): item is "text" | "image" => item !== "document") ?? ["text"];
+  return (
+    model.input?.filter((item): item is "text" | "image" | "video" => item !== "document") ?? [
+      "text",
+    ]
+  );
 }
 
 function buildManifestCatalogModel(
@@ -164,6 +153,7 @@ function buildManifestCatalogModel(
       : {}),
     ...(model.contextWindowDefault ? { contextWindowDefault: model.contextWindowDefault } : {}),
     ...(model.contextTokens !== undefined ? { contextTokens: model.contextTokens } : {}),
+    ...(model.parameterCount !== undefined ? { parameterCount: model.parameterCount } : {}),
     maxTokens: model.maxTokens,
     ...(model.thinkingLevelMap ? { thinkingLevelMap: { ...model.thinkingLevelMap } } : {}),
     ...(model.headers ? { headers: { ...model.headers } } : {}),
@@ -285,6 +275,7 @@ export function buildManifestProviderCatalogFamily(params: {
           reasoning: entry.reasoning,
           input: [...entry.input],
           contextWindow: entry.contextWindow,
+          ...(entry.parameterCount !== undefined ? { parameterCount: entry.parameterCount } : {}),
         })),
       ),
   };

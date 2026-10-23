@@ -6,6 +6,7 @@ import path from "node:path";
 import type { AgentHarnessRuntimeArtifactBinding } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isPathInside, sha256File } from "openclaw/plugin-sdk/file-access-runtime";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
+import { canAccess } from "openclaw/plugin-sdk/path-existence-runtime";
 import { resolveWindowsExecutablePath } from "openclaw/plugin-sdk/windows-spawn";
 import type { CodexAppServerClient, CodexAppServerRuntimeIdentity } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
@@ -113,10 +114,6 @@ function compareArtifactNames(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function normalizeRelativePath(filePath: string): string {
-  return filePath.split(path.sep).join("/");
-}
-
 const ARTIFACT_STAT_FIELDS = ["dev", "ino", "mode", "size", "mtimeNs", "ctimeNs"] as const;
 
 function sameOpenedFile(left: BigIntStats, right: BigIntStats): boolean {
@@ -199,7 +196,7 @@ async function listPackageFiles(params: {
       if (!entry.isFile()) {
         throw new Error(`Codex runtime artifact contains an unsupported entry: ${entryPath}`);
       }
-      files.push(normalizeRelativePath(path.relative(params.rootPath, entryPath)));
+      files.push(path.relative(params.rootPath, entryPath).split(path.sep).join("/"));
     }
   };
   await visit(params.rootPath, 0);
@@ -402,12 +399,9 @@ async function resolveCommandPath(
       const entryPath =
         entry === "" ? cwd : path.isAbsolute(entry) ? entry : path.resolve(cwd, entry);
       const possible = path.join(entryPath, command);
-      try {
-        await fs.access(possible, fsConstants.X_OK);
+      if (await canAccess(possible, fsConstants.X_OK)) {
         candidate = possible;
         break;
-      } catch {
-        // Continue through PATH in child-process resolution order.
       }
     }
   }

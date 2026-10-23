@@ -15,6 +15,7 @@ import {
   isPlainTextToolNameChar,
   scanJsonObject,
   type JsonObjectScanState,
+  scanToolCallNameEnd,
   scanXmlishToolCall,
   skipHorizontalWhitespace,
   skipLineIndentation,
@@ -73,6 +74,7 @@ export type PlainTextToolCallScan = PlainTextToolCallScanBranches &
         next: number;
         overCap: boolean;
         payloadStart: number;
+        settled: boolean;
       }
     | {
         completeEnd?: number;
@@ -104,17 +106,6 @@ function isLiteralPrefixAt(text: string, start: number, literal: string): boolea
   return start >= 0 && available < literal.length && literal.startsWith(text.slice(start));
 }
 
-function scanToolNameEnd(text: string, start: number): number | null {
-  let end = start;
-  while (isPlainTextToolNameChar(text[end])) {
-    if (end - start === MAX_PLAIN_TEXT_TOOL_NAME_CHARS) {
-      return null;
-    }
-    end += 1;
-  }
-  return end;
-}
-
 function candidate<NameComplete extends boolean>(
   syntax: PlainTextJsonToolCallSyntax,
   name: PlainTextJsonToolCallSpan,
@@ -139,8 +130,8 @@ function scanBracketOpening(
     return { kind: "prefix" };
   }
   const nameStart = cursor;
-  const nameEnd = scanToolNameEnd(text, nameStart);
-  if (nameEnd === null) {
+  const nameEnd = scanToolCallNameEnd(text, nameStart, isPlainTextToolNameChar);
+  if (nameEnd - nameStart > MAX_PLAIN_TEXT_TOOL_NAME_CHARS) {
     return { kind: "invalid", at: nameStart + MAX_PLAIN_TEXT_TOOL_NAME_CHARS };
   }
   const name = { start: nameStart, end: nameEnd };
@@ -206,8 +197,8 @@ function scanHarmonyOpening(text: string, start: number): PlainTextJsonToolCallO
   cursor += "to=".length;
 
   const nameStart = cursor;
-  const nameEnd = scanToolNameEnd(text, nameStart);
-  if (nameEnd === null) {
+  const nameEnd = scanToolCallNameEnd(text, nameStart, isPlainTextToolNameChar);
+  if (nameEnd - nameStart > MAX_PLAIN_TEXT_TOOL_NAME_CHARS) {
     return { kind: "invalid", at: nameStart + MAX_PLAIN_TEXT_TOOL_NAME_CHARS };
   }
   const name = { start: nameStart, end: nameEnd };
@@ -339,56 +330,49 @@ export function scanPlainTextToolCall(
     );
   const xmlOverCap = overCap(xml.payload);
   const jsonOverCap = overCap(jsonValue.payload);
-
-  if (xml.accepted && xmlish.kind === "complete") {
-    return {
-      ...branches,
-      end: xmlish.end,
-      kind: "complete",
-      next: xmlish.end,
-      overCap: xmlOverCap,
-      payloadStart: xmlish.payload.start,
-    };
-  }
-  if (jsonValue.accepted && json.kind === "complete") {
-    if (jsonOverCap || parseJsonArguments(text, json.payload)) {
+  const complete =
+    xml.accepted && xmlish.kind === "complete"
+      ? xmlish
+      : jsonValue.accepted && json.kind === "complete"
+        ? json
+        : undefined;
+  if (complete) {
+    const payloadOverCap = complete === xmlish ? xmlOverCap : jsonOverCap;
+    if (complete === xmlish || payloadOverCap || parseJsonArguments(text, complete.payload)) {
       return {
         ...branches,
-        end: json.end,
+        end: complete.end,
         kind: "complete",
-        next: json.end,
-        overCap: jsonOverCap,
-        payloadStart: json.payload.start,
+        next: complete.end,
+        overCap: payloadOverCap,
+        payloadStart: complete.payload.start,
+        settled:
+          complete.end > complete.payload.end || skipWhitespace(text, complete.end) < text.length,
       };
     }
     return {
       ...branches,
-      at: json.end,
+      at: complete.end,
       kind: "invalid",
-      next: json.end,
+      next: complete.end,
       overCap: false,
-      payloadStart: json.payload.start,
+      payloadStart: complete.payload.start,
     };
   }
-
-  if (xml.accepted && xmlish.kind === "invalid" && xmlOverCap && xml.payload) {
+  const invalid =
+    xmlOverCap && xmlish.kind === "invalid"
+      ? xmlish
+      : jsonOverCap && json.kind === "invalid"
+        ? json
+        : undefined;
+  if (invalid?.candidate?.payload) {
     return {
       ...branches,
-      at: xmlish.at,
+      at: invalid.at,
       kind: "invalid",
-      next: xmlish.at,
+      next: invalid.at,
       overCap: true,
-      payloadStart: xml.payload.start,
-    };
-  }
-  if (jsonValue.accepted && json.kind === "invalid" && jsonOverCap && jsonValue.payload) {
-    return {
-      ...branches,
-      at: json.at,
-      kind: "invalid",
-      next: json.at,
-      overCap: true,
-      payloadStart: jsonValue.payload.start,
+      payloadStart: invalid.candidate.payload.start,
     };
   }
 
@@ -403,7 +387,7 @@ export function scanPlainTextToolCall(
         : {}),
       kind: "prefix",
       next: text.length,
-      overCap: overCap(payload),
+      overCap: xmlPrefix ? xmlOverCap : jsonOverCap,
       ...(payload ? { payloadStart: payload.start } : {}),
     };
   }
@@ -521,27 +505,52 @@ export function stripPlainTextToolCallBlocks(
   options: { resolveProtectedRanges?: PlainTextToolCallProtectedRangeResolver } = {},
 ): string {
   if (
-    !text ||
-    (!/(?:^|[\r\n])[^\S\r\n]*\[(?:tool:)?[A-Za-z0-9_-]+\]/.test(text) &&
-      !/(?:^|[\r\n])[^\S\r\n]*(?:<\|channel\|>)?(?:commentary|analysis|final)[ \t]+to=/.test(
-        text,
-      ) &&
-      !/(?:^|[\r\n])[^\S\r\n]*<function=/i.test(text))
+    !/(?:^|[\r\n])[^\S\r\n]*\[(?:tool:)?[A-Za-z0-9_-]+\]\s*(?:\{|<parameter=)/i.test(text) &&
+    !/(?:^|[\r\n])[^\S\r\n]*(?:<\|channel\|>)?(?:commentary|analysis|final)[ \t]+to=/.test(text) &&
+    !/(?:^|[\r\n])[^\S\r\n]*<function=/i.test(text)
   ) {
     return text;
   }
-  const protectedRanges = options.resolveProtectedRanges?.(text) ?? [];
+  return projectPlainTextToolCallBlocks(text, options).text;
+}
+
+/** Call-grammar settlement; callers also retain any mutable Markdown ownership. */
+export function projectPlainTextToolCallBlocks(
+  text: string,
+  options: {
+    resolveProtectedRanges?: PlainTextToolCallProtectedRangeResolver;
+    settleBefore?: number;
+  } = {},
+): { text: string; retainStart: number; retainedOutputStart: number } {
+  let protectedRanges: ReturnType<PlainTextToolCallProtectedRangeResolver> | undefined;
+  const isProtected = (offset: number) =>
+    isOffsetInProtectedRanges(
+      offset,
+      (protectedRanges ??= options.resolveProtectedRanges?.(text) ?? []),
+    );
   let result = "";
   let cursor = 0;
   let index = 0;
+  let retainStart = 0;
+  let retainedOutputStart = 0;
+  let pending = false;
   while (index < text.length) {
     const lineStart = index === 0 || text[index - 1] === "\n" || text[index - 1] === "\r";
     if (!lineStart) {
       index += 1;
       continue;
     }
+    if (!pending && index <= (options.settleBefore ?? text.length)) {
+      retainStart = index;
+      retainedOutputStart = result.length + index - cursor;
+    }
     const blockStart = skipLineIndentation(text, index);
-    if (isOffsetInProtectedRanges(blockStart, protectedRanges)) {
+    if (
+      (text[blockStart] === "[" ||
+        text[blockStart] === "<" ||
+        HARMONY_CHANNELS.some((channel) => channel[0] === text[blockStart])) &&
+      isProtected(blockStart)
+    ) {
       index += 1;
       continue;
     }
@@ -552,17 +561,19 @@ export function stripPlainTextToolCallBlocks(
       index = Math.max(index + 1, scan.next);
       continue;
     }
+    pending ||= scan.kind === "prefix" || !scan.settled;
     let blockEnd = scan.kind === "complete" ? scan.end : scan.completeEnd;
     if (blockEnd === undefined) {
-      return result + text.slice(cursor);
+      return { text: result + text.slice(cursor), retainStart, retainedOutputStart };
     }
     result += text.slice(cursor, index);
     while (true) {
       const adjacentStart = skipLineIndentation(text, blockEnd);
-      if (isOffsetInProtectedRanges(adjacentStart, protectedRanges)) {
+      if (isProtected(adjacentStart)) {
         break;
       }
       const adjacent = scanPlainTextToolCall(text, adjacentStart);
+      pending ||= adjacent.kind === "prefix" || (adjacent.kind === "complete" && !adjacent.settled);
       const adjacentEnd =
         adjacent.kind === "complete"
           ? adjacent.end
@@ -582,5 +593,10 @@ export function stripPlainTextToolCallBlocks(
     index = cursor;
   }
   result += text.slice(cursor);
-  return result;
+  // Keep a terminal CR until a possible LF settles newline consumption.
+  if (!pending && text.endsWith("\n") && text.length <= (options.settleBefore ?? text.length)) {
+    retainStart = text.length;
+    retainedOutputStart = result.length;
+  }
+  return { text: result, retainStart, retainedOutputStart };
 }

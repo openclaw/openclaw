@@ -1,3 +1,4 @@
+import { publishRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import * as nodeCrypto from "@openclaw/normalization-core/node-crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyLoggingConfig, resetLogger } from "../logging/logger.js";
@@ -7,9 +8,7 @@ import * as runtimeStoreWriter from "./runtime-store-writer.js";
 import { createTrajectoryRuntimeRecorder, toTrajectoryToolDefinitions } from "./runtime.js";
 
 function arrayReturning(value: unknown): unknown[] {
-  return Object.defineProperty([], "slice", {
-    value: () => ({ map: () => value }),
-  });
+  return Object.defineProperty([], "slice", { value: () => ({ map: () => value }) });
 }
 
 function projectParameters(parameters: unknown) {
@@ -38,20 +37,52 @@ describe("trajectory tool definition preparation", () => {
     expect(digest).toHaveBeenCalledTimes(2);
     registerSecretValueForRedaction("synthetic-new-registration");
     expect(project()[0]?.parameters).toMatchObject({ nested: { ordinary: "changed" } });
-    expect(digest).toHaveBeenCalledTimes(3);
+    expect(digest).toHaveBeenCalledTimes(2);
   });
 
-  it("rechecks changed schemas and current secret registrations after repeated projections", async () => {
+  it("reuses published schemas while isolating results and replacement publications", () => {
+    const source = { type: "object", properties: { value: { type: "string" } } };
+    const published = publishRuntimeToolInputSchema(source).schema;
+    const first = projectParameters(published);
+    expect(first).toEqual(source);
+    Object.assign(first ?? {}, { properties: {} });
+    expect(projectParameters(published)).toEqual(source);
+
+    source.properties.value.type = "number";
+    expect(projectParameters(published)).toMatchObject({
+      properties: { value: { type: "string" } },
+    });
+    expect(projectParameters(publishRuntimeToolInputSchema(source).schema)).toEqual(source);
+  });
+
+  it("still bounds published JSON before caching its diagnostic projection", () => {
+    const has = vi.spyOn(Headers.prototype, "has");
+    const source = { description: "x".repeat(32_769) };
+    const published = publishRuntimeToolInputSchema(source).schema;
+    for (const parameters of [source, published, source, published]) {
+      expect(projectParameters(parameters)).toEqual({
+        description: {
+          truncated: true,
+          reason: "trajectory-field-size-limit",
+          originalChars: 32_769,
+          limitChars: 32_768,
+        },
+      });
+    }
+    expect(has).not.toHaveBeenCalled();
+  });
+
+  it("keeps schema text unchanged across secret registrations and log policy changes", async () => {
     const writes: string[] = [];
     const description = "trajectory-fixture-value";
+    const policy = "policy-fixture-value";
+    const bearer = "Authorization: Bearer synthetic-changed-value";
     vi.spyOn(runtimeStoreWriter, "createSqliteTrajectoryRuntimeSink").mockResolvedValueOnce({
       write: (_event, line) => writes.push(line),
       flush: async () => {},
       describeFlushState: () => undefined,
     });
-    const recorder = await createTrajectoryRuntimeRecorder({
-      sessionId: "tool-projection",
-    });
+    const recorder = await createTrajectoryRuntimeRecorder({ sessionId: "tool-projection" });
     const record = (text: string) =>
       recorder?.recordEvent("context.compiled", {
         tools: toTrajectoryToolDefinitions([{ name: "sample", parameters: { description: text } }]),
@@ -60,22 +91,16 @@ describe("trajectory tool definition preparation", () => {
     record(description);
     registerSecretValueForRedaction(description);
     record(description);
-    record("Authorization: Bearer synthetic-changed-value");
-    record("policy-fixture-value");
-    applyLoggingConfig({ redactPatterns: ["policy-fixture-value"] });
-    record("policy-fixture-value");
+    record(bearer);
+    record(policy);
+    applyLoggingConfig({ redactPatterns: [policy] });
+    record(policy);
     applyLoggingConfig(undefined);
-    record("policy-fixture-value");
+    record(policy);
 
-    expect(writes).toHaveLength(7);
-    expect(writes[0]).toContain(description);
-    expect(writes[1]).toContain(description);
-    expect(writes[2]).not.toContain(description);
-    expect(writes[3]).not.toContain("synthetic-changed-value");
-    expect(JSON.parse(writes[3]!).data.tools[0].parameters.description).toContain("redacted");
-    expect(writes[4]).toContain("policy-fixture-value");
-    expect(writes[5]).not.toContain("policy-fixture-value");
-    expect(writes[6]).toContain("policy-fixture-value");
+    const captured = writes.map((line) => JSON.parse(line).data.tools[0].parameters.description);
+    const expected = [description, description, description, bearer, policy, policy, policy];
+    expect(captured).toEqual(expected);
   });
 
   it("does not invoke custom serialization hooks or cache opaque array-operation results", () => {
@@ -88,53 +113,33 @@ describe("trajectory tool definition preparation", () => {
     expect(toJSON).not.toHaveBeenCalled();
   });
 
-  it("preserves truncation metadata without probing its records as native headers", () => {
-    const has = vi.spyOn(Headers.prototype, "has");
-    expect(projectParameters({ description: "x".repeat(32_769) })).toEqual({
-      description: {
-        truncated: true,
-        reason: "trajectory-field-size-limit",
-        originalChars: 32_769,
-        limitChars: 32_768,
-      },
+  it("preserves native headers returned by custom array operations", () => {
+    const headers = new Headers({ "retry-after": "7", authorization: "Bearer test" });
+    expect(projectParameters({ ordinary: "kept", nested: arrayReturning(headers) })).toEqual({
+      ordinary: "kept",
+      nested: { "retry-after-ms": 7_000 },
     });
-    expect(has).not.toHaveBeenCalled();
   });
 
-  it.each(["native headers", "prototype traps"])(
-    "preserves %s returned by custom array operations",
-    (kind) => {
-      const native = kind === "native headers";
-      const getPrototypeOf = vi.fn(() => null);
-      const value = native
-        ? new Headers({
-            "retry-after": "7",
-            authorization: "Bearer synthetic-credential",
-          })
-        : new Proxy({}, { getPrototypeOf });
-      const parameters = {
-        [native ? "nested" : "__proto__"]: arrayReturning(value),
-        ordinary: "kept",
-      };
-      expect(projectParameters(parameters)).toEqual(
-        native ? { ordinary: "kept", nested: { "retry-after-ms": 7_000 } } : { ordinary: "kept" },
-      );
-      if (!native) {
-        expect(getPrototypeOf).toHaveBeenCalled();
-        expect(Object.getPrototypeOf(parameters)).toBe(Object.prototype);
-      }
-    },
-  );
+  it("preserves prototype traps returned by custom array operations", () => {
+    const getPrototypeOf = vi.fn(() => null);
+    const parameters = {
+      ["__proto__"]: arrayReturning(new Proxy({}, { getPrototypeOf })),
+      ordinary: "kept",
+    };
+    expect(projectParameters(parameters)).toEqual({ ordinary: "kept" });
+    expect(getPrototypeOf).toHaveBeenCalled();
+    expect(Object.getPrototypeOf(parameters)).toBe(Object.prototype);
+  });
 
   it("reads source getters once while preserving inert serialization hooks", () => {
     const toJSON = vi.fn(() => ({ unexpected: true }));
     const readNested = vi.fn(() => ({ ordinary: "kept", password: "synthetic-secret", toJSON }));
-    const parameters = Object.defineProperty({}, "nested", {
-      enumerable: true,
-      get: readNested,
-    });
+    const parameters = Object.defineProperty({}, "nested", { enumerable: true, get: readNested });
 
-    expect(projectParameters(parameters)).toEqual({ nested: { ordinary: "kept", toJSON } });
+    expect(projectParameters(parameters)).toEqual({
+      nested: { ordinary: "kept", password: "synthetic-secret", toJSON },
+    });
     expect(readNested).toHaveBeenCalledOnce();
     expect(toJSON).not.toHaveBeenCalled();
   });

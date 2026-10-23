@@ -1,41 +1,8 @@
 import { parseBuffer, type IFileInfo } from "music-metadata";
 import type { MediaKind } from "openclaw/plugin-sdk/media-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
-import type {
-  DimensionalFileInfo,
-  EncryptedFile,
-  FileWithThumbnailInfo,
-  MatrixClient,
-} from "../sdk.js";
-import type {
-  MatrixMediaContent,
-  MatrixMediaInfo,
-  MatrixMediaMsgType,
-  MatrixRelation,
-} from "./types.js";
-
-function buildMatrixMediaInfo(params: {
-  size: number;
-  mimetype?: string;
-  durationMs?: number;
-  imageInfo?: DimensionalFileInfo;
-}): MatrixMediaInfo | undefined {
-  const base: FileWithThumbnailInfo = {};
-  if (Number.isFinite(params.size)) {
-    base.size = params.size;
-  }
-  if (params.mimetype) {
-    base.mimetype = params.mimetype;
-  }
-  const info = params.imageInfo ? { ...base, ...params.imageInfo } : base;
-  if (typeof params.durationMs === "number") {
-    return { ...info, duration: params.durationMs };
-  }
-  if (!params.imageInfo && Object.keys(info).length === 0) {
-    return undefined;
-  }
-  return info;
-}
+import type { DimensionalFileInfo, EncryptedFile, MatrixClient } from "../sdk.js";
+import type { MatrixMediaContent, MatrixMediaMsgType, MatrixRelation } from "./types.js";
 
 export function buildMediaContent(params: {
   msgtype: MatrixMediaMsgType;
@@ -54,7 +21,12 @@ export function buildMediaContent(params: {
     msgtype: params.msgtype,
     body: params.body,
     filename: params.filename,
-    info: buildMatrixMediaInfo(params),
+    info: {
+      size: params.size,
+      ...(params.mimetype ? { mimetype: params.mimetype } : {}),
+      ...params.imageInfo,
+      ...(typeof params.durationMs === "number" ? { duration: params.durationMs } : {}),
+    },
   };
   // Encrypted media should only include the "file" payload, not top-level "url".
   if (!params.file && params.url) {

@@ -16,10 +16,15 @@ import {
 } from "./update-command-executor-children.js";
 import { resolveUpdateCommandChildBinding } from "./update-command-executor-grant.js";
 import {
+  prepareUpdateCommandExecutorTerminal,
+  withUpdateCommandExecutorOperation,
+} from "./update-command-executor-operation.js";
+import {
   admittedAuthorities,
   slotReservations,
   occupiedSlotKey,
   childOwners,
+  terminalPreparations,
 } from "./update-command-executor-state.js";
 import { createUpdateIdentityWarningReporter } from "./update-command-identity-warning.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
@@ -68,7 +73,7 @@ export async function withDelegatedUpdateCommandExecutor<T>(
         retainedChild,
         slot,
         slotChild,
-      } = resolveUpdateCommandChildBinding(grant, runId, root, identityWarnings.warn);
+      } = await resolveUpdateCommandChildBinding(grant, runId, root, identityWarnings.warn);
       using readConnections = new DisposableStack();
       readConnections.use(store.retainReadConnection());
       let active = true;
@@ -182,29 +187,29 @@ export async function withDelegatedUpdateCommandExecutor<T>(
         owner.run(childRoot, childOperation, purpose),
       );
       try {
-        return await withCommandProcessScope(async () => {
-          let outcome: { result: T } | { error: unknown };
-          try {
-            fence.assertCurrent();
-            admittedAuthorities.set(fence, {
-              authority: Object.freeze({
-                ...databaseIdentity,
-                installKey: original.key,
-                owner: original.owner,
-              }),
-              assertCurrent: assertBase,
-              managedHandoff,
-              runId,
-              retainedRoot: retained?.key,
-            });
-            if (options) {
-              activation.start(
-                new UpdateActivationTimeoutError(root, options.activationTimeoutMs),
-                options.activationTimeoutMs,
-              );
-            }
-            outcome = {
-              result: await operation(fence, {
+        const operationOutcome = await withUpdateCommandExecutorOperation(
+          {
+            children: owner,
+            operation: () => {
+              fence.assertCurrent();
+              admittedAuthorities.set(fence, {
+                authority: Object.freeze({
+                  ...databaseIdentity,
+                  installKey: original.key,
+                  owner: original.owner,
+                }),
+                assertCurrent: assertBase,
+                managedHandoff,
+                runId,
+                retainedRoot: retained?.key,
+              });
+              if (options) {
+                activation.start(
+                  new UpdateActivationTimeoutError(root, options.activationTimeoutMs),
+                  options.activationTimeoutMs,
+                );
+              }
+              return operation(fence, {
                 runId,
                 databaseIdentity,
                 parents: [
@@ -213,38 +218,26 @@ export async function withDelegatedUpdateCommandExecutor<T>(
                   ...(retainedChild ? [retainedChild] : []),
                   ...(slotChild ? [slotChild] : []),
                 ],
-              }),
-            };
-          } catch (error) {
-            outcome = { error };
-          }
-          owner.close();
-          try {
-            await owner.settle();
-            fence.assertCurrent();
-            identityWarnings.flush();
-          } catch (cause) {
-            outcome = {
-              error:
-                "error" in outcome && outcome.error !== cause
-                  ? new AggregateError(
-                      [outcome.error, cause],
-                      "Unable to finish stopping the update process and its children",
-                      { cause },
-                    )
-                  : cause,
-            };
-          }
-          if ("error" in outcome) {
-            throw outcome.error;
-          }
-          return outcome.result;
-        });
+              });
+            },
+          },
+          "delegated",
+        ).then(
+          (result) => ({ result }),
+          (error: unknown) => ({ error }),
+        );
+        const outcome = await prepareUpdateCommandExecutorTerminal(fence, operationOutcome);
+        if ("error" in outcome) {
+          throw outcome.error;
+        }
+        return outcome.result;
       } finally {
+        identityWarnings.flush();
         active = false;
         childOwners.delete(fence);
         slotReservations.delete(fence);
         admittedAuthorities.delete(fence);
+        terminalPreparations.delete(fence);
       }
     }, activation.signal),
   );

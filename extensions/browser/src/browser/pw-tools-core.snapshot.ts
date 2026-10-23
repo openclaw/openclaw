@@ -36,7 +36,7 @@ import {
 } from "./pw-session.js";
 import {
   markBackendDomRefsOnPage,
-  readMainFrameDocumentIdentityForPage,
+  readDocumentIdentitiesForPage,
   withPageScopedCdpClient,
 } from "./pw-session.page-cdp.js";
 import {
@@ -132,7 +132,7 @@ export async function storeSnapshotRefsViaPlaywright(opts: {
     run: async (assertCurrent) => {
       if (
         opts.expectedDocumentIdentity &&
-        (await readMainFrameDocumentIdentityForPage(page)) !== opts.expectedDocumentIdentity
+        (await readDocumentIdentitiesForPage(page)).mainFrame !== opts.expectedDocumentIdentity
       ) {
         throw new Error(
           "Frame changed while its browser snapshot refs were being published; retry.",

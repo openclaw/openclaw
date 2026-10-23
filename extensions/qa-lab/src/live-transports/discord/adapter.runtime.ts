@@ -1,13 +1,14 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
+import { createQaPollingErrorState } from "../../qa-transport.js";
+import { releaseQaCredentialLease } from "../shared/credential-lease-cleanup.js";
 import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
 } from "../shared/credential-lease.runtime.js";
 import { createDiscordChannelE2eSession, type DiscordChannelE2eSession } from "./channel-e2e.js";
-import type { DiscordUser, DiscordObservedMessage } from "./discord-live.evidence.js";
+import type { DiscordUser } from "./discord-live.evidence.js";
 import {
   buildDiscordQaConfig,
   getCurrentDiscordUser,
@@ -58,11 +59,7 @@ export async function createDiscordQaTransportAdapter(
       throw new Error("Discord QA SUT application id must match the SUT bot user id.");
     }
   } catch (error) {
-    try {
-      await heartbeat.stop();
-    } finally {
-      await lease.release();
-    }
+    await releaseQaCredentialLease(lease, heartbeat);
     throw error;
   }
   const accountId = options.sutAccountId?.trim() || "sut";
@@ -80,7 +77,7 @@ export async function createDiscordQaTransportAdapter(
     await waitForDiscordChannelRunning(gateway as never, accountId);
     assertActive();
   };
-  let pollingError: Error | undefined;
+  const pollingError = createQaPollingErrorState(() => stopped);
   let afterSnowflake = discordSnowflakeForTimestamp(Date.now());
   const polling = (async () => {
     for (;;) {
@@ -89,15 +86,11 @@ export async function createDiscordQaTransportAdapter(
       }
       try {
         assertActive();
-        const observed: DiscordObservedMessage[] = [];
         const matched = await pollChannelMessages({
           token: runtimeEnv.driverBotToken,
           channelId: runtimeEnv.channelId,
           afterSnowflake,
           timeoutMs: 1_500,
-          observedMessages: observed,
-          observationScenarioId: "adapter",
-          observationScenarioTitle: "Discord adapter",
           predicate: (message: { senderId: string }) => message.senderId === sutIdentity.id,
         });
         assertActive();
@@ -116,11 +109,7 @@ export async function createDiscordQaTransportAdapter(
       }
       await sleep(250);
     }
-  })().catch((error: unknown) => {
-    if (!stopped) {
-      pollingError = toStringifiedError(error);
-    }
-  });
+  })().catch(pollingError.capture);
   const scenarioEnvironment = createDiscordQaScenarioEnvironment({
     accountId,
     driverIdentity,
@@ -136,9 +125,7 @@ export async function createDiscordQaTransportAdapter(
     ...(options.agentE2e ? { whenUnhealthy: heartbeat.whenFailed } : {}),
     assertTransportHealthy() {
       assertActive();
-      if (pollingError) {
-        throw pollingError;
-      }
+      pollingError.assertHealthy();
       activeE2eSession?.assertHealthy();
     },
     async sendInbound(input) {

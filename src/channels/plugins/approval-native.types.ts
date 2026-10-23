@@ -33,3 +33,13 @@ export type ChannelApprovalNativeAdapter = {
     params: ChannelApprovalNativeContext,
   ) => ChannelApprovalNativeTarget[] | Promise<ChannelApprovalNativeTarget[]>;
 };
+
+/** Native delivery discovery that can await worker-owned account state. */
+export type ChannelApprovalNativeAdapterAsync = Omit<
+  ChannelApprovalNativeAdapter,
+  "describeDeliveryCapabilities"
+> & {
+  describeDeliveryCapabilities: (
+    params: ChannelApprovalNativeContext,
+  ) => Promise<ReturnType<ChannelApprovalNativeAdapter["describeDeliveryCapabilities"]>>;
+};

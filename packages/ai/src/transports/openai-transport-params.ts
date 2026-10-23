@@ -409,7 +409,6 @@ export function getCompat(model: OpenAIModeModel) {
     ...resolved,
     reasoningEffortMap: resolveOpenAIReasoningEffortMap(model, {}),
     openRouterRouting: (resolved.openRouterRouting as Record<string, unknown> | undefined) ?? {},
-    vercelGatewayRouting: resolved.vercelGatewayRouting as Record<string, unknown>,
     requiresStringContent: compat.requiresStringContent ?? false,
     strictMessageKeys: compat.strictMessageKeys === true,
   };

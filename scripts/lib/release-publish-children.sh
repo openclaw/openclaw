@@ -39,7 +39,8 @@ record_postpublish_diagnostics() {
     CHILD_PLUGIN_CLAWHUB_RUN_ID="${plugin_clawhub_run_id:-${CHILD_PLUGIN_CLAWHUB_RUN_ID:-}}" \
     CHILD_PLUGIN_CLAWHUB_BOOTSTRAP_RUN_ID="${plugin_clawhub_bootstrap_run_id:-${CHILD_PLUGIN_CLAWHUB_BOOTSTRAP_RUN_ID:-}}" \
     CHILD_OPENCLAW_NPM_RUN_ID="${openclaw_npm_run_id:-${CHILD_OPENCLAW_NPM_RUN_ID:-}}" \
-    node --import tsx "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/release-beta-verifier.ts" "$1" \
+    node --import "${GITHUB_WORKSPACE}/.release-harness/scripts/tsx.mjs" \
+      "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/release-beta-verifier.ts" "$1" \
     || echo "Warning: postpublish diagnostics unavailable; primary result unchanged." >&2
 }
 
@@ -660,7 +661,7 @@ resolve_openclaw_npm_publish_state() {
     "https://registry.npmjs.org/-/npm/v1/attestations/openclaw@${release_version}" \
     -o "${provenance_path}"
   published_sha512="$(sha512sum "${published_tarball_path}" | awk '{print $1}')"
-  resume_state="$(node --import tsx "${GITHUB_WORKSPACE}/.release-harness/scripts/openclaw-npm-resume-run.mts" \
+  resume_state="$(node --import "${GITHUB_WORKSPACE}/.release-harness/scripts/tsx.mjs" "${GITHUB_WORKSPACE}/.release-harness/scripts/openclaw-npm-resume-run.mts" \
     --repo "${GITHUB_REPOSITORY}" \
     --run-id "${OPENCLAW_NPM_RESUME_RUN_ID}" \
     --version "${release_version}" \
@@ -725,7 +726,7 @@ write_clawhub_runtime_state() {
   if [[ "${RELEASE_NPM_DIST_TAG}" == "extended-stable" || "${clawhub_failed}" != "0" ]]; then
     force_skip_clawhub=true
   fi
-  node --import tsx \
+  node --import "${GITHUB_WORKSPACE}/.release-harness/scripts/tsx.mjs" \
     "${GITHUB_WORKSPACE}/.release-harness/scripts/openclaw-release-clawhub-runtime-state.ts" \
     --repository "${GITHUB_REPOSITORY}" \
     --wait-for-clawhub "${WAIT_FOR_CLAWHUB}" \
@@ -742,7 +743,7 @@ render_github_release_notes() {
   local metadata_file="${3:-}"
   local regular_stable_version=""
   local -a render_args=(
-    node --import tsx "${GITHUB_WORKSPACE}/.release-harness/scripts/render-github-release-notes.mts"
+    node --import "${GITHUB_WORKSPACE}/.release-harness/scripts/tsx.mjs" "${GITHUB_WORKSPACE}/.release-harness/scripts/render-github-release-notes.mts"
     --root "${GITHUB_WORKSPACE}" --ref "${TARGET_SHA}"
     --tag "${RELEASE_TAG}"
     --repository "${GITHUB_REPOSITORY}"
@@ -798,7 +799,7 @@ canonical_release_body_matches() {
   if [[ "${RELEASE_EVIDENCE_MODE}" != "authorized-beta-focused-v1" && -f "${FULL_RELEASE_VALIDATION_MANIFEST_DIR:-}/full-release-validation-manifest.json" ]] && grep -q '^### Release verification$' "$body_file"; then
     verify_args+=(--validation-manifest "${FULL_RELEASE_VALIDATION_MANIFEST_DIR}/full-release-validation-manifest.json")
   fi
-  node --import tsx "${GITHUB_WORKSPACE}/.release-harness/scripts/render-github-release-notes.mts" \
+  node --import "${GITHUB_WORKSPACE}/.release-harness/scripts/tsx.mjs" "${GITHUB_WORKSPACE}/.release-harness/scripts/render-github-release-notes.mts" \
     "${verify_args[@]}"
 }
 
@@ -922,7 +923,7 @@ dispatch_linux_mirror() {
     --release-publish-run-id "$parent_run" --release-publish-run-attempt "$parent_attempt" \
     --release-publish-ref "$parent_ref" --release-publish-full-ref "$parent_full_ref" \
     --release-publish-parent-state-policy active-or-success || return 1
-  mirror_run_id="$(dispatch_workflow_at_ref "$parent_ref" "$parent_sha" linux-app-release.yml \
+  mirror_run_id="$(dispatch_workflow_at_ref "$parent_ref" "$parent_sha" linux-app-mirror.yml \
     -f release_tag="$RELEASE_TAG" -f source_sha="$TARGET_SHA" -f tooling_sha="$parent_sha" \
     -f release_publish_run_id="$parent_run" -f release_publish_run_attempt="$parent_attempt")" || return 1
   jq --arg runId "$mirror_run_id" '. + {state: "dispatched", childRunId: $runId}' \
@@ -945,7 +946,7 @@ NODE
   if [[ "${release_train}" != "stable" || "${RELEASE_NPM_DIST_TAG}" == "extended-stable" ]]; then
     return 0
   fi
-  jq -n --arg tag "$RELEASE_TAG" '{tag: $tag, state: "dispatch-unconfirmed"}' \
+  jq -n --arg tag "$RELEASE_TAG" --arg sourceSha "$TARGET_SHA" '{tag: $tag, sourceSha: $sourceSha, state: "dispatch-unconfirmed"}' \
     > "$RUNNER_TEMP/linux-dispatch.json"
   release_json="$(gh_read release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease)" || return 1
   if ! jq -e '.isDraft == false and .isPrerelease == false' <<< "$release_json" >/dev/null; then
@@ -959,7 +960,7 @@ NODE
   if [[ "$(jq -er '.state' <<< "$publication_state")" == published &&
         "$(jq -r '.needsUpdaterPublication' <<< "$publication_state")" != true &&
         "$(jq -r '.needsChannelPublication' <<< "$publication_state")" == false ]]; then
-    jq -n --arg tag "$RELEASE_TAG" '{tag: $tag, state: "published-assets-reused"}' \
+    jq -n --arg tag "$RELEASE_TAG" --arg sourceSha "$TARGET_SHA" '{tag: $tag, sourceSha: $sourceSha, state: "published-assets-reused"}' \
       > "$RUNNER_TEMP/linux-dispatch.json"
     echo "- Linux: existing same-tag AppImage, Debian package, signed updater manifest, and checksums verified; no build requested." >> "$GITHUB_STEP_SUMMARY"
     return 0
@@ -980,8 +981,8 @@ NODE
   done
   if [[ -n "$existing_request" ]]; then
     request_run_id="$(jq -r '.id' <<< "$existing_request")"
-    jq --arg tag "$RELEASE_TAG" \
-      '{tag: $tag, state: "request-reused", requestRunId: (.id | tostring), workflowSha: .head_sha}' \
+    jq --arg tag "$RELEASE_TAG" --arg sourceSha "$TARGET_SHA" \
+      '{tag: $tag, sourceSha: $sourceSha, state: "request-reused", requestRunId: (.id | tostring), requestRunAttempt: (.run_attempt | tostring), workflowSha: .head_sha}' \
       <<< "$existing_request" > "$RUNNER_TEMP/linux-dispatch.json"
     echo "- Linux: existing same-tag request reused; no duplicate build requested. Request: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${request_run_id}; inspect Linux App Release for publication status and recovery." >> "$GITHUB_STEP_SUMMARY"
     return 0
@@ -993,10 +994,10 @@ NODE
   # validates the title, exact main SHA, release ancestry, and signing trust.
   request_run_id="$(dispatch_workflow_at_ref main "$workflow_sha" linux-app-release-request.yml \
     -f tag="$RELEASE_TAG" -f desktop-test-bundles=false)" || return 1
-  jq -n --arg tag "$RELEASE_TAG" --arg requestRunId "$request_run_id" --arg workflowSha "$workflow_sha" \
-    '{tag: $tag, state: "request-dispatched", requestRunId: $requestRunId, workflowSha: $workflowSha}' \
+  jq -n --arg tag "$RELEASE_TAG" --arg sourceSha "$TARGET_SHA" --arg requestRunId "$request_run_id" --arg workflowSha "$workflow_sha" \
+    '{tag: $tag, sourceSha: $sourceSha, state: "request-dispatched", requestRunId: $requestRunId, requestRunAttempt: "1", workflowSha: $workflowSha}' \
     > "$RUNNER_TEMP/linux-dispatch.json"
-  echo "- Linux: request dispatched; release processing is pending and verified existing bundles will be reused. Request: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${request_run_id}; publication: https://github.com/${GITHUB_REPOSITORY}/actions/workflows/linux-app-release.yml" >> "$GITHUB_STEP_SUMMARY"
+  echo "- Linux: dispatched, awaiting builder admission; release processing is pending and verified existing bundles will be reused. Request: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${request_run_id}; publication: https://github.com/${GITHUB_REPOSITORY}/actions/workflows/linux-app-release.yml" >> "$GITHUB_STEP_SUMMARY"
 }
 
 promote_windows_release_assets() {
@@ -1305,7 +1306,7 @@ verify_published_release() {
   OPENCLAW_NPM_EXPECTED_WORKFLOW_REF="${openclaw_npm_expected_workflow_ref}" \
     OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA="${openclaw_npm_expected_workflow_sha}" \
     OPENCLAW_NPM_EXPECTED_RUN_ATTEMPT="${openclaw_npm_run_attempt}" \
-    node --import tsx \
+    node --import "${GITHUB_WORKSPACE}/.release-harness/scripts/tsx.mjs" \
       "${GITHUB_WORKSPACE}/.release-harness/scripts/${verifier}" \
       "${verify_args[@]}"
 

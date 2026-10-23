@@ -50,15 +50,8 @@ export function buildTelegramNativeQuoteCandidate(params: {
   if (!text.trim()) {
     return undefined;
   }
-  const candidate: TelegramNativeQuoteCandidate = {
-    text,
-    position: 0,
-  };
   const entities = sliceTelegramEntitiesForQuote(params.entities, text.length);
-  if (entities) {
-    candidate.entities = entities;
-  }
-  return candidate;
+  return { text, position: 0, ...(entities ? { entities } : {}) };
 }
 
 export function addTelegramNativeQuoteCandidate(

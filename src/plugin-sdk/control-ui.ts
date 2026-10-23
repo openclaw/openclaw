@@ -6,6 +6,7 @@ import type {
   SessionsListParams,
 } from "@openclaw/gateway-protocol";
 import type { ControlUiComponents } from "./control-ui-components.js";
+export { createSessionHeaderLink } from "./control-ui-session-link.js";
 export type {
   ControlUiAgentPickerProps,
   ControlUiComponentHandle,
@@ -13,6 +14,8 @@ export type {
   ControlUiDashboardProps,
   ControlUiDialogProps,
 } from "./control-ui-components.js";
+export type { AgentsWorkspaceGetResult } from "@openclaw/gateway-protocol";
+export type { MemorySearchResponse } from "../../packages/memory-host-sdk/src/host/types.js";
 export type ControlUiDisposer = () => void;
 
 export type ControlUiConnection = {
@@ -222,6 +225,12 @@ export type ControlUiHost = {
    * The Gateway enforces connection scopes, not a per-plugin RPC allowlist.
    */
   request: <T = unknown>(method: string, params?: Record<string, unknown>) => Promise<T>;
+  /**
+   * `session.message` listeners receive complete message bodies. Registration is
+   * synchronous, but delivery starts after the Gateway acknowledges full-body
+   * interest. In-flight roster events without bodies are skipped during admission;
+   * the host never delivers a bodyless `session.message` to a plugin listener.
+   */
   onEvent: (event: string, listener: (payload: unknown) => void) => ControlUiDisposer;
   subscribe: (listener: () => void) => ControlUiDisposer;
   sessions: {
@@ -309,3 +318,14 @@ export type ControlUiPlugin = {
 export function defineControlUiPlugin(plugin: ControlUiPlugin): ControlUiPlugin {
   return plugin;
 }
+export type { DoctorMemoryStatusPayload } from "../../packages/gateway-protocol/src/doctor-memory.js";
+export type {
+  ControlUiSettingsPlacement,
+  ControlUiSettingsSnapshot,
+  ControlUiSettingsComponents,
+  ControlUiSettingsContext,
+  ControlUiSettingsView,
+  ControlUiChannelSettingsSnapshot,
+  ControlUiChannelSettingsContext,
+  ControlUiChannelSettingsView,
+} from "./control-ui-settings.js";

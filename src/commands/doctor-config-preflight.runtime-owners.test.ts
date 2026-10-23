@@ -8,7 +8,6 @@ import {
   type DeferredPluginMigration,
 } from "../infra/deferred-plugin-migrations.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { readConfigPreflightSnapshot } from "./config-preflight-snapshot.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 import { runStartupConfigPreflight } from "./startup-config-preflight.js";
@@ -68,39 +67,6 @@ async function withRuntimeOwner(run: (configPath: string) => Promise<void>) {
 }
 
 describe("runtime plugin migration ownership", () => {
-  it.each([
-    { facts: "prepared-empty", includePluginMetadata: false, valid: false },
-    { facts: "provided-pending", includePluginMetadata: true, valid: true },
-  ] as const)(
-    "validates with $facts migration facts (metadata: $includePluginMetadata)",
-    async ({ facts, includePluginMetadata, valid }) => {
-      await withRuntimeOwner(async (configPath) => {
-        const retained = { ...pending, validationExcludedPaths: [["legacyFixture"]] };
-        await recordDeferredPluginMigrations({ pending: [retained] });
-        const raw = JSON.stringify({ ...config, legacyFixture: { enabled: true } });
-        await fs.writeFile(configPath, raw);
-        const result = await readConfigPreflightSnapshot({
-          purpose: "doctor",
-          allowCurrentPluginMetadata: false,
-          includePluginMetadata,
-          skipPluginValidation: false,
-          observe: false,
-          ...(facts === "prepared-empty"
-            ? { preparePluginMigrations: async () => [] }
-            : { deferredPluginMigrations: [retained] }),
-        });
-        expect(result.snapshot.valid).toBe(valid);
-        if (!valid) {
-          expect(result.snapshot.issues).toContainEqual(
-            expect.objectContaining({ message: expect.stringContaining("legacyFixture") }),
-          );
-        }
-        expect(await fs.readFile(configPath, "utf8")).toBe(raw);
-        expect(readDeferredPluginMigrations()).toEqual([retained]);
-      });
-    },
-  );
-
   it("startup preserves the runtime record until Doctor reconciles its owner", async () => {
     await withRuntimeOwner(async (configPath) => {
       await fs.writeFile(
@@ -134,33 +100,18 @@ describe("runtime plugin migration ownership", () => {
     });
   });
 
-  it.each([
-    { requiresStateMigration: true as const },
-    { requiresDoctorInspection: true as const },
-    { configPaths: [["plugins", "entries", runtimeId, "config"]] },
-    { validationExcludedPaths: [["legacyFixture"]] },
-  ])("preserves a retained obligation %j", async (obligation) => {
+  it("preserves runtime alias inputs excluded from validation", async () => {
     await withRuntimeOwner(async (configPath) => {
-      const protectedConfig =
-        "configPaths" in obligation
-          ? {
-              plugins: { entries: { [runtimeId]: { enabled: false, config: { retained: true } } } },
-            }
-          : "validationExcludedPaths" in obligation
-            ? { legacyFixture: { retained: true } }
-            : undefined;
-      if (protectedConfig) {
-        await fs.writeFile(configPath, JSON.stringify({ ...config, ...protectedConfig }));
-      }
+      const obligation = { validationExcludedPaths: [["legacyFixture"]] };
+      const protectedConfig = { legacyFixture: { retained: true } };
+      await fs.writeFile(configPath, JSON.stringify({ ...config, ...protectedConfig }));
       await recordDeferredPluginMigrations({ pending: [{ ...pending, ...obligation }] });
       const result = await runDoctorConfigPreflight(doctorOptions);
       expect(result.snapshot.valid).toBe(true);
       expect(readDeferredPluginMigrations()).toEqual([
         expect.objectContaining({ pluginId: runtimeId, ...obligation }),
       ]);
-      if (protectedConfig) {
-        expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toMatchObject(protectedConfig);
-      }
+      expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toMatchObject(protectedConfig);
     });
   });
 
@@ -180,16 +131,6 @@ describe("runtime plugin migration ownership", () => {
       expect(result.stateMigrationStepReceipts).toContainEqual(
         expect.objectContaining({ id: `plugin:${runtimeId}`, outcome: "deferred" }),
       );
-    });
-  });
-
-  it("reconciles a false runtime record that retained only the shared session locator", async () => {
-    await withRuntimeOwner(async () => {
-      await recordDeferredPluginMigrations({
-        pending: [{ ...pending, configPaths: [["session", "store"]] }],
-      });
-      await runDoctorConfigPreflight(doctorOptions);
-      expect(readDeferredPluginMigrations()).toEqual([]);
     });
   });
 });

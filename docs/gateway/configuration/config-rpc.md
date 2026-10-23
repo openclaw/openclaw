@@ -58,6 +58,14 @@ after validation and secret restoration, or `[]` for a no-op. These paths contai
 no configuration values; clients can use them to distinguish a channel change
 from an unrelated write even when secret values are redacted.
 
+`config.patch` also accepts `response: "summary"` for callers that only need a
+commit acknowledgment. It omits the full config from the response. A summary
+for a change requiring no runtime reload work also omits the restart sentinel.
+Clients that maintain an editable config draft, including the Control UI, keep
+the default full response so they can adopt the committed revision without
+losing pending edits. Validation, persistence, and runtime application complete
+before acknowledgment in either mode.
+
 Both `config.apply` and `config.patch` accept `raw`, `baseHash`, `sessionKey`,
 `note`, and `restartDelayMs`. `baseHash` is required for both methods once a
 config file already exists (a first write with no existing config skips the check).
@@ -69,7 +77,10 @@ allowlists and DM/group policies, publish without a channel restart or drain
 wait. Writes that also contain restart-required settings remain one deferred
 transaction. If
 the file watcher takes over the same unapplied write during that wait, the RPC stays pending
-through replay; persistence alone is not an application acknowledgment. Shutdown,
+through replay; persistence alone is not an application acknowledgment. If the watcher
+already applied the exact saved source before the managed notification arrives, the
+RPC acknowledges that completed application without resolving secrets or scanning
+skills again. Shutdown,
 supersession by different content, or failed application returns `UNAVAILABLE`
 with recovery guidance. `config.set` acknowledges persistence only.
 

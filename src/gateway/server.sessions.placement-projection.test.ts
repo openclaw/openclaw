@@ -4,7 +4,6 @@ import { afterEach, expect, test, vi } from "vitest";
 import type { EnvironmentSummary } from "../../packages/gateway-protocol/src/index.js";
 import { i18n } from "../../ui/src/i18n/index.ts";
 import { projectDevicePlacements } from "../../ui/src/pages/new-session/device-placement.ts";
-import { readDraftEnvironments } from "../../ui/src/pages/new-session/discovery.ts";
 import { listRegisteredAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
 import { restoreRegisteredAgentHarnesses } from "../agents/harness/registry.test-support.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../infra/node-runner-inventory.js";
@@ -31,7 +30,7 @@ import {
   getGatewayConfigModule,
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
-import type { WorkerPlacementMoveIntent } from "./worker-environments/placement-move-intent.js";
+import type { WorkerPlacementMoveIntent } from "./worker-environments/placement-move-intent.types.js";
 import type { WorkerSessionPlacementReader } from "./worker-environments/placement-projector.js";
 import { placementTurnOwner } from "./worker-environments/placement-record.js";
 import {
@@ -165,7 +164,7 @@ test.each([
           ?.requiredNodeCommand,
       ).toEqual({ command, state, ...(disabledReason ? { message: disabledReason } : {}) });
       const devices = projectDevicePlacements(
-        readDraftEnvironments(catalog.payload?.environments),
+        catalog.payload?.environments ?? [],
         runtime?.devicePlacement,
       );
       const device = devices.find((option) => option.deviceId === "node-host");

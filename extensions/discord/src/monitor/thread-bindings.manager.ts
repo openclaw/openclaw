@@ -1,6 +1,5 @@
 import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import {
-  registerSessionBindingAdapter,
   resolveThreadBindingFarewellText,
   resolveThreadBindingThreadName,
   unregisterSessionBindingAdapter,
@@ -12,10 +11,11 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
-  asOptionalObjectRecord,
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { registerSessionBindingAdapterV2 } from "openclaw/plugin-sdk/thread-bindings-runtime";
+import { warnPluginSdkDeprecation } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 import { createDiscordRestClient } from "../client.js";
 import { getChannel } from "../internal/discord.js";
 import {
@@ -36,7 +36,7 @@ import {
   drainThreadBindingAccountOperations,
   drainThreadBindingMutations,
   shouldPersistAnyBindingState,
-  snapshotThreadBindingJson,
+  snapshotThreadBindingMetadata,
 } from "./thread-bindings.persistence.js";
 import { createThreadBindingSessionAdapter } from "./thread-bindings.session-adapter.js";
 import {
@@ -74,6 +74,10 @@ function isDirectConversationBindingId(value?: string | null): boolean {
 
 function normalizeTouchTimestamp(at: number | undefined): number {
   return typeof at === "number" && Number.isFinite(at) ? Math.max(0, Math.floor(at)) : Date.now();
+}
+
+function touchBindingRecord(record: ThreadBindingRecord, at: number): ThreadBindingRecord {
+  return { ...record, lastActivityAt: Math.max(record.lastActivityAt || 0, at) };
 }
 
 export async function createThreadBindingManager(input: {
@@ -190,9 +194,8 @@ function createLoadedThreadBindingManager(
       }
       if (!rest) {
         try {
-          const cfg = resolveCurrentCfg();
           rest = createDiscordRestClient({
-            cfg,
+            cfg: resolveCurrentCfg(),
             accountId,
             token: resolveCurrentToken(),
           }).rest;
@@ -296,19 +299,21 @@ function createLoadedThreadBindingManager(
     getIdleTimeoutMs: () => idleTimeoutMs,
     getMaxAgeMs: () => maxAgeMs,
     getByThreadId: (threadId) => getBinding(threadId)?.record,
-    getBySessionKey: (targetSessionKey) => manager.listBySessionKey(targetSessionKey)[0],
-    listBySessionKey: (targetSessionKey) => {
-      const ids = resolveBindingIdsForSession({
+    listBySessionKey: (targetSessionKey) =>
+      resolveBindingIdsForSession({
         targetSessionKey,
         accountId,
-      });
-      return ids
+      })
         .map((bindingKey) => BINDINGS_BY_THREAD_ID.get(bindingKey))
-        .filter((entry): entry is ThreadBindingRecord => Boolean(entry));
-    },
+        .filter((entry): entry is ThreadBindingRecord => Boolean(entry)),
     listBindings: () =>
       [...BINDINGS_BY_THREAD_ID.values()].filter((entry) => entry.accountId === accountId),
     touchThreadSync: (input) => {
+      warnPluginSdkDeprecation({
+        family: "conversation-bindings",
+        method: "ThreadBindingManager.touchThreadSync",
+        replacement: "ThreadBindingManager.touchThread",
+      });
       assertManagerCurrent();
       if (stopping) {
         throw new Error("Discord thread binding manager is stopping");
@@ -320,10 +325,7 @@ function createLoadedThreadBindingManager(
       const at = normalizeTouchTimestamp(input.at);
       return updateBindingRecordSync({
         bindingKey: key,
-        transform: (record) => ({
-          ...record,
-          lastActivityAt: Math.max(record.lastActivityAt || 0, at),
-        }),
+        transform: (record) => touchBindingRecord(record, at),
         persist: (input.persist ?? persist) && shouldPersistAnyBindingState(),
         minIntervalMs: THREAD_BINDING_TOUCH_PERSIST_MIN_INTERVAL_MS,
       });
@@ -339,10 +341,7 @@ function createLoadedThreadBindingManager(
           return null;
         }
         const { bindingKey, record: existingResult } = binding;
-        const nextRecord: ThreadBindingRecord = {
-          ...existingResult,
-          lastActivityAt: Math.max(existingResult.lastActivityAt || 0, touchParams.at),
-        };
+        const nextRecord = touchBindingRecord(existingResult, touchParams.at);
         await commitBindingRecord({
           bindingKey,
           previous: existingResult,
@@ -357,9 +356,7 @@ function createLoadedThreadBindingManager(
     bindTarget: async (input) => {
       const bindParams = {
         ...input,
-        metadata: asOptionalObjectRecord(
-          snapshotThreadBindingJson(input.metadata ? { ...input.metadata } : undefined),
-        ),
+        metadata: snapshotThreadBindingMetadata(input),
       };
       return runOwnedMutation(async () => {
         const assertCurrent = bindParams.assertCurrent;
@@ -595,7 +592,7 @@ function createLoadedThreadBindingManager(
     }, THREAD_BINDINGS_SWEEP_INTERVAL_MS);
     // Keep the production process free to exit, but avoid breaking fake-timer
     // sweeper tests where unref'd intervals may never fire.
-    if (!(process.env.VITEST || process.env.NODE_ENV === "test")) {
+    if (shouldDefaultPersist()) {
       sweepTimer.unref?.();
     }
   }
@@ -606,15 +603,15 @@ function createLoadedThreadBindingManager(
     defaults: { idleTimeoutMs, maxAgeMs },
     resolveCurrentCfg,
     resolveCurrentToken,
+    assertCurrent: assertManagerCurrent,
   });
 
-  registerSessionBindingAdapter(sessionBindingAdapter);
+  registerSessionBindingAdapterV2(sessionBindingAdapter);
 
   MANAGERS_BY_ACCOUNT_ID.set(accountId, manager);
   return manager;
 }
 
 export function getThreadBindingManager(accountId?: string): ThreadBindingManager | null {
-  const normalized = normalizeAccountId(accountId);
-  return MANAGERS_BY_ACCOUNT_ID.get(normalized) ?? null;
+  return MANAGERS_BY_ACCOUNT_ID.get(normalizeAccountId(accountId)) ?? null;
 }

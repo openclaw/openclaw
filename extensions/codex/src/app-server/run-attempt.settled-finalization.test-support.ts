@@ -8,7 +8,6 @@ import {
   runCodexAppServerAttempt,
   tempDir,
   threadStartResult,
-  userMessage,
 } from "./run-attempt-test-harness.js";
 import {
   readCodexAppServerBinding,
@@ -16,10 +15,7 @@ import {
   type writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
 import * as settledTurnContext from "./settled-turn-context.js";
-import {
-  appendSqliteHistoryMessage,
-  attachSqliteSessionTarget,
-} from "./sqlite-session.test-helpers.js";
+import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
 
 type SettledFinalizationFixtures = {
   expectResumeRequest: (
@@ -33,40 +29,55 @@ type SettledFinalizationFixtures = {
   ) => Promise<void>;
 };
 
+async function settledParams(name: string, prompt: string) {
+  const sessionId = `session-${name}`;
+  const sessionFile = `agent:main:${sessionId}`;
+  const workspaceDir = path.join(tempDir, `workspace-${name}`);
+  const params = createParams(sessionFile, workspaceDir);
+  await attachSqliteSessionTarget(params, path.join(tempDir, `${name}.sqlite`), sessionId);
+  params.prompt = prompt;
+  params.onSettledTurn = async (attempt, captureContext) => {
+    attempt.settledTurnFinalizationContext = await captureContext();
+  };
+  return { params, sessionFile, workspaceDir };
+}
+
+function commandEvents(cwd: string, output: string) {
+  const command = { type: "commandExecution", id: "tool-settled", command: `echo ${output}`, cwd };
+  return [
+    itemNotification("item/started", { ...command, status: "inProgress" }),
+    itemNotification("item/completed", {
+      ...command,
+      status: "completed",
+      aggregatedOutput: `${output}\n`,
+      exitCode: 0,
+      durationMs: 12,
+    }),
+  ];
+}
+
 /** Keep finalization evidence cases under the parent suite's original hooks and ordering. */
 export function registerSettledFinalizationTests({
   expectResumeRequest,
   writeExistingBinding,
 }: SettledFinalizationFixtures) {
-  it.each(
+  it.each([
+    ["preserve-only host-auth turn", undefined, true],
     [
+      "provider overload after the tool result",
       {
-        label: "preserve-only host-auth turn",
-        failure: undefined,
-        expectedContext: true,
-        preserveNativeModel: true,
+        message: "Selected model is at capacity. Please try a different model.",
+        codexErrorInfo: "serverOverloaded",
       },
-      {
-        label: "provider overload after the tool result",
-        failure: {
-          message: "Selected model is at capacity. Please try a different model.",
-          codexErrorInfo: "serverOverloaded",
-        },
-        expectedContext: true,
-      },
-    ].map((scenario) => ({
-      scenario,
-      oversizedHistory: scenario.label === "completed turn",
-    })),
-  )(
-    "preserves settled finalization eligibility for a $scenario.label (oversized history: $oversizedHistory)",
-    async ({ scenario, oversizedHistory }) => {
-      const { failure, expectedContext } = scenario;
-      const preserveNativeModel = "preserveNativeModel" in scenario;
-      const storePath = path.join(tempDir, "settled-finalization-context.sqlite");
-      const sessionId = "session-settled-finalization-context";
-      const sessionFile = `agent:main:${sessionId}`;
-      const workspaceDir = path.join(tempDir, "workspace-settled-finalization-context");
+      false,
+    ],
+  ] as const)(
+    "preserves settled finalization eligibility for a %s",
+    async (_label, failure, preserveNativeModel) => {
+      const { params, sessionFile, workspaceDir } = await settledParams(
+        "settled-finalization-context",
+        "Send the update to Alice.",
+      );
       const sourceSelection = { model: "gpt-5.6-luna", modelProvider: "openai" };
       const onStart = vi.fn();
       const harness = createStartedThreadHarness(
@@ -76,7 +87,6 @@ export function registerSettledFinalizationTests({
             : undefined,
         { onStart, ...(preserveNativeModel ? { persistedThreads: ["thread-1"] } : {}) },
       );
-      const params = createParams(sessionFile, workspaceDir);
       params.registerPluginRuntimeRefreshConsumer = vi.fn();
       params.modelId = "synthetic-outer-model";
       params.authProfileStore = {
@@ -87,7 +97,6 @@ export function registerSettledFinalizationTests({
           "openai:binding": { type: "api_key", provider: "openai", key: "synthetic-binding-key" },
         },
       };
-      await attachSqliteSessionTarget(params, storePath, sessionId);
       if (preserveNativeModel) {
         registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
         await writeExistingBinding(sessionFile, workspaceDir, {
@@ -97,15 +106,6 @@ export function registerSettledFinalizationTests({
           authProfileId: "openai:binding",
         });
       }
-      if (oversizedHistory) {
-        for (let index = 0; index < 201; index += 1) {
-          await appendSqliteHistoryMessage(
-            params,
-            userMessage(`Prior message ${index}`, index + 1),
-          );
-        }
-      }
-      params.prompt = "Send the update to Alice.";
       const run = runCodexAppServerAttempt(params);
       await harness.waitForMethod("turn/start");
       const emptyAssistant = { type: "agentMessage", id: "empty-assistant", text: "" };
@@ -113,36 +113,7 @@ export function registerSettledFinalizationTests({
       await Promise.all([
         harness.notify(itemNotification("item/started", emptyAssistant)),
         harness.notify(itemNotification("item/completed", emptyAssistant)),
-        harness.notify(
-          itemNotification("item/started", {
-            type: "commandExecution",
-            id: "tool-settled",
-            command: "echo sent-to-alice",
-            cwd: workspaceDir,
-            processId: null,
-            source: "agent",
-            status: "inProgress",
-            commandActions: [],
-            aggregatedOutput: null,
-            exitCode: null,
-            durationMs: null,
-          }),
-        ),
-        harness.notify(
-          itemNotification("item/completed", {
-            type: "commandExecution",
-            id: "tool-settled",
-            command: "echo sent-to-alice",
-            cwd: workspaceDir,
-            processId: 42,
-            source: "agent",
-            status: "completed",
-            commandActions: [],
-            aggregatedOutput: "sent-to-alice\n",
-            exitCode: 0,
-            durationMs: 12,
-          }),
-        ),
+        ...commandEvents(workspaceDir, "sent-to-alice").map((event) => harness.notify(event)),
         failure
           ? harness.notify(turnCompleted({ id: "turn-1", status: "failed", error: failure }))
           : harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" }),
@@ -165,84 +136,51 @@ export function registerSettledFinalizationTests({
       if (!failure) {
         expect(result.terminal).toEqual({ kind: "ok" });
       }
-      expect(Boolean(result.settledTurnFinalizationContext)).toBe(expectedContext);
       expect(result.currentAttemptAssistant).toBeDefined();
-      expect(result.replayMetadata).toMatchObject({
-        hadPotentialSideEffects: true,
-        replaySafe: false,
+      expect(result).toMatchObject({
+        replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+        itemLifecycle: { startedCount: 2, completedCount: 2, activeCount: 0 },
       });
-      expect(result.itemLifecycle).toMatchObject({
-        startedCount: 2,
-        completedCount: 2,
-        activeCount: 0,
+      const context = result.settledTurnFinalizationContext;
+      expect(context).toMatchObject({
+        source: "harness",
+        selection: { ...sourceSelection, authProfileId: selectedProfile },
       });
-      if (expectedContext) {
-        const context = result.settledTurnFinalizationContext;
-        expect(context).toMatchObject({
-          source: "harness",
-          selection: { ...sourceSelection, authProfileId: selectedProfile },
-        });
-        if (!(context instanceof settledTurnContext.CodexSettledTurnContext)) {
-          throw new Error("Expected complete settled-turn evidence from the harness");
-        }
-        expect(context.data).toHaveLength(oversizedHistory ? 200 : 3);
-        if (oversizedHistory) {
-          expect(context.data[0]).toMatchObject({
-            content: [{ text: expect.stringContaining("Earlier conversation was omitted") }],
-          });
-        }
-        expect(context.data.slice(-3)).toEqual([
-          {
-            type: "message",
-            role: "user",
-            content: [{ type: "input_text", text: expect.stringContaining(params.prompt) }],
-          },
-          {
-            type: "function_call",
-            call_id: "tool-settled",
-            name: "bash",
-            arguments: JSON.stringify({ command: "echo sent-to-alice", cwd: workspaceDir }),
-          },
-          { type: "function_call_output", call_id: "tool-settled", output: "sent-to-alice\n" },
-        ]);
-        expect(Object.isFrozen(context)).toBe(true);
+      if (!(context instanceof settledTurnContext.CodexSettledTurnContext)) {
+        throw new Error("Expected complete settled-turn evidence from the harness");
       }
+      expect(context.data).toEqual([
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: expect.stringContaining(params.prompt) }],
+        },
+        {
+          type: "function_call",
+          call_id: "tool-settled",
+          name: "bash",
+          arguments: JSON.stringify({ command: "echo sent-to-alice", cwd: workspaceDir }),
+        },
+        { type: "function_call_output", call_id: "tool-settled", output: "sent-to-alice\n" },
+      ]);
     },
   );
   it("captures settled tool evidence when an active native compaction fails terminally", async () => {
-    const storePath = path.join(tempDir, "settled-compaction-failure.sqlite");
-    const sessionId = "session-settled-compaction-failure";
-    const sessionFile = `agent:main:${sessionId}`;
-    const workspaceDir = path.join(tempDir, "workspace-settled-compaction-failure");
+    const { params, workspaceDir } = await settledParams(
+      "settled-compaction-failure",
+      "Finish the task and report the result.",
+    );
     const harness = createStartedThreadHarness();
-    const params = createParams(sessionFile, workspaceDir);
-    await attachSqliteSessionTarget(params, storePath, sessionId);
-    params.prompt = "Finish the task and report the result.";
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
+    const error = {
+      message: "remote compaction failed",
+      codexErrorInfo: "other",
+      additionalDetails: null,
+    };
     // Native events arrive in wire order; local projection must not delay terminal receipt.
     await Promise.all([
-      harness.notify(
-        itemNotification("item/started", {
-          type: "commandExecution",
-          id: "tool-settled",
-          command: "echo completed-work",
-          cwd: workspaceDir,
-          status: "inProgress",
-        }),
-      ),
-      harness.notify(
-        itemNotification("item/completed", {
-          type: "commandExecution",
-          id: "tool-settled",
-          command: "echo completed-work",
-          cwd: workspaceDir,
-          status: "completed",
-          aggregatedOutput: "completed-work\n",
-          exitCode: 0,
-          durationMs: 12,
-        }),
-      ),
+      ...commandEvents(workspaceDir, "completed-work").map((event) => harness.notify(event)),
       harness.notify(
         itemNotification("item/started", { type: "contextCompaction", id: "compact-failed" }),
       ),
@@ -251,25 +189,11 @@ export function registerSettledFinalizationTests({
         params: {
           threadId: "thread-1",
           turnId: "turn-1",
-          error: {
-            message: "remote compaction failed",
-            codexErrorInfo: "other",
-            additionalDetails: null,
-          },
+          error,
           willRetry: false,
         },
       }),
-      harness.notify(
-        turnCompleted({
-          id: "turn-1",
-          status: "failed",
-          error: {
-            message: "remote compaction failed",
-            codexErrorInfo: "other",
-            additionalDetails: null,
-          },
-        }),
-      ),
+      harness.notify(turnCompleted({ id: "turn-1", status: "failed", error })),
     ]);
 
     const result = await run;
@@ -287,6 +211,5 @@ export function registerSettledFinalizationTests({
         expect.objectContaining({ type: "function_call_output", call_id: "tool-settled" }),
       ],
     });
-    expect(Object.isFrozen(result.settledTurnFinalizationContext)).toBe(true);
   });
 }

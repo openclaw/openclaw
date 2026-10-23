@@ -40,10 +40,9 @@ function commitDraftWithCaret(host: InlineSlashHost, next: string, caret: number
 
 export function commitInlineSlashSelection(
   replacement: string,
-  state: InlineSlashState,
+  completion: InlineSlashCompletion | null,
   host: InlineSlashHost,
 ): boolean {
-  const completion = state.slashMenuCompletion;
   if (!completion?.inline) {
     return false;
   }
@@ -68,7 +67,6 @@ export function beginInlineFreeformSlashArguments(
   const replacement = `/${commandName} `;
   const next = `${current.slice(0, completion.start)}${replacement}${current.slice(completion.end)}`;
   const caret = completion.start + replacement.length;
-  commitDraftWithCaret(host, next, caret);
   state.slashMenuCompletion = {
     query: commandName,
     start: completion.start,
@@ -76,14 +74,14 @@ export function beginInlineFreeformSlashArguments(
     inline: true,
     argumentStart: caret,
   };
+  commitDraftWithCaret(host, next, caret);
   return true;
 }
 
 export function removeInlineSlashSelection(
-  state: InlineSlashState,
+  completion: InlineSlashCompletion | null,
   host: InlineSlashHost,
 ): boolean {
-  const completion = state.slashMenuCompletion;
   if (!completion?.inline) {
     return false;
   }
@@ -125,7 +123,6 @@ export function findDirectInlineSlashArgumentInvocation(
   for (const match of prefix.matchAll(commandPattern)) {
     const typedName = match[1]!.toLowerCase();
     const command = getSlashCommandCompletions(typedName, {
-      showAll: true,
       inlineOnly: true,
     }).find(
       (entry) =>

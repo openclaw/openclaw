@@ -65,6 +65,12 @@ temporary capture state is removed, then removes only owned fixtures before
 releasing the lease. Private `<scenario-id>-slack-e2e.json` receipts distinguish
 accepted writes, stored state, and incomplete cleanup.
 
+With `agentE2e: true`, message scenarios in the leased channel also record their
+driver roots through the native receipt owner. Cleanup includes those roots and
+their captured SUT replies and standalone progress messages even when a scenario
+assertion fails. Capture reads acquire current database admission so Gateway
+restarts do not invalidate final cleanup.
+
 ### Direct credential setup
 
 Required env when `--credential-source env`:
@@ -82,7 +88,7 @@ Optional:
 - `OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_TIMEOUT_MS` overrides the checkpoint
   acknowledgement timeout. The default is `120000`.
 
-Canonical YAML scenarios exposed through the Slack live adapter:
+Shared YAML scenarios exposed through the Slack live adapter:
 
 - `thread-follow-up`
 - `thread-isolation`
@@ -241,7 +247,7 @@ reaction handling yet.
 {
   "display_information": {
     "name": "OpenClaw QA SUT",
-    "description": "OpenClaw QA SUT connector for OpenClaw"
+    "description": "OpenClaw QA SUT app for OpenClaw"
   },
   "features": {
     "bot_user": {

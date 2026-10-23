@@ -1,22 +1,30 @@
-import { createServer } from "node:http";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import * as sessionEntryRuntime from "../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  executeWorkerInference,
-  type WorkerInferenceExecutionParams,
-} from "../gateway/worker-environments/inference-runtime.js";
+import type { WorkerInferenceExecutionParams } from "../gateway/worker-environments/inference-runtime.js";
+import { executeWorkerInference } from "../gateway/worker-environments/inference.js";
+import { identityFor, REQUEST } from "../gateway/worker-environments/inference.test-support.js";
 import * as workerTurnOwner from "../gateway/worker-environments/placement-turn-claim-events.js";
+import { prepareWorkerTurnModel } from "../gateway/worker-environments/worker-turn-model.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as sessionAuthRuntime from "./auth-profiles/session-override.js";
+import { acquireAgentRunPreparedModelRuntime } from "./prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 import type { BoundAgentRunSessionTarget } from "./run-session-target.types.js";
 import {
   acquireSimpleCompletionModelForAgent,
   completeWithPreparedSimpleCompletionModel,
 } from "./simple-completion-runtime.js";
+import {
+  assertPrepared,
+  completionChunk,
+  completionConfig,
+  completionContext,
+  completionModel,
+  startCompletionServer,
+} from "./simple-completion.test-support.js";
 
 afterEach(async () => {
   await resetPreparedModelRuntimeSnapshotsForTest();
@@ -25,14 +33,15 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-describe.each([
+it.each([
   { mode: "agent", api: undefined },
   { mode: "worker", api: "openai-completions" },
-] as const)("initial $mode simple completion with provider API $api", ({ mode, api }) => {
-  it("normalizes input once without an ambient prepared runtime", async () => {
+] as const)(
+  "normalizes initial $mode completion once without ambient runtime (API $api)",
+  async ({ mode, api }) => {
     await withOpenClawTestState({ label: "selected-completion" }, async (state) => {
       const requests: string[] = [];
-      const server = createServer((request, response) => {
+      await using server = await startCompletionServer((request, response) => {
         let body = "";
         request.setEncoding("utf8");
         request.on("data", (chunk: string) => {
@@ -42,69 +51,40 @@ describe.each([
           const { model } = JSON.parse(body) as { model: string };
           requests.push(model);
           response.writeHead(200, { "content-type": "text/event-stream" });
-          response.end(
-            `data: ${JSON.stringify({
-              id: "selected-completion-response",
-              object: "chat.completion.chunk",
-              model,
-              choices: [
-                {
-                  index: 0,
-                  delta: { content: `materialized:${model}` },
-                  finish_reason: "stop",
-                },
-              ],
-            })}\n\ndata: [DONE]\n\n`,
-          );
+          response.end(completionChunk(`materialized:${model}`, model));
         });
       });
-      await new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        server.listen(0, "127.0.0.1", () => {
-          server.removeListener("error", reject);
-          resolve();
-        });
+      const { baseUrl } = server;
+      const nativeFetch = globalThis.fetch;
+      vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+        const url = new URL(input instanceof Request ? input.url : input);
+        expect(url.origin).toBe(new URL(baseUrl).origin);
+        return nativeFetch(input, init);
       });
-      try {
-        const address = server.address();
-        if (!address || typeof address === "string") {
-          throw new Error("Completion fixture did not expose a TCP port");
-        }
-        const baseUrl = `http://127.0.0.1:${address.port}/v1`;
-        const nativeFetch = globalThis.fetch;
-        vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
-          const url = new URL(input instanceof Request ? input.url : input);
-          expect(url.origin).toBe(new URL(baseUrl).origin);
-          return nativeFetch(input, init);
-        });
-        const provider = "selected-completion";
-        const models = ["middle", "final", "plain"].map((id) => ({
+      const provider = "selected-completion";
+      const models = ["middle", "final", "plain"].map((id) =>
+        completionModel({
           id,
-          name: id,
           provider,
           api: "openai-completions",
           baseUrl,
-          reasoning: false,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 16_000,
-          maxTokens: 4_096,
-        }));
-        await state.writeJson("provider/openclaw.plugin.json", {
-          id: provider,
-          providers: [provider],
-          configSchema: { type: "object", properties: {}, additionalProperties: false },
-          modelIdNormalization: {
-            providers: { [provider]: { aliases: { entry: "middle", middle: "final" } } },
-          },
-          modelCatalog: {
-            discovery: { [provider]: "static" },
-            providers: { [provider]: { api: "openai-completions", baseUrl, models } },
-          },
-        });
-        const runtimePath = await state.writeText(
-          "provider/index.cjs",
-          `const models = ${JSON.stringify(models)};
+        }),
+      );
+      await state.writeJson("provider/openclaw.plugin.json", {
+        id: provider,
+        providers: [provider],
+        configSchema: { type: "object", properties: {}, additionalProperties: false },
+        modelIdNormalization: {
+          providers: { [provider]: { aliases: { entry: "middle", middle: "final" } } },
+        },
+        modelCatalog: {
+          discovery: { [provider]: "static" },
+          providers: { [provider]: { api: "openai-completions", baseUrl, models } },
+        },
+      });
+      const runtimePath = await state.writeText(
+        "provider/index.cjs",
+        `const models = ${JSON.stringify(models)};
 module.exports = {
   id: ${JSON.stringify(provider)},
   register(api) {
@@ -115,8 +95,16 @@ module.exports = {
   },
 };
 `,
-        );
-        const cfg: OpenClawConfig = {
+      );
+      const cfg: OpenClawConfig = completionConfig(
+        provider,
+        {
+          api,
+          baseUrl,
+          apiKey: "synthetic-fixture",
+          models: [],
+        },
+        {
           agents: {
             defaults: {
               workspace: state.workspaceDir,
@@ -126,133 +114,104 @@ module.exports = {
               },
             },
           },
-          models: {
-            providers: {
-              [provider]: { api, baseUrl, apiKey: "synthetic-fixture", models: [] },
-            },
-          },
           plugins: {
             allow: [provider],
             entries: { [provider]: { enabled: true } },
             load: { paths: [runtimePath] },
             slots: { memory: "none" },
           },
-        };
-        await state.writeConfig(cfg);
-        const sessionTarget: BoundAgentRunSessionTarget = {
-          agentId: "main",
-          sessionId: "selected-test",
-          sessionKey: "agent:main:main",
-          storePath: state.path("unused-session-store.sqlite"),
-        };
-        if (mode === "worker") {
-          vi.spyOn(workerTurnOwner, "readWorkerTurnPromptCacheContext").mockReturnValue({
-            boundaryCount: 0,
-          });
-          vi.spyOn(sessionEntryRuntime, "readSessionEntryInWorker").mockImplementation(
-            async (target) => {
-              expect(target).toEqual(sessionTarget);
-              return { sessionId: "selected-test", updatedAt: 0 };
-            },
-          );
-          vi.spyOn(sessionAuthRuntime, "resolveSessionAuthSelection").mockResolvedValue(undefined);
-        }
-
-        for (const [raw, expected] of [
-          ["entry", "middle"],
-          ["middle", "final"],
-          ["plain", "plain"],
-        ] as const) {
-          if (mode === "worker") {
-            const result = await executeWorkerInference(
-              workerRequest(cfg, provider, raw, sessionTarget),
-            );
-            expect(result).toMatchObject({
-              type: "done",
-              message: {
-                provider,
-                model: expected,
-                content: [{ type: "text", text: `materialized:${expected}` }],
-              },
-            });
-          } else {
-            const prepared = await acquireSimpleCompletionModelForAgent({
-              cfg,
-              agentId: "main",
-              modelRef: `${provider}/${raw}`,
-              allowBundledStaticCatalogFallback: true,
-            });
-            if ("error" in prepared) {
-              throw new Error(prepared.error);
-            }
-            try {
-              expect(prepared.model.id).toBe(expected);
-              const result = await completeWithPreparedSimpleCompletionModel({
-                cfg,
-                model: prepared.model,
-                auth: prepared.auth,
-                context: {
-                  messages: [{ role: "user", content: "Synthetic input.", timestamp: 0 }],
-                },
-                options: { maxTokens: 64 },
-              });
-              expect(result).toMatchObject({
-                content: [{ type: "text", text: `materialized:${expected}` }],
-              });
-            } finally {
-              await prepared[Symbol.asyncDispose]();
-            }
-          }
-        }
-        expect(requests).toEqual(["middle", "final", "plain"]);
-      } finally {
-        server.closeAllConnections();
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        });
-      }
-    });
-  });
-});
-
-function workerRequest(
-  config: OpenClawConfig,
-  provider: string,
-  model: string,
-  sessionTarget: BoundAgentRunSessionTarget,
-): WorkerInferenceExecutionParams {
-  return {
-    config,
-    sessionTarget,
-    identity: {
-      environmentId: "selected-test",
-      credentialHash: "synthetic-fixture",
-      bundleHash: "synthetic-fixture",
-      sessionId: "selected-test",
-      runId: "selected-test",
-      ownerEpoch: 1,
-      turnClaim: {
+        },
+      );
+      await state.writeConfig(cfg);
+      const sessionTarget: BoundAgentRunSessionTarget = {
+        agentId: "main",
         sessionId: "selected-test",
-        claimId: "selected-test",
-        runId: "selected-test",
-        placementGeneration: 1,
-        owner: { kind: "worker", environmentId: "selected-test", ownerEpoch: 1 },
-      },
-      rpcSetVersion: 1,
-      protocolFeatures: ["worker-inference-v1"],
-      credentialExpiresAtMs: Number.MAX_SAFE_INTEGER,
-    },
-    request: {
-      runEpoch: 1,
-      sessionId: "selected-test",
-      runId: "selected-test",
-      turnId: "selected-test",
-      modelRef: { provider, model },
-      context: { messages: [{ role: "user", content: "Synthetic input.", timestamp: 0 }] },
-      options: { maxTokens: 64 },
-    },
-    signal: new AbortController().signal,
-    isCurrent: () => true,
-    emit: () => {},
-  };
-}
+        sessionKey: "agent:main:main",
+        storePath: state.path("unused-session-store.sqlite"),
+      };
+      if (mode === "worker") {
+        vi.spyOn(workerTurnOwner, "readWorkerTurnPromptCacheContext").mockReturnValue({
+          boundaryCount: 0,
+        });
+        vi.spyOn(sessionEntryRuntime, "readSessionEntryInWorker").mockImplementation(
+          async (target) => {
+            expect(target).toEqual(sessionTarget);
+            return { sessionId: "selected-test", updatedAt: 0 };
+          },
+        );
+        vi.spyOn(sessionAuthRuntime, "resolveSessionAuthSelection").mockResolvedValue(undefined);
+      }
+
+      for (const [raw, expected] of [
+        ["entry", "middle"],
+        ["middle", "final"],
+        ["plain", "plain"],
+      ] as const) {
+        if (mode === "worker") {
+          await using lease = await acquireAgentRunPreparedModelRuntime({
+            config: cfg,
+            agentId: "main",
+            agentDir: state.agentDir(),
+            workspaceDir: state.workspaceDir,
+          });
+          const start = {
+            ...REQUEST,
+            sessionId: sessionTarget.sessionId,
+            runId: "selected-test",
+            turnId: "selected-test",
+            modelRef: { provider, model: raw },
+            context: completionContext("Synthetic input.", 0),
+            options: { maxTokens: 64 },
+          };
+          const request: WorkerInferenceExecutionParams = {
+            sessionTarget,
+            request: start,
+            identity: { ...identityFor(start), credentialExpiresAtMs: Number.MAX_SAFE_INTEGER },
+            signal: new AbortController().signal,
+            isCurrent: () => true,
+            emit: () => {},
+          };
+          const { inference } = await prepareWorkerTurnModel({
+            target: sessionTarget,
+            modelRef: request.request.modelRef,
+            runtimeSnapshot: lease.snapshot,
+            inferencePlacement: "gateway",
+            turn: { workspaceDir: state.workspaceDir },
+            assertCurrent() {},
+          });
+          vi.spyOn(workerTurnOwner, "getWorkerTurnInference").mockReturnValue(inference);
+          const result = await executeWorkerInference(request);
+          expect(result).toMatchObject({
+            type: "done",
+            message: {
+              provider,
+              model: expected,
+              content: [{ type: "text", text: `materialized:${expected}` }],
+            },
+          });
+        } else {
+          const acquired = await acquireSimpleCompletionModelForAgent({
+            cfg,
+            agentId: "main",
+            modelRef: `${provider}/${raw}`,
+            allowBundledStaticCatalogFallback: true,
+          });
+          assertPrepared(acquired);
+          await using prepared = acquired;
+          expect(prepared.model.id).toBe(expected);
+          const result = await completeWithPreparedSimpleCompletionModel({
+            cfg,
+            model: prepared.model,
+            auth: prepared.auth,
+            context: completionContext("Synthetic input.", 0),
+            options: { maxTokens: 64 },
+          });
+          expect(result).toMatchObject({
+            content: [{ type: "text", text: `materialized:${expected}` }],
+          });
+        }
+      }
+      expect(requests).toEqual(["middle", "final", "plain"]);
+    });
+  },
+);

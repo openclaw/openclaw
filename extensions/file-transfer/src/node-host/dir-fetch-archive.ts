@@ -2,16 +2,19 @@ import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
 
 const CANONICAL_PATH_CHANGED_EXIT_CODE = 78;
 const CANONICAL_TAR_WORKER = [
+  "(()=>{",
   'const fs=require("node:fs");',
   'const {spawn}=require("node:child_process");',
   "const [directory,expected,device,inode,tar]=process.argv.slice(1);",
-  "try{process.chdir(directory);}catch{process.exit(1);}",
-  'if(fs.realpathSync(".")!==expected){process.exit(78);}',
+  "try{process.chdir(directory);}catch{process.exitCode=1;return;}",
+  'if(fs.realpathSync(".")!==expected){process.exitCode=78;return;}',
   'const bound=fs.statSync(".",{bigint:true});',
-  "if(String(bound.dev)!==device||String(bound.ino)!==inode){process.exit(78);}",
+  "if(String(bound.dev)!==device||String(bound.ino)!==inode){process.exitCode=78;return;}",
   'const child=spawn(tar,["-czf","-","."],{stdio:["ignore","inherit","inherit"]});',
-  'child.once("error",()=>process.exit(1));',
-  'child.once("exit",code=>process.exit(code??1));',
+  "let failed=false;",
+  'child.once("error",()=>{failed=true;});',
+  'child.once("close",code=>{process.exitCode=failed?1:(code??1);});',
+  "})();",
 ].join("");
 
 type TarArchiveResult = Buffer | "TOO_LARGE" | "TIMEOUT" | "CANONICAL_PATH_CHANGED" | "ERROR";

@@ -28,14 +28,24 @@ type MaterializedSessionTranscriptArchive = {
   sha256: string;
 };
 
-export type TranscriptArchiveWorkerPlan = Pick<
-  SessionStateDeletePlan,
-  "agentId" | "archiveDirectory" | "databasePath" | "reason" | "sessionId" | "snapshot"
->;
+export type SessionHistoryEvictionArchivePlan = Omit<SessionStateDeletePlan, "snapshot"> & {
+  historyEviction: {
+    expectedIdentity: DatabasePathIdentity;
+    preserveRecentMs?: number | null;
+  };
+};
+
+export type TranscriptArchiveWorkerPlan =
+  | Pick<
+      SessionStateDeletePlan,
+      "agentId" | "archiveDirectory" | "databasePath" | "reason" | "sessionId" | "snapshot"
+    >
+  | SessionHistoryEvictionArchivePlan;
 
 export type TranscriptArchiveWorkerResult = {
   archive: MaterializedSessionTranscriptArchive | null;
   sessionId: string;
+  preparedPlan?: SessionStateDeletePlan | null;
 };
 
 export type TranscriptArchiveWorkerMessage = {
@@ -129,18 +139,13 @@ export type SqliteArchiveOneShotWorkerData = Extract<
 
 export type SqliteArchiveSessionRequest = SqliteArchiveOperation & {
   type: "archive-operation";
-  operationId: number;
 };
 
-export type SqliteArchiveSessionResponse = {
-  operationId: number;
-  settled: true;
-} & (
+export type SqliteArchiveSessionResponse =
   | TranscriptArchiveWorkerMessage
   | TranscriptArchivePublishWorkerMessage
   | { type: "page-read"; results: Array<TranscriptArchivePageResult | undefined> }
-  | { type: "final-read"; results: TranscriptArchiveReadResult[] }
-);
+  | { type: "final-read"; results: TranscriptArchiveReadResult[] };
 export type SessionTranscriptMaintenanceSizingInput = {
   agentId: string;
   path: string;

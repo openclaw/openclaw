@@ -7,7 +7,7 @@ export type GatewayApprovalResolved = ApprovalResolved;
 
 export type GatewayApprovalEventSubscriber = {
   eventKinds: ReadonlySet<ChannelApprovalKind>;
-  shouldHandle: (request: GatewayApprovalRequest) => boolean;
+  shouldHandle: (request: GatewayApprovalRequest) => boolean | Promise<boolean>;
   onRequested: (request: GatewayApprovalRequest) => void;
   onResolved: (resolved: GatewayApprovalResolved) => void;
 };

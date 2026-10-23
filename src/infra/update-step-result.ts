@@ -34,6 +34,8 @@ export type UpdateStepResult = {
   recoverySteps?: readonly UpdateRecoveryStep[];
   failureFacts?: UpdateFailureFact[];
   doctorLintFindings?: UpdateDoctorLintFinding[];
+  /** Null records an observed Doctor without a usable selector report. */
+  deferredInspectionCheckIds?: string[] | null;
   configChanges?: UpdateDoctorConfigChange[];
   configWriteRefusal?: UpdateDoctorConfigWriteRefusal;
   snapshotCapacity?: UpdateSnapshotCapacity;

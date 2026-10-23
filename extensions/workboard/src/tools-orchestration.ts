@@ -148,10 +148,7 @@ export function createWorkboardOrchestrationTools(params: {
         summary: Type.Optional(Type.String({ description: "Specification summary comment." })),
         token: Type.Optional(Type.String({ description: "Claim token for claimed cards." })),
       }),
-      execute: async (_toolCallId, rawParams) => {
-        const { record, id, scope } = await readScopedCardToolParams(asNonArrayRecord(rawParams));
-        return jsonResult({ card: redactClaimToken(await store.specify(id, record, scope)) });
-      },
+      execute: scopedCardMutation((id, record, scope) => store.specify(id, record, scope)),
     },
     {
       name: "workboard_decompose",
@@ -261,7 +258,7 @@ export function createWorkboardOrchestrationTools(params: {
       name: "workboard_promote",
       label: "Workboard Promote",
       description:
-        "Promote a dependency-ready card into ready, optionally forcing past holds for operator recovery.",
+        "Promote a todo card into ready, optionally forcing past dependency or schedule holds. Unblock blocked cards first.",
       parameters: strictObject({
         id: cardIdField(),
         token: ScopedClaimTokenField,

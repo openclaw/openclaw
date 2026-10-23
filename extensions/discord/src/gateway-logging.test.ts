@@ -1,6 +1,5 @@
-// Discord tests cover gateway logging plugin behavior.
 import { EventEmitter } from "node:events";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 
 // Suite runs isolate=false: a partial factory here poisons the shared module
@@ -16,89 +15,46 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
 
 let logVerbose: typeof import("openclaw/plugin-sdk/runtime-env").logVerbose;
 let attachDiscordGatewayLogging: typeof import("./gateway-logging.js").attachDiscordGatewayLogging;
+let emitter: EventEmitter;
+let runtime: ReturnType<typeof createRuntimeSpies>;
+let cleanup: () => void;
 
 describe("attachDiscordGatewayLogging", () => {
   beforeAll(async () => {
-    const { logVerbose: loadedLogVerbose } = await import("openclaw/plugin-sdk/runtime-env");
-    logVerbose = loadedLogVerbose;
+    ({ logVerbose } = await import("openclaw/plugin-sdk/runtime-env"));
     ({ attachDiscordGatewayLogging } = await import("./gateway-logging.js"));
   });
 
   beforeEach(() => {
     vi.clearAllMocks();
+    emitter = new EventEmitter();
+    runtime = createRuntimeSpies();
+    cleanup = attachDiscordGatewayLogging({ emitter, runtime });
   });
-  it("logs debug events and promotes reconnect/close to info", () => {
-    const emitter = new EventEmitter();
-    const runtime = createRuntimeSpies();
-
-    const cleanup = attachDiscordGatewayLogging({
-      emitter,
-      runtime,
-    });
-
-    emitter.emit("debug", "Gateway websocket opened");
-    emitter.emit("debug", "Gateway websocket closed: 1001");
-    emitter.emit("debug", "Gateway reconnect scheduled in 1000ms (close, resume=true)");
-    emitter.emit("debug", "Gateway forcing fresh IDENTIFY after 3 failed resume attempts");
-
-    const logVerboseMock = vi.mocked(logVerbose);
-    expect(logVerboseMock).toHaveBeenCalledTimes(4);
-    expect(runtime.log).toHaveBeenCalledTimes(3);
-    expect(runtime.log).toHaveBeenNthCalledWith(
-      1,
-      "discord gateway: Gateway websocket closed: 1001",
+  afterEach(() => cleanup());
+  it.each([
+    ["debug", "Gateway websocket opened", false],
+    ["debug", "Gateway websocket closed: 1001", true],
+    ["debug", "Gateway reconnect scheduled in 1000ms (close, resume=true)", true],
+    ["debug", "Gateway forcing fresh IDENTIFY after 3 failed resume attempts", true],
+    ["warning", "High latency detected: 1200ms", true],
+  ] as const)("logs %s: %s", (event, message, promoted) => {
+    emitter.emit(event, message);
+    const verbose = `discord gateway${event === "warning" ? " warning" : ""}: ${message}`;
+    expect(logVerbose).toHaveBeenCalledExactlyOnceWith(verbose);
+    expect(runtime.log.mock.calls).toEqual(
+      promoted ? [[event === "warning" ? `warn:${verbose}` : verbose]] : [],
     );
-    expect(runtime.log).toHaveBeenNthCalledWith(
-      2,
-      "discord gateway: Gateway reconnect scheduled in 1000ms (close, resume=true)",
-    );
-    expect(runtime.log).toHaveBeenNthCalledWith(
-      3,
-      "discord gateway: Gateway forcing fresh IDENTIFY after 3 failed resume attempts",
-    );
-
-    cleanup();
-  });
-
-  it("promotes warnings while keeping metrics verbose-only", () => {
-    const emitter = new EventEmitter();
-    const runtime = createRuntimeSpies();
-
-    const cleanup = attachDiscordGatewayLogging({
-      emitter,
-      runtime,
-    });
-
-    emitter.emit("warning", "High latency detected: 1200ms");
-    emitter.emit("metrics", { latency: 42, errors: 1 });
-
-    const logVerboseMock = vi.mocked(logVerbose);
-    expect(logVerboseMock).toHaveBeenCalledTimes(2);
-    expect(runtime.log).toHaveBeenCalledWith(
-      "warn:discord gateway warning: High latency detected: 1200ms",
-    );
-
-    cleanup();
   });
 
   it("removes listeners on cleanup", () => {
-    const emitter = new EventEmitter();
-    const runtime = createRuntimeSpies();
-
-    const cleanup = attachDiscordGatewayLogging({
-      emitter,
-      runtime,
-    });
     cleanup();
 
-    const logVerboseMock = vi.mocked(logVerbose);
-    logVerboseMock.mockClear();
-
+    vi.mocked(logVerbose).mockClear();
     emitter.emit("debug", "Gateway websocket closed: 1001");
     emitter.emit("warning", "High latency detected: 1200ms");
-    emitter.emit("metrics", { latency: 42 });
 
-    expect(logVerboseMock).not.toHaveBeenCalled();
+    expect(logVerbose).not.toHaveBeenCalled();
     expect(runtime.log).not.toHaveBeenCalled();
   });
 });

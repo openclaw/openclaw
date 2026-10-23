@@ -3,8 +3,6 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import {
   SessionsProcessesListParamsSchema,
   SessionsProcessesStopParamsSchema,
-  SessionsProcessesListResultSchema,
-  SessionsProcessesStopResultSchema,
   type SessionsProcessesListResult,
   type SessionsProcessesStopResult,
 } from "../../../packages/gateway-protocol/src/schema/session-processes.js";
@@ -20,7 +18,7 @@ import { withReadySessionRows, type SessionRowReadView } from "../session-row-pr
 import { prepareProjectedSessionPresentation } from "../session-row-presentation.js";
 import { requireSessionRowProjection } from "../session-row-projection-access.js";
 import type { MaterializedRow } from "../session-row-projection-record.js";
-import { resolveSessionMutationAuthorization } from "../session-sharing.js";
+import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
 import { resolveSessionStoreKey } from "../session-store-key.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
@@ -103,6 +101,7 @@ async function observeProcesses(options: GatewayRequestHandlerOptions, stop: boo
     select(projection, selected);
     placement?.assertCurrent();
   };
+  let releaseStopAuthorization: (() => void) | undefined;
   try {
     assertCurrent();
     const owner = placement?.placement;
@@ -147,37 +146,38 @@ async function observeProcesses(options: GatewayRequestHandlerOptions, stop: boo
           ? { sessionId, ...readBackgroundProcesses(scope) }
           : stopBackgroundProcess(scope, operation);
     }
-    // Reenter readiness for publication after remote I/O. A stale response cannot leak
-    // output after a reset, a sharing change, or an execution placement replacement.
-    await withReadySessionRows(projection, queries, () => {
-      assertCurrent();
-      const expected = stop ? SessionsProcessesStopResultSchema : SessionsProcessesListResultSchema;
-      if (
-        !Value.Check(expected, result) ||
-        (!stop && "sessionId" in result && result.sessionId !== sessionId)
-      ) {
-        throw new Error("Worker returned an invalid process observation; reconnect and retry.");
-      }
-      if ("processes" in result) {
-        const stopParams = { key: selected.key, agentId: selected.agentId };
-        const stopScope = authorizeOperatorScopesForMethod(
-          "sessions.processes.stop",
-          client?.connect.scopes ?? [],
-          stopParams,
-        );
-        const canStop = Boolean(
-          client &&
-          stopScope.allowed &&
-          !resolveSessionMutationAuthorization({
+    const stopParams = { key: selected.key, agentId: selected.agentId };
+    const stopScope = authorizeOperatorScopesForMethod(
+      "sessions.processes.stop",
+      client?.connect.scopes ?? [],
+      stopParams,
+    );
+    const stopAuthorization =
+      "processes" in result && client && stopScope.allowed
+        ? await resolveSessionMutationAuthorizationAsync({
             client,
             method: "sessions.processes.stop",
             requestParams: stopParams,
             context,
-            // Keep the admitted own-session ceiling, just as dispatch authorization does.
             sessionScope: stopScope.sessionScope,
             sessionRowRead: projection,
-          }).error,
-        );
+            assertInvocationCurrent: assertCurrent,
+          })
+        : undefined;
+    releaseStopAuthorization = stopAuthorization?.authorization?.release;
+    // Reenter readiness for publication after remote I/O. A stale response cannot leak
+    // output after a reset, a sharing change, or an execution placement replacement.
+    await withReadySessionRows(projection, queries, () => {
+      assertCurrent();
+      if (
+        "processes" in result === stop ||
+        ("sessionId" in result && result.sessionId !== sessionId)
+      ) {
+        throw new Error("Worker returned an invalid process observation; reconnect and retry.");
+      }
+      if ("processes" in result) {
+        stopAuthorization?.authorization?.assertCurrent();
+        const canStop = Boolean(stopAuthorization && !stopAuthorization.error);
         result = {
           ...result,
           processes: result.processes.map((row) => ({ ...row, canStop: row.canStop && canStop })),
@@ -186,6 +186,7 @@ async function observeProcesses(options: GatewayRequestHandlerOptions, stop: boo
       respond(true, result);
     });
   } finally {
+    releaseStopAuthorization?.();
     placement?.release();
   }
 }

@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { assertAgentReplyContainsMarker } from "../agent-turn-output.mjs";
 import { readTcpPortEnv } from "../env-limits.mjs";
+import { readJson } from "../fixtures/common.mjs";
 import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";
+import { readDatabase } from "./observations.mjs";
 
 const MODEL = "survivor/gpt-5.6-luna";
 const JOBS = [
@@ -23,10 +24,6 @@ function requiredEnv(name) {
 
 function artifact(name) {
   return path.join(requiredEnv("OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT"), name);
-}
-
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
 function writeJson(file, value) {
@@ -602,16 +599,13 @@ export function assertLegacyOperatorApprovals(stage) {
   } else {
     const dbPath = path.join(stateDir, "state", "openclaw.sqlite");
     assert(fs.existsSync(dbPath), "legacy operator approvals database missing");
-    const db = new DatabaseSync(dbPath, { readOnly: true });
-    try {
+    readDatabase(dbPath, (db) => {
       const row = db
         .prepare("SELECT raw_json FROM exec_approvals_config WHERE config_key = ?")
         .get("current");
       assert(row, "legacy operator approvals canonical row missing");
       policy = JSON.parse(row.raw_json);
-    } finally {
-      db.close();
-    }
+    });
   }
   const observed = stage === "baseline" ? baselinePolicy(policy) : authoredPolicy(policy);
   writeJson(artifact(`legacy-operator-${stage}-approvals.json`), observed);
@@ -813,9 +807,11 @@ export function assertLegacyOperatorCronOwners(listing, baseline) {
       expected.agentId,
       `legacy operator cron owner unresolved or changed: ${expected.name}`,
     );
+    // Doctor may pin an ownerless legacy-roster job to its historical owner
+    // (docs/gateway/doctor/state-and-sessions.md); authored owners never move.
     assert.equal(
       after.agentId,
-      before.agentId,
+      before.agentId ?? after.agentId,
       `legacy operator cron explicit owner changed: ${expected.name}`,
     );
   }

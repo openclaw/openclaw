@@ -58,6 +58,7 @@ export function createWorkspaceResultJournal(params: {
   >;
   turnClaim: WorkerSessionTurnClaim;
   assertCurrent?: () => void;
+  assertCommitCurrent?: () => void;
   current?: PlacementTurnClaimCurrentCheck;
 }) {
   const owner = {
@@ -76,7 +77,7 @@ export function createWorkspaceResultJournal(params: {
         return params.placements.beginWorkspaceReconciliation(owner, next, params.assertCurrent);
       },
       commit: async (manifestRef: string) => {
-        params.assertCurrent?.();
+        (params.assertCommitCurrent ?? params.assertCurrent)?.();
         await params.placements.updateWorkspaceBaseManifest(
           { claim: params.turnClaim, manifestRef },
           params.assertCurrent,
@@ -114,10 +115,7 @@ export async function finalizeWorkspaceResultConflicts(params: {
   retainPriorConflict?: boolean;
   report: (report: WorkerWorkspaceConflictReport) => Promise<void>;
   workspace: WorkerSessionWorkspace;
-}): Promise<{
-  conflict: Required<WorkerWorkspaceResultConflict> | undefined;
-  conflictRetained: boolean;
-}> {
+}): Promise<boolean> {
   params.assertCurrent();
   const retainedPriorConflict =
     params.retainPriorConflict && params.conflictPaths.length === 0
@@ -161,7 +159,7 @@ export async function finalizeWorkspaceResultConflicts(params: {
     await params.report({ cleared: true });
   }
 
-  return { conflict, conflictRetained: conflict !== undefined };
+  return conflict !== undefined;
 }
 
 type StagedWorkspaceResultSettlement = {

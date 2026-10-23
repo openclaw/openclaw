@@ -1,4 +1,9 @@
-import { isPositionalSeg, parseArrayIndexSegment, resolvePositionalSeg } from "../oc-path.js";
+import {
+  isPositionalSeg,
+  parseArrayIndexSegment,
+  resolvePositionalSeg,
+  unquoteSeg,
+} from "../oc-path.js";
 import type { JsoncEntry, JsoncValue } from "./ast.js";
 
 type JsoncValueOcPathMatch =
@@ -18,12 +23,13 @@ export function resolveJsoncValueOcPath(
   // jsonc-parser edits distinguish object keys from array indices.
   const walked: (string | number)[] = [];
 
-  for (let seg of segments) {
-    if (seg.length === 0) {
+  for (const rawSeg of segments) {
+    let seg = unquoteSeg(rawSeg);
+    if (rawSeg.length === 0) {
       return null;
     }
-    if (isPositionalSeg(seg)) {
-      const concrete = resolveJsoncPositionalSegment(current, seg);
+    if (isPositionalSeg(rawSeg)) {
+      const concrete = resolveJsoncPositionalSegment(current, rawSeg);
       if (concrete !== null) {
         seg = concrete;
       }

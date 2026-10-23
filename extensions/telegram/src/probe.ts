@@ -4,6 +4,7 @@ import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-run
 import { makeProxyFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
+import { asBoolean } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { fetchWithTimeout, runChannelProbe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeTelegramBotInfo, type TelegramBotInfo } from "./bot-info.js";
 import {
@@ -48,19 +49,7 @@ const MAX_PROBE_TRANSPORT_CACHE_SIZE = 64;
 // 4 MiB guards against a misbehaving or hostile API endpoint streaming an oversized payload.
 const TELEGRAM_BOT_API_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 
-function resolveProbeOptions(
-  proxyOrOptions?: string | TelegramProbeOptions,
-): TelegramProbeOptions | undefined {
-  if (!proxyOrOptions) {
-    return undefined;
-  }
-  if (typeof proxyOrOptions === "string") {
-    return { proxyUrl: proxyOrOptions };
-  }
-  return proxyOrOptions;
-}
-
-function buildProbeTransportCacheKey(token: string, options?: TelegramProbeOptions): string {
+function resolveProbeTransport(token: string, options?: TelegramProbeOptions): TelegramTransport {
   const cacheIdentity = options?.accountId?.trim() || token;
   const cacheIdentityKind = options?.accountId?.trim() ? "account" : "token";
   const proxyKey = options?.proxyUrl?.trim() ?? "";
@@ -69,13 +58,18 @@ function buildProbeTransportCacheKey(token: string, options?: TelegramProbeOptio
     typeof autoSelectFamily === "boolean" ? String(autoSelectFamily) : "default";
   const dnsResultOrderKey = options?.network?.dnsResultOrder ?? "default";
   const apiRootKey = options?.apiRoot?.trim() ?? "";
-  return `${cacheIdentityKind}:${cacheIdentity}::${proxyKey}::${autoSelectFamilyKey}::${dnsResultOrderKey}::${apiRootKey}`;
-}
+  const cacheKey = `${cacheIdentityKind}:${cacheIdentity}::${proxyKey}::${autoSelectFamilyKey}::${dnsResultOrderKey}::${apiRootKey}`;
+  const cached = probeTransportCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
 
-function setCachedProbeTransport(
-  cacheKey: string,
-  transport: TelegramTransport,
-): TelegramTransport {
+  const proxyUrl = options?.proxyUrl?.trim();
+  const proxyFetch = proxyUrl ? makeProxyFetch(proxyUrl) : undefined;
+  const transport = resolveTelegramTransport(proxyFetch, {
+    network: options?.network,
+  });
+
   probeTransportCache.set(cacheKey, transport);
   if (probeTransportCache.size > MAX_PROBE_TRANSPORT_CACHE_SIZE) {
     const oldestKey = probeTransportCache.keys().next().value;
@@ -88,28 +82,8 @@ function setCachedProbeTransport(
   return transport;
 }
 
-function resolveProbeTransport(token: string, options?: TelegramProbeOptions): TelegramTransport {
-  const cacheKey = buildProbeTransportCacheKey(token, options);
-  const cached = probeTransportCache.get(cacheKey);
-  if (cached) {
-    return cached;
-  }
-
-  const proxyUrl = options?.proxyUrl?.trim();
-  const proxyFetch = proxyUrl ? makeProxyFetch(proxyUrl) : undefined;
-  const transport = resolveTelegramTransport(proxyFetch, {
-    network: options?.network,
-  });
-
-  return setCachedProbeTransport(cacheKey, transport);
-}
-
-function normalizeBoolean(value: unknown): boolean | null {
-  return typeof value === "boolean" ? value : null;
-}
-
-async function readTelegramDiagnosticBody(response: Response, timeoutMs: number): Promise<Buffer> {
-  return await readResponseWithLimit(response, TELEGRAM_BOT_API_MAX_RESPONSE_BYTES, {
+async function readTelegramDiagnosticJson(response: Response, timeoutMs: number): Promise<unknown> {
+  const body = await readResponseWithLimit(response, TELEGRAM_BOT_API_MAX_RESPONSE_BYTES, {
     timeoutMs,
     chunkTimeoutMs: timeoutMs / 2,
     onIdleTimeout: ({ chunkTimeoutMs }) =>
@@ -117,6 +91,7 @@ async function readTelegramDiagnosticBody(response: Response, timeoutMs: number)
     onTimeout: ({ timeoutMs: resolvedTimeoutMs }) =>
       new Error(`Telegram diagnostic response body timed out after ${resolvedTimeoutMs}ms`),
   });
+  return JSON.parse(body.toString("utf8"));
 }
 
 export async function probeTelegram(
@@ -129,7 +104,12 @@ export async function probeTelegram(
     async ({ startedAt }) => {
       const timeoutBudgetMs = Math.max(1, Math.floor(timeoutMs));
       const deadlineMs = startedAt + timeoutBudgetMs;
-      const options = resolveProbeOptions(proxyOrOptions);
+      const options =
+        typeof proxyOrOptions === "string"
+          ? proxyOrOptions
+            ? { proxyUrl: proxyOrOptions }
+            : undefined
+          : proxyOrOptions;
       const abortSignal = options?.abortSignal;
       const includeWebhookInfo = options?.includeWebhookInfo !== false;
       const apiBase = resolveTelegramApiBase(options?.apiRoot);
@@ -192,14 +172,10 @@ export async function probeTelegram(
         );
       }
 
-      const meJson = JSON.parse(
-        (
-          await readTelegramDiagnosticBody(
-            meRes,
-            Math.min(timeoutBudgetMs, resolveRemainingBudgetMs()),
-          )
-        ).toString("utf8"),
-      ) as {
+      const meJson = (await readTelegramDiagnosticJson(
+        meRes,
+        Math.min(timeoutBudgetMs, resolveRemainingBudgetMs()),
+      )) as {
         ok?: boolean;
         description?: string;
         result?: unknown;
@@ -218,17 +194,17 @@ export async function probeTelegram(
       }
       result.bot = {
         id: typeof bot.id === "number" ? bot.id : null,
-        isBot: normalizeBoolean(bot.is_bot),
+        isBot: asBoolean(bot.is_bot) ?? null,
         firstName: typeof bot.first_name === "string" ? bot.first_name : null,
         username: typeof bot.username === "string" ? bot.username : null,
-        canJoinGroups: normalizeBoolean(bot.can_join_groups),
-        canReadAllGroupMessages: normalizeBoolean(bot.can_read_all_group_messages),
-        canManageBots: normalizeBoolean(bot.can_manage_bots),
-        supportsInlineQueries: normalizeBoolean(bot.supports_inline_queries),
-        canConnectToBusiness: normalizeBoolean(bot.can_connect_to_business),
-        hasMainWebApp: normalizeBoolean(bot.has_main_web_app),
-        hasTopicsEnabled: normalizeBoolean(bot.has_topics_enabled),
-        allowsUsersToCreateTopics: normalizeBoolean(bot.allows_users_to_create_topics),
+        canJoinGroups: asBoolean(bot.can_join_groups) ?? null,
+        canReadAllGroupMessages: asBoolean(bot.can_read_all_group_messages) ?? null,
+        canManageBots: asBoolean(bot.can_manage_bots) ?? null,
+        supportsInlineQueries: asBoolean(bot.supports_inline_queries) ?? null,
+        canConnectToBusiness: asBoolean(bot.can_connect_to_business) ?? null,
+        hasMainWebApp: asBoolean(bot.has_main_web_app) ?? null,
+        hasTopicsEnabled: asBoolean(bot.has_topics_enabled) ?? null,
+        allowsUsersToCreateTopics: asBoolean(bot.allows_users_to_create_topics) ?? null,
       };
 
       if (includeWebhookInfo) {
@@ -237,14 +213,10 @@ export async function probeTelegram(
           const webhookRemainingBudgetMs = resolveRemainingBudgetMs();
           if (webhookRemainingBudgetMs > 0) {
             const webhookRes = await fetchMethod("getWebhookInfo", webhookRemainingBudgetMs);
-            const webhookJson = JSON.parse(
-              (
-                await readTelegramDiagnosticBody(
-                  webhookRes,
-                  Math.min(timeoutBudgetMs, resolveRemainingBudgetMs()),
-                )
-              ).toString("utf8"),
-            ) as {
+            const webhookJson = (await readTelegramDiagnosticJson(
+              webhookRes,
+              Math.min(timeoutBudgetMs, resolveRemainingBudgetMs()),
+            )) as {
               ok?: boolean;
               result?: { url?: string; has_custom_certificate?: boolean };
             };

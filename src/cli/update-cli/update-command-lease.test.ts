@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
+import * as stateMetadata from "../../infra/update-candidate-state.sizes.js";
 import {
   createUpdateRun,
   getUpdateRun,
@@ -55,7 +56,14 @@ vi.mock("../../daemon/gateway-entrypoint.js", () => ({
   resolveGatewayInstallEntrypoint: mocks.entrypoint,
 }));
 vi.mock("./update-command-plugins.js", () => ({ updatePluginsAfterCoreUpdate: mocks.plugins }));
-vi.mock("./progress.js", () => ({ printResult: mocks.print }));
+vi.mock("./progress.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./progress.js")>()),
+  printResult: mocks.print,
+  prepareResult:
+    async (...args: Parameters<typeof import("./progress.js").printResult>) =>
+    () =>
+      mocks.print(...args.slice(0, 3)),
+}));
 vi.mock("./shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./shared.js")>()),
   resolveUpdateRoot: mocks.root,
@@ -110,6 +118,9 @@ let entrypoint: string;
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  vi.spyOn(stateMetadata, "readUpdateStateDatabaseSizes").mockImplementation((files, { signal }) =>
+    stateMetadata.readUpdateStateDatabaseSizesInProcess(files, signal),
+  );
   mocks.publication.mockReset().mockImplementation(async (params, publish) => {
     params.assertCurrent();
     return await publish(async () => params.assertCurrent());
@@ -859,6 +870,7 @@ describe("update orchestration lifecycle ownership", () => {
 
     expect(reportedResult("repair")).toMatchObject({
       status: "warning",
+      coreUpdate: "completed",
       reconciledRuns: [recovery.runId],
     });
     expectRecoveredRun(recoveredAtOutput);
@@ -917,29 +929,6 @@ describe("update orchestration lifecycle ownership", () => {
     expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
   });
 
-  it("continues restart handling with a warning after a final Doctor execution failure", async () => {
-    await writeScenario("current-process", { failDoctor: "post", hostVersion: "1.0.0" });
-    await invoke("current-process");
-    expect(mocks.print.mock.lastCall?.[0]).toMatchObject({
-      status: "ok",
-      postUpdate: {
-        plugins: {
-          status: "warning",
-          warnings: [expect.objectContaining({ reason: "doctor-advisory" })],
-        },
-      },
-      steps: expect.arrayContaining([
-        expect.objectContaining({
-          advisory: expect.objectContaining({ kind: "recoverable-maintenance" }),
-        }),
-      ]),
-    });
-    expect(mocks.restart).toHaveBeenCalledOnce();
-    expect(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBeUndefined();
-    expectDoctorDiagnostics();
-    expect(await events()).toEqual(["post-attempt", "post-acquired", "validate", "readiness"]);
-  });
-
   it.each([
     ["fresh-process" as const, "finding" as const, "post-plugin-update-readiness-failed"],
     [
@@ -955,19 +944,26 @@ describe("update orchestration lifecycle ownership", () => {
     ],
     ["repair" as const, "finding" as const, "post-plugin-update-readiness-failed"],
     ["repair" as const, "execution" as const, "post-plugin-update-readiness-execution-failed"],
-  ])("%s leaves the Gateway stopped after a readiness %s", async (lane, failure, reason) => {
+  ])("%s preserves a readiness %s outcome", async (lane, failure, reason) => {
     await writeScenario(lane, {
       readinessFailure: failure,
       hostVersion: lane === "current-process" ? "1.0.0" : undefined,
     });
 
-    await invokeReportedFailure(lane);
+    if (failure === "finding") {
+      await invokeReportedFailure(lane);
+    } else {
+      await invoke(lane);
+    }
 
     expect(reportedResult(lane)).toMatchObject({
-      status: "error",
-      postUpdate: { plugins: { reason } },
+      status: failure === "finding" ? "error" : lane === "repair" ? "warning" : "ok",
+      ...(lane === "repair" ? { coreUpdate: failure === "finding" ? "pending" : "completed" } : {}),
+      postUpdate: { plugins: { status: failure === "finding" ? "error" : "warning", reason } },
     });
-    expect(mocks.restart).not.toHaveBeenCalled();
+    expect(mocks.restart).toHaveBeenCalledTimes(
+      failure === "execution" && lane !== "repair" ? 1 : 0,
+    );
     expect(await events()).toEqual([
       ...(lane === "repair" ? ["pre-attempt", "pre-acquired"] : []),
       ...(lane === "fresh-process" ? ["packages-acquired", "packages-released"] : []),

@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { deserialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
@@ -7,19 +5,59 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import * as brokerReply from "../../infra/sqlite-worker-broker-reply.js";
 import type { Slot } from "../../infra/sqlite-worker-broker.types.js";
+import type { SqliteWorkerRequest } from "../../infra/sqlite-worker-contract.js";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import { placements, SESSION_ID, sessionTarget } from "./worker-turn-launcher.test-support.js";
 import { useRepositoryWorkspaceResultFixture } from "./workspace-result-repository.test-support.js";
 
-// This fixture clones a local Git origin; no GitHub identity is involved.
-vi.mock("./worker-github-binding.js", () => ({
-  prepareWorkerGitHubBinding: async () => undefined,
+// mock-isolation: This fixture clones a local Git origin without GitHub credentials.
+vi.mock("./repository-github-identity.js", () => ({
+  prepareRepositoryGitHubIdentity: async (_agentId: string, assertCurrent: () => void) => ({
+    token: undefined,
+    assertSelected: assertCurrent,
+    start: async (start: () => Promise<unknown>) => await start(),
+  }),
 }));
+
+function readCommand(request: SqliteWorkerRequest) {
+  const command: unknown = request.type === "execute" ? deserialize(request.input) : undefined;
+  return isRecord(command) ? command : undefined;
+}
 
 describe("repository workspace editor admission", () => {
   const { fixture, readArtifact } = useRepositoryWorkspaceResultFixture();
+  async function editorFixture(incognito: boolean) {
+    const f = await fixture("worker-turn", false, incognito);
+    const original = placements.get(SESSION_ID)!.workspaceBaseManifestRef;
+    const updateManifest = placements.updateWorkspaceBaseManifest.bind(placements);
+    const manifestWrites = vi.spyOn(placements, "updateWorkspaceBaseManifest");
+    return {
+      ...f,
+      manifestWrites,
+      updateManifest,
+      async expectSave(file: string, bytes: string, accepted = false) {
+        expect(manifestWrites).toHaveBeenCalledOnce();
+        const manifestRef = manifestWrites.mock.calls[0]![0].manifestRef;
+        expect(manifestRef).not.toBe(original);
+        expect(placements.get(SESSION_ID)?.workspaceBaseManifestRef).toBe(
+          accepted ? manifestRef : original,
+        );
+        if (accepted) {
+          await f.expectSettled();
+        } else {
+          await f.expectUnaccepted({
+            repositoryWorkspaceId: f.repository.workspaceId,
+            stagedResultRef: expect.any(String),
+          });
+        }
+        const checkpoint = await readArtifact(f.repository.workspaceId, file);
+        expect(checkpoint.preview).toEqual(new Uint8Array(Buffer.from(bytes)));
+      },
+    };
+  }
 
   it.each(
     (["file", "native-incognito"] as const).flatMap((storage) =>
@@ -28,109 +66,61 @@ describe("repository workspace editor admission", () => {
   )(
     "checks $storage repository editor $authority authority at native commit",
     async ({ storage, authority }) => {
-      const f = await fixture("worker-turn", false, storage === "native-incognito");
-      const originalManifestRef = placements.get(SESSION_ID)!.workspaceBaseManifestRef;
+      const f = await editorFixture(storage === "native-incognito");
       const editorBytes = "editor bytes retained for authorized recovery\n";
-      const manifestWrites = vi.spyOn(placements, "updateWorkspaceBaseManifest");
-      const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
       let revoked = false;
-      let commitObserved = false;
-      let measuringCommit = false;
-      const commitSql: string[] = [];
-      const sql = observeHostDataSql((query) => {
-        if (measuringCommit) {
-          commitSql.push(query);
-        }
-      });
-      const admission = vi
-        .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit, attachment) =>
-          createAdmission((request, grant) => {
-            const input = manifestWrites.mock.calls[0]?.[0];
-            const facts =
-              isRecord(request.facts) && request.facts.kind === "session-entry-current"
-                ? request.facts.domainFacts
-                : request.facts;
-            if (
-              request.stage === "commit" &&
-              input &&
-              isRecord(facts) &&
-              isRecord(facts.placement) &&
-              facts.placement.sessionId === input.claim.sessionId &&
-              facts.placement.workspaceBaseManifestRef === input.manifestRef
-            ) {
-              commitObserved = true;
-              revoked = authority === "revoked";
-              measuringCommit = true;
-              try {
-                admit(request, grant);
-              } finally {
-                measuringCommit = false;
-              }
-              return;
-            }
+      let commitSql: string[] | undefined;
+      let liveSql: string[] | undefined;
+      const sql = observeHostDataSql((query) => liveSql?.push(query));
+      const admission = probe.admission(operationAdmission, (request, grant, admit) => {
+        const input = f.manifestWrites.mock.calls[0]?.[0];
+        const facts =
+          isRecord(request.facts) && request.facts.kind === "session-entry-current"
+            ? request.facts.domainFacts
+            : request.facts;
+        if (
+          request.stage === "commit" &&
+          input &&
+          isRecord(facts) &&
+          isRecord(facts.placement) &&
+          facts.placement.sessionId === input.claim.sessionId &&
+          facts.placement.workspaceBaseManifestRef === input.manifestRef
+        ) {
+          revoked = authority === "revoked";
+          liveSql = commitSql ??= [];
+          try {
             admit(request, grant);
-          }, attachment),
-        );
+          } finally {
+            liveSql = undefined;
+          }
+          return;
+        }
+        admit(request, grant);
+      });
       try {
-        placements.get(SESSION_ID);
-        expect(sql.queries.length).toBeGreaterThan(0);
-        const saving = f.mutations.mutate({
-          ...sessionTarget,
-          assertCurrent: () => {
-            if (revoked) {
-              throw new Error("repository editor authority closed");
-            }
-          },
-          mutate: async (assertCurrent) => {
-            assertCurrent();
-            await fs.writeFile(path.join(f.remote, "editor.txt"), editorBytes);
-            return { changed: true, value: "saved" };
-          },
+        const saving = f.save("editor.txt", editorBytes, () => {
+          if (revoked) {
+            throw new Error("repository editor authority closed");
+          }
         });
         if (authority === "revoked") {
           await expect(saving).rejects.toThrow("repository editor authority closed");
         } else {
           await expect(saving).resolves.toBe("saved");
         }
-        expect(commitObserved).toBe(true);
         expect(commitSql).toEqual([]);
         expect(revoked).toBe(authority === "revoked");
-        expect(manifestWrites).toHaveBeenCalledOnce();
-        expect(manifestWrites.mock.calls[0]![0].manifestRef).not.toBe(originalManifestRef);
-        expect(placements.get(SESSION_ID)?.workspaceBaseManifestRef).toBe(
-          authority === "revoked"
-            ? originalManifestRef
-            : manifestWrites.mock.calls[0]![0].manifestRef,
-        );
-        if (authority === "revoked") {
-          expect(await placements.listPendingWorkspaceResultsAsync(SESSION_ID)).toMatchObject([
-            {
-              repositoryWorkspaceId: f.repository.workspaceId,
-              stagedResultRef: expect.any(String),
-              workspaceAcceptedAtMs: null,
-              recoveryRequestedAtMs: expect.any(Number),
-            },
-          ]);
-        } else {
-          expect(await placements.listPendingWorkspaceResultsAsync(SESSION_ID)).toEqual([]);
-          expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
-        }
-        const checkpoint = await readArtifact(f.repository.workspaceId, "editor.txt");
-        expect(checkpoint.preview).toEqual(new Uint8Array(Buffer.from(editorBytes)));
+        await f.expectSave("editor.txt", editorBytes, authority === "healthy");
       } finally {
         sql.restore();
         admission.mockRestore();
-        manifestWrites.mockRestore();
+        f.manifestWrites.mockRestore();
       }
     },
   );
 
-  it("rejects a queued repository manifest after its native session binding changes", async ({
-    signal,
-  }) => {
-    const f = await fixture("worker-turn", false, true);
-    const originalManifestRef = placements.get(SESSION_ID)!.workspaceBaseManifestRef;
+  it("fences queued manifests after session rebinding", async ({ signal }) => {
+    const f = await editorFixture(true);
     const replacement = await f.store.create({
       agentId: sessionTarget.agentId,
       sessionKey: "agent:main:dashboard:incognito-replacement",
@@ -143,9 +133,7 @@ describe("repository workspace editor admission", () => {
     const manifestQueued = createDeferredCore();
     const receive = brokerReply.receiveSqliteWorkerReply;
     const dispatch = brokerReply.dispatchSqliteWorkerJob;
-    const dispatchedSlots = new WeakMap<object, Slot>();
-    const runOperation = stateWorker.runOpenClawStateWorkerOperation;
-    const updateManifest = placements.updateWorkspaceBaseManifest.bind(placements);
+    const predecessorRequests = new WeakMap<object, Slot>();
     let holding = false;
     let heldSlot: Slot | undefined;
     let deliver: (() => void) | undefined;
@@ -159,8 +147,15 @@ describe("repository workspace editor admission", () => {
     const dispatches = vi
       .spyOn(brokerReply, "dispatchSqliteWorkerJob")
       .mockImplementation((slot, job, onRejected) => {
-        dispatchedSlots.set(slot, slot);
-        dispatch(slot, job, onRejected);
+        const command = readCommand(job.request);
+        if (
+          command?.type === "repositoryWorkspaces.get" &&
+          isRecord(command.input) &&
+          command.input.workspaceId === f.repository.workspaceId
+        ) {
+          predecessorRequests.set(job.request, slot);
+        }
+        return dispatch(slot, job, onRejected);
       });
     const replies = vi
       .spyOn(brokerReply, "receiveSqliteWorkerReply")
@@ -168,68 +163,37 @@ describe("repository workspace editor admission", () => {
         if (
           holding &&
           !heldSlot &&
-          slot.current?.request.type === "execute" &&
+          slot.current &&
+          predecessorRequests.has(slot.current.request) &&
           reply.ok &&
           !reply.transfer &&
           !reply.input
         ) {
-          const command: unknown = deserialize(slot.current.request.input);
-          if (
-            isRecord(command) &&
-            command.type === "repositoryWorkspaces.get" &&
-            isRecord(command.input) &&
-            command.input.workspaceId === f.repository.workspaceId
-          ) {
-            heldSlot = dispatchedSlots.get(slot);
-            if (!heldSlot) {
-              throw new Error("Repository predecessor has no observed native dispatch");
-            }
-            deliver = () => receive(slot, reply, owner);
-            predecessorHeld.resolve();
-            if (signal.aborted) {
-              release();
-            }
-            return;
+          heldSlot = predecessorRequests.get(slot.current.request);
+          deliver = () => receive(slot, reply, owner);
+          predecessorHeld.resolve();
+          if (signal.aborted) {
+            release();
           }
+          return;
         }
         receive(slot, reply, owner);
       });
-    const operations = vi
-      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-      .mockImplementation((context, operation, options) =>
-        runOperation(
-          context,
-          (scope) =>
-            operation({
-              execute: (command, executeOptions) => {
-                const pending = scope.execute(command, executeOptions);
-                if (command.type === "placementTurns.updateWorkspaceBaseManifest") {
-                  manifestQueued.resolve();
-                }
-                return pending;
-              },
-            }),
-          options,
-        ),
-      );
-    const manifestWrites = vi
-      .spyOn(placements, "updateWorkspaceBaseManifest")
-      .mockImplementation(async (...args) => {
-        holding = true;
-        predecessor = f.store.get(f.repository.workspaceId);
-        void predecessor.catch(predecessorHeld.reject);
-        await predecessorHeld.promise;
-        return updateManifest(...args);
-      });
-    const saving = f.mutations.mutate({
-      ...sessionTarget,
-      assertCurrent: () => {},
-      mutate: async (assertCurrent) => {
-        assertCurrent();
-        await fs.writeFile(path.join(f.remote, "queued-editor.txt"), editorBytes);
-        return { changed: true, value: "saved" };
-      },
+    const operations = probe.command(stateWorker, (command, executeOptions, scope) => {
+      const pending = scope.execute(command, executeOptions);
+      if (command.type === "placementTurns.updateWorkspaceBaseManifest") {
+        manifestQueued.resolve();
+      }
+      return pending;
     });
+    f.manifestWrites.mockImplementation(async (...args) => {
+      holding = true;
+      predecessor = f.store.get(f.repository.workspaceId);
+      void predecessor.catch(predecessorHeld.reject);
+      await predecessorHeld.promise;
+      return f.updateManifest(...args);
+    });
+    const saving = f.save("queued-editor.txt", editorBytes);
     void saving.catch(() => {});
     try {
       await Promise.race([
@@ -239,13 +203,9 @@ describe("repository workspace editor admission", () => {
         }),
       ]);
       expect(
-        heldSlot?.queue.some((job) => {
-          if (job.request.type !== "execute") {
-            return false;
-          }
-          const command: unknown = deserialize(job.request.input);
-          return isRecord(command) && command.type === "placementTurns.updateWorkspaceBaseManifest";
-        }),
+        heldSlot?.queue.some(
+          (job) => readCommand(job.request)?.type === "placementTurns.updateWorkspaceBaseManifest",
+        ),
       ).toBe(true);
       // The real predecessor has settled natively; only its ordinary reply holds the FIFO.
       const updated = await patchSessionEntryCore(
@@ -257,24 +217,12 @@ describe("repository workspace editor admission", () => {
       release();
       await predecessor;
       await expect(saving).rejects.toThrow("lost its exact session placement owner");
-      expect(manifestWrites).toHaveBeenCalledOnce();
-      expect(manifestWrites.mock.calls[0]![0].manifestRef).not.toBe(originalManifestRef);
-      expect(placements.get(SESSION_ID)?.workspaceBaseManifestRef).toBe(originalManifestRef);
-      expect(await placements.listPendingWorkspaceResultsAsync(SESSION_ID)).toMatchObject([
-        {
-          repositoryWorkspaceId: f.repository.workspaceId,
-          stagedResultRef: expect.any(String),
-          workspaceAcceptedAtMs: null,
-          recoveryRequestedAtMs: expect.any(Number),
-        },
-      ]);
-      const checkpoint = await readArtifact(f.repository.workspaceId, "queued-editor.txt");
-      expect(checkpoint.preview).toEqual(new Uint8Array(Buffer.from(editorBytes)));
+      await f.expectSave("queued-editor.txt", editorBytes);
     } finally {
       release();
       await Promise.allSettled([saving, ...(predecessor ? [predecessor] : [])]);
       signal.removeEventListener("abort", release);
-      manifestWrites.mockRestore();
+      f.manifestWrites.mockRestore();
       operations.mockRestore();
       replies.mockRestore();
       dispatches.mockRestore();

@@ -4,16 +4,13 @@ import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString as trimToValue } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
+import { ensureRepoBoundDirectory, resolveTimestampedQaOutputDir } from "../cli-paths.js";
 import {
   copyCrabboxArtifacts,
   type CommandRunner,
-  defaultCommandRunner,
   createMantisCrabboxSession,
-  resolveCrabboxBin,
   renderMantisBrowserDiscoveryScript,
   renderMantisDesktopRecordingScript,
-  resolveMantisCrabboxLeaseOptions,
   type MantisCrabboxLeaseOptions,
   shellQuote,
 } from "./crabbox-runtime.js";
@@ -47,11 +44,6 @@ const DEFAULT_BROWSER_URL = "https://openclaw.ai";
 const BROWSER_PROFILE_ARCHIVE_ENV = "OPENCLAW_MANTIS_BROWSER_PROFILE_TGZ_B64";
 const BROWSER_PROFILE_DIR_ENV = "OPENCLAW_MANTIS_BROWSER_PROFILE_DIR";
 const DEFAULT_VIDEO_DURATION_SECONDS = 10;
-
-function defaultOutputDir(repoRoot: string, startedAt: Date) {
-  const stamp = startedAt.toISOString().replace(/[:.]/gu, "-");
-  return path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", `desktop-browser-${stamp}`);
-}
 
 function assertSafeEnvName(value: string, label: string) {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(value)) {
@@ -192,25 +184,18 @@ export async function runMantisDesktopBrowserSmoke(
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const outputDir = await ensureRepoBoundDirectory(
     repoRoot,
-    resolveRepoRelativeOutputDir(repoRoot, opts.outputDir) ?? defaultOutputDir(repoRoot, startedAt),
+    resolveTimestampedQaOutputDir(repoRoot, opts.outputDir, startedAt, "mantis/desktop-browser"),
     "Mantis desktop browser smoke output directory",
     { mode: 0o755 },
   );
   const summaryPath = path.join(outputDir, "mantis-desktop-browser-smoke-summary.json");
   const reportPath = path.join(outputDir, "mantis-desktop-browser-smoke-report.md");
-  const crabboxBin = await resolveCrabboxBin({
-    env,
-    explicit: opts.crabboxBin,
-    repoRoot,
-  });
-  const {
-    provider,
-    machineClass,
-    idleTimeout,
-    ttl,
-    leaseId: explicitLeaseId,
-    keepLease,
-  } = resolveMantisCrabboxLeaseOptions(opts, env);
+  // Browser capture does not build OpenClaw; heavier Mantis tasks keep the shared default.
+  const session = await createMantisCrabboxSession(
+    opts,
+    { repoRoot, env },
+    { machineClass: "tiny" },
+  );
   const htmlFileOption = trimToValue(opts.htmlFile);
   const htmlFile = htmlFileOption
     ? resolveRepoBoundFile(repoRoot, htmlFileOption, "Mantis desktop HTML file")
@@ -233,18 +218,9 @@ export async function runMantisDesktopBrowserSmoke(
     1,
     Math.floor(opts.videoDurationSeconds ?? DEFAULT_VIDEO_DURATION_SECONDS),
   );
-  const runner = opts.commandRunner ?? defaultCommandRunner;
   const remoteOutputDir = `/tmp/openclaw-mantis-desktop-${startedAt
     .toISOString()
     .replace(/[^0-9A-Za-z]/gu, "-")}`;
-  const session = createMantisCrabboxSession({
-    crabboxBin,
-    cwd: repoRoot,
-    env,
-    leaseId: explicitLeaseId,
-    provider,
-    runner,
-  });
   const summary: MantisDesktopBrowserSmokeSummary = {
     artifacts: { reportPath, summaryPath },
     browserUrl,
@@ -258,35 +234,18 @@ export async function runMantisDesktopBrowserSmoke(
   };
 
   try {
-    const leaseId = await session.acquire({ idleTimeout, machineClass, ttl });
+    await session.acquire();
     const inspected = await session.inspect();
-    await runner(
-      crabboxBin,
-      [
-        "run",
-        "--provider",
-        provider,
-        "--id",
-        leaseId,
-        "--desktop",
-        "--browser",
-        "--no-sync",
-        "--shell",
-        "--",
-        renderRemoteScript({
-          browserProfileArchiveEnv,
-          browserProfileDir,
-          browserUrl,
-          htmlBase64,
-          remoteOutputDir,
-          videoDurationSeconds,
-        }),
-      ],
-      {
-        cwd: repoRoot,
-        env,
-        stdio: "inherit",
-      },
+    await session.runShell(
+      renderRemoteScript({
+        browserProfileArchiveEnv,
+        browserProfileDir,
+        browserUrl,
+        htmlBase64,
+        remoteOutputDir,
+        videoDurationSeconds,
+      }),
+      ["--no-sync"],
     );
     await copyCrabboxArtifacts({
       cwd: repoRoot,
@@ -295,7 +254,7 @@ export async function runMantisDesktopBrowserSmoke(
       inspect: inspected,
       outputDir,
       remoteOutputDir,
-      runner,
+      runner: session.runner,
     });
     const screenshotPath = path.join(outputDir, "desktop-browser-smoke.png");
     const videoPath = path.join(outputDir, "desktop-browser-smoke.mp4");
@@ -314,8 +273,8 @@ export async function runMantisDesktopBrowserSmoke(
     summary.finishedAt = new Date().toISOString();
     await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
     await fs.writeFile(reportPath, renderReport(summary), "utf8");
-    if (summary.status === "pass" && session.createdLease && session.leaseId && !keepLease) {
-      await session.stop();
+    if (summary.status === "pass") {
+      await session.stopIfOwned();
     }
   }
   return {

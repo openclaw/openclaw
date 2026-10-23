@@ -10,6 +10,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/plistbuddy.sh"
+source "$ROOT_DIR/scripts/lib/mac-disk-image.sh"
 source "$ROOT_DIR/scripts/lib/mac-signing-identity.sh"
 source "$ROOT_DIR/scripts/lib/swift-toolchain.sh"
 RECOVERY_DIR="$ROOT_DIR/dist/macos-notarization-recovery"
@@ -234,12 +235,16 @@ audit_app_async_frames() {
 
 audit_retained_dmg_async_frames() (
   set -euo pipefail
+  dmg="$1"
   mount_dir="$(mktemp -d "$ROOT_DIR/dist/.notary-dmg.XXXXXX")"
   mounted=0
   cleanup_audit_mount() {
     local result=$?
     if [[ "$mounted" == "1" ]]; then
       hdiutil detach "$mount_dir" >/dev/null || result=1
+    else
+      # A failed attach can leave the DMG's devices attached without a mount.
+      detach_disk_image "$dmg" || result=1
     fi
     rmdir "$mount_dir" || result=1
     exit "$result"
@@ -247,7 +252,7 @@ audit_retained_dmg_async_frames() (
   trap cleanup_audit_mount EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM HUP
-  hdiutil attach -readonly -nobrowse -mountpoint "$mount_dir" "$1" >/dev/null
+  hdiutil attach -readonly -nobrowse -mountpoint "$mount_dir" "$dmg" >/dev/null
   mounted=1
   audit_app_async_frames "$mount_dir/OpenClaw.app"
 )

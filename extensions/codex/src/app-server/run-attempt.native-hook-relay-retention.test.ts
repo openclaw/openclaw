@@ -319,7 +319,7 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
         "unambiguous receiver turn",
       );
       await expect(invoke("parent-b", "unbound-root", "reserved-root")).rejects.toThrow(
-        "receiver turn to be bound",
+        "outside the sender's admitted tree",
       );
       expect(() => capture.assertCurrent()).not.toThrow();
       await expect(

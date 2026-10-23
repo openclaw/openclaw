@@ -13,17 +13,52 @@ export function registerManagedCampaignFailureTests(
   ) => Promise<ManagedServiceManagerBoundaryResult>,
   itUnix: ReturnType<typeof import("vitest").it.runIf>,
 ): void {
-  itUnix.each([undefined, "consumed-before-exit"] as const)(
-    "records the child's early refusal without its notification (%s)",
-    async (updaterNotification) => {
+  itUnix.each(["healthy", "failed", undefined] as const)(
+    "preserves the updater's recorded recovery in preflight triage (service=%s)",
+    async (service) => {
+      const { commands, parentSignal, state } = await runManagedServiceManagerBoundary("systemd", {
+        controlDisconnect: "transferred",
+        validationResult: "child-result",
+        helperExitCode: 7,
+        updaterResult: {
+          status: "error",
+          mode: "git",
+          reason: "preflight-node-runtime-incompatible",
+          recovery: { serviceRestartSafe: true, version: "1.0.0", service },
+        },
+      });
+      expect(commands).toEqual([]);
+      expect(parentSignal).toBeNull();
+      expect(state.parked).toBeUndefined();
+      expect(state.restored).toBeUndefined();
+      expect(state.triageCalls).toBe(1);
+      expect(state.triageInput).toMatchObject({
+        error: expect.stringContaining(
+          service === "healthy"
+            ? "Service recovery succeeded."
+            : service === "failed"
+              ? "Service recovery failed."
+              : "Service recovery outcome was not recorded",
+        ),
+      });
+    },
+  );
+
+  itUnix.each([
+    { updaterNotification: undefined, structuredFacts: false },
+    { updaterNotification: "consumed-before-exit", structuredFacts: true },
+  ] as const)(
+    "records the child's early refusal without its notification ($updaterNotification)",
+    async ({ updaterNotification, structuredFacts }) => {
       const reason = "update-recovery-pending";
-      const repair =
-        "Retained package activation is prepared. Run openclaw update repair before retrying.";
+      const diagnostic =
+        "Package publication recovery permissions are unsafe: /fixture/.openclaw.package-activation-test (mode 0750, nlink 2).";
+      const failureMessage = "Package publication is incomplete.";
       const facts = [
         {
           check: "package-activation",
           code: reason,
-          message: "Package publication is incomplete.",
+          message: failureMessage,
         },
       ];
       const { commands, parentSignal, run, state, sentinel, sensitiveFilesRemoved } =
@@ -46,8 +81,8 @@ export function registerManagedCampaignFailureTests(
                 cwd: "",
                 durationMs: 0,
                 exitCode: 1,
-                failureFacts: facts,
-                diagnostics: [repair],
+                ...(structuredFacts ? { failureFacts: facts } : {}),
+                diagnostics: [diagnostic],
                 stdoutTail: updaterNotification ? undefined : "diagnostic context ".repeat(4_000),
               },
             ],
@@ -67,19 +102,19 @@ export function registerManagedCampaignFailureTests(
           expect.objectContaining({
             step: "package-activation",
             status: "failed",
-            failureFacts: facts,
+            ...(structuredFacts ? { failureFacts: facts } : {}),
           }),
-          expect.objectContaining({ step: "diagnostic:package-activation", detail: repair }),
+          expect.objectContaining({ step: "diagnostic:package-activation", detail: diagnostic }),
           expect.objectContaining({
             step: "managed-service-handoff",
             status: "failed",
-            detail: "managed-service-handoff-failed",
+            detail: `${reason}: ${structuredFacts ? failureMessage : diagnostic}`,
           }),
         ]),
       );
       const report = renderUpdateRunReport(recorded).markdown;
       expect(report).toContain(reason);
-      expect(report).toContain("Package publication is incomplete.");
+      expect(report).toContain(structuredFacts ? failureMessage : diagnostic);
     },
   );
 
@@ -126,21 +161,13 @@ export function registerManagedCampaignFailureTests(
               .spyOn(handoff, "transferManagedServiceUpdateHandoff")
               .mockImplementationOnce(async () => {
                 if (diagnosticFailure) {
-                  const codec = await import("./update-run-codec.js");
-                  const encode = codec.encodeRun;
+                  const worker = await import("../state/openclaw-state-worker-store.js");
+                  const execute = worker.runOpenClawStateWorkerOperation;
                   const write = vi
-                    .spyOn(codec, "encodeRun")
-                    .mockImplementation((record, options) => {
-                      if (
-                        record.steps.some((step) =>
-                          step.failureFacts?.some((fact) => fact.check === "managed-service"),
-                        )
-                      ) {
-                        write.mockRestore();
-                        throw new Error("diagnostic ledger is read-only");
-                      }
-                      return encode(record, options);
-                    });
+                    .spyOn(worker, "runOpenClawStateWorkerOperation")
+                    // Keep the requested failure durable, then reject its optional diagnostics.
+                    .mockImplementationOnce(execute)
+                    .mockRejectedValueOnce(new Error("diagnostic ledger is read-only"));
                   restoreDiagnosticFailure = () => write.mockRestore();
                 }
                 throw new Error("automatic transfer failed");

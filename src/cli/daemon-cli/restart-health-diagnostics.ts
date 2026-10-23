@@ -103,6 +103,12 @@ export function formatGatewayRestartFailure(params: {
     const message = formatGatewayStillStarting(params.health);
     return { statusLine: message, failMessage: message };
   }
+  if (params.health.waitOutcome === "port-held") {
+    const message =
+      params.health.probeError ??
+      `Gateway port ${params.port} is held by another process. Inspect it with openclaw gateway status --deep.`;
+    return { statusLine: message, failMessage: message };
+  }
   if (params.health.waitOutcome === "stopped-free") {
     const elapsedSeconds = Math.max(1, Math.round((params.health.elapsedMs ?? 0) / 1000));
     return {
@@ -127,4 +133,29 @@ export function formatGatewayRestartFailure(params: {
     statusLine: `Timed out after ${timeoutSeconds}s waiting for gateway port ${params.port} to become healthy.`,
     failMessage: `Gateway restart timed out after ${timeoutSeconds}s waiting for health checks.`,
   };
+}
+
+export function getGatewayChannelWarnings(
+  health: Pick<
+    GatewayRestartSnapshot,
+    "channelProbeErrors" | "channelProbeTimeouts" | "channelRuntimeWarnings"
+  >,
+  http?: { failingChannels?: string[] },
+): Array<{ id: string; error: string }> {
+  const warnings = new Map<string, { id: string; error: string }>();
+  for (const warning of [
+    ...(health.channelProbeErrors ?? []),
+    ...(health.channelProbeTimeouts ?? []),
+    ...(health.channelRuntimeWarnings ?? []),
+  ]) {
+    if (!warnings.has(warning.id)) {
+      warnings.set(warning.id, warning);
+    }
+  }
+  for (const id of http?.failingChannels ?? []) {
+    if (![...warnings.keys()].some((key) => key === id || key.startsWith(`${id}/`))) {
+      warnings.set(id, { id, error: "channel readiness unavailable" });
+    }
+  }
+  return [...warnings.values()];
 }

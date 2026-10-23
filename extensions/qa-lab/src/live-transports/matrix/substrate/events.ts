@@ -27,7 +27,6 @@ type MatrixQaObservedEventAttachment = {
 type MatrixQaObservedApproval = {
   agentId?: string;
   allowedDecisions?: string[];
-  commandTextPreview?: string;
   hasCommandText?: boolean;
   id: string;
   kind: ChannelApprovalKind;
@@ -73,7 +72,6 @@ export type MatrixQaObservedEvent = {
 };
 
 const MATRIX_QA_APPROVAL_METADATA_KEY = "com.openclaw.approval";
-const MATRIX_QA_APPROVAL_COMMAND_PREVIEW_CHARS = 160;
 
 function readNonEmptyStringEntries(value: unknown) {
   return Array.isArray(value)
@@ -123,20 +121,9 @@ function resolveMatrixQaObservedEventKind(params: { msgtype?: string; type: stri
 }
 
 function resolveMatrixQaAttachmentKind(msgtype: string | undefined) {
-  switch (msgtype) {
-    case "m.audio":
-      return "audio" as const;
-    case "m.file":
-      return "file" as const;
-    case "m.image":
-      return "image" as const;
-    case "m.sticker":
-      return "sticker" as const;
-    case "m.video":
-      return "video" as const;
-    default:
-      return undefined;
-  }
+  return (["audio", "file", "image", "sticker", "video"] as const).find(
+    (kind) => msgtype === `m.${kind}`,
+  );
 }
 
 function isLikelyMatrixQaFilenameBody(value: string) {
@@ -176,8 +163,6 @@ function normalizeMatrixQaApprovalMetadata(value: unknown): MatrixQaObservedAppr
     return undefined;
   }
   const commandText = readStringField(metadata, "commandText")?.trim();
-  const commandPreview = readStringField(metadata, "commandPreview")?.trim();
-  const commandTextPreview = commandPreview?.slice(0, MATRIX_QA_APPROVAL_COMMAND_PREVIEW_CHARS);
   return {
     id,
     kind,
@@ -189,7 +174,6 @@ function normalizeMatrixQaApprovalMetadata(value: unknown): MatrixQaObservedAppr
       ? { allowedDecisions: readNonEmptyStringEntries(metadata.allowedDecisions) }
       : {}),
     ...(commandText ? { hasCommandText: true } : {}),
-    ...(commandTextPreview ? { commandTextPreview } : {}),
     ...(kind === "plugin" && typeof metadata.pluginId === "string"
       ? { pluginId: metadata.pluginId }
       : {}),

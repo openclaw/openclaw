@@ -11,17 +11,18 @@ import {
   stripPreflightEnvPrefix,
 } from "./bash-tools.exec-script-target.js";
 
-function extractUnquotedShellText(raw: string): string | null {
-  let out = "";
+function scanUnquotedShellText(
+  raw: string,
+  onText: (text: string, escaped: boolean) => boolean,
+  onQuote?: () => boolean,
+): "match" | "complete" | "incomplete" {
   let quote: "'" | '"' | undefined;
   let escaped = false;
 
   for (const ch of raw) {
     if (escaped) {
-      if (!quote) {
-        // Preserve escapes outside quotes so downstream heuristics can distinguish
-        // escaped literals (e.g. `\|`) from executable shell operators.
-        out += `\\${ch}`;
+      if (!quote && onText(ch, true)) {
+        return "match";
       }
       escaped = false;
       continue;
@@ -37,16 +38,28 @@ function extractUnquotedShellText(raw: string): string | null {
       continue;
     }
     if (ch === "'" || ch === '"') {
+      if (onQuote?.()) {
+        return "match";
+      }
       quote = ch;
       continue;
     }
-    out += ch;
+    if (onText(ch, false)) {
+      return "match";
+    }
   }
 
-  if (escaped || quote) {
-    return null;
-  }
-  return out;
+  return escaped || quote ? "incomplete" : "complete";
+}
+
+function extractUnquotedShellText(raw: string): string | null {
+  let out = "";
+  const scanned = scanUnquotedShellText(raw, (text, escaped) => {
+    // Preserve escaped operators outside quotes for downstream heuristics.
+    out += escaped ? `\\${text}` : text;
+    return false;
+  });
+  return scanned === "incomplete" ? null : out;
 }
 
 function splitShellSegmentsOutsideQuotes(
@@ -142,8 +155,6 @@ function hasUnescapedSequence(raw: string, sequence: string): boolean {
 }
 
 function hasUnquotedScriptHint(raw: string): boolean {
-  let quote: "'" | '"' | undefined;
-  let escaped = false;
   let token = "";
 
   const flushToken = (): boolean => {
@@ -155,40 +166,19 @@ function hasUnquotedScriptHint(raw: string): boolean {
     return false;
   };
 
-  for (const ch of raw) {
-    if (escaped) {
-      if (!quote) {
-        token += ch;
-      }
-      escaped = false;
-      continue;
-    }
-    if (quote !== "'" && ch === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (quote) {
-      if (ch === quote) {
-        quote = undefined;
-      }
-      continue;
-    }
-    if (ch === "'" || ch === '"') {
-      if (flushToken()) {
-        return true;
-      }
-      quote = ch;
-      continue;
-    }
-    if (/\s/u.test(ch) || "|&;()<>".includes(ch)) {
-      if (flushToken()) {
-        return true;
-      }
-      continue;
-    }
-    token += ch;
-  }
-  return flushToken();
+  return (
+    scanUnquotedShellText(
+      raw,
+      (text, escaped) => {
+        if (!escaped && (/\s/u.test(text) || "|&;()<>".includes(text))) {
+          return flushToken();
+        }
+        token += text;
+        return false;
+      },
+      flushToken,
+    ) === "match" || flushToken()
+  );
 }
 
 function resolveLeadingShellSegmentExecutable(rawSegment: string): string | undefined {
@@ -213,14 +203,9 @@ function analyzeInterpreterHeuristicsFromUnquoted(raw: string): {
   const hasNode = executables.includes("node");
   const hasProcessSubstitution = hasUnescapedSequence(raw, "<(") || hasUnescapedSequence(raw, ">(");
   const hasComplexSyntax =
-    hasUnescapedSequence(raw, "|") ||
-    hasUnescapedSequence(raw, "&&") ||
-    hasUnescapedSequence(raw, "||") ||
-    hasUnescapedSequence(raw, ";") ||
+    ["|", "&&", "||", ";", "$(", "`"].some((sequence) => hasUnescapedSequence(raw, sequence)) ||
     raw.includes("\n") ||
     raw.includes("\r") ||
-    hasUnescapedSequence(raw, "$(") ||
-    hasUnescapedSequence(raw, "`") ||
     hasProcessSubstitution;
   const hasScriptHint = hasUnquotedScriptHint(raw);
 
@@ -319,44 +304,27 @@ export function shouldFailClosedInterpreterPreflight(command: string): {
 
     if (/^python(?:3(?:\.\d+)?)?$/i.test(executable)) {
       const pythonInfoOnlyFlags = new Set(["-V", "--version", "-h", "--help"]);
-      if (argsLocal.some((arg) => pythonInfoOnlyFlags.has(arg))) {
-        return false;
-      }
-      if (
-        argsLocal.some(
-          (arg) =>
-            arg === "-c" ||
-            arg === "-m" ||
-            arg.startsWith("-c") ||
-            arg.startsWith("-m") ||
-            arg === "--check-hash-based-pycs",
-        )
-      ) {
-        return false;
-      }
-      return true;
+      return !argsLocal.some(
+        (arg) =>
+          pythonInfoOnlyFlags.has(arg) ||
+          arg.startsWith("-c") ||
+          arg.startsWith("-m") ||
+          arg === "--check-hash-based-pycs",
+      );
     }
 
     if (executable === "node") {
       const nodeInfoOnlyFlags = new Set(["-v", "--version", "-h", "--help", "-c", "--check"]);
-      if (argsLocal.some((arg) => nodeInfoOnlyFlags.has(arg))) {
-        return false;
-      }
-      if (
-        argsLocal.some(
-          (arg) =>
-            arg === "-e" ||
-            arg === "-p" ||
-            arg === "--eval" ||
-            arg === "--print" ||
-            arg.startsWith("--eval=") ||
-            arg.startsWith("--print=") ||
-            ((arg.startsWith("-e") || arg.startsWith("-p")) && arg.length > 2),
-        )
-      ) {
-        return false;
-      }
-      return true;
+      return !argsLocal.some(
+        (arg) =>
+          nodeInfoOnlyFlags.has(arg) ||
+          arg.startsWith("-e") ||
+          arg.startsWith("-p") ||
+          arg === "--eval" ||
+          arg === "--print" ||
+          arg.startsWith("--eval=") ||
+          arg.startsWith("--print="),
+      );
     }
 
     return false;

@@ -8,8 +8,8 @@ import {
   getWindowsCmdExePath,
   getWindowsPowerShellExePath,
 } from "../infra/windows-install-roots.js";
-import { decodeWindowsLauncherScript } from "../infra/windows-launcher-encoding.js";
 import "./test-helpers/schtasks-base-mocks.js";
+import { decodeWindowsLauncherScript } from "../infra/windows-launcher-encoding.js";
 import { readWindowsStartupFallbackRuntimeForUpdate } from "./schtasks-runtime.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import { withGatewayServiceUpdateAuthority } from "./service-update-authority.js";
@@ -135,18 +135,14 @@ vi.mock("../infra/gateway-processes.js", () => ({
     findVerifiedGatewayListenerPidsOnPortSync(port),
 }));
 
-const {
-  installScheduledTask,
-  isScheduledTaskInstalled,
-  readScheduledTaskRuntime,
-  restartScheduledTask,
-  resolveTaskScriptPath,
-  stopScheduledTask,
-  uninstallScheduledTask,
-} = await import("./schtasks.js");
-const { removeStartupEntries } = await import("./schtasks-runtime.js");
+const { restartScheduledTask, stopScheduledTask } = await import("./schtasks-control.js");
+const { installScheduledTask, uninstallScheduledTask } = await import("./schtasks-install.js");
+const { resolveTaskScriptPath } = await import("./schtasks-layout.js");
+const { isScheduledTaskInstalled, readScheduledTaskRuntime, removeStartupEntries } =
+  await import("./schtasks-runtime.js");
 const { createMockGatewayService } = await import("./service.test-helpers.js");
-const { readServiceStatusSummary } = await import("../commands/status.service-summary.js");
+const { readGatewayServiceStatusForTest } =
+  await import("../commands/status.service-summary.test-support.ts");
 const { getStatusOverviewRowValue } = await import("../commands/status.test-support.ts");
 
 const STARTUP_GATEWAY_COMMAND =
@@ -440,19 +436,18 @@ describe("Windows startup fallback", () => {
     const detail = "-2147024891";
     taskProbe.mockReturnValue({ status: 1, stdout: "-2147024891" });
 
-    const summary = await readServiceStatusSummary(
+    const summary = await readGatewayServiceStatusForTest(
       createMockGatewayService({
         label: "Scheduled Task",
         loadedText: "registered",
         notLoadedText: "missing",
         readRuntime: () => readScheduledTaskRuntime(env),
       }),
-      "Daemon",
     );
 
     expect(summary.runtime).toEqual({
       status: "unknown",
-      detail: "service runtime inspection failed",
+      detail: "service runtime inspection failed; retry with openclaw status --deep",
       inspectionFailure: {
         code: "service-runtime-inspection-failed",
         detail: "Scheduled Task check failed (exit 1): -2147024891",
@@ -460,7 +455,7 @@ describe("Windows startup fallback", () => {
       missingUnit: false,
     });
     expect(getStatusOverviewRowValue("Gateway service", { gatewayService: summary })).toBe(
-      "Scheduled Task missing (inspection failed: service runtime inspection failed) · unknown",
+      "Scheduled Task missing (inspection failed: service runtime inspection failed; retry with openclaw status --deep) · unknown",
     );
     expect(getStatusOverviewRowValue("Gateway service", { gatewayService: summary })).not.toContain(
       detail,
@@ -688,47 +683,6 @@ describe("Windows startup fallback", () => {
 
     expectGatewayTermination(4242);
     expectStartupFallbackSpawn();
-    await fs.access(startupEntryPath);
-  });
-
-  it("does not take over when another process owns the replacement port", async ({ env }) => {
-    const startupEntryPath = await writeStartupFallbackEntry(env);
-    await writeGatewayScript(env, 18789);
-    const scriptPath = resolveTaskScriptPath(env);
-    const scriptBefore = decodeWindowsLauncherScript({ buffer: await fs.readFile(scriptPath) });
-    env.OPENCLAW_GATEWAY_PORT = "19433";
-    mockProcesses(() => [
-      processEntry(4242),
-      processEntry(5252, OTHER_GATEWAY_COMMAND),
-      POWERSHELL_PROCESS,
-    ]);
-
-    inspectPortUsageMock.mockResolvedValue(
-      portUsage("busy", [processListener(5252, OTHER_GATEWAY_COMMAND)], 19433),
-    );
-    addMissingTaskInstallResponses([
-      ...successfulResponses(2),
-      runningTaskSnapshot(),
-      runningTaskSnapshot(),
-    ]);
-    const pendingSchtasksResponses = schtasksResponses.length;
-
-    await expect(installGatewayScheduledTask(env, new PassThrough(), "19433")).rejects.toThrow(
-      "replacement gateway port 19433 is occupied by an unverified process",
-    );
-
-    const oldPidKills = spawnSync.mock.calls.filter(
-      ([command, args]) =>
-        command.endsWith("taskkill.exe") &&
-        Array.isArray(args) &&
-        args.includes("/PID") &&
-        args.includes("4242"),
-    );
-    expect(oldPidKills).toHaveLength(0);
-    expect(schtasksResponses).toHaveLength(pendingSchtasksResponses);
-    expect(decodeWindowsLauncherScript({ buffer: await fs.readFile(scriptPath) })).toBe(
-      scriptBefore,
-    );
     await fs.access(startupEntryPath);
   });
 

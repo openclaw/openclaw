@@ -8,10 +8,6 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeCommentFileType, type CommentFileType } from "./comment-target.js";
 import { captureFeishuSendAuthority } from "./send-context.js";
-import {
-  getFeishuSendRateLimitCode,
-  getFeishuSendRateLimitCodeFromResponse,
-} from "./send-rate-limit.js";
 
 export type FeishuDriveCommentReply = {
   reply_id?: string;
@@ -118,12 +114,31 @@ export function formatFeishuApiError(
 
 const FEISHU_SEND_MAX_RETRIES = 2;
 const FEISHU_SEND_RETRY_BASE_MS = 500;
+const FEISHU_SEND_RATE_LIMIT_CODES = new Set([230020, 11232]);
+
+function getFeishuSendRateLimitCode(error: unknown): number | undefined {
+  if (!isRecord(error)) {
+    return undefined;
+  }
+  const response = isRecord(error.response) ? error.response : undefined;
+  if (response?.status === 429) {
+    return 429;
+  }
+  return getFeishuSendRateLimitCodeFromResponse(response?.data);
+}
+
+function getFeishuSendRateLimitCodeFromResponse(response: unknown): number | undefined {
+  if (!isRecord(response)) {
+    return undefined;
+  }
+  const code = response.code;
+  return typeof code === "number" && FEISHU_SEND_RATE_LIMIT_CODES.has(code) ? code : undefined;
+}
 
 export async function requestFeishuApi<T>(
   request: () => Promise<T>,
   errorPrefix: string,
   options: {
-    includeConfigParams?: boolean;
     includeNestedErrorLogId?: boolean;
   } = {},
 ): Promise<T> {
@@ -282,27 +297,17 @@ function parseCommentLinkedDocumentPath(pathname: string): {
   return { urlKind: kind, token };
 }
 
-function hasResolvedLinkedDocumentReference(link: ParsedCommentLinkedDocument): boolean {
-  return (
-    link.urlKind !== "unknown" && (Boolean(link.resolvedObjToken) || Boolean(link.wikiNodeToken))
-  );
-}
-
 function resolveCommentLinkedDocumentFromUrl(params: {
   rawUrl: string;
   currentDocument?: ParsedCommentDocumentRef;
-}): ParsedCommentLinkedDocument {
-  const link: ParsedCommentLinkedDocument = {
-    rawUrl: params.rawUrl,
-    urlKind: "unknown",
-  };
+}): ParsedCommentLinkedDocument | undefined {
   const parsed = URL.parse(params.rawUrl);
   const parsedPath = parsed && parseCommentLinkedDocumentPath(parsed.pathname);
   if (!parsedPath) {
-    return link;
+    return undefined;
   }
   const { urlKind, token } = parsedPath;
-  link.urlKind = urlKind;
+  const link: ParsedCommentLinkedDocument = { rawUrl: params.rawUrl, urlKind };
   if (urlKind === "wiki") {
     link.wikiNodeToken = token;
   } else {
@@ -366,7 +371,7 @@ export function parseCommentContentElements(params: {
           rawUrl,
           currentDocument: params.currentDocument,
         });
-        if (hasResolvedLinkedDocumentReference(linkedDocument)) {
+        if (linkedDocument) {
           const key = [
             linkedDocument.rawUrl,
             linkedDocument.urlKind,

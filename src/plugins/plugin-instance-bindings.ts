@@ -7,7 +7,7 @@ import {
 } from "./plugin-instance-argument-views.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import type { PluginInstanceInvocation } from "./plugin-instance-invocation.types.js";
-import { PluginHostObject } from "./plugin-instance-owned-values.js";
+import { PluginFactoryBinding } from "./plugin-instance-owned-values.js";
 import {
   getPluginOriginalValue,
   pluginInstanceState,
@@ -17,6 +17,7 @@ import {
 } from "./plugin-instance-scope.js";
 import type { PluginInstanceCallLease } from "./plugin-instance.types.js";
 import { mapPluginReturnPromise, resolvePluginReturnPromise } from "./plugin-return-value.js";
+import { createPluginToolExecutionBinding } from "./plugin-tool-execution.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 
@@ -31,19 +32,6 @@ type PluginIteratorAdmission = {
   close: () => void;
   call: (key: PropertyKey, method: Function | undefined, args: unknown[]) => Promise<unknown>;
 };
-
-class ExecutableBinding extends PluginHostObject {
-  #factory: object;
-
-  constructor(value: object, factory: object) {
-    super(value);
-    this.#factory = factory;
-  }
-
-  static belongsTo(value: object, factory: object) {
-    return #factory in value && value.#factory === factory;
-  }
-}
 
 const DATA_FIELDS = new Set([
   "parameters",
@@ -64,17 +52,6 @@ function pluginMemberDescriptor(object: object, key: PropertyKey) {
     descriptor = Object.getOwnPropertyDescriptor(source, key);
   }
   return descriptor;
-}
-
-function readPluginMember(
-  object: object,
-  key: PropertyKey,
-  invoke: (run: () => unknown) => unknown,
-  receiver = object,
-): unknown {
-  return pluginMemberNeedsAdmission(object, key)
-    ? invoke(() => Reflect.get(object, key, receiver))
-    : Reflect.get(object, key, receiver);
 }
 
 function pluginMemberNeedsAdmission(object: object, key: PropertyKey, getters = true): boolean {
@@ -126,10 +103,10 @@ type PluginInstanceBindingOwner = {
 
 /** Registration facts and captured stream scopes share the instance's lifetime. */
 export function createPluginInstanceBindings(bindings: PluginInstanceBindingOwner) {
-  const factories = new WeakMap<object, true | readonly PropertyKey[]>();
+  const factories = new WeakMap<object, true | "tool" | readonly PropertyKey[]>();
   const admitFactory = (
     factory: (...args: never[]) => unknown,
-    resultCallbacks?: readonly PropertyKey[],
+    resultCallbacks?: "tool" | readonly PropertyKey[],
   ): void => {
     factories.set(factory, resultCallbacks ?? true);
   };
@@ -147,11 +124,10 @@ export function createPluginInstanceBindings(bindings: PluginInstanceBindingOwne
 /** Builds callable views while the exact instance continues to own admission and leases. */
 function createPluginBindings(
   bindings: PluginInstanceBindingOwner,
-  factories: WeakMap<object, true | readonly PropertyKey[]>,
+  factories: WeakMap<object, true | "tool" | readonly PropertyKey[]>,
   admit: <T>(run: () => T) => T,
   admitCallback: <T>(run: () => T) => T,
 ) {
-  const { instance } = bindings;
   const prepareInvocation = (token: object, parent?: PluginInstanceInvocation) => {
     const context = pluginInvocationContext.getStore();
     const consumer = bindings.isConsumerToken(token);
@@ -167,15 +143,15 @@ function createPluginBindings(
       origin,
       reenter: <T>(run: () => T): T => {
         if (consumer && !bindings.hasToken(token)) {
-          throw new Error(`Plugin ${instance.pluginId} consumer is closed`);
+          throw new Error(`Plugin ${bindings.instance.pluginId} consumer is closed`);
         }
         return resource.runInAsyncScope(() => pluginInstanceInvocation.run(origin, run));
       },
       assertCurrent: () => {
-        context?.lookup(instance);
+        context?.lookup(bindings.instance);
         const current = pluginInvocationContext.getStore();
         if (current !== context) {
-          current?.lookup(instance);
+          current?.lookup(bindings.instance);
         }
       },
       run: <T>(run: () => T): T => resource.runInAsyncScope(run),
@@ -189,7 +165,7 @@ function createPluginBindings(
     for (
       let source: object | undefined = value;
       source;
-      source = getPluginOriginalValue(source, instance)
+      source = getPluginOriginalValue(source, bindings.instance)
     ) {
       const binding = factories.get(source);
       if (binding) {
@@ -207,7 +183,7 @@ function createPluginBindings(
   const wrapArguments = createPluginArgumentView({
     original: originalValue,
     setOriginal: (value, source) => setPluginOriginalValue(value, source, bindings.instance),
-    isWrapped: (value) => ExecutableBinding.belongsTo(value, factory),
+    isWrapped: (value) => PluginFactoryBinding.belongsTo(value, factory),
     invoke: admitCallback,
   });
   // Executable return contracts keep admission; ordinary result graphs are never inspected.
@@ -219,7 +195,10 @@ function createPluginBindings(
       ? wrap(value)
       : value;
   // Factory arrays contain executable registrations, not ordinary result payloads.
-  const bindFactoryResult = <T>(value: T, binding: true | readonly PropertyKey[]): T => {
+  const bindFactoryResult = <T>(value: T, binding: true | "tool" | readonly PropertyKey[]): T => {
+    if (binding === "tool") {
+      return bindTool(value);
+    }
     const callbacks = binding === true ? undefined : binding;
     if (
       callbacks &&
@@ -238,7 +217,7 @@ function createPluginBindings(
   const wrapResult = <T>(
     result: T,
     callerData?: unknown[],
-    executable?: true | readonly PropertyKey[],
+    executable?: true | "tool" | readonly PropertyKey[],
   ): T => {
     const completion = resolvePluginReturnPromise(result);
     if (completion) {
@@ -260,6 +239,21 @@ function createPluginBindings(
         : passResult(result);
   };
 
+  const bindTool = createPluginToolExecutionBinding({
+    admit,
+    wrapProxy: (tool) => wrap(tool),
+    call: (method, receiver, args) =>
+      admit(() => {
+        const call = wrapArguments(args);
+        return wrapResult(Reflect.apply(method, receiver, call.args), call.callerData);
+      }),
+    register: (view, source) => {
+      void new PluginFactoryBinding(view, factory);
+      setPluginOriginalValue(view, source, bindings.instance);
+      valueInstances.setHost(view, bindings.instance);
+    },
+  });
+
   /** Callables retain their instance; schemas remain data for host validators. */
   const wrap = <T>(
     value: T,
@@ -275,7 +269,7 @@ function createPluginBindings(
       return value;
     }
     const object: object = value;
-    if (ExecutableBinding.belongsTo(object, factory)) {
+    if (PluginFactoryBinding.belongsTo(object, factory)) {
       return value;
     }
     const cached = wrapped.get(object);
@@ -336,7 +330,9 @@ function createPluginBindings(
       let property: unknown;
       try {
         resolvedReceiver = resolveReceiver(key, receiver);
-        property = readPluginMember(object, key, invoke, resolvedReceiver);
+        property = pluginMemberNeedsAdmission(object, key)
+          ? invoke(() => Reflect.get(object, key, resolvedReceiver))
+          : Reflect.get(object, key, resolvedReceiver);
       } catch (error) {
         if (protocol && iteration?.active) {
           iteration.close();
@@ -497,7 +493,11 @@ function createPluginBindings(
             object,
             key,
             next,
-            pluginMemberDescriptor(object, key)?.set ? resolveReceiver(key, receiver) : receiver,
+            // Inherited and derived data writes must reach their owning view's defineProperty.
+            (receiver === result && !derivedReceivers.has(object)) ||
+              pluginMemberDescriptor(object, key)?.set
+              ? resolveReceiver(key, receiver)
+              : receiver,
           ),
         ),
       // Freezing only the shadow would invalidate its live original-property projection.
@@ -572,7 +572,7 @@ function createPluginBindings(
       );
     }
     wrapped.set(object, result);
-    void new ExecutableBinding(result, factory);
+    void new PluginFactoryBinding(result, factory);
     setPluginOriginalValue(result, object, bindings.instance);
     valueInstances.setHost(result, bindings.instance);
     // SAFETY: The view retains the input prototype and routes each member to the original object.

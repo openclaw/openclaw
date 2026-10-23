@@ -151,7 +151,7 @@ export async function withSqliteCanonicalValidationWorker<T>(
   } finally {
     closed = true;
     await queue.enqueue("canonical-validation", async () => {
-      await slot.worker?.close("exclusive-handoff");
+      await slot.worker?.close();
     });
   }
 }
@@ -167,7 +167,7 @@ async function useReclamationWorker<T>(
   assertRequestCurrent();
   assertSourceCurrent();
   if (slot.worker && !slot.worker.matches(options, expectedIdentity)) {
-    await slot.worker.close("matches-mismatch");
+    await slot.worker.close();
     slot.worker = undefined;
   }
   assertRequestCurrent();
@@ -197,7 +197,7 @@ async function useReclamationWorker<T>(
     }
     // An uncertain mutation is never replayed; a replacement serves only a later request.
     try {
-      await worker.close("failure");
+      await worker.close();
       if (slot.worker === worker) {
         slot.worker = undefined;
       }

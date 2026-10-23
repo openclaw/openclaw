@@ -47,7 +47,9 @@ suite.define(() => {
 
           await page.goto(`${suite.server.baseUrl}cron`);
           await page.getByRole("tab", { name: "Run history", exact: true }).click();
-          const labels = page.locator(".cron-run-filters .cron-filter-dropdown__trigger span");
+          const labels = page.locator(
+            ".cron-run-filters .cron-filter-dropdown__trigger > .oc-menu-item__label > span",
+          );
           await expect.poll(() => labels.count()).toBe(3);
           const fontSizes = await labels.evaluateAll((elements) =>
             elements.map((element) => getComputedStyle(element).fontSize),
@@ -55,7 +57,7 @@ suite.define(() => {
           expect(new Set(fontSizes).size).toBe(1);
 
           await page.getByRole("button", { name: "Sort Newest first", exact: true }).click();
-          await page.locator('wa-dropdown-item[value="asc"]').click();
+          await page.locator('[data-value="asc"]').click();
           await page.getByRole("button", { name: "Sort Oldest first", exact: true }).waitFor();
           await expect
             .poll(async () =>

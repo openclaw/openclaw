@@ -61,6 +61,14 @@ impl DesktopNodeProcess {
                 let sender = sender.clone();
                 let overflow = Arc::clone(&overflow);
                 thread::spawn(move || {
+                    let send_line = |line: &[u8]| {
+                        if sender
+                            .try_send((stdout, String::from_utf8_lossy(line).into_owned()))
+                            .is_err()
+                        {
+                            overflow.store(true, Ordering::SeqCst);
+                        }
+                    };
                     let mut chunk = [0; 4096];
                     let mut line = Vec::new();
                     while let Ok(size) = pipe.read(&mut chunk) {
@@ -69,12 +77,7 @@ impl DesktopNodeProcess {
                         }
                         for byte in &chunk[..size] {
                             if *byte == b'\n' {
-                                if sender
-                                    .try_send((stdout, String::from_utf8_lossy(&line).into_owned()))
-                                    .is_err()
-                                {
-                                    overflow.store(true, Ordering::SeqCst);
-                                }
+                                send_line(&line);
                                 line.clear();
                             } else if line.len() < 16 * 1024 {
                                 line.push(*byte);
@@ -83,12 +86,8 @@ impl DesktopNodeProcess {
                             }
                         }
                     }
-                    if !line.is_empty()
-                        && sender
-                            .try_send((stdout, String::from_utf8_lossy(&line).into_owned()))
-                            .is_err()
-                    {
-                        overflow.store(true, Ordering::SeqCst);
+                    if !line.is_empty() {
+                        send_line(&line);
                     }
                 })
             })

@@ -33,6 +33,16 @@ impl Default for Status {
     }
 }
 
+impl Status {
+    fn error(enabled: Option<bool>, detail: String) -> Self {
+        Self {
+            enabled,
+            state: "error",
+            detail: Some(detail),
+        }
+    }
+}
+
 #[derive(Clone)]
 struct Desired {
     revision: u64,
@@ -197,11 +207,7 @@ fn run(
             for owner in [&mut child, &mut probe_owner] {
                 if let Some(process) = owner.as_mut() {
                     if let Err(error) = process.stop() {
-                        publish_status(Status {
-                            enabled: Some(false),
-                            state: "error",
-                            detail: Some(error),
-                        });
+                        publish_status(Status::error(Some(false), error));
                         cleanup_failed = true;
                         continue;
                     }
@@ -238,11 +244,7 @@ fn run(
             );
             applied = Some(desired.revision);
             match prepared {
-                Err(error) => publish_status(Status {
-                    enabled: preparing.enabled,
-                    state: "error",
-                    detail: Some(error),
-                }),
+                Err(error) => publish_status(Status::error(preparing.enabled, error)),
                 Ok((enabled, command)) => {
                     let Some((mut command, secrets)) = command else {
                         publish_status(Status {
@@ -283,11 +285,7 @@ fn run(
                             publish_status(Status { enabled: Some(enabled), state: "running", detail: Some("Desktop sharing is running for the Primary Gateway. Approve this computer's desktop capability there if requested.".into()) });
                         }
                         Ok(None) => {}
-                        Err(error) => publish_status(Status {
-                            enabled: Some(enabled),
-                            state: "error",
-                            detail: Some(error),
-                        }),
+                        Err(error) => publish_status(Status::error(Some(enabled), error)),
                     }
                 }
             }
@@ -300,11 +298,7 @@ fn run(
                     let stopped = process.stop();
                     retain_diagnostics(process, &redactions, &mut diagnostic_tail);
                     let error = outcome.err().or_else(|| stopped.as_ref().err().cloned()).unwrap_or_else(|| format!("Desktop sharing exited. Check the local CLI and Primary Gateway, then turn sharing off and on to retry.\n{}", diagnostic_tail.iter().cloned().collect::<Vec<_>>().join("\n")));
-                    publish_status(Status {
-                        enabled: Some(true),
-                        state: "error",
-                        detail: Some(error),
-                    });
+                    publish_status(Status::error(Some(true), error));
                     // Join descendants before considering a later operator-requested restart.
                     if stopped.is_ok() {
                         child = None;

@@ -4,6 +4,7 @@ import os from "node:os";
 import { expect, vi } from "vitest";
 import "../../../test-utils/prepare-compiled-subprocesses.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.shared.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveLeastPrivilegeOperatorScopesForMethod } from "../../../gateway/method-scopes.js";
 import type { SubagentLifecycleHookRunner } from "../../../plugins/hooks.js";
 import type { RegisterSubagentRunParams } from "../registry/subagent-registry-run-launch-record.js";
@@ -11,6 +12,32 @@ import type {
   RegisterSubagentRunOptions,
   SubagentRegistrationScope,
 } from "../registry/subagent-registry.types.js";
+import type { SpawnAcpResult } from "./acp-spawn-result.js";
+
+export function expectFailedAcpSpawn(
+  result: SpawnAcpResult,
+  status?: "error" | "forbidden",
+): Extract<SpawnAcpResult, { status: "error" | "forbidden" }> {
+  if (status) {
+    expect(result.status).toBe(status);
+  } else {
+    expect(result.status).not.toBe("accepted");
+  }
+  if (result.status === "accepted") {
+    throw new Error("Expected ACP spawn to fail");
+  }
+  return result;
+}
+
+export function expectAcceptedAcpSpawn(
+  result: SpawnAcpResult,
+): Extract<SpawnAcpResult, { status: "accepted" }> {
+  expect(result.status).toBe("accepted");
+  if (result.status !== "accepted") {
+    throw new Error("Expected ACP spawn to be accepted");
+  }
+  return result;
+}
 
 type MockFn = (...args: unknown[]) => unknown;
 type MockImplementationTarget = {
@@ -112,6 +139,57 @@ export async function supportedSpawnModelChoice(
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     },
   };
+}
+
+export function createSpawnBoundaryConfig(
+  workspace: string,
+  maxChildrenPerAgent?: number,
+): OpenClawConfig {
+  return {
+    logging: { audit: { enabled: true, executionIdentity: true } },
+    tools: { swarm: { enabled: true, maxConcurrent: 1 } },
+    agents: {
+      ownership: "explicit",
+      defaults: {
+        workspace,
+        systemAgent: { agentId: "main" },
+        model: { primary: "custom/test-model" },
+        ...(maxChildrenPerAgent !== undefined ? { subagents: { maxChildrenPerAgent } } : {}),
+      },
+      entries: { main: { workspace } },
+    },
+    models: {
+      mode: "replace",
+      providers: {
+        custom: {
+          api: "openai-completions",
+          baseUrl: "https://example.invalid/v1",
+          models: [
+            {
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              id: "test-model",
+              input: ["text"],
+              maxTokens: 1_024,
+              name: "Test model",
+              reasoning: false,
+            },
+          ],
+        },
+      },
+    },
+  };
+}
+
+/** Rethrows proof and cleanup failures without losing either outcome. */
+export function throwBoundFailures(failures: unknown[]): void {
+  if (failures.length === 1) {
+    throw failures[0];
+  }
+  if (failures.length > 1) {
+    throw new AggregateError(failures, "Spawn proof and fixture cleanup failed", {
+      cause: failures[0],
+    });
+  }
 }
 
 /** Build a minimal runtime config for sessions_spawn tests. */
@@ -347,18 +425,6 @@ export async function loadSubagentSpawnModuleForTest(params: {
       params.getRuntimeConfig?.() ??
       createSubagentSpawnTestConfig(params.workspaceDir ?? os.tmpdir()),
     prepareModelChoice: params.prepareModelChoiceMock ?? supportedSpawnModelChoice,
-    loadSessionEntry: (scope: { storePath?: string; sessionKey: string }) =>
-      ((params.loadSessionStoreMock?.(scope.storePath) ?? {}) as SessionStore)[scope.sessionKey],
-    readSessionEntryReadOnlyInWorker: async (
-      scope: { storePath?: string; sessionKey: string },
-      assertCurrent: () => void,
-    ) => {
-      assertCurrent();
-      const store = (params.loadSessionStoreMock?.(scope.storePath) ?? {}) as SessionStore;
-      const value = await Promise.resolve(store[scope.sessionKey]);
-      assertCurrent();
-      return value;
-    },
     ensureContextEnginesInitialized:
       params.ensureContextEnginesInitializedMock ?? (() => undefined),
     resolveContextEngine: params.resolveContextEngineMock ?? (async () => ({})),
@@ -420,8 +486,11 @@ export async function loadSubagentSpawnModuleForTest(params: {
       params.resolveSandboxRuntimeStatus ?? (() => ({ sandboxed: false })),
   }));
 
+  // mock-isolation: Spawn fixtures supply caller depth without opening a session database.
   vi.doMock("./subagent-depth.js", () => ({
     getSubagentDepthFromSessionStore: params.getSubagentDepthFromSessionStore ?? (() => 0),
+    getSubagentDepthFromSessionStoreInWorker: async (key: string, opts?: unknown) =>
+      params.getSubagentDepthFromSessionStore?.(key, opts) ?? 0,
   }));
 
   vi.doMock("../registry/subagent-registry.js", () => ({

@@ -140,8 +140,8 @@ durable event queue, automatic retry, or exactly-once guarantee. Restart or
 process exit can lose in-flight work.
 
 Keep side effects short and bounded. Await the work that belongs to the handler,
-set timeouts on network calls, limit data sizes, and make repeatable operations
-idempotent. Do not use `void doHeavyWork(event)` as a general solution: that work
+set timeouts on network calls, limit data sizes, and design repeatable operations
+so retries do not duplicate their effects. Do not use `void doHeavyWork(event)` as a general solution: that work
 escapes the handler's wait/error boundary and can outlive its session or process.
 If work needs a durable job lifecycle, use an automation or service that owns it.
 

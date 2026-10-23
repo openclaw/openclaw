@@ -8,7 +8,7 @@ import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
-import { resolveEnvVars } from "./config.js";
+import { resolveDefaultDbPath, resolveEnvVars } from "./config.js";
 import {
   hasAgentScopeColumn,
   memoryAgentPredicate,
@@ -105,11 +105,12 @@ function resolveConfiguredDbPath(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
   pluginRoot: string,
+  stateDir: string,
 ): string {
   const pluginConfig = asOptionalRecord(config.plugins?.entries?.["memory-lancedb"]?.config);
   const configured = typeof pluginConfig?.dbPath === "string" ? pluginConfig.dbPath.trim() : "";
   if (!configured) {
-    return path.join(resolveHome(env), ".openclaw", "memory", "lancedb");
+    return resolveDefaultDbPath(stateDir);
   }
   if (configured.includes("://")) {
     return configured;
@@ -144,12 +145,18 @@ async function openMemoryTable(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   pluginRoot: string;
+  stateDir: string;
 }): Promise<{
   connection: LanceDbConnection | null;
   table: LanceDbTable | null;
   dbPath: string;
 }> {
-  const dbPath = resolveConfiguredDbPath(params.config, params.env, params.pluginRoot);
+  const dbPath = resolveConfiguredDbPath(
+    params.config,
+    params.env,
+    params.pluginRoot,
+    params.stateDir,
+  );
   if (!dbPath.includes("://") && !fs.existsSync(dbPath)) {
     return { connection: null, table: null, dbPath };
   }

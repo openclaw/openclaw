@@ -48,13 +48,9 @@ export function maybeRepairInvalidPluginConfig(cfg: OpenClawConfig): {
 
   const next = structuredClone(cfg);
   const entries = asNullableRecord(next.plugins?.entries);
-  if (!entries) {
-    return { config: cfg, changes: [] };
-  }
-
   const quarantined: string[] = [];
   for (const pluginId of hits) {
-    const entry = asNullableRecord(entries[pluginId]);
+    const entry = asNullableRecord(entries?.[pluginId]);
     if (!entry) {
       continue;
     }

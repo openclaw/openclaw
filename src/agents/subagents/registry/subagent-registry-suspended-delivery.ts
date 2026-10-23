@@ -62,11 +62,10 @@ export async function discardSuspendedPendingFinalDelivery(params: {
 }): Promise<void> {
   const { runId, entry, now, resumedRuns } = params;
   const stateContext = captureOpenClawStateWorkerContext();
-  const generation = entry.generation;
   const resumeKey = getSubagentRunRuntimeKey(entry);
   const isCurrent = () => {
     assertSubagentRegistryWriteSourceCurrent(stateContext);
-    return entry.generation === generation && params.isCurrent();
+    return params.isCurrent();
   };
   const assertCurrent = () => {
     if (!isCurrent()) {
@@ -86,7 +85,7 @@ export async function discardSuspendedPendingFinalDelivery(params: {
     skipRequesterSettleWake: true,
     stateContext,
     isCurrent,
-    discardDelivery: (draft) => params.discardTerminalDelivery(draft, now, "expired"),
+    finalizeDelivery: (draft) => params.discardTerminalDelivery(draft, now),
   });
   assertCurrent();
   resumedRuns.delete(resumeKey);
@@ -97,6 +96,11 @@ export async function discardSuspendedPendingFinalDelivery(params: {
     runId: entry.runId,
     childSessionKey: entry.childSessionKey,
     requesterSessionKey: entry.requesterSessionKey,
+    suspendedAt: entry.delivery?.suspendedAt,
+    suspendedReason: entry.delivery?.suspendedReason,
+    lastError: entry.delivery?.lastError,
+    recovery:
+      "Inspect retained results with /subagents info <runId>; session history depends on cleanup and retention.",
   });
   if (shouldRemoveSubagentAttachments(entry) && isHookCurrent()) {
     await safeRemoveAttachmentsDir(entry, isHookCurrent);

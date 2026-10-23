@@ -12,7 +12,11 @@ export type ChatStartupProjectionReadParams = {
 };
 
 export type ChatStartupProjectionResult = {
-  metadata?: ChatMetadataResult;
+  commandsRevision?: string;
+  metadata?: Pick<
+    ChatMetadataResult,
+    "commands" | "swarmEnabled" | "requiredWorkerInferenceProfileId"
+  >;
   sessionModelCatalog: ModelCatalogEntry[];
   defaultModelCatalog: ModelCatalogEntry[];
 };

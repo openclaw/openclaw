@@ -95,7 +95,7 @@ export type ClawHubPluginVersionCategories = {
 
 type ClawHubReadOptions = Pick<
   ClawHubRequestParams,
-  "baseUrl" | "token" | "skipAuth" | "timeoutMs" | "fetchImpl"
+  "baseUrl" | "token" | "skipAuth" | "timeoutMs"
 >;
 
 const BARE_ICON_KEY = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u;
@@ -133,6 +133,7 @@ function readOptionalNonNegativeNumber(
   value: Record<string, unknown>,
   field: string,
   context: string,
+  kind: "number" | "integer" = "number",
 ): number | undefined {
   const candidate = value[field];
   if (candidate === undefined || candidate === null) {
@@ -140,6 +141,9 @@ function readOptionalNonNegativeNumber(
   }
   if (typeof candidate !== "number" || !Number.isFinite(candidate) || candidate < 0) {
     throw new Error(`Malformed ClawHub ${context}: expected ${field} to be non-negative.`);
+  }
+  if (kind === "integer" && !Number.isInteger(candidate)) {
+    throw new Error(`Malformed ClawHub ${context}: expected ${field} to be an integer.`);
   }
   return candidate;
 }
@@ -150,18 +154,6 @@ function readOptionalBoolean(
   context: string,
 ): boolean | undefined {
   return value[field] == null ? undefined : readRequiredBoolean(value, field, context);
-}
-
-function readOptionalRank(
-  value: Record<string, unknown>,
-  field: string,
-  context: string,
-): number | undefined {
-  const candidate = readOptionalNonNegativeNumber(value, field, context);
-  if (candidate !== undefined && !Number.isInteger(candidate)) {
-    throw new Error(`Malformed ClawHub ${context}: expected ${field} to be an integer.`);
-  }
-  return candidate;
 }
 
 function parseCatalogPackage(
@@ -190,8 +182,8 @@ function parseCatalogPackage(
   const verificationTier = readClawHubStringField(value, "verificationTier", context);
   const featured = readOptionalBoolean(value, "featured", context);
   const trending = readOptionalBoolean(value, "trending", context);
-  const featuredRank = readOptionalRank(value, "featuredRank", context);
-  const trendingRank = readOptionalRank(value, "trendingRank", context);
+  const featuredRank = readOptionalNonNegativeNumber(value, "featuredRank", context, "integer");
+  const trendingRank = readOptionalNonNegativeNumber(value, "trendingRank", context, "integer");
   const downloads = stats
     ? readOptionalNonNegativeNumber(stats, "downloads", `${context} stats`)
     : undefined;
@@ -263,34 +255,6 @@ function parsePluginCategories(value: unknown): ClawHubPluginCategory[] {
     };
   });
   return categories.toSorted((left, right) => left.order - right.order);
-}
-
-function parseCatalogList(value: unknown, baseUrl?: string) {
-  if (!isRecord(value) || !Array.isArray(value.items)) {
-    throw new Error("Malformed ClawHub plugin catalog response: expected items to be an array.");
-  }
-  const nextCursor = readClawHubStringField(value, "nextCursor", "plugin catalog response");
-  return {
-    items: value.items.map((item, index) =>
-      parseCatalogPackage(item, `plugin catalog item ${index}`, baseUrl),
-    ),
-    ...(nextCursor ? { nextCursor } : {}),
-    ...(value.categories !== undefined ? { categories: parsePluginCategories(value) } : {}),
-  };
-}
-
-function parseCatalogSearch(value: unknown, baseUrl?: string) {
-  if (!isRecord(value) || !Array.isArray(value.results)) {
-    throw new Error("Malformed ClawHub plugin search response: expected results to be an array.");
-  }
-  return {
-    items: value.results.map((result, index) => {
-      if (!isRecord(result)) {
-        throw new Error(`Malformed ClawHub plugin search result ${index}: expected an object.`);
-      }
-      return parseCatalogPackage(result.package, `plugin search result ${index}`, baseUrl);
-    }),
-  };
 }
 
 function readOptionalRecord(
@@ -421,8 +385,8 @@ export async function fetchClawHubPluginCatalog(
   const shared = {
     baseUrl: params.baseUrl,
     token: params.token,
+    skipAuth: params.skipAuth,
     timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
   };
   if (query) {
     const searchSource = isClawHubTelemetryDisabled() ? undefined : params.searchSource;
@@ -439,7 +403,18 @@ export async function fetchClawHubPluginCatalog(
         limit: params.limit ? String(params.limit) : undefined,
       },
     });
-    return parseCatalogSearch(value, params.baseUrl);
+    const baseUrl = params.baseUrl;
+    if (!isRecord(value) || !Array.isArray(value.results)) {
+      throw new Error("Malformed ClawHub plugin search response: expected results to be an array.");
+    }
+    return {
+      items: value.results.map((result, index) => {
+        if (!isRecord(result)) {
+          throw new Error(`Malformed ClawHub plugin search result ${index}: expected an object.`);
+        }
+        return parseCatalogPackage(result.package, `plugin search result ${index}`, baseUrl);
+      }),
+    };
   }
   const value = await fetchClawHubJson<unknown>({
     ...shared,
@@ -459,7 +434,18 @@ export async function fetchClawHubPluginCatalog(
       limit: params.limit ? String(params.limit) : undefined,
     },
   });
-  return parseCatalogList(value, params.baseUrl);
+  const baseUrl = params.baseUrl;
+  if (!isRecord(value) || !Array.isArray(value.items)) {
+    throw new Error("Malformed ClawHub plugin catalog response: expected items to be an array.");
+  }
+  const nextCursor = readClawHubStringField(value, "nextCursor", "plugin catalog response");
+  return {
+    items: value.items.map((item, index) =>
+      parseCatalogPackage(item, `plugin catalog item ${index}`, baseUrl),
+    ),
+    ...(nextCursor ? { nextCursor } : {}),
+    ...(value.categories !== undefined ? { categories: parsePluginCategories(value) } : {}),
+  };
 }
 
 export async function fetchClawHubPluginOverview(

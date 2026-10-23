@@ -1,4 +1,8 @@
-import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
+import {
+  emitTrustedDiagnosticEvent,
+  hasPendingInternalDiagnosticEvent,
+  type DiagnosticEventPayload,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 import type { CodexDynamicToolRuntimeResponse } from "./dynamic-tool-response-state.js";
 import type { CodexDynamicToolCallParams } from "./protocol.js";
 
@@ -22,6 +26,29 @@ function diagnosticToolIdentity(params: DynamicToolDiagnosticContext) {
 }
 
 export function createCodexDynamicToolDiagnostics(params: DynamicToolDiagnosticContext) {
+  const matchesTerminal = (event: DiagnosticEventPayload): boolean => {
+    if (
+      (event.type !== "tool.execution.completed" &&
+        event.type !== "tool.execution.error" &&
+        event.type !== "tool.execution.blocked") ||
+      event.toolCallId !== params.call.callId ||
+      event.toolName !== params.call.tool
+    ) {
+      return false;
+    }
+    if (params.runId !== undefined) {
+      return event.runId === params.runId;
+    }
+    if (params.sessionId !== undefined) {
+      return event.sessionId === params.sessionId;
+    }
+    if (params.sessionKey !== undefined) {
+      return event.sessionKey === params.sessionKey;
+    }
+    return (
+      event.runId === undefined && event.sessionId === undefined && event.sessionKey === undefined
+    );
+  };
   const error = (
     durationMs: number,
     terminalReason: "failed" | "cancelled" | "timed_out" = "failed",
@@ -35,6 +62,8 @@ export function createCodexDynamicToolDiagnostics(params: DynamicToolDiagnosticC
     });
   };
   return {
+    matchesTerminal,
+    hasPendingTerminal: () => hasPendingInternalDiagnosticEvent(matchesTerminal),
     started() {
       emitTrustedDiagnosticEvent({
         type: "tool.execution.started",

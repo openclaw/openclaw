@@ -26,10 +26,7 @@ export function createPendingGatewayMovePreparation(deps: PlacementRecoveryDeps)
     const assertMoveCurrent = () => {
       assertCurrent();
       assertRequiredWorkerMove(getRuntimeConfig(), move.target);
-      if (
-        !placements.validateWorkspaceResultClaim(turnClaim) ||
-        placements.getPlacementMove(placement.sessionId)?.operationId !== move.operationId
-      ) {
+      if (!placements.validateWorkspaceResultClaim(turnClaim)) {
         throw new Error("Recovered Gateway move lost its workspace result owner");
       }
     };

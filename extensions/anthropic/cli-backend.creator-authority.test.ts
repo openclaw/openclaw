@@ -20,6 +20,7 @@ describe("Claude CLI cron creator authority", () => {
     // Background Bash is disallowed at launch, so Bash never yields process.
     expect(project?.(["Bash", "Bash(git:*)"])).toEqual(["exec"]);
     expect(project?.(["WebSearch", "WebFetch"])).toEqual(["web_fetch", "web_search"]);
+    expect(project?.(["AskUserQuestion"])).toEqual(["ask_user"]);
     expect(project?.(["Task", "TodoWrite"])).toEqual([]);
     expect(project?.([])).toEqual([]);
   });

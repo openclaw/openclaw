@@ -1,3 +1,7 @@
+openclaw-chat-svg-attachment {
+  display: contents;
+}
+
 .chat-attachment-file-icon {
   position: relative;
   display: inline-block;
@@ -14,10 +18,66 @@
   position: absolute;
   inset: 15px;
   background-color: var(--chat-file-icon-accent);
-  -webkit-mask: var(--chat-file-icon-overlay) center / 14px 14px no-repeat;
   mask: var(--chat-file-icon-overlay) center / 14px 14px no-repeat;
 }
 
 .chat-attachment-file-icon--unavailable {
   opacity: 0.42;
+}
+
+.chat-attachment-thumb.chat-attachment-thumb--video {
+  width: fit-content;
+  min-width: 162px;
+  max-width: min(240px, calc(100vw - 64px));
+  height: 56px;
+}
+
+.chat-attachment-thumb--preparation .chat-attachment-file {
+  position: relative;
+  z-index: 1;
+}
+
+.chat-attachment-compress {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  text-decoration: none;
+}
+
+.chat-attachment-compress > span {
+  text-decoration: none;
+}
+
+.chat-attachment-compress svg {
+  width: 12px;
+  height: 12px;
+  flex: none;
+}
+
+.chat-attachment-compress--retry {
+  color: var(--danger);
+}
+
+.chat-attachment-compress--retry > span {
+  text-decoration: none;
+}
+
+.chat-attachment-video__placeholder > .chat-attachment-compression-progress {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 3px;
+  stroke-linecap: round;
+  transform: rotate(-90deg);
+}
+
+.chat-attachment-compression-progress__track {
+  stroke: var(--border);
 }

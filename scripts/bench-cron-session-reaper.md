@@ -19,7 +19,7 @@ imports, and removes its fixture tree afterward. It accepts 1–1000 agents.
 
 ## What it measures
 
-Each agent gets a real canonical SQLite database with four persisted sessions
+Each agent gets a real SQLite database with four persisted sessions
 and 512 KiB of synthetic padding in the existing cache table. The harness calls
 the production `sweepCronRunSessions` sequentially, matching the scheduler's
 per-agent await ordering without adding yields, accessor spies, or mocks.

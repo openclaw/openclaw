@@ -7,21 +7,9 @@ const DISCORD_DNS_HOSTS = ["discord.com", "discord.gg", "gateway.discord.gg"];
 
 function isDiscordTransportHostname(hostname: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(hostname);
-  if (!normalized) {
-    return false;
-  }
   return DISCORD_DNS_HOSTS.some(
     (target) => normalized === target || normalized.endsWith(`.${target}`),
   );
-}
-
-function reorderLookupAddresses(addresses: dns.LookupAddress[]): dns.LookupAddress[] {
-  if (addresses.length < 2) {
-    return addresses;
-  }
-  const ipv4 = addresses.filter((entry) => entry.family === 4);
-  const ipv6 = addresses.filter((entry) => entry.family === 6);
-  return [...ipv4, ...ipv6];
 }
 
 export function createDiscordDnsLookup(): LookupFunction {
@@ -31,11 +19,7 @@ export function createDiscordDnsLookup(): LookupFunction {
     }
 
     const lookupOptions: dns.LookupOptions =
-      typeof options === "number"
-        ? { family: options }
-        : options === undefined
-          ? {}
-          : ({ ...options } as dns.LookupOptions);
+      typeof options === "number" ? { family: options } : { ...options };
 
     if (lookupOptions.family === 4 || lookupOptions.family === 6) {
       return dns.lookup(hostname, lookupOptions, callback as never);
@@ -46,12 +30,13 @@ export function createDiscordDnsLookup(): LookupFunction {
         callback(err, "", 4);
         return;
       }
-      if (!Array.isArray(addresses)) {
-        callback(new Error("Expected all lookup addresses to be an array"), "", 4);
-        return;
-      }
-
-      const reordered = reorderLookupAddresses(addresses);
+      const reordered =
+        addresses.length < 2
+          ? addresses
+          : [
+              ...addresses.filter((entry) => entry.family === 4),
+              ...addresses.filter((entry) => entry.family === 6),
+            ];
       if (lookupOptions.all === true) {
         (callback as (err: NodeJS.ErrnoException | null, addresses: dns.LookupAddress[]) => void)(
           null,

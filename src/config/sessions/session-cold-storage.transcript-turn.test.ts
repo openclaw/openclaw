@@ -7,12 +7,14 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
   withSessionTranscriptWriteLock,
   type SessionTranscriptWriteLockContext,
 } from "../../plugin-sdk/session-transcript-runtime.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../io.js";
 import {
   persistSessionTranscriptTurn,
   replaceSessionEntrySync,
@@ -34,6 +36,17 @@ import type { PreparedSessionSourceAuthority } from "./session-source-authority.
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { withSessionTranscriptWriteAssertion } from "./transcript-write-context.js";
 
+type WorkerParams = Extract<
+  Parameters<typeof archiveWorkers.runSqliteTranscriptArchiveWorkerOperation>[0],
+  { expectedMessageType: "reclaimed" }
+>;
+function interceptRestoration(rewrite: (params: WorkerParams) => WorkerParams) {
+  const original = archiveWorkers.runSqliteTranscriptArchiveWorkerOperation;
+  vi.spyOn(archiveWorkers, "runSqliteTranscriptArchiveWorkerOperation").mockImplementation(
+    (params) => original(params.expectedMessageType === "reclaimed" ? rewrite(params) : params),
+  );
+}
+
 describe("selected transcript turn cold restoration", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   const databasePaths: string[] = [];
@@ -44,12 +57,14 @@ describe("selected transcript turn cold restoration", () => {
     }
     await closeOpenClawAgentDatabasesAsync();
     await closeOpenClawStateDatabaseAsync();
+    clearRuntimeConfigSnapshot();
   });
 
   async function createFixture() {
     const root = tempDirs.make("openclaw-cold-turn-");
     const storePath = path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite");
     databasePaths.push(storePath);
+    setRuntimeConfigSnapshot({ session: { store: storePath } });
     const fixture = await createSessionColdStorageFixture(storePath, "global");
     expect(
       await runSessionColdStorageMaintenance({ config: maintenanceConfig(storePath) }),
@@ -59,15 +74,31 @@ describe("selected transcript turn cold restoration", () => {
       updatedAt: 1,
       lifecycleRevision: "selected",
     });
-    const descriptor = readSessionColdTranscript(fixture.database(), historicalId);
+    const cold = () => readSessionColdTranscript(fixture.database(), historicalId);
+    const descriptor = cold();
     expect(descriptor).toBeDefined();
+    const prepareMessage = vi.fn(async (message: unknown) => {
+      expect(cold()).toBeUndefined();
+      return message;
+    });
     const append = () =>
       persistSessionTranscriptTurn(
         { ...fixture.scope, sessionKey: "agent:main:global" },
         {
           expectedSessionId: historicalId,
           expectedLifecycleRevision: "selected",
-          messages: [{ message: { role: "user", content: "Resume selected history" } }],
+          messages: [
+            {
+              message: {
+                role: "user",
+                content: "Resume selected history",
+                idempotencyKey: "resume-selected-history",
+              },
+              workerPreparation: {
+                prepareMessageAfterIdempotencyCheckAsync: prepareMessage,
+              },
+            },
+          ],
           updateMode: "none",
         },
       );
@@ -77,7 +108,7 @@ describe("selected transcript turn cold restoration", () => {
         updatedAt: 2,
         lifecycleRevision: "successor",
       });
-    return { ...fixture, append, descriptor, replaceRevision };
+    return { ...fixture, append, cold, descriptor, replaceRevision, prepareMessage };
   }
 
   it.each(["turn", "locked worker with owner fence", "locked SDK released-sync"])(
@@ -86,6 +117,7 @@ describe("selected transcript turn cold restoration", () => {
       const fixture = await createFixture();
       if (mode === "turn") {
         await expect(fixture.append()).resolves.toMatchObject({ appendedCount: 1 });
+        expect(fixture.prepareMessage).toHaveBeenCalledOnce();
       } else {
         const message = { role: "user", content: "Resume selected history" };
         const prepare = vi.fn((value: typeof message) => value);
@@ -120,7 +152,7 @@ describe("selected transcript turn cold restoration", () => {
         }
         expect(prepare).toHaveBeenCalledTimes(mode === "locked SDK released-sync" ? 1 : 0);
       }
-      expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeUndefined();
+      expect(fixture.cold()).toBeUndefined();
       const events = loadTranscriptEventsSync(fixture.scope);
       expect(events).toContainEqual(expect.objectContaining({ id: "history-user" }));
       expect(events).toContainEqual(
@@ -134,6 +166,25 @@ describe("selected transcript turn cold restoration", () => {
     },
   );
 
+  it("restores archived history through the bounded manager's own read admission", async () => {
+    const fixture = await createFixture();
+    const manager = await SessionManager.openBoundedAsync(
+      { ...fixture.scope, sessionKey: "agent:main:global" },
+      { maxBytes: 2 * 1024 * 1024, maxEvents: 5 },
+    );
+    expect(manager.getEntry("history-user")).toMatchObject({
+      message: { content: [{ type: "text", text: "你好 🦞\n".repeat(12_000) }] },
+    });
+    expect(manager.getEntry("history-assistant")).toMatchObject({
+      parentId: "history-user",
+      message: { content: [{ type: "text", text: "Preserved response" }] },
+    });
+    expect(fixture.cold()).toBeUndefined();
+    expect(fixture.snapshot().events.filter((event) => event.session_id === historicalId)).toEqual(
+      fixture.original.events.filter((event) => event.session_id === historicalId),
+    );
+  });
+
   it.each(["before restoration", "at worker admission"])(
     "keeps the archive cold when the captured revision changes %s",
     async (timing) => {
@@ -141,29 +192,21 @@ describe("selected transcript turn cold restoration", () => {
       let admitted = false;
       let commitRequested = false;
       if (timing === "at worker admission") {
-        const original = archiveWorkers.runSqliteTranscriptArchiveWorkerOperation;
-        vi.spyOn(archiveWorkers, "runSqliteTranscriptArchiveWorkerOperation").mockImplementation(
-          (params) => {
-            if (params.expectedMessageType !== "reclaimed") {
-              return original(params);
-            }
-            return original({
-              ...params,
-              withWriteAdmission: (run, diagnostics) =>
-                params.withWriteAdmission((refusal) => {
-                  if (!refusal) {
-                    admitted = true;
-                    fixture.replaceRevision();
-                  }
-                  return run(refusal);
-                }, diagnostics),
-              onCommitRequest: () => {
-                commitRequested = true;
-                params.onCommitRequest();
-              },
-            });
+        interceptRestoration((params) => ({
+          ...params,
+          withWriteAdmission: (run, diagnostics) =>
+            params.withWriteAdmission((refusal) => {
+              if (!refusal) {
+                admitted = true;
+                fixture.replaceRevision();
+              }
+              return run(refusal);
+            }, diagnostics),
+          onCommitRequest: () => {
+            commitRequested = true;
+            params.onCommitRequest();
           },
-        );
+        }));
       }
       const pending = fixture.append();
       if (timing === "before restoration") {
@@ -175,9 +218,8 @@ describe("selected transcript turn cold restoration", () => {
       });
       expect(admitted).toBe(timing === "at worker admission");
       expect(commitRequested).toBe(false);
-      expect(readSessionColdTranscript(fixture.database(), historicalId)).toEqual(
-        fixture.descriptor,
-      );
+      expect(fixture.prepareMessage).not.toHaveBeenCalled();
+      expect(fixture.cold()).toEqual(fixture.descriptor);
       expect(
         fixture
           .database()
@@ -187,8 +229,8 @@ describe("selected transcript turn cold restoration", () => {
     },
   );
 
-  it.for(["prepared source", "optional writer fence"] as const)(
-    "keeps a locked read cold when its %s changes during restoration admission",
+  it.for(["prepared source", "turn source", "optional writer fence"] as const)(
+    "keeps history cold when its %s changes during restoration admission",
     async (guard, { signal }) => {
       const fixture = await createFixture();
       const sourceScope = {
@@ -231,6 +273,7 @@ describe("selected transcript turn cold restoration", () => {
       });
       const scope = {
         ...fixture.scope,
+        ...(guard === "turn source" ? { sessionKey: "agent:main:global" } : {}),
         ...(guard === "optional writer fence"
           ? { expectedOwner: { lifecycleRevision: "selected", activeWriterRunId: undefined } }
           : {}),
@@ -243,39 +286,35 @@ describe("selected transcript turn cold restoration", () => {
       const before = rawRows();
       const requested = createDeferred();
       const resume = createDeferred();
-      const original = archiveWorkers.runSqliteTranscriptArchiveWorkerOperation;
-      vi.spyOn(archiveWorkers, "runSqliteTranscriptArchiveWorkerOperation").mockImplementation(
-        (params) =>
-          params.expectedMessageType !== "reclaimed"
-            ? original(params)
-            : original({
-                ...params,
-                withWriteAdmission: async (run, diagnostics) => {
-                  requested.resolve();
-                  await resume.promise;
-                  return params.withWriteAdmission(run, diagnostics);
-                },
-              }),
-      );
+      interceptRestoration((params) => ({
+        ...params,
+        withWriteAdmission: async (run, diagnostics) => {
+          requested.resolve();
+          await resume.promise;
+          return params.withWriteAdmission(run, diagnostics);
+        },
+      }));
       const callback = vi.fn(async (locked: { readEvents: () => Promise<unknown[]> }) =>
         locked.readEvents(),
       );
       const pending = withSessionTranscriptWriteAssertion(scope, assertion, () =>
-        guard === "optional writer fence"
-          ? withTranscriptWriteLock(scope, callback)
-          : withSessionTranscriptWriteLock(scope, callback),
+        guard === "turn source"
+          ? fixture.append()
+          : guard === "optional writer fence"
+            ? withTranscriptWriteLock(scope, callback)
+            : withSessionTranscriptWriteLock(scope, callback),
       );
       try {
         await withinTest(
           awaitGateBeforeSettlement(
             requested.promise,
             pending,
-            "Locked read settled before cold restoration admission",
+            "History access settled before cold restoration admission",
           ),
           signal,
         );
         expect(assertion.prepareSessionSource).toHaveBeenCalled();
-        if (guard === "prepared source") {
+        if (guard !== "optional writer fence") {
           replaceSessionEntrySync(sourceScope, {
             sessionId: sourceScope.sessionId,
             updatedAt: 2,
@@ -290,7 +329,7 @@ describe("selected transcript turn cold restoration", () => {
           });
         }
         resume.resolve();
-        if (guard === "prepared source") {
+        if (guard !== "optional writer fence") {
           await expect(pending).rejects.toThrow("Prepared cold source changed");
         } else {
           await expect(pending).rejects.toMatchObject({
@@ -299,9 +338,8 @@ describe("selected transcript turn cold restoration", () => {
           });
         }
         expect(callback).not.toHaveBeenCalled();
-        expect(readSessionColdTranscript(fixture.database(), historicalId)).toEqual(
-          fixture.descriptor,
-        );
+        expect(fixture.prepareMessage).not.toHaveBeenCalled();
+        expect(fixture.cold()).toEqual(fixture.descriptor);
         expect(rawRows()).toEqual(before);
       } finally {
         resume.resolve();
@@ -320,7 +358,7 @@ describe("selected transcript turn cold restoration", () => {
       );
     });
 
-    expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeUndefined();
+    expect(fixture.cold()).toBeUndefined();
     expect(
       fixture.database().prepare("SELECT current_session_id FROM session_nodes").all(),
     ).toEqual([{ current_session_id: currentId }]);

@@ -16,16 +16,9 @@ export function resolveDefaultModel(params: { cfg: OpenClawConfig; agentId?: str
     config: params.cfg,
     allowWorkspaceScopedSnapshot: true,
   });
-  const { provider: defaultProvider, model: defaultModel } = resolveDefaultModelForAgent({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    manifestPlugins,
-  });
-  const aliasIndex = buildModelAliasIndex({
-    cfg: params.cfg,
-    defaultProvider,
-    agentId: params.agentId,
-    manifestPlugins,
-  });
+  const modelContext = { cfg: params.cfg, agentId: params.agentId, manifestPlugins };
+  const { provider: defaultProvider, model: defaultModel } =
+    resolveDefaultModelForAgent(modelContext);
+  const aliasIndex = buildModelAliasIndex({ ...modelContext, defaultProvider });
   return { defaultProvider, defaultModel, aliasIndex };
 }

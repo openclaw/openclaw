@@ -1,17 +1,26 @@
+import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
+import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  recordInboundSession,
+  upsertChannelPairingRequest,
+} from "openclaw/plugin-sdk/conversation-runtime";
 import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
-import {
-  createSubsystemLogger,
-  danger,
-  logVerbose,
-  shouldLogVerbose,
-  sleepWithAbort,
-} from "openclaw/plugin-sdk/runtime-env";
+import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
+import { danger, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import type { TelegramBotDeps } from "./bot-deps.js";
+import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
+import {
+  readSessionUpdatedAtAsync,
+  readAmbientTranscriptWatermarkAsync,
+  resolveAmbientTranscriptWatermarkKey,
+  resolveStorePath,
+} from "openclaw/plugin-sdk/session-store-runtime";
+import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
+import { createTelegramDirectAvatarResolver } from "./bot-message-avatar.js";
 import {
   buildTelegramMessageContext,
   type BuildTelegramMessageContextParams,
@@ -28,12 +37,11 @@ import {
 import type { TelegramBotOptions } from "./bot.types.js";
 import { buildTelegramThreadParams, resolveTelegramStreamMode } from "./bot/helpers.js";
 import { resolveTelegramDmHistoryLimit } from "./dm-history.js";
+import type { TelegramTransport } from "./fetch.js";
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 import { TELEGRAM_RICH_TEXT_LIMIT } from "./rich-message.js";
 import { resolveTelegramRichMessages } from "./rich-messages-config.js";
 import { resolveSpooledUpdatePersistenceRetryDelayMs } from "./telegram-ingress-spool.js";
-
-const telegramInboundLog = createSubsystemLogger("gateway/channels/telegram").child("inbound");
 
 function abortedProcessingResult(
   signal: AbortSignal,
@@ -59,11 +67,12 @@ type TelegramMessageProcessorDeps = Omit<
   | "ackReactionScope"
 > & {
   runtime: RuntimeEnv;
-  telegramDeps: TelegramBotDeps;
   buildContext?: typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
+  telegramTransport?: TelegramTransport;
   opts: Pick<
     TelegramBotOptions,
     | "token"
+    | "fetchAbortSignal"
     | "ownerAgentId"
     | "allowFrom"
     | "groupAllowFrom"
@@ -117,51 +126,26 @@ export function resolveTelegramMessageTurnSettings(params: {
 export const createTelegramMessageProcessor = (
   deps: TelegramMessageProcessorDeps,
 ): RegisterTelegramHandlerParams["processMessage"] => {
-  const {
-    bot,
-    account,
-    logger,
-    resolveGroupActivation,
-    resolveGroupRequireMention,
-    resolveTelegramGroupConfig,
-    sendChatActionHandler,
-    runtime,
-    telegramDeps,
-    buildContext,
-    opts,
-  } = deps;
+  const { runtime, buildContext, opts, ...contextOptions } = deps;
+  const { bot, account } = contextOptions;
   const sessionRuntime = {
-    ...((buildContext ?? telegramDeps.buildChannelInboundEventContext)
-      ? {
-          buildChannelInboundEventContext:
-            buildContext ?? telegramDeps.buildChannelInboundEventContext,
-        }
-      : {}),
-    ...(telegramDeps.readSessionUpdatedAtAsync
-      ? { readSessionUpdatedAtAsync: telegramDeps.readSessionUpdatedAtAsync }
-      : {}),
-    ...(telegramDeps.readAmbientTranscriptWatermark
-      ? { readAmbientTranscriptWatermark: telegramDeps.readAmbientTranscriptWatermark }
-      : {}),
-    ...(telegramDeps.recordInboundSession
-      ? { recordInboundSession: telegramDeps.recordInboundSession }
-      : {}),
-    ...(telegramDeps.resolveAmbientTranscriptWatermarkKey
-      ? { resolveAmbientTranscriptWatermarkKey: telegramDeps.resolveAmbientTranscriptWatermarkKey }
-      : {}),
-    ...(telegramDeps.resolveInboundLastRouteSessionKey
-      ? { resolveInboundLastRouteSessionKey: telegramDeps.resolveInboundLastRouteSessionKey }
-      : {}),
-    ...(telegramDeps.resolvePinnedMainDmOwnerFromAllowlist
-      ? {
-          resolvePinnedMainDmOwnerFromAllowlist: telegramDeps.resolvePinnedMainDmOwnerFromAllowlist,
-        }
-      : {}),
-    resolveStorePath: telegramDeps.resolveStorePath,
+    buildChannelInboundEventContext: buildContext ?? buildChannelInboundEventContext,
+    readSessionUpdatedAtAsync,
+    readAmbientTranscriptWatermarkAsync,
+    recordInboundSession,
+    resolveAmbientTranscriptWatermarkKey,
+    resolveInboundLastRouteSessionKey,
+    resolvePinnedMainDmOwnerFromAllowlist,
+    resolveStorePath,
   };
-  const contextRuntime = telegramDeps.recordChannelActivity
-    ? { recordChannelActivity: telegramDeps.recordChannelActivity }
-    : undefined;
+  const resolveDirectAvatar = createTelegramDirectAvatarResolver({
+    api: bot.api,
+    abortSignal: opts.fetchAbortSignal,
+    accountId: account.accountId,
+    token: opts.token,
+    transport: deps.telegramTransport,
+  });
+  const contextRuntime = { recordChannelActivity };
 
   return async ({
     ctx: primaryCtx,
@@ -182,13 +166,9 @@ export const createTelegramMessageProcessor = (
       telegramCfg: turnTelegramCfg,
       opts,
     });
-    const ingressReceivedAtMs =
-      typeof options?.receivedAtMs === "number" && Number.isFinite(options.receivedAtMs)
-        ? options.receivedAtMs
-        : undefined;
-    const ingressDebugEnabled = shouldLogVerbose();
-    const ingressContextStartMs = ingressReceivedAtMs ? Date.now() : undefined;
     const context = await buildTelegramMessageContext({
+      ...contextOptions,
+      resolveDirectAvatar,
       nativeCommandNames: deps.nativeCommandNames,
       primaryCtx,
       allMedia,
@@ -197,65 +177,24 @@ export const createTelegramMessageProcessor = (
       promptContext,
       storeAllowFrom,
       options,
-      bot,
       cfg: turnCfg,
-      account,
       ownerAgentId: opts.ownerAgentId,
-      historyLimit: turnSettings.historyLimit,
-      dmHistoryLimit: turnSettings.dmHistoryLimit,
-      dmPolicy: turnSettings.dmPolicy,
-      allowFrom: turnSettings.allowFrom,
-      groupAllowFrom: turnSettings.groupAllowFrom,
-      ackReactionScope: turnSettings.ackReactionScope,
-      logger,
-      resolveGroupActivation,
-      resolveGroupRequireMention,
-      resolveTelegramGroupConfig,
-      sendChatActionHandler,
+      ...turnSettings,
       runtime: contextRuntime,
       sessionRuntime,
-      upsertPairingRequest: telegramDeps.upsertChannelPairingRequest,
+      upsertPairingRequest: upsertChannelPairingRequest,
     });
     if (!context) {
-      if (ingressDebugEnabled && ingressReceivedAtMs && ingressContextStartMs) {
-        logVerbose(
-          `telegram ingress: chatId=${primaryCtx.message.chat.id} dropped after ${Date.now() - ingressReceivedAtMs}ms` +
-            (options?.ingressBuffer ? ` buffer=${options.ingressBuffer}` : ""),
-        );
-      }
       return { kind: "skipped" };
     }
-    if (ingressDebugEnabled && ingressReceivedAtMs && ingressContextStartMs) {
-      logVerbose(
-        `telegram ingress: chatId=${context.chatId} contextReadyMs=${Date.now() - ingressReceivedAtMs}` +
-          ` preDispatchMs=${Date.now() - ingressContextStartMs}` +
-          (options?.ingressBuffer ? ` buffer=${options.ingressBuffer}` : ""),
-      );
-    }
-    if (
-      context.ctxPayload.InboundEventKind !== "room_event" &&
-      context.initialTypingCueSent !== true
-    ) {
-      void context.sendTyping().catch((err: unknown) => {
-        logVerbose(`telegram early typing cue failed for chat ${context.chatId}: ${String(err)}`);
-      });
-    }
-    const logTo = context.primaryCtx.me?.username
-      ? `@${context.primaryCtx.me.username}`
-      : context.ctxPayload.To;
-    const mediaType = allMedia[0]?.contentType ?? allMedia[0]?.kind;
-    const kindLabel = mediaType ? `, ${mediaType}` : "";
-    telegramInboundLog.info(
-      `Inbound message ${context.ctxPayload.From} -> ${logTo} (${context.ctxPayload.ChatType}${kindLabel}, ${context.ctxPayload.RawBody.length} chars)`,
-    );
     const spooledReplay =
       options?.spooledReplay === true || isTelegramSpooledReplayUpdate(primaryCtx.update);
     if (!spooledReplay) {
       await turnContext.onDispatchStart?.();
     }
-    const runTelegramDispatch = async (params: {
-      turnAdoptionLifecycle?: GetReplyOptions["turnAdoptionLifecycle"];
-    }): Promise<TelegramMessageProcessingResult> => {
+    const runTelegramDispatch = async (
+      turnAdoptionLifecycle?: GetReplyOptions["turnAdoptionLifecycle"],
+    ): Promise<TelegramMessageProcessingResult> => {
       try {
         const dispatchResult = await dispatchTelegramMessage({
           context,
@@ -266,23 +205,16 @@ export const createTelegramMessageProcessor = (
           streamMode: turnSettings.streamMode,
           textLimit: turnSettings.textLimit,
           telegramCfg: turnTelegramCfg,
-          telegramDeps,
           opts,
           retryDispatchErrors: spooledReplay,
           suppressFailureFallback: spooledReplay,
-          turnAdoptionLifecycle: params.turnAdoptionLifecycle,
+          turnAdoptionLifecycle,
         });
         if (dispatchResult?.kind === "failed-retryable") {
           return {
             kind: "failed-retryable",
             error: dispatchResult.error,
           };
-        }
-        if (ingressDebugEnabled && ingressReceivedAtMs) {
-          logVerbose(
-            `telegram ingress: chatId=${context.chatId} dispatchCompleteMs=${Date.now() - ingressReceivedAtMs}` +
-              (options?.ingressBuffer ? ` buffer=${options.ingressBuffer}` : ""),
-          );
         }
         return { kind: "completed" };
       } catch (err) {
@@ -372,49 +304,47 @@ export const createTelegramMessageProcessor = (
         const drainLifecycle = getTelegramSpooledReplayLifecycle();
         // Participant always owns an AbortSignal on the spooled-replay path;
         // merge optional drain/context signals without widening to undefined.
-        const turnAbortSignal: AbortSignal = (() => {
-          const extras = [turnContext.spooledReplayAbortSignal, drainLifecycle?.abortSignal].filter(
-            (signal): signal is AbortSignal => signal !== undefined,
-          );
-          if (extras.length === 0) {
-            return participant.abortSignal;
-          }
-          return AbortSignal.any([participant.abortSignal, ...extras]);
-        })();
+        const turnAbortSignals = [
+          participant.abortSignal,
+          turnContext.spooledReplayAbortSignal,
+          drainLifecycle?.abortSignal,
+        ].filter((signal): signal is AbortSignal => signal !== undefined);
+        const turnAbortSignal =
+          turnAbortSignals.length === 1
+            ? participant.abortSignal
+            : AbortSignal.any(turnAbortSignals);
         const result = await runTelegramDispatch({
-          turnAdoptionLifecycle: {
-            admission: "exclusive",
-            abortSignal: turnAbortSignal,
-            onAdopted: async () => {
-              if (adopted) {
-                return;
-              }
-              adoptionAttempted = true;
-              const adoptedResult = await settle({ kind: "completed" }, "adopted");
-              if (adoptedResult.kind !== "completed") {
-                adoptionFinalizationError =
-                  adoptedResult.kind === "failed-retryable"
-                    ? adoptedResult.error
-                    : new Error("telegram spooled turn adoption was not completed");
-                throw adoptionFinalizationError;
-              }
-              await drainLifecycle?.onAdopted();
-            },
-            onDeferred: () => {
-              deferred = true;
-              drainLifecycle?.onDeferred();
-              turnContext.onTurnDeferred?.();
-            },
-            onDeferredHeartbeat: () => participant.heartbeat(),
-            deferredHeartbeatIntervalMs: participant.heartbeatIntervalMs,
-            onAbandoned: () => {
-              if (!adopted) {
-                void settle({ kind: "failed-retryable", error: "turn-abandoned" }, "terminal");
-              }
-              // Generic reply abandonment is synchronous; Telegram has no
-              // owner-local resource teardown gated on core claim release.
-              void drainLifecycle?.onAbandoned();
-            },
+          admission: "exclusive",
+          abortSignal: turnAbortSignal,
+          onAdopted: async () => {
+            if (adopted) {
+              return;
+            }
+            adoptionAttempted = true;
+            const adoptedResult = await settle({ kind: "completed" }, "adopted");
+            if (adoptedResult.kind !== "completed") {
+              adoptionFinalizationError =
+                adoptedResult.kind === "failed-retryable"
+                  ? adoptedResult.error
+                  : new Error("telegram spooled turn adoption was not completed");
+              throw adoptionFinalizationError;
+            }
+            await drainLifecycle?.onAdopted();
+          },
+          onDeferred: () => {
+            deferred = true;
+            drainLifecycle?.onDeferred();
+            turnContext.onTurnDeferred?.();
+          },
+          onDeferredHeartbeat: () => participant.heartbeat(),
+          deferredHeartbeatIntervalMs: participant.heartbeatIntervalMs,
+          onAbandoned: () => {
+            if (!adopted) {
+              void settle({ kind: "failed-retryable", error: "turn-abandoned" }, "terminal");
+            }
+            // Generic reply abandonment is synchronous; Telegram has no
+            // owner-local resource teardown gated on core claim release.
+            void drainLifecycle?.onAbandoned();
           },
         });
         if (adopted) {
@@ -485,12 +415,13 @@ export const createTelegramMessageProcessor = (
         }
         return await settle(result, "terminal");
       };
-      // The participant is the ingress ownership boundary. Direct and buffered
-      // callers both return when it is durably adopted or terminally rejected.
-      void run();
+      // Ingress returns at adoption; dispatch still owns draft cleanup and fallback delivery.
+      void runDetachedWebhookWork(run).catch((error: unknown) =>
+        settle({ kind: "failed-retryable", error }, "terminal"),
+      );
       return await participant.task;
     }
 
-    return await runTelegramDispatch({});
+    return await runTelegramDispatch();
   };
 };

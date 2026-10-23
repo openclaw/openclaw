@@ -23,22 +23,16 @@ export async function resolveBoundDeliveryDestination(input: {
   if (!requester?.channel || !requester.conversationId) {
     return null;
   }
-  let exactBinding: SessionBindingRecord | null = null;
-  let matchingBinding: SessionBindingRecord | null = null;
-  let matchingCount = 0;
-  for (const entry of activeBindings) {
-    const conversation = normalizeConversationRef(entry.conversation);
-    if (
-      conversation.channel !== requester.channel ||
-      conversation.accountId !== requester.accountId
-    ) {
-      continue;
-    }
-    if (conversation.conversationId === requester.conversationId) {
-      exactBinding ??= entry;
-    }
-    matchingBinding = entry;
-    matchingCount += 1;
-  }
-  return exactBinding ?? (matchingCount === 1 ? matchingBinding : null);
+  const matchingBindings = activeBindings
+    .map((record) => ({ record, conversation: normalizeConversationRef(record.conversation) }))
+    .filter(
+      ({ conversation }) =>
+        conversation.channel === requester.channel &&
+        conversation.accountId === requester.accountId,
+    );
+  return (
+    matchingBindings.find(
+      ({ conversation }) => conversation.conversationId === requester.conversationId,
+    )?.record ?? (matchingBindings.length === 1 ? matchingBindings[0]!.record : null)
+  );
 }

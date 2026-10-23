@@ -14,7 +14,6 @@ export type ActivePluginChannelRegistration = {
   resolveChannelRuntime?: () => import("./runtime/types-channel.js").PluginRuntimeChannel;
 };
 
-/** Active runtime channel registry snapshot. */
 export type ActivePluginChannelRegistry = {
   channels: ActivePluginChannelRegistration[];
 };

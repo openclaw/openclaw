@@ -53,7 +53,10 @@ const command = {
   environment: {},
 };
 
-vi.mock("../../runtime.js", () => ({ defaultRuntime: lifecycleTestRuntime }));
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
+  defaultRuntime: lifecycleTestRuntime,
+}));
 vi.mock("../../daemon/service.js", async (original) => ({
   ...(await original<typeof import("../../daemon/service.js")>()),
   resolveGatewayService: () => service,

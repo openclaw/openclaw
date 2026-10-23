@@ -63,7 +63,11 @@ export function createControlUiMockResponses(
     return undefined;
   }
 
-  function applyAgentModel(method: string, value: unknown): unknown {
+  function applyAgentModel(method: string, response: unknown): unknown {
+    const value =
+      method === "agents.list" && isRecord(response)
+        ? { sessionPlacement: {}, ...response }
+        : response;
     if (!input.agentModel || !isRecord(value)) {
       return value;
     }
@@ -84,6 +88,12 @@ export function createControlUiMockResponses(
       return applyAgentsList(value);
     }
     return value;
+  }
+
+  function applySessionPlacement(params: unknown, response: Record<string, unknown>) {
+    return isRecord(params) && params.includeSessionPlacement === true
+      ? { sessionPlacement: {}, ...response }
+      : response;
   }
 
   function valuesEqual(actual: unknown, expected: unknown): boolean {
@@ -281,10 +291,12 @@ export function createControlUiMockResponses(
     select: configuredResponse,
     startupPending,
     applyAgentModel,
+    applySessionPlacement,
     sessionList: sessionListResponse,
     cases: responseCases,
     sequence: responseSequence,
     matches: paramsMatch,
+    matchesExact: valuesEqual,
     search: scopedSearchResponse,
     resetSequence: (method: string) => methodResponseSequenceIndexes.delete(method),
   };

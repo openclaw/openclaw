@@ -24,6 +24,9 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../
 const manifestPath = path.join(repoRoot, "ui", "config", "control-ui-boot-modules.json");
 const SETTLE_MS = 3_000;
 const READY_TIMEOUT_MS = 60_000;
+// Idle decoration must not become a route preload just because the capture
+// waits for background work to settle after the composer is already visible.
+const idleEntries = new Set(["ui/src/components/lobster-pet.tsx"]);
 
 const mime: Record<string, string> = {
   ".html": "text/html",
@@ -108,7 +111,11 @@ async function collectBootChunkPaths(
             chunkPaths.add(pathname);
           }
         });
-        await installMockGateway(page, { serverBuildId: readDistBuildId(distDir) });
+        await installMockGateway(page, {
+          serverBuildId: readDistBuildId(distDir),
+          // The roster hook would import diagnostics into the measured boot graph.
+          awaitInitialRoster: false,
+        });
         const waitForRoute = async () => {
           await page
             .locator(
@@ -268,9 +275,9 @@ async function main(): Promise<void> {
       const routeEntries = { new: new Set<string>(), chat: new Set<string>() };
       for (const route of ["new", "chat"] as const) {
         const chunks = await collectBootChunkPaths(server.baseUrl, distDir, route);
-        const requestedEntries = [...chunks].flatMap(
-          (chunk) => graph.dynamicEntries.get(chunk) ?? [],
-        );
+        const requestedEntries = [...chunks]
+          .flatMap((chunk) => graph.dynamicEntries.get(chunk) ?? [])
+          .filter((id) => !idleEntries.has(controlUiBootManifestKey(id)));
         routeEntries[route] = new Set(requestedEntries.map(controlUiBootManifestKey));
         // Fetched shared chunks can co-locate modules only the other route
         // imports; keep the modules reachable from what this route requested.

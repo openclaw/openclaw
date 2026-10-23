@@ -23,7 +23,7 @@ import { createUpdateFailureFact, type UpdateFailureFact } from "../infra/update
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { resolveCommandProcessSignal, withCommandProcessScope } from "../process/exec-spawn.js";
 import {
-  assertDoctorAgentLeaseAdmission,
+  admitDoctorAgentLeases,
   preflightExternalDoctorAgentLease,
 } from "./doctor-agent-lease-refusal.js";
 import { resolveDoctorUpdateAdmission } from "./doctor-maintenance-admission.js";
@@ -32,6 +32,7 @@ import {
   assertDoctorMaintenanceInspection,
   classifyDoctorMaintenanceRefusal,
   readDoctorGatewayOwnerLease,
+  readOfflineAppOwnedDoctorInspection,
 } from "./doctor-maintenance-inspection.js";
 import {
   assertStaleDoctorGatewayStopped,
@@ -55,19 +56,22 @@ import {
 } from "./doctor-update-refusal.js";
 
 export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
-  if (!(params.options.repair === true || params.options.yes === true)) {
+  if (
+    !(params.options.repair === true || params.options.yes === true || params.interactiveRepair)
+  ) {
     return undefined;
   }
-  const env = { ...process.env, ...(params.runId ? { [UPDATE_RUN_ID_ENV]: params.runId } : {}) };
+  const sourceEnv = params.env ?? process.env;
+  const env = { ...sourceEnv, ...(params.runId ? { [UPDATE_RUN_ID_ENV]: params.runId } : {}) };
   // Ordinary activation remains with the parent. Stale-instance recovery below
   // retains custody through offline repair and verified restoration.
-  const parentActivation = isDoctorUpdateRepairMode(resolveDoctorRepairMode(params.options))
-    ? resolveUpdateParentGatewayActivation(env)
-    : undefined;
+  const updateRepair = isDoctorUpdateRepairMode(resolveDoctorRepairMode(params.options, env));
+  const waitForMaintenance = updateRepair || params.waitForMaintenance === true;
+  const parentActivation = updateRepair ? resolveUpdateParentGatewayActivation(env) : undefined;
   // Repair discovery can execute plugins and open writable state. Establish
-  // ownership for every explicit repair before running those inspections.
+  // ownership for every admitted repair before running those inspections.
   let stopped: PreManagedServiceStop | undefined;
-  let serviceUpdateVerdict: PreManagedServiceStop["serviceUpdateVerdict"];
+  let serviceVerdict: PreManagedServiceStop["serviceUpdateVerdict"];
   let stopDeadline: number | undefined;
   const warnings: string[] = [];
   const warn = (message: string) => {
@@ -119,38 +123,36 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
       pollIntervalMs: 250,
       maxPollIntervalMs: 2_000,
     });
-  const releaseState = async () => {
-    if (cleanupFailure) {
-      throw cleanupFailure.error;
+  const throwSettledFailure = (failure: Error | undefined) => {
+    if (failure !== undefined) {
+      throw failure;
     }
-    await state.release();
-    repairStoresMayBeOpen = false;
   };
-  const release = async (assertCustody?: () => void) => {
-    await settle(async () => {
-      await releaseState();
+  // A settled state cleanup failure is reported only after Doctor restores what it stopped.
+  const releaseAndRestoreAutoStart = (assertCustody?: () => void) =>
+    settle(async () => {
+      const settledFailure = await state.release();
       const recovery = stopped?.windowsTaskAutoStartRecovery;
       try {
         assertCustody?.();
         if (!retainStoppedInstallation) {
-          await settle(async () => {
-            await recovery?.restore(true);
-          });
+          await settle(async () => recovery?.restore(true));
         }
       } finally {
         if (!cleanupFailure) {
           await settle(async () => recovery?.complete(!retainStoppedInstallation));
         }
       }
+      return settledFailure;
     });
-  };
-  const finish = async (
+  const release = async (assertCustody?: () => void) =>
+    throwSettledFailure(await releaseAndRestoreAutoStart(assertCustody));
+  const restoreGateway = async (
     cfg: OpenClawConfig,
     assertCustody?: () => void,
     writeConfig?: DoctorConfigWriter,
     assertRestoreAdmission = assertUpdateAdmissionCurrent,
   ) => {
-    await release(assertCustody);
     assertCustody?.();
     const before = stopped;
     const root = params.root;
@@ -183,7 +185,12 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
         }
       }
       if (
-        resolveDoctorRepairMode(params.options).updateInProgress ||
+        // Custody consent restores our own stop; it does not authorize starting
+        // a service the operator had already stopped. Explicit repair retains recovery.
+        (params.interactiveRepair &&
+          params.options.repair !== true &&
+          params.options.yes !== true) ||
+        resolveDoctorRepairMode(params.options, env).updateInProgress ||
         before.offline !== true ||
         verdict?.kind !== "owned" ||
         verdict.requiresInstallRootRefresh
@@ -245,9 +252,12 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
             : {}),
         }),
       );
-      if (health.outcome === "starting") {
+      if (
+        health.outcome === "starting" ||
+        (health.outcome !== "ready" && health.runtime.status === "running")
+      ) {
         warn(
-          `Warning: Doctor repair complete; Gateway is still starting — check \`${formatCliCommand("openclaw gateway status", state.env)}\` in a minute.`,
+          `Warning: Doctor repair complete; Gateway started but readiness was not verified. ${renderRestartDiagnostics(health).join(" ")} Run \`${formatCliCommand("openclaw gateway status --deep", state.env)}\` or \`${formatCliCommand("openclaw gateway diagnostics export", state.env)}\`.`,
         );
         return;
       }
@@ -309,13 +319,48 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
       warn(warning);
     }
   };
+  const finish = async (
+    initialConfig: OpenClawConfig | undefined,
+    assertCustody?: () => void,
+    writeConfig?: DoctorConfigWriter,
+    assertRestoreAdmission?: () => void,
+  ) => {
+    let cfg = initialConfig;
+    // Config recovery must not encounter Doctor's own offline-maintenance lease.
+    const settledFailure = await releaseAndRestoreAutoStart(assertCustody);
+    if (!cfg && !stopped?.stopped) {
+      throwSettledFailure(settledFailure);
+      return;
+    }
+    if (!cfg) {
+      try {
+        // Restore our own stop without re-entering the readiness gate that failed.
+        const { readConfigFileSnapshot } = await import("../config/config.js");
+        cfg = (await readConfigFileSnapshot({ skipPluginValidation: true, observe: false })).config;
+      } catch (error) {
+        throw new DoctorMaintenanceRefusalError(
+          `Doctor could not restore the Gateway because persisted repair state is not ready: ${formatErrorMessage(error)}`,
+          { kind: "data-at-risk", reason: "incomplete-migration" },
+          { cause: error },
+        );
+      }
+    }
+    await restoreGateway(cfg, assertCustody, writeConfig, assertRestoreAdmission);
+    throwSettledFailure(settledFailure);
+  };
   const admitRepair = async () => {
     inspectingActivation = false;
     await assertLegacyGatewayStoppedForMaintenance(state.env);
     // Retain one process owner across every migration and its resource drainage.
-    await acquireStoppedMaintenanceResources();
-    assertUpdateAdmissionCurrent?.();
-    await assertDoctorAgentLeaseAdmission(state.env);
+    await admitDoctorAgentLeases({
+      state,
+      wait: waitForMaintenance,
+      acquire: () =>
+        acquireStoppedMaintenanceResources().then(() => assertUpdateAdmissionCurrent?.()),
+      assertCurrent: assertCallerCurrent,
+      signal: exit.signal,
+      log: params.runtime.log,
+    });
     repairStoresMayBeOpen = true;
   };
   let admissionFailureHandled = false;
@@ -338,9 +383,8 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
               : `Warning: Doctor could not reacquire maintenance ownership: ${String(ownershipError)} Restoring its service without repairing shared state.`;
           warn(warning);
         }
-        const { readConfigFileSnapshot } = await import("../config/config.js");
         await finish(
-          (await readConfigFileSnapshot({ skipPluginValidation: true, observe: false })).config,
+          undefined,
           assertStopCustody,
           undefined,
           assertStopCustody ?? assertUpdateAdmissionCurrent,
@@ -353,7 +397,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
         cause: restoreError,
       });
     }
-    resolveCommandProcessSignal()?.throwIfAborted();
+    resolveCommandProcessSignal(exit.signal)?.throwIfAborted();
     if (authorityRefused || error instanceof DoctorUnreadableStateDatabaseError) {
       throw error;
     }
@@ -397,9 +441,9 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
   });
   try {
     await settle(async () => {
-      const externallyManaged = isServiceRepairExternallyManaged();
+      const externallyManaged = isServiceRepairExternallyManaged(undefined, env);
       if (externallyManaged) {
-        await preflightExternalDoctorAgentLease(env);
+        await preflightExternalDoctorAgentLease(env, waitForMaintenance);
       }
       if (
         params.root &&
@@ -410,15 +454,28 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
         const { maybeStopManagedServiceBeforeMutableUpdate } =
           await import("../cli/update-cli/update-command-service-maintenance.js");
         inspectingActivation = true;
-        const inspection = await maybeStopManagedServiceBeforeMutableUpdate({
-          updateInstallKind: "package",
-          root: params.root,
-          shouldRestart: true,
-          jsonMode: true,
-          phase: "inspect",
-        });
+        let inspection: PreManagedServiceStop;
+        try {
+          inspection = await maybeStopManagedServiceBeforeMutableUpdate({
+            updateInstallKind: "package",
+            root: params.root,
+            shouldRestart: true,
+            jsonMode: true,
+            phase: "inspect",
+          });
+        } catch (error) {
+          const offlineApp = await readOfflineAppOwnedDoctorInspection(error, env);
+          if (!offlineApp) {
+            throw error;
+          }
+          inspection = offlineApp;
+        }
         assertDoctorMaintenanceInspection(inspection, env);
-        serviceUpdateVerdict = inspection.serviceUpdateVerdict;
+        serviceVerdict = inspection.serviceUpdateVerdict;
+        if (serviceVerdict?.kind === "unavailable") {
+          // State admission may refuse a live owner before a maintenance handle exists.
+          warn(serviceVerdict.message);
+        }
         if (inspection.serviceUpdateVerdict?.kind !== "absent" && inspection.offline !== true) {
           assertAuthority(() => {
             const admitted = resolveDoctorUpdateAdmission(env);
@@ -426,7 +483,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
             assertUpdateAdmissionReadCurrent = () => assertAuthority(admitted.assertCurrent);
             const checkAndRecord = () => assertAuthority(admitted.recordContinuation);
             assertUpdateAdmissionCurrent = () =>
-              state.owner ? state.owner.run(checkAndRecord) : checkAndRecord();
+              state.resources ? state.run(checkAndRecord) : checkAndRecord();
           });
         }
         if (inspection.serviceUpdateVerdict?.kind === "owned" && inspection.serviceEnv) {
@@ -556,9 +613,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
               },
             );
           }
-        } else if (inspection.serviceUpdateVerdict?.kind === "unavailable") {
-          warn(inspection.serviceUpdateVerdict.message);
-        } else if (inspection.serviceUpdateVerdict?.kind !== "absent") {
+        } else if (serviceVerdict?.kind !== "unavailable" && serviceVerdict?.kind !== "absent") {
           params.runtime.log(
             "The stopped Gateway service was left unchanged; repairing Doctor's selected state only.",
           );
@@ -584,20 +639,23 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
     }
   }
   let custody: "held" | "restoring" | "released" = "held";
+  const assertHeld = (receiver: unknown, operation: string) => {
+    if (receiver !== maintenance || custody !== "held") {
+      throw new Error(`${operation} requires its original live maintenance owner.`);
+    }
+  };
   const maintenance = {
     signal: exit.signal,
-    serviceUpdateVerdict,
+    serviceUpdateVerdict: serviceVerdict,
     warnings,
     failureFacts,
     get databaseWrites() {
       return state.receipt;
     },
     run: <T>(operation: () => T) => state.run(operation),
-    releaseState: () => settle(releaseState),
+    releaseState: async () => throwSettledFailure(await settle(() => state.release())),
     async repairSqliteNoCow(paths: readonly string[]) {
-      if (this !== maintenance || custody !== "held") {
-        throw new Error("SQLite NOCOW repair requires its original live maintenance owner.");
-      }
+      assertHeld(this, "SQLite NOCOW repair");
       const result = await settle(() => state.repairSqliteNoCow(paths));
       for (const message of result.changes) {
         params.runtime.log(message);
@@ -607,19 +665,15 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
       }
     },
     async enableSqliteReclamation(agents: readonly AgentDatabaseMigrationTarget[]) {
-      if (this !== maintenance || custody !== "held") {
-        throw new Error("SQLite reclamation requires its original live maintenance owner.");
-      }
+      assertHeld(this, "SQLite reclamation");
       const result = await settle(() => state.enableSqliteReclamation(agents));
       for (const message of result.warnings) {
         warn(message);
       }
     },
     async cleanupRetainedRuntimes() {
-      if (this !== maintenance || custody !== "held") {
-        throw new Error("Updater runtime cleanup requires its original live maintenance owner.");
-      }
-      await settle(() => state.cleanupRetainedRuntimes(serviceUpdateVerdict !== undefined));
+      assertHeld(this, "Updater runtime cleanup");
+      await settle(() => state.cleanupRetainedRuntimes(serviceVerdict !== undefined));
     },
     async release() {
       if (this !== maintenance) {
@@ -640,7 +694,6 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
       writeConfig?: DoctorConfigWriter,
       failure?: unknown,
     ) {
-      let cfg = initialConfig;
       if (cleanupFailure) {
         throw cleanupFailure.error;
       }
@@ -653,27 +706,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
       custody = "restoring";
       let failed = failure !== undefined;
       try {
-        if (!cfg && !stopped?.stopped) {
-          await release(assertCustody);
-          return;
-        }
-        if (!cfg) {
-          try {
-            // Readiness may be the operation that failed. Reversing Doctor's own
-            // stop must not re-enter that gate; the previous Gateway remains the
-            // recovery owner for the persisted state it was already serving.
-            const { readConfigFileSnapshot } = await import("../config/config.js");
-            cfg = (await readConfigFileSnapshot({ skipPluginValidation: true, observe: false }))
-              .config;
-          } catch (error) {
-            throw new DoctorMaintenanceRefusalError(
-              `Doctor could not restore the Gateway because persisted repair state is not ready: ${formatErrorMessage(error)}`,
-              { kind: "data-at-risk", reason: "incomplete-migration" },
-              { cause: error },
-            );
-          }
-        }
-        await finish(cfg, assertCustody, writeConfig);
+        await finish(initialConfig, assertCustody, writeConfig);
       } catch (restoreError) {
         failed = true;
         if (failure !== undefined) {

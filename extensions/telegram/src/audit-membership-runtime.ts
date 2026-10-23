@@ -11,26 +11,9 @@ import type {
 } from "./audit.types.js";
 import { resolveTelegramApiBase, resolveTelegramTransport } from "./fetch.js";
 
-type TelegramApiOk<T> = { ok: true; result: T };
-type TelegramApiErr = { ok: false; description?: string };
 type TelegramGroupMembershipAuditData = Omit<TelegramGroupMembershipAudit, "elapsedMs">;
 // Telegram getChatMember responses are tiny (< 1 KiB). 4 MiB guards against hostile endpoints.
 const TELEGRAM_BOT_API_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
-type TelegramChatMemberResult = { status?: string };
-
-async function readTelegramMembershipAuditBody(
-  response: Response,
-  timeoutMs: number,
-): Promise<Buffer> {
-  return await readResponseWithLimit(response, TELEGRAM_BOT_API_MAX_RESPONSE_BYTES, {
-    timeoutMs,
-    chunkTimeoutMs: timeoutMs / 2,
-    onIdleTimeout: ({ chunkTimeoutMs }) =>
-      new Error(`Telegram membership audit response body stalled for ${chunkTimeoutMs}ms`),
-    onTimeout: ({ timeoutMs: resolvedTimeoutMs }) =>
-      new Error(`Telegram membership audit response body timed out after ${resolvedTimeoutMs}ms`),
-  });
-}
 
 export async function auditTelegramGroupMembershipImpl(
   params: AuditTelegramGroupMembershipParams,
@@ -64,17 +47,23 @@ export async function auditTelegramGroupMembershipImpl(
       try {
         const url = `${base}/getChatMember?chat_id=${encodeURIComponent(chatId)}&user_id=${encodeURIComponent(String(params.botId))}`;
         const res = await fetchWithTimeout(url, {}, requestTimeoutMs, transport.fetch);
-        const json = JSON.parse(
-          (
-            await readTelegramMembershipAuditBody(res, Math.max(1, deadlineMs - Date.now()))
-          ).toString("utf8"),
-        ) as TelegramApiOk<TelegramChatMemberResult> | TelegramApiErr;
+        const bodyTimeoutMs = Math.max(1, deadlineMs - Date.now());
+        const body = await readResponseWithLimit(res, TELEGRAM_BOT_API_MAX_RESPONSE_BYTES, {
+          timeoutMs: bodyTimeoutMs,
+          chunkTimeoutMs: bodyTimeoutMs / 2,
+          onIdleTimeout: ({ chunkTimeoutMs }) =>
+            new Error(`Telegram membership audit response body stalled for ${chunkTimeoutMs}ms`),
+          onTimeout: ({ timeoutMs: resolvedTimeoutMs }) =>
+            new Error(
+              `Telegram membership audit response body timed out after ${resolvedTimeoutMs}ms`,
+            ),
+        });
+        const json: unknown = JSON.parse(body.toString("utf8"));
         if (!res.ok || !isRecord(json) || !json.ok) {
-          const desc =
+          entry.error =
             isRecord(json) && !json.ok && typeof json.description === "string"
               ? json.description
               : `getChatMember failed (${res.status})`;
-          entry.error = desc;
           continue;
         }
         const status =

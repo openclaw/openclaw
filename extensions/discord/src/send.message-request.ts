@@ -1,13 +1,13 @@
 import { randomBytes } from "node:crypto";
 import { MessageFlags, type APIAllowedMentions, type APIEmbed } from "discord-api-types/v10";
+import { Embed } from "./internal/embeds.js";
 import {
-  Embed,
   hasDiscordV2Components,
   serializePayload,
   type MessagePayloadFile,
   type MessagePayloadObject,
   type TopLevelComponents,
-} from "./internal/discord.js";
+} from "./internal/payload.js";
 
 export { stripUndefinedFields } from "./internal/undefined-fields.js";
 
@@ -51,13 +51,9 @@ export function resolveDiscordMessageFlags(params: {
   silent?: boolean;
   suppressEmbeds?: boolean;
 }): number | undefined {
-  let flags = 0;
-  if (params.suppressEmbeds) {
-    flags |= SUPPRESS_EMBEDS_FLAG;
-  }
-  if (params.silent) {
-    flags |= SUPPRESS_NOTIFICATIONS_FLAG;
-  }
+  const flags =
+    (params.suppressEmbeds ? SUPPRESS_EMBEDS_FLAG : 0) |
+    (params.silent ? SUPPRESS_NOTIFICATIONS_FLAG : 0);
   return flags || undefined;
 }
 

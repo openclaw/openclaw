@@ -109,6 +109,7 @@ export function startSessionColdStorageMaintenance(params: {
     id: "maintenance:session-cold-storage",
     delayMs: 0,
     everyMs: 60_000,
+    phase: "maintenance",
     run: () => {
       if (
         inFlight ||

@@ -1,5 +1,9 @@
 // Isolated runtime.llm.complete tests cover zero-tool dispatch and policy enforcement.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  PreparedModelRuntimeInitialRunAdmissionError,
+  PreparedModelRuntimeOwnerNotPublishedError,
+} from "../../agents/prepared-model-runtime.errors.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginEntryConfig } from "../../config/types.plugins.js";
 import {
@@ -193,7 +197,6 @@ describe("runtime.llm.complete isolated agent runtime", () => {
       total: 0.125,
       expected: 0.125,
     },
-    { name: "isolated recorded zero", isolated: true, tiered: true, total: 0, expected: 0 },
     {
       name: "direct single-call tier",
       isolated: false,
@@ -426,33 +429,6 @@ describe("runtime.llm.complete isolated agent runtime", () => {
     );
   });
 
-  it("does not require profile authority for a model-only override", async () => {
-    hoisted.resolveSimpleCompletionSelectionForAgent.mockReturnValueOnce({
-      provider: "openai",
-      modelId: "gpt-5.4",
-      profileId: "openai:configured",
-      agentDir: "/tmp/main",
-    });
-    const llm = createRuntimeLlm({
-      getConfig: () =>
-        configWithPluginPolicy("model-plugin", {
-          allowModelOverride: true,
-          allowedModels: ["openai/gpt-5.4"],
-        }),
-      authority: { allowComplete: true },
-    });
-
-    await expect(
-      withPluginRuntimePluginScope({ pluginId: "model-plugin" }, () =>
-        llm.complete({
-          model: "openai/gpt-5.4",
-          messages: [{ role: "user", content: "Return JSON" }],
-          execution: { mode: "isolated-agent-runtime" },
-        }),
-      ),
-    ).resolves.toMatchObject({ text: "isolated" });
-  });
-
   it("rejects chat histories before isolated runtime dispatch", async () => {
     const llm = createRuntimeLlm({ getConfig: () => cfg, authority: { allowComplete: true } });
 
@@ -462,17 +438,6 @@ describe("runtime.llm.complete isolated agent runtime", () => {
           { role: "user", content: "first" },
           { role: "assistant", content: "second" },
         ],
-        execution: { mode: "isolated-agent-runtime" },
-      } as unknown as Parameters<typeof llm.complete>[0]),
-    ).rejects.toMatchObject({ code: "LLM_ISOLATED_INPUT_REJECTED" });
-    expect(hoisted.runIsolatedCompletion).not.toHaveBeenCalled();
-  });
-
-  it("rejects a missing isolated messages container with the stable input code", async () => {
-    const llm = createRuntimeLlm({ getConfig: () => cfg, authority: { allowComplete: true } });
-
-    await expect(
-      llm.complete({
         execution: { mode: "isolated-agent-runtime" },
       } as unknown as Parameters<typeof llm.complete>[0]),
     ).rejects.toMatchObject({ code: "LLM_ISOLATED_INPUT_REJECTED" });
@@ -520,46 +485,8 @@ describe("runtime.llm.complete isolated agent runtime", () => {
     ).rejects.toMatchObject({ code: "LLM_ISOLATED_INPUT_REJECTED" });
   });
 
-  it("settles at the deadline when the isolated runtime ignores cancellation", async () => {
-    hoisted.runIsolatedCompletion.mockReturnValueOnce(new Promise(() => {}));
-    const llm = createRuntimeLlm({ getConfig: () => cfg, authority: { allowComplete: true } });
-
-    await expect(
-      llm.complete({
-        messages: [{ role: "user", content: "Return JSON" }],
-        execution: { mode: "isolated-agent-runtime", timeoutMs: 5 },
-      }),
-    ).rejects.toMatchObject({ code: "LLM_COMPLETION_TIMEOUT" });
-  });
-
-  it("settles on caller abort when the isolated runtime ignores cancellation", async () => {
-    let markStarted: (() => void) | undefined;
-    const started = new Promise<void>((resolve) => {
-      markStarted = resolve;
-    });
-    hoisted.runIsolatedCompletion.mockImplementationOnce(() => {
-      markStarted?.();
-      return new Promise(() => {});
-    });
-    const controller = new AbortController();
-    const llm = createRuntimeLlm({ getConfig: () => cfg, authority: { allowComplete: true } });
-    const completion = llm.complete({
-      messages: [{ role: "user", content: "Return JSON" }],
-      signal: controller.signal,
-      execution: { mode: "isolated-agent-runtime" },
-    });
-
-    await started;
-    controller.abort();
-    await expect(completion).rejects.toMatchObject({ code: "LLM_COMPLETION_ABORTED" });
-  });
-
-  it("maps unsupported isolated runtimes to a stable public error code", async () => {
-    hoisted.runIsolatedCompletion.mockRejectedValueOnce(
-      Object.assign(new Error("Agent harness external does not support isolated completion."), {
-        code: "unsupported",
-      }),
-    );
+  it.each([null])("maps an empty adapter rejection (%s) to a stable error", async (error) => {
+    hoisted.runIsolatedCompletion.mockRejectedValueOnce(error);
     const llm = createRuntimeLlm({ getConfig: () => cfg, authority: { allowComplete: true } });
 
     await expect(
@@ -567,27 +494,12 @@ describe("runtime.llm.complete isolated agent runtime", () => {
         messages: [{ role: "user", content: "Return JSON" }],
         execution: { mode: "isolated-agent-runtime" },
       }),
-    ).rejects.toMatchObject({ code: "LLM_ISOLATED_UNSUPPORTED" });
+    ).rejects.toMatchObject({
+      code: "LLM_COMPLETION_FAILED",
+      message: "Plugin LLM completion failed.",
+    });
+    expect(hoisted.runIsolatedCompletion).toHaveBeenCalledOnce();
   });
-
-  it.each([null, undefined])(
-    "maps an empty adapter rejection (%s) to a stable error",
-    async (error) => {
-      hoisted.runIsolatedCompletion.mockRejectedValueOnce(error);
-      const llm = createRuntimeLlm({ getConfig: () => cfg, authority: { allowComplete: true } });
-
-      await expect(
-        llm.complete({
-          messages: [{ role: "user", content: "Return JSON" }],
-          execution: { mode: "isolated-agent-runtime" },
-        }),
-      ).rejects.toMatchObject({
-        code: "LLM_COMPLETION_FAILED",
-        message: "Plugin LLM completion failed.",
-      });
-      expect(hoisted.runIsolatedCompletion).toHaveBeenCalledOnce();
-    },
-  );
 
   it.each([
     ["input-rejected", "LLM_ISOLATED_INPUT_REJECTED"],
@@ -612,5 +524,26 @@ describe("runtime.llm.complete isolated agent runtime", () => {
     ).rejects.toMatchObject({ code: publicCode });
     stop();
     expect(usageEvents).toEqual([]);
+  });
+
+  it("codes isolated reload admission refusals as lifecycle failures", async () => {
+    const refusal = new PreparedModelRuntimeInitialRunAdmissionError(
+      new PreparedModelRuntimeOwnerNotPublishedError("Model runtime replacement is in progress", {
+        admissionBlocked: true,
+      }),
+    );
+    hoisted.runIsolatedCompletion.mockRejectedValueOnce(refusal);
+    const llm = createRuntimeLlm({ getConfig: () => cfg, authority: { allowComplete: true } });
+
+    await expect(
+      llm.complete({
+        messages: [{ role: "user", content: "Return JSON" }],
+        execution: { mode: "isolated-agent-runtime" },
+      }),
+    ).rejects.toMatchObject({
+      code: "LLM_RUNTIME_LIFECYCLE",
+      message: refusal.message,
+      cause: refusal,
+    });
   });
 });

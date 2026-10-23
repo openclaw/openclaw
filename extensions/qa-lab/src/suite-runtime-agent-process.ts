@@ -172,8 +172,11 @@ function resolveRetryableHistoryDelayMs(error: unknown) {
   for (let depth = 0; depth < 4 && isRecord(current); depth += 1) {
     const code = current.gatewayCode ?? current.code;
     if (code === "UNAVAILABLE" && current.retryable === true) {
-      const detailMethod = isRecord(current.details) ? current.details.method : undefined;
-      if (detailMethod === "chat.history") {
+      const details = isRecord(current.details) ? current.details : undefined;
+      if (
+        details?.method === "chat.history" ||
+        (details?.method === undefined && details?.code === "agent-database-inspection-pending")
+      ) {
         return resolveIntegerOption(current.retryAfterMs, QA_HISTORY_RETRY_DEFAULT_MS, {
           min: QA_HISTORY_RETRY_MIN_MS,
           max: QA_HISTORY_RETRY_MAX_MS,
@@ -321,12 +324,17 @@ async function forceMemoryIndex(params: {
   query: string;
   expectedNeedle: string;
 }) {
+  if (!params.env.gateway.restartAfterStateMutation) {
+    throw new Error("qa gateway cannot stop for offline memory indexing");
+  }
+  await params.env.gateway.restartAfterStateMutation(async () => {
+    await runQaCli(params.env, ["memory", "index", "--agent", "qa", "--force"], {
+      timeoutMs: resolveQaLiveTurnTimeoutMs(params.env, 60_000),
+    });
+  });
   await waitForGatewayHealthy(params.env, 60_000);
   await waitForTransportReady(params.env, 60_000);
-  await runQaCli(params.env, ["memory", "index", "--agent", "qa", "--force"], {
-    timeoutMs: resolveQaLiveTurnTimeoutMs(params.env, 60_000),
-  });
-  const result = await waitForMemorySearchMatch({
+  return await waitForMemorySearchMatch({
     expectedNeedle: params.expectedNeedle,
     timeoutMs: resolveQaLiveTurnTimeoutMs(params.env, 20_000),
     search: async () =>
@@ -339,8 +347,6 @@ async function forceMemoryIndex(params: {
         },
       )) as QaMemorySearchResult,
   });
-  await params.env.gateway.restartAfterStateMutation?.(async () => {});
-  return result;
 }
 
 async function waitForPersistedTranscriptToolEvidence(

@@ -1,11 +1,6 @@
-import {
-  resolveDefaultSessionStorePath,
-  resolveSessionFilePathCore,
-  resolveSessionFilePathOptions,
-} from "../../config/sessions/paths.js";
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import { resolveDefaultSessionStorePath } from "../../config/sessions/paths.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { escapeRegExp } from "../../shared/regexp.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
@@ -13,7 +8,6 @@ interface ExportCommandSessionTarget {
   agentId: string;
   entry: SessionEntry;
   sessionId: string;
-  sessionFile: string;
   sessionKey: string;
   storePath: string;
 }
@@ -30,7 +24,8 @@ export function parseExportCommandOutputPath(
   }
   const aliasPattern = aliases.map(escapeRegExp).join("|");
   const args = normalized.replace(new RegExp(`^/(${aliasPattern})\\s*`), "").trim();
-  const outputPath = args.split(/\s+/).find((part) => !part.startsWith("-"));
+  // The command registry serializes a single path argument, which may contain spaces.
+  const outputPath = args.replace(/^(?:-\S*(?:\s+|$))+/u, "").trim() || undefined;
   if (outputPath && outputPath.length > MAX_EXPORT_COMMAND_OUTPUT_PATH_CHARS) {
     return {
       error: `❌ Output path is too long. Keep it at ${MAX_EXPORT_COMMAND_OUTPUT_PATH_CHARS} characters or less.`,
@@ -39,12 +34,12 @@ export function parseExportCommandOutputPath(
   return { outputPath };
 }
 
-export function resolveExportCommandSessionTarget(
+export async function resolveExportCommandSessionTarget(
   params: HandleCommandsParams,
-): ExportCommandSessionTarget | { text: string } {
+): Promise<ExportCommandSessionTarget | { text: string }> {
   const targetAgentId = params.agentId;
   const storePath = params.storePath ?? resolveDefaultSessionStorePath(targetAgentId);
-  const entry = loadSessionEntryReadOnly({
+  const entry = await readSessionEntryReadOnlyInWorker({
     storePath,
     sessionKey: params.sessionKey,
     clone: false,
@@ -54,23 +49,11 @@ export function resolveExportCommandSessionTarget(
     return { text: `❌ Session not found: ${params.sessionKey}` };
   }
 
-  try {
-    const sessionFile = resolveSessionFilePathCore(
-      sessionId,
-      entry,
-      resolveSessionFilePathOptions({ agentId: targetAgentId, storePath }),
-    );
-    return {
-      agentId: targetAgentId,
-      entry,
-      sessionFile,
-      sessionId,
-      sessionKey: params.sessionKey,
-      storePath,
-    };
-  } catch (err) {
-    return {
-      text: `❌ Failed to resolve session file: ${formatErrorMessage(err)}`,
-    };
-  }
+  return {
+    agentId: targetAgentId,
+    entry,
+    sessionId,
+    sessionKey: params.sessionKey,
+    storePath,
+  };
 }

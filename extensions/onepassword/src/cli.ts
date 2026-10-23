@@ -18,7 +18,6 @@ type OnePasswordCliContext = {
   resolveOpClient: () => Pick<OpClient, "opBin" | "tokenFilePresent">;
   auditStore: PluginStateKeyedStore<AuditRow>;
   registerAdditionalCommands?: (command: CommandLike) => void;
-  write?: (message: string) => void;
 };
 
 function parseLimit(value: unknown): number {
@@ -75,7 +74,7 @@ async function readAuditRows(auditStore: PluginStateKeyedStore<AuditRow>, limit:
 }
 
 export function registerOnePasswordCommands(context: OnePasswordCliContext): void {
-  const write = context.write ?? ((message: string) => process.stdout.write(`${message}\n`));
+  const write = (message: string) => process.stdout.write(`${message}\n`);
   const command = context.program
     .command("onepassword")
     .description("Inspect the 1Password broker");

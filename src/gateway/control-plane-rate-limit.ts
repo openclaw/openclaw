@@ -40,7 +40,6 @@ export function consumeControlPlaneWriteBudget(params: {
 }): {
   allowed: boolean;
   retryAfterMs: number;
-  remaining: number;
   key: string;
 } {
   const nowMs = params.nowMs ?? Date.now();
@@ -71,7 +70,6 @@ export function consumeControlPlaneWriteBudget(params: {
     return {
       allowed: false,
       retryAfterMs,
-      remaining: 0,
       key,
     };
   }
@@ -80,7 +78,6 @@ export function consumeControlPlaneWriteBudget(params: {
   return {
     allowed: true,
     retryAfterMs: 0,
-    remaining: Math.max(0, CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS - bucket.count),
     key,
   };
 }

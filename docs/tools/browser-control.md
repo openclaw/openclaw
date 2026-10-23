@@ -461,7 +461,7 @@ not supported on `profile="user"` and other existing-session (chrome-mcp)
 profiles. Send actions individually there.
 
 - CLI: `openclaw browser batch --actions '<json>'`, `openclaw browser batch
---actions-file plan.json`, or `openclaw browser batch --actions-file -` to
+  --actions-file plan.json`, or `openclaw browser batch --actions-file -` to
   read the JSON array from stdin. `--continue` sets `stopOnError=false`. The
   default is to stop on first error. `--target-id` scopes the whole batch to
   one tab. `--actions-file` and stdin input are capped at 1,000,000 bytes.
@@ -478,7 +478,7 @@ profiles. Send actions individually there.
   different tab is rejected with `ACT_TARGET_ID_MISMATCH` before any action
   runs. Batched actions share the request's tab by design.
 - Error summary: the response is `{ "results": [{ "ok": true }, { "ok": false,
-"error": "<message>" }, ...] }`, one entry per action in order. When
+  "error": "<message>" }, ...] }`, one entry per action in order. When
   `stopOnError` is the default, the array ends at the first failure. With
   `--continue` it covers every action. Any failed entry makes the CLI exit
   nonzero. Pass `--json` to preserve the full ordered response for scripts.

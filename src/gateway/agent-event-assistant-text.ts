@@ -4,6 +4,7 @@ type AssistantTextInput = {
   text?: string;
   delta?: string;
   itemId?: string;
+  occurrenceId?: string;
   replace?: boolean;
   replaceable?: boolean;
   managedMediaUrls?: string[];
@@ -45,10 +46,16 @@ export function createAssistantTextStream(holdOutput: boolean) {
     get streamedText() {
       return streamed.text;
     },
-    update(data: unknown): { delta?: string; replacement?: "representable" | "unrepresentable" } {
-      const input = resolveAssistantTextInput(data);
+    update(
+      data: unknown,
+      rawDelta?: string,
+    ): { delta?: string; replacement?: "representable" | "unrepresentable" } {
+      let input = resolveAssistantTextInput(data);
       if (!input) {
         return {};
+      }
+      if (rawDelta !== undefined) {
+        input = { ...input, text: undefined, delta: rawDelta };
       }
       // Hold provisional replacements and their terminal echoes until the run result settles.
       if (input.replaceable || pending) {
@@ -107,6 +114,10 @@ export function resolveAssistantTextInput(data: unknown): AssistantTextInput | u
     text: typeof record.text === "string" ? record.text : undefined,
     delta: typeof record.delta === "string" ? record.delta : undefined,
     itemId: typeof record.itemId === "string" && record.itemId ? record.itemId : undefined,
+    occurrenceId:
+      typeof record.occurrenceId === "string" && record.occurrenceId
+        ? record.occurrenceId
+        : undefined,
     replace: record.replace === true,
     replaceable: record.replaceable === true,
     ...(Array.isArray(record.managedMediaUrls)

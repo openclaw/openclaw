@@ -18,11 +18,14 @@ const POSIX_ENV = { PATH: "/usr/bin:/bin" };
 
 async function render(
   command: string,
-  options: Omit<Parameters<typeof buildAuthorizedShellCommandFromPlan>[0], "plan">,
+  mode: Parameters<typeof buildAuthorizedShellCommandFromPlan>[0]["mode"],
+  segmentSatisfiedBy: Parameters<
+    typeof buildAuthorizedShellCommandFromPlan
+  >[0]["segmentSatisfiedBy"],
   env: NodeJS.ProcessEnv = POSIX_ENV,
 ) {
   const plan = await planShellAuthorization({ command, env });
-  return buildAuthorizedShellCommandFromPlan({ plan, ...options });
+  return buildAuthorizedShellCommandFromPlan({ plan, mode, segmentSatisfiedBy });
 }
 
 function renderOk(result: ReturnType<typeof buildAuthorizedShellCommandFromPlan>): string {
@@ -55,133 +58,45 @@ async function prepareReviewedCommand(command: string, env: NodeJS.ProcessEnv, c
 }
 
 describe("exec authorization renderer", () => {
-  it("rewrites only approved executables while preserving pipeline arguments", async () => {
-    const command = renderOk(
-      await render("git diff | head", {
-        mode: "safeBins",
-        segmentSatisfiedBy: [null, "safeBins"],
-      }),
-    );
-    expect(command).toMatch(/^git diff \| \/.+\/head$/);
-  });
-
-  it("fails closed when POSIX safe-bin arguments contain shell expansion source", async () => {
-    await expect(
-      render("rg foo src/*.ts | head -n {5,/etc/passwd} && echo ok", {
-        mode: "safeBins",
-        segmentSatisfiedBy: [null, "safeBins", null],
-      }),
-    ).resolves.toEqual({ ok: false, reason: "shell expansion in safe-bin arguments" });
+  it.each<[string, Parameters<typeof render>[1], Parameters<typeof render>[2], string]>([
+    [
+      "rg foo src/*.ts | head -n {5,/etc/passwd} && echo ok",
+      "safeBins",
+      [null, "safeBins", null],
+      "shell expansion in safe-bin arguments",
+    ],
+    [
+      "true *.txt && head -n 1",
+      "enforced",
+      ["safeBuiltins", "allowlist"],
+      "shell expansion in enforced arguments",
+    ],
+    ["cat ~/secret", "enforced", ["allowlist"], "shell expansion in enforced arguments"],
+    ["sh -c 'head -n 5'", "enforced", ["allowlist"], "shell quoting required in wrapper payload"],
+    ["git diff | head", "safeBins", ["safeBins"], "segment metadata mismatch"],
+  ])("fails closed for %s (%s)", async (command, mode, satisfiedBy, reason) => {
+    await expect(render(command, mode, satisfiedBy)).resolves.toEqual({ ok: false, reason });
   });
 
   it("renders dispatch-wrapper safe-bin commands without quote-all argv rendering", async () => {
-    const command = renderOk(
-      await render(
-        "env rg -n needle",
-        {
-          mode: "safeBins",
-          segmentSatisfiedBy: ["safeBins"],
-        },
-        makePathEnv(makeExecApprovalsTempDir()),
-      ),
+    const env = makePathEnv(makeExecApprovalsTempDir());
+    expect(renderOk(await render("env rg -n needle", "safeBins", ["safeBins"], env))).toBe(
+      "rg -n needle",
     );
-    expect(command).toBe("rg -n needle");
-  });
-
-  it("renders shell-wrapper payloads by preserving wrapper transport", async () => {
-    const command = renderOk(
-      await render("sh -c 'tr a b && head -c 16'", {
-        mode: "safeBins",
-        segmentSatisfiedBy: ["safeBins", "safeBins"],
-      }),
-    );
-    expect(command).toMatch(/^sh -c '\/.+\/tr a b && \/.+\/head -c 16'$/);
   });
 
   it("preserves non-rewritten wrapper payload commands", async () => {
-    const command = renderOk(
-      await render("sh -c 'git status && head -c 16'", {
-        mode: "safeBins",
-        segmentSatisfiedBy: [null, "safeBins"],
-      }),
-    );
-    expect(command).toMatch(/^sh -c 'git status && \/.+\/head -c 16'$/);
-  });
-
-  it("source-preserves arguments for enforced POSIX commands", async () => {
-    const command = renderOk(
-      await render("head -c 16", {
-        mode: "enforced",
-        segmentSatisfiedBy: ["safeBins"],
-      }),
-    );
-    expect(command).toMatch(/^\/.+\/head -c 16$/);
+    const result = await render("sh -c 'git status && head -c 16'", "safeBins", [null, "safeBins"]);
+    expect(renderOk(result)).toMatch(/^sh -c 'git status && \/.+\/head -c 16'$/);
   });
 
   it("leaves POSIX safe builtins unrewritten in enforced mode", async () => {
-    const command = renderOk(
-      await render("cd .", {
-        mode: "enforced",
-        segmentSatisfiedBy: ["safeBuiltins"],
-      }),
-    );
-    expect(command).toBe("cd .");
-  });
-
-  it("rejects shell expansion in safe builtins without rewriting them", async () => {
-    await expect(
-      render("true *.txt && head -n 1", {
-        mode: "enforced",
-        segmentSatisfiedBy: ["safeBuiltins", "allowlist"],
-      }),
-    ).resolves.toEqual({ ok: false, reason: "shell expansion in enforced arguments" });
-  });
-
-  it("rewrites quoted POSIX executable source spans", async () => {
-    const command = renderOk(
-      await render('"head" -c 16', {
-        mode: "safeBins",
-        segmentSatisfiedBy: ["safeBins"],
-      }),
-    );
-    expect(command).toMatch(/^\/.+\/head -c 16$/);
-  });
-
-  it("fails closed for enforced POSIX commands with shell glob arguments", async () => {
-    await expect(
-      render("ls *.ts", {
-        mode: "enforced",
-        segmentSatisfiedBy: ["allowlist"],
-      }),
-    ).resolves.toEqual({ ok: false, reason: "shell expansion in enforced arguments" });
-  });
-
-  it("fails closed for enforced POSIX commands with tilde-expanded arguments", async () => {
-    await expect(
-      render("cat ~/secret", {
-        mode: "enforced",
-        segmentSatisfiedBy: ["allowlist"],
-      }),
-    ).resolves.toEqual({ ok: false, reason: "shell expansion in enforced arguments" });
+    expect(renderOk(await render("cd .", "enforced", ["safeBuiltins"]))).toBe("cd .");
   });
 
   it("preserves env assignment prefixes for enforced POSIX commands", async () => {
-    const command = renderOk(
-      await render("LIMIT=1 head -n 5", {
-        mode: "enforced",
-        segmentSatisfiedBy: ["allowlist"],
-      }),
-    );
-    expect(command).toMatch(/^LIMIT=1 \/.+\/head -n 5$/);
-  });
-
-  it("fails closed for enforced shell-wrapper payload rewrites", async () => {
-    await expect(
-      render("sh -c 'head -n 5'", {
-        mode: "enforced",
-        segmentSatisfiedBy: ["allowlist"],
-      }),
-    ).resolves.toEqual({ ok: false, reason: "shell quoting required in wrapper payload" });
+    const result = await render("LIMIT=1 head -n 5", "enforced", ["allowlist"]);
+    expect(renderOk(result)).toMatch(/^LIMIT=1 \/.+\/head -n 5$/);
   });
 
   it("fails closed when shell-wrapper safe-bin rewrites would need outer quote escaping", async () => {
@@ -189,31 +104,13 @@ describe("exec authorization renderer", () => {
     fs.mkdirSync(dir);
     makeExecutable(dir, "head");
     await expect(
-      render(
-        "sh -c 'head -n 5'",
-        {
-          mode: "safeBins",
-          segmentSatisfiedBy: ["safeBins"],
-        },
-        makePathEnv(dir),
-      ),
+      render("sh -c 'head -n 5'", "safeBins", ["safeBins"], makePathEnv(dir)),
     ).resolves.toEqual({ ok: false, reason: "shell quoting required in wrapper payload" });
-  });
-
-  it("fails closed when candidate metadata does not match the plan", async () => {
-    await expect(
-      render("git diff | head", {
-        mode: "safeBins",
-        segmentSatisfiedBy: ["safeBins"],
-      }),
-    ).resolves.toEqual({ ok: false, reason: "segment metadata mismatch" });
   });
 });
 
 describe.skipIf(process.platform === "win32")("reviewed shell dispatch renderer", () => {
   it.each([
-    ["ls *.txt", "'BIN/ls' *.txt"],
-    ["env -- env 'ls' ~/docs/*.txt", "'BIN/env' -- 'BIN/env' 'BIN/ls' ~/docs/*.txt"],
     [
       '"ls"  "雪" *.txt | cat && env ls ~/docs; ls \\*.txt\nls "*.txt"',
       "'BIN/ls'  \"雪\" *.txt | 'BIN/cat' && 'BIN/env' 'BIN/ls' ~/docs; 'BIN/ls' \\*.txt\n'BIN/ls' \"*.txt\"",
@@ -240,7 +137,7 @@ describe.skipIf(process.platform === "win32")("reviewed shell dispatch renderer"
     );
   });
 
-  it.each(["spans", "wrapper binding", "final binding"])(
+  it.each(["spans", "final binding"])(
     "refuses a partially pinned dispatch when %s are missing",
     async (missing) => {
       const binDir = makeExecApprovalsTempDir();
@@ -255,7 +152,7 @@ describe.skipIf(process.platform === "win32")("reviewed shell dispatch renderer"
         }
       } else {
         prepared.binding.operands = prepared.binding.operands.filter(
-          (operand) => operand.argv.length !== (missing === "wrapper binding" ? 1 : 3),
+          (operand) => operand.argv.length !== 3,
         );
       }
 

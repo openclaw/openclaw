@@ -1,7 +1,5 @@
 import type { RouteLocation } from "@openclaw/uirouter";
-import { definePage } from "@openclaw/uirouter";
-import { html } from "lit";
-import { routePageSpec } from "../../app-route-paths.ts";
+import { defineSolidPage } from "../../app-route-types.tsx";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { SessionArchivedFilter } from "../../lib/sessions/index.ts";
 
@@ -21,22 +19,19 @@ function routeOptions(location: RouteLocation) {
   return { expandedSessionKey, statusFilter };
 }
 
-export const page = definePage({
-  ...routePageSpec("sessions"),
-  loaderDeps: (context: ApplicationContext, location: RouteLocation) => {
-    const options = routeOptions(location);
-    return `${options.expandedSessionKey ?? ""}\u0000${options.statusFilter}\u0000${context.agentSelection.state.scopeId ?? "all"}`;
+export const page = defineSolidPage<"sessions", ApplicationContext, SessionsRouteData>(
+  "sessions",
+  () => import("./sessions-page.tsx").then((module) => module.SessionsPage),
+  {
+    loaderDeps: (context: ApplicationContext, location: RouteLocation) => {
+      const options = routeOptions(location);
+      return `${options.expandedSessionKey ?? ""}\u0000${options.statusFilter}\u0000${context.agentSelection.state.scopeId ?? "all"}`;
+    },
+    loader: async (context: ApplicationContext, { location }): Promise<SessionsRouteData> => {
+      await context.runtimeConfig.ensureLoaded().catch(() => undefined);
+      // The mounted page owns list issuance, including scope/status navigation
+      // during a search. Prefetching here bypasses its single in-flight request.
+      return routeOptions(location);
+    },
   },
-  loader: async (context: ApplicationContext, { location }): Promise<SessionsRouteData> => {
-    await context.runtimeConfig.ensureLoaded().catch(() => undefined);
-    // The mounted page owns list issuance, including scope/status navigation
-    // during a search. Prefetching here bypasses its single in-flight request.
-    return routeOptions(location);
-  },
-  component: () =>
-    import("./sessions-page.ts").then(() => ({
-      header: true,
-      render: (data: SessionsRouteData | undefined) =>
-        html`<openclaw-sessions-page .routeData=${data}></openclaw-sessions-page>`,
-    })),
-});
+);

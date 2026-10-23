@@ -163,7 +163,7 @@ const connection = createWorkerConnection({
   },
 });
 
-await connection.start();
+await Promise.all([connection.waitForReady(), connection.waitForReady(), connection.start()]);
 await connection.invokeGatewayTool(
   {
     generation: "closing-window-surface",

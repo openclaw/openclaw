@@ -156,7 +156,6 @@ export function resolveIncludeWriteBoundary(params: {
     [...new Set(targets)].map((target) => [target, resolvePathViaExistingAncestorSync(target)]),
   );
   let best: IncludeWriteBoundary | null = null;
-  let bestDepth = 0;
   for (const entry of provenance) {
     // Array-entry includes own a position inside a merged array, which a keyed
     // subtree write cannot express. Numeric object keys remain ordinary keys.
@@ -206,9 +205,8 @@ export function resolveIncludeWriteBoundary(params: {
     // the innermost authored file before its delegating parents. Strict
     // comparison keeps that first candidate; replacing it would select an outer
     // file that still contains a $include directive and cannot absorb a write.
-    if (entry.path.length > bestDepth) {
+    if (entry.path.length > (best?.boundaryPath.length ?? 0)) {
       best = { boundaryPath: entry.path, includePath: entry.targetPath };
-      bestDepth = entry.path.length;
     }
   }
   return best;

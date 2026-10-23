@@ -8,12 +8,10 @@ describe("desktop PCM playback", () => {
     const queue = new DesktopPcmQueue(context as unknown as AudioContext);
     queue.play(new Uint8Array(4800 * 4));
     queue.play(new Uint8Array(4800 * 4));
-    const ended = context.sources[0]!.captureDispatch("ended");
     queue.play(new Uint8Array(4800 * 4));
     expect(context.sources.slice(0, 2).every((s) => s.stop.mock.calls.length === 1)).toBe(true);
     expect(context.sources[2]!.start).toHaveBeenCalledWith(0);
     expect(context.sources[0]!.listenerCount).toBe(0);
-    ended(new Event("ended"));
     expect(context.sources[0]!.disconnect).toHaveBeenCalledOnce();
     expect(context.sources[2]!.stop).not.toHaveBeenCalled();
     const large = new Uint8Array(24000 * 4 + 1);

@@ -1,12 +1,27 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { fileURLToPath } from "node:url";
 import { expectDefined } from "../../packages/normalization-core/src/expect.ts";
+import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { delay } from "./gateway-bench-child.ts";
 import { requestProbeStatus } from "./gateway-bench-probes.ts";
 import { parseStrictIntegerOption } from "./strict-integer-option.ts";
 
 export type SummaryStats = NonNullable<ReturnType<typeof summarizeNumbers>>;
+
+export function gatewayBenchCpuProfileArgs(directory?: string): string[] {
+  if (!directory) {
+    return [];
+  }
+  mkdirSync(directory, { recursive: true });
+  return [
+    "--cpu-prof",
+    `--cpu-prof-dir=${path.resolve(directory)}`,
+    "--import",
+    fileURLToPath(new URL("./gateway-bench-cpu-profile.mjs", import.meta.url)),
+  ];
+}
 export type InitialProbeResult = {
   firstErrorKind: string | null;
   firstRecoveryMs: number | null;
@@ -32,7 +47,7 @@ export const BASE_GATEWAY_BENCH_CONFIG = {
     tailscale: { mode: "off" },
   },
   plugins: { enabled: true, entries: { browser: { enabled: false } } },
-} satisfies Record<string, unknown>;
+} satisfies OpenClawConfig;
 
 export class CliArgumentError extends Error {
   override name = "CliArgumentError";
@@ -75,7 +90,7 @@ export function buildGatewayBenchCommand(
 }
 
 export function parseCliArgs(
-  argv: string[],
+  argv: readonly string[],
   options: {
     booleanFlags: ReadonlySet<string>;
     repeatableValueFlags?: ReadonlySet<string>;
@@ -256,6 +271,7 @@ export function createGatewayBenchEnv(
     LANG: process.env.LANG ?? "en_US.UTF-8",
     LOGNAME: process.env.LOGNAME ?? "openclaw-bench",
     NO_COLOR: "1",
+    NODE_DISABLE_COMPILE_CACHE: process.env.NODE_DISABLE_COMPILE_CACHE,
     PATH: process.env.PATH,
     SHELL: process.env.SHELL,
     TMPDIR: process.env.TMPDIR,
@@ -331,9 +347,7 @@ export function writePluginFixtures(
       `${JSON.stringify(
         {
           id,
-          ...(options.activationOnStartup === undefined
-            ? {}
-            : { activation: { onStartup: options.activationOnStartup } }),
+          activation: { onStartup: options.activationOnStartup ?? true },
           ...(stallsProviderCatalog || stallsProviderStaticCatalog
             ? {
                 providers: [STALLED_CATALOG_PROVIDER_ID],
@@ -368,6 +382,7 @@ export function writeGatewayBenchConfig(
   },
 ): string {
   const agents = config.agents as { defaults?: Record<string, unknown> } | undefined;
+  const plugins = config.plugins as OpenClawConfig["plugins"];
   const merged = {
     ...config,
     ...(options.agentList
@@ -388,11 +403,14 @@ export function writeGatewayBenchConfig(
         }
       : {}),
     plugins: {
-      ...(config.plugins as Record<string, unknown> | undefined),
+      ...plugins,
       ...(options.pluginFixtures
         ? {
-            allow: options.pluginFixtures.pluginIds,
-            load: { paths: [options.pluginFixtures.pluginsDir] },
+            allow: [...(plugins?.allow ?? []), ...options.pluginFixtures.pluginIds],
+            load: {
+              ...plugins?.load,
+              paths: [...(plugins?.load?.paths ?? []), options.pluginFixtures.pluginsDir],
+            },
           }
         : {}),
     },
@@ -406,6 +424,7 @@ export function buildGatewayBenchChildArgs(
   entry: string,
   port: number,
   nodeOptions: string[] = [],
+  authMode: "none" | "token" | "trusted-proxy" = "none",
 ): string[] {
   return [
     ...nodeOptions,
@@ -417,7 +436,7 @@ export function buildGatewayBenchChildArgs(
     "--bind",
     "loopback",
     "--auth",
-    "none",
+    authMode,
     "--tailscale",
     "off",
     "--allow-unconfigured",
@@ -546,11 +565,7 @@ export function flushOutputLineBuffers(
   buffers: Record<"stderr" | "stdout", string>,
   onLine: (line: string, nowMs: number) => void,
   nowMs: number,
-  options: { flushPartial?: boolean } = {},
 ): void {
-  if (!options.flushPartial) {
-    return;
-  }
   for (const stream of ["stdout", "stderr"] as const) {
     const line = buffers[stream];
     if (line) {

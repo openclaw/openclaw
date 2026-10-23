@@ -1,5 +1,6 @@
 import {
   isSyntheticSourceReplyTurn,
+  resolveCommandReplyExpectation,
   type ReplyExpectation,
 } from "../../agents/reply-completion.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
@@ -13,6 +14,7 @@ import { resolveCommandTurnContext } from "../command-turn-context.js";
 import { isExplicitCommandTurnContext } from "../command-turn-detection.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import type { MsgContext } from "../templating.js";
+import type { FollowupRun } from "./queue/types.js";
 
 export type SourceReplyDeliveryModeContext = Pick<
   MsgContext,
@@ -28,6 +30,7 @@ export type SourceReplyDeliveryModeContext = Pick<
   | "CommandTurn"
   | "BotUsername"
   | "WasMentioned"
+  | "MentionSource"
   | "InputProvenance"
 >;
 
@@ -93,12 +96,21 @@ export function resolveSourceReplyDeliveryMode(params: {
 export function resolveSourceReplyExpectation(params: {
   ctx: SourceReplyDeliveryModeContext;
   cfg: OpenClawConfig;
-  isHeartbeat?: boolean;
+  scheduledAutomation?: boolean;
 }): ReplyExpectation {
+  const commandExpectation = resolveCommandReplyExpectation({
+    cfg: params.cfg,
+    sessionKey: params.ctx.SessionKey,
+    messageChannel: params.ctx.Provider ?? params.ctx.Surface,
+    opts: { inputProvenance: params.ctx.InputProvenance },
+  });
+  if (commandExpectation === "result-required") {
+    return commandExpectation;
+  }
   if (
     isSyntheticSourceReplyTurn({
       inputProvenance: params.ctx.InputProvenance,
-      isHeartbeat: params.isHeartbeat,
+      scheduledAutomation: params.scheduledAutomation,
     })
   ) {
     return "optional";
@@ -117,7 +129,8 @@ export function resolveSourceReplyExpectation(params: {
   });
   if (
     conversationType === "group" &&
-    params.ctx.WasMentioned !== true &&
+    // Thread participation admits the message but does not explicitly request a reply.
+    (params.ctx.WasMentioned !== true || params.ctx.MentionSource === "implicit_thread") &&
     resolveSilentReplySettings({
       cfg: params.cfg,
       surface: params.ctx.Surface ?? params.ctx.Provider,
@@ -129,9 +142,26 @@ export function resolveSourceReplyExpectation(params: {
   return "required";
 }
 
+export function resolveFollowupReplyExpectation(queued: FollowupRun, cfg: OpenClawConfig) {
+  return (
+    queued.run.terminalReplyExpectation ??
+    resolveSourceReplyExpectation({
+      ctx: {
+        Provider: queued.run.messageProvider,
+        SessionKey: queued.run.sessionKey,
+        InboundEventKind: queued.currentInboundEventKind,
+        InputProvenance: queued.run.inputProvenance,
+      },
+      cfg,
+      scheduledAutomation: queued.run.scheduledAutomation !== undefined,
+    })
+  );
+}
+
 export function resolveSourceReplyVisibilityPolicy(params: {
   cfg: OpenClawConfig;
   ctx: SourceReplyDeliveryModeContext;
+  scheduledAutomation?: boolean;
   requested?: SourceReplyDeliveryMode;
   strictMessageToolOnly?: boolean;
   sendPolicy: SessionSendPolicyDecision;
@@ -147,13 +177,12 @@ export function resolveSourceReplyVisibilityPolicy(params: {
    */
   sessionStableMessageToolAvailable?: boolean;
   defaultVisibleReplies?: "automatic" | "message_tool";
-  isHeartbeat?: boolean;
 }) {
   const sourceReplyDeliveryMode = resolveSourceReplyDeliveryMode(params);
   const hasStableTurnOverride =
     !isSyntheticSourceReplyTurn({
       inputProvenance: params.ctx.InputProvenance,
-      isHeartbeat: params.isHeartbeat,
+      scheduledAutomation: params.scheduledAutomation,
     }) &&
     (params.requested !== undefined || isExplicitCommandTurnContext(params.ctx, params.cfg));
   const sessionStableSourceReplyDeliveryMode = hasStableTurnOverride

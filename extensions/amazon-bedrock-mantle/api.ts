@@ -1,7 +1,3 @@
-/**
- * Public Amazon Bedrock Mantle API barrel for discovery and bearer-token
- * helpers shared by config, runtime, and tests.
- */
 export {
   discoverMantleModels,
   generateBearerTokenFromIam,

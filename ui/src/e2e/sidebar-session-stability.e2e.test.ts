@@ -1,23 +1,78 @@
-import { createHash } from "node:crypto";
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
+import type { BrowserContextOptions, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   controlUiBundledSettingsStorageKey,
   pauseVirtualClock,
+  type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
-  captureUiProof,
-  captureUiProofEnabled,
   controlUiSessionPath,
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
   installMockGateway,
   sessionsListResponse,
 } from "./session-management.test-support.ts";
+import {
+  expectPath,
+  expectText,
+  expectAttribute,
+  expectCount,
+  seedStorage,
+} from "./sidebar-assertions.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
+
+function treeList(parentKey: string, roots: unknown[], children: unknown[]) {
+  return {
+    cases: [
+      { match: { spawnedBy: parentKey }, response: sessionsListResponse(children) },
+      { response: sessionsListResponse(roots) },
+    ],
+  };
+}
+
+function withPage(run: (page: Page) => Promise<void>, options: BrowserContextOptions = {}) {
+  return suite.withPage(
+    {
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+      ...options,
+    },
+    async ({ page }) => {
+      await page.clock.install();
+      await run(page);
+    },
+  );
+}
+
+async function invalidateSessions(page: Page, gateway: MockGatewayControls, payload: unknown) {
+  await pauseVirtualClock(page);
+  await gateway.emitGatewayEvent("sessions.changed", payload);
+  await page.clock.fastForward(5_001);
+  await page.clock.resume();
+}
+
+async function deferChildRefresh(
+  page: Page,
+  gateway: MockGatewayControls,
+  parentKey: string,
+  updatedAt: number,
+) {
+  const match = { spawnedBy: parentKey };
+  const after = (await gateway.getRequests("sessions.list", match)).length;
+  expect(after).toBeGreaterThan(0);
+  await gateway.deferNext("sessions.list", match);
+  await invalidateSessions(page, gateway, {
+    key: parentKey,
+    sessionKey: parentKey,
+    reason: "run",
+    updatedAt,
+  });
+  await gateway.waitForRequest("sessions.list", { after, match });
+}
 
 suite.define(() => {
   it("refreshes the selected child after a later child-list result", async () => {
@@ -26,123 +81,50 @@ suite.define(() => {
     const childKey = "agent:main:research-child";
     const siblingKey = "agent:main:research-sibling";
     const parentRow = sessionRow(parentKey, "Research handoff", baseTime, {
-      sessionId: "research-parent-session",
       childSessions: [childKey, siblingKey],
     });
     const childRow = sessionRow(childKey, "Research in progress", baseTime + 1, {
-      sessionId: "research-child-session",
       spawnedBy: parentKey,
     });
     const siblingRow = sessionRow(siblingKey, "Supporting research", baseTime + 1, {
-      sessionId: "research-sibling-session",
       spawnedBy: parentKey,
     });
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    await page.clock.install();
-    const gateway = await installMockGateway(page, {
-      sessions: [parentRow, childRow, siblingRow],
-      methodResponses: {
-        "sessions.list": {
-          cases: [
-            {
-              match: { spawnedBy: parentKey },
-              response: sessionsListResponse([childRow, siblingRow]),
-            },
-            { response: sessionsListResponse([parentRow]) },
-          ],
+    await withPage(async (page) => {
+      const gateway = await installMockGateway(page, {
+        sessions: [parentRow, childRow, siblingRow],
+        methodResponses: {
+          "sessions.list": treeList(parentKey, [parentRow], [childRow, siblingRow]),
         },
-      },
-      sessionKey: childKey,
-    });
-    try {
+        sessionKey: childKey,
+      });
       const documentResponse = await page.goto(controlUiSessionUrl(suite.server.baseUrl, childKey));
       expect(documentResponse?.status()).toBe(200);
       const child = page.locator(`[data-session-key="${childKey}"]`);
       const sibling = page.locator(`[data-session-key="${siblingKey}"]`);
-      await expect.poll(() => child.textContent()).toContain("Research in progress");
-      await expect.poll(() => sibling.textContent()).toContain("Supporting research");
+      await expectText(child, "Research in progress");
+      await expectText(sibling, "Supporting research");
       expect(await child.getAttribute("class")).toContain("sidebar-recent-session--active");
-      await captureUiProof(suite, page, "selected-child-before-refresh.png");
-      const childMatch = { spawnedBy: parentKey };
-      const refreshedChildren = [
-        {
-          ...childRow,
-          label: "Research completed",
-          displayName: "Research completed",
-          updatedAt: baseTime + 3,
-        },
-        {
-          ...siblingRow,
-          label: "Supporting research refreshed",
-          displayName: "Supporting research refreshed",
-          updatedAt: baseTime + 3,
-        },
-      ];
+      const refreshedChildren = [childRow, siblingRow].map((row, index) => {
+        const label = index === 0 ? "Research completed" : "Supporting research refreshed";
+        return Object.assign({}, row, { label, displayName: label, updatedAt: baseTime + 3 });
+      });
       // Commit the change before its invalidation event so every later read sees it.
       await gateway.setSessionsListResponse(
         sessionsListResponse([parentRow, ...refreshedChildren]),
       );
-      await gateway.setMethodResponse("sessions.list", {
-        cases: [
-          { match: childMatch, response: sessionsListResponse(refreshedChildren) },
-          { response: sessionsListResponse([parentRow]) },
-        ],
-      });
-      const childRequests = (await gateway.getRequests("sessions.list", childMatch)).length;
-      expect(childRequests).toBeGreaterThan(0);
-      await gateway.deferNext("sessions.list", childMatch);
-      await pauseVirtualClock(page);
-      await gateway.emitGatewayEvent("sessions.changed", {
-        key: parentKey,
-        sessionKey: parentKey,
-        reason: "run",
-        updatedAt: baseTime + 2,
-      });
-      await page.clock.fastForward(5_001);
-      await page.clock.resume();
-      await gateway.waitForRequest("sessions.list", { after: childRequests, match: childMatch });
+      await gateway.setMethodResponse(
+        "sessions.list",
+        treeList(parentKey, [parentRow], refreshedChildren),
+      );
+      await deferChildRefresh(page, gateway, parentKey, baseTime + 2);
       await gateway.resolveDeferred("sessions.list", sessionsListResponse(refreshedChildren));
       // The sibling proves the new child snapshot rendered before checking the selected row.
-      await expect.poll(() => sibling.textContent()).toContain("Supporting research refreshed");
-      if (captureUiProofEnabled) {
-        await page.screenshot({
-          animations: "disabled",
-          path: path.join(suite.artifactDir, "selected-child-refreshed.png"),
-        });
-        await writeFile(
-          path.join(suite.artifactDir, "selected-child-requests.json"),
-          JSON.stringify(
-            {
-              requests: await gateway.getRequests("sessions.list"),
-              selectedText: await child.textContent(),
-              siblingText: await sibling.textContent(),
-              documentSha256: createHash("sha256")
-                .update(await documentResponse!.body())
-                .digest("hex"),
-              assets: await page.evaluate(() =>
-                performance
-                  .getEntriesByType("resource")
-                  .map((entry) => entry.name)
-                  .filter((name) => name.includes("/assets/")),
-              ),
-            },
-            null,
-            2,
-          ),
-        );
-      }
+      await expectText(sibling, "Supporting research refreshed");
       expect(await child.textContent()).toContain("Research completed");
       expect(await child.textContent()).not.toContain("Research in progress");
       expect(await child.count()).toBe(1);
       expect(await child.getAttribute("class")).toContain("sidebar-recent-session--active");
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it.each([
@@ -167,141 +149,114 @@ suite.define(() => {
       const childRow = sessionRow(childKey, "Background research", baseTime - 1, {
         spawnedBy: parentKey,
       });
-      const context = await suite.browser.newContext({
-        colorScheme,
-        hasTouch: pointer === "coarse",
-        isMobile: pointer === "coarse",
-        locale: "en-US",
-        reducedMotion: width === 390 ? "reduce" : "no-preference",
-        serviceWorkers: "block",
-        viewport: { height: 900, width },
-      });
-      const page = await context.newPage();
-      await page.clock.install();
-      if (textScale !== 100) {
-        await page.addInitScript(
-          ({ scale, settingsKey }) => {
-            localStorage.setItem(settingsKey, JSON.stringify({ textScale: scale }));
-          },
-          {
-            scale: textScale,
-            settingsKey: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
-          },
-        );
-      }
-      const gateway = await installMockGateway(page, {
-        sessions: [activeRow, parentRow, childRow],
-        methodResponses: {
-          "sessions.list": {
-            cases: [
-              {
-                match: { spawnedBy: parentKey },
-                response: sessionsListResponse([childRow]),
-              },
-              {
-                response: sessionsListResponse([activeRow, parentRow]),
-              },
-            ],
-          },
+      await withPage(
+        async (page) => {
+          if (textScale !== 100) {
+            await seedStorage(page, {
+              [controlUiBundledSettingsStorageKey(suite.server.baseUrl)]: JSON.stringify({
+                textScale,
+              }),
+            });
+          }
+          const gateway = await installMockGateway(page, {
+            sessions: [activeRow, parentRow, childRow],
+            methodResponses: {
+              "sessions.list": treeList(parentKey, [activeRow, parentRow], [childRow]),
+            },
+            sessionKey: activeKey,
+          });
+
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, activeKey));
+          expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches)).toBe(
+            pointer === "coarse",
+          );
+          if (width === 390) {
+            const drawerToggle = navigationDrawerToggle(page);
+            await drawerToggle.waitFor({ state: "visible" });
+            await drawerToggle.click();
+          }
+          const childToggle = page.locator(`[data-child-session-toggle="${parentKey}"]`);
+          await childToggle.waitFor({ state: "visible" });
+          if (width === 390) {
+            const parent = page.locator(`[data-session-key="${parentKey}"]`);
+            const menu = parent.locator("[data-sidebar-session-menu]");
+            const toggleBox = (await childToggle.boundingBox())!;
+            const menuBox = (await menu.boundingBox())!;
+            expect(menuBox).toMatchObject({ width: 44, height: 44 });
+            expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(toggleBox.x);
+            for (const control of [childToggle, menu]) {
+              expect(
+                await control.evaluate((element) => {
+                  const box = element.getBoundingClientRect();
+                  return element.contains(
+                    document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2),
+                  );
+                }),
+              ).toBe(true);
+            }
+          }
+          await gateway.deferNext("sessions.list", { spawnedBy: parentKey });
+          await childToggle.click();
+          await gateway.waitForRequest("sessions.list", { match: { spawnedBy: parentKey } });
+
+          const children = page.locator(
+            `[data-session-tree="${parentKey}"] > .sidebar-session-tree__children`,
+          );
+          const loading = children.locator(":scope > .sidebar-session-tree__loading");
+          await expectCount(loading, 1);
+          expect(await children.locator(":scope > .skeleton").count()).toBe(1);
+          expect(await loading.getAttribute("aria-busy")).toBe("true");
+          expect(await loading.getAttribute("aria-label")).toBe("Loading…");
+          expect(
+            await loading
+              .locator("a, button, input, select, textarea, [tabindex]:not([tabindex='-1'])")
+              .count(),
+          ).toBe(0);
+          const loadingGeometry = await loading.evaluate((element) => ({
+            left: element.getBoundingClientRect().left,
+            rowHeight: element.parentElement!.getBoundingClientRect().height,
+          }));
+          if (textScale === 100) {
+            expect(loadingGeometry.rowHeight).toBe(width === 390 ? 44 : 30);
+          } else {
+            expect(loadingGeometry.rowHeight).toBeGreaterThan(30);
+          }
+
+          await gateway.resolveDeferred("sessions.list");
+          await expectCount(loading, 0);
+          const child = page.locator(`[data-session-key="${childKey}"]`);
+          await child.waitFor({ state: "visible" });
+          const childGeometry = await child.evaluate((element) => ({
+            left: element.querySelector(".sidebar-recent-session__name")!.getBoundingClientRect()
+              .left,
+            rowHeight: element.parentElement!.parentElement!.getBoundingClientRect().height,
+          }));
+          expect(childGeometry.left).toBe(loadingGeometry.left);
+          // Chromium can quantize empty and text line boxes 1/64 CSS px apart.
+          expect(childGeometry.rowHeight).toBeCloseTo(loadingGeometry.rowHeight, 1);
+
+          await deferChildRefresh(page, gateway, parentKey, baseTime + 2);
+          expect(await page.locator(".sidebar-session-tree__loading").count()).toBe(0);
+          expect(await child.isVisible()).toBe(true);
+
+          await gateway.resolveDeferred(
+            "sessions.list",
+            sessionsListResponse([
+              { ...childRow, label: "Updated research", updatedAt: baseTime + 3 },
+            ]),
+          );
+          await expectText(child, "Updated research");
+          expect(await page.locator(".sidebar-session-tree__loading").count()).toBe(0);
+          expect(await child.count()).toBe(1);
         },
-        sessionKey: activeKey,
-      });
-
-      try {
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, activeKey));
-        expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches)).toBe(
-          pointer === "coarse",
-        );
-        if (width === 390) {
-          const drawerToggle = page
-            .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
-            .first();
-          await drawerToggle.waitFor({ state: "visible" });
-          await drawerToggle.click();
-        }
-        const childToggle = page.locator(`[data-child-session-toggle="${parentKey}"]`);
-        await childToggle.waitFor({ state: "visible" });
-        await gateway.deferNext("sessions.list", { spawnedBy: parentKey });
-        await childToggle.click();
-        await gateway.waitForRequest("sessions.list", { match: { spawnedBy: parentKey } });
-
-        const children = page.locator(
-          `[data-session-tree="${parentKey}"] > .sidebar-session-tree__children`,
-        );
-        const loading = children.locator(":scope > .sidebar-session-tree__loading");
-        await expect.poll(() => loading.count()).toBe(1);
-        await captureUiProof(
-          suite,
-          page,
-          `sidebar-child-loading-${colorScheme}-${width}-${pointer}.png`,
-        );
-        expect(await children.locator(":scope > .skeleton").count()).toBe(1);
-        expect(await loading.getAttribute("aria-busy")).toBe("true");
-        expect(await loading.getAttribute("aria-label")).toBe("Loading…");
-        expect(
-          await loading
-            .locator("a, button, input, select, textarea, [tabindex]:not([tabindex='-1'])")
-            .count(),
-        ).toBe(0);
-        const loadingGeometry = await children.evaluate((element) => {
-          const rowBounds = element.getBoundingClientRect();
-          const barBounds = element
-            .querySelector(".sidebar-session-tree__loading")!
-            .getBoundingClientRect();
-          return { left: barBounds.left, rowHeight: rowBounds.height };
-        });
-        if (textScale === 100) {
-          expect(loadingGeometry.rowHeight).toBe(width === 390 ? 44 : 30);
-        } else {
-          expect(loadingGeometry.rowHeight).toBeGreaterThan(30);
-        }
-
-        await gateway.resolveDeferred("sessions.list");
-        await expect.poll(() => loading.count()).toBe(0);
-        const child = page.locator(`[data-session-key="${childKey}"]`);
-        await child.waitFor({ state: "visible" });
-        const childGeometry = await child.evaluate((element) => {
-          const titleBounds = element
-            .querySelector(".sidebar-recent-session__name")!
-            .getBoundingClientRect();
-          const rowBounds = element.parentElement!.parentElement!.getBoundingClientRect();
-          return { left: titleBounds.left, rowHeight: rowBounds.height };
-        });
-        expect(childGeometry.left).toBe(loadingGeometry.left);
-        // Chromium can quantize empty and text line boxes 1/64 CSS px apart.
-        expect(childGeometry.rowHeight).toBeCloseTo(loadingGeometry.rowHeight, 1);
-
-        const childMatch = { spawnedBy: parentKey };
-        const childRequests = (await gateway.getRequests("sessions.list", childMatch)).length;
-        await gateway.deferNext("sessions.list", childMatch);
-        await pauseVirtualClock(page);
-        await gateway.emitGatewayEvent("sessions.changed", {
-          key: parentKey,
-          sessionKey: parentKey,
-          reason: "run",
-          updatedAt: baseTime + 2,
-        });
-        await page.clock.fastForward(5_001);
-        await page.clock.resume();
-        await gateway.waitForRequest("sessions.list", {
-          after: childRequests,
-          match: childMatch,
-        });
-        expect(await page.locator(".sidebar-session-tree__loading").count()).toBe(0);
-        expect(await child.isVisible()).toBe(true);
-
-        await gateway.resolveDeferred(
-          "sessions.list",
-          sessionsListResponse([
-            { ...childRow, label: "Updated research", updatedAt: baseTime + 3 },
-          ]),
-        );
-        await expect.poll(() => child.textContent()).toContain("Updated research");
-        expect(await page.locator(".sidebar-session-tree__loading").count()).toBe(0);
-        expect(await child.count()).toBe(1);
-      } finally {
-        await context.close();
-      }
+        {
+          colorScheme,
+          hasTouch: pointer === "coarse",
+          isMobile: pointer === "coarse",
+          reducedMotion: width === 390 ? "reduce" : "no-preference",
+          viewport: { height: 900, width },
+        },
+      );
     },
   );
 
@@ -310,50 +265,36 @@ suite.define(() => {
     const parentKey = "agent:main:stability-parent";
     const childKey = "agent:main:stability-child";
     const runId = "sidebar-stability-run";
-    const siblingRows = Array.from({ length: 10 }, (_, index) => ({
-      ...sessionRow(`agent:main:stability-${index}`, `Stable session ${index}`, baseTime - index),
-      createdAt: baseTime - index,
-    }));
-    const parentRow = {
-      ...sessionRow(parentKey, "Parent session", baseTime + 100, {
-        childSessions: [childKey],
+    const siblingRows = Array.from({ length: 10 }, (_, index) =>
+      sessionRow(`agent:main:stability-${index}`, `Stable session ${index}`, baseTime - index, {
+        createdAt: baseTime - index,
       }),
+    );
+    const parentRow = sessionRow(parentKey, "Parent session", baseTime + 100, {
+      childSessions: [childKey],
       createdAt: baseTime + 100,
-    };
-    const childRow = {
-      ...sessionRow(childKey, "Child session", baseTime + 50, {
-        hasActiveRun: true,
-        spawnedBy: parentKey,
-        startedAt: baseTime,
-        status: "running",
-      }),
+    });
+    const childRow = sessionRow(childKey, "Child session", baseTime + 50, {
+      hasActiveRun: true,
+      spawnedBy: parentKey,
+      startedAt: baseTime,
+      status: "running",
       activeRunIds: [runId],
       createdAt: baseTime + 50,
-    };
+    });
     const expectedVisibleKeys = [
       parentKey,
       childKey,
       ...siblingRows.slice(0, 9).map(({ key }) => key),
     ];
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-      recordVideo: captureUiProofEnabled
-        ? { dir: suite.artifactDir, size: { height: 900, width: 1280 } }
-        : undefined,
-    });
-    const page = await context.newPage();
-    await page.clock.install();
-    const proofVideo = page.video();
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "sessions.list": sessionsListResponse([parentRow, childRow, ...siblingRows]),
-      },
-      sessionKey: childKey,
-    });
+    await withPage(async (page) => {
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "sessions.list": sessionsListResponse([parentRow, childRow, ...siblingRows]),
+        },
+        sessionKey: childKey,
+      });
 
-    try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, childKey));
       const rows = page.locator(".sidebar-recent-session");
       const visibleKeys = () =>
@@ -362,8 +303,7 @@ suite.define(() => {
         );
       const childToggle = page.locator(`[data-child-session-toggle="${parentKey}"]`);
       await expect.poll(visibleKeys, { timeout: 10_000 }).toEqual(expectedVisibleKeys);
-      await expect.poll(() => childToggle.getAttribute("aria-expanded")).toBe("true");
-      await captureUiProof(suite, page, "sidebar-session-stability-running.png");
+      await expectAttribute(childToggle, "aria-expanded", "true");
 
       await gateway.emitGatewayEvent("agent", {
         data: { name: "bash" },
@@ -373,55 +313,37 @@ suite.define(() => {
       });
       expect(await visibleKeys()).toEqual(expectedVisibleKeys);
 
-      const completedChild = {
-        ...childRow,
+      const completion = {
         activeRunIds: [],
         endedAt: baseTime + 200,
         hasActiveRun: false,
         status: "done",
         updatedAt: baseTime + 200,
       };
+      const completedChild = { ...childRow, ...completion };
       await gateway.setSessionsListResponse(
         sessionsListResponse([parentRow, completedChild, ...siblingRows]),
       );
       const listCount = (await gateway.getRequests("sessions.list")).length;
-      await pauseVirtualClock(page);
-      await gateway.emitGatewayEvent("sessions.changed", {
-        activeRunIds: [],
-        endedAt: completedChild.endedAt,
-        hasActiveRun: false,
+      await invalidateSessions(page, gateway, {
+        ...completion,
         key: childKey,
         kind: "direct",
         reason: "lifecycle",
         sessionKey: childKey,
-        status: "done",
-        updatedAt: completedChild.updatedAt,
       });
-      await page.clock.fastForward(5_001);
-      await page.clock.resume();
       await expect
         .poll(async () => (await gateway.getRequests("sessions.list")).length)
         .toBeGreaterThan(listCount);
       await expect.poll(visibleKeys).toEqual(expectedVisibleKeys);
 
-      const nextSessionKey = siblingRows[0]?.key;
-      if (!nextSessionKey) {
-        throw new Error("expected a visible sibling session");
-      }
+      const nextSessionKey = siblingRows[0]!.key;
       await page
         .locator(`[data-session-key="${nextSessionKey}"] a.sidebar-recent-session__link`)
         .click();
-      await expect
-        .poll(() => new URL(page.url()).pathname)
-        .toBe(controlUiSessionPath(nextSessionKey));
-      await expect.poll(() => childToggle.getAttribute("aria-expanded")).toBe("true");
+      await expectPath(page, controlUiSessionPath(nextSessionKey));
+      await expectAttribute(childToggle, "aria-expanded", "true");
       await expect.poll(visibleKeys).toEqual(expectedVisibleKeys);
-      await captureUiProof(suite, page, "sidebar-session-stability-completed.png");
-    } finally {
-      await context.close();
-      if (proofVideo) {
-        await proofVideo.saveAs(path.join(suite.artifactDir, "sidebar-session-stability.webm"));
-      }
-    }
+    });
   });
 });

@@ -54,7 +54,7 @@ export function createPluginReloadRecovery(
       }
       return warnings;
     },
-    prepare(
+    async prepare(
       params: Omit<Parameters<typeof preparePlugins>[0], "pluginIds" | "moduleRecoveries">,
       cause: unknown,
     ) {
@@ -81,7 +81,7 @@ export function createPluginReloadRecovery(
         moduleRecoveries,
       };
       if (selectedUnavailableIds.size) {
-        const plan = preparePlugins({ ...recoveryParams, loadModules: false });
+        const plan = await preparePlugins({ ...recoveryParams, loadModules: false });
         plan.retireGatewayRuntimeBindings();
         // The loader can add dependencies outside the requested scope. Validate
         // its actual plan before any unavailable owner could run from disk.
@@ -98,11 +98,20 @@ export function createPluginReloadRecovery(
       }
       return preparePlugins(recoveryParams);
     },
-    dispose() {
-      for (const recovery of moduleRecoveries.values()) {
-        recovery.module.dispose();
-      }
+    async dispose() {
+      const results = await Promise.allSettled(
+        [...moduleRecoveries.values()].map((recovery) => recovery.module.dispose()),
+      );
       moduleRecoveries.clear();
+      const errors = results.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      if (errors.length === 1) {
+        throw errors[0];
+      }
+      if (errors.length > 1) {
+        throw new AggregateError(errors, "Plugin reload recovery cleanup failed");
+      }
     },
   };
 }

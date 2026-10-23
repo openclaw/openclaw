@@ -1,4 +1,4 @@
-import { OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-registration";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
@@ -28,12 +28,12 @@ import type { QaRuntimeSelection, RuntimeId } from "./runtime-id.js";
 
 export { normalizeQaThinkingLevel, type QaThinkingLevel } from "./qa-thinking.js";
 
-const DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS = Object.freeze([
+const DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS: readonly string[] = [
   "http://127.0.0.1:18789",
   "http://localhost:18789",
   "http://127.0.0.1:43124",
   "http://localhost:43124",
-]);
+];
 
 // External runtimes such as ACPX must be selected by the fixture that needs them.
 export const QA_BASE_RUNTIME_PLUGIN_IDS = Object.freeze(["memory-core"]);

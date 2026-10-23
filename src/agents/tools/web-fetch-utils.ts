@@ -22,6 +22,7 @@ const BLOCK_BREAK_TAGS = new Set([
   "article",
   "header",
   "footer",
+  "pre",
   "table",
   "tr",
   "ul",
@@ -36,7 +37,13 @@ type RenderContext =
   | { kind: "title"; parts: string[] }
   | { kind: "anchor"; href: string | undefined; hasText: boolean; parts: string[] }
   | { kind: "heading"; level: number; parts: string[] }
-  | { kind: "list-item"; parts: string[] };
+  | { kind: "list-item"; parts: string[] }
+  | { kind: "pre"; parts: string[] };
+
+type RenderState = {
+  title?: string;
+  preBlocks: string[];
+};
 
 function decodeEntities(value: string): string {
   // Display extraction historically accepted mixed-case &nbsp; and treats non-breaking spaces as
@@ -49,19 +56,53 @@ function readAnchorHref(rawTag: string): string | undefined {
   return value === undefined ? undefined : decodeEntities(value);
 }
 
+function escapePreMarkerText(value: string): string {
+  // Internal pre markers use single NULs. Double NULs in fetched text so even
+  // entity-decoded marker-like prose cannot be mistaken for a placeholder.
+  return value.replaceAll("\u0000", "\u0000\u0000");
+}
+
 function appendText(stack: RenderContext[], value: string): void {
   const context = stack[stack.length - 1];
-  context?.parts.push(value);
+  context?.parts.push(context.kind === "pre" ? value : escapePreMarkerText(value));
   if (context?.kind === "anchor" && /\S/.test(value)) {
     context.hasText = true;
   }
 }
 
-function closeContext(
-  context: RenderContext,
-  parent: RenderContext,
-  state: { title?: string },
-): void {
+function formatPreformattedMarkdown(value: string): string {
+  const code = value.replace(/\r\n?/g, "\n");
+  let longestBacktickRun = 0;
+  let currentBacktickRun = 0;
+  for (const character of code) {
+    if (character === "`") {
+      currentBacktickRun += 1;
+      longestBacktickRun = Math.max(longestBacktickRun, currentBacktickRun);
+    } else {
+      currentBacktickRun = 0;
+    }
+  }
+  const fence = "`".repeat(Math.max(3, longestBacktickRun + 1));
+  return `${fence}\n${code}${code.endsWith("\n") ? "" : "\n"}${fence}`;
+}
+
+function restorePreformattedMarkdown(value: string, state: RenderState): string {
+  return value.replace(/\0(?:\0|openclaw-pre-(\d+)\0)/g, (_match, index: string | undefined) =>
+    index === undefined ? "\0" : formatPreformattedMarkdown(state.preBlocks[Number(index)]!),
+  );
+}
+
+function closeContext(context: RenderContext, parent: RenderContext, state: RenderState): void {
+  if (context.kind === "pre") {
+    const code = context.parts.join("");
+    if (code.trim()) {
+      const index = state.preBlocks.push(code) - 1;
+      parent.parts.push(`\n\n\0openclaw-pre-${index}\0\n\n`);
+    } else {
+      parent.parts.push("\n");
+    }
+    return;
+  }
   const label = normalizeWhitespace(context.parts.join(""));
   if (!label && context.kind !== "title" && !(context.kind === "anchor" && context.href)) {
     return;
@@ -79,7 +120,9 @@ function closeContext(
       return;
     case "anchor":
       parent.parts.push(
-        context.href && label ? `[${label}](${context.href})` : label || context.href || "",
+        context.href && label
+          ? `[${label}](${escapePreMarkerText(context.href)})`
+          : label || escapePreMarkerText(context.href || ""),
       );
       return;
     case "heading":
@@ -98,7 +141,7 @@ function closeContext(
   }
 }
 
-function closeTopContext(stack: RenderContext[], state: { title?: string }): void {
+function closeTopContext(stack: RenderContext[], state: RenderState): void {
   const context = stack.pop()!;
   closeContext(context, stack[stack.length - 1]!, state);
 }
@@ -106,7 +149,7 @@ function closeTopContext(stack: RenderContext[], state: { title?: string }): voi
 function closeThroughContext(
   stack: RenderContext[],
   kind: RenderContext["kind"],
-  state: { title?: string },
+  state: RenderState,
   requireAnchorText = false,
 ): boolean {
   for (let i = stack.length - 1; i > 0; i -= 1) {
@@ -127,7 +170,7 @@ function closeThroughContext(
 function pushContext(
   stack: RenderContext[],
   context: Exclude<RenderContext, { kind: "root" }>,
-  state: { title?: string },
+  state: RenderState,
 ): void {
   while (stack.length >= MAX_RENDER_CONTEXT_DEPTH) {
     closeTopContext(stack, state);
@@ -138,7 +181,8 @@ function pushContext(
 export function htmlToMarkdown(html: string): { text: string; title?: string } {
   const root: RenderContext = { kind: "root", parts: [] };
   const stack: RenderContext[] = [root];
-  const state: { title?: string } = {};
+  const state: RenderState = { preBlocks: [] };
+  const tableRowCellCounts: number[] = [];
 
   for (let i = 0; i < html.length;) {
     const ch = html[i];
@@ -177,15 +221,31 @@ export function htmlToMarkdown(html: string): { text: string; title?: string } {
       continue;
     }
 
+    // Within pre, tags are presentation only; their text must stay literal.
+    if (stack[stack.length - 1]?.kind === "pre" && token.name !== "pre") {
+      if (token.name === "br" && !token.closing) {
+        appendText(stack, "\n");
+      }
+      continue;
+    }
+    const kind =
+      token.name === "title"
+        ? "title"
+        : token.name === "pre"
+          ? "pre"
+          : token.name === "a"
+            ? "anchor"
+            : /^h[1-6]$/.test(token.name)
+              ? "heading"
+              : token.name === "li"
+                ? "list-item"
+                : undefined;
     if (token.closing) {
-      if (token.name === "title") {
-        closeThroughContext(stack, "title", state);
-      } else if (token.name === "a") {
-        closeThroughContext(stack, "anchor", state);
-      } else if (/^h[1-6]$/.test(token.name)) {
-        closeThroughContext(stack, "heading", state);
-      } else if (token.name === "li") {
-        closeThroughContext(stack, "list-item", state);
+      if (token.name === "tr") {
+        tableRowCellCounts.pop();
+      }
+      if (kind) {
+        closeThroughContext(stack, kind, state);
       } else if (BLOCK_BREAK_TAGS.has(token.name)) {
         appendText(stack, "\n");
       }
@@ -196,39 +256,42 @@ export function htmlToMarkdown(html: string): { text: string; title?: string } {
       i = readRawTextBounds(html, token.name, i).end;
       continue;
     }
+    if (token.name === "tr" && !token.selfClosing) {
+      tableRowCellCounts.push(0);
+    }
+    if ((token.name === "td" || token.name === "th") && !token.selfClosing) {
+      const rowIndex = tableRowCellCounts.length - 1;
+      if (rowIndex >= 0) {
+        const cellCount = tableRowCellCounts[rowIndex] ?? 0;
+        if (cellCount > 0) {
+          appendText(stack, " | ");
+        }
+        tableRowCellCounts[rowIndex] = cellCount + 1;
+      }
+    }
     if (BLOCK_BREAK_TAGS.has(token.name) && closeThroughContext(stack, "anchor", state, true)) {
       appendText(stack, " ");
+    }
+    if (token.name === "pre") {
+      appendText(stack, "\n");
     }
     if (token.name === "br" || token.name === "hr") {
       appendText(stack, "\n");
       continue;
     }
-    if (token.name === "title" && !token.selfClosing) {
-      pushContext(stack, { kind: "title", parts: [] }, state);
+    if (!kind || token.selfClosing) {
       continue;
     }
-    if (token.name === "a" && !token.selfClosing) {
-      closeThroughContext(stack, "anchor", state);
-      pushContext(
-        stack,
-        { kind: "anchor", href: readAnchorHref(token.raw), hasText: false, parts: [] },
-        state,
-      );
-      continue;
+    if (kind !== "title") {
+      closeThroughContext(stack, "anchor", state, kind !== "anchor");
     }
-    if (/^h[1-6]$/.test(token.name) && !token.selfClosing) {
-      closeThroughContext(stack, "anchor", state, true);
-      pushContext(
-        stack,
-        { kind: "heading", level: Number.parseInt(token.name[1] ?? "1", 10), parts: [] },
-        state,
-      );
-      continue;
-    }
-    if (token.name === "li" && !token.selfClosing) {
-      closeThroughContext(stack, "anchor", state, true);
-      pushContext(stack, { kind: "list-item", parts: [] }, state);
-    }
+    const context: Exclude<RenderContext, { kind: "root" }> =
+      kind === "anchor"
+        ? { kind, href: readAnchorHref(token.raw), hasText: false, parts: [] }
+        : kind === "heading"
+          ? { kind, level: Number.parseInt(token.name[1] ?? "1", 10), parts: [] }
+          : { kind, parts: [] };
+    pushContext(stack, context, state);
   }
 
   while (stack.length > 1) {
@@ -236,8 +299,8 @@ export function htmlToMarkdown(html: string): { text: string; title?: string } {
   }
 
   return {
-    text: normalizeWhitespace(root.parts.join("")),
-    title: state.title,
+    text: restorePreformattedMarkdown(normalizeWhitespace(root.parts.join("")), state),
+    title: state.title ? restorePreformattedMarkdown(state.title, state) : state.title,
   };
 }
 
@@ -248,6 +311,14 @@ export function normalizeWhitespace(value: string): string {
     .replace(/\n{3,}/g, "\n\n")
     .replace(/[ \t]{2,}/g, " ")
     .trim();
+}
+
+function readBacktickRunEnd(value: string, start: number): number {
+  let end = start + 1;
+  while (value[end] === "`") {
+    end += 1;
+  }
+  return end;
 }
 
 export function markdownToText(markdown: string): string {
@@ -261,15 +332,35 @@ export function markdownToText(markdown: string): string {
       break;
     }
     text += markdown.slice(pos, open).replaceAll("\0", "\0\0");
-    const afterOpen = open + 3;
-    const close = markdown.indexOf("```", afterOpen);
-    if (close === -1) {
-      text += markdown.slice(open).replaceAll("\0", "\0\0");
-      break;
+    const afterOpen = readBacktickRunEnd(markdown, open);
+    const fenceLength = afterOpen - open;
+    let closingStart = afterOpen;
+    let close: { start: number; end: number } | undefined;
+    while (closingStart < markdown.length) {
+      const start = markdown.indexOf("`", closingStart);
+      if (start === -1) {
+        break;
+      }
+      const end = readBacktickRunEnd(markdown, start);
+      if (end - start >= fenceLength) {
+        // Consume only the matching run, preserving adjacent blocks.
+        close = { start, end: start + fenceLength };
+        break;
+      }
+      closingStart = end;
     }
     const firstLineEnd = markdown.indexOf("\n", afterOpen);
-    const contentStart = firstLineEnd === -1 || firstLineEnd > close ? afterOpen : firstLineEnd + 1;
-    const code = markdown.slice(contentStart, close);
+    if (!close) {
+      const lineStart = markdown.lastIndexOf("\n", open) + 1;
+      if (firstLineEnd === -1 || !/^[ \t]*$/.test(markdown.slice(lineStart, open))) {
+        text += markdown.slice(open).replaceAll("\0", "\0\0");
+        break;
+      }
+    }
+    const contentEnd = close?.start ?? markdown.length;
+    const contentStart =
+      firstLineEnd === -1 || firstLineEnd > contentEnd ? afterOpen : firstLineEnd + 1;
+    const code = markdown.slice(contentStart, contentEnd);
     // Keep the surrounding prose connected without interpreting the code as Markdown.
     // Preserve its final line boundary for heading/list markers after the closing fence.
     const lineEnd = /[\r\n\u2028\u2029]$/.test(code) ? code.slice(-1) : "";
@@ -279,7 +370,7 @@ export function markdownToText(markdown: string): string {
       codeBlocks.push(literal);
     }
     text += lineEnd;
-    pos = close + 3;
+    pos = close?.end ?? markdown.length;
   }
   text = text.replace(/!\[[^\]]*]\([^)]+\)/g, "");
   text = text.replace(/\[([^\]]+)]\([^)]+\)/g, "$1");
@@ -289,10 +380,11 @@ export function markdownToText(markdown: string): string {
   text = text.replace(/^[^\S\n]*\d+\.\s+/gm, "");
   // Escaped input NUL pairs stay paired through prose formatting, so only our
   // single-NUL markers can restore code. Replacement output is not rescanned.
-  text = text.replace(/\0(?:\0|(\d+)\0)/g, (_match, index: string | undefined) =>
-    index === undefined ? "\0" : codeBlocks[Number(index)]!,
+  return normalizeWhitespace(text).replace(
+    /\0(?:\0|(\d+)\0)/g,
+    (_match, index: string | undefined) =>
+      index === undefined ? "\0" : codeBlocks[Number(index)]!,
   );
-  return normalizeWhitespace(text);
 }
 
 export function truncateWebFetchText(

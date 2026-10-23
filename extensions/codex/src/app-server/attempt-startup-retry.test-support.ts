@@ -16,7 +16,7 @@ import { getLeasedSharedCodexAppServerClient } from "./shared-client.js";
 import { createCodexTestModel } from "./test-support.js";
 
 export function startFixtureAttempt(
-  fixture: { root: string; pluginConfig: CodexPluginConfig },
+  fixture: { root: string; pluginConfig: CodexPluginConfig; disableTools?: boolean },
   attemptClientFactory = getLeasedSharedCodexAppServerClient,
   signal = new AbortController().signal,
 ) {
@@ -60,7 +60,7 @@ export function startFixtureAttempt(
         modelId: "gpt-5.4-codex",
         model: createCodexTestModel("codex"),
         thinkLevel: "medium",
-        disableTools: true,
+        disableTools: fixture.disableTools ?? true,
         timeoutMs: 5_000,
         authStorage: {} as never,
         authProfileStore: { version: 1, profiles: {} },

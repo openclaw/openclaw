@@ -29,12 +29,9 @@ export function resolveSessionDefaultAccountId(params: {
   const accountId =
     normalizeOptionalString(params.accountIdRaw) ??
     normalizeOptionalString(params.persistedLastAccountId);
-  if (accountId) {
-    return accountId;
-  }
   const channel = normalizeOptionalLowercaseString(params.channelRaw);
-  if (!channel) {
-    return undefined;
+  if (accountId || !channel) {
+    return accountId;
   }
   // SAFETY: only the optional defaultAccount field is read; its unknown value is normalized below.
   const channels = params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined>;

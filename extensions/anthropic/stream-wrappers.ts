@@ -13,6 +13,7 @@ import {
   isAnthropicOAuthApiKey,
   resolveAnthropicPayloadPolicy,
   resolveAnthropicServerCompactionPlan,
+  streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -223,7 +224,11 @@ function createAnthropicCompactionWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    const compaction = resolveAnthropicServerCompactionPlan(model, extraParams, options?.apiKey);
+    const compaction = resolveAnthropicServerCompactionPlan(
+      model,
+      extraParams,
+      options?.apiKey ?? getEnvApiKey(model.provider),
+    );
     if (!compaction.enabled) {
       return underlying(model, context, options);
     }
@@ -241,32 +246,23 @@ export function createAnthropicServiceTierWrapper(
   baseStreamFn: StreamFn | undefined,
   serviceTier: AnthropicServiceTier,
 ): StreamFn {
-  return createPayloadPatchStreamWrapper(
-    baseStreamFn,
-    ({ payload, model }) => {
-      const payloadPolicy = resolveAnthropicPayloadPolicy({
-        provider: model.provider,
-        api: model.api,
-        baseUrl: model.baseUrl,
-        serviceTier,
-      });
-      applyAnthropicPayloadPolicyToParams(payload, payloadPolicy, new Set());
-    },
-    {
-      shouldPatch: ({ model, options }) => {
-        // Opus 5 and Sonnet 5 do not support Priority Tier; omit service_tier entirely.
-        if (isAnthropicOAuthApiKey(options?.apiKey) || !supportsAnthropicPriorityTier(model)) {
-          return false;
-        }
-        return resolveAnthropicPayloadPolicy({
-          provider: model.provider,
-          api: model.api,
-          baseUrl: model.baseUrl,
-          serviceTier,
-        }).allowsServiceTier;
-      },
-    },
-  );
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (isAnthropicOAuthApiKey(options?.apiKey) || !supportsAnthropicPriorityTier(model)) {
+      return underlying(model, context, options);
+    }
+    const policy = resolveAnthropicPayloadPolicy({
+      provider: model.provider,
+      api: model.api,
+      baseUrl: model.baseUrl,
+      serviceTier,
+    });
+    return policy.allowsServiceTier
+      ? streamWithPayloadPatch(underlying, model, context, options, (payload) =>
+          applyAnthropicPayloadPolicyToParams(payload, policy, new Set()),
+        )
+      : underlying(model, context, options);
+  };
 }
 
 function createAnthropicThinkingPrefillWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
@@ -297,9 +293,7 @@ export function resolveAnthropicServiceTier(
   return normalized;
 }
 
-export function wrapAnthropicProviderStream(
-  ctx: ProviderWrapStreamFnContext,
-): StreamFn | undefined {
+export function wrapAnthropicProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn {
   const anthropicBetas = resolveAnthropicBetas(ctx.extraParams, ctx.modelId);
   const needsAnthropicBetaWrapper =
     anthropicBetas !== undefined ||
@@ -309,7 +303,7 @@ export function wrapAnthropicProviderStream(
   const hasFastModeParam =
     ctx.extraParams !== undefined &&
     (Object.hasOwn(ctx.extraParams, "fastMode") || Object.hasOwn(ctx.extraParams, "fast_mode"));
-  return composeProviderStreamWrappers(
+  const wrapped = composeProviderStreamWrappers(
     ctx.streamFn,
     needsAnthropicBetaWrapper
       ? (streamFn) => createAnthropicBetaHeadersWrapper(streamFn, anthropicBetas ?? [])
@@ -325,9 +319,8 @@ export function wrapAnthropicProviderStream(
             ctx.extraParams,
           )
       : undefined,
-    ctx.extraParams?.anthropicServerCompaction === true
-      ? (streamFn) => createAnthropicCompactionWrapper(streamFn, ctx.extraParams)
-      : undefined,
-    createAnthropicThinkingPrefillWrapper,
+    // The shared plan owns the default, opt-out, and per-request auth/route gates.
+    (streamFn) => createAnthropicCompactionWrapper(streamFn, ctx.extraParams),
   );
+  return createAnthropicThinkingPrefillWrapper(wrapped);
 }

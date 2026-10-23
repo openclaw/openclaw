@@ -123,7 +123,11 @@ export function createQueuedDeliveryOwner(
       custody = "released";
       return true;
     },
-    fail(record: QueuedDeliveryFailureRecorder, error: string): Promise<void> {
+    fail(
+      record: QueuedDeliveryFailureRecorder,
+      error: string,
+      ambiguousTransportError?: true,
+    ): Promise<void> {
       owner.signal?.throwIfAborted();
       // Internal transitions retain captured state; caller-supplied recorders keep their public arguments.
       const recordInState = [
@@ -132,7 +136,14 @@ export function createQueuedDeliveryOwner(
         failDeliveryBeforePlatformSend,
       ].find((candidate) => candidate === record);
       return recordInState
-        ? recordInState(owner.queueId, error, owner.stateDir, owner.claimId, context)
+        ? recordInState(
+            owner.queueId,
+            error,
+            owner.stateDir,
+            owner.claimId,
+            context,
+            ambiguousTransportError,
+          )
         : record(owner.queueId, error, owner.stateDir, owner.claimId);
     },
     async retire(): Promise<void> {

@@ -283,7 +283,7 @@ export function resolveClickClackAccount(params: {
     mentionPatterns: merged.mentionPatterns ?? [],
     allowBots: merged.allowBots ?? false,
     botLoopProtection: merged.botLoopProtection,
-    groups: mergeClickClackGroups(merged.groups),
+    groups: merged.groups ?? {},
     config: {
       ...merged,
       allowFrom: merged.allowFrom ?? ["*"],

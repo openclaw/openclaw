@@ -14,7 +14,7 @@ import {
 } from "../agents/identity-file.js";
 import { DEFAULT_IDENTITY_FILENAME } from "../agents/workspace.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { ExpectedCliError } from "../cli/failure-output.js";
+import { throwExpectedCliError } from "../cli/failure-output.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { replaceConfigFile } from "../config/config.js";
 import { applyImplicitAgentRosterDefaults } from "../config/implicit-agent-roster.js";
@@ -23,7 +23,7 @@ import type { IdentityConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
-import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { defaultRuntime as runtime, writeRuntimeJson } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { applyAgentConfig, listAgentEntries } from "./agents.config.js";
 import { requireValidConfigForWrite } from "./config-validation.js";
@@ -42,10 +42,6 @@ type AgentsSetIdentityOptions = {
 
 const normalizeWorkspacePath = (input: string) => path.resolve(resolveUserPath(input));
 
-function failAgentIdentity(message: string): never {
-  throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
-}
-
 function resolveAgentIdByWorkspace(
   cfg: Parameters<typeof resolveAgentWorkspaceDir>[0],
   workspaceDir: string,
@@ -61,10 +57,7 @@ function resolveAgentIdByWorkspace(
   );
 }
 
-export async function agentsSetIdentityCommand(
-  opts: AgentsSetIdentityOptions,
-  runtime: RuntimeEnv = defaultRuntime,
-) {
+export async function agentsSetIdentityCommand(opts: AgentsSetIdentityOptions) {
   const writeSnapshot = await requireValidConfigForWrite(runtime);
   if (!writeSnapshot) {
     return;
@@ -84,7 +77,9 @@ export async function agentsSetIdentityCommand(
   const wantsIdentityFile = Boolean(opts.fromIdentity || identityFileRaw || !hasExplicitIdentity);
   const normalizedAgent = opts.agent === undefined ? null : normalizeAgentIdStrict(opts.agent);
   if (normalizedAgent && !normalizedAgent.ok) {
-    failAgentIdentity(`Agent "${opts.agent}" not found. Create it with \`openclaw agents add\`.`);
+    throwExpectedCliError(
+      `Agent "${opts.agent}" not found. Create it with \`openclaw agents add\`.`,
+    );
   }
   let agentId = normalizedAgent?.value;
 
@@ -108,12 +103,12 @@ export async function agentsSetIdentityCommand(
     const resolvedWorkspace = expectDefined(workspaceDir, "agent workspace");
     const matches = resolveAgentIdByWorkspace(cfg, resolvedWorkspace);
     if (matches.length === 0) {
-      failAgentIdentity(
+      throwExpectedCliError(
         `No agent workspace matches ${shortenHomePath(resolvedWorkspace)}. Pass --agent to target a specific agent.`,
       );
     }
     if (matches.length > 1) {
-      failAgentIdentity(
+      throwExpectedCliError(
         `Multiple agents match ${shortenHomePath(resolvedWorkspace)}: ${matches.join(", ")}. Pass --agent to choose one.`,
       );
     }
@@ -123,7 +118,7 @@ export async function agentsSetIdentityCommand(
   const resolvedAgentId = expectDefined(agentId, "agent id");
   const resolvedAgentIds = listAgentIds(cfg).map((id) => normalizeAgentId(id));
   if (!resolvedAgentIds.includes(resolvedAgentId)) {
-    failAgentIdentity(
+    throwExpectedCliError(
       `Agent "${resolvedAgentId}" not found. Create it with \`openclaw agents add\`.`,
     );
   }
@@ -133,7 +128,7 @@ export async function agentsSetIdentityCommand(
       try {
         identityFromFile = await loadAgentIdentityFromFile(identityFilePath);
       } catch (error) {
-        failAgentIdentity(formatErrorMessage(error));
+        throwExpectedCliError(formatErrorMessage(error));
       }
     } else if (workspaceDir) {
       identityFromFile = await loadAgentIdentityFromWorkspaceAsync(workspaceDir);
@@ -142,12 +137,11 @@ export async function agentsSetIdentityCommand(
       const targetPath =
         identityFilePath ??
         (workspaceDir ? path.join(workspaceDir, DEFAULT_IDENTITY_FILENAME) : "IDENTITY.md");
-      failAgentIdentity(`No identity data found in ${shortenHomePath(targetPath)}.`);
+      throwExpectedCliError(`No identity data found in ${shortenHomePath(targetPath)}.`);
     }
   }
 
-  const fileTheme =
-    identityFromFile?.theme ?? identityFromFile?.creature ?? identityFromFile?.vibe ?? undefined;
+  const fileTheme = identityFromFile?.theme ?? identityFromFile?.creature ?? identityFromFile?.vibe;
   const incomingIdentity: IdentityConfig = {
     ...(nameRaw || identityFromFile?.name ? { name: nameRaw ?? identityFromFile?.name } : {}),
     ...(emojiRaw || identityFromFile?.emoji ? { emoji: emojiRaw ?? identityFromFile?.emoji } : {}),

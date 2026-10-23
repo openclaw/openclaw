@@ -36,7 +36,7 @@ suite.define(() => {
       await page.locator(".chat-attachment-file__name", { hasText: "draft-notes.txt" }).waitFor();
       await page.locator(".agent-chat__input-btn--attach").first().click();
       await page
-        .locator('.agent-chat__attach-menu-option[value="file"]')
+        .locator('.agent-chat__attach-menu-option[data-value="file"]')
         .first()
         .waitFor({ state: "visible" });
       await page.screenshot({ path: path.join(artifacts, "before.png"), animations: "disabled" });

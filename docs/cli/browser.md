@@ -75,7 +75,7 @@ openclaw browser --browser-profile openclaw reset-profile
   Passive status never launches Chrome just to collect these facts.
 - `stop` closes the active control session and clears temporary emulation overrides. This applies even to `attachOnly` and remote CDP profiles, where OpenClaw did not launch the browser process itself. For local managed profiles, `stop` also stops the spawned browser process.
 - `start --headless` applies only to that start request, and only when OpenClaw launches a local managed browser. It does not rewrite `browser.headless` or profile config, and is a no-op for an already-running browser.
-- On Linux hosts without `DISPLAY` or `WAYLAND_DISPLAY`, local managed profiles run headless automatically unless `OPENCLAW_BROWSER_HEADLESS=0`, `browser.headless=false`, or `browser.profiles.<name>.headless=false` explicitly requests a visible browser.
+- Local managed profiles run headless by default on every platform. `OPENCLAW_BROWSER_HEADLESS=0`, `browser.headless=false`, or `browser.profiles.<name>.headless=false` explicitly requests a visible browser; Linux then needs `DISPLAY` or `WAYLAND_DISPLAY`. Externally owned browsers keep their current mode.
 
 ## If the command is missing
 
@@ -116,6 +116,8 @@ openclaw browser delete-profile --name work
 Use a specific profile with `--browser-profile <name>` on any subcommand, for example `openclaw browser --browser-profile work tabs`.
 
 On macOS, `system-profiles` lists real Chrome, Brave, Edge, or Chromium profiles available on the host. `import-profile` decrypts their cookies after one macOS Keychain/Touch ID consent prompt and injects them into a fresh OpenClaw-managed profile. It imports cookies only. Local storage and IndexedDB are unchanged. Some Google sessions use device-bound session credentials (DBSC) and can still require re-authentication after import.
+
+Newer macOS versions can also ask whether the Gateway's Node process may access the browser's data. Until someone answers that prompt on the Gateway host, system-profile discovery and import time out while the rest of the Gateway keeps running.
 
 When the macOS app uses a local Gateway, it can offer this import once and make the isolated imported profile the default for agent browsing. Import always requires an explicit click. Successful import or dismissal suppresses later automatic prompts, and **Settings → General → Browser login** remains available for re-import.
 
@@ -204,7 +206,7 @@ openclaw browser extension cdp --json
 - `extension pair` remains the advanced manual flow. `--gateway-url` creates a
   direct remote-Gateway pairing URL. Non-loopback URLs must use `wss://`.
 - `extension pair --local-gateway --json` lets desktop native helpers obtain
-  the canonical local pairing through the Gateway’s `/browser/extension` wake-up
+  the existing local pairing through the Gateway’s `/browser/extension` wake-up
   route. It requires a local Gateway configuration and cannot be combined with
   `--gateway-url`. The JSON contains a credential: consume it privately, never log it.
 - `extension cdp` prints non-secret Browser Relay Authentication v2 metadata:
@@ -356,6 +358,10 @@ openclaw browser batch --actions-file - --continue
 If navigation or a closed page stops the batch, text output reports the action number and skipped count. Take a fresh snapshot before continuing with dependent actions.
 
 `--actions-file` and `--actions-file -` stdin input are capped at 1,000,000 bytes. Split larger plans into multiple `openclaw browser batch` commands.
+
+`fill --fields-file`, `batch --actions-file`, and batch stdin require valid UTF-8.
+Malformed bytes are rejected before any browser action runs. Save the input as
+UTF-8 and retry; valid Unicode values, including emoji and CJK text, are preserved.
 
 ## State and storage
 

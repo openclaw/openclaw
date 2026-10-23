@@ -37,7 +37,11 @@ export function collectControlUiBootAssets(
     const entries = chunk.facadeModuleId ? [chunk.facadeModuleId] : Object.keys(chunk.modules);
     // Forgetting local sign-in or rejecting cached admission must show the real
     // gate offline, not fail while downloading its optional component.
-    if (entries.some((id) => controlUiBootManifestKey(id) === "ui/src/components/login-gate.ts")) {
+    if (
+      entries.some(
+        (id) => controlUiBootManifestKey(id) === "ui/src/components/login-gate-solid.tsx",
+      )
+    ) {
       collect(chunk.fileName, login);
     }
     for (const route of ["chat", "new"] as const) {
@@ -89,7 +93,13 @@ export function controlUiBootPreloadsPlugin(): Plugin {
         const assets = collectControlUiBootAssets(bundle);
         const templates = (["chat", "new"] as const).map((route) => {
           const links = [...assets[route]]
-            .filter((file) => !assets.initial.has(file) && /\.(?:js|css)$/u.test(file))
+            // URL assets such as attachment workers belong to the offline cache,
+            // but are not modules in the document's boot graph.
+            .filter(
+              (file) =>
+                !assets.initial.has(file) &&
+                (bundle[file]?.type === "chunk" || file.endsWith(".css")),
+            )
             .map((file) => ({
               tag: "link",
               attrs: file.endsWith(".css")

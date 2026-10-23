@@ -1,8 +1,18 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
-import type { MessagePort, Transferable, Worker } from "node:worker_threads";
+import {
+  receiveMessageOnPort,
+  type MessagePort,
+  type Transferable,
+  type Worker,
+} from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { createRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
+import {
+  BrokerNativeResourceCloseError,
+  type BrokerResourceResponse,
+} from "../process/spawn-broker/resource-protocol.js";
+import { runWithMainThreadTask } from "./main-thread-stall.js";
 import { trackNativeWorkerForCpu } from "./worker-cpu.js";
 import { decodeNativeWorkerFailure } from "./worker-native-error.js";
 import type {
@@ -14,36 +24,28 @@ import type {
   NativeWorkerResourceDescriptor,
   RetainedNativeWorker,
 } from "./worker-native-lifecycle.types.js";
-import { bindNativeWorkerResource } from "./worker-native-resource.js";
 import { NativeWorkerTaskPort } from "./worker-native-task-port.js";
+import { workerRequestKind } from "./worker-request-kind.js";
 
 type HeapStatistics = Awaited<ReturnType<Worker["getHeapStatistics"]>>;
-type NativeDelivery =
-  | NativeWorkerReply
-  | { type: "owner-failed"; error: Error }
-  | { type: "owner-joined"; error: Error }
-  | { type: "resource-failed"; error: unknown; diagnostic: Error };
-
 export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements RetainedNativeWorker {
   // Match native Worker callbacks even when a different caller services this port.
   private readonly runInContext = AsyncLocalStorage.snapshot();
+  private readonly diagnosticName: string;
   threadId = 0;
   started = false;
   executionStopped = false;
+  private executionExitCode: number | undefined;
   private referenced = true;
   private stopping = false;
   private joined = false;
   private servicingResource = false;
-  private resourceBinding?: ReturnType<typeof bindNativeWorkerResource>;
+  private resourceBinding?: ReturnType<NativeWorker["bindResource"]>;
   private resourceClosed = false;
   private supervisorJoined = false;
   private resourceRecovery?: Promise<void>;
-  // Preserve one caller retry across the current close attempt's terminal failure.
-  private resourceRetryRequested = false;
   private readonly taskPort?: NativeWorkerTaskPort;
-  private readonly deliveries: NativeDelivery[] = [];
   private terminalObserved = false;
-  private observingTaskPortLoss = false;
   private taskPortLossReported = false;
   private requestId = 0;
   private stopCompletion = createRetainedOperation<void>(() => this.service());
@@ -66,9 +68,15 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
     taskPort?: MessagePort,
   ) {
     super();
+    this.diagnosticName = `worker:${
+      !evalSource && filename instanceof URL ? workerRequestKind(filename) : "other"
+    }`;
     if (taskPort) {
       this.taskPort = new NativeWorkerTaskPort(taskPort, {
-        message: (value) => this.runInContext(() => this.emit("message", value)),
+        message: (value) =>
+          this.runInContext(() =>
+            runWithMainThreadTask(this.diagnosticName, () => this.emit("message", value)),
+          ),
         messageerror: (error) => this.runInContext(() => this.emit("messageerror", error)),
         unavailable: () => this.observeTaskPortLoss(),
       });
@@ -90,11 +98,11 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
   }
 
   serviceTaskPort(): void {
-    if (!this.taskPort) {
+    const taskPort = this.taskPort;
+    if (!taskPort) {
       return;
     }
-    this.drainDeliveries();
-    this.taskPort.service();
+    runWithMainThreadTask(this.diagnosticName, () => taskPort.service());
     this.observeTaskPortLoss();
   }
 
@@ -102,8 +110,8 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
     const failure = this.taskPort?.failure;
     if (
       !failure ||
+      !this.started ||
       !this.referenced ||
-      this.observingTaskPortLoss ||
       this.taskPortLossReported ||
       this.terminalObserved ||
       this.stopping ||
@@ -113,25 +121,8 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
     ) {
       return;
     }
-    this.observingTaskPortLoss = true;
-    try {
-      // A close on the data channel can precede an already queued native error or exit.
-      this.runtime.service();
-      if (
-        this.started &&
-        this.referenced &&
-        !this.terminalObserved &&
-        !this.stopping &&
-        !this.joined &&
-        !this.executionStopped &&
-        !this.runtime.failure
-      ) {
-        this.taskPortLossReported = true;
-        this.runInContext(() => this.emit("error", failure));
-      }
-    } finally {
-      this.observingTaskPortLoss = false;
-    }
+    this.taskPortLossReported = true;
+    this.runInContext(() => this.emit("error", failure));
   }
 
   serviceResource(): void {
@@ -142,34 +133,107 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
     try {
       this.resourceBinding.service();
     } catch (error) {
-      this.deliver({
-        type: "resource-failed",
-        error,
-        diagnostic: toErrorObject(error, "Native resource observation failed"),
-      });
+      this.resourceFailed(error);
     } finally {
       this.servicingResource = false;
     }
   }
 
   attachResource(descriptor: NativeWorkerResourceDescriptor) {
-    this.resourceBinding = bindNativeWorkerResource({
-      broker: this.runtime.resourceBroker(),
-      descriptor,
-      connection: this.resourceConnection,
-      supervisorAvailable: () => !this.runtime.failure,
-      postOwnerMessage: (value, sequence) =>
-        this.runtime.post({ type: "resource-owner", id: this.id, sequence, value }),
-      closed: () =>
-        this.runInContext(() => {
-          this.resourceClosed = true;
-          if (this.supervisorJoined) {
-            this.finishJoined(undefined);
-          }
-        }),
-      failed: (error) => this.deliver({ type: "resource-failed", error, diagnostic: error }),
-    });
+    this.resourceBinding = this.bindResource(descriptor);
     return { workerDataKey: descriptor.workerDataKey, attachment: this.resourceBinding.attachment };
+  }
+
+  /** Binds the host's original cleanup port to the same surviving spawn-owner claim. */
+  private bindResource(descriptor: NativeWorkerResourceDescriptor) {
+    const broker = this.runtime.resourceBroker();
+    const connection = this.resourceConnection;
+    let disposed = false;
+    const lease = broker.captureNativeResource(
+      { moduleUrl: descriptor.moduleUrl, input: descriptor.input, ownerPort: Boolean(connection) },
+      {
+        message: (response) => {
+          if (response.type === "resource-owner") {
+            connection?.port.postMessage(response.value, []);
+          } else if (response.type === "resource-closed") {
+            this.runInContext(() => {
+              this.resourceClosed = true;
+              if (this.supervisorJoined || this.executionStopped) {
+                this.finishJoined(this.executionExitCode);
+              }
+            });
+          }
+        },
+        failed: (error) => this.resourceFailed(error),
+      },
+    );
+    const forward = (value: unknown) => {
+      if (disposed) {
+        return;
+      }
+      try {
+        // The surviving claim retains the original reply even if the primary relay dies.
+        const delivery = lease.ownerMessage(value);
+        if (!this.runtime.failure) {
+          this.runtime.post({
+            type: "resource-owner",
+            id: this.id,
+            sequence: delivery.sequence,
+            value,
+          });
+        }
+      } catch (error) {
+        this.resourceFailed(toErrorObject(error, "Native resource owner delivery failed"));
+      }
+    };
+    connection?.port.on("message", forward);
+    const dispose = () => {
+      if (disposed) {
+        return;
+      }
+      disposed = true;
+      connection?.port.off("message", forward);
+      connection?.port.close();
+      connection?.dispose();
+    };
+    return {
+      attachment: lease.attachment,
+      receive(response: BrokerResourceResponse) {
+        lease.receive(response);
+      },
+      service() {
+        if (disposed || !connection) {
+          return;
+        }
+        connection.service();
+        for (;;) {
+          const next = receiveMessageOnPort(connection.port);
+          if (!next) {
+            break;
+          }
+          forward(next.message);
+        }
+      },
+      async closeAfterSupervisor() {
+        try {
+          await broker.sealNativeResources();
+          await lease.close();
+        } catch (error) {
+          if (error instanceof BrokerNativeResourceCloseError && connection?.decodeCloseError) {
+            throw connection.decodeCloseError(error.payload);
+          }
+          throw error;
+        }
+      },
+      release() {
+        lease.release();
+        dispose();
+      },
+      abandonUnattached() {
+        lease.abandonUnattached();
+        dispose();
+      },
+    };
   }
 
   abandonResource(): void {
@@ -181,32 +245,28 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
     }
   }
 
-  private recoverResource(requestRetry = false): void {
-    if (!this.resourceBinding || this.joined) {
+  private resourceFailed(error: unknown): void {
+    this.runInContext(() => {
+      this.stopCompletion.reject(error);
+      this.emit("error", toErrorObject(error, "Native resource observation failed"));
+    });
+  }
+
+  private recoverResource(): void {
+    if (!this.resourceBinding || this.joined || this.resourceRecovery) {
       return;
     }
-    if (this.resourceRecovery) {
-      this.resourceRetryRequested ||= requestRetry;
-      return;
-    }
-    this.resourceRetryRequested = false;
     const recovery = this.resourceBinding.closeAfterSupervisor();
     this.resourceRecovery = recovery;
     void recovery.then(
       () =>
         this.runInContext(() => {
-          this.resourceRecovery = undefined;
-          this.resourceRetryRequested = false;
           this.finishJoined(undefined);
         }),
       (error: unknown) =>
         this.runInContext(() => {
-          this.resourceRecovery = undefined;
           this.stopping = false;
           this.stopCompletion.reject(error);
-          if (this.resourceRetryRequested) {
-            this.recoverResource();
-          }
         }),
     );
   }
@@ -273,7 +333,7 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
           cause: this.runtime.failure,
         }),
       );
-      this.recoverResource(true);
+      this.recoverResource();
       return this.stopCompletion.operation;
     }
     if (!this.stopping) {
@@ -332,10 +392,6 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
   }
 
   ownerFailed(error: Error): void {
-    this.deliver({ type: "owner-failed", error });
-  }
-
-  private receiveOwnerFailure(error: Error): void {
     this.runInContext(() => {
       this.taskPort?.close();
       this.stopping = false;
@@ -346,10 +402,6 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
   }
 
   ownerJoined(error: Error): void {
-    this.deliver({ type: "owner-joined", error });
-  }
-
-  private receiveOwnerJoin(error: Error): void {
     this.runInContext(() => {
       this.stopping = false;
       this.supervisorJoined = true;
@@ -401,57 +453,31 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
     if (!this.executionStopped) {
       this.taskPort?.close();
       this.executionStopped = true;
+      this.executionExitCode = code;
       this.emit("execution-exit", code);
+    }
+    if (this.resourceClosed && !this.joined) {
+      this.finishJoined(code);
     }
   }
 
   receive(reply: NativeWorkerReply): void {
-    this.deliver(reply);
-  }
-
-  private deliver(delivery: NativeDelivery): void {
-    this.deliveries.push(delivery);
-    this.drainDeliveries();
-  }
-
-  private drainDeliveries(): void {
-    this.runInContext(() => {
-      for (;;) {
-        const delivery = this.deliveries[0];
-        if (!delivery) {
-          return;
-        }
+    this.runInContext(() =>
+      runWithMainThreadTask(this.diagnosticName, () => {
         if (
-          delivery.type === "error" ||
-          delivery.type === "messageerror" ||
-          delivery.type === "create-error" ||
-          delivery.type === "execution-exit" ||
-          delivery.type === "stopped" ||
-          delivery.type === "stop-error" ||
-          delivery.type === "resource-failed" ||
-          delivery.type === "owner-failed" ||
-          delivery.type === "owner-joined"
+          reply.type === "error" ||
+          reply.type === "messageerror" ||
+          reply.type === "create-error" ||
+          reply.type === "execution-exit" ||
+          reply.type === "stopped" ||
+          reply.type === "stop-error"
         ) {
           this.terminalObserved = true;
           this.taskPort?.drain();
-          // Reentrant service may have delivered this same terminal receipt while draining data.
-          if (this.deliveries[0] !== delivery) {
-            continue;
-          }
         }
-        this.deliveries.shift();
-        if (delivery.type === "owner-failed") {
-          this.receiveOwnerFailure(delivery.error);
-        } else if (delivery.type === "owner-joined") {
-          this.receiveOwnerJoin(delivery.error);
-        } else if (delivery.type === "resource-failed") {
-          this.stopCompletion.reject(delivery.error);
-          this.emit("error", delivery.diagnostic);
-        } else {
-          this.receiveOwned(delivery);
-        }
-      }
-    });
+        this.receiveOwned(reply);
+      }),
+    );
   }
 
   private receiveOwned(reply: NativeWorkerReply): void {

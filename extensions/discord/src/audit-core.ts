@@ -45,14 +45,12 @@ export function resolveRequiredDiscordChannelPermissions(channelType?: number): 
   return [...REQUIRED_TEXT_CHANNEL_PERMISSIONS];
 }
 
-function listConfiguredGuildChannelKeys(
-  guilds: Record<string, DiscordGuildEntry> | undefined,
-): string[] {
-  if (!guilds) {
-    return [];
-  }
+export function collectDiscordAuditChannelIdsForAccount(config: {
+  guilds?: Record<string, DiscordGuildEntry>;
+  voice?: { autoJoin?: Array<{ guildId?: string; channelId?: string }> };
+}) {
   const ids = new Set<string>();
-  for (const entry of Object.values(guilds)) {
+  for (const entry of Object.values(config.guilds ?? {})) {
     if (!entry || typeof entry !== "object") {
       continue;
     }
@@ -62,28 +60,18 @@ function listConfiguredGuildChannelKeys(
     }
     for (const [key, value] of Object.entries(channelsRaw)) {
       const channelId = normalizeOptionalString(key) ?? "";
-      if (!channelId) {
-        continue;
-      }
-      if (channelId === "*") {
-        continue;
-      }
-      if ((value as DiscordGuildChannelConfig | undefined)?.enabled === false) {
+      if (
+        !channelId ||
+        channelId === "*" ||
+        (value as DiscordGuildChannelConfig | undefined)?.enabled === false
+      ) {
         continue;
       }
       ids.add(channelId);
     }
   }
-  return [...ids].toSorted((a, b) => a.localeCompare(b));
-}
-
-export function collectDiscordAuditChannelIdsForAccount(config: {
-  guilds?: Record<string, DiscordGuildEntry>;
-  voice?: { autoJoin?: Array<{ guildId?: string; channelId?: string }> };
-}) {
-  const keys = listConfiguredGuildChannelKeys(config.guilds);
-  const channelIds = new Set(keys.filter((key) => /^\d+$/.test(key)));
-  let unresolvedChannels = keys.length - channelIds.size;
+  const channelIds = new Set([...ids].filter((key) => /^\d+$/.test(key)));
+  let unresolvedChannels = ids.size - channelIds.size;
   for (const entry of config.voice?.autoJoin ?? []) {
     const channelId = normalizeOptionalString(entry?.channelId) ?? "";
     if (/^\d+$/.test(channelId)) {

@@ -5,10 +5,15 @@ import {
   loadPatternListFromEnv,
   matchesVitestGlob,
   narrowIncludePatternsForCli,
+  vitestE2eTestGlob,
 } from "./vitest.pattern-file.ts";
 import { sharedVitestConfig } from "./vitest.shared.config.ts";
 import { UiE2eSequencer } from "./vitest.ui-e2e.sequencer.ts";
-import { controlUiE2eTestGlobs, uiE2eRealGatewayTestFiles } from "./vitest.ui-paths.mjs";
+import {
+  controlUiE2eTestGlobs,
+  resolveUiTypeScriptPath,
+  uiE2eRealGatewayTestFiles,
+} from "./vitest.ui-paths.mjs";
 
 const uiE2eIncludePatterns = [
   ...controlUiE2eTestGlobs,
@@ -27,37 +32,44 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/background-work.real-gateway.e2e.test.ts",
   "ui/src/e2e/boot-module-boundaries.e2e.test.ts",
   "ui/src/e2e/browser-auth-recovery.e2e.test.ts",
+  "ui/src/e2e/browser-capabilities.e2e.test.ts",
   "ui/src/e2e/build-info-unicode.e2e.test.ts",
   "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-code-block-fences.e2e.test.ts",
   "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-composer-websearch-kill-switch.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-export-attribution.e2e.test.ts",
+  "ui/src/e2e/chat-html-publication.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-json-tree.e2e.test.ts",
   "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-managed-media-order.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-reconnect-continuity.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-session-diff-folding.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-steer-deferred-custody.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-stop-finished-run.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-stop-owned-exec.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-thinking-metadata.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-tts-supplement.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-wait-clock.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts",
   "ui/src/e2e/child-session-load-errors.e2e.test.ts",
   "ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts",
   "ui/src/e2e/command-palette-search.real-gateway.e2e.test.ts",
-  "ui/src/e2e/community-invite-showing.e2e.test.ts",
   "ui/src/e2e/composer-draft-store.e2e.test.ts",
   "ui/src/e2e/composer-recovery-fences.e2e.test.ts",
   "ui/src/e2e/config-raw-save.e2e.test.ts",
   "ui/src/e2e/control-ui-shell-routing.e2e.test.ts",
   "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
   "ui/src/e2e/cron-loading.e2e.test.ts",
+  "ui/src/e2e/deepseek-search.real-gateway.e2e.test.ts",
   "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
   "ui/src/e2e/device-platform-family.real-gateway.e2e.test.ts",
   "ui/src/e2e/gateway-foreground-recovery.e2e.test.ts",
   "ui/src/e2e/initial-connect-splash.e2e.test.ts",
   "ui/src/e2e/locale-offline-retry.e2e.test.ts",
   "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
-  "ui/src/e2e/mobile-chat-session-menu.e2e.test.ts",
+  "ui/src/e2e/memory-overview-source.e2e.test.ts",
   "ui/src/e2e/mobile-sidebar-session-menu.e2e.test.ts",
   "ui/src/e2e/model-api-keys.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-catalog-partial-refresh.real-gateway.e2e.test.ts",
@@ -65,17 +77,29 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/mount-recovery.e2e.test.ts",
   "ui/src/e2e/native-notifications-loading.e2e.test.ts",
   "ui/src/e2e/new-session-page.cloud-startup.runtime-load.e2e.test.ts",
+  "ui/src/e2e/peer-followup-restart.real-gateway.e2e.test.ts",
+  "ui/src/e2e/post-deploy-session-entry.e2e.test.ts",
+  "ui/src/e2e/presentation-primitives.e2e.test.ts",
   "ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts",
   "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
   "ui/src/e2e/session-management.delete.e2e.test.ts",
+  "ui/src/e2e/session-management.promotion.e2e.test.ts",
   "ui/src/e2e/session-roster-request-rate.real-gateway.e2e.test.ts",
   "ui/src/e2e/settings-loading-skeletons.e2e.test.ts",
+  "ui/src/e2e/shell-module-loading.e2e.test.ts",
   "ui/src/e2e/sidebar-account-footer.e2e.test.ts",
+  "ui/src/e2e/sidebar-boot-imports.e2e.test.ts",
+  "ui/src/e2e/sidebar-pin-placement.e2e.test.ts",
   "ui/src/e2e/terminal-fonts.e2e.test.ts",
   "ui/src/e2e/terminal-runtime.e2e.test.ts",
-];
+  "ui/src/pages/agents-home/claws-catalog.e2e.test.ts",
+  "ui/src/pages/claws/creator-review.e2e.test.ts",
+  "ui/src/pages/workboard/workboard-distribution.e2e.test.ts",
+].map((file) => resolveUiTypeScriptPath(file));
 
-export const uiE2eRuntimeBudgetTestFile = "ui/src/e2e/chat-stream-runtime-budgets.e2e.test.ts";
+export const uiE2eRuntimeBudgetTestFile = resolveUiTypeScriptPath(
+  "ui/src/e2e/chat-stream-runtime-budgets.e2e.test.ts",
+);
 
 // Real Gateways never overlap the parallel phase when the CI skip is absent.
 export const uiE2eSerialTestFiles = [
@@ -91,9 +115,9 @@ export const uiE2eSerialTestFiles = [
 const uiE2eStandaloneTestFiles = [
   "ui/src/e2e/board-fixture.e2e.test.ts",
   "ui/src/e2e/control-ui-build-publication.e2e.test.ts",
-  "ui/src/e2e/control-ui-retained-assets.e2e.test.ts",
+  "ui/src/e2e/control-ui-stale-build-reload.e2e.test.ts",
   "ui/src/e2e/service-worker-update.e2e.test.ts",
-];
+].map((file) => resolveUiTypeScriptPath(file));
 
 export function createUiE2eVitestConfig(
   env: Record<string, string | undefined> = process.env,
@@ -105,7 +129,7 @@ export function createUiE2eVitestConfig(
   const realGatewayExclude =
     env.OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY === "1" ? uiE2eRealGatewayTestFiles : [];
   const exclude = [
-    ...(baseTest.exclude ?? []).filter((pattern) => pattern !== "**/*.e2e.test.ts"),
+    ...(baseTest.exclude ?? []).filter((pattern) => pattern !== vitestE2eTestGlob),
     ...realGatewayExclude,
   ];
   const includeFromEnv = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);

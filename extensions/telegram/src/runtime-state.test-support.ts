@@ -21,6 +21,10 @@ export function setTelegramPluginStateRuntimeForTests(): void {
       state: {
         openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) =>
           createPluginStateKeyedStoreForTests<T>("telegram", options),
+        openKeyedStoreV2: <T>(options: OpenAsyncKeyedStoreOptions) =>
+          createPluginStateKeyedStoreForTests<T>("telegram", options).withCurrent({
+            assertCurrent: () => {},
+          }),
         openSyncKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
           createPluginStateSyncKeyedStoreForTests<T>("telegram", options),
       },
@@ -41,6 +45,11 @@ export function installTelegramIngressQueueRuntime(
             ...options,
             env: { ...process.env, OPENCLAW_STATE_DIR: resolveStateDir() },
           }),
+        openKeyedStoreV2: <T>(options: OpenAsyncKeyedStoreOptions) =>
+          createPluginStateKeyedStoreForTests<T>("telegram", {
+            ...options,
+            env: { ...process.env, OPENCLAW_STATE_DIR: resolveStateDir() },
+          }).withCurrent({ assertCurrent: () => {} }),
         openChannelIngressQueue: (
           options?: Omit<Parameters<typeof createChannelIngressQueueForTests>[0], "channelId">,
         ) => {
@@ -55,12 +64,12 @@ export function installTelegramIngressQueueRuntime(
 }
 
 export function setTelegramPollRegistryRuntimeForTests(
-  store: PluginStateKeyedStore<TelegramPollRegistryEntry>,
+  store: PluginStateKeyedStore<TelegramPollRegistryEntry, 2>,
 ): void {
   setTelegramRuntime(
     createPluginRuntimeMock({
       state: {
-        openKeyedStore: (() => store) as TelegramRuntime["state"]["openKeyedStore"],
+        openKeyedStoreV2: (() => store) as TelegramRuntime["state"]["openKeyedStoreV2"],
       },
     }),
   );

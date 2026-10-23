@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import { prepareWhatsAppInboundContext } from "../auto-reply/monitor/inbound-dispatch.js";
 import { whatsappPlugin } from "../channel.js";
 import { setWhatsAppRuntime } from "../runtime.js";
-import { checkInboundAccessControl } from "./access-control.js";
+import { normalizeTestWhatsAppMessage } from "./message-normalization.test-helper.js";
 import { createTestWebInboundMessage } from "./test-message.test-helper.js";
 
 const sender = "+15550000001";
@@ -32,7 +32,7 @@ describe("WhatsApp participant admission", () => {
         async (runtime, retire) => {
           const prepare = async (group: boolean, retireBeforeContext = false) => {
             const conversationId = group ? "120363000000000000@g.us" : sender;
-            const access = await checkInboundAccessControl({
+            const normalized = await normalizeTestWhatsAppMessage({
               cfg,
               accountId: "default",
               from: conversationId,
@@ -42,14 +42,13 @@ describe("WhatsApp participant admission", () => {
               group,
               isFromMe: false,
               remoteJid: group ? conversationId : "15550000001@s.whatsapp.net",
-              sock: { sendMessage: async () => undefined },
             });
-            expect(access.allowed).toBe(true);
-            if (!access.allowed) {
+            expect(normalized).not.toBeNull();
+            if (!normalized) {
               throw new Error("Expected admitted WhatsApp fixture");
             }
             const msg = createTestWebInboundMessage();
-            msg.admission = access.admission;
+            msg.admission = normalized.access.admission;
             const buildContext = runtime.channel.inbound.buildContext;
             if (retireBeforeContext) {
               retire();

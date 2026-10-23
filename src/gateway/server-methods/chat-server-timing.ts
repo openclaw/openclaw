@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import { isNativeAppUiClient } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { GatewayClientInfo } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { emitDiagnosticsTimelineEvent } from "../../infra/diagnostics-timeline.js";
 import { isOperatorUiClient } from "../../utils/message-channel.js";
@@ -11,12 +12,6 @@ type ChatSendTimingContext = {
   session: { clientRunId: string; sessionKey: string; agentId: string; sessionLoadMs: number };
 };
 
-type ChatSendAckServerTiming = {
-  receivedToAckMs: number;
-  loadSessionMs: number;
-  prepareAttachmentsMs?: number;
-};
-
 type ChatSendServerTimingPhase =
   | "dispatch-started"
   | "model-selected"
@@ -27,21 +22,6 @@ type ChatSendServerTimingPhase =
 
 export function roundedChatSendTimingMs(value: number): number {
   return Math.max(0, Math.round(value * 1000) / 1000);
-}
-
-function chatSendAckServerTimingAttributes(
-  timing: ChatSendAckServerTiming | undefined,
-): Record<string, number> {
-  if (!timing) {
-    return {};
-  }
-  return {
-    serverReceivedToAckMs: timing.receivedToAckMs,
-    serverLoadSessionMs: timing.loadSessionMs,
-    ...(timing.prepareAttachmentsMs !== undefined
-      ? { serverPrepareAttachmentsMs: timing.prepareAttachmentsMs }
-      : {}),
-  };
 }
 
 export function prepareChatSendAckTiming({
@@ -81,7 +61,15 @@ export function prepareChatSendAckTiming({
       attributes: {
         ...chatSendTraceAttributes,
         ackStatus,
-        ...chatSendAckServerTimingAttributes(serverTiming),
+        ...(serverTiming
+          ? {
+              serverReceivedToAckMs: serverTiming.receivedToAckMs,
+              serverLoadSessionMs: serverTiming.loadSessionMs,
+              ...(serverTiming.prepareAttachmentsMs !== undefined
+                ? { serverPrepareAttachmentsMs: serverTiming.prepareAttachmentsMs }
+                : {}),
+            }
+          : {}),
       },
     }),
   };
@@ -98,7 +86,8 @@ export function resolveControlUiReconnectResumeParams(
   }
   const record = params as Record<string, unknown>;
   const resumeRequested =
-    record[CONTROL_UI_RECONNECT_RESUME_PARAM] === true && isOperatorUiClient(clientInfo);
+    record[CONTROL_UI_RECONNECT_RESUME_PARAM] === true &&
+    (isOperatorUiClient(clientInfo) || isNativeAppUiClient(clientInfo));
   if (!resumeRequested) {
     return { params, resumeRequested: false };
   }

@@ -15,8 +15,8 @@ pairing prompt.
 Each X conversation is a group thread identified by its `conversation_id`.
 The agent receives the triggering mention together with available ancestors,
 conversation posts, and quoted posts. The original mention remains the
-user-visible message. DMs, original posts, likes, follows, and media uploads are
-not supported.
+user-visible message. Replies can include native images, GIFs, and MP4 videos.
+DMs, original posts, likes, and follows are not supported.
 
 ## Setup
 
@@ -28,7 +28,8 @@ openclaw plugins install --link ./extensions/x
 ```
 
 Use an X confidential OAuth2 application and authorize the bot account with
-`tweet.read tweet.write users.read offline.access`. Keep its client ID, client
+`tweet.read tweet.write users.read offline.access media.write`. Existing text-only
+connections must be reauthorized with `media.write` before uploading attachments. Keep its client ID, client
 secret, and user-context refresh token. The plugin refreshes access tokens with
 HTTP Basic client authentication. An optional, separate app-only bearer token
 enables the Activity API.
@@ -86,7 +87,7 @@ shared root default `channels.x.autoPublishWorkSessions`) to publish fresh,
 isolated visible work sessions spawned directly by admitted maintainer mentions.
 Guest mentions remain limited to hidden helpers and cannot publish work sessions.
 This is **off by default**. It exposes that child's conversation to anonymous readers
-at the same canonical `/chat` link; it does not change Team collaboration rights.
+at the same `/chat` link; it does not change Team collaboration rights.
 Only enable it for an agent whose work is intended to be public.
 
 Publication requires a configured **app-only** `bearerToken`. Before admission,
@@ -111,14 +112,111 @@ it does not downgrade to a transport that loses the invocation's authority.
 Manual publication remains governed by the existing creator/administrator
 sharing controls. No X identity is promoted to a Team profile or administrator.
 
+## Work sessions and replies
+
+Visible work sessions started by verified X mentions retain the triggering post's
+URL, author handle, and sender tier. The session's system instructions include
+that origin and require manual approval before replying to X. This applies
+whether or not automatic public sharing is enabled.
+
+Visible descendants retain the same origin and approval instructions, including
+when the work is delegated through a hidden helper. They cannot widen the X reply
+target beyond the original conversation.
+
+When the session has a finding, fix, PR, or a clear "can't reproduce" result, it
+drafts a reply of at most 280 characters and asks whether to post it. Tell the
+session explicitly to post the draft; after approval, the visible session uses
+tool `message` with `action: "send"`,
+`channel: "x"`, the origin post URL as `target`, the recorded `accountId`, and
+the approved reply as `message`. Without an answer, it reminds you once in
+its final summary. The send adapter restricts work sessions to their origin post
+or another bot mention in the same X conversation. The host does not yet expose
+user-turn provenance to this adapter, so the approval rule is enforced through
+the session's instructions rather than a user-turn check at send time.
+
+The X front-door agent continues to receive incoming mentions in the original
+conversation session. Maintainer turns include bounded references to recent
+visible work sessions previously started by that front door for the same X
+account and conversation. References contain only a native session key and the
+origin post URL, not work-session titles or transcripts. Deleted, archived,
+incognito, draft, and inaccessible sessions are omitted. Guest turns never
+receive these references.
+
+Before starting new work, the agent should distinguish a continuation from an
+unrelated task in the same thread. Continuations use available, authorized
+session tools; a reference is not a message delivery or an access grant. If the
+current tool policy does not provide a continuation tool, the agent must not
+claim it resumed work or start a duplicate as a workaround. Normal failure
+reporting applies. This context does not automatically route follow-ups, change
+session visibility, or waive manual approval for X replies.
+
+## Reply outcomes and failures
+
+Model replies to mentions are posted only when the agent declares success.
+The channel's delivery rules ask the agent to start each reply with
+`[[x_success]]` or `[[x_failure]]`; the tag is removed before posting. Model replies
+tagged `[[x_failure]]`, untagged model replies, and host error replies are withheld
+from X. `NO_REPLY` and empty replies are dropped. If a model omits the tag on a
+successful answer, that answer is withheld rather than posted.
+
+Runtime queue acknowledgments and steering refusal notices are posted without a
+model success tag. These notices report the actual admission decision; they do
+not declare that the agent's work succeeded.
+
+Without a failure route, withheld replies are discarded and logged as
+`reply withheld post=<id> reason=<failure|error|unclassified> route=none`. With
+`failureRoute`, OpenClaw sends a notice through the target channel's normal
+outbound delivery: the mention's post URL, the author's handle, and a redacted
+summary of at most 500 characters. Delivery is best-effort; a failed notice is
+logged with its result and never falls back to X.
+
+```json5
+{
+  channels: {
+    x: {
+      failureRoute: { channel: "discord", to: "channel:<channelId>" },
+    },
+  },
+}
+```
+
+Set `failureRoute.accountId` to choose an account on the route channel. The
+route cannot target `x`. Message-tool posts from work sessions stay manual: a
+`[[x_success]]` tag is removed and a draft tagged `[[x_failure]]` is refused.
+
+## Native proof attachments
+
+Use the shared `message` tool with `action: "send"`, `channel: "x"`, the approved
+reply text, the target post URL, and `media` set to an inspected local file or HTTPS
+media URL. Native attachments are preferable to sign-in-only proof links when the
+image or video helps explain the result. Work-session approval and origin restrictions
+still apply; guest replies remain text-only.
+
+The X plugin accepts up to four JPEG, PNG, or WebP images (5 MiB each), or one GIF
+(15 MiB) or MP4 video (100 MiB). It does not mix videos/GIFs with other attachments.
+The video cap bounds Gateway buffering; it is not X's account upload ceiling.
+Use H.264 video and AAC-LC audio; X validates the remaining encoding and account
+limits. See [X media requirements](https://docs.x.com/x-api/media/quickstart/best-practices).
+
+Local files use the host's approved media roots and file-reader policy; remote
+URLs use the shared guarded downloader. The plugin uploads in chunks and waits
+for X processing before creating the reply. Attachments go on the first post if a
+long caption is split into a thread. A failed upload never falls back to a text-only
+post or a local-file link. A 403 on upload may require reconnecting the bot's OAuth
+account with `media.write`; an app-only bearer token is not sufficient.
+
 ## Manage the allowlist
 
 Open **X replies** in the Control UI as an administrator. The page shows the
-effective union of config `allowFrom` entries and users added through the page.
+effective union of config `allowFrom` entries, users added through the page, and
+GitHub-derived users when [GitHub verification](/channels/x#verify-github-collaborators)
+is configured.
 Add a username to resolve it to a stable numeric X user ID. Stored entries retain
 the resolved username, display name, adding operator, and timestamp. Remove a
 stored entry from the page; config entries are read-only and must be removed
-from config.
+from config. The **From GitHub** section is also read-only and shows each X
+handle, its source GitHub login, repository permission, and last sync time.
+Removing a stored entry does not revoke access granted by another source.
 
 The page also shows this account's estimated X API spend for today and the
 current billing cycle against its limits. Select **Refresh** to update the
@@ -138,6 +236,106 @@ in `allowFrom`.
 `groupPolicy: "open"` setting is unnecessary and cannot bypass the guest switch.
 `groupPolicy: "disabled"` turns off all inbound turns. `dmPolicy` accepts only
 `disabled`.
+
+## Verify GitHub collaborators
+
+Set `verifiedFromGitHub.repo` to grant the verified maintainer tier to people
+with write access to a GitHub repository who declare an X account on their
+GitHub profile. This is **off by default**. Derived numeric X user IDs join
+config `allowFrom` and administrator-managed entries; they receive the same
+maintainer sessions, tools, and reply behavior.
+
+```json5
+{
+  channels: {
+    x: {
+      verifiedFromGitHub: {
+        repo: "openclaw/openclaw",
+        minPermission: "push",
+        refreshMinutes: 60,
+        token: { source: "env", provider: "default", id: "X_GITHUB_TOKEN" },
+      },
+    },
+  },
+}
+```
+
+These settings inherit from `channels.x` into each account, with per-field
+account overrides. `repo` uses `owner/name` format. `minPermission` accepts
+`push` (write, maintain, or admin), `maintain` (maintain or admin), or `admin`.
+The refresh interval defaults to 60 minutes and cannot be shorter than 15.
+
+The X plugin uses its configured GitHub token for read-only REST calls to
+`api.github.com`. The existing GitHub tools identity does not expose a shared
+authenticated REST client, so configuring `tools.github` alone does not provide
+this credential. Set `token` to a [SecretRef](/gateway/secrets) available to the
+Gateway. The credential must be able to list all collaborators on the selected
+repository, including their permissions, and read public user profiles and
+social accounts. For a fine-grained token, grant access to that repository and
+**Metadata: read**; organization policies may also require approval or SSO
+authorization. A credential that cannot list collaborators produces a visible
+sync error instead of silently treating the repository as empty.
+
+A plugin service syncs on startup and at the configured interval. It paginates
+all collaborators, filters by repository permission, and reads each eligible
+GitHub profile's `twitter_username` and Twitter/X social-account links. Multiple
+valid declarations are combined and duplicate handles are removed. Bare handles,
+`@handles`, and X/Twitter profile URLs are accepted. It resolves declared handles
+to numeric X IDs in batches of up to 100
+using the account's existing X API client and budget. Each returned user costs
+**$0.01**. Handle-to-ID caching avoids repeated paid lookups for unchanged
+handles. Unresolvable handles are skipped, cached, and shown in status. To retry
+an unchanged unresolved declaration, remove it for a sync and then add it back,
+or change the declaration. GitHub profile caching uses ETags where available
+and lasts for the running service's lifetime.
+
+Derived entries and the handle-resolution cache live in worker-backed plugin keyed state under
+`x.verified-github`. A successful sync replaces the derived set. Losing the
+required repository permission or removing the declared handle removes that
+entry at the next successful sync. Removals use the existing allowlist
+revocation fence, invalidating in-flight authorization. Other allowlist sources
+still apply. A failed sync keeps the last good set, marks it stale, and logs
+once per failure streak; it does not revoke everyone during a GitHub outage.
+Successful paid lookup batches are cached even if a later batch fails, so the
+next sync can finish without paying again for those users. Unchanged refreshes
+and stale-status updates preserve in-flight authorization.
+
+Channel status includes `verifiedFromGitHub` with `repo`, `entries`,
+`unresolvedHandles`, `lastSyncAt`, and `stale`. The **From GitHub** section on
+**X replies** shows the same source attribution and freshness. Page **Refresh**
+reloads the current snapshot; the plugin service owns synchronization.
+
+### Trust model
+
+The GitHub account owner declares the X handle and already has write access
+to the repository. Mapping that account to the verified tier adds no meaningful
+power within this trust model. The residual risk is a collaborator declaring
+an X handle they do not own. Administrators can inspect the source GitHub login
+for every derived entry on **X replies**. Revoking the collaborator's repository
+access or removing the profile declaration removes the derived entry on the
+next successful sync, subject to the last-good-set behavior during failures.
+
+The host authorizes the resolved numeric X ID, never a handle supplied in a
+post or by the model. The sender line records the source, for example:
+
+```text
+This is from a verified user: @example (Example), X user id 123, GitHub @example-dev with write access to openclaw/openclaw.
+```
+
+### Enable yourself
+
+1. Sign in to the GitHub account that has the required repository permission.
+2. Open **Settings → Public profile**.
+3. Add your X handle to the **Twitter username** field, or add your
+   `https://x.com/your_handle` profile URL under **Social accounts**.
+4. Save your profile and wait for the next sync (60 minutes by default).
+5. Mention the X bot from that X account. An administrator can confirm your
+   mapping in **X replies → From GitHub**.
+
+Without a declared, resolvable X handle, repository access alone cannot map
+you to an X account. You can also ask an administrator to add your X account
+manually. To remove the derived mapping, remove the declaration from your
+GitHub profile or have your repository permission revoked.
 
 ## Guest mode
 
@@ -168,11 +366,9 @@ send messages, or inspect unrelated sessions. The optional `guests.tools.allow`
 can narrow the five default tools; an empty array disables all tools.
 `guests.tools.deny` takes precedence. Neither setting can add stronger tools.
 
-Hidden helpers require a host that advertises enforcement of these restrictions.
-Older hosts keep the `read` and `ls` defaults, even when they report the same
-OpenClaw version. The X replies settings page shows upgrade guidance when helper
-support is missing. Explicitly selecting only helper tools on an older host
-disables all guest tools; it does not restore the default read tools.
+The bundled X plugin uses the current host's enforcement of these restrictions.
+Core authorizes hidden helpers and preserves the guest's restricted tool surface
+and repository root.
 
 Each guest mention gets a separate channel session and the quoted X thread
 context. It does not reuse a maintainer's conversation history, permission mode,
@@ -252,8 +448,8 @@ and each reply post are billed normally; a guest citation URL receives X's
 higher URL-containing reply price. The author quota is not a dollar budget.
 
 **Security:** the host determines the tier only from X's numeric `author_id`
-against the effective union of configured and administrator-managed allowlist
-entries. Handles, display names, post text, and model output never grant
+against the effective union of configured, administrator-managed, and
+GitHub-derived allowlist entries. Handles, display names, post text, and model output never grant
 maintainer access. Every agent-facing turn starts with a host-generated sender
 line; all thread posts below it are quoted data. Removing a maintainer from the
 allowlist makes subsequent mentions guests when guest mode is on.
@@ -335,7 +531,7 @@ per post; each URL counts as 23 characters. The last chunk receives
 empty string to disable the signature.
 
 When a maintainer turn starts a visible work session, its first session URL is appended
-to the reply unless the text already contains that URL. The canonical link is
+to the reply unless the text already contains that URL. The session link is
 publicly readable only when the creation receipt confirms publication; otherwise
 it is labeled "Work session (sign-in required)." Both use X's URL-containing
 reply price.
@@ -348,7 +544,7 @@ openclaw message send --channel x --target x:1234567890123456789 --message "Repl
 ```
 
 The target must satisfy X's reply eligibility: its author mentioned or quoted
-the app account. Sending media or creating an original post is unsupported.
+the app account. Creating an original post is unsupported.
 
 <a id="costs" />
 
@@ -449,6 +645,10 @@ These fields work at `channels.x` and on individual account entries unless noted
 | `events.mode`                       | `auto`                  | `auto`, `stream`, or `poll`.                                                      |
 | `events.pollSeconds`                | `60`                    | Mentions polling interval, minimum 15 seconds.                                    |
 | `allowFrom`                         | `[]`                    | Numeric author IDs, optionally prefixed with `x:`.                                |
+| `verifiedFromGitHub.repo`           | Unset (off)             | Repository whose collaborators can become verified, in `owner/name` form.         |
+| `verifiedFromGitHub.minPermission`  | `push`                  | Minimum repository permission: `push`, `maintain`, or `admin`.                    |
+| `verifiedFromGitHub.refreshMinutes` | `60`                    | Sync interval in minutes, minimum 15.                                             |
+| `verifiedFromGitHub.token`          | Unset                   | GitHub read credential; supports SecretRef.                                       |
 | `groupPolicy`                       | `allowlist`             | `allowlist`, `open`, or `disabled`.                                               |
 | `dmPolicy`                          | `disabled`              | Only `disabled` is accepted.                                                      |
 | `threadContext.maxPosts`            | `50`                    | Maximum posts included in agent thread context, from 2 to 100.                    |
@@ -461,6 +661,7 @@ These fields work at `channels.x` and on individual account entries unless noted
 | `costLimits.monthlyUsd`             | `1000`                  | Maximum estimated X API spend per billing cycle; `0` blocks paid calls.           |
 | `costLimits.cycleStartDay`          | `1`                     | UTC billing-cycle start day of the month, from 1 to 28.                           |
 | `replySignature`                    | `🤖 automated reply`    | Added to the last reply chunk; up to 140 characters, empty disables it.           |
+| `failureRoute`                      | Unset (discard)         | `{ channel, to, accountId? }` notice target for replies withheld from X.          |
 | `accounts`                          | Unset                   | Named account overrides; channel root only.                                       |
 | `defaultAccount`                    | `default`               | Account selected when none is specified; channel root only.                       |
 
@@ -470,6 +671,13 @@ These fields work at `channels.x` and on individual account entries unless noted
 The dropped-mention counter and last dropped author explain intentional silence.
 There is no pairing flow. An empty allowlist blocks all authors under the
 default policy.
+
+**GitHub verification is stale:** inspect `verifiedFromGitHub` in channel status
+and **X replies → From GitHub** for the last successful sync and error. Confirm
+the token can list collaborators, its repository access is approved, and the
+X API budget permits new handle lookups. The last good set remains active until
+a successful sync. For an unresolved handle, check the collaborator's public
+GitHub profile and that the X account exists.
 
 **Streaming falls back:** check the status message for the Activity endpoint,
 HTTP status, and X error detail. Verify the app bearer and the bot's OAuth2

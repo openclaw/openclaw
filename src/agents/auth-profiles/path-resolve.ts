@@ -5,11 +5,13 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveStateDir } from "../../config/paths.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { readConfigMachineStateAsync } from "../../state/config-machine-state-async.js";
 import { readConfigMachineState } from "../../state/config-machine-state.js";
 import { isArtifactPreservingStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
-import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
 import { SHARED_AUTH_STORE_STATE_KEY } from "./sqlite-json.js";
 import type { SharedAuthStoreOwnership } from "./types.js";
@@ -30,7 +32,11 @@ export function captureAuthProfileOwnerScope(
 
 // Explicit env callers can address another state root in the same process.
 // Pin each root once so later row changes require an owner-controlled restart.
-const sharedAuthStoreOwnershipByDatabasePath = new Map<string, SharedAuthStoreOwnership>();
+// Worker entrypoints and plugin SDK chunks must consume the same published owner.
+const sharedAuthStoreOwnershipByDatabasePath = resolveGlobalSingleton(
+  Symbol.for("openclaw.sharedAuthStoreOwnershipByDatabasePath"),
+  () => new Map<string, SharedAuthStoreOwnership>(),
+);
 
 class InvalidSharedAuthStoreOwnershipError extends Error {
   readonly code = "INVALID_SHARED_AUTH_STORE_OWNERSHIP" as const;
@@ -45,7 +51,7 @@ class InvalidSharedAuthStoreOwnershipError extends Error {
   }
 }
 
-function parseSharedAuthStoreOwnership(value: unknown): SharedAuthStoreOwnership {
+export function parseSharedAuthStoreOwnership(value: unknown): SharedAuthStoreOwnership {
   if (value === undefined) {
     return { location: "legacy-main" };
   }
@@ -59,6 +65,14 @@ function parseSharedAuthStoreOwnership(value: unknown): SharedAuthStoreOwnership
   throw new InvalidSharedAuthStoreOwnershipError(value);
 }
 
+export function getPreparedSharedAuthStoreOwnership(
+  env: NodeJS.ProcessEnv,
+): SharedAuthStoreOwnership | undefined {
+  return sharedAuthStoreOwnershipByDatabasePath.get(
+    path.resolve(resolveOpenClawStateSqlitePath(env)),
+  );
+}
+
 function cacheSharedOwnership(databasePath: string, read: () => unknown): SharedAuthStoreOwnership {
   if (sharedAuthStoreOwnershipByDatabasePath.size >= SHARED_AUTH_STORE_OWNERSHIP_CACHE_LIMIT) {
     throw new Error(
@@ -70,7 +84,7 @@ function cacheSharedOwnership(databasePath: string, read: () => unknown): Shared
   return ownership;
 }
 
-/** Resolve the process-stable owner of the shared auth store. */
+/** Consume the process-stable owner prepared by the auth lifecycle. Never opens SQLite. */
 export function resolveSharedAuthStoreOwnership(
   env: NodeJS.ProcessEnv = process.env,
 ): SharedAuthStoreOwnership {
@@ -79,8 +93,8 @@ export function resolveSharedAuthStoreOwnership(
   if (cached) {
     return cached;
   }
-  return cacheSharedOwnership(databasePath, () =>
-    readConfigMachineState<unknown>(SHARED_AUTH_STORE_STATE_KEY, { env, path: databasePath }),
+  throw new Error(
+    `Shared auth store ownership is not prepared for ${databasePath}; await resolveSharedAuthStoreOwnershipAsync before using auth paths.`,
   );
 }
 
@@ -93,14 +107,10 @@ export async function resolveSharedAuthStoreOwnershipAsync(
   if (cached) {
     return cached;
   }
-  const value = await runOpenClawStateWorkerOperation(
-    context,
-    (scope) =>
-      scope.execute({
-        type: "authProfiles.sharedOwnership",
-        input: { artifactPreserving: isArtifactPreservingStateRead() },
-      }),
-    { existingOnly: true },
+  const value = await readConfigMachineStateAsync(
+    SHARED_AUTH_STORE_STATE_KEY,
+    { path: databasePath, env: context.environment },
+    { artifactPreservingReadOnly: isArtifactPreservingStateRead() },
   );
   context.admission.assertCurrent();
   // An explicit commit/reload while this read waited remains the authoritative owner.
@@ -109,6 +119,16 @@ export async function resolveSharedAuthStoreOwnershipAsync(
     return current;
   }
   return cacheSharedOwnership(databasePath, () => value);
+}
+
+/** Prepare cold ownership once; warm lifecycle entries consume the published fact directly. */
+export async function prepareSharedAuthStoreOwnership(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<SharedAuthStoreOwnership> {
+  return (
+    getPreparedSharedAuthStoreOwnership(env) ??
+    resolveSharedAuthStoreOwnershipAsync(captureOpenClawStateWorkerContext({ env }))
+  );
 }
 
 /** Inspect copied state without pinning a runtime owner or changing SQLite artifacts. */
@@ -124,7 +144,7 @@ export function inspectSharedAuthStoreOwnership(
   );
 }
 
-/** Update the process-stable cache after this process commits the ownership row. */
+/** Install a committed shared-store ownership fact without rereading SQLite. */
 export function noteCommittedSharedAuthStoreOwnership(
   ownership: SharedAuthStoreOwnership,
   env: NodeJS.ProcessEnv = process.env,
@@ -133,15 +153,19 @@ export function noteCommittedSharedAuthStoreOwnership(
   sharedAuthStoreOwnershipByDatabasePath.set(databasePath, ownership);
 }
 
-/** Reload shared auth ownership after an explicit out-of-process auth mutation. */
-export function reloadSharedAuthStoreOwnership(
+/** Reload shared auth ownership after an explicitly joined auth child mutation. */
+export async function reloadSharedAuthStoreOwnership(
   env: NodeJS.ProcessEnv = process.env,
-): SharedAuthStoreOwnership {
-  const databasePath = path.resolve(resolveOpenClawStateSqlitePath(env));
-  const ownership = parseSharedAuthStoreOwnership(
-    readConfigMachineState<unknown>(SHARED_AUTH_STORE_STATE_KEY, { env, path: databasePath }),
+): Promise<SharedAuthStoreOwnership> {
+  const context = captureOpenClawStateWorkerContext({ env });
+  const value = await readConfigMachineStateAsync(
+    SHARED_AUTH_STORE_STATE_KEY,
+    { path: context.admission.databasePath, env: context.environment },
+    { artifactPreservingReadOnly: isArtifactPreservingStateRead() },
   );
-  sharedAuthStoreOwnershipByDatabasePath.set(databasePath, ownership);
+  context.admission.assertCurrent();
+  const ownership = parseSharedAuthStoreOwnership(value);
+  sharedAuthStoreOwnershipByDatabasePath.set(context.admission.databasePath, ownership);
   return ownership;
 }
 

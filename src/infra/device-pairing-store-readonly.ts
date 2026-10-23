@@ -2,7 +2,11 @@ import {
   executeExistingOpenClawStateRead,
   getActiveOpenClawStateDatabaseReadSnapshot,
 } from "../state/openclaw-state-db-readonly.js";
-import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import {
+  captureOpenClawStateWorkerContext,
+  captureOpenClawStateReadContext,
+} from "../state/openclaw-state-worker-context.js";
 import type { DeviceBootstrapBoundContextInput } from "./device-bootstrap.worker-types.js";
 import { withDevicePairingLock } from "./device-pairing-lock.js";
 import { captureDevicePairingPublication } from "./device-pairing-publication.js";
@@ -10,9 +14,10 @@ import type {
   DevicePairingNodeSnapshot,
   DevicePairingReadCommand,
 } from "./device-pairing-read.types.js";
+import type { PairedDevice } from "./device-pairing.types.js";
 
-async function readPairing(
-  command: DevicePairingReadCommand,
+async function readPairing<Command extends DevicePairingReadCommand>(
+  command: Command,
   baseDir?: string,
   current = false,
   prepareNodes = false,
@@ -23,15 +28,18 @@ async function readPairing(
   const snapshot = current ? undefined : getActiveOpenClawStateDatabaseReadSnapshot(selected);
   const read = async () => {
     const publication = captureDevicePairingPublication(context.admission);
+    const nodes = prepareNodes && !snapshot ? publication.readNodes() : undefined;
+    if (nodes) {
+      context.admission.assertCurrent();
+      return { reply: undefined, nodes };
+    }
     let reply;
     try {
-      reply = await executeExistingOpenClawStateRead(
-        selected,
+      const selectedCommand: Command =
         command.type === "devicePairing.list" && !snapshot
           ? { ...command, publishedRevision: publication.completeRevision() }
-          : command,
-        { current },
-      );
+          : command;
+      reply = await executeExistingOpenClawStateRead(selected, selectedCommand, { current });
     } catch (error) {
       if (!snapshot) {
         publication.fail();
@@ -45,16 +53,16 @@ async function readPairing(
     if (!publication.isCurrent()) {
       return undefined;
     }
-    if (reply?.ok && "bindings" in reply) {
+    if (reply && "bindings" in reply) {
       publication.publish(reply.revision, reply.bindings, reply.type === "devicePairing.list");
     } else if (!reply) {
       publication.publish("missing", [], true);
     }
-    const nodes =
-      prepareNodes && (!reply || (reply.ok && reply.type === "devicePairing.list"))
+    const preparedNodes =
+      prepareNodes && (!reply || "list" in reply)
         ? publication.prepareNodes(reply?.revision ?? "missing", reply?.list.paired ?? [])
         : undefined;
-    return { reply, nodes };
+    return { reply, nodes: preparedNodes };
   };
   const observed = await read();
   if (observed) {
@@ -96,28 +104,34 @@ export async function listDevicePairingStoreRecordsReadOnly(baseDir?: string, cu
   if (!reply) {
     return { pending: [], paired: [] };
   }
-  if (!reply.ok || reply.type !== "devicePairing.list") {
-    throw new Error("Unexpected pairing list reply");
-  }
   return reply.list;
 }
 
-export async function loadPairedDevicePairingStoreRecordReadOnly(
+export function loadPairedDevicePairingStoreRecordReadOnly(deviceId: string, baseDir?: string) {
+  return readCurrentPairedDevice(deviceId, (device) => device, baseDir);
+}
+
+/** Run authorization without yielding after reading the committed publication. */
+export async function readCurrentPairedDevice<T>(
   deviceId: string,
+  read: (device: PairedDevice | null) => T,
   baseDir?: string,
-) {
-  const { reply } = await readPairing(
-    { type: "devicePairing.lookup", deviceId: deviceId.trim() },
-    baseDir,
-    true,
+): Promise<T> {
+  const context = captureOpenClawStateReadContext(
+    resolveOpenClawStateSqlitePath(
+      baseDir ? { ...process.env, OPENCLAW_STATE_DIR: baseDir } : process.env,
+    ),
   );
-  if (!reply) {
-    return null;
+  let device = captureDevicePairingPublication(context.admission).readDevice(deviceId.trim());
+  if (device === undefined) {
+    await readPairing({ type: "devicePairing.lookup", deviceId: deviceId.trim() }, baseDir, true);
+    device = captureDevicePairingPublication(context.admission).readDevice(deviceId.trim());
+    if (device === undefined) {
+      throw new Error("Device pairing read publication was replaced");
+    }
   }
-  if (!reply.ok || reply.type !== "devicePairing.lookup") {
-    throw new Error("Unexpected pairing lookup reply");
-  }
-  return reply.device;
+  context.admission.assertCurrent();
+  return read(device);
 }
 
 export async function loadPendingDevicePairingStoreRecordReadOnly(
@@ -131,9 +145,6 @@ export async function loadPendingDevicePairingStoreRecordReadOnly(
   );
   if (!reply) {
     return null;
-  }
-  if (!reply.ok || reply.type !== "devicePairing.pending") {
-    throw new Error("Unexpected pending pairing reply");
   }
   return reply.pending;
 }
@@ -149,9 +160,6 @@ export async function loadBoundDeviceBootstrapContextReadOnly(
   );
   if (!reply) {
     return null;
-  }
-  if (!reply.ok || reply.type !== "devicePairing.bootstrapContext") {
-    throw new Error("Unexpected bootstrap context reply");
   }
   return reply.context;
 }

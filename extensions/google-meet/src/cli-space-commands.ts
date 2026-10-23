@@ -136,7 +136,11 @@ export function registerGoogleMeetCreateCommands(context: GoogleMeetCliCommandCo
           token,
           source: _source,
           ...result
-        } = await createSpaceFromParams(context.config, resolveCliParams(options));
+        } = await createSpaceFromParams(
+          context.config,
+          resolveCliParams(options),
+          context.oauthRuntime,
+        );
         created = {
           ...result,
           tokenSource: token.refreshed ? "refresh-token" : "cached-access-token",
@@ -171,6 +175,7 @@ export function registerGoogleMeetCreateCommands(context: GoogleMeetCliCommandCo
       const token = await resolveGoogleMeetTokenFromParams(
         context.config,
         resolveCliParams(options),
+        context.oauthRuntime,
       );
       const result = await endGoogleMeetActiveConference({
         accessToken: token.accessToken,
@@ -199,16 +204,17 @@ export function registerGoogleMeetApiCommands(context: GoogleMeetCliCommandConte
     addGoogleMeetMeetingOption(
       root
         .command("resolve-space")
-        .description("Resolve a Meet URL, meeting code, or spaces/{id} to its canonical space"),
+        .description("Resolve a Meet URL, meeting code, or spaces/{id} to the matching space"),
     ),
   )
     .option("--json", "Print JSON output", false)
     .action(async (options: ResolveSpaceOptions) => {
       const meeting = resolveMeetingInput(context.config, options.meeting);
-      const { space, token } = await resolveSpaceFromParams(context.config, {
-        ...resolveCliParams(options),
-        meeting,
-      });
+      const { space, token } = await resolveSpaceFromParams(
+        context.config,
+        resolveCliParams(options),
+        context.oauthRuntime,
+      );
       if (options.json) {
         writeStdoutJson(space);
         return;
@@ -238,10 +244,11 @@ export function registerGoogleMeetApiCommands(context: GoogleMeetCliCommandConte
     .option("--json", "Print JSON output", false)
     .action(async (options: ResolveSpaceOptions) => {
       const meeting = resolveMeetingInput(context.config, options.meeting);
-      const { space, token } = await resolveSpaceFromParams(context.config, {
-        ...resolveCliParams(options),
-        meeting,
-      });
+      const { space, token } = await resolveSpaceFromParams(
+        context.config,
+        resolveCliParams(options),
+        context.oauthRuntime,
+      );
       const report = buildGoogleMeetPreflightReport({
         input: meeting,
         space,
@@ -283,7 +290,11 @@ export function registerGoogleMeetApiCommands(context: GoogleMeetCliCommandConte
     .option("--json", "Print JSON output", false)
     .action(async (options: ResolveSpaceOptions) => {
       const raw = resolveCliParams(options);
-      const token = await resolveGoogleMeetTokenFromParams(context.config, raw);
+      const token = await resolveGoogleMeetTokenFromParams(
+        context.config,
+        raw,
+        context.oauthRuntime,
+      );
       if (!options.today && !options.event?.trim()) {
         const meeting = options.meeting?.trim() || context.config.defaults.meeting;
         if (!meeting) {
@@ -334,6 +345,7 @@ export function registerGoogleMeetApiCommands(context: GoogleMeetCliCommandConte
       const token = await resolveGoogleMeetTokenFromParams(
         context.config,
         resolveCliParams(options),
+        context.oauthRuntime,
       );
       const window = options.today ? buildGoogleMeetCalendarDayWindow() : {};
       const result = await listGoogleMeetCalendarEvents({

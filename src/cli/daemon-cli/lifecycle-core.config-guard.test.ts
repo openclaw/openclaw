@@ -48,7 +48,8 @@ vi.mock("../../config/issue-format.js", () => ({
   ) => issues.map((i) => `${i.path}: ${i.message}`),
 }));
 
-vi.mock("../../runtime.js", () => ({
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
   defaultRuntime: lifecycleTestRuntime,
 }));
 
@@ -99,6 +100,7 @@ function createServiceRunArgs() {
     serviceNoun: "Gateway",
     service,
     renderStartHints: () => [],
+    renderFailureHints: () => [],
     opts: { json: true },
   };
 }

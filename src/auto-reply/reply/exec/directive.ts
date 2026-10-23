@@ -1,4 +1,3 @@
-// Parses execution directives for approval, sandbox, and target settings.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   type ExecAsk,
@@ -73,9 +72,7 @@ export function extractExecDirective(rawBody?: string): ExecDirectiveParse {
     if (!token) {
       break;
     }
-    const eq = token.indexOf("=");
-    const colon = token.indexOf(":");
-    const separator = eq === -1 ? colon : colon === -1 ? eq : Math.min(eq, colon);
+    const separator = token.search(/[=:]/);
     if (separator === -1) {
       break;
     }

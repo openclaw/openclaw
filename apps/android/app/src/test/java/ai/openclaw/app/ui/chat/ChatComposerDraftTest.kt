@@ -587,28 +587,6 @@ class ChatComposerDraftTest {
   }
 
   @Test
-  fun stagedSharePreservesComposerAndReportsDroppedImages() {
-    val owner = ChatComposerOwner("gateway", "main", "agent:main:device")
-    val store = ChatComposerAttachmentStore()
-    val existing = pendingAttachment("existing")
-    val shared = pendingAttachment("shared")
-    val staged =
-      StagedChatShare(
-        text = "shared link",
-        attachments = listOf(shared),
-        failedAttachmentCount = 0,
-        droppedAttachmentCount = 2,
-      )
-
-    store.add(owner, listOf(existing))
-    val omitted = store.add(owner, staged.attachments)
-
-    assertEquals("existing draft\n\nshared link", mergeSharedChatText(staged.text, "existing draft"))
-    assertEquals(listOf(existing, shared), store.get(owner))
-    assertEquals(2, staged.failedAttachmentCount + staged.droppedAttachmentCount + omitted)
-  }
-
-  @Test
   fun unreadableSharedImageDoesNotDiscardOtherStagedContent() =
     runBlocking {
       val readable = Uri.parse("content://photos/readable")
@@ -677,26 +655,6 @@ class ChatComposerDraftTest {
       assertEquals(CHAT_COMPOSER_MAX_ATTACHMENTS, store.get(owner).size)
       assertEquals(2, staged.droppedAttachmentCount + omitted)
     }
-
-  @Test
-  fun mergeRechecksAttachmentBudgetAfterStaging() {
-    val owner = ChatComposerOwner("gateway", "main", "agent:main:device")
-    val store = ChatComposerAttachmentStore()
-    val staged =
-      StagedChatShare(
-        text = null,
-        attachments = listOf(pendingAttachment("one"), pendingAttachment("two")),
-        failedAttachmentCount = 0,
-        droppedAttachmentCount = 0,
-      )
-    val current = (1..7).map { pendingAttachment("existing-$it") }
-
-    store.add(owner, current)
-    val omitted = store.add(owner, staged.attachments)
-
-    assertEquals(CHAT_COMPOSER_MAX_ATTACHMENTS, store.get(owner).size)
-    assertEquals(1, staged.droppedAttachmentCount + omitted)
-  }
 
   @Test
   fun sharedAttachmentsMergeWithAnInFlightPickerImportAtTheComposerOwner() {

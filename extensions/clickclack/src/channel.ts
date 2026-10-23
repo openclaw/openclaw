@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/channel-core";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
+  createChannelMessageAdapterFromOutbound,
   createMessageReceiptFromOutboundResults,
   defineChannelMessageAdapter,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -38,6 +39,15 @@ import type { CoreConfig, ResolvedClickClackAccount } from "./types.js";
 
 const CHANNEL_ID = CLICKCLACK_CHANNEL_ID;
 
+const clickClackTextMessageAdapter = createChannelMessageAdapterFromOutbound<CoreConfig>({
+  outbound: {
+    sendText: async (ctx) => ({
+      channel: CHANNEL_ID,
+      ...(await sendClickClackText(ctx)),
+    }),
+  },
+});
+
 const clickClackMessageAdapter = defineChannelMessageAdapter({
   id: CHANNEL_ID,
   durableFinal: {
@@ -53,23 +63,7 @@ const clickClackMessageAdapter = defineChannelMessageAdapter({
     reconcileUnknownSend: reconcileClickClackUnknownSend,
   },
   send: {
-    text: async (ctx) => {
-      const messageId = await sendClickClackText({
-        ...ctx,
-        cfg: ctx.cfg as CoreConfig,
-      });
-      const threadId = ctx.threadId == null ? undefined : String(ctx.threadId);
-      const replyToId = ctx.replyToId ?? undefined;
-      return {
-        ...(messageId ? { messageId } : {}),
-        receipt: createMessageReceiptFromOutboundResults({
-          results: messageId ? [{ channel: CHANNEL_ID, messageId }] : [],
-          threadId,
-          replyToId,
-          kind: "text",
-        }),
-      };
-    },
+    ...clickClackTextMessageAdapter.send,
     media: async (ctx) => {
       const messageId = await sendClickClackMedia({
         ...ctx,
@@ -193,14 +187,10 @@ export const clickClackPlugin: ChannelPlugin<ResolvedClickClackAccount> = create
     },
     attachedResults: {
       channel: CHANNEL_ID,
-      sendText: async (ctx) => {
-        const messageId = await sendClickClackText({
-          ...ctx,
-          cfg: ctx.cfg as CoreConfig,
-        });
-        // Legacy outbound results use an empty id to report an intentional no-send.
-        return { messageId: messageId ?? "" };
-      },
+      sendText: async (ctx) => ({
+        messageId: "",
+        ...(await sendClickClackText({ ...ctx, cfg: ctx.cfg as CoreConfig })),
+      }),
       sendMedia: async (ctx) => {
         const { mediaUrl, onDeliveryResult } = ctx;
         if (!mediaUrl) {

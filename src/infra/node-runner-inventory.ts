@@ -19,6 +19,11 @@ export const NODE_WORKER_ENVIRONMENT_SESSION_VERSION = 1;
 export const NODE_WORKER_STATUS_WAIT_VERSION = 1;
 export const NODE_WORKER_PREPARED_WORKSPACE_VERSION = 1;
 export const NODE_WORKER_NATIVE_INFERENCE_VERSION = 1;
+export const NODE_WORKER_INFERENCE_SETUP_ERROR =
+  "Worker-local inference is not configured on this node. Add a compatible model under " +
+  "models.providers with a usable credential in the node openclaw.json, set " +
+  'nodeHost.workerRuns.isolation to "none", then restart the node host. ' +
+  "If the node runs an older OpenClaw version, update it first.";
 export const NODE_WORKER_PROMPT_CONTEXT_VERSION = 1;
 export const NODE_WORKER_HOST_DISABLED_REASON_MAX_LENGTH = 1_024;
 // Couples the lease owner with foreground tree ownership; neither rolls out alone.
@@ -82,6 +87,7 @@ const WorkerHost = z
       portalStream: z.literal(NODE_WORKER_PORTAL_STREAM_VERSION).optional(),
       environmentSession: z.literal(NODE_WORKER_ENVIRONMENT_SESSION_VERSION).optional(),
       statusWait: z.literal(NODE_WORKER_STATUS_WAIT_VERSION).optional(),
+      deviceFolders: z.literal(true).optional(),
       preparedWorkspace: z.literal(NODE_WORKER_PREPARED_WORKSPACE_VERSION).optional(),
       capturedExecPolicy: z.literal(true).optional(),
       workspaceQuiescence: z.literal(NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION).optional(),
@@ -142,22 +148,17 @@ export function formatNodeRunnerInventoryIssue(
     : `device worker node ${nodeId} requires an update before it can host sessions; run ${issue.updateCommand}, then reconnect it (for a headless node, run ${issue.headlessReconnectCommand})`;
 }
 
-class NodeRunnerUpdateRequiredError extends Error {
-  readonly code = "node_runner_update_required";
-
-  constructor(nodeId: string) {
-    super(formatNodeRunnerInventoryIssue(nodeId, NODE_RUNNER_UPDATE_REQUIRED_ISSUE));
-    this.name = "NodeRunnerUpdateRequiredError";
-  }
-}
-
 export function createNodeRunnerInventoryIssueError(
   nodeId: string,
   issue: NodeRunnerInventoryIssue,
 ): Error {
+  const error = new Error(formatNodeRunnerInventoryIssue(nodeId, issue));
   return issue.code === "update-required"
-    ? new NodeRunnerUpdateRequiredError(nodeId)
-    : new Error(formatNodeRunnerInventoryIssue(nodeId, issue));
+    ? Object.assign(error, {
+        code: "node_runner_update_required",
+        name: "NodeRunnerUpdateRequiredError",
+      })
+    : error;
 }
 
 /** Worker execution requires captured policy and the current assignment prompt context. */

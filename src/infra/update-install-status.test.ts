@@ -4,7 +4,11 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { resolveStartupInstallStatus } from "./update-install-status.js";
+import { ownImmutableFixture } from "./package-update-activation-fixtures.test-support.js";
+import {
+  prepareStartupUpdateInstall,
+  resolveStartupInstallStatus,
+} from "./update-install-status.js";
 
 const mocks = vi.hoisted(() => ({
   root: vi.fn(),
@@ -21,8 +25,43 @@ vi.mock("./update-global.js", () => ({ detectGlobalInstallManagerForRoot: async 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
   vi.resetAllMocks();
 });
+
+it.each(["root", "current", "release"] as const)(
+  "initializes an externally managed immutable %s without taking update ownership",
+  async (spelling) => {
+    const root = await fs.realpath(dirs.make("openclaw-update-external-immutable-"));
+    const sha = "a".repeat(40);
+    const release = path.join(root, "releases", sha);
+    await fs.mkdir(release, { recursive: true, mode: 0o755 });
+    await fs.mkdir(path.join(release, ".git"));
+    await fs.symlink(`releases/${sha}`, path.join(root, "current"));
+    ownImmutableFixture(root, true);
+    mocks.root.mockResolvedValue(
+      spelling === "root" ? root : spelling === "current" ? path.join(root, "current") : release,
+    );
+    const signal = new AbortController().signal;
+
+    const prepared = await prepareStartupUpdateInstall(
+      () => resolveStartupInstallStatus(false, signal),
+      "dev",
+      signal,
+    );
+
+    expect(prepared.installStatus.status).toMatchObject({
+      installKind: "host",
+      installOwner: { owner: "immutable-deployer" },
+      packageManager: "unknown",
+    });
+    expect(prepared.installStatus.status.error).toBeUndefined();
+    expect(prepared.readOnlySchedule).toEqual({ channel: "dev", autoEnabled: false });
+    expect(mocks.git).not.toHaveBeenCalled();
+    expect((await fs.readdir(root)).toSorted()).toEqual(["current", "releases"]);
+    expect(await fs.readlink(path.join(root, "current"))).toBe(`releases/${sha}`);
+  },
+);
 
 it.each(["recover", "exhaust", "abort"] as const)(
   "settles a startup Git probe after a timeout (%s)",
@@ -46,7 +85,6 @@ it.each(["recover", "exhaust", "abort"] as const)(
         firstProbe.resolve();
       }
       return {
-        pid: 1,
         code: timeout ? null : 0,
         stdout: ownership ? root : "",
         stderr: "",
@@ -90,15 +128,6 @@ it("initializes an immutable package directory without invoking Git", async () =
   const root = dirs.make("openclaw-update-package-");
   await fs.writeFile(path.join(root, "package.json"), '{"name":"openclaw"}');
   mocks.root.mockResolvedValue(root);
-  mocks.git.mockResolvedValue({
-    code: 128,
-    stdout: "",
-    stderr: "not a git repository",
-    signal: null,
-    killed: false,
-    termination: "exit",
-    timeoutMs: 2_500,
-  });
   const { status } = await resolveStartupInstallStatus(false, new AbortController().signal);
   expect(status.installKind).toBe("package");
   expect(mocks.git).not.toHaveBeenCalled();

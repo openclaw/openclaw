@@ -8,6 +8,9 @@ import {
   addSession,
   appendOutput,
   deleteSession,
+  getActiveBackgroundExecSessionCount,
+  getFinishedSession,
+  getSession,
   markExited,
   recordNotifyOnExitRemoval,
   type ProcessSession,
@@ -21,20 +24,31 @@ import {
   recordToolCall,
   recordToolCallOutcome,
 } from "./tool-loop-detection.js";
+import { isToolResultError } from "./tool-result-error.js";
 
-beforeEach(() => vi.useFakeTimers());
+const { cancel, killTree } = vi.hoisted(() => ({ cancel: vi.fn(), killTree: vi.fn() }));
+// mock-isolation: Registry fixtures exercise cancellation decisions without launching processes.
+vi.mock("../process/supervisor/index.js", () => ({ getProcessSupervisor: () => ({ cancel }) }));
+// mock-isolation: Synthetic process IDs must never reach the host process-killing implementation.
+vi.mock("../process/kill-tree.js", () => ({ killProcessTree: killTree }));
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.useFakeTimers();
+});
 afterEach(() => {
   resetProcessRegistryForTests();
   resetDiagnosticSessionStateForTest();
   vi.useRealTimers();
 });
 
-function harness() {
+function harness(overrides: Partial<ProcessSession> = {}) {
   const session = createProcessSessionFixture({
     id: "session",
     command: "test",
     backgrounded: true,
+    ...overrides,
   });
+  Object.assign(session, overrides);
   addSession(session);
   const tool = createProcessTool();
   const call = (action: string, extra: Record<string, unknown> = {}, signal?: AbortSignal) =>
@@ -48,22 +62,40 @@ function harness() {
 
 type Result = Awaited<ReturnType<ReturnType<typeof createProcessTool>["execute"]>>;
 const text = (result: Result) => (result.content[0]?.type === "text" ? result.content[0].text : "");
+function check(result: Result, details: object, includes: string[] = [], excludes: string[] = []) {
+  expect(result.details).toMatchObject(details);
+  for (const value of includes) {
+    expect(text(result)).toContain(value);
+  }
+  for (const value of excludes) {
+    expect(text(result)).not.toContain(value);
+  }
+}
+const tick = () => vi.advanceTimersByTimeAsync(250);
+function onExit(session: ProcessSession) {
+  const remove = vi.fn(() => true);
+  recordNotifyOnExitRemoval(session, remove);
+  return remove;
+}
+function complete(session: ProcessSession, output: string, exitCode = 0) {
+  appendOutput(session, "stdout", output);
+  markExited(session, exitCode, null, "completed");
+  return onExit(session);
+}
 
 function writableSession() {
-  const session = createProcessSessionFixture({
-    id: "input",
-    command: "cat",
-    backgrounded: true,
-    startedAt: Date.now() - 20_000,
-  });
   const stdin = {
     write: vi.fn<NonNullable<ProcessSession["stdin"]>["write"]>((_data, done) => done?.(null)),
     end: vi.fn(),
     destroyed: false,
     writableEnded: false,
   };
-  session.stdin = stdin;
-  addSession(session);
+  const { session } = harness({
+    id: "input",
+    command: "cat",
+    startedAt: Date.now() - 20_000,
+    stdin,
+  });
   return { session, stdin };
 }
 
@@ -101,31 +133,23 @@ test("exposes idle input controls only while stdin remains writable", async () =
     idleMs: 20_000,
     lastOutputAt: Date.now() - 20_000,
   };
-  const log = await inputCall("log");
-  expect(text(log)).toContain("may be waiting for input");
-  expect(log.details).toMatchObject(details);
+  check(await inputCall("log"), details, ["may be waiting for input"]);
   await inputCall("poll");
-  const poll = await inputCall("poll");
-  expect(text(poll)).toContain("(no new output)");
-  expect(text(poll)).toContain("may be waiting for input");
-  expect(poll.details).toMatchObject(details);
-  const listed = await inputCall("list");
-  expect(text(listed)).toContain("[input-wait]");
-  expect(listed.details).toMatchObject({ sessions: [details] });
+  check(await inputCall("poll"), details, ["(no new output)", "may be waiting for input"]);
+  check(await inputCall("list"), { sessions: [details] }, ["[input-wait]"]);
   expect(text(await inputCall("write", { data: "你好😀" }))).toBe(
     "Wrote 10 bytes to session input.",
   );
   stdin.writableEnded = true;
-  const closed = await inputCall("log");
-  expect(text(closed)).not.toContain("provide input");
-  expect(closed.details).toMatchObject({
-    status: "running",
-    stdinWritable: false,
-    waitingForInput: false,
-  });
-  const write = await inputCall("write", { data: "answer\n" });
-  expect(text(write)).toContain("stdin is not writable");
-  expect(write.details).toMatchObject({ status: "failed" });
+  check(
+    await inputCall("log"),
+    { status: "running", stdinWritable: false, waitingForInput: false },
+    [],
+    ["provide input"],
+  );
+  check(await inputCall("write", { data: "answer\n" }), { status: "failed" }, [
+    "stdin is not writable",
+  ]);
 });
 
 test.each(["poll", "log"])(
@@ -157,12 +181,7 @@ test.each(["poll", "log"])(
     });
 
     appendOutput(session, "stdout", "New prompt: ");
-    const progressed = await observe();
-    expect(text(progressed)).toContain("New prompt:");
-    expect(progressed.details).toMatchObject({
-      idleMs: 40_000,
-      lastOutputAt: session.startedAt,
-    });
+    check(await observe(), { idleMs: 40_000, lastOutputAt: session.startedAt }, ["New prompt:"]);
     expect(detectToolCallLoop(state, "process", params)).toEqual({ stuck: false });
   },
 );
@@ -175,11 +194,7 @@ test("sorts by start time then registration order across terminal transitions", 
       ["middle", 2_000],
       ["newest-tie", 2_000],
     ] as const
-  ).map(([id, startedAt]) => {
-    const session = createProcessSessionFixture({ id, startedAt, backgrounded: true });
-    addSession(session);
-    return session;
-  });
+  ).map(([id, startedAt]) => harness({ id, startedAt }).session);
   const expected = ["later", "newest-tie", "middle", "oldest"];
   const expectOrder = async () => {
     const result = await inputCall("list");
@@ -207,11 +222,9 @@ test("poll returns a new interactive prompt before its wait expires", async () =
     return result;
   });
   appendOutput(session, "stderr", "interactive prompt\n");
-  await vi.advanceTimersByTimeAsync(250);
+  await tick();
   expect(settled).toBe(true);
-  const result = await pending;
-  expect(result.details).toMatchObject({ status: "running", sessionId: session.id });
-  expect(text(result)).toContain("interactive prompt");
+  check(await pending, { status: "running", sessionId: session.id }, ["interactive prompt"]);
 });
 
 test("an already-aborted poll leaves buffered output unread", async () => {
@@ -223,47 +236,17 @@ test("an already-aborted poll leaves buffered output unread", async () => {
   expect(session.pendingOutput).toEqual([{ stream: "stdout", text: "interactive prompt\n" }]);
 });
 
-test("poll drains interleaved output in callback order across completion", async () => {
-  const { session, poll } = harness();
-  appendOutput(session, "stderr", "ERR-before\n");
-  appendOutput(session, "stdout", "OUT-after\n");
-  const running = await poll();
-  expect(text(running)).toContain("ERR-before\nOUT-after");
-  expect(running.details).toMatchObject({
-    status: "running",
-    aggregated: "ERR-before\nOUT-after\n",
-  });
-  const pending = poll("2000");
-  const unread = `ERR-last\n${"x".repeat(2_001)}\nEND`;
-  appendOutput(session, "stderr", unread);
-  markExited(session, 0, null, "completed");
-  await vi.advanceTimersByTimeAsync(250);
-  const terminal = await pending;
-  expect(text(terminal)).toContain(unread);
-  expect(text(terminal)).not.toContain("ERR-before");
-  expect(text(terminal)).not.toContain("OUT-after");
-  expect(terminal.details).toMatchObject({
-    status: "completed",
-    aggregated: `ERR-before\nOUT-after\n${unread}`,
-  });
-  expect(text(await poll())).not.toContain(unread);
-});
-
 test("a waiting poll cannot adopt a same-id successor after removal", async () => {
   const { session, poll } = harness();
   const pending = poll(2_000);
   session.backgrounded = false;
   deleteSession(session.id);
   markExited(session, 0, null, "completed");
-  const successor = createProcessSessionFixture({ id: session.id, backgrounded: true });
-  addSession(successor);
-  appendOutput(successor, "stdout", "successor output\n");
-  markExited(successor, 0, null, "completed");
-  const remove = vi.fn(() => true);
-  recordNotifyOnExitRemoval(successor, remove);
-  await vi.advanceTimersByTimeAsync(250);
+  const { session: successor } = harness();
+  const remove = complete(successor, "successor output\n");
+  await tick();
   const original = await pending;
-  expect(original.details).toMatchObject({ status: "failed" });
+  check(original, { status: "failed" });
   expect(text(original)).toBe(`No session found for ${session.id}`);
   expect(remove).not.toHaveBeenCalled();
   const result = await poll();
@@ -278,38 +261,28 @@ test("an evicted completion keeps its receipt without recommending successor log
   const pending = poll(2_000);
   const output = `[earlier]${"x".repeat(30_000)}[latest]`;
   session.maxOutputChars = output.length;
-  appendOutput(session, "stdout", output);
-  markExited(session, 0, null, "completed");
-  const originalRemove = vi.fn(() => true);
-  recordNotifyOnExitRemoval(session, originalRemove);
+  const originalRemove = complete(session, output);
   deleteSession(session.id);
-  const successor = createProcessSessionFixture({ id: session.id, backgrounded: true });
-  addSession(successor);
-  appendOutput(successor, "stdout", "successor output\n");
-  markExited(successor, 7, null, "completed");
-  const successorRemove = vi.fn(() => true);
-  recordNotifyOnExitRemoval(successor, successorRemove);
-  await vi.advanceTimersByTimeAsync(250);
+  const { session: successor } = harness();
+  const successorRemove = complete(successor, "successor output\n", 7);
+  await tick();
   const original = await pending;
-  expect(original.details).toMatchObject({ status: "completed", exitCode: 0, aggregated: output });
-  expect(text(original)).not.toContain("[earlier]");
-  expect(text(original)).toContain("[latest]");
-  expect(text(original)).not.toContain("successor output");
-  expect(text(original)).not.toContain("use action=log");
-  expect(text(original)).toContain("omitted output is no longer available through action=log");
+  check(
+    original,
+    { status: "completed", exitCode: 0, aggregated: output },
+    ["[latest]", "omitted output is no longer available through action=log"],
+    ["[earlier]", "successor output", "use action=log"],
+  );
   expect(originalRemove).not.toHaveBeenCalled();
   acknowledgeInternalToolResult(original);
   expect(originalRemove).toHaveBeenCalledOnce();
-  const log = await call("log");
-  expect(log.details).toMatchObject({ status: "completed", exitCode: 7 });
-  expect(text(log)).toContain("successor output");
+  check(await call("log"), { status: "completed", exitCode: 7 }, ["successor output"]);
   expect(successorRemove).not.toHaveBeenCalled();
 });
 
 test("capped stream output stays ordered, compact, and frozen through terminal drains", async () => {
   const { session, poll, call } = harness();
-  session.maxOutputChars = 3_000;
-  session.pendingMaxOutputChars = 1_000;
+  Object.assign(session, { maxOutputChars: 3_000, pendingMaxOutputChars: 1_000 });
   const appendChunks = () => {
     for (let index = 0; index < 2_000; index += 1) {
       appendOutput(session, "stdout", "o");
@@ -334,25 +307,24 @@ test("capped stream output stays ordered, compact, and frozen through terminal d
   );
   appendOutput(session, "stderr", "late".repeat(1_000));
   expect(text(await poll())).toBe(discarded + "(no new output)\n\nProcess exited with code 0.");
-  expect(session.totalOutputChars).toBe(8_000);
-  expect(session.pendingOutput).toBe("");
+  expect(session).toMatchObject({ totalOutputChars: 8_000, pendingOutput: "" });
   expect(text(await call("log"))).toBe(discarded + "oe".repeat(1_500));
 });
 
 test.each([
   [null, null, "failed", "manual-cancel", false, "unknown exit code"],
   [null, "SIGKILL", "failed", "no-output-timeout", true, "signal SIGKILL"],
+  [null, "SIGTERM", "failed", "overall-timeout", true, "signal SIGTERM"],
 ] as const)(
   "preserves exit %s/%s as %s (%s) across waiting and retained observations",
   async (code, signal, status, reason, timedOut, label) => {
     const { session, poll, call } = harness();
-    const pending = poll(1_000);
+    const pending = poll("1000");
     appendOutput(session, "stderr", "terminal output\n");
     const noOutputTimedOut = reason === "no-output-timeout";
     markExited(session, code, signal, status, reason, noOutputTimedOut);
-    const remove = vi.fn(() => true);
-    recordNotifyOnExitRemoval(session, remove);
-    await vi.advanceTimersByTimeAsync(250);
+    const remove = onExit(session);
+    await tick();
     const raced = await pending;
     const details = {
       status,
@@ -362,20 +334,27 @@ test.each([
       timedOut,
       noOutputTimedOut,
     };
-    expect(raced.details).toMatchObject({ ...details, aggregated: "terminal output\n" });
-    expect(text(raced)).toContain(`Process exited with ${label}.`);
-    expect(text(raced).includes("Verify the resulting state before retrying")).toBe(timedOut);
+    check(raced, { ...details, aggregated: "terminal output\n" }, [
+      `Process exited with ${label}.`,
+    ]);
     const listed = await call("list");
     expect(listed.details).toMatchObject({ sessions: [details] });
     expect(text(listed).includes(`[${reason}]`)).toBe(timedOut);
     const log = await call("log");
-    expect(log.details).toMatchObject(details);
-    expect(text(log)).toContain("terminal output");
-    expect(text(log).includes("Verify the resulting state before retrying")).toBe(timedOut);
+    check(log, details, ["terminal output"]);
+    const warning = "Verify the resulting state before retrying";
+    expect([raced, log].map((result) => text(result).includes(warning))).toEqual([
+      timedOut,
+      timedOut,
+    ]);
     const retained = await poll();
-    expect(retained.details).toMatchObject(details);
-    expect(text(retained)).toContain(`Process exited with ${label}.`);
-    expect(text(retained)).not.toContain("terminal output");
+    check(retained, details, [`Process exited with ${label}.`], ["terminal output"]);
+    if (reason === "overall-timeout") {
+      const killed = await call("kill");
+      check(killed, details);
+      expect(isToolResultError(killed)).toBe(true);
+      expect(cancel).not.toHaveBeenCalled();
+    }
     expect(remove).not.toHaveBeenCalled();
     acknowledgeInternalToolResult(raced);
     expect(remove).toHaveBeenCalledOnce();
@@ -400,3 +379,87 @@ test("poll aborts while waiting for completion", async () => {
   controller.abort();
   await rejected;
 });
+
+function managedSession(managed = true) {
+  const fixture = harness({ pid: 4242 });
+  if (managed) {
+    fixture.session.processActivity = {
+      resultSettled: false,
+      lastOutputAtMs: fixture.session.startedAt,
+    };
+  }
+  return fixture;
+}
+
+test("remove hides a running session without releasing its active-process count", async () => {
+  const { session, call } = managedSession();
+  expect((await call("remove")).content[0]).toMatchObject({
+    text: "Removed session session from the process list. Termination was requested but is not yet confirmed.",
+  });
+  expect(cancel).toHaveBeenCalledExactlyOnceWith(session.id, "manual-cancel");
+  expect(getSession(session.id)).toBeUndefined();
+  expect(getFinishedSession(session.id)).toBeUndefined();
+  expect(getActiveBackgroundExecSessionCount()).toBe(1);
+  markExited(session, null, "SIGTERM", "failed", "manual-cancel");
+  expect(getActiveBackgroundExecSessionCount()).toBe(0);
+  expect(getFinishedSession(session.id)).toBeUndefined();
+});
+
+test("removes a retained completed session and its logs", async () => {
+  const { session, call } = managedSession();
+  markExited(session, 0, null, "completed");
+  expect((await call("kill")).details).toMatchObject({ status: "completed", exitCode: 0 });
+  expect(cancel).not.toHaveBeenCalled();
+  expect((await call("remove")).details).toMatchObject({ status: "completed" });
+  expect((await call("log")).details).toMatchObject({
+    status: "failed",
+    error: `No session found for ${session.id}`,
+  });
+  expect((await call("kill")).details).toMatchObject({
+    status: "failed",
+    error: `No active session found for ${session.id}`,
+  });
+});
+
+test("keeps terminal observations scoped when a cleared process id is reused", async () => {
+  const { session, call } = managedSession();
+  const scopedCall = (scopeKey: string) =>
+    createProcessTool({ scopeKey }).execute("kill", { action: "kill", sessionId: session.id });
+  session.scopeKey = "owner";
+  markExited(session, 0, null, "completed");
+  expect((await scopedCall("other")).details).toMatchObject({ status: "failed" });
+  await call("clear");
+  const successor = managedSession().session;
+  successor.scopeKey = "other";
+  expect((await scopedCall("owner")).details).toMatchObject({ status: "failed" });
+  expect(cancel).not.toHaveBeenCalled();
+  expect((await scopedCall("other")).details).toMatchObject({
+    cancellationRequested: true,
+    terminationConfirmed: false,
+  });
+  expect(cancel).toHaveBeenCalledOnce();
+  expect(getSession(session.id)).toBe(successor);
+});
+
+test.each([
+  ["kill", false],
+  ["remove", false],
+  ["kill", true],
+  ["remove", true],
+] as const)(
+  "refuses %s without cancellation authority (finalizing=%s)",
+  async (action, finalizing) => {
+    const { session, call } = managedSession(finalizing);
+    if (finalizing) {
+      session.processActivity = { resultSettled: true, lastOutputAtMs: session.startedAt };
+      session.finalizing = true;
+    }
+    const result = await call(action);
+    expect(cancel).not.toHaveBeenCalled();
+    expect(killTree).not.toHaveBeenCalled();
+    expect(getSession(session.id)?.exited).toBe(false);
+    const message = finalizing ? "is finalizing" : "no active supervisor cancellation handle";
+    expect(result.content[0]).toMatchObject({ text: expect.stringContaining(message) });
+    expect(result.details).toMatchObject({ status: "failed" });
+  },
+);

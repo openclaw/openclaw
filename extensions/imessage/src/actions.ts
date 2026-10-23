@@ -10,7 +10,6 @@ import {
 } from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,
-  ChannelMessageActionContext,
   ChannelMessageActionName,
 } from "openclaw/plugin-sdk/channel-contract";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
@@ -28,15 +27,17 @@ import { normalizeIMessageMessageId } from "./message-guid.js";
 import { describeIMessageMessageTool } from "./message-tool-api.js";
 import {
   findLatestIMessageEntryForChat,
-  isIMessageCurrentMessageInChat,
   isIMessageCurrentMessageInChatAsync,
   rememberIMessageReplyCache,
   type IMessageChatContext,
 } from "./monitor-reply-cache.js";
-import { imessageRpcSupportsMethod } from "./private-api-status.js";
-import { getCachedIMessagePrivateApiStatus, probeIMessagePrivateApi } from "./probe.js";
+import {
+  getCachedIMessagePrivateApiStatus,
+  imessageRpcSupportsMethod,
+} from "./private-api-status.js";
+import { probeIMessagePrivateApi } from "./probe.js";
 import { resolveIMessageRemoteHost } from "./remote-host.js";
-import { parseIMessageTarget, type IMessageService, type IMessageTarget } from "./targets.js";
+import { parseIMessageTarget, type IMessageTarget } from "./targets.js";
 
 const loadIMessageActionsRuntime = createLazyRuntimeNamedExport(
   () => import("./actions.runtime.js"),
@@ -58,10 +59,6 @@ const GROUP_MANAGEMENT_ACTIONS = new Set<ChannelMessageActionName>([
   "removeParticipant",
   "leaveGroup",
 ]);
-
-type IMessageConversationReadOrigin = NonNullable<
-  ChannelMessageActionContext["conversationReadOrigin"]
->;
 
 function readMessageText(params: Record<string, unknown>): string | undefined {
   return readStringParam(params, "text") ?? readStringParam(params, "message");
@@ -134,10 +131,6 @@ function createIMessageTargetAliases(resourceAliases: string[] = []) {
     deliveryTargetAliases: [...IMESSAGE_DELIVERY_TARGET_ALIASES],
     resolveDeliveryTarget: ({ args }: { args: Record<string, unknown> }) =>
       resolveIMessageDeliveryTarget(args),
-    matchesCurrentConversation: (params: Parameters<typeof currentConversationMatchParams>[0]) => {
-      const match = currentConversationMatchParams(params);
-      return match ? isIMessageCurrentMessageInChat(match) : false;
-    },
     matchesCurrentConversationAsync: async (
       params: Parameters<typeof currentConversationMatchParams>[0],
     ) => {
@@ -163,77 +156,11 @@ function readMessageIdWithChatFallback(
   return readStringParam(params, "messageId", { required: true });
 }
 
-type IMessageActionsRuntime = Awaited<ReturnType<typeof loadIMessageActionsRuntime>>;
-
-async function resolveChatGuid(params: {
-  action: ChannelMessageActionName;
-  actionParams: Record<string, unknown>;
-  currentChannelId?: string;
-  conversationReadOrigin: IMessageConversationReadOrigin;
-  runtime: IMessageActionsRuntime;
-  options: {
-    cliPath: string;
-    dbPath?: string;
-    remoteHost?: string;
-    timeoutMs?: number;
-  };
-}): Promise<string> {
-  const target = resolveIMessageActionTarget(params);
-  if (!target) {
-    throw new Error(
-      `iMessage ${params.action} requires chatGuid, chatId, chatIdentifier, or a chat target.`,
-    );
-  }
-  if (target.kind === "chat_guid") {
-    return target.chatGuid;
-  }
-  // Messages identifies direct chats by service and handle; resolve all other
-  // target shapes through the same account-scoped chat lookup.
-  const synthesizedIdentifier =
-    target.kind === "handle"
-      ? `${target.service === "sms" ? "SMS" : "iMessage"};-;${target.to}`
-      : "";
-  const lookupTarget =
-    target.kind === "handle"
-      ? { kind: "chat_identifier" as const, chatIdentifier: synthesizedIdentifier }
-      : target;
-  const resolved = await params.runtime.resolveChatGuidForTarget({
-    target: lookupTarget,
-    options: params.options,
-    conversationReadOrigin: params.conversationReadOrigin,
-  });
-  if (resolved) {
-    return resolved;
-  }
-  if (target.kind !== "handle") {
-    throw new Error(
-      `iMessage ${params.action} failed: chatGuid not found for ${formatUnresolvedTarget(target)}.`,
-    );
-  }
-  // Sends may create a DM; mutations require a registered chat and message.
-  if (params.action === "react" || params.action === "edit" || params.action === "unsend") {
-    throw new Error(
-      `iMessage ${params.action} requires a known chat. ` +
-        `No registered chat for the supplied target; send a message first or pass an explicit chatGuid.`,
-    );
-  }
-  return synthesizedIdentifier;
-}
-
 function formatUnresolvedTarget(
   target: Extract<IMessageTarget, { kind: "chat_id" | "chat_identifier" }>,
 ): string {
   // Tool errors must not expose conversation handles.
   return target.kind === "chat_id" ? "chat_id:<redacted>" : "chat_identifier:<redacted>";
-}
-
-function buildChatContextFromActionParams(params: {
-  actionParams: Record<string, unknown>;
-  currentChannelId?: string;
-  service?: IMessageService;
-}): IMessageChatContext {
-  const target = resolveIMessageActionTarget(params);
-  return target ? chatContextFromIMessageTarget(target, params.service) : {};
 }
 
 function mapTapbackReaction(emoji?: string): string | undefined {
@@ -259,7 +186,7 @@ function decodeBase64Buffer(params: Record<string, unknown>, action: string): Ui
   if (!canonical) {
     throw new Error(`iMessage ${action} buffer must be valid base64.`);
   }
-  return Uint8Array.from(Buffer.from(canonical, "base64"));
+  return Buffer.from(canonical, "base64");
 }
 
 // Hydration must admit raw paths before this adapter receives attachment bytes.
@@ -272,28 +199,6 @@ const REPLY_ATTACHMENT_PATH_PARAM_NAMES: readonly string[] = [
 ] as const;
 
 type ReplyAttachmentSpec = { kind: "buffer"; buffer: Uint8Array; filename: string };
-
-function extractReplyAttachment(
-  params: Record<string, unknown>,
-): { spec: ReplyAttachmentSpec } | { spec: null; bypassParam: string } | null {
-  const buffer = readStringParam(params, "buffer");
-  if (buffer) {
-    const filename = readStringParam(params, "filename") ?? "attachment.bin";
-    return {
-      spec: {
-        kind: "buffer",
-        buffer: decodeBase64Buffer(params, "reply attachment"),
-        filename,
-      },
-    };
-  }
-  for (const name of REPLY_ATTACHMENT_PATH_PARAM_NAMES) {
-    if (readStringParam(params, name)) {
-      return { spec: null, bypassParam: name };
-    }
-  }
-  return null;
-}
 
 const EFFECT_ALIASES: Record<string, string> = {
   slam: "com.apple.MobileSMS.expressivesend.impact",
@@ -330,7 +235,7 @@ function effectIdFromParam(raw?: string): string | undefined {
   throw new Error(
     `iMessage sendWithEffect rejected unknown effect "${raw}". ` +
       "Use one of: slam, loud, gentle, invisibleink, confetti, lasers, fireworks, balloon, heart, " +
-      "echo, happybirthday, shootingstar, sparkles, spotlight (or the canonical com.apple.MobileSMS.expressivesend.* / com.apple.messages.effect.* identifier).",
+      "echo, happybirthday, shootingstar, sparkles, spotlight (or the full com.apple.MobileSMS.expressivesend.* / com.apple.messages.effect.* identifier).",
   );
 }
 
@@ -431,21 +336,58 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       timeoutMs: account.config.probeTimeoutMs,
     };
     const attestedConversationReadOrigin = conversationReadOrigin ?? "delegated";
-    const chatGuid = async () =>
-      await resolveChatGuid({
-        action,
+    const chatGuid = async (): Promise<string> => {
+      const target = resolveIMessageActionTarget({
         actionParams: params,
         currentChannelId: toolContext?.currentChannelId,
-        conversationReadOrigin: attestedConversationReadOrigin,
-        runtime,
+      });
+      if (!target) {
+        throw new Error(
+          `iMessage ${action} requires chatGuid, chatId, chatIdentifier, or a chat target.`,
+        );
+      }
+      if (target.kind === "chat_guid") {
+        return target.chatGuid;
+      }
+      // Messages identifies direct chats by service and handle; resolve all other
+      // target shapes through the same account-scoped chat lookup.
+      const synthesizedIdentifier =
+        target.kind === "handle"
+          ? `${target.service === "sms" ? "SMS" : "iMessage"};-;${target.to}`
+          : "";
+      const lookupTarget =
+        target.kind === "handle"
+          ? { kind: "chat_identifier" as const, chatIdentifier: synthesizedIdentifier }
+          : target;
+      const resolved = await runtime.resolveChatGuidForTarget({
+        target: lookupTarget,
         options: opts,
+        conversationReadOrigin: attestedConversationReadOrigin,
       });
+      if (resolved) {
+        return resolved;
+      }
+      if (target.kind !== "handle") {
+        throw new Error(
+          `iMessage ${action} failed: chatGuid not found for ${formatUnresolvedTarget(target)}.`,
+        );
+      }
+      // Sends may create a DM; mutations require a registered chat and message.
+      if (action === "react" || action === "edit" || action === "unsend") {
+        throw new Error(
+          `iMessage ${action} requires a known chat. ` +
+            `No registered chat for the supplied target; send a message first or pass an explicit chatGuid.`,
+        );
+      }
+      return synthesizedIdentifier;
+    };
     const messageReference = async (input?: { messageId?: string; requireFromMe?: boolean }) => {
-      const inputChatContext = buildChatContextFromActionParams({
+      const service = account.config.service;
+      const target = resolveIMessageActionTarget({
         actionParams: params,
         currentChannelId: toolContext?.currentChannelId,
-        service: account.config.service,
       });
+      const inputChatContext = target ? chatContextFromIMessageTarget(target, service) : {};
       return await resolveAuthorizedIMessageActionReference({
         messageId: input?.messageId,
         inputChatContext,
@@ -506,7 +448,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       }
       const partIndex = readNonNegativeIntegerParam(params, "partIndex");
       const reference = await messageReference();
-      const reactionsToSend = remove && !reaction ? [...TAPBACK_KINDS] : reaction ? [reaction] : [];
+      const reactionsToSend = remove && !reaction ? TAPBACK_KINDS : reaction ? [reaction] : [];
       for (const kind of reactionsToSend) {
         await runtime.sendReaction({
           chatGuid: reference.chatGuid,
@@ -560,15 +502,27 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         throw new Error("iMessage reply requires text or message.");
       }
       const reference = await messageReference();
-      const attachment = extractReplyAttachment(params);
-      if (attachment) {
-        if (attachment.spec === null) {
-          throw new Error(
-            `iMessage reply rejected \`${attachment.bypassParam}\` because it did not pass through the outbound media resolver. ` +
-              'Pass a base64 `buffer` + `filename` directly, or invoke message(action: "reply") through the runner so the resolver ' +
-              "can validate the path against mediaLocalRoots/sandbox/size before sending.",
-          );
+      let attachment: ReplyAttachmentSpec | undefined;
+      const buffer = readStringParam(params, "buffer");
+      if (buffer) {
+        const filename = readStringParam(params, "filename") ?? "attachment.bin";
+        attachment = {
+          kind: "buffer",
+          buffer: decodeBase64Buffer(params, "reply attachment"),
+          filename,
+        };
+      } else {
+        for (const name of REPLY_ATTACHMENT_PATH_PARAM_NAMES) {
+          if (readStringParam(params, name)) {
+            throw new Error(
+              `iMessage reply rejected \`${name}\` because it did not pass through the outbound media resolver. ` +
+                'Pass a base64 `buffer` + `filename` directly, or invoke message(action: "reply") through the runner so the resolver ' +
+                "can validate the path against mediaLocalRoots/sandbox/size before sending.",
+            );
+          }
         }
+      }
+      if (attachment) {
         // Older local imsg builds cannot attach files to send-rich; never drop the file.
         if (
           !opts.remoteHost &&
@@ -587,7 +541,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         text,
         replyToMessageId: reference.messageId,
         partIndex,
-        attachment: attachment?.spec ?? undefined,
+        attachment,
         options: opts,
       });
       return await completeOutboundBridgeMessage(result, reference.chatGuid, {
@@ -769,4 +723,3 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     throw new Error(`Action ${action} is not supported for provider ${providerId}.`);
   },
 };
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -8,6 +8,16 @@ title: "openclaw status"
 
 Diagnostics for channels + sessions.
 
+JSON includes `databaseEngines.families` (configured choices) and
+`databaseEngines.stores` (available physical/admitted evidence). The retained
+`databaseEngines.experimental` boolean means an experimental engine/search
+feature is selected. It is `false` for all currently supported family selections,
+including PostgreSQL and mixed engines. It does not certify the server major,
+TLS/SecretRef-provider deployment, native client or upgrade path; see the
+[PostgreSQL support matrix](/gateway/postgresql#support-matrix). An unavailable
+store projection remains unknown even when this flag is false. Run Doctor on the
+Gateway host for fresh per-store inspection and repair guidance.
+
 Task counts and audit totals use a read-only metadata summary. Retained task
 payloads and delivery history are not loaded for each status request, and
 overlapping requests share the pending summary read. Database work runs on the
@@ -38,7 +48,9 @@ Status starts one monotonic check deadline when the command begins. Local readin
 
 When no matching Gateway service or live foreground owner exists and its port is
 free, status checks directly instead of waiting for a Gateway startup. Local-only
-agent environments therefore report an unavailable Gateway promptly. Observed startup
+agent environments therefore report an unavailable Gateway promptly. A listener positively
+identified as another process reports a port conflict with diagnostic guidance instead
+of waiting for the readiness budget. Unknown listener attribution keeps startup grace. Observed startup
 migrations retain startup grace across the handoff to Gateway ownership; unverifiable
 ownership also retains that grace. Lock and native process inspection consume the
 same remaining check allowance.
@@ -57,7 +69,17 @@ build, or unknown identity keeps the warning and its recorded failure details,
 with the serving and target versions when known. Rollback and recovery observations
 cannot by themselves establish the intended candidate identity. A
 same-version rollback stays warned when the intended candidate build cannot be
-verified. Status does not rewrite the failed run or claim the update succeeded.
+verified. A failed run that never selected a target, such as a preflight refusal
+that recorded no target version, SHA, tag, or post-update identity, is also
+labeled as historical once the Gateway serves a different version or build than
+the running Gateway observation saved with that failure: `Last update run failed
+(preflight-no-good-commit) — Gateway is now serving 2026.10.1; recorded serving
+identity was 2026.9.4.` The installed package identity alone cannot establish this
+change: it may already have been ahead of the running Gateway when the update
+failed. A recovery check matching the old installed package does not establish
+an update target. Without a saved serving identity, the warning remains. A run with an
+explicit target keeps the rules above.
+Status does not rewrite the failed run or claim the update succeeded.
 Starting, unreachable, degraded, and
 remote Gateways do not qualify for this note. Use
 `openclaw update status` to inspect the saved verification failure.
@@ -78,6 +100,9 @@ and pressured inbound lanes. These warnings include pending, claimed, and blocke
 message counts even when a channel connection is healthy. See
 [Queue warnings](/gateway/health#queue-warnings).
 
+Deep health also warns when a context engine is quarantined or configuration hot
+reload is disabled. Healthy auxiliary components do not add warning rows.
+
 Plain `openclaw status` stays on the fast read-only path and marks memory as
 `not checked` instead of unavailable when it skips memory inspection. Heavy
 security audit, plugin compatibility, and memory-vector checks are left to
@@ -88,6 +113,8 @@ Local agent ownership checks read schema and owner metadata from one consistent
 SQLite snapshot, including committed WAL changes. They do not copy the entire
 agent database unless its journal state requires private recovery. Startup and
 migration readiness checks retain their full validation.
+
+Local reports apply committed agent deletions after their final diagnostics, database-engine, backup, log, and usage reads. Deleted namespaces are omitted while undeleted namespaces in shared stores remain visible. Online JSON keeps the snapshot published by the Gateway.
 
 The CLI runs in a separate process and contacts the Gateway over WebSocket, even
 for a local loopback target. `--timeout` bounds checks, not the entire status
@@ -165,6 +192,9 @@ Use `openclaw skills check --agent <id>` to inspect the missing requirements.
 
 ## Session and model resolution
 
+- Configured model labels resolve default and per-agent aliases, including
+  `provider/alias` and `alias@profile`, to the selected model ID. These read-only
+  lookups do not start provider discovery.
 - Session status output separates `Execution:` from `Runtime:`. `Execution`
   is the sandbox path (`direct`, `docker/*`), while `Runtime` tells you
   whether the session is using `OpenClaw Default`, `OpenAI Codex`, a CLI
@@ -196,6 +226,8 @@ Use `openclaw skills check --agent <id>` to inspect the missing requirements.
   until cleared.
 - Output includes per-agent session stores when multiple agents are
   configured.
+- Session summaries omit namespaces with a committed agent deletion while cleanup drains. Undeleted namespaces in a shared store still contribute to counts and recent sessions, even when its configured reader is deleted.
+- Display defaults follow the surviving roster when the configured default is being deleted. Runtime and System Agent ownership remain unchanged, and explicit fleets without a default still require agent selection.
 - Fleet status works without a System Agent owner. Pending events include each
   agent's main queue; a shared global queue is counted once. `--agent` selects
   credentials only for `--usage`.
@@ -249,6 +281,28 @@ If local session state requires Doctor, status prints any installation drift to 
 - `status --all` includes a **Telemetry exporters** diagnosis with the latest
   trusted per-signal exporter state and transport. Endpoint values, headers,
   certificates, payloads, and raw errors are not shown.
+- Missing log files are omitted from `status --all`. Unreadable logs show an
+  unavailable message with guidance to check the file path and permissions.
+
+## Plugin health
+
+Plugin-health collection warns when persisted quarantine records cannot be read
+and continues with the available health information. The inventory may be
+incomplete; run `openclaw doctor` to inspect state storage. The warning does not
+include stored records or raw database errors.
+
+## Plugin reload
+
+While the Gateway replaces plugins, status shows a **Plugin reload** overview
+row naming the plugins, phase, and waiting or failure reason. JSON includes the
+owner's `pluginReload` record: `phase` (`reloading`, `recovering`, or `failed`),
+`pluginIds`, and optional `deadlineAtMs` and `reason`. New agent runs wait during
+replacement. Ordinary drains have a shared 60-second budget;
+[`plugins reload --wait`](/cli/plugins/uninstall-and-update) extends it to ten
+minutes and can be cancelled with Ctrl+C. A successful rollback, including after
+a drain timeout, clears the pending reload record. Unresolved activation or
+recovery failures stay visible until a later reload of the affected plugin
+succeeds or the Gateway restarts.
 
 ## Secrets
 
@@ -264,9 +318,11 @@ If local session state requires Doctor, status prints any installation drift to 
 - When command-local SecretRef resolution succeeds, status prefers the
   resolved snapshot and clears transient "secret unavailable" channel
   markers from the final output.
-- `status --all` includes a Secrets overview row and a diagnosis section
-  that summarizes secret diagnostics (truncated for readability) without
-  stopping report generation.
+- Human status combines Gateway-owned degraded secrets with distinct command-local
+  diagnostics, deduplicating matching config paths. It shows cold/stale state,
+  redacted reasons, and `openclaw secrets reload` guidance. The `status --all`
+  Secrets row and diagnosis count use that same list, bounded for readability.
+  JSON keeps Gateway owners and command-local `secretDiagnostics` separate.
 
 ## Memory
 

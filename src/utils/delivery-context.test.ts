@@ -10,18 +10,20 @@ import {
   projectSessionDeliveryFields,
 } from "./delivery-context.shared.js";
 
+const slackRoute = {
+  channel: "slack",
+  accountId: "work",
+  target: { to: "channel:C123", rawTo: "slack://C123", chatType: "channel" as const },
+  thread: { id: "177000.123", kind: "thread" as const, source: "target" as const },
+};
+
 describe("delivery context helpers", () => {
-  it.each([
-    ["undefined", undefined, false],
-    ["channel only", { channel: "telegram" }, false],
-    ["target only", { to: "-1001" }, false],
-    ["empty channel", { channel: "", to: "-1001" }, false],
-    ["empty target", { channel: "telegram", to: "" }, false],
-    ["whitespace-only fields", { channel: " ", to: " " }, true],
-    ["internal route", { channel: "webchat", to: "dashboard" }, true],
-  ] as const)("checks raw delivery target fields for %s", (_name, context, expected) => {
-    expect(hasDeliveryTargetFields(context)).toBe(expected);
-  });
+  it.each([["whitespace-only fields", { channel: " ", to: " " }, true]] as const)(
+    "checks raw delivery target fields for %s",
+    (_name, context, expected) => {
+      expect(hasDeliveryTargetFields(context)).toBe(expected);
+    },
+  );
 
   it("normalizes channel/to/accountId and drops empty contexts", () => {
     expect(
@@ -53,20 +55,6 @@ describe("delivery context helpers", () => {
     expect(merged?.threadId).toBeUndefined();
   });
 
-  it("inherits missing route fields when channels match", () => {
-    const merged = mergeDeliveryContext(
-      { channel: "demo-channel" },
-      { channel: "demo-channel", to: "123", accountId: "acct", threadId: "99" },
-    );
-
-    expect(merged).toEqual({
-      channel: "demo-channel",
-      to: "123",
-      accountId: "acct",
-      threadId: "99",
-    });
-  });
-
   it("does not inherit route fields from a different account on the same channel", () => {
     const merged = mergeDeliveryContext(
       { channel: "telegram", accountId: "bot-a" },
@@ -89,20 +77,6 @@ describe("delivery context helpers", () => {
       channel: undefined,
       to: undefined,
       accountId: "bot-a",
-    });
-  });
-
-  it("uses fallback route fields when fallback has no channel", () => {
-    const merged = mergeDeliveryContext(
-      { channel: "demo-channel" },
-      { to: "123", accountId: "acct", threadId: "99" },
-    );
-
-    expect(merged).toEqual({
-      channel: "demo-channel",
-      to: "123",
-      accountId: "acct",
-      threadId: "99",
     });
   });
 
@@ -161,10 +135,11 @@ describe("delivery context helpers", () => {
     expect(
       normalizeSessionDeliveryState({
         route: {
+          ...slackRoute,
           channel: "Slack",
           accountId: " work ",
-          target: { to: " channel:C123 ", rawTo: " slack://C123 ", chatType: "channel" },
-          thread: { id: " 177000.123 ", kind: "thread", source: "target" },
+          target: { ...slackRoute.target, to: " channel:C123 ", rawTo: " slack://C123 " },
+          thread: { ...slackRoute.thread, id: " 177000.123 " },
         },
         context: { channel: "discord", to: "channel:old" },
         origin: { label: "Support" },

@@ -1,4 +1,3 @@
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 
 // Session lifecycle hooks track unmatched session_start events here. Reset,
@@ -6,7 +5,6 @@ import { resolveGlobalMap } from "../shared/global-singleton.js";
 // preventing the drain from emitting a second session_end.
 
 type ActiveSessionForShutdown = {
-  cfg: OpenClawConfig;
   sessionKey: string;
   sessionId: string;
   storePath: string;

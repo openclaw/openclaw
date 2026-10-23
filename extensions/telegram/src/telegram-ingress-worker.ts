@@ -1,5 +1,10 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createCpuTrackedWorker } from "openclaw/plugin-sdk/process-runtime";
+import {
+  createCpuTrackedWorker,
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "openclaw/plugin-sdk/process-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 
 export const TELEGRAM_INGRESS_WORKER_RUNTIME_MARKER = "openclaw.telegram-ingress-worker";
@@ -32,9 +37,9 @@ export type TelegramIngressWorkerMessage =
       queued: number;
     }
   | {
-      type: "update";
+      type: "updates";
       requestId: string;
-      update: unknown;
+      updates: unknown[];
       queued: number;
     };
 
@@ -67,7 +72,7 @@ export type TelegramIngressWorkerOptions = {
 };
 
 type TelegramIngressWorkerHandle = {
-  onMessage(listener: (message: TelegramIngressWorkerMessage) => void): () => void;
+  onMessage?: (message: TelegramIngressWorkerMessage) => void;
   ackSpooledUpdate?(
     requestId: string,
     result: Extract<TelegramIngressWorkerCommand, { type: "spool-ack" }>["result"],
@@ -81,13 +86,19 @@ export type TelegramIngressWorkerFactory = (
 ) => TelegramIngressWorkerHandle;
 
 export const createTelegramIngressWorker: TelegramIngressWorkerFactory = (options) => {
-  const listeners = new Set<(message: TelegramIngressWorkerMessage) => void>();
-  const worker = createCpuTrackedWorker(
-    new URL("./telegram-ingress-worker.runtime.js", import.meta.url),
-    {
-      workerData: { ...options, runtime: TELEGRAM_INGRESS_WORKER_RUNTIME_MARKER },
+  const workerUrl = resolveRuntimeWorkerUrl({
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "telegram-ingress-worker.runtime",
+    distWorkerPath: "telegram-ingress-worker.runtime.js",
+    package: {
+      name: "@openclaw/telegram",
+      distWorkerPath: "src/telegram-ingress-worker.runtime.js",
     },
-  );
+  });
+  const worker = createCpuTrackedWorker(workerUrl, {
+    execArgv: resolveRuntimeWorkerArgv(workerUrl).slice(0, -1),
+    workerData: { ...options, runtime: TELEGRAM_INGRESS_WORKER_RUNTIME_MARKER },
+  });
   const taskPromise = new Promise<void>((resolve, reject) => {
     worker.once("error", reject);
     worker.once("exit", (code) => {
@@ -98,19 +109,15 @@ export const createTelegramIngressWorker: TelegramIngressWorkerFactory = (option
       reject(new Error(`Telegram ingress worker exited with code ${code}`));
     });
   });
-  worker.on("message", (message: TelegramIngressWorkerMessage) => {
-    for (const listener of listeners) {
-      listener(message);
-    }
-  });
+  // Keep the constructing plugin's runtime even if another scope assigns onMessage.
+  worker.on(
+    "message",
+    AsyncLocalStorage.bind((message: TelegramIngressWorkerMessage) => {
+      handle.onMessage?.(message);
+    }),
+  );
 
-  return {
-    onMessage(listener) {
-      listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
-    },
+  const handle: TelegramIngressWorkerHandle = {
     ackSpooledUpdate(requestId, result) {
       try {
         worker.postMessage(
@@ -126,7 +133,7 @@ export const createTelegramIngressWorker: TelegramIngressWorkerFactory = (option
       }
     },
     async stop() {
-      // Forced termination is replay-safe: the parent commits each update before its ACK.
+      // Forced termination is replay-safe: the parent commits each batch before its ACK.
       await raceWithTimeout(
         () => {
           worker.postMessage({ type: "stop" } satisfies TelegramIngressWorkerCommand, []);
@@ -141,4 +148,5 @@ export const createTelegramIngressWorker: TelegramIngressWorkerFactory = (option
       return taskPromise;
     },
   };
+  return handle;
 };

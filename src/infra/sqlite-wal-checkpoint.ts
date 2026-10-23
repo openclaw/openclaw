@@ -4,7 +4,6 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { registerListener } from "../shared/listeners.js";
 import { hasErrnoCode } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
-import { compareValidSemver } from "./semver.js";
 import { normalizeSqliteNumber, readFiniteSqliteNumber } from "./sqlite-number.js";
 import {
   readSqliteReaderDiagnosticsForPath,
@@ -14,16 +13,6 @@ import {
 } from "./sqlite-reader-lifecycle.js";
 
 export type SqliteWalCheckpointMode = "PASSIVE" | "FULL" | "RESTART" | "TRUNCATE";
-
-/** Unknown modes backfill on older SQLite; never issue NOOP without native support. */
-export function readSqliteWalState(database: DatabaseSync) {
-  const version = database /* sqlite-allow-raw -- Gate the non-mutating WAL observation. */
-    .prepare("SELECT sqlite_version() AS version")
-    .get()?.version;
-  return typeof version === "string" && (compareValidSemver(version, "3.53.0") ?? -1) >= 0
-    ? database.prepare("PRAGMA main.wal_checkpoint(NOOP)").get() // sqlite-allow-raw -- Observe without copying WAL pages.
-    : undefined;
-}
 
 export type SqliteWalCheckpointOptions = {
   databaseLabel?: string;
@@ -262,9 +251,10 @@ export function createSqliteWalCheckpoint(
     if (observation.error !== undefined) {
       options.onCheckpointError?.(sizeError);
     }
-    // Frequent checkpoint ticks expect readers to block some passes; only the
-    // reclaim cadence reports them, the health snapshot still records every one.
-    if ((busy || observation.warning) && !quiet) {
+    // Frequent checkpoint ticks expect readers to block some passes; only an
+    // observation that reaches the warning policy reports them, while the
+    // health snapshot still records every blocked pass.
+    if (observation.warning && !quiet) {
       const label = options.databaseLabel ?? "sqlite database";
       options.onCheckpointError?.(
         new Error(

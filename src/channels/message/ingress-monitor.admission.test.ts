@@ -20,6 +20,60 @@ describe("channel ingress monitor admission", () => {
     vi.restoreAllMocks();
   });
 
+  it.each([
+    [false, false],
+    [false, true],
+    [true, false],
+    [true, true],
+  ] as const)(
+    "keeps legacy queues only for unprotected intake (policy=%s batch=%s)",
+    async (policy, batch) => {
+      const queue = createChannelIngressQueue<StoredEvent>({
+        channelId: "test",
+        stateDir: tempDirs.make("openclaw-ingress-policy-compat-"),
+      });
+      const legacy: ChannelIngressQueue<StoredEvent> = {
+        ...queue,
+        enqueueAuthorized: undefined,
+        enqueueBatchAuthorized: undefined,
+      };
+      const monitor = createChannelIngressMonitor<RawEvent, string, StoredEvent>({
+        queue: legacy,
+        inspect: (raw) => ({ eventId: raw.id, laneKey: "lane:a" }),
+        prepareAdmission: async (raw) =>
+          policy ? { raw, assertCurrent: () => undefined } : undefined,
+        payload: {
+          storage: "raw-event",
+          version: 1,
+          serialize: (raw) => JSON.stringify(raw),
+          deserialize: (body) => JSON.parse(body) as RawEvent,
+          createClaimError: (kind) => new Error(kind),
+        },
+        deliver: vi.fn(),
+        pollIntervalMs: 60_000,
+        retention: "standard",
+      });
+      try {
+        const events = [
+          { id: "first", text: "one" },
+          { id: "second", text: "two" },
+        ];
+        const admission = batch ? monitor.admitBatch(events) : monitor.admit(events[0]!);
+        if (policy) {
+          await expect(admission).rejects.toThrow(/requires an authorized/);
+          expect(await queue.listPending()).toEqual([]);
+        } else {
+          await admission;
+          expect((await queue.listPending()).map((row) => row.id)).toEqual(
+            batch ? ["first", "second"] : ["first"],
+          );
+        }
+      } finally {
+        await monitor.stop();
+      }
+    },
+  );
+
   it("does not replay or acknowledge an append with a wrapped unknown native outcome", async () => {
     const queue = createChannelIngressQueue<StoredEvent>({
       channelId: "test",
@@ -518,36 +572,44 @@ describe("channel ingress monitor start capacity", () => {
     }
   });
 
-  it("gives no start-slot discount to a drain that holds its lane on deferral", async () => {
-    const started: string[] = [];
-    const parked = createDeferred();
-    const monitor = createMonitor(
-      async (raw, lifecycle) => {
-        started.push(raw.id);
-        lifecycle.onDeferred();
-        await parked.promise;
-        return { kind: "completed" };
-      },
-      { startLimit: 1 },
-    );
+  it.each([
+    { startLimit: 1, capacity: 1 },
+    { startLimit: undefined, capacity: 32 },
+  ])(
+    "bounds held deliveries across pumps at $capacity while admitting durable input",
+    async ({ startLimit, capacity }) => {
+      const started: string[] = [];
+      const parked = createDeferred();
+      const monitor = createMonitor(
+        async (raw, lifecycle) => {
+          started.push(raw.id);
+          lifecycle.onDeferred();
+          await parked.promise;
+          return { kind: "completed" };
+        },
+        { startLimit },
+      );
 
-    monitor.start();
-    try {
-      await monitor.admit({ id: "event-parked", lane: "a", text: "a" });
-      await monitor.waitForPumpIdle();
-      expect(started).toEqual(["event-parked"]);
+      monitor.start();
+      try {
+        for (let index = 0; index < capacity; index++) {
+          await monitor.admit({ id: `event-parked-${index}`, lane: `${index}`, text: "a" });
+        }
+        await monitor.waitForPumpIdle();
+        expect(started).toHaveLength(capacity);
 
-      await monitor.admit({ id: "event-second-lane", lane: "b", text: "b" });
-      monitor.requestDrain();
-      await monitor.waitForPumpIdle();
-      expect(started).not.toContain("event-second-lane");
+        await monitor.admit({ id: "event-second-lane", lane: "b", text: "b" });
+        monitor.requestDrain();
+        await monitor.waitForPumpIdle();
+        expect(started).not.toContain("event-second-lane");
 
-      parked.resolve();
-      await monitor.waitForIdle();
-      expect(started).toContain("event-second-lane");
-    } finally {
-      parked.resolve();
-      await monitor.stop();
-    }
-  });
+        parked.resolve();
+        await monitor.waitForIdle();
+        expect(started).toContain("event-second-lane");
+      } finally {
+        parked.resolve();
+        await monitor.stop();
+      }
+    },
+  );
 });

@@ -4,6 +4,7 @@ import type {
   ImageContent,
   Message,
   Model,
+  ModelThinkingLevel,
   SimpleStreamOptions,
   StreamFn as LlmStreamFn,
   TextContent,
@@ -184,12 +185,15 @@ export interface AgentLoopTurnUpdate {
 
 export interface PrepareNextTurnContext extends ShouldStopAfterTurnContext {}
 
-/** @internal Mutable one-shot budget shared by prompt retries in one Agent run. */
+/** @internal Mutable loop safety evidence shared by prompt retries in one Agent run. */
 export type ToolLoopRecoveryState = {
   criticalToolLoopSeen: boolean;
+  repeatedToolError?: { signature: string; count: number };
 };
 
 export interface AgentLoopConfig extends SimpleStreamOptions {
+  /** @internal Host-resolved small-model repetition policy. */
+  repetitionGuard?: (model: Model) => boolean;
   model: Model;
   /** Logical thinking level retained across model changes before provider mapping. */
   thinkingLevel?: ThinkingLevel;
@@ -308,9 +312,11 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
   completesToolTurn?: (context: {
     message: AssistantMessage;
     toolResults: ToolResultMessage[];
+    terminalToolCallIds: ReadonlySet<string>;
+    inputScope: object;
   }) => boolean;
 
-  /** @internal Preserves the one-shot recovery budget across Agent.continue() retries. */
+  /** @internal Preserves loop safety evidence across Agent.continue() retries. */
   toolLoopRecoveryState?: ToolLoopRecoveryState;
 
   /**
@@ -350,7 +356,7 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
  * Note: "xhigh" is only supported by selected model families. Use model thinking-level metadata
  * from openclaw/plugin-sdk/llm to detect support for a concrete model.
  */
-export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+export type ThinkingLevel = ModelThinkingLevel;
 
 export interface BashExecutionMessage {
   role: "bashExecution";

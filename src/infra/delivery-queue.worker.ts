@@ -69,6 +69,7 @@ import type {
   OutboundDeliverySnapshot,
 } from "./outbound/delivery-queue-storage.types.js";
 import {
+  FINAL_TEXT_RECOVERY_MAX_ATTEMPTS,
   hasActiveDeliveryOwner,
   type QueuedDelivery,
   type DeliveryFailureSettlement,
@@ -78,7 +79,11 @@ type OutboundDeliveryMutation = {
   id: string;
   expectedPlatformSendAttemptId?: string | null;
 } & (
-  | { kind: "fail" | "fail-before-send" | "fail-after-send"; error: string }
+  | {
+      kind: "fail" | "fail-before-send" | "fail-after-send";
+      error: string;
+      ambiguousTransportError?: true;
+    }
   | { kind: "start" | "dispatch"; route?: { replyToId?: string | null } }
   | { kind: "unknown" }
 );
@@ -159,6 +164,11 @@ function mutateOutbound(database: OpenClawStateDatabase, input: OutboundDelivery
           retryCount: entry.retryCount + 1,
           lastAttemptAt: now,
           lastError: input.error,
+          ambiguousTransportError: input.ambiguousTransportError,
+          maxRetries:
+            entry.retryAmbiguousFinalText === true && input.ambiguousTransportError === true
+              ? FINAL_TEXT_RECOVERY_MAX_ATTEMPTS
+              : entry.maxRetries,
           availableAt: undefined,
           producerClaimId: undefined,
           ...(input.kind === "fail-before-send"
@@ -287,6 +297,12 @@ function writeOperation<Input, Output>(
       { database: open(), ...stateOptions() },
       { operationLabel },
     );
+}
+
+function readOperation<Input, Output>(
+  operation: (database: OpenClawStateDatabase, input: Input) => Output,
+) {
+  return (input: Input, { open }: WorkerOperationContext): Output => operation(open(), input);
 }
 
 export const deliveryQueueOperations = {
@@ -454,14 +470,8 @@ export const deliveryQueueOperations = {
     input: Parameters<typeof executePendingDeliveryFailure>[0],
     { open, stateOptions },
   ) => executePendingDeliveryFailure(input, { database: open(), ...stateOptions() }),
-  "deliveryQueue.findIntentOwners": (
-    input: Parameters<typeof findDeliveryIntentOwnersInDatabase>[1],
-    { open },
-  ) => findDeliveryIntentOwnersInDatabase(open(), input),
-  "deliveryQueue.inspectReceipt": (
-    input: Parameters<typeof inspectDeliveryQueueReceiptInDatabase>[1],
-    { open },
-  ) => inspectDeliveryQueueReceiptInDatabase(open(), input),
+  "deliveryQueue.findIntentOwners": readOperation(findDeliveryIntentOwnersInDatabase),
+  "deliveryQueue.inspectReceipt": readOperation(inspectDeliveryQueueReceiptInDatabase),
   "deliveryQueue.countFailed": (_input: undefined, { open }) =>
     countFailedDeliveryQueueEntriesInDatabase(open()),
   "deliveryQueue.countPending": (input: { queueNames: string[] }, { open }) =>
@@ -494,8 +504,7 @@ export const deliveryQueueOperations = {
         input.id,
       ),
   ),
-  "deliveryQueue.mediaRetentionSnapshot": (
-    input: Parameters<typeof loadDeliveryQueueMediaRetentionSnapshotInDatabase>[1],
-    { open },
-  ) => loadDeliveryQueueMediaRetentionSnapshotInDatabase(open(), input),
+  "deliveryQueue.mediaRetentionSnapshot": readOperation(
+    loadDeliveryQueueMediaRetentionSnapshotInDatabase,
+  ),
 } satisfies WorkerOperationHandlers;

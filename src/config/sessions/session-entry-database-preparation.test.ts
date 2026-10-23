@@ -11,6 +11,21 @@ import {
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import { readSessionEntryInWorker } from "./session-entry-read-runtime.js";
 
+type Scope = Parameters<typeof createSessionEntryWithTranscript>[0];
+type Preparation = ReturnType<typeof prepareSessionEntryMutationDatabases>;
+
+const prepare = (scope: Scope, ready = Promise.resolve()) =>
+  prepareSessionEntryMutationDatabases([{ scope, assertCurrent() {} }], ready);
+
+async function create(scope: Scope, preparation: Preparation, sessionId: string) {
+  const storage = await preparation.preparations[0]!;
+  return createSessionEntryWithTranscript(
+    scope,
+    () => ({ ok: true, entry: { sessionId, updatedAt: 1 } }),
+    { commitGuard: storage.assertCurrent },
+  );
+}
+
 it("creates distinct sessions through concurrent first-store preparations", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const storePath = state.statePath("fresh.sqlite");
@@ -20,19 +35,12 @@ it("creates distinct sessions through concurrent first-store preparations", asyn
       storePath,
       env: state.env,
     }));
-    const preparations = scopes.map((scope) =>
-      prepareSessionEntryMutationDatabases([{ scope, assertCurrent() {} }], Promise.resolve()),
-    );
+    const preparations = scopes.map((scope) => prepare(scope));
     try {
       const results = await Promise.allSettled(
-        preparations.map(async (preparation, index) => {
-          const storage = await preparation.preparations[0]!;
-          return createSessionEntryWithTranscript(
-            scopes[index]!,
-            () => ({ ok: true, entry: { sessionId: `created-${index}`, updatedAt: 1 } }),
-            { commitGuard: storage.assertCurrent },
-          );
-        }),
+        preparations.map((preparation, index) =>
+          create(scopes[index]!, preparation, `created-${index}`),
+        ),
       );
       expect(results).toEqual(
         scopes.map((_, index) => ({
@@ -51,6 +59,32 @@ it("creates distinct sessions through concurrent first-store preparations", asyn
       ).toEqual(scopes.map((_, index) => `created-${index}`));
     } finally {
       await Promise.all(preparations.map((preparation) => preparation[Symbol.asyncDispose]()));
+    }
+  });
+});
+
+it("retains a shared store's first creation while a sibling awaits authority", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const storePath = state.statePath("delayed-shared.sqlite");
+    const scope = { agentId: "main", sessionKey: "agent:main:first", storePath, env: state.env };
+    const followerScope = { ...scope, agentId: "other", sessionKey: "agent:other:follower" };
+    const ready = createDeferred();
+    await using first = prepare(scope);
+    await using follower = prepareSessionEntryMutationDatabases(
+      [{ scope: followerScope, assertCurrent() {}, relatedScopes: [scope] }],
+      ready.promise,
+    );
+    try {
+      await first.preparations[0];
+      ready.resolve();
+      const created = await create(followerScope, follower, "delayed-follower");
+      expect(created).toMatchObject({ ok: true, entry: { sessionId: "delayed-follower" } });
+      const database = openOpenClawAgentDatabase({ agentId: "main", path: storePath });
+      expect(readExactSessionEntryRow(database, followerScope.sessionKey)?.entry.sessionId).toBe(
+        "delayed-follower",
+      );
+    } finally {
+      ready.resolve();
     }
   });
 });
@@ -110,10 +144,7 @@ it.each(["before-ready", "before-native-open"])(
         };
         return {
           scope,
-          preparation: prepareSessionEntryMutationDatabases(
-            [{ scope, assertCurrent() {} }],
-            ready.promise,
-          ),
+          preparation: prepare(scope, ready.promise),
         };
       });
       try {
@@ -130,14 +161,9 @@ it.each(["before-ready", "before-native-open"])(
         resume.resolve();
         await expect(first.preparations[0]).rejects.toThrow("Caller authority ended");
         const results = await Promise.all(
-          followers.map(async ({ scope, preparation }, index) => {
-            const storage = await preparation.preparations[0]!;
-            return createSessionEntryWithTranscript(
-              scope,
-              () => ({ ok: true, entry: { sessionId: `follower-${index}`, updatedAt: 1 } }),
-              { commitGuard: storage.assertCurrent },
-            );
-          }),
+          followers.map(({ scope, preparation }, index) =>
+            create(scope, preparation, `follower-${index}`),
+          ),
         );
         expect(results.map((result) => result.ok && result.entry.sessionId)).toEqual([
           "follower-0",
@@ -166,18 +192,8 @@ it("shares cold-store preparation between logical reads and session creation", a
       }),
     );
     const scope = { agentId: "main", sessionKey: "agent:main:mixed", storePath, env: state.env };
-    await using creation = prepareSessionEntryMutationDatabases(
-      [{ scope, assertCurrent() {} }],
-      Promise.resolve(),
-    );
-    const creating = (async () => {
-      const prepared = await creation.preparations[0]!;
-      return createSessionEntryWithTranscript(
-        scope,
-        () => ({ ok: true, entry: { sessionId: "mixed", updatedAt: 1 } }),
-        { commitGuard: prepared.assertCurrent },
-      );
-    })();
+    await using creation = prepare(scope);
+    const creating = create(scope, creation, "mixed");
     const results = await Promise.allSettled([...reads, creating]);
     expect(results).toEqual([
       ...Array.from({ length: 4 }, () => ({ status: "fulfilled", value: undefined })),

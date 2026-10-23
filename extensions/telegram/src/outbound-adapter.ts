@@ -97,13 +97,10 @@ function normalizeTelegramMetadataOnlyPayload(payload: ReplyPayload): ReplyPaylo
   const hasReaction =
     typeof telegramData?.reaction?.emoji === "string" &&
     Boolean(telegramData.reaction.emoji.trim());
-  if (hasReaction && !buttons?.length && !hasQuoteText) {
-    return payload;
+  if (!buttons?.length && !hasQuoteText) {
+    return hasReaction ? payload : null;
   }
   const fallbackText = payload.fallbackText?.text.trim();
-  if (!buttons?.length && !hasQuoteText) {
-    return null;
-  }
   return fallbackText ? { ...payload, text: fallbackText } : null;
 }
 

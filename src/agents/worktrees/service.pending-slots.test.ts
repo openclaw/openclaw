@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import { hostname } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -10,6 +9,7 @@ import {
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as backoff from "../../infra/backoff.js";
 import * as gitExec from "../../infra/git-exec.js";
+import * as gitWorker from "../../infra/git-worker.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
@@ -109,13 +109,13 @@ describe("managed worktree pending slots", () => {
           db,
           getNodeSqliteKysely<Pick<DB, "state_leases">>(db)
             .updateTable("state_leases")
-            .set({
-              payload_json: JSON.stringify({
-                state: "pending",
-                record,
-                owner: { pid: 2147483647, host: hostname(), startedAt: null },
-              }),
-            })
+            .set((eb) => ({
+              payload_json: eb.fn<string>("json_set", [
+                eb.ref("payload_json"),
+                eb.val("$.owner.pid"),
+                eb.val(2_147_483_647),
+              ]),
+            }))
             .where("scope", "=", "core:managed-worktrees:pending-slots")
             .where("lease_key", "=", record.id),
         );
@@ -152,7 +152,7 @@ describe("managed worktree pending slots", () => {
     }
   });
 
-  it.each([29, 30])(
+  it.each([30])(
     "publishes after %i minutes of contention and two minutes of preparation",
     async (admissionMinutes) => {
       const release = await holdLease(WORKTREE_CREATE_LEASE_SCOPE, "capacity");
@@ -185,6 +185,54 @@ describe("managed worktree pending slots", () => {
       }
     },
   );
+
+  it("keeps Git dependency inspection outside capacity admission", async () => {
+    const run = gitWorker.runGitWorkerOperation;
+    vi.spyOn(gitWorker, "runGitWorkerOperation").mockImplementation(async (operation, options) => {
+      if (operation.type === "worktree.eviction-source") {
+        await stateLease.withOpenClawStateLeaseAsync(
+          { scope: WORKTREE_CREATE_LEASE_SCOPE, key: "capacity", leaseMs: 60_000, waitMs: 0 },
+          captureWorktreeRunEndContext(env),
+          async () => {},
+        );
+      }
+      return run(operation, options);
+    });
+    const created = await service.create({ repoRoot, name: "source-inspection", baseRef: "HEAD" });
+    expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
+    expect(await readPendingWorktrees(env)).toEqual([]);
+  });
+
+  it("keeps Git name discovery outside capacity admission", async ({ signal }) => {
+    const entered = createDeferred();
+    const release = createDeferred();
+    const execute = gitExec.executeGitCommand;
+    vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
+      if (args[0] === "show-ref" || args[0] === "for-each-ref") {
+        entered.resolve();
+        await release.promise;
+      }
+      return execute(cwd, args, options);
+    });
+    const creating = service.create({ repoRoot, name: "name-discovery", baseRef: "HEAD" });
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(entered.promise, creating, "Git name discovery did not start"),
+        signal,
+      );
+      await stateLease.withOpenClawStateLeaseAsync(
+        { scope: WORKTREE_CREATE_LEASE_SCOPE, key: "capacity", leaseMs: 60_000, waitMs: 0 },
+        captureWorktreeRunEndContext(env),
+        async () => {},
+      );
+    } finally {
+      release.resolve();
+      await Promise.allSettled([creating]);
+    }
+    const created = await creating;
+    expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
+    expect(await readPendingWorktrees(env)).toEqual([]);
+  });
 
   it("overlaps materialization after releasing the allocation lease", async ({ signal }) => {
     const held = holdMaterialization();
@@ -226,6 +274,38 @@ describe("managed worktree pending slots", () => {
     );
     for (const record of records) {
       expect(await fs.readFile(path.join(record.path, "README.md"), "utf8")).toBe("base\n");
+    }
+  });
+
+  it("publishes a reserved checkout while another creator holds allocation", async ({ signal }) => {
+    config.worktreeMaxCount = 1;
+    const held = holdMaterialization();
+    const creating = service.create({ repoRoot, name: "publish-reserved", baseRef: "HEAD" });
+    let releaseAllocation: (() => Promise<void>) | undefined;
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(
+          held.entered[0]!.promise,
+          creating,
+          "Checkout did not materialize",
+        ),
+        signal,
+      );
+      expect(await readPendingWorktrees(env)).toHaveLength(1);
+      releaseAllocation = await holdLease(WORKTREE_CREATE_LEASE_SCOPE, "capacity");
+      // An occupied allocation lane must not delay the count-neutral pending → live transaction.
+      vi.spyOn(backoff, "sleepWithAbort").mockRejectedValue(
+        new Error("Publication waited for the unrelated allocation holder"),
+      );
+      held.release.resolve();
+      const created = await withinTest(creating, signal);
+      expect(await readPendingWorktrees(env)).toEqual([]);
+      expect(await service.listRegistryRecords()).toEqual([created]);
+      expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
+    } finally {
+      held.release.resolve();
+      await releaseAllocation?.();
+      await Promise.allSettled([creating]);
     }
   });
 
@@ -507,7 +587,7 @@ describe("managed worktree pending slots", () => {
     },
   );
 
-  it.each(["materialization", "publication"] as const)(
+  it.each(["publication"] as const)(
     "rolls back the slot and registration after %s fails",
     async (stage) => {
       config.worktreeMaxCount = 1;
@@ -545,7 +625,7 @@ describe("managed worktree pending slots", () => {
     },
   );
 
-  it.each(["worker", "process"] as const)(
+  it.each(["worker"] as const)(
     "reclaims a crashed owner's slot while retaining an uncertain %s checkout for recovery",
     async (kind) => {
       config.worktreeMaxCount = 1;

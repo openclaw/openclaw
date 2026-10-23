@@ -457,7 +457,8 @@ struct ChatViewModelUnreadTests {
         vm.swarmSessions = wireRows
         var palette = ChatCommandPaletteSearch()
         let request = ChatCommandPaletteSearch.Request(query: "Before", target: vm.currentSessionTarget)
-        palette.complete(wireRows, generation: palette.begin(request, owner: owner))
+        palette.begin(request, owner: owner)
+        palette.complete(wireRows)
         let readers: [() -> [OpenClawChatSessionEntry]] = [
             { vm.sessions },
             { ChatSessionSidebarModel.sections(

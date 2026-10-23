@@ -1,5 +1,11 @@
 import { gitHubPublicApi } from "./github-public-api.js";
 
+export type SessionPullRequestReadCredential = {
+  token: string;
+  apiBaseUrl: string;
+  assertCurrent: () => void;
+};
+
 /** Shared I/O survives one reader's retirement while each reader owns its delivery. */
 export function createGitHubReadGroup() {
   const readers = new Set<() => void>();
@@ -52,17 +58,30 @@ export function createGitHubReadGroup() {
 /** Session reads pin the admitted host, endpoint and credential across every auxiliary request. */
 export function prepareSessionPullRequestGitHubRead(
   host: string,
-  fetchImpl: typeof fetch,
   assertAccess: () => void,
-  options: { optionalAuth?: boolean; signal?: AbortSignal } = {},
+  options: {
+    optionalAuth?: boolean;
+    signal?: AbortSignal;
+    credential?: SessionPullRequestReadCredential;
+  } = {},
 ) {
-  const optionalAuth = options.optionalAuth !== false;
-  const selected = gitHubPublicApi.resolveGitHubApiCredentialScope(undefined, host);
+  const fetchRequest = fetch;
+  const credential = options.credential;
+  const optionalAuth = !credential && options.optionalAuth !== false;
+  const selected = credential
+    ? {
+        token: credential.token,
+        apiBaseUrl: credential.apiBaseUrl,
+        cacheScope: `${host}:${credential.apiBaseUrl}:${gitHubPublicApi.githubApiCredentialCacheScope(credential.token)}`,
+      }
+    : gitHubPublicApi.resolveGitHubApiCredentialScope(undefined, host);
   const assertCurrent = () => {
     assertAccess();
+    credential?.assertCurrent();
     if (
+      !credential &&
       gitHubPublicApi.resolveGitHubApiCredentialScope(undefined, host).cacheScope !==
-      selected.cacheScope
+        selected.cacheScope
     ) {
       throw new gitHubPublicApi.ControlUiGitHubError(
         409,
@@ -74,6 +93,7 @@ export function prepareSessionPullRequestGitHubRead(
   return {
     ...selected,
     host,
+    credential,
     assertCurrent,
     async request(
       this: void,
@@ -92,7 +112,7 @@ export function prepareSessionPullRequestGitHubRead(
         gitHubPublicApi.readGitHubJsonResponse(
           await gitHubPublicApi.fetchGitHubApi(
             url,
-            fetchImpl,
+            fetchRequest,
             token,
             beforeRedirect,
             identity,

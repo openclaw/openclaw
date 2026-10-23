@@ -15,7 +15,7 @@ import {
   type RedactionField,
 } from "./redact-json-tokens.js";
 import {
-  iterateRedactMatches,
+  visitRedactMatches,
   type RedactMatch,
   type ResolvedRedactPattern,
 } from "./redact-pattern-runtime.js";
@@ -35,26 +35,6 @@ type RedactionCaptureSelector = (
   pattern: ResolvedRedactPattern,
 ) => RedactionCapture | undefined;
 
-export function getPatternRedactionEdits(
-  value: string,
-  pattern: ResolvedRedactPattern,
-  getCapture: RedactionCaptureSelector,
-): RedactionEdit[] {
-  const edits: RedactionEdit[] = [];
-  for (const match of iterateRedactMatches(value, pattern)) {
-    const capture = getCapture(match, pattern);
-    const edit = capture?.redact({
-      start: capture.start,
-      end: capture.end,
-      value: value.slice(capture.start, capture.end),
-    });
-    if (edit && edit.end >= edit.start) {
-      edits.push(edit);
-    }
-  }
-  return edits;
-}
-
 export type RedactionMessage = {
   text: string;
   contentLength: number;
@@ -64,7 +44,6 @@ export type RedactionMessage = {
     json: boolean;
     messageField: boolean;
     start: number;
-    primitiveLength?: number;
   }[];
 };
 
@@ -146,7 +125,7 @@ function projectMessageEdits(
         }
       } else {
         start = part.start + edit.start;
-        end = part.start + (part.primitiveLength ?? edit.end);
+        end = part.start + edit.end;
       }
       if (start < message.contentLength) {
         projected.push({
@@ -452,6 +431,14 @@ export function redactJsonRecord(
       (token.pending ??= []).push(edit);
       pending.add(token);
     };
+    let decodedToken: ScalarToken;
+    const visitDecodedMatch = (match: RedactMatch, pattern: ResolvedRedactPattern) => {
+      const capture = getCapture(match, pattern);
+      const edit = capture?.redact(capture);
+      if (edit && edit.end >= edit.start) {
+        add(decodedToken, edit);
+      }
+    };
     for (const group of groups) {
       // Earlier serialized rules can change the boundaries inspected by the next group.
       if (group.couldMatch && !group.couldMatch(current)) {
@@ -459,16 +446,14 @@ export function redactJsonRecord(
       }
       for (const pattern of group.patterns) {
         if (phase === 0) {
-          for (const token of decodedTokens) {
-            for (const edit of getPatternRedactionEdits(token.currentValue, pattern, getCapture)) {
-              add(token, edit);
-            }
+          for (decodedToken of decodedTokens) {
+            visitRedactMatches(decodedToken.currentValue, pattern, visitDecodedMatch);
           }
         } else {
-          for (const match of iterateRedactMatches(current, pattern)) {
+          visitRedactMatches(current, pattern, (match) => {
             const capture = getCapture(match, pattern);
             if (!capture || capture.end < capture.start) {
-              continue;
+              return;
             }
             // Batch rules need token coordinates only after a serialized match exists.
             if (batch && tokens.length === 0) {
@@ -548,7 +533,7 @@ export function redactJsonRecord(
               }
               add(token, { ...edit, replacement });
             }
-          }
+          });
         }
         if (pending.size === 0) {
           continue;

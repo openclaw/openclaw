@@ -74,7 +74,7 @@ WhatsApp YAML scenarios (`qa/scenarios/channels/whatsapp-*.yaml`):
   `whatsapp-group-outbound-media`, `whatsapp-group-outbound-poll`,
   `whatsapp-message-actions`, `whatsapp-reply-context-isolation`,
   `whatsapp-reply-delivery-shape`. These bypass model prompting on purpose
-  and prove deterministic Gateway/channel `send`, `poll`, and
+  and prove repeatable Gateway/channel `send`, `poll`, and
   `message.action` contracts.
 - Access-control coverage: `whatsapp-access-control-dm-open`,
   `whatsapp-access-control-dm-disabled`, `whatsapp-access-control-group-open`,
@@ -87,7 +87,7 @@ WhatsApp YAML scenarios (`qa/scenarios/channels/whatsapp-*.yaml`):
   `whatsapp-status-reaction-lifecycle`.
 
 WhatsApp defaults are derived from the selected taxonomy profile and lane
-constraints. `mock-openai` runs eligible scenarios deterministically through
+constraints. `mock-openai` runs eligible scenarios with fixed model responses through
 the real WhatsApp transport while mocking only model output; `live-frontier`
 excludes scenarios whose provider or model contract requires the mock lane.
 
@@ -188,18 +188,18 @@ credential cleanup.
 Payload shapes the broker validates on `admin/add`:
 
 - Buzz (`kind: "buzz"`): `{ relayUrl: string, roomId: string,
-driverPrivateKey: string, sutPrivateKey: string, driverAuthTag?: string,
-sutAuthTag?: string }` - `relayUrl` must use `wss://`, with `ws://` allowed only
+  driverPrivateKey: string, sutPrivateKey: string, driverAuthTag?: string,
+  sutAuthTag?: string }` - `relayUrl` must use `wss://`, with `ws://` allowed only
   for loopback relays; `roomId` must be a channel UUID, and the identities must
   be distinct.
 - Discord (`kind: "discord"`): `{ guildId: string, channelId: string,
-driverBotToken: string, sutBotToken: string, sutApplicationId: string,
-voiceChannelId?: string }`.
+  driverBotToken: string, sutBotToken: string, sutApplicationId: string,
+  voiceChannelId?: string }`.
 - Telegram (`kind: "telegram"`): `{ groupId: string, driverToken: string,
-sutToken: string }` - `groupId` must be a numeric chat-id string.
+  sutToken: string }` - `groupId` must be a numeric chat-id string.
 - WhatsApp (`kind: "whatsapp"`): `{ driverPhoneE164: string, sutPhoneE164:
-string, driverAuthArchiveBase64: string, sutAuthArchiveBase64: string,
-groupJid?: string }` - phone numbers must be distinct E.164 strings.
+  string, driverAuthArchiveBase64: string, sutAuthArchiveBase64: string,
+  groupJid?: string }` - phone numbers must be distinct E.164 strings.
 
 Slack lanes can also use the pool. Slack payload shape checks currently live
 in the Slack QA runner rather than the broker; use `{ channelId: string,

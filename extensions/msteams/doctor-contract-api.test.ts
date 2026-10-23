@@ -60,6 +60,36 @@ describe("msteams doctor state migration", () => {
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
+  it("retains malformed UTF-8 delegated tokens without importing replacement characters", async () => {
+    const filePath = path.join(stateDir, "msteams-delegated.json");
+    const bytes = Buffer.from(
+      JSON.stringify({
+        accessToken: "utf8-marker",
+        refreshToken: "synthetic-refresh",
+        expiresAt: 1_800_000_000_000,
+        scopes: ["User.Read"],
+      }),
+    );
+    bytes[bytes.indexOf("utf8-marker")] = 0xff;
+    await fs.writeFile(filePath, bytes);
+    const context = createDoctorContext(env);
+    const result = await migrationById(
+      "msteams-delegated-token-json-to-plugin-state",
+    ).migrateLegacyState({ config: {}, env, stateDir, oauthDir: stateDir, context });
+    expect(result.changes).toEqual([]);
+    expect(result.warningDisposition).toBe("recoverable");
+    expect(result.warnings.join("\n")).toContain("left it in place");
+    expect(await fs.readFile(filePath)).toEqual(bytes);
+    expect(
+      await context
+        .openPluginStateKeyedStore({
+          namespace: MSTEAMS_DELEGATED_TOKEN_NAMESPACE,
+          maxEntries: MSTEAMS_DELEGATED_TOKEN_MAX_ENTRIES,
+        })
+        .lookup(MSTEAMS_DELEGATED_TOKEN_KEY),
+    ).toBeUndefined();
+  });
+
   it.each([
     {
       name: "conversations",
@@ -136,6 +166,42 @@ describe("msteams doctor state migration", () => {
       });
     },
   );
+
+  it("retains delegated tokens when the import write rejects", async () => {
+    const filePath = path.join(stateDir, "msteams-delegated.json");
+    const source = JSON.stringify({
+      accessToken: "synthetic-access",
+      refreshToken: "synthetic-refresh",
+      expiresAt: 1_800_000_000_000,
+      scopes: ["User.Read"],
+    });
+    await fs.writeFile(filePath, source);
+    const context = createDoctorContext(env);
+    const result = await migrationById(
+      "msteams-delegated-token-json-to-plugin-state",
+    ).migrateLegacyState({
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context: {
+        openPluginStateKeyedStore<T>(options: OpenKeyedStoreOptions) {
+          const store = context.openPluginStateKeyedStore<T>(options);
+          return {
+            ...store,
+            registerIfAbsent: async () => {
+              throw new Error("synthetic write failure");
+            },
+          };
+        },
+      },
+    });
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([expect.stringContaining("synthetic write failure")]);
+    await expect(fs.readFile(filePath, "utf8")).resolves.toBe(source);
+    await expect(fs.access(`${filePath}.archives`)).rejects.toMatchObject({ code: "ENOENT" });
+  });
 
   it.each(["empty", "collision", "blocked", "relative-symlink"])(
     "imports delegated OAuth tokens before archiving (archive=%s)",

@@ -28,18 +28,6 @@ Do not offload needless work. Material tradeoff: best 2-3 options + recommendati
 Live chat: short, natural, human. No memo voice, long preamble, wall, repetition. Sparse natural emoji ok.`;
 
 /** @deprecated OpenAI/Codex provider-owned prompt overlay helper; do not use from third-party plugins. */
-export const GPT5_HEARTBEAT_PROMPT_OVERLAY = `### Heartbeats
-
-Heartbeat = useful proactive progress, not chatter. Wake, orient, use the provided monitor scratch, act.
-Assigned/ongoing work: pursue spirit with judgment. Quiet check counts only if real blocker/urgent interruption.
-No rote loops; orientation != accomplishment. Prefer action/silent progress.
-Never repetitive "same/no change/still" updates.
-Interrupt only for meaningful development/result/blocker/decision/time risk. Unchanged: work, change approach, dig deeper, or silence.`;
-
-/** @deprecated OpenAI/Codex provider-owned prompt overlay helper; do not use from third-party plugins. */
-export const GPT5_FRIENDLY_PROMPT_OVERLAY = `${GPT5_FRIENDLY_CHAT_PROMPT_OVERLAY}\n\n${GPT5_HEARTBEAT_PROMPT_OVERLAY}`;
-
-/** @deprecated OpenAI/Codex provider-owned prompt overlay helper; do not use from third-party plugins. */
 export const GPT5_BEHAVIOR_CONTRACT = `<persona_latch>
 Keep persona/tone across turns unless higher priority overrides. Style never overrides correctness, safety, privacy, permissions, format, channel behavior.
 </persona_latch>
@@ -113,8 +101,7 @@ export function resolveGpt5SystemPromptContribution(params: {
   modelId?: string;
   legacyPluginConfig?: Record<string, unknown>;
   enabled?: boolean;
-  trigger?: "cron" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
-  includeHeartbeatGuidance?: boolean;
+  trigger?: "cron" | "event" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
 }): ProviderSystemPromptContribution | undefined {
   if (params.enabled === false || !isGpt5ModelId(params.modelId)) {
     return undefined;
@@ -122,12 +109,9 @@ export function resolveGpt5SystemPromptContribution(params: {
   const mode = resolveGpt5PromptOverlayMode(params.config, params.legacyPluginConfig, {
     providerId: params.providerId,
   });
-  const interactionStyle =
-    params.includeHeartbeatGuidance === true
-      ? GPT5_FRIENDLY_PROMPT_OVERLAY
-      : GPT5_FRIENDLY_CHAT_PROMPT_OVERLAY;
   return {
     stablePrefix: GPT5_BEHAVIOR_CONTRACT,
-    sectionOverrides: mode === "friendly" ? { interaction_style: interactionStyle } : {},
+    sectionOverrides:
+      mode === "friendly" ? { interaction_style: GPT5_FRIENDLY_CHAT_PROMPT_OVERLAY } : {},
   };
 }

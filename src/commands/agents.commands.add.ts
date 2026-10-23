@@ -7,6 +7,7 @@ import {
   checkAgentCreationGate,
   createAgent,
   validateAgentIdInput,
+  type CreateAgentSuccess,
 } from "../agents/agent-create.js";
 import { loadAgentRole } from "../agents/agent-roles.js";
 import {
@@ -18,16 +19,19 @@ import {
   buildPortableAuthProfileStoreForAgentCopy,
   type AuthProfileStore,
 } from "../agents/auth-profiles.js";
-import { AuthProfileStoreUnreadableError } from "../agents/auth-profiles/legacy-source-diagnostic.js";
-import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import {
-  inspectPersistedAuthProfileStoreRaw,
+  loadPersistedAuthProfileStoreFromRows,
+  prepareAgentAuthProfileRowsRead,
+} from "../agents/auth-profiles/sqlite-read.js";
+import {
+  resolveAuthProfileDatabaseOwnerId,
   resolveAuthProfileDatabasePath,
 } from "../agents/auth-profiles/sqlite.js";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
+import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { ExpectedCliError } from "../cli/failure-output.js";
+import { throwExpectedCliError } from "../cli/failure-output.js";
+import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
 import { isTerminalInteractive } from "../cli/terminal-interactivity.js";
 import { logConfigUpdated } from "../config/logging.js";
 import { createChannelSetupHooks, setupChannels } from "../flows/channel-setup.js";
@@ -39,7 +43,7 @@ import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { stageProviderAuthProfileBatch } from "../plugins/provider-auth-persistence.js";
 import type { ProviderAuthProfile } from "../plugins/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { defaultRuntime as runtime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
@@ -68,16 +72,21 @@ type AgentsAddOptions = {
   json?: boolean;
 };
 
-function failAgentsAdd(message: string): never {
-  throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
-}
-
-function loadReadablePersistedAuthProfileStore(agentDir: string): AuthProfileStore | null {
-  const store = loadPersistedAuthProfileStore(agentDir);
-  if (!store && inspectPersistedAuthProfileStoreRaw(agentDir).status !== "missing") {
-    throw new AuthProfileStoreUnreadableError(resolveAuthProfileDatabasePath(agentDir));
+async function loadReadablePersistedAuthProfileStore(
+  agentDir: string,
+): Promise<AuthProfileStore | null> {
+  const databasePath = resolveAuthProfileDatabasePath(agentDir);
+  const reader = prepareAgentAuthProfileRowsRead({
+    databasePath,
+    agentId: resolveAuthProfileDatabaseOwnerId(agentDir),
+    env: process.env,
+    source: "canonical",
+  });
+  try {
+    return loadPersistedAuthProfileStoreFromRows(await reader.read(), databasePath);
+  } finally {
+    await reader.dispose();
   }
-  return store;
 }
 
 function formatSkippedOAuthProfilesMessage(
@@ -91,48 +100,41 @@ function formatSkippedOAuthProfilesMessage(
 
 export async function agentsAddCommand(
   opts: AgentsAddOptions,
-  runtime: RuntimeEnv = defaultRuntime,
   params?: { hasAutomationFlags?: boolean },
 ) {
   if (opts.role !== undefined) {
     try {
       await loadAgentRole(opts.role);
     } catch (error) {
-      failAgentsAdd(error instanceof Error ? error.message : String(error));
+      throwExpectedCliError(error instanceof Error ? error.message : String(error));
     }
   }
   const hasAutomationFlags = params?.hasAutomationFlags === true;
   const nonInteractive = opts.nonInteractive === true || hasAutomationFlags;
   const wizardOutput = opts.json ? process.stderr : process.stdout;
   if (!nonInteractive && !isTerminalInteractive(wizardOutput)) {
-    failAgentsAdd(
+    throwExpectedCliError(
       `Agent creation needs an interactive TTY. Use \`${formatCliCommand("openclaw agents add <id> --non-interactive --workspace <dir>")}\` for automation.`,
     );
   }
-
-  const writeSnapshot = await requireValidConfigForWrite(runtime);
-  if (!writeSnapshot) {
-    return;
-  }
-  const cfg = writeSnapshot.snapshot.sourceConfig;
 
   const workspaceFlag = opts.workspace?.trim();
   const nameInput = opts.name?.trim();
 
   if (nonInteractive) {
     if (!workspaceFlag && !opts.role) {
-      failAgentsAdd(
+      throwExpectedCliError(
         `Non-interactive agent creation requires --workspace. Re-run ${formatCliCommand("openclaw agents add <id> --workspace <path>")} or omit flags to use the wizard.`,
       );
     }
     if (!nameInput) {
-      failAgentsAdd(
+      throwExpectedCliError(
         `Agent name is required in non-interactive mode. Run ${formatCliCommand("openclaw agents add <id> --workspace <path>")}.`,
       );
     }
     const validation = validateAgentIdInput(nameInput);
     if (!validation.ok) {
-      failAgentsAdd(
+      throwExpectedCliError(
         validation.reason === "reserved-id"
           ? `"${validation.agentId}" is reserved. Choose another name, or run ${formatCliCommand("openclaw agents list")} to inspect configured agents.`
           : validation.message,
@@ -143,26 +145,48 @@ export async function agentsAddCommand(
       runtime.log(`Normalized agent id to "${agentId}".`);
     }
 
-    const created = await withPluginLifecycleLease({}, async () => {
-      return await createAgent({
+    const created = await runWithLocalStateOwner<
+      Pick<
+        CreateAgentSuccess,
+        "agentId" | "name" | "workspace" | "agentDir" | "model" | "bindingResult"
+      >
+    >({
+      method: "agents.create",
+      params: {
         name: nameInput,
         workspace: workspaceFlag,
-        ...(opts.role ? { role: opts.role } : {}),
-        ...(opts.agentDir ? { agentDir: opts.agentDir } : {}),
         ...(opts.model ? { model: opts.model } : {}),
-        ...(opts.bind?.length ? { bindingSpecs: opts.bind } : {}),
-        transformConfig: transformConfigWithPendingPluginInstalls,
-      });
+      },
+      target: agentId,
+      recoveryCommand: "openclaw agents list",
+      // Guided role, auth-directory, and binding setup has no matching creation RPC.
+      ...(opts.role || opts.agentDir || opts.bind?.length
+        ? { onForeignOwner: "refuse" as const }
+        : {}),
+      runLocal: ({ assertCurrent }) =>
+        withPluginLifecycleLease({}, async () => {
+          const result = await createAgent({
+            name: nameInput,
+            workspace: workspaceFlag,
+            ...(opts.role ? { role: opts.role } : {}),
+            ...(opts.agentDir ? { agentDir: opts.agentDir } : {}),
+            ...(opts.model ? { model: opts.model } : {}),
+            ...(opts.bind?.length ? { bindingSpecs: opts.bind } : {}),
+            transformConfig: transformConfigWithPendingPluginInstalls,
+            beforePersistentApply: assertCurrent,
+          });
+          if (result.status === "error") {
+            throwExpectedCliError(
+              result.reason === "reserved-id"
+                ? `"${result.agentId}" is reserved. Choose another name, or run ${formatCliCommand("openclaw agents list")} to inspect configured agents.`
+                : result.reason === "already-exists"
+                  ? `Agent "${result.agentId}" already exists.`
+                  : result.message,
+            );
+          }
+          return result;
+        }),
     });
-    if (created.status === "error") {
-      failAgentsAdd(
-        created.reason === "reserved-id"
-          ? `"${created.agentId}" is reserved. Choose another name, or run ${formatCliCommand("openclaw agents list")} to inspect configured agents.`
-          : created.reason === "already-exists"
-            ? `Agent "${created.agentId}" already exists.`
-            : created.message,
-      );
-    }
 
     const { added = [], updated = [], skipped = [], conflicts = [] } = created.bindingResult ?? {};
     if (!opts.json) {
@@ -206,6 +230,22 @@ export async function agentsAddCommand(
     return;
   }
 
+  await runWithLocalStateOwner({
+    method: "agents.setup",
+    params: {},
+    target: nameInput ?? "interactive agent setup",
+    onForeignOwner: "refuse",
+    runLocal: () => runInteractiveAgentsAdd(opts, wizardOutput),
+  });
+}
+
+async function runInteractiveAgentsAdd(opts: AgentsAddOptions, wizardOutput: NodeJS.WriteStream) {
+  const writeSnapshot = await requireValidConfigForWrite(runtime);
+  if (!writeSnapshot) {
+    return;
+  }
+  const cfg = writeSnapshot.snapshot.sourceConfig;
+  const nameInput = opts.name?.trim();
   const prompter = createClackPrompter(wizardOutput);
   const wizardRuntime: RuntimeEnv = opts.json
     ? { ...runtime, log: (...args) => runtime.error(...args) }
@@ -250,7 +290,7 @@ export async function agentsAddCommand(
     );
     if (existingAgent) {
       if (opts.role) {
-        failAgentsAdd(
+        throwExpectedCliError(
           `Agent "${agentId}" already exists. Choose a new id to create an agent from a role.`,
         );
       }
@@ -317,9 +357,9 @@ export async function agentsAddCommand(
         normalizeLowercaseStringOrEmpty(path.resolve(sharedMainAgentPath));
       if (!sameAuthPath) {
         const sourceStore = sourceIsInheritedMain
-          ? loadAuthProfileStoreWithoutExternalProfiles(sourceAgentDir)
-          : loadReadablePersistedAuthProfileStore(sourceAgentDir);
-        const destStore = loadReadablePersistedAuthProfileStore(agentDir);
+          ? await loadAuthProfileStoreWithoutExternalProfilesAsync(sourceAgentDir)
+          : await loadReadablePersistedAuthProfileStore(sourceAgentDir);
+        const destStore = await loadReadablePersistedAuthProfileStore(agentDir);
         const portable = sourceStore
           ? buildPortableAuthProfileStoreForAgentCopy(sourceStore)
           : undefined;
@@ -349,7 +389,7 @@ export async function agentsAddCommand(
             }
             stagedAuthOrder = portable.store.order;
             reportPortableAuthCopy = async () => {
-              const persisted = loadPersistedAuthProfileStore(agentDir);
+              const persisted = await loadReadablePersistedAuthProfileStore(agentDir);
               const persistedIds = new Set(Object.keys(persisted?.profiles ?? {}));
               const copiedCount = copiedProfileIds.filter((profileId) =>
                 persistedIds.has(profileId),

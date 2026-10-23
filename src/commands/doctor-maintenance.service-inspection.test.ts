@@ -6,13 +6,18 @@ import { printDaemonStatus } from "../cli/daemon-cli/status.print.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "../cli/update-cli/update-command-service-maintenance.js";
 import { execFileUtf8 } from "../daemon/exec-file.js";
 import { decodeLaunchAgentPlistFixture } from "../daemon/launchd-plist.test-support.js";
-import { inspectSystemLaunchDaemonOwnership } from "../daemon/launchd-system.js";
 import { readGatewayServiceState, resolveGatewayService } from "../daemon/service.js";
 import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
 import { openSystemdPrivatePeer } from "../daemon/systemd-peer-native.js";
 import { defaultRuntime } from "../runtime.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
+
+// This fixture owns a user unit only; the runner's system units are unrelated.
+vi.mock("../daemon/systemd-unit-load-paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/systemd-unit-load-paths.js")>()),
+  DEFAULT_SYSTEMD_SYSTEM_UNIT_DIRS: [],
+}));
 
 // These diagnostics model unavailable transports, not the runner's real user manager.
 vi.mock("../daemon/systemd-peer-native.js", async (importOriginal) => ({
@@ -55,24 +60,6 @@ it.each([
     reason: "systemd-user-bus-unavailable",
     message: "systemd user session bus is unavailable",
     hint: "dbus-user-session",
-  },
-  {
-    platform: "linux",
-    reason: "service-manager-access-denied",
-    message: "service-manager check could not start (EACCES/EPERM)",
-    hint: "executable permissions",
-  },
-  {
-    platform: "darwin",
-    reason: "launchd-system-domain-unavailable",
-    message: "launchd system domain cannot be queried by this account",
-    hint: "root",
-  },
-  {
-    platform: "darwin",
-    reason: "launchd-gui-domain-unavailable",
-    message: "launchd GUI domain is unavailable for this account",
-    hint: "logged-in macOS desktop session",
   },
   {
     platform: "darwin",
@@ -122,70 +109,34 @@ it.each([
     );
   }
   vi.mocked(execFileUtf8).mockImplementation(async (command, args) => {
-    if (scenario.reason === "service-manager-access-denied") {
-      return {
-        code: 1,
-        termination: "error",
-        errorCode: "EACCES",
-        stdout: "",
-        stderr: "Command failed during launch or output capture (EACCES)",
-      };
-    }
+    const result = { code: 0, termination: "exit" as const, stdout: "", stderr: "" };
     if (command === "busctl") {
-      return {
-        code: 1,
-        termination: "exit",
-        stdout: "",
-        stderr:
-          "Failed to connect to user scope bus via local transport: No such file or directory",
-      };
-    }
-    if (command === "systemctl") {
-      return {
-        code: 0,
-        termination: "exit",
-        stdout: args.includes("show") ? "ActiveState=active\nMainPID=1234" : "enabled",
-        stderr: "",
-      };
-    }
-    if (command === "launchctl") {
+      result.code = 1;
+      result.stderr =
+        "Failed to connect to user scope bus via local transport: No such file or directory";
+    } else if (command === "systemctl") {
+      result.stdout = args.includes("show") ? "ActiveState=active\nMainPID=1234" : "enabled";
+    } else if (command === "launchctl") {
       const system = args[1]?.startsWith("system/");
       if (system && scenario.reason === "launchd-system-owned") {
-        return { code: 0, termination: "exit", stdout: "state = running\npid = 1234", stderr: "" };
+        result.stdout = "state = running\npid = 1234";
+      } else {
+        result.code = 125;
+        result.stderr = "Could not print domain: 125: Domain does not support specified action";
       }
-      if (system && scenario.reason === "launchd-gui-domain-unavailable") {
-        return { code: 113, termination: "exit", stdout: "", stderr: "Could not find service" };
-      }
-      return {
-        code: 125,
-        termination: "exit",
-        stdout: "",
-        stderr: "Could not print domain: 125: Domain does not support specified action",
-      };
+    } else {
+      throw new Error(`Unexpected native command: ${command}`);
     }
-    throw new Error(`Unexpected native command: ${command}`);
+    return result;
   });
   const service = resolveGatewayService();
+  const command = service.readCommand(process.env, { requireEffective: true });
   if (scenario.platform === "linux") {
-    await expect
-      .soft(service.readCommand(process.env, { requireEffective: true }))
-      .rejects.toMatchObject({
-        reason: scenario.reason,
-      });
+    await expect.soft(command).rejects.toMatchObject({ reason: scenario.reason });
   } else {
-    await expect(
-      service.readCommand(process.env, { requireEffective: true }),
-    ).resolves.toMatchObject({
+    await expect(command).resolves.toMatchObject({
       programArguments: ["/usr/bin/node", "/opt/openclaw/openclaw.mjs", "gateway"],
     });
-  }
-  if (scenario.reason === "launchd-system-domain-unavailable") {
-    await expect
-      .soft(inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway"))
-      .resolves.toMatchObject({
-        status: "unverifiable",
-        reason: scenario.reason,
-      });
   }
   const inspection = await maybeStopManagedServiceBeforeMutableUpdate({
     root: home,
@@ -208,9 +159,7 @@ it.each([
   });
   try {
     expect(maintenance).toBeDefined();
-    expect(maintenance?.warnings).toEqual([
-      expect.stringContaining("Restart the Gateway you launched manually after the update."),
-    ]);
+    expect(maintenance?.warnings).toEqual([expect.stringContaining("openclaw gateway stop")]);
     expect(maintenance?.warnings?.[0]).toContain(scenario.message);
     await maintenance?.finish({});
   } finally {

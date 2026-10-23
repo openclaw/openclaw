@@ -77,9 +77,6 @@ export async function prepareFreshManagerRuntimeHandleRetry(params: {
     return false;
   }
   if (params.runtime.prepareFreshSession) {
-    if (!params.isCurrentActor()) {
-      return false;
-    }
     try {
       await params.runtime.prepareFreshSession({
         persistedHandle: persistedAcpRuntimeHandle(params, params.meta),

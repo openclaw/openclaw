@@ -6,6 +6,7 @@ import {
   type MatrixClient,
 } from "matrix-js-sdk/lib/matrix.js";
 import { RustCrypto } from "matrix-js-sdk/lib/rust-crypto/rust-crypto.js";
+import { isStringArray } from "openclaw/plugin-sdk/collection-input-runtime";
 import { LogService } from "./logger.js";
 
 // A single startup budget owns the lookup, this pool, and non-abortable crypto replay.
@@ -56,7 +57,7 @@ export async function reconcileJoinedRoomEncryption(
     throw error;
   }
   checkActive();
-  if (!Array.isArray(joinedRooms) || !joinedRooms.every((room) => typeof room === "string")) {
+  if (!isStringArray(joinedRooms)) {
     throw new Error("Matrix homeserver returned invalid joined rooms");
   }
   const rooms = [...new Set(joinedRooms)];

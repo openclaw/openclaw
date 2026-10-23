@@ -7,7 +7,11 @@ import type {
 } from "./exec-approvals.js";
 import { normalizeSystemRunApprovalPlan } from "./system-run-approval-plan.js";
 import { resolveSystemRunCommandRequest } from "./system-run-command.js";
-import { normalizeNonEmptyString, normalizeStringArray } from "./system-run-normalize.js";
+import {
+  normalizeNonEmptyString,
+  normalizeStringArray,
+  readNonBlankString,
+} from "./system-run-normalize.js";
 
 // System-run approval context normalizes prepared node-run payloads before exec policy.
 export type PreparedRunExecPolicy = {
@@ -121,15 +125,20 @@ export function resolveSystemRunApprovalRequestContext(params: {
     ? (normalizedPlan.commandPreview ?? normalizeNonEmptyString(fallbackCommand))
     : null;
   const commandPreview = preview && preview !== commandText ? preview : null;
-  const plan = normalizedPlan ? { ...normalizedPlan, commandPreview } : null;
+  const cwd = normalizedPlan?.cwd ?? readNonBlankString(params.cwd) ?? null;
+  const agentId = normalizedPlan?.agentId ?? normalizeNonEmptyString(params.agentId);
+  const sessionKey = normalizedPlan?.sessionKey ?? normalizeNonEmptyString(params.sessionKey);
+  const plan = normalizedPlan
+    ? { ...normalizedPlan, commandPreview, cwd, agentId, sessionKey }
+    : null;
   return {
     plan,
     commandArgv: plan?.argv ?? (fallbackArgv.length > 0 ? fallbackArgv : undefined),
     commandText,
     commandPreview,
-    cwd: plan?.cwd ?? normalizeNonEmptyString(params.cwd),
-    agentId: plan?.agentId ?? normalizeNonEmptyString(params.agentId),
-    sessionKey: plan?.sessionKey ?? normalizeNonEmptyString(params.sessionKey),
+    cwd,
+    agentId,
+    sessionKey,
   };
 }
 
@@ -165,7 +174,7 @@ export function resolveSystemRunApprovalRuntimeContext(params: {
     ok: true,
     plan: null,
     argv: command.argv,
-    cwd: normalizeNonEmptyString(params.cwd),
+    cwd: readNonBlankString(params.cwd) ?? null,
     agentId: normalizeNonEmptyString(params.agentId),
     sessionKey: normalizeNonEmptyString(params.sessionKey),
     commandText: command.commandText,

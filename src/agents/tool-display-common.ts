@@ -8,10 +8,10 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { redactToolPayloadText } from "../logging/redact.js";
 import { isAgentPlanProgressToolName } from "../session-cards/progress-card-input.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { resolveExecDetail, type ToolDetailMode } from "./tool-display-exec.js";
+export { defaultTitle, normalizeToolDisplayName } from "./tool-display-name.js";
 
 type ToolDisplayActionSpec = {
   label?: string;
@@ -28,21 +28,6 @@ export type ToolDisplaySpec = {
 type CoerceDisplayValueOptions = {
   includeFalsy?: boolean;
 };
-
-export function normalizeToolDisplayName(name?: string): string {
-  return (name ?? "tool").trim();
-}
-
-export function defaultTitle(name: string): string {
-  const cleaned = name.replace(/_/g, " ").trim();
-  if (!cleaned) {
-    return "Tool";
-  }
-  return cleaned
-    .split(/\s+/)
-    .map((part) => `${part.at(0)?.toUpperCase() ?? ""}${part.slice(1)}`)
-    .join(" ");
-}
 
 /** Beyond this nesting depth, a value does not contribute to the compact display preview. */
 const TOOL_DISPLAY_ARRAY_DEPTH_LIMIT = 64;
@@ -63,11 +48,10 @@ function coerceDisplayValue(
     if (!trimmed) {
       return undefined;
     }
-    const rawLine = normalizeOptionalString(trimmed.split(/\r?\n/, 1)[0]) ?? "";
-    if (!rawLine) {
+    const firstLine = normalizeOptionalString(trimmed.split(/\r?\n/, 1)[0]) ?? "";
+    if (!firstLine) {
       return undefined;
     }
-    const firstLine = redactToolPayloadText(rawLine);
     if (firstLine.length > 160) {
       return `${sliceUtf16Safe(firstLine, 0, 79)}…${sliceUtf16Safe(firstLine, -80)}`;
     }
@@ -145,12 +129,7 @@ function resolvePathArg(record: Record<string, unknown>): string | undefined {
   return undefined;
 }
 
-function resolveReadDetail(args: unknown): string | undefined {
-  const record = asRecord(args);
-  if (!record) {
-    return undefined;
-  }
-
+function resolveReadDetail(record: Record<string, unknown>): string | undefined {
   const path = resolvePathArg(record);
   if (!path) {
     return undefined;
@@ -173,12 +152,7 @@ function resolveReadDetail(args: unknown): string | undefined {
   return `from ${path}`;
 }
 
-function resolveWriteDetail(toolKey: string, args: unknown): string | undefined {
-  const record = asRecord(args);
-  if (!record) {
-    return undefined;
-  }
-
+function resolveWriteDetail(toolKey: string, record: Record<string, unknown>): string | undefined {
   const path = resolvePathArg(record) ?? normalizeOptionalString(record.url);
   if (!path) {
     return undefined;
@@ -205,12 +179,7 @@ function resolveWriteDetail(toolKey: string, args: unknown): string | undefined 
   return `${destinationPrefix} ${path}`;
 }
 
-function resolveWebSearchDetail(args: unknown): string | undefined {
-  const record = asRecord(args);
-  if (!record) {
-    return undefined;
-  }
-
+function resolveWebSearchDetail(record: Record<string, unknown>): string | undefined {
   const queries = collectWebSearchQueries(record);
   const count =
     asPositiveFiniteNumber(record.count) ??
@@ -274,12 +243,7 @@ function collectWebSearchQueries(record: Record<string, unknown>): string[] {
   return [...queries];
 }
 
-function resolveWebFetchDetail(args: unknown): string | undefined {
-  const record = asRecord(args);
-  if (!record) {
-    return undefined;
-  }
-
+function resolveWebFetchDetail(record: Record<string, unknown>): string | undefined {
   const url = normalizeOptionalString(record.url);
   if (!url) {
     return undefined;
@@ -298,46 +262,7 @@ function resolveWebFetchDetail(args: unknown): string | undefined {
   return suffix ? `from ${url} (${suffix})` : `from ${url}`;
 }
 
-function resolveDetailFromKeys(
-  args: unknown,
-  keys: string[],
-  opts: {
-    mode: "first" | "summary";
-    coerce?: CoerceDisplayValueOptions;
-    formatKey?: (raw: string) => string;
-  },
-): string | undefined {
-  const entries: Array<{ label: string; value: string }> = [];
-  for (const key of keys) {
-    const value = lookupValueByPath(args, key);
-    const display = coerceDisplayValue(value, opts.coerce);
-    if (!display) {
-      continue;
-    }
-    if (opts.mode === "first") {
-      return display;
-    }
-    entries.push({ label: opts.formatKey ? opts.formatKey(key) : key, value: display });
-  }
-  if (entries.length === 0) {
-    return undefined;
-  }
-  if (entries.length === 1) {
-    return entries.at(0)?.value;
-  }
-
-  const unique = dedupeByKey(entries, (entry) => `${entry.label}:${entry.value}`);
-  const parts: string[] = [];
-  for (let index = 0; index < unique.length && index < 8; index += 1) {
-    const entry = unique[index];
-    if (entry) {
-      parts.push(`${entry.label} ${entry.value}`);
-    }
-  }
-  return parts.join(", ");
-}
-
-export function resolveToolVerbAndDetailForArgs(params: {
+export function resolveToolDetailForArgs(params: {
   toolKey: string;
   args?: unknown;
   meta?: string;
@@ -347,55 +272,64 @@ export function resolveToolVerbAndDetailForArgs(params: {
   toolDetailMode?: ToolDetailMode;
   detailCoerce?: CoerceDisplayValueOptions;
   detailFormatKey?: (raw: string) => string;
-}): { verb?: string; detail?: string } {
+}): string | undefined {
   // Card arguments belong to the card renderer; generic summaries must not expose them.
   if (isAgentPlanProgressToolName(params.toolKey)) {
-    return {};
+    return undefined;
   }
-  // Keep the existing read order when caller-owned options expose accessors.
   const { toolKey, args, meta } = params;
-  const action = normalizeOptionalString(asRecord(params.args)?.action);
+  const record = asRecord(args);
+  const action = normalizeOptionalString(record?.action);
   const { spec, fallbackDetailKeys, detailMode, toolDetailMode, detailCoerce, detailFormatKey } =
     params;
-  const actionSpec = spec && action ? (spec.actions?.[action] ?? undefined) : undefined;
-  const fallbackVerb =
-    toolKey === "web_search"
-      ? "search"
-      : toolKey === "web_fetch"
-        ? "fetch"
-        : toolKey.replace(/[_.]/g, " ");
-  const verb = normalizeOptionalString(actionSpec?.label ?? action ?? fallbackVerb)?.replace(
-    /_/g,
-    " ",
-  );
-
+  const actionSpec = spec && action ? spec.actions?.[action] : undefined;
   let detail: string | undefined;
   if (toolKey === "exec" || toolKey === "bash" || toolKey === "shell") {
     detail = resolveExecDetail(args, { detailMode: toolDetailMode });
   }
-  if (!detail && toolKey === "read") {
-    detail = resolveReadDetail(args);
-  }
-  if (!detail && (toolKey === "write" || toolKey === "edit" || toolKey === "attach")) {
-    detail = resolveWriteDetail(toolKey, args);
-  }
-  if (!detail && toolKey === "web_search") {
-    detail = resolveWebSearchDetail(args);
-  }
-  if (!detail && toolKey === "web_fetch") {
-    detail = resolveWebFetchDetail(args);
+  if (record && !detail) {
+    if (toolKey === "read") {
+      detail = resolveReadDetail(record);
+    } else if (toolKey === "write" || toolKey === "edit" || toolKey === "attach") {
+      detail = resolveWriteDetail(toolKey, record);
+    } else if (toolKey === "web_search") {
+      detail = resolveWebSearchDetail(record);
+    } else if (toolKey === "web_fetch") {
+      detail = resolveWebFetchDetail(record);
+    }
   }
 
   const detailKeys = actionSpec?.detailKeys ?? spec?.detailKeys ?? fallbackDetailKeys ?? [];
   if (!detail && detailKeys.length > 0) {
-    detail = resolveDetailFromKeys(args, detailKeys, {
-      mode: detailMode,
-      coerce: detailCoerce,
-      formatKey: detailFormatKey,
-    });
+    const entries: Array<{ label: string; value: string }> = [];
+    for (const key of detailKeys) {
+      const value = lookupValueByPath(args, key);
+      const display = coerceDisplayValue(value, detailCoerce);
+      if (!display) {
+        continue;
+      }
+      if (detailMode === "first") {
+        detail = display;
+        break;
+      }
+      entries.push({ label: detailFormatKey ? detailFormatKey(key) : key, value: display });
+    }
+    if (entries.length === 1) {
+      detail = entries.at(0)?.value;
+    } else if (entries.length > 1) {
+      const unique = dedupeByKey(entries, (entry) => `${entry.label}:${entry.value}`);
+      const parts: string[] = [];
+      for (let index = 0; index < unique.length && index < 8; index += 1) {
+        const entry = unique[index];
+        if (entry) {
+          parts.push(`${entry.label} ${entry.value}`);
+        }
+      }
+      detail = parts.join(", ");
+    }
   }
   if (!detail && meta) {
     detail = meta;
   }
-  return { verb, detail };
+  return detail;
 }

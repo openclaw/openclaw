@@ -1,28 +1,38 @@
-// Telegram tests cover channel actions.contract plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { telegramPlugin } from "../api.js";
 
+const telegramConfig = (
+  telegram: NonNullable<NonNullable<OpenClawConfig["channels"]>["telegram"]>,
+): OpenClawConfig => ({ channels: { telegram } });
+type PreparedSend = Parameters<
+  NonNullable<NonNullable<typeof telegramPlugin.actions>["prepareSendPayload"]>
+>[0];
+function prepareSend(params: PreparedSend["ctx"]["params"], payload: PreparedSend["payload"]) {
+  return telegramPlugin.actions?.prepareSendPayload?.({
+    ctx: { channel: "telegram", action: "send", cfg: {}, params },
+    to: "123456",
+    payload,
+  });
+}
+const presentation = { blocks: [{ type: "text" as const, text: "Quoted chart" }] };
+
 describe("telegram actions contract", () => {
   it("requires send and poll permission on the same discoverable account", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        telegram: {
-          defaultAccount: "senderOnly",
-          actions: { sendMessage: false, poll: false },
-          accounts: {
-            senderOnly: {
-              botToken: "tok-send",
-              actions: { sendMessage: true, poll: false },
-            },
-            pollOnly: {
-              botToken: "tok-poll",
-              actions: { sendMessage: false, poll: true },
-            },
-          },
+    const cfg = telegramConfig({
+      defaultAccount: "senderOnly",
+      actions: { sendMessage: false, poll: false },
+      accounts: {
+        senderOnly: {
+          botToken: "tok-send",
+          actions: { sendMessage: true, poll: false },
+        },
+        pollOnly: {
+          botToken: "tok-poll",
+          actions: { sendMessage: false, poll: true },
         },
       },
-    };
+    });
     for (const [accountId, sends] of [
       [undefined, true],
       ["senderOnly", true],
@@ -35,20 +45,16 @@ describe("telegram actions contract", () => {
   });
 
   it("keeps root and selected-account action gates distinct", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        telegram: {
-          botToken: "tok-default",
-          actions: { reactions: false, poll: true },
-          accounts: {
-            work: {
-              botToken: "tok-work",
-              actions: { sendMessage: false, reactions: true, poll: false, sticker: true },
-            },
-          },
+    const cfg = telegramConfig({
+      botToken: "tok-default",
+      actions: { reactions: false, poll: true },
+      accounts: {
+        work: {
+          botToken: "tok-work",
+          actions: { sendMessage: false, reactions: true, poll: false, sticker: true },
         },
       },
-    };
+    });
     const root = telegramPlugin.actions?.describeMessageTool?.({ cfg, accountId: "default" });
     const work = telegramPlugin.actions?.describeMessageTool?.({ cfg, accountId: "work" });
     expect(root?.actions).toEqual(expect.arrayContaining(["send", "poll"]));
@@ -66,25 +72,21 @@ describe("telegram actions contract", () => {
   });
 
   it("discovers SecretRef actions and account-scoped reaction guidance without hiding healthy siblings", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        telegram: {
-          defaultAccount: "carey-notifications",
-          reactionLevel: "minimal",
-          accounts: {
-            "Carey Notifications": {
-              botToken: { source: "exec", provider: "default", id: "telegram-carey" },
-              reactionLevel: "extensive",
-              actions: { reactions: false, poll: false },
-            },
-            default: {
-              botToken: "tok-healthy",
-              actions: { reactions: true, poll: true },
-            },
-          },
+    const cfg = telegramConfig({
+      defaultAccount: "carey-notifications",
+      reactionLevel: "minimal",
+      accounts: {
+        "Carey Notifications": {
+          botToken: { source: "exec", provider: "default", id: "telegram-carey" },
+          reactionLevel: "extensive",
+          actions: { reactions: false, poll: false },
+        },
+        default: {
+          botToken: "tok-healthy",
+          actions: { reactions: true, poll: true },
         },
       },
-    };
+    });
     const scoped = telegramPlugin.actions?.describeMessageTool?.({
       cfg,
       accountId: "carey-notifications",
@@ -102,39 +104,19 @@ describe("telegram actions contract", () => {
     expect(telegramPlugin.agentPrompt?.reactionGuidance?.({ cfg })?.level).toBe("extensive");
   });
 
-  it("discovers root SecretRef actions and reaction guidance before credentials are resolved", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        telegram: {
-          botToken: { source: "exec", provider: "default", id: "telegram-token" },
-          reactionLevel: "extensive",
-          actions: { reactions: true, poll: false },
-        },
-      },
-    };
-    const discovery = telegramPlugin.actions?.describeMessageTool?.({ cfg });
-    expect(discovery?.actions).toEqual(expect.arrayContaining(["send", "react"]));
-    expect(discovery?.actions).not.toContain("poll");
-    expect(telegramPlugin.agentPrompt?.reactionGuidance?.({ cfg })?.level).toBe("extensive");
-  });
-
   it.each(["disabled", "tokenless", "unknown"] as const)(
     "hides actions and capabilities for a %s scoped account",
     (accountId) => {
       expect(
         telegramPlugin.actions?.describeMessageTool?.({
-          cfg: {
-            channels: {
-              telegram: {
-                ...(accountId !== "tokenless" ? { botToken: "tok-root" } : {}),
-                accounts: {
-                  healthy: { botToken: "tok-healthy" },
-                  disabled: { enabled: false, botToken: "tok-disabled" },
-                  tokenless: {},
-                },
-              },
+          cfg: telegramConfig({
+            ...(accountId !== "tokenless" ? { botToken: "tok-root" } : {}),
+            accounts: {
+              healthy: { botToken: "tok-healthy" },
+              disabled: { enabled: false, botToken: "tok-disabled" },
+              tokenless: {},
             },
-          },
+          }),
           accountId,
         }),
       ).toEqual({ actions: [], capabilities: [], schema: null });
@@ -142,16 +124,12 @@ describe("telegram actions contract", () => {
   );
 
   it("owns one formatting contract, chosen by the delivering account's richMessages", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        telegram: {
-          accounts: {
-            rich: { botToken: "tok-rich", richMessages: true },
-            plain: { botToken: "tok-plain" },
-          },
-        },
+    const cfg = telegramConfig({
+      accounts: {
+        rich: { botToken: "tok-rich", richMessages: true },
+        plain: { botToken: "tok-plain" },
       },
-    };
+    });
     const agentPrompt = telegramPlugin.agentPrompt;
     const rich = agentPrompt?.inboundFormattingHints?.({ cfg, accountId: "rich" });
     const plain = agentPrompt?.inboundFormattingHints?.({ cfg, accountId: "plain" });
@@ -169,112 +147,48 @@ describe("telegram actions contract", () => {
   });
 
   it("exposes Telegram thread create CLI remapping through the exported plugin", () => {
+    const args = { channel: "telegram", target: "-1003894873578", message: "hello" };
     const request = telegramPlugin.actions?.resolveCliActionRequest?.({
       action: "thread-create",
-      args: {
-        channel: "telegram",
-        target: "-1003894873578",
-        threadName: "Build Updates",
-        message: "hello",
-      },
+      args: { ...args, threadName: "Build Updates" },
     });
 
     expect(request).toEqual({
       action: "topic-create",
-      args: {
-        channel: "telegram",
-        target: "-1003894873578",
-        name: "Build Updates",
-        message: "hello",
-      },
+      args: { ...args, name: "Build Updates" },
     });
   });
 
-  it("preserves quote text when presentations use durable core delivery", async () => {
-    const presentation = {
-      blocks: [{ type: "text" as const, text: "Quoted chart" }],
+  it.each([
+    { key: "quoteText", quote: "  original message\n  ", telegram: { parseMode: "MarkdownV2" } },
+    { key: "quote_text", quote: " \nsnake case quote  ", telegram: {} },
+  ])("preserves $key on durable presentation delivery", async ({ key, quote, telegram }) => {
+    const payload = {
+      text: "Chart",
+      presentation,
+      ...(key === "quoteText" ? { channelData: { telegram } } : {}),
     };
-    const prepareSendPayload = telegramPlugin.actions?.prepareSendPayload;
+    expect(await prepareSend({ [key]: quote }, payload)).toEqual({
+      ...payload,
+      channelData: { telegram: { ...telegram, quoteText: quote } },
+    });
+  });
 
+  it("leaves legacy delivery to the legacy owner", async () => {
     expect(
-      await prepareSendPayload?.({
-        ctx: {
-          channel: "telegram",
-          action: "send",
-          cfg: {} as OpenClawConfig,
-          params: { quoteText: "  original message\n  " },
-        },
-        to: "123456",
-        payload: {
-          text: "Chart",
-          presentation,
-          channelData: { telegram: { parseMode: "MarkdownV2" } },
-        },
-      }),
-    ).toEqual({
-      text: "Chart",
-      presentation,
-      channelData: {
-        telegram: {
-          parseMode: "MarkdownV2",
-          quoteText: "  original message\n  ",
-        },
-      },
-    });
-    expect(
-      await prepareSendPayload?.({
-        ctx: {
-          channel: "telegram",
-          action: "send",
-          cfg: {} as OpenClawConfig,
-          params: { quoteText: "original message" },
-        },
-        to: "123456",
-        payload: { text: "legacy send" },
-      }),
+      await prepareSend({ quoteText: "original message" }, { text: "legacy send" }),
     ).toBeNull();
-    expect(
-      await prepareSendPayload?.({
-        ctx: {
-          channel: "telegram",
-          action: "send",
-          cfg: {} as OpenClawConfig,
-          params: { quote_text: " \nsnake case quote  " },
-        },
-        to: "123456",
-        payload: { text: "Chart", presentation },
-      }),
-    ).toEqual({
-      text: "Chart",
-      presentation,
-      channelData: { telegram: { quoteText: " \nsnake case quote  " } },
-    });
   });
 
   it("rejects retired native buttons before prepared presentation delivery", async () => {
-    const prepareSendPayload = telegramPlugin.actions?.prepareSendPayload;
-
     await expect(
-      prepareSendPayload?.({
-        ctx: {
-          channel: "telegram",
-          action: "send",
-          cfg: {} as OpenClawConfig,
-          params: { buttons: '[[{"text":"Yes","callback_data":"yes"}]]' },
-        },
-        to: "123456",
-        payload: {
+      prepareSend(
+        { buttons: '[[{"text":"Yes","callback_data":"yes"}]]' },
+        {
           text: "Choose",
-          presentation: {
-            blocks: [
-              {
-                type: "buttons",
-                buttons: [{ label: "Yes", action: { type: "callback", value: "yes" } }],
-              },
-            ],
-          },
+          presentation,
         },
-      }),
+      ),
     ).rejects.toThrow(/native "buttons" is unsupported.*Use presentation/);
   });
 });

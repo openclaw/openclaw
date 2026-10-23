@@ -1,10 +1,10 @@
 import type { OpenClawPluginCommandDefinition } from "openclaw/plugin-sdk/plugin-entry";
-import type { CodexCommandDepsOverride } from "./command-handlers.js";
+import type { CodexCommandDeps } from "./command-handler-deps.js";
 
 export type CodexCommandOptions = {
   pluginConfig?: unknown;
   resolvePluginConfig?: () => unknown;
-  deps: CodexCommandDepsOverride;
+  deps: CodexCommandDeps;
 };
 
 export function createCodexCommand(options: CodexCommandOptions): OpenClawPluginCommandDefinition {

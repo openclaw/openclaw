@@ -1,11 +1,11 @@
 import { TOOL_NAME_SEPARATOR } from "../../agent-bundle-mcp-names.js";
+import { mayMatchGlobWithPrefix } from "../../glob-pattern.js";
 import {
   type CoreToolFactoryFamily,
   type OpenClawCodingToolConstructionPlan,
   listCoreToolFactoryDescriptors,
   resolveCoreToolFactoryFamily,
-} from "../../core-tool-factory-descriptors.js";
-import { mayMatchGlobWithPrefix } from "../../glob-pattern.js";
+} from "../../tool-catalog.js";
 import { createRuntimeToolMatcher } from "../../tool-policy-match.js";
 import {
   attachToolAllowlistIntersection,
@@ -206,12 +206,14 @@ export function resolveEmbeddedAttemptToolConstructionPlan(params: {
   };
 }
 
+type BundleRuntimeParams = {
+  toolsEnabled: boolean;
+  disableTools?: boolean;
+  toolsAllow?: string[];
+};
+
 function shouldCreateBundleRuntimeForAttempt(
-  params: {
-    toolsEnabled: boolean;
-    disableTools?: boolean;
-    toolsAllow?: string[];
-  },
+  params: BundleRuntimeParams,
   matchesAllowlist: (normalizedToolNames: string[]) => boolean,
 ): boolean {
   if (!params.toolsEnabled || params.disableTools === true) {
@@ -233,12 +235,9 @@ function shouldCreateBundleRuntimeForAttempt(
  * runtime creation follows explicit bundle/plugin names or globs that can reach
  * a configured server namespace. Final tool policy remains authoritative.
  */
-export function shouldCreateBundleMcpRuntimeForAttempt(params: {
-  toolsEnabled: boolean;
-  disableTools?: boolean;
-  toolsAllow?: string[];
-  resolveConfiguredMcpNamespaces?: () => string[];
-}): boolean {
+export function shouldCreateBundleMcpRuntimeForAttempt(
+  params: BundleRuntimeParams & { resolveConfiguredMcpNamespaces?: () => string[] },
+): boolean {
   return shouldCreateBundleRuntimeForAttempt(params, (names) => {
     if (names.some((name) => isBundleMcpAllowlistName(name) || name === "group:plugins")) {
       return true;
@@ -255,11 +254,7 @@ export function shouldCreateBundleMcpRuntimeForAttempt(params: {
   });
 }
 
-export function shouldCreateBundleLspRuntimeForAttempt(params: {
-  toolsEnabled: boolean;
-  disableTools?: boolean;
-  toolsAllow?: string[];
-}): boolean {
+export function shouldCreateBundleLspRuntimeForAttempt(params: BundleRuntimeParams): boolean {
   return shouldCreateBundleRuntimeForAttempt(params, (names) =>
     names.some(
       (name) =>

@@ -206,7 +206,7 @@ export function mutableCompensationFixtureSource(): string {
       const membershipUrl = ${url("serviceMembership")};
       mock.module(membershipUrl,{namedExports:{...(await import(membershipUrl)),inspectServiceProcessMembershipSync:()=> 'outside'}});
       const maintenanceUrl = ${url("systemdMaintenance")};
-      mock.module(maintenanceUrl,{namedExports:{...(await import(maintenanceUrl)),prepareSystemdGatewayMaintenance:async()=>false}});
+      mock.module(maintenanceUrl,{namedExports:{...(await import(maintenanceUrl)),prepareSystemdGatewayMaintenance:async()=>({kind:"unchanged"})}});
       const drainUrl = ${url("serviceDrain")};
       mock.module(drainUrl,{namedExports:{...(await import(drainUrl)),withGatewayMaintenanceDrain:async(_params,stop)=>await stop()}});
       return async ({run,currentOptions,ready}) => {
@@ -291,8 +291,10 @@ export function mutableCompensationFixtureSource(): string {
         let receiptWorker;
         const post = Worker.prototype.postMessage;
         Worker.prototype.postMessage = function(request,...args) {
+          // postMessage transfers and detaches the serialized input.
+          const commandType = request.type==='execute' ? deserialize(request.input).type : undefined;
           const result = Reflect.apply(post,this,[request,...args]);
-          if(request.type==='execute' && deserialize(request.input).type==='updateRuns.recordPhase') {
+          if(commandType==='updateRuns.recordPhase') {
             Worker.prototype.postMessage=post;
             receiptWorker=this;
             assert.equal(fs.existsSync(root+'/compensation-signal-snapshot'),true);

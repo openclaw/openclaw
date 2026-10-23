@@ -72,8 +72,8 @@ extension OnboardingView {
     @discardableResult
     func onboardingDidAppear() -> Task<Void, Never>? {
         onboardingVisible = true
-        currentPage = 0
-        updateMonitoring(for: 0)
+        currentPage = pageOrder.firstIndex(of: initialPage.rawValue) ?? 0
+        updateMonitoring(for: self.activePageIndex)
         // App launch may have connected and emitted its snapshot before this
         // view subscribed. Always inspect the selected route once on appear.
         return self.probeConfiguredGatewayForDashboard(intent: self.aiSetup.automaticSetupIntent, knownVisible: true)
@@ -87,7 +87,7 @@ extension OnboardingView {
 
     func activePageIndex(for pageCursor: Int) -> Int {
         guard !pageOrder.isEmpty else { return 0 }
-        let clamped = min(max(0, pageCursor), pageOrder.count - 1)
+        let clamped = Self.visiblePageCursor(pageCursor, pageCount: pageOrder.count)
         return pageOrder[clamped]
     }
 

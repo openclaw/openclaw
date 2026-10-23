@@ -59,6 +59,7 @@ export function renderMarkdownIRChunksWithinLimit<TRendered>(
   // moving every remaining chunk for long messages.
   const pending = splitMarkdownIRPreserveWhitespace(options.ir, normalizedLimit).toReversed();
   const finalized: RenderedCandidate<TRendered>[] = [];
+  let sourceOffset = 0;
 
   for (let chunk = pending.pop(); chunk; chunk = pending.pop()) {
     const candidate = renderCandidate(options, chunk);
@@ -67,6 +68,7 @@ export function renderMarkdownIRChunksWithinLimit<TRendered>(
       chunk.text.length <= 1
     ) {
       finalized.push(candidate);
+      sourceOffset += chunk.text.length;
       continue;
     }
 
@@ -74,7 +76,24 @@ export function renderMarkdownIRChunksWithinLimit<TRendered>(
     if (split.length <= 1) {
       // Worst-case safety: avoid retry loops and keep the original chunk.
       finalized.push(candidate);
+      sourceOffset += chunk.text.length;
       continue;
+    }
+    const remainder = split.at(-1);
+    if (remainder && pending.length > 0) {
+      // The retry's final slice is overflow, not a message boundary. Refill it
+      // from pending source windows before applying the ordinary split rules.
+      const start = sourceOffset + chunk.text.length - remainder.text.length;
+      let end = sourceOffset + chunk.text.length;
+      while (pending.length > 0 && end - start < normalizedLimit) {
+        const next = pending.pop();
+        if (next) {
+          end += next.text.length;
+        }
+      }
+      const carried = sliceMarkdownIR(options.ir, start, end);
+      split.pop();
+      pending.push(...splitMarkdownIRPreserveWhitespace(carried, normalizedLimit).toReversed());
     }
     for (const next of split.toReversed()) {
       pending.push(next);

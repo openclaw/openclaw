@@ -569,13 +569,6 @@ class MainViewModel internal constructor(
   val skillMutationKeys: StateFlow<Set<String>> = runtimeState(initial = emptySet()) { it.skillMutationKeys }
   val clawHubSkillSearchState: StateFlow<GatewayClawHubSkillSearchState> =
     runtimeState(initial = GatewayClawHubSkillSearchState()) { it.clawHubSkillSearchState }
-  val skillWorkshopSummary: StateFlow<GatewaySkillWorkshopSummary> =
-    runtimeState(initial = GatewaySkillWorkshopSummary(proposals = emptyList())) { it.skillWorkshopSummary }
-  val skillWorkshopRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.skillWorkshopRefreshing }
-  val skillWorkshopErrorText: StateFlow<String?> = runtimeState(initial = null) { it.skillWorkshopErrorText }
-  val skillWorkshopNoticeText: StateFlow<String?> = runtimeState(initial = null) { it.skillWorkshopNoticeText }
-  val skillWorkshopInspectingProposalId: StateFlow<String?> = runtimeState(initial = null) { it.skillWorkshopInspectingProposalId }
-  val skillWorkshopMutatingProposalId: StateFlow<String?> = runtimeState(initial = null) { it.skillWorkshopMutatingProposalId }
   val nodesDevicesSummary: StateFlow<GatewayNodesDevicesSummary> =
     runtimeState(initial = GatewayNodesDevicesSummary(nodes = emptyList(), pendingDevices = emptyList(), pairedDevices = emptyList())) { it.nodesDevicesSummary }
   val nodesDevicesRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.nodesDevicesRefreshing }
@@ -1460,30 +1453,6 @@ class MainViewModel internal constructor(
   fun refreshUsage(): Unit = ensureRuntime().refreshUsage()
 
   fun refreshSkills(): Unit = ensureRuntime().refreshSkills()
-
-  fun refreshSkillWorkshopProposals(agentId: String? = null): Unit = ensureRuntime().refreshSkillWorkshopProposals(agentId = agentId)
-
-  fun resetSkillWorkshopAgentScope(agentId: String? = null): Unit = ensureRuntime().resetSkillWorkshopAgentScope(agentId = agentId)
-
-  fun inspectSkillWorkshopProposal(
-    proposalId: String,
-    agentId: String? = null,
-  ): Unit = ensureRuntime().inspectSkillWorkshopProposal(proposalId = proposalId, agentId = agentId)
-
-  fun applySkillWorkshopProposal(
-    proposalId: String,
-    agentId: String? = null,
-  ): Unit = ensureRuntime().applySkillWorkshopProposal(proposalId = proposalId, agentId = agentId)
-
-  fun rejectSkillWorkshopProposal(
-    proposalId: String,
-    agentId: String? = null,
-  ): Unit = ensureRuntime().rejectSkillWorkshopProposal(proposalId = proposalId, agentId = agentId)
-
-  fun quarantineSkillWorkshopProposal(
-    proposalId: String,
-    agentId: String? = null,
-  ): Unit = ensureRuntime().quarantineSkillWorkshopProposal(proposalId = proposalId, agentId = agentId)
 
   fun setSkillEnabled(
     skillKey: String,

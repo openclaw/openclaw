@@ -26,6 +26,7 @@ const identity = {
   userSid: "S-1-5-21-123-456-789-1001",
   startTime: "2026-09-18T12:34:56.1234567Z",
 };
+const setup = createCrabboxWindowsDesktopSetup("cbx_fixture", "c3ludGhldGlj");
 
 function launcher(result: { status: number; stdout?: string; stderr?: string }) {
   let source = "";
@@ -37,26 +38,18 @@ function launcher(result: { status: number; stdout?: string; stderr?: string }) 
     rmSync: vi.fn(),
   };
   const run = vi.fn(() => result);
+  const dependencies: Record<string, unknown> = {
+    "node:fs": mockFs,
+    "node:path": path.win32,
+    "node:os": { tmpdir: () => String.raw`C:\Users\crabbox\AppData\Local\Temp` },
+    "node:child_process": { spawnSync: run },
+  };
   const runtime = runInNewContext(
     `${createCrabboxWindowsDesktopNodeLauncher()}
 ({ launch: launchWindowsDesktopNode })`,
     {
       Buffer,
-      require: (name: string) => {
-        if (name === "node:fs") {
-          return mockFs;
-        }
-        if (name === "node:path") {
-          return path.win32;
-        }
-        if (name === "node:os") {
-          return { tmpdir: () => String.raw`C:\Users\crabbox\AppData\Local\Temp` };
-        }
-        if (name === "node:child_process") {
-          return { spawnSync: run };
-        }
-        return require(name);
-      },
+      require: (name: string) => dependencies[name] ?? require(name),
     },
   ) as {
     launch: (input: typeof options) => Promise<typeof identity>;
@@ -139,14 +132,27 @@ const hasPowerShell =
     stdio: "ignore",
   }).status === 0;
 
+function runPowerShell(script: string, input: unknown, timeout = 20_000) {
+  const result = spawnSync(powershell, ["-NoProfile", "-NonInteractive", "-Command", script], {
+    input: JSON.stringify(input),
+    encoding: "utf8",
+    timeout,
+  });
+  expect({ code: result.status, errors: result.stderr }).toEqual({ code: 0, errors: "" });
+  return result.stdout;
+}
+
+function browserFixture(prefix: string) {
+  const root = tempDirs.make(prefix);
+  const browser = path.join(root, "browser's.exe");
+  fs.writeFileSync(browser, "synthetic executable identity; never executed");
+  return { root, browser, setup };
+}
+
 describe.skipIf(!hasPowerShell)("generated Windows PowerShell syntax", () => {
   it("parses setup, nested app launchers, and enrollment using the installed PowerShell parser", async () => {
     const runtime = launcher({ status: 0, stdout: JSON.stringify(identity) });
     await runtime.launch(options);
-    const scripts = [
-      createCrabboxWindowsDesktopSetup("cbx_fixture", "c3ludGhldGlj"),
-      runtime.source(),
-    ];
     const parser = String.raw`
 $ErrorActionPreference = 'Stop'
 function Check-Script([string]$text) {
@@ -158,12 +164,7 @@ function Check-Script([string]$text) {
 }
 foreach ($script in ([Console]::In.ReadToEnd() | ConvertFrom-Json)) { Check-Script $script }
 `;
-    const result = spawnSync(powershell, ["-NoProfile", "-NonInteractive", "-Command", parser], {
-      input: JSON.stringify(scripts),
-      encoding: "utf8",
-      timeout: 20_000,
-    });
-    expect({ code: result.status, errors: result.stderr }).toEqual({ code: 0, errors: "" });
+    runPowerShell(parser, [setup, runtime.source()]);
   });
 });
 
@@ -178,9 +179,7 @@ describe.skipIf(!hasPowerShell)("Windows browser launcher ownership", () => {
     { scenario: "public-listener", passed: false, launches: 0 },
     { scenario: "changed-after-response", passed: false, launches: 1 },
   ])("$scenario", ({ scenario, passed, launches }) => {
-    const root = tempDirs.make("windows-browser-owner-");
-    const browser = path.join(root, "browser's.exe");
-    fs.writeFileSync(browser, "synthetic executable identity; never executed");
+    const fixture = browserFixture("windows-browser-owner-");
     const harness = String.raw`
 $ErrorActionPreference = 'Stop'
 $fixture = [Console]::In.ReadToEnd() | ConvertFrom-Json
@@ -234,48 +233,41 @@ function Invoke-RestMethod { $global:responded=$true; [pscustomobject]@{Browser=
 try { & $launcher; $passed=$true; $message=$null } catch { $passed=$false; $message=$_.Exception.Message }
 @{passed=$passed;launches=$global:launches;message=$message} | ConvertTo-Json -Compress
 `;
-    const result = spawnSync(powershell, ["-NoProfile", "-NonInteractive", "-Command", harness], {
-      input: JSON.stringify({
-        scenario,
-        root,
-        browser,
-        setup: createCrabboxWindowsDesktopSetup("cbx_fixture", "c3ludGhldGlj"),
-      }),
-      encoding: "utf8",
-      timeout: 20_000,
+    expect(JSON.parse(runPowerShell(harness, { ...fixture, scenario }))).toMatchObject({
+      passed,
+      launches,
     });
-    expect({ code: result.status, errors: result.stderr }).toEqual({ code: 0, errors: "" });
-    expect(JSON.parse(result.stdout)).toMatchObject({ passed, launches });
   });
 });
 
 describe.skipIf(!hasPowerShell)("Windows desktop VNC handover", () => {
   it("hands over authenticated VNC, preserves replay, and rejects changed or cancelled ownership", () => {
+    function handover(scenario: string, error = "", stops = 0, launches = 0, kills = 0) {
+      return { scenario, passed: !error, launches, stops, kills, error };
+    }
     const cases = [
-      { scenario: "launch", passed: true, launches: 1, stops: 1, kills: 0 },
-      { scenario: "launcher-command-whitespace", passed: true, launches: 1, stops: 1, kills: 0 },
-      { scenario: "reuse", passed: true, launches: 0, stops: 0, kills: 0 },
-      { scenario: "replay-pid-change", passed: false, launches: 0, stops: 0, kills: 0 },
-      { scenario: "replay-birth-change", passed: false, launches: 0, stops: 0, kills: 0 },
-      { scenario: "fresh-listener-appeared", passed: false, launches: 0, stops: 1, kills: 0 },
-      { scenario: "service-only", passed: false, launches: 0, stops: 0, kills: 0 },
-      { scenario: "service-birth-change", passed: false, launches: 0, stops: 0, kills: 0 },
-      { scenario: "account-before-stop", passed: false, launches: 0, stops: 0, kills: 0 },
-      { scenario: "session-after-stop", passed: false, launches: 0, stops: 1, kills: 0 },
-      { scenario: "account-after-discovery", passed: false, launches: 0, stops: 1, kills: 0 },
-      { scenario: "missing-auth", passed: false, launches: 0, stops: 0, kills: 0 },
-      { scenario: "wrong-account", passed: false, launches: 0, stops: 0, kills: 0 },
-      { scenario: "wrong-session", passed: false, launches: 0, stops: 0, kills: 0 },
-      { scenario: "wrong-arguments", passed: false, launches: 0, stops: 0, kills: 0 },
-      { scenario: "public-listener", passed: false, launches: 0, stops: 0, kills: 0 },
-      { scenario: "changed-settings", passed: false, launches: 0, stops: 0, kills: 0 },
-      { scenario: "cancel-launch", passed: false, launches: 1, stops: 1, kills: 1 },
-      { scenario: "cancel-during-discovery", passed: false, launches: 0, stops: 1, kills: 0 },
-      { scenario: "cancel-reuse", passed: false, launches: 0, stops: 0, kills: 0 },
+      handover("launch", "", 1, 1),
+      handover("launcher-command-whitespace", "", 1, 1),
+      handover("reuse"),
+      handover("replay-pid-change", "VNC changed during setup handover"),
+      handover("replay-birth-change", "VNC changed during setup handover"),
+      handover("fresh-listener-appeared", "VNC appeared during setup handover", 1),
+      handover("service-only", "forbids TightVNC application mode"),
+      handover("service-birth-change", "changed before VNC service handover"),
+      handover("account-before-stop", "changed before VNC service handover"),
+      handover("session-after-stop", "changed before VNC configuration", 1),
+      handover("account-after-discovery", "changed before VNC configuration", 1),
+      handover("missing-auth", "authentication is not enabled"),
+      handover("wrong-account", "VNC process identity changed"),
+      handover("wrong-session", "VNC process identity changed"),
+      handover("wrong-arguments", "VNC process identity changed"),
+      handover("public-listener", "one worker-owned loopback listener"),
+      handover("changed-settings", "VNC settings changed"),
+      handover("cancel-launch", "launch was cancelled", 1, 1, 1),
+      handover("cancel-during-discovery", "launch was cancelled", 1),
+      handover("cancel-reuse", "launch was cancelled"),
     ];
-    const root = tempDirs.make("windows-vnc-owner-");
-    const browser = path.join(root, "browser.exe");
-    fs.writeFileSync(browser, "synthetic executable identity; never executed");
+    const fixture = browserFixture("windows-vnc-owner-");
     // Execute the generated administrative request and its interactive script,
     // substituting only Windows APIs and the disposable filesystem root.
     const harness = String.raw`
@@ -405,25 +397,16 @@ try { $output=& $setup; $passed=$true; $message=$null } catch { $passed=$false; 
 @{scenario=$fixture.scenario;passed=$passed;launches=$global:launches;stops=$global:stops;kills=$global:kills;configures=$global:configures;writes=$global:writes;settings=$global:registry;message=$message} | ConvertTo-Json -Compress
 }
 `;
-    const result = spawnSync(powershell, ["-NoProfile", "-NonInteractive", "-Command", harness], {
-      input: JSON.stringify(
-        cases.map(({ scenario }) => ({
-          scenario,
-          root,
-          browser,
-          setup: createCrabboxWindowsDesktopSetup("cbx_fixture", "c3ludGhldGlj"),
-        })),
-      ),
-      encoding: "utf8",
-      timeout: 60_000,
-    });
-    expect({ code: result.status, errors: result.stderr }).toEqual({ code: 0, errors: "" });
-    const results = result.stdout
+    const results = runPowerShell(
+      harness,
+      cases.map(({ scenario }) => ({ ...fixture, scenario })),
+      60_000,
+    )
       .trim()
       .split("\n")
       .map((line: string) => JSON.parse(line));
     expect(results).toHaveLength(cases.length);
-    for (const expected of cases) {
+    for (const { error, ...expected } of cases) {
       const observed = results.find((entry) => entry.scenario === expected.scenario);
       expect(observed, expected.scenario).toMatchObject(expected);
       if (
@@ -449,26 +432,7 @@ try { $output=& $setup; $passed=$true; $message=$null } catch { $passed=$false; 
           RemoveWallpaper: 0,
         });
       } else {
-        const errors: Record<string, string> = {
-          "replay-pid-change": "VNC changed during setup handover",
-          "replay-birth-change": "VNC changed during setup handover",
-          "fresh-listener-appeared": "VNC appeared during setup handover",
-          "service-only": "forbids TightVNC application mode",
-          "service-birth-change": "changed before VNC service handover",
-          "account-before-stop": "changed before VNC service handover",
-          "session-after-stop": "changed before VNC configuration",
-          "account-after-discovery": "changed before VNC configuration",
-          "missing-auth": "authentication is not enabled",
-          "wrong-account": "VNC process identity changed",
-          "wrong-session": "VNC process identity changed",
-          "wrong-arguments": "VNC process identity changed",
-          "public-listener": "one worker-owned loopback listener",
-          "changed-settings": "VNC settings changed",
-          "cancel-launch": "launch was cancelled",
-          "cancel-during-discovery": "launch was cancelled",
-          "cancel-reuse": "launch was cancelled",
-        };
-        expect(observed.message, expected.scenario).toContain(errors[expected.scenario]);
+        expect(observed.message, expected.scenario).toContain(error);
       }
     }
   });

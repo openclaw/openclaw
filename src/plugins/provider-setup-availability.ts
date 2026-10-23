@@ -4,8 +4,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { enablePluginInConfig, enablePluginWithCapabilityConsent } from "./enable.js";
+import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
+import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import {
   type ProviderAuthChoiceMetadata,
   resolveManifestProviderAuthChoices,
@@ -24,8 +26,11 @@ export async function probeSetupProviderChoices<T>(
     env?: NodeJS.ProcessEnv;
     signal?: AbortSignal;
     choices: readonly ProviderAuthChoiceMetadata[];
-    enablePluginInConfig?: typeof enablePluginInConfig;
-    resolvePluginProviders?: typeof resolvePluginProvidersCore;
+    /**
+     * Inventory that selected `choices`. The fresh operation cache below owns only
+     * instance lifetime; without this, every call rediscovers all plugin packages.
+     */
+    metadataSnapshot?: PluginMetadataSnapshot;
   },
   probe: (
     choice: ProviderAuthChoiceMetadata,
@@ -47,19 +52,17 @@ export async function probeSetupProviderChoices<T>(
         });
         params.signal?.throwIfAborted();
         if (enabled.enabled) {
-          config = (params.enablePluginInConfig ?? enablePluginInConfig)(
-            config,
-            choice.pluginId,
-          ).config;
+          config = enablePluginInConfig(config, choice.pluginId).config;
           choices.push(choice);
         }
       }
       const providers = choices.length
-        ? (params.resolvePluginProviders ?? resolvePluginProvidersCore)({
+        ? resolvePluginProvidersCore({
             config,
             workspaceDir: params.workspaceDir,
             env,
             mode: "setup",
+            pluginMetadataSnapshot: params.metadataSnapshot,
             // Cached registries bind their instances to this operation's retirement.
             cache: true,
             includeUntrustedWorkspacePlugins: false,
@@ -98,9 +101,12 @@ export async function detectAvailableSetupProviderIds(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<ReadonlySet<string>> {
+  const env = params.env ?? process.env;
+  const metadataSnapshot = loadManifestMetadataSnapshot({ ...params, env });
   const choices = resolveManifestProviderAuthChoices({
     ...params,
-    env: params.env ?? process.env,
+    env,
+    metadataSnapshot,
     includeUntrustedWorkspacePlugins: false,
   }).filter(
     (choice) =>
@@ -109,7 +115,7 @@ export async function detectAvailableSetupProviderIds(params: {
       (!choice.onboardingScopes || choice.onboardingScopes.includes("text-inference")),
   );
   const detected = await probeSetupProviderChoices(
-    { ...params, choices },
+    { ...params, env, choices, metadataSnapshot },
     async (choice, provider, context) => {
       const method = provider?.auth.find(
         (candidate) => normalizeProviderId(candidate.id) === normalizeProviderId(choice.methodId),

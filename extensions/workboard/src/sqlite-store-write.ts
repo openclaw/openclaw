@@ -1,4 +1,4 @@
-import type { DatabaseSync, SQLInputValue } from "node:sqlite";
+import type { SQLInputValue } from "node:sqlite";
 import type { WorkboardCard } from "@openclaw/workboard-contract";
 import {
   compileSqliteQueryBindings,
@@ -11,6 +11,7 @@ import {
   type Row,
   type WorkboardCardDatabase,
 } from "./sqlite-store-records.js";
+import type { WorkboardSqlConnection } from "./sqlite-store-schema.js";
 
 function cardBoardId(card: WorkboardCard): string {
   return card.metadata?.automation?.boardId ?? "default";
@@ -31,7 +32,7 @@ export function bindNull(value: unknown): SQLInputValue {
 }
 
 export function prepareWorkboardUpsert(
-  db: DatabaseSync,
+  db: WorkboardSqlConnection,
   table: "workboard_cards" | "workboard_boards" | "workboard_notification_subscriptions",
   fields: Record<string, () => SQLInputValue>,
   preserved: readonly string[] = [],
@@ -60,7 +61,7 @@ export function prepareWorkboardUpsert(
 }
 
 function insertChildren<T>(
-  db: DatabaseSync,
+  db: WorkboardSqlConnection,
   table: (typeof CARD_CHILD_TABLES)[number],
   cardId: string,
   entries: readonly T[] | undefined,
@@ -72,27 +73,34 @@ function insertChildren<T>(
       .where("card_id", "=", cardId),
   );
   db.prepare(deletion.compiled.sql).run(...deletion.bind());
-  if (entries?.length) {
-    const { compiled, bind } = compileSqliteQueryBindings<[T, number]>((parameter) =>
+  if (!entries?.length) {
+    return;
+  }
+  // The widest child row has 12 columns; 64 rows stay below 999 parameters.
+  for (let offset = 0; offset < entries.length; offset += 64) {
+    const size = Math.min(64, entries.length - offset);
+    const { compiled, bind } = compileSqliteQueryBindings<readonly T[]>((parameter) =>
       getNodeSqliteKysely<WorkboardCardDatabase>(db)
         .insertInto(table)
-        .values({
-          ordinal: parameter(([, ordinal]) => ordinal),
-          ...Object.fromEntries(
-            Object.entries(fields).map(([column, read]) => [
-              column,
-              parameter(([entry]) => read(entry)),
-            ]),
-          ),
-        }),
+        .values(
+          Array.from({ length: size }, (_, index) => ({
+            ordinal: offset + index,
+            ...Object.fromEntries(
+              Object.entries(fields).map(([column, read]) => [
+                column,
+                parameter((source) => read(source[offset + index]!)),
+              ]),
+            ),
+          })),
+        ),
     );
     // Defer payload getters until native preparation succeeds, as for the parent row.
     const statement = db.prepare(compiled.sql);
-    entries.forEach((entry, ordinal) => statement.run(...bind([entry, ordinal])));
+    statement.run(...bind(entries));
   }
 }
 
-export function insertCard(db: DatabaseSync, card: WorkboardCard): void {
+export function insertCard(db: WorkboardSqlConnection, card: WorkboardCard): void {
   const board = executeSqliteQueryTakeFirstSync(
     db,
     getNodeSqliteKysely<{ workboard_boards: { id: string; kind: string | null } }>(db)

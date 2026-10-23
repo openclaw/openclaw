@@ -67,9 +67,11 @@ describe("attachment frame admission", () => {
 
       expect(await handleSendChat(host)).toBeUndefined();
 
-      expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything(), {
-        timeoutMs: 30_000,
-      });
+      expect(host.request).not.toHaveBeenCalledWith(
+        "chat.send",
+        expect.anything(),
+        expect.anything(),
+      );
       expect(host.chatMessage).toBe(message);
       expect(host.chatMentions).toEqual(mentions);
       expect(host.chatReplyTarget).toEqual(replyTarget);
@@ -117,17 +119,21 @@ describe("attachment frame admission", () => {
 
     await resumeStoredChatOutboxes(restored);
 
-    expect(source.request).not.toHaveBeenCalledWith("chat.send", expect.anything(), {
-      timeoutMs: 30_000,
-    });
+    expect(source.request).not.toHaveBeenCalledWith(
+      "chat.send",
+      expect.anything(),
+      expect.anything(),
+    );
     expect(listStoredChatOutboxes(restored)[0]?.queue[0]).toMatchObject(expectedRow);
     expect(restored.chatError).toBe("Too large to send: brief.pdf");
 
     await retryQueuedChatMessage(restored, original.id);
 
-    expect(source.request).not.toHaveBeenCalledWith("chat.send", expect.anything(), {
-      timeoutMs: 30_000,
-    });
+    expect(source.request).not.toHaveBeenCalledWith(
+      "chat.send",
+      expect.anything(),
+      expect.anything(),
+    );
     const failed = queuedAttachmentBatch(restored);
     expect(failed).toMatchObject(expectedRow);
     const hydrated = await prepareOutboxPayload(restored, failed);
@@ -271,7 +277,8 @@ describe("structured Goal admission", () => {
       sessionKey: host.sessionKey,
     };
     // The same browser persistence owner used on reconnect restores this immutable row.
-    const { admitQueuedMessageForSession } = await import("./chat-queue.ts");
+    const { admitQueuedMessageForSession } =
+      await import("./chat-outbox-admission.test-support.ts");
     expect(
       admitQueuedMessageForSession(host, captureChatOutboxAdmission(host, host.sessionKey), queued),
     ).toBe(true);
@@ -471,7 +478,7 @@ describe("handleSendChat immediate local commands", () => {
         chatMessage: draft,
         chatAttachments: [attachment],
         exportCurrentChat,
-        renderLifecycle: { invalidate: vi.fn(), afterCommit },
+        renderLifecycle: { afterCommit },
         requestHandlers: {},
       });
       await handleSendChat(host);
@@ -593,9 +600,11 @@ describe("handleSendChat session ownership", () => {
           expect(host.chatRunError).toBeNull();
         }
         if (pendingHistory) {
-          expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything(), {
-            timeoutMs: 30_000,
-          });
+          expect(host.request).not.toHaveBeenCalledWith(
+            "chat.send",
+            expect.anything(),
+            expect.anything(),
+          );
           refresh.resolve(failed);
           await loading;
         }
@@ -728,18 +737,22 @@ describe("handleSendChat session ownership", () => {
     await drain;
     await loading;
     expect(host.chatRunError?.summary).toContain("Earlier preparation failed");
-    expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything(), {
-      timeoutMs: 30_000,
-    });
+    expect(host.request).not.toHaveBeenCalledWith(
+      "chat.send",
+      expect.anything(),
+      expect.anything(),
+    );
     expect(host.chatQueue).toMatchObject([
       { text: "offline later turn", sendAttempts: 0, sendRunId: originalId },
     ]);
     pending = true;
     readiness.mockReturnValue(true);
     await resumeStoredChatOutboxes(host);
-    expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything(), {
-      timeoutMs: 30_000,
-    });
+    expect(host.request).not.toHaveBeenCalledWith(
+      "chat.send",
+      expect.anything(),
+      expect.anything(),
+    );
     pending = false;
     await resumeStoredChatOutboxes(host);
     expect(host.chatRunError).toBeNull();

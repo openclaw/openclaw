@@ -7,6 +7,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { createTestIngressQueue, withTempState } from "./ingress-drain.test-helpers.js";
 import { pruneChannelIngressInDatabase } from "./ingress-queue.kernel.js";
 
@@ -31,7 +32,7 @@ describe("channel ingress pruning", () => {
   it("prunes pending overflow past a protected page without materializing rows", async () => {
     await withTempState(async (stateDir) => {
       const env = { OPENCLAW_STATE_DIR: stateDir };
-      const { db } = openOpenClawStateDatabase({ env });
+      const db = requireNativeSqliteDatabase(openOpenClawStateDatabase({ env }).db);
       const queueName = JSON.stringify(["test", "a"]);
       executeSqliteQuerySync(
         db,

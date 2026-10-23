@@ -11,7 +11,7 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import { BuzzConfigSchema } from "./config-schema.js";
+import { buzzSetupPlugin } from "./channel.setup.js";
 import {
   listBuzzDirectoryGroupsFromConfig,
   listBuzzDirectoryPeersFromConfig,
@@ -25,8 +25,6 @@ import {
 import { buzzOutboundAdapter, sendBuzzTyping, startBuzzGatewayAccount } from "./gateway.js";
 import { discoverBuzzRooms } from "./room-discovery.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
-import { buzzSetupContract } from "./setup-core.js";
-import { buzzSetupWizard } from "./setup-surface.js";
 import {
   buildBuzzTarget,
   looksLikeBuzzTarget,
@@ -35,9 +33,7 @@ import {
 } from "./target.js";
 import {
   assertBuzzAccountAvailable,
-  listBuzzAccountIds,
   resolveBuzzAccount,
-  resolveDefaultBuzzAccountId,
   type ResolvedBuzzAccount,
 } from "./types.js";
 
@@ -56,21 +52,7 @@ type BuzzProbeResult = {
 export const buzzPlugin = createChatChannelPlugin<ResolvedBuzzAccount, BuzzProbeResult, unknown, 2>(
   {
     base: {
-      id: "buzz",
-      meta: {
-        id: "buzz",
-        label: "Buzz",
-        selectionLabel: "Buzz",
-        docsPath: "/channels/buzz",
-        docsLabel: "buzz",
-        blurb: "Connect OpenClaw agents to Buzz team rooms.",
-        markdownCapable: true,
-        order: 56,
-      },
-      capabilities: {
-        chatTypes: ["group"],
-        threads: true,
-      },
+      ...buzzSetupPlugin,
       threading: {
         resolveReplyTransport: ({ replyDelivery, threadId, replyToId, replyToIsExplicit }) => {
           if (replyDelivery?.replyToMode === "off") {
@@ -88,15 +70,8 @@ export const buzzPlugin = createChatChannelPlugin<ResolvedBuzzAccount, BuzzProbe
           "- Buzz mentions: write a unique current room member as `@Display Name`. For an explicit identity, include `nostr:npub...`; the public key must belong to the target room. Any unresolved or ambiguous label needs an explicit identity for every intended member.",
         ],
       },
-      reload: { configPrefixes: ["channels.buzz"], accountScopedRestart: true },
-      configSchema: BuzzConfigSchema,
-      setupContract: buzzSetupContract,
-      setupWizard: buzzSetupWizard,
       config: {
-        listAccountIds: listBuzzAccountIds,
-        resolveAccount: (cfg, accountId) => resolveBuzzAccount({ cfg, accountId }),
-        defaultAccountId: resolveDefaultBuzzAccountId,
-        isConfigured: (account) => account.configured,
+        ...buzzSetupPlugin.config,
         describeAccount: (account) =>
           describeAccountSnapshot({
             account,

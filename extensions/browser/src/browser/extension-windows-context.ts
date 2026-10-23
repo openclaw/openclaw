@@ -1,5 +1,5 @@
-import crypto from "node:crypto";
 import path from "node:path";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import {
   bindingSchema,
   receiptSchema,
@@ -14,8 +14,7 @@ import {
   type NativeWindowsContext,
   type WindowsInstallation,
 } from "./extension-windows-contract.js";
-import type { WindowsNativePlatform } from "./extension-windows-platform.js";
-const hash = (bytes: Buffer) => crypto.createHash("sha256").update(bytes).digest("hex");
+import { windowsNativePlatform as ops } from "./extension-windows-platform.js";
 export function matchesWindowsContext(a: NativeWindowsContext, b: NativeWindowsContext): boolean {
   return (
     a.browserProfile === b.browserProfile &&
@@ -27,7 +26,6 @@ export function matchesWindowsContext(a: NativeWindowsContext, b: NativeWindowsC
 /** Descriptor/receipt are evidence, never permission to skip current OS admission. */
 export async function readWindowsNativeGeneration(
   manifestPath: string,
-  ops: WindowsNativePlatform,
 ): Promise<{ installation: WindowsInstallation; binding: ReturnType<typeof bindingSchema.parse> }> {
   const identity = await ops.identity();
   const root = path.win32.join(
@@ -72,9 +70,9 @@ export async function readWindowsNativeGeneration(
   if (
     receipt.ownerSid !== identity.sid ||
     receipt.generation !== installation.generation ||
-    receipt.bindingSha256 !== hash(bindingBytes) ||
-    receipt.manifestSha256 !== hash(manifestBytes) ||
-    receipt.executableSha256 !== hash(image) ||
+    receipt.bindingSha256 !== sha256Hex(bindingBytes) ||
+    receipt.manifestSha256 !== sha256Hex(manifestBytes) ||
+    receipt.executableSha256 !== sha256Hex(image) ||
     binding.manifestPath !== installation.manifestPath ||
     manifest.path !== installation.launcherPath ||
     JSON.stringify(binding.expectedOrigins) !== JSON.stringify(manifest.allowed_origins)
@@ -86,9 +84,8 @@ export async function readWindowsNativeGeneration(
 export async function admitWindowsNativeRuntime(
   params: { manifestPath: string; launcherPath: string; expectedOrigins: string[] },
   context: NativeWindowsContext,
-  ops: WindowsNativePlatform,
 ): Promise<string> {
-  const owned = await readWindowsNativeGeneration(params.manifestPath, ops);
+  const owned = await readWindowsNativeGeneration(params.manifestPath);
   if (
     owned.binding.mode !== "native-windows-cli" ||
     !owned.binding.nativeWindows ||

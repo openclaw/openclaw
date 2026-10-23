@@ -4,16 +4,12 @@ import { hasExplicitOptions } from "../command-options.js";
 import { formatDocsHelp, formatHelpExamples } from "../help-format.js";
 import { collectOption } from "./helpers.js";
 
-type RuntimeModule = typeof import("../../runtime.js");
-
-async function runAgentsCommandAction(
-  action: (runtime: RuntimeModule["defaultRuntime"]) => Promise<void>,
-): Promise<void> {
+async function runAgentsCommandAction(action: () => Promise<void>): Promise<void> {
   const [{ defaultRuntime }, { runCommandWithRuntime }] = await Promise.all([
     import("../../runtime.js"),
     import("../cli-utils.js"),
   ]);
-  await runCommandWithRuntime(defaultRuntime, () => action(defaultRuntime));
+  await runCommandWithRuntime(defaultRuntime, action);
 }
 
 export function registerAgentsCommands(program: Command): void {
@@ -29,9 +25,9 @@ export function registerAgentsCommands(program: Command): void {
     .option("--bindings", "Include routing bindings", false)
     .option("--tree", "Render agent creation hierarchy", false)
     .action(async (opts): Promise<void> => {
-      await runAgentsCommandAction(async (runtime) => {
+      await runAgentsCommandAction(async () => {
         const { agentsListCommand } = await import("../../commands/agents.commands.list.js");
-        await agentsListCommand(opts, runtime);
+        await agentsListCommand(opts);
       });
     });
 
@@ -41,43 +37,36 @@ export function registerAgentsCommands(program: Command): void {
     .option("--agent <id>", "Filter by agent id")
     .option("--json", "Output JSON instead of text", false)
     .action(async (opts): Promise<void> => {
-      await runAgentsCommandAction(async (runtime) => {
+      await runAgentsCommandAction(async () => {
         const { agentsBindingsCommand } = await import("../../commands/agents.commands.bind.js");
-        await agentsBindingsCommand(opts, runtime);
+        await agentsBindingsCommand(opts);
       });
     });
 
-  agents
-    .command("bind")
-    .description("Add routing bindings for an agent")
-    .option("--agent <id>", "Agent id (defaults to current default agent)")
-    .option(
-      "--bind <channel[:accountId]>",
-      "Binding to add (repeatable). If omitted, accountId is resolved by channel defaults/hooks.",
-      collectOption,
-      [],
-    )
-    .option("--json", "Output JSON summary", false)
-    .action(async (opts): Promise<void> => {
-      await runAgentsCommandAction(async (runtime) => {
-        const { agentsBindCommand } = await import("../../commands/agents.commands.bind.js");
-        await agentsBindCommand(opts, runtime);
+  for (const operation of ["bind", "unbind"] as const) {
+    const command = agents
+      .command(operation)
+      .description(`${operation === "bind" ? "Add" : "Remove"} routing bindings for an agent`)
+      .option("--agent <id>", "Agent id (defaults to current default agent)")
+      .option(
+        "--bind <channel[:accountId]>",
+        operation === "bind"
+          ? "Binding to add (repeatable). If omitted, accountId is resolved by channel defaults/hooks."
+          : "Binding to remove (repeatable)",
+        collectOption,
+        [],
+      );
+    if (operation === "unbind") {
+      command.option("--all", "Remove all bindings for this agent", false);
+    }
+    command.option("--json", "Output JSON summary", false).action(async (opts): Promise<void> => {
+      await runAgentsCommandAction(async () => {
+        const { agentsUpdateBindingsCommand } =
+          await import("../../commands/agents.commands.bind.js");
+        await agentsUpdateBindingsCommand(operation, opts);
       });
     });
-
-  agents
-    .command("unbind")
-    .description("Remove routing bindings for an agent")
-    .option("--agent <id>", "Agent id (defaults to current default agent)")
-    .option("--bind <channel[:accountId]>", "Binding to remove (repeatable)", collectOption, [])
-    .option("--all", "Remove all bindings for this agent", false)
-    .option("--json", "Output JSON summary", false)
-    .action(async (opts): Promise<void> => {
-      await runAgentsCommandAction(async (runtime) => {
-        const { agentsUnbindCommand } = await import("../../commands/agents.commands.bind.js");
-        await agentsUnbindCommand(opts, runtime);
-      });
-    });
+  }
 
   agents
     .command("add [name]")
@@ -94,7 +83,7 @@ export function registerAgentsCommands(program: Command): void {
     )
     .option("--json", "Output JSON summary", false)
     .action(async (name, opts, command): Promise<void> => {
-      await runAgentsCommandAction(async (runtime) => {
+      await runAgentsCommandAction(async () => {
         const hasAutomationFlags = hasExplicitOptions(command, [
           "workspace",
           "model",
@@ -103,7 +92,7 @@ export function registerAgentsCommands(program: Command): void {
           "nonInteractive",
         ]);
         const { agentsAddCommand } = await import("../../commands/agents.commands.add.js");
-        await agentsAddCommand({ ...opts, name }, runtime, { hasAutomationFlags });
+        await agentsAddCommand({ ...opts, name }, { hasAutomationFlags });
       });
     });
 
@@ -119,9 +108,9 @@ export function registerAgentsCommands(program: Command): void {
     .option("--non-interactive", "Disable prompts", false)
     .option("--json", "Output JSON summary", false)
     .action(async (opts): Promise<void> => {
-      await runAgentsCommandAction(async (runtime) => {
+      await runAgentsCommandAction(async () => {
         const { agentsTeamCreateCommand } = await import("../../commands/agents.commands.team.js");
-        await agentsTeamCreateCommand(opts, runtime);
+        await agentsTeamCreateCommand(opts);
       });
     });
 
@@ -160,10 +149,10 @@ ${formatHelpExamples([
 `,
     )
     .action(async (opts): Promise<void> => {
-      await runAgentsCommandAction(async (runtime) => {
+      await runAgentsCommandAction(async () => {
         const { agentsSetIdentityCommand } =
           await import("../../commands/agents.commands.identity.js");
-        await agentsSetIdentityCommand(opts, runtime);
+        await agentsSetIdentityCommand(opts);
       });
     });
 
@@ -173,16 +162,16 @@ ${formatHelpExamples([
     .option("--force", "Skip confirmation", false)
     .option("--json", "Output JSON summary", false)
     .action(async (id, opts): Promise<void> => {
-      await runAgentsCommandAction(async (runtime) => {
+      await runAgentsCommandAction(async () => {
         const { agentsDeleteCommand } = await import("../../commands/agents.commands.delete.js");
-        await agentsDeleteCommand({ ...opts, id }, runtime);
+        await agentsDeleteCommand({ ...opts, id });
       });
     });
 
   agents.action(async (): Promise<void> => {
-    await runAgentsCommandAction(async (runtime) => {
+    await runAgentsCommandAction(async () => {
       const { agentsListCommand } = await import("../../commands/agents.commands.list.js");
-      await agentsListCommand({}, runtime);
+      await agentsListCommand({});
     });
   });
 }

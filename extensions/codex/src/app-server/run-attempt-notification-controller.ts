@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { acknowledgeInternalToolResult } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   isCodexTurnAbortMarkerNotification,
   completePendingOpenClawDynamicToolNotification,
@@ -10,12 +11,11 @@ import {
   readRawResponseToolCallId,
   updateActiveTurnItemIds,
 } from "./attempt-notifications.js";
-import { isCodexNotificationForTurn } from "./notification-correlation.js";
-import { readCodexTurnCompletedNotification } from "./protocol-validators.js";
-import type { CodexServerNotification } from "./protocol.js";
+import type { CodexPreparedServerNotification } from "./protocol.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
+import { projectCodexSessionWarning } from "./session-warnings.js";
 import { waitForPromiseOrAbort } from "./timeout.js";
 import { CODEX_APP_SERVER_NATIVE_TURN_WAIT_TIMEOUT_MS } from "./turn-router.js";
 import type { CodexThreadRouteScope } from "./turn-router.js";
@@ -42,6 +42,7 @@ export function createCodexAttemptNotificationController(
     deadlines,
   } = turnRuntime;
   const {
+    recordModelResponseNotification,
     scheduleTerminalDynamicToolReleaseCheck,
     reportExecutionNotification,
     maybeAnnounceFastModeAutoOff,
@@ -59,16 +60,7 @@ export function createCodexAttemptNotificationController(
       signal.throwIfAborted();
     }
   };
-  const readTerminalTurn = (notification: CodexServerNotification, notificationTurnId: string) =>
-    notification.method === "turn/completed" &&
-    isCodexNotificationForTurn(
-      notification.params,
-      resourceState.thread.threadId,
-      notificationTurnId,
-    )
-      ? readCodexTurnCompletedNotification(notification.params)?.turn
-      : undefined;
-  const handleNotification = async (notification: CodexServerNotification) => {
+  const handleNotification = async (notification: CodexPreparedServerNotification) => {
     if (state.projectionClosed) {
       return;
     }
@@ -80,12 +72,9 @@ export function createCodexAttemptNotificationController(
       }
       return;
     }
-    const isCurrentTurn = isCodexNotificationForTurn(
-      notification.params,
-      resourceState.thread.threadId,
-      turnId,
-    );
-    const completedTurn = readTerminalTurn(notification, turnId);
+    const isCurrentTurn =
+      notification.threadId === resourceState.thread.threadId && notification.turnId === turnId;
+    const completedTurn = isCurrentTurn ? notification.completedTurn : undefined;
     if (
       (state.timeout || state.localCompletionRequested) &&
       completedTurn?.status === "interrupted"
@@ -141,7 +130,36 @@ export function createCodexAttemptNotificationController(
           state.sawCodexInterruptMarker = true;
         }
       }
-      await projector.handleNotification(notification);
+      if (notification.method === "warning" || notification.method === "configWarning") {
+        const { params, sessionAgentId, assertCurrent } = runtime.connection;
+        await projectCodexSessionWarning({
+          session: {
+            agentId: sessionAgentId,
+            sessionId: params.sessionId,
+            sessionKey: params.sessionTarget?.sessionKey ?? params.sessionKey,
+            storePath:
+              params.sessionTarget?.storePath ??
+              resolveStorePath(params.config?.session?.store, { agentId: sessionAgentId }),
+            expectedLifecycleRevision: params.sessionTarget?.expectedLifecycleRevision,
+          },
+          threadId: resourceState.thread.threadId,
+          notification,
+          assertCurrent,
+          project: async () => {
+            if (
+              state.projectionClosed ||
+              projectorRef.current !== projector ||
+              turnIdRef.current !== turnId
+            ) {
+              return false;
+            }
+            await projector.handleNotification(notification);
+            return true;
+          },
+        });
+      } else {
+        await projector.handleNotification(notification);
+      }
       if (
         isCurrentTurn &&
         activeTurnItemIds.size === 0 &&
@@ -196,7 +214,7 @@ export function createCodexAttemptNotificationController(
     }
   };
   const noteNotificationReceived = (
-    notification: CodexServerNotification,
+    notification: CodexPreparedServerNotification,
     scope: CodexThreadRouteScope,
     receivedAtMs: number,
   ) => {
@@ -206,7 +224,7 @@ export function createCodexAttemptNotificationController(
       return;
     }
     projector.recordMcpToolCallReceipt(notification);
-    const completedTurn = readTerminalTurn(notification, turnId);
+    const completedTurn = scope.turnId === turnId ? notification.completedTurn : undefined;
     if (completedTurn) {
       projector.settlement.terminalReceipt = completedTurn;
       state.terminalTurnNotificationQueued = true;
@@ -214,6 +232,8 @@ export function createCodexAttemptNotificationController(
       deadlines.beginSettlement(receivedAtMs);
     }
     if (scope.turnId === turnId) {
+      // Admission observes receipts before queued projection or concurrent tool responses.
+      recordModelResponseNotification(notification);
       const modelToolCallId = readRawResponseToolCallId(notification);
       if (modelToolCallId) {
         allocateCodexToolOutcomeOrdinal?.(modelToolCallId);
@@ -229,16 +249,6 @@ export function createCodexAttemptNotificationController(
       }
     }
   };
-  const enqueueNotification = async (
-    notification: CodexServerNotification,
-    scope: CodexThreadRouteScope,
-  ) => {
-    embeddedAgentLog.trace("codex app-server raw notification received", {
-      method: notification.method,
-      ...scope,
-    });
-    await handleNotification(notification);
-  };
   const drainNotificationQueue = async () => {
     await resourceState.turnRoute?.drain();
   };
@@ -246,7 +256,7 @@ export function createCodexAttemptNotificationController(
     waitForActiveNativeTurnCompletion,
     waitForNativeTerminalItems,
     noteNotificationReceived,
-    enqueueNotification,
+    enqueueNotification: handleNotification,
     drainNotificationQueue,
   };
 }

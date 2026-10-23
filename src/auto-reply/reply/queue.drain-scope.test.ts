@@ -13,17 +13,80 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
+import { withSessionTurn } from "../../sessions/session-controller.admission.js";
+import {
+  getCurrentSessionControllerOwner,
+  withSessionControllerOwner,
+} from "../../sessions/session-controller.context.js";
+import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import { AsyncWorkScope, captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import type { QueueSettings } from "./queue.js";
+import type { FollowupRun, QueueSettings } from "./queue.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
 import {
-  clearFollowupQueueForTest,
   createQueueTestRun as createRun,
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
+import { clearFollowupQueue } from "./queue/state.js";
 
 installQueueRuntimeErrorSilencer();
+
+it.each(["S1", "unrelated"])(
+  "preserves the source runner and applies the post-clear rebind only to session %s",
+  async (sessionId) => {
+    const key = `source-runner-rebind-${sessionId}`;
+    const outcome = createDeferredCore<{ runner: string; run: FollowupRun }>();
+    const source = createRun({ prompt: "queued source" });
+    source.run.sessionId = sessionId;
+    try {
+      enqueueFollowupRun(
+        key,
+        source,
+        { mode: "followup", debounceMs: 0, cap: 10 },
+        "none",
+        async (run) => outcome.resolve({ runner: "source", run }),
+        false,
+      );
+      scheduleFollowupDrain(
+        key,
+        async (run) => outcome.resolve({ runner: "wake", run }),
+        undefined,
+        { from: "S1", to: "S2" },
+      );
+      const executed = await outcome.promise;
+      expect(executed.runner).toBe("source");
+      expect(executed.run.admissionSessionId).toBe(sessionId === "S1" ? "S2" : undefined);
+      expect(source.admissionSessionId).toBeUndefined();
+      await source.controllerInput?.claim?.settlement.promise;
+    } finally {
+      clearFollowupQueue(key);
+    }
+  },
+);
+
+it.each([true, false])(
+  "uses the source runner when registered=%s, otherwise the waking runner",
+  async (registered) => {
+    const key = `source-runner-${registered}`;
+    const outcome = createDeferredCore<string>();
+    const source = createRun({ prompt: "queued source" });
+    try {
+      enqueueFollowupRun(
+        key,
+        source,
+        { mode: "followup", debounceMs: 0, cap: 10 },
+        "none",
+        registered ? async () => outcome.resolve("source") : undefined,
+        false,
+      );
+      scheduleFollowupDrain(key, async () => outcome.resolve("wake"));
+      await expect(outcome.promise).resolves.toBe(registered ? "source" : "wake");
+      await source.controllerInput?.claim?.settlement.promise;
+    } finally {
+      clearFollowupQueue(key);
+    }
+  },
+);
 
 it("drained followup turn keeps tracked work accepted after the triggering scope closes", async () => {
   resetGatewayWorkAdmission();
@@ -80,7 +143,53 @@ it("drained followup turn keeps tracked work accepted after the triggering scope
   } finally {
     scopeClosed.resolve();
     requestRoot.release();
-    clearFollowupQueueForTest(key);
+    clearFollowupQueue(key);
     resetGatewayWorkAdmission();
+  }
+});
+
+it("admits a queued successor without borrowing the retiring turn that wakes its mailbox", async () => {
+  const key = "agent:main:retiring-drain-owner";
+  const sessionId = "retiring-drain-owner-session";
+  const previous = createReplyOperation({ sessionKey: key, sessionId, resetTriggered: false });
+  const outcome = createDeferredCore<string>();
+  const queued = createRun({ prompt: "successor" });
+  queued.run.sessionId = sessionId;
+  queued.run.sessionKey = key;
+  try {
+    withSessionControllerOwner(previous, () => {
+      enqueueFollowupRun(key, queued, { mode: "followup", debounceMs: 0, cap: 10 });
+      scheduleFollowupDrain(key, async () => {
+        // Backend admission must acquire new custody, not stale ambient ownership.
+        try {
+          expect(getCurrentSessionControllerOwner()).toBeUndefined();
+          const successor = createReplyOperation({
+            sessionKey: key,
+            sessionId,
+            resetTriggered: false,
+            mailboxClaim: queued.controllerInput!.claim!,
+          });
+          try {
+            outcome.resolve(
+              await withSessionControllerOwner(successor, () =>
+                withSessionTurn({ sessionKey: key, sessionId }, async (operation) => {
+                  expect(operation).toBe(successor);
+                  return "successor completed";
+                }),
+              ),
+            );
+          } finally {
+            successor.complete();
+          }
+        } catch (error) {
+          outcome.reject(error);
+        }
+      });
+      previous.complete();
+    });
+    await expect(outcome.promise).resolves.toBe("successor completed");
+  } finally {
+    previous.complete();
+    clearFollowupQueue(key);
   }
 });

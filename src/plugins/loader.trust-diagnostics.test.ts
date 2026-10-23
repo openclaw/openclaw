@@ -2,13 +2,18 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { maybeRepairPluginRegistryState } from "../commands/doctor-plugin-registry.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub-integrity.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
-import { loadOpenClawPlugins } from "./loader.js";
+import { clearPluginRegistryLoadCache, loadOpenClawPlugins } from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   makePluginLoaderTempDir,
@@ -17,6 +22,8 @@ import {
   writePlugin,
   writePluginMetadata,
 } from "./loader.test-fixtures.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
+import { PluginTrustRefusalError } from "./plugin-trust.js";
 import { disposePluginRegistryInstances } from "./runtime.js";
 import { buildPluginInspectReport, buildPluginSnapshotReport } from "./status.js";
 
@@ -30,15 +37,95 @@ if (!agentMailIntegrity) {
 }
 
 afterEach(async () => {
-  await closeOpenClawStateDatabaseAsync();
-  resetPluginStateStoreForTests();
-  resetPluginLoaderTestStateForTest();
+  try {
+    await closeOpenClawStateDatabaseAsync();
+    resetPluginStateStoreForTests();
+    resetPluginLoaderTestStateForTest();
+  } finally {
+    clearRuntimeConfigSnapshot();
+  }
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
 
 describe("recorded plugin trust diagnostics", () => {
+  it("warns once across registry reloads and again for changed provenance or a restarted Gateway", async () => {
+    useNoBundledPlugins();
+    const first = writePlugin({ id: "unverified-reload", filename: "index.cjs", registration: "" });
+    const replacement = writePlugin({ id: first.id, filename: "index.cjs", registration: "" });
+    const other = writePlugin({ id: "unverified-other", registration: "" });
+    for (const plugin of [first, replacement]) {
+      writePluginMetadata({
+        dir: plugin.dir,
+        id: plugin.id,
+        packageJson: {
+          name: `@vendor/${plugin.id}`,
+          version: "1.0.0",
+          openclaw: { extensions: ["./index.cjs"] },
+        },
+      });
+    }
+    const warn = vi.fn();
+    const load = (plugin = first, activate = true, install?: PluginInstallRecord) => {
+      const registry = loadOpenClawPlugins({
+        config: {
+          plugins: {
+            load: { paths: [plugin.file] },
+            entries: { [plugin.id]: { enabled: true } },
+            slots: { memory: "none" },
+          },
+        },
+        installRecords: install ? { [plugin.id]: install } : {},
+        cache: false,
+        activate,
+        logger: { info() {}, warn, error() {}, debug() {} },
+      });
+      expect(registry.plugins.find(({ id }) => id === plugin.id)?.status).toBe("loaded");
+      expect(registry.diagnostics).toContainEqual(
+        expect.objectContaining({
+          level: "warn",
+          pluginId: plugin.id,
+          message: expect.stringContaining(`openclaw plugins inspect ${plugin.id}`),
+        }),
+      );
+    };
+    load(first, false);
+    expect(warn).not.toHaveBeenCalled();
+    load();
+    for (let reload = 0; reload < 4; reload++) {
+      clearPluginRegistryLoadCache();
+      load();
+    }
+    await using cache = createPluginCache();
+    withPluginCache(cache, () => load());
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toContain(first.file);
+    load(replacement);
+    load(replacement);
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn.mock.calls[1]?.[0]).toContain(replacement.file);
+    const install: PluginInstallRecord = {
+      source: "npm",
+      spec: "@vendor/unverified-reload@1.0.0",
+      installPath: replacement.dir,
+      resolvedName: "@vendor/different-package",
+    };
+    load(replacement, true, install);
+    load(replacement, true, install);
+    expect(warn).toHaveBeenCalledTimes(3);
+    expect(warn.mock.calls[2]?.[0]).toContain("provenance-invalid");
+    const resolvedSpec = "@vendor/unverified-reload@2.0.0";
+    load(replacement, true, { ...install, resolvedSpec });
+    load(replacement, true, { resolvedSpec, ...install });
+    expect(warn).toHaveBeenCalledTimes(4);
+    expect(warn.mock.calls[3]?.[0]).toBe(warn.mock.calls[2]?.[0]);
+    load(other);
+    expect(warn).toHaveBeenCalledTimes(5);
+    await drainGlobalSingletonLifecycleState("restart");
+    load(other);
+    expect(warn).toHaveBeenCalledTimes(6);
+  });
+
   it.each([
-    { name: "legacy npm spec", override: {}, reason: "trusted-official", trusted: true },
     {
       name: "official install through a symlinked state root",
       symlinkedStateRoot: true,
@@ -52,8 +139,6 @@ describe("recorded plugin trust diagnostics", () => {
       trusted: false,
       repair: true,
     },
-    { name: "missing record", missing: true, reason: "record-missing", trusted: false },
-    { name: "path install", override: { source: "path" }, reason: "origin-path", trusted: false },
     {
       name: "missing provenance",
       override: { spec: undefined },
@@ -114,6 +199,28 @@ describe("recorded plugin trust diagnostics", () => {
       repairTrusted: true,
     },
     {
+      name: "consistent third-party npm install",
+      pluginId: "third-party-demo",
+      packageName: "@vendor/third-party-demo",
+      version: "1.0.0",
+      reason: "third-party-npm",
+      trusted: false,
+    },
+    {
+      name: "conflicting third-party npm identity",
+      pluginId: "third-party-demo",
+      packageName: "@vendor/third-party-demo",
+      override: { resolvedName: "@vendor/other" },
+      reason: "provenance-invalid",
+      trusted: false,
+    },
+    {
+      name: "official package recorded under another plugin id",
+      pluginId: "third-party-demo",
+      reason: "provenance-invalid",
+      trusted: false,
+    },
+    {
       name: "unendorsed AgentMail npm namesake",
       pluginId: "agentmail",
       packageName: "@agentmail/agentmail",
@@ -127,7 +234,6 @@ describe("recorded plugin trust diagnostics", () => {
     packageName?: string;
     version?: string;
     override?: Partial<PluginInstallRecord>;
-    missing?: boolean;
     symlinkedStateRoot?: boolean;
     reason: string;
     trusted: boolean;
@@ -137,7 +243,6 @@ describe("recorded plugin trust diagnostics", () => {
     "inspection and registration agree for $name",
     async ({
       override,
-      missing,
       symlinkedStateRoot,
       reason,
       trusted,
@@ -186,7 +291,7 @@ describe("recorded plugin trust diagnostics", () => {
         };
         await refreshPersistedInstalledPluginIndex({
           reason: "source-changed",
-          installRecords: missing ? {} : { [pluginId]: install },
+          installRecords: { [pluginId]: install },
         });
         const config = {
           plugins: {
@@ -195,6 +300,7 @@ describe("recorded plugin trust diagnostics", () => {
             slots: { memory: "none" },
           },
         };
+        setRuntimeConfigSnapshot(config);
         const snapshot = buildPluginSnapshotReport({ config });
         const inspected = buildPluginInspectReport({
           id: plugin.id,
@@ -217,6 +323,15 @@ describe("recorded plugin trust diagnostics", () => {
           origin: "global",
         });
         expect(loaded.status).toBe("loaded");
+        if (reason === "third-party-npm") {
+          const refusal = new PluginTrustRefusalError({
+            pluginId,
+            source: plugin.file,
+            trust: loaded.trust,
+          });
+          expect(refusal.message).toContain("Reinstalling the same package will not change that");
+          expect(refusal.message).not.toContain("Reinstall from the official");
+        }
         const warnings = warn.mock.calls.filter(([message]) =>
           String(message).includes("OpenClaw can't verify where this plugin came from"),
         );

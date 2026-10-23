@@ -77,10 +77,8 @@ function buildGoogleLiveModel(row: unknown): ModelDefinitionConfig | undefined {
     cost: GOOGLE_GEMINI_COST,
     contextWindow,
     maxTokens,
-    ...(staticModel?.compat ? { compat: { ...staticModel.compat } } : {}),
-    ...(staticModel?.thinkingLevelMap
-      ? { thinkingLevelMap: { ...staticModel.thinkingLevelMap } }
-      : {}),
+    ...(staticModel?.compat ? { compat: staticModel.compat } : {}),
+    ...(staticModel?.thinkingLevelMap ? { thinkingLevelMap: staticModel.thinkingLevelMap } : {}),
   };
 }
 
@@ -98,7 +96,6 @@ export async function buildGoogleLiveCatalogProvider(params: {
   apiKey?: string;
   discoveryApiKey?: string;
   fetchGuard?: LiveModelCatalogFetchGuard;
-  signal?: AbortSignal;
 }): Promise<ModelProviderConfig> {
   const { models, ...providerConfig } = buildGoogleStaticCatalogProvider();
   return await buildLiveModelProviderConfig({

@@ -20,9 +20,20 @@ import {
   ManagedWorktreeService,
 } from "../agents/worktrees/service.js";
 import type { ManagedWorktreeRecord, WorktreeWorkerAuthority } from "../agents/worktrees/types.js";
-import { loadSessionEntry, type SessionAccessScope } from "../config/sessions/session-accessor.js";
+import type { SessionAccessScope } from "../config/sessions/session-accessor.js";
+import {
+  captureSessionEntryMetadataRead,
+  captureSessionEntrySourceAssertion,
+} from "../config/sessions/session-entry-source-authority.js";
+import {
+  composeSessionSourceAssertion,
+  prepareSessionSourceAuthority,
+  type SessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
+import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { getChildLogger } from "../logging/logger.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 
 function belongsToSession(record: ManagedWorktreeRecord, sessionKey: string) {
@@ -123,25 +134,31 @@ export async function removeSessionWorktree(params: {
 export async function restoreSessionWorktree(params: {
   entry: SessionEntry;
   scope: SessionAccessScope;
-  commitGuard?: () => void;
+  commitGuard?: SessionSourceAssertion;
   assertRestoreAllowed?: () => void;
-}): Promise<() => void> {
+}): Promise<SessionSourceAssertion> {
   const { entry, scope: requestedScope } = params;
   const id = entry.worktree?.id;
   if (!id) {
-    return () => params.commitGuard?.();
+    return composeSessionSourceAssertion([params.commitGuard]);
   }
   const context = captureWorktreeRunEndContext(requestedScope.env ?? process.env);
   const scope = {
     ...requestedScope,
     env: { ...(requestedScope.env ?? process.env), ...context.environment },
   };
+  const metadata = captureSessionEntryMetadataRead(scope, () => {
+    params.commitGuard?.();
+    params.assertRestoreAllowed?.();
+  });
   const accept = captureWorktreeRegistryReadGuard(context, "session-owner");
   const record = await readRegistryWorktree(context, id);
   const assertWorktreeCurrent = accept(record);
-  const assertSessionCurrent = () => {
-    params.commitGuard?.();
-    const current = loadSessionEntry(scope);
+  const assertSessionMatches = (
+    current:
+      | Pick<SessionEntry, "sessionId" | "lifecycleRevision" | "archivedAt" | "worktree">
+      | undefined,
+  ) => {
     if (
       current?.sessionId !== entry.sessionId ||
       current?.lifecycleRevision !== entry.lifecycleRevision ||
@@ -154,83 +171,132 @@ export async function restoreSessionWorktree(params: {
       );
     }
   };
-  const assertCurrent = () => {
-    assertSessionCurrent();
-    assertWorktreeCurrent();
-    try {
-      assertWorktreeRemovalAvailable(scope.env ?? process.env, id);
-    } catch (error) {
-      if (error instanceof WorktreeRemovalContentionError) {
-        throw new SessionWorktreeLifecycleError(error.message, "busy");
-      }
-      throw error;
-    }
-    if (record && !belongsToSession(record, scope.sessionKey)) {
-      throw new SessionWorktreeLifecycleError(
-        "Session worktree has a different owner; restore the correct binding before retrying.",
-        "owner-mismatch",
-      );
+  const assertSessionCurrent = () => {
+    if (metadata) {
+      assertSessionMatches(metadata.readCurrent());
     }
   };
-  const workerAuthority: WorktreeWorkerAuthority = {
+  const sourceParams = {
+    scope: {
+      agentId: scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey),
+      sessionKey: scope.sessionKey,
+      storePath: resolveSessionStorePathForScope(scope),
+      env: scope.env,
+    },
+    expected: entry,
     assertCurrent: assertSessionCurrent,
-    predicates: [{ kind: "session-owner", id, sessionKey: scope.sessionKey }],
+    refuse: () => {
+      throw new SessionWorktreeLifecycleError(
+        "Session changed while preparing its worktree; retry the request.",
+        "session-changed",
+      );
+    },
   };
-  assertCurrent();
-  if (!record || (record.removedAt !== undefined && !record.snapshotRef)) {
-    throw new SessionWorktreeLifecycleError(
-      "Session worktree snapshot is missing or expired. The conversation is preserved; start a new worktree task from the source repository to continue.",
-      "restore-failed",
-    );
-  }
-  if (record.removedAt !== undefined) {
-    params.assertRestoreAllowed?.();
-    try {
-      await new ManagedWorktreeService({ env: scope.env }).restore({
-        id,
-        commitGuard: assertCurrent,
-        workerAuthority,
-      });
-    } catch (error) {
-      assertCurrent();
-      if (error instanceof SessionWorktreeLifecycleError) {
+  const source = captureSessionEntrySourceAssertion({
+    ...sourceParams,
+    // The destination's patch snapshot owns archivedAt; successful unarchive changes it.
+    fields: ["sessionId", "lifecycleRevision", "worktree"],
+  });
+  const assertCurrent = composeSessionSourceAssertion(
+    [params.commitGuard, source],
+    (assertSources) => {
+      assertSources();
+      assertWorktreeCurrent();
+      try {
+        assertWorktreeRemovalAvailable(scope.env ?? process.env, id);
+      } catch (error) {
+        if (error instanceof WorktreeRemovalContentionError) {
+          throw new SessionWorktreeLifecycleError(error.message, "busy");
+        }
         throw error;
       }
-      if (!existsSync(record.repoRoot)) {
+      if (record && !belongsToSession(record, scope.sessionKey)) {
         throw new SessionWorktreeLifecycleError(
-          "Session worktree source repository is missing. Restore the original repository and its snapshot refs, then retry; otherwise start a new worktree task. The conversation is preserved.",
-          "restore-failed",
+          "Session worktree has a different owner; restore the correct binding before retrying.",
+          "owner-mismatch",
         );
       }
-      const snapshot = await runGit(record.repoRoot, [
-        "rev-parse",
-        "--verify",
-        "--end-of-options",
-        `${record.snapshotRef}^{commit}`,
-      ]);
-      assertCurrent();
-      if (snapshot.code !== 0) {
-        throw new SessionWorktreeLifecycleError(
-          "Session worktree snapshot is missing or unavailable. Restore the original repository snapshot, or start a new worktree task. The conversation is preserved.",
-          "restore-failed",
-        );
-      }
+    },
+  );
+  const retained = metadata
+    ? undefined
+    : await prepareSessionSourceAuthority(
+        captureSessionEntrySourceAssertion({
+          ...sourceParams,
+          fields: ["sessionId", "lifecycleRevision", "archivedAt", "worktree"],
+        }),
+      );
+  try {
+    const assertRestoreCurrent = composeSessionSourceAssertion([
+      assertCurrent,
+      retained?.assertCurrent,
+    ]);
+    const workerAuthority: WorktreeWorkerAuthority = {
+      assertCurrent: composeSessionSourceAssertion([
+        params.commitGuard,
+        source,
+        retained?.assertCurrent,
+      ]),
+      predicates: [{ kind: "session-owner", id, sessionKey: scope.sessionKey }],
+    };
+    assertRestoreCurrent();
+    if (!record || (record.removedAt !== undefined && !record.snapshotRef)) {
       throw new SessionWorktreeLifecycleError(
-        "Session worktree could not be restored. Free disk space if needed, check the source repository, then retry. The conversation and snapshot are preserved.",
+        "Session worktree snapshot is missing or expired. The conversation is preserved; start a new worktree task from the source repository to continue.",
         "restore-failed",
       );
     }
-  } else {
-    try {
-      await assertManagedWorktreeRemovalComplete(record, { beforeRun: assertCurrent });
-    } catch (error) {
-      assertCurrent();
-      if (error instanceof WorktreeRemovalContentionError) {
-        throw new SessionWorktreeLifecycleError(error.message, "restore-failed");
+    if (record.removedAt !== undefined) {
+      params.assertRestoreAllowed?.();
+      try {
+        await new ManagedWorktreeService({ env: scope.env }).restore({
+          id,
+          commitGuard: assertRestoreCurrent,
+          workerAuthority,
+        });
+      } catch (error) {
+        assertRestoreCurrent();
+        if (error instanceof SessionWorktreeLifecycleError) {
+          throw error;
+        }
+        if (!existsSync(record.repoRoot)) {
+          throw new SessionWorktreeLifecycleError(
+            "Session worktree source repository is missing. Restore the original repository and its snapshot refs, then retry; otherwise start a new worktree task. The conversation is preserved.",
+            "restore-failed",
+          );
+        }
+        const snapshot = await runGit(record.repoRoot, [
+          "rev-parse",
+          "--verify",
+          "--end-of-options",
+          `${record.snapshotRef}^{commit}`,
+        ]);
+        assertRestoreCurrent();
+        if (snapshot.code !== 0) {
+          throw new SessionWorktreeLifecycleError(
+            "Session worktree snapshot is missing or unavailable. Restore the original repository snapshot, or start a new worktree task. The conversation is preserved.",
+            "restore-failed",
+          );
+        }
+        throw new SessionWorktreeLifecycleError(
+          "Session worktree could not be restored. Free disk space if needed, check the source repository, then retry. The conversation and snapshot are preserved.",
+          "restore-failed",
+        );
       }
-      throw error;
+    } else {
+      try {
+        await assertManagedWorktreeRemovalComplete(record, { beforeRun: assertRestoreCurrent });
+      } catch (error) {
+        assertRestoreCurrent();
+        if (error instanceof WorktreeRemovalContentionError) {
+          throw new SessionWorktreeLifecycleError(error.message, "restore-failed");
+        }
+        throw error;
+      }
     }
+    assertRestoreCurrent();
+    return assertCurrent;
+  } finally {
+    await retained?.release?.();
   }
-  assertCurrent();
-  return assertCurrent;
 }

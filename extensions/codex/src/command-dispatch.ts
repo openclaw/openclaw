@@ -7,11 +7,10 @@ export async function handleCodexCommand(
   ctx: PluginCommandContext,
   options: CodexCommandOptions,
 ): Promise<PluginCommandResult> {
-  const commandContext = { ...ctx, gatewayClientScopes: ctx.gatewayClientScopes?.slice() };
   const { resolvePluginConfig, ...subcommandOptions } = options;
   try {
     const { handleCodexSubcommand } = await import("./command-handlers.js");
-    return await handleCodexSubcommand(commandContext, {
+    return await handleCodexSubcommand(ctx, {
       ...subcommandOptions,
       pluginConfig: resolvePluginConfig?.() ?? subcommandOptions.pluginConfig,
     });

@@ -23,7 +23,7 @@ function resolveNormalizedBoundAccountMatch(binding: AgentRouteBinding) {
   return {
     ...baseMatch,
     peerId: peerId || undefined,
-    peerKind: peerKind ?? undefined,
+    peerKind,
     guildId: normalizeRouteBindingId(match.guildId) || null,
     teamId: normalizeRouteBindingId(match.teamId) || null,
     roles: normalizeRouteBindingRoles(match.roles),
@@ -51,7 +51,7 @@ export function resolveFirstBoundAccountId(params: {
       .filter(Boolean),
   );
   const hasPeerContext = exactPeerIds.size > 0;
-  const normalizedPeerKind = normalizeChatType(params.peerKind) ?? undefined;
+  const normalizedPeerKind = normalizeChatType(params.peerKind);
   let memberRoleIds: Set<string> | undefined;
   const scope = {
     groupSpace: params.groupSpace,

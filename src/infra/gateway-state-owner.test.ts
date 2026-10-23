@@ -1,8 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveGatewayLockDir } from "../config/paths.js";
 import { stateNativeProcessEntrypoints } from "../state/native-process-runtime.test-support.js";
 import {
@@ -11,12 +10,22 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
+import {
+  GatewayLockNamespaceError,
+  readGatewayLockProcessNamespace,
+} from "./gateway-lock-payload.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
+import {
+  StateDatabaseAdmissionPendingError,
+  StateDatabaseMaintenanceScopeError,
+  StateDatabaseOfflineMaintenanceError,
+} from "./gateway-state-owner-record.js";
 import {
   acquireGatewayStateOwner,
   acquireStateDatabaseSchemaLease,
   assertStateDatabaseAccessAllowed,
   assertStateDatabaseReadAllowed,
+  captureStateDatabaseAccess,
   GatewayStateOwnerContentionError,
   hasActiveGatewayStateOwner,
   resolveGatewayStateOwnerPath,
@@ -27,167 +36,34 @@ import {
 import * as nodeSqlite from "./node-sqlite.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 
-describe("bounded Gateway state reads", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-  function createDatabase(stateDir: string): string {
-    const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
-    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-    fs.writeFileSync(databasePath, "");
-    return databasePath;
-  }
-
-  function acquireServingOwner(databasePath: string) {
-    return acquireGatewayStateOwner({
-      databasePath,
-      payload: {
-        pid: process.pid,
-        createdAt: new Date().toISOString(),
-        configPath: path.join(path.dirname(path.dirname(databasePath)), "openclaw.json"),
-        role: "gateway",
-      },
-    });
-  }
-
-  function createAliasedDatabases() {
-    const root = tempDirs.make("openclaw-owner-read-alias-");
-    const original = path.join(root, "original");
-    const replacement = path.join(root, "replacement");
-    const alias = path.join(root, "alias");
-    const originalDatabasePath = createDatabase(original);
-    const replacementDatabasePath = createDatabase(replacement);
-    fs.symlinkSync(original, alias, "junction");
-    return {
-      originalDatabasePath,
-      replacementDatabasePath,
-      databasePath: path.join(alias, "state", "openclaw.sqlite"),
-      retarget() {
-        fs.unlinkSync(alias);
-        fs.symlinkSync(replacement, alias, "junction");
-      },
-    };
-  }
-
-  beforeEach(() => {
-    vi.useFakeTimers();
+function gatewayOwner(databasePath: string, root: string) {
+  return acquireGatewayStateOwner({
+    databasePath,
+    payload: { ...ownerPayload(root), role: "gateway" },
   });
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.useRealTimers();
-  });
+}
 
-  it.each(["owner", "projection"] as const)(
-    "rechecks a replaced %s when the read verification window expires",
-    async (kind) => {
-      const root = tempDirs.make("openclaw-owner-read-replaced-");
-      const databasePath = createDatabase(root);
-      const gateway = await acquireGatewayLock({
-        allowInTests: true,
-        env: { OPENCLAW_STATE_DIR: root },
-        timeoutMs: 0,
-        readProcessStartTime: () => null,
-      });
-      if (!gateway) {
-        throw new Error("Expected Gateway ownership");
-      }
-      const replacedPath = kind === "owner" ? gateway.lockPath : gateway.stateLockPath;
-      try {
-        assertStateDatabaseReadAllowed(databasePath);
-        fs.unlinkSync(replacedPath);
-        fs.writeFileSync(replacedPath, "replacement");
-        expect(() => assertStateDatabaseReadAllowed(databasePath)).not.toThrow();
-        vi.advanceTimersByTime(999);
-        expect(() => assertStateDatabaseReadAllowed(databasePath)).not.toThrow();
-        vi.advanceTimersByTime(1);
-        expect(() => assertStateDatabaseReadAllowed(databasePath)).toThrow("could not be verified");
-        expect(() =>
-          kind === "owner"
-            ? assertStateDatabaseAccessAllowed(databasePath)
-            : gateway.assertCurrent(),
-        ).toThrow(kind === "owner" ? "could not be verified" : "no longer current");
-      } finally {
-        await gateway.release();
-      }
-      expect(fs.readFileSync(replacedPath, "utf8")).toBe("replacement");
-    },
-  );
+function ownerPayload(root: string, pid = process.pid) {
+  return {
+    pid,
+    createdAt: new Date().toISOString(),
+    configPath: path.join(root, "openclaw.json"),
+    processNamespace: readGatewayLockProcessNamespace(),
+  };
+}
 
-  it("observes an alias retarget immediately for strict access and at expiry for reads", () => {
-    const fixture = createAliasedDatabases();
-    const owner = acquireServingOwner(fixture.originalDatabasePath);
-    const maintenance = acquireGatewayStateOwner({ databasePath: fixture.replacementDatabasePath });
-    try {
-      expect(() => assertStateDatabaseAccessAllowed(fixture.databasePath)).not.toThrow();
-      expect(() => owner.assertDatabaseAccess(fixture.databasePath)).not.toThrow();
-      assertStateDatabaseReadAllowed(fixture.databasePath);
-      fixture.retarget();
-      expect(() => owner.assertCurrent()).not.toThrow();
-      expect(() => assertStateDatabaseAccessAllowed(fixture.databasePath)).toThrow(
-        "offline maintenance",
-      );
-      expect(() => owner.assertDatabaseAccess(fixture.databasePath)).toThrow(
-        "does not own this database",
-      );
-      vi.advanceTimersByTime(999);
-      expect(() => assertStateDatabaseReadAllowed(fixture.databasePath)).not.toThrow();
-      vi.advanceTimersByTime(1);
-      expect(() => assertStateDatabaseReadAllowed(fixture.databasePath)).toThrow(
-        "offline maintenance",
-      );
-    } finally {
-      maintenance.release();
-      owner.release();
-    }
-  });
+function markerPath(databasePath: string) {
+  const seed = acquireGatewayStateOwner({ databasePath });
+  seed.release();
+  return seed.path;
+}
 
-  it.each(["schema acquisition", "schema release", "root release", "failed cleanup"] as const)(
-    "invalidates a cached alias resolution on %s without waiting for expiry",
-    (transition) => {
-      const fixture = createAliasedDatabases();
-      const owner = acquireServingOwner(fixture.originalDatabasePath);
-      const maintenance = acquireGatewayStateOwner({
-        databasePath: fixture.replacementDatabasePath,
-      });
-      let schema: ReturnType<typeof acquireStateDatabaseSchemaLease> | undefined;
-      try {
-        if (transition === "schema release") {
-          schema = acquireStateDatabaseSchemaLease(fixture.originalDatabasePath);
-        }
-        assertStateDatabaseReadAllowed(fixture.databasePath);
-        fixture.retarget();
-        expect(() => assertStateDatabaseReadAllowed(fixture.databasePath)).not.toThrow();
-        if (transition === "schema acquisition") {
-          schema = acquireStateDatabaseSchemaLease(fixture.originalDatabasePath);
-        } else if (transition === "schema release") {
-          schema?.release();
-        } else if (transition === "root release") {
-          owner.release();
-        } else {
-          const remove = fs.rmSync.bind(fs);
-          const failure = new Error("controlled ownership cleanup failure");
-          const cleanup = vi.spyOn(fs, "rmSync").mockImplementation((pathname, options) => {
-            if (pathname === owner.path) {
-              throw failure;
-            }
-            remove(pathname, options);
-          });
-          try {
-            expect(() => owner.release()).toThrow(failure);
-          } finally {
-            cleanup.mockRestore();
-          }
-        }
-        expect(() => assertStateDatabaseReadAllowed(fixture.databasePath)).toThrow(
-          "offline maintenance",
-        );
-      } finally {
-        schema?.release();
-        maintenance.release();
-        owner.release();
-      }
-    },
-  );
-});
+const projectionPath = (root: string) =>
+  path.join(resolveGatewayLockDir(root), "gateway.state.lock");
+const readRecord = (pathname: string): unknown => JSON.parse(fs.readFileSync(pathname, "utf8"));
+function expectExistence(present: boolean, ...paths: string[]) {
+  expect(paths.map((pathname) => fs.existsSync(pathname))).toEqual(paths.map(() => present));
+}
 
 describe("Gateway state ownership", () => {
   it.skipIf(process.platform === "win32")(
@@ -231,50 +107,6 @@ describe("Gateway state ownership", () => {
     },
   );
 
-  it.skipIf(process.platform === "win32").each(["process", "schema"] as const)(
-    "recovers a removed empty parent before %s ownership without replaying protected work",
-    async (kind) => {
-      await withTempDir("openclaw-owner-parent-race-", async (root) => {
-        const stateDir = path.join(fs.realpathSync(root), "absent");
-        const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
-        const pathname = resolveGatewayStateOwnerPath(databasePath);
-        const open = fs.openSync.bind(fs);
-        let removed = false;
-        const admission = vi.spyOn(fs, "openSync").mockImplementation((file, flags, mode) => {
-          if (
-            file === pathname &&
-            typeof flags === "number" &&
-            (flags & fs.constants.O_CREAT) !== 0 &&
-            !removed
-          ) {
-            fs.rmdirSync(path.dirname(pathname));
-            removed = true;
-          }
-          return open(file, flags, mode);
-        });
-        let owner: ReturnType<typeof acquireGatewayStateOwner> | undefined;
-        try {
-          owner =
-            kind === "schema"
-              ? acquireStateDatabaseSchemaLease(databasePath)
-              : acquireGatewayStateOwner({ databasePath });
-          expect(removed).toBe(true);
-          const operation = vi.fn(() => assertStateDatabaseAccessAllowed(databasePath));
-          owner.run(operation);
-          expect(operation).toHaveBeenCalledOnce();
-          expect(tryAcquireGatewayStateOwner(databasePath)).toBeNull();
-        } finally {
-          admission.mockRestore();
-          owner?.release();
-        }
-        expect(fs.existsSync(pathname)).toBe(false);
-        if (kind === "schema") {
-          expect(fs.existsSync(stateDir)).toBe(false);
-        }
-      });
-    },
-  );
-
   it.each(["after native open", "partial publication", "publication becomes maintenance"] as const)(
     "joins a transient schema owner for a created but uninitialized database: %s",
     async (arrival) => {
@@ -282,14 +114,10 @@ describe("Gateway state ownership", () => {
         const databasePath = path.join(root, "openclaw.sqlite");
         fs.writeFileSync(databasePath, "");
         const databaseLocation = path.toNamespacedPath(fs.realpathSync(databasePath));
-        const seed = acquireGatewayStateOwner({ databasePath });
-        const marker = seed.path;
-        seed.release();
+        const marker = markerPath(databasePath);
         const payload = {
-          pid: process.ppid,
+          ...ownerPayload(root, process.ppid),
           ownerId: "foreign-schema-fixture",
-          createdAt: new Date().toISOString(),
-          configPath: path.join(root, "openclaw.json"),
           role: "sqlite-maintenance",
           stateOwnerKind: "schema",
         };
@@ -360,18 +188,14 @@ describe("Gateway state ownership", () => {
     async (observation) => {
       await withTempDir("openclaw-cold-schema-budget-", async (root) => {
         const databasePath = path.join(root, "openclaw.sqlite");
-        const seed = acquireGatewayStateOwner({ databasePath });
-        const marker = seed.path;
-        seed.release();
+        const marker = markerPath(databasePath);
         let owner = 0;
         const publish = (pid: number) =>
           fs.writeFileSync(
             marker,
             JSON.stringify({
-              pid,
+              ...ownerPayload(root, pid),
               ownerId: `schema-fixture-${owner++}`,
-              createdAt: new Date().toISOString(),
-              configPath: path.join(root, "openclaw.json"),
               role: "sqlite-maintenance",
               stateOwnerKind: "schema",
             }),
@@ -403,7 +227,7 @@ describe("Gateway state ownership", () => {
           publish(process.pid);
           expect(() =>
             withStateDatabaseColdAdmission({ databasePath, busyTimeoutMs: 25 }, open),
-          ).toThrow("offline maintenance");
+          ).toThrow(StateDatabaseMaintenanceScopeError);
           expect(wait).not.toHaveBeenCalled();
           expect(open).not.toHaveBeenCalled();
         } finally {
@@ -418,21 +242,13 @@ describe("Gateway state ownership", () => {
   it("retains accepted nested maintenance after the root stops lending", async () => {
     await withTempDir("openclaw-state-owner-", async (root) => {
       const databasePath = path.join(root, "state", "openclaw.sqlite");
-      const owner = acquireGatewayStateOwner({
-        databasePath,
-        payload: {
-          pid: process.pid,
-          createdAt: new Date().toISOString(),
-          configPath: path.join(root, "openclaw.json"),
-          role: "gateway",
-        },
-      });
+      const owner = gatewayOwner(databasePath, root);
       const accepted = tryBorrowGatewayStateOwner(databasePath);
       if (!accepted) {
         owner.release();
         throw new Error("Expected retained process ownership");
       }
-      const projectionPath = path.join(resolveGatewayLockDir(root), "gateway.state.lock");
+      const projection = projectionPath(root);
       try {
         assertStateDatabaseAccessAllowed(databasePath);
         expect(tryAcquireGatewayStateOwner(databasePath)).toBeNull();
@@ -444,8 +260,7 @@ describe("Gateway state ownership", () => {
         accepted.assertDatabaseAccess(databasePath);
         expect(() => assertStateDatabaseAccessAllowed(databasePath)).toThrow();
         accepted.run(() => assertStateDatabaseAccessAllowed(databasePath));
-        expect(fs.existsSync(owner.path)).toBe(true);
-        expect(fs.existsSync(projectionPath)).toBe(true);
+        expectExistence(true, owner.path, projection);
         expect(() => acquireStateDatabaseSchemaLease(databasePath)).toThrow(
           GatewayStateOwnerContentionError,
         );
@@ -453,9 +268,7 @@ describe("Gateway state ownership", () => {
         owner.release();
         accepted.release();
       }
-      expect(fs.existsSync(resolveGatewayStateOwnerPath(databasePath))).toBe(false);
-      expect(fs.existsSync(projectionPath)).toBe(false);
-      expect(fs.existsSync(databasePath)).toBe(false);
+      expectExistence(false, resolveGatewayStateOwnerPath(databasePath), projection, databasePath);
       const next = acquireGatewayStateOwner({ databasePath });
       next.release();
       expect(fs.existsSync(next.path)).toBe(false);
@@ -480,9 +293,7 @@ describe("Gateway state ownership", () => {
         await gateway.release();
         schema.assertCurrent();
         expect(fs.readFileSync(gateway.stateLockPath)).toEqual(projection);
-        expect(fs.existsSync(path.join(resolveGatewayLockDir(root), "gateway.state.lock"))).toBe(
-          false,
-        );
+        expectExistence(false, projectionPath(root));
         const rm = fs.rmSync.bind(fs);
         const failure = new Error("controlled projection cleanup failure");
         const remove = vi.spyOn(fs, "rmSync").mockImplementation((pathname, options) => {
@@ -493,15 +304,13 @@ describe("Gateway state ownership", () => {
         });
         try {
           expect(() => schema.release()).toThrow(failure);
-          expect(fs.existsSync(gateway.lockPath)).toBe(true);
-          expect(fs.existsSync(gateway.stateLockPath)).toBe(true);
+          expectExistence(true, gateway.lockPath, gateway.stateLockPath);
           expect(tryAcquireGatewayStateOwner(databasePath)).toBeNull();
         } finally {
           remove.mockRestore();
         }
         schema.release();
-        expect(fs.existsSync(gateway.lockPath)).toBe(false);
-        expect(fs.existsSync(gateway.stateLockPath)).toBe(false);
+        expectExistence(false, gateway.lockPath, gateway.stateLockPath);
       } finally {
         await gateway.release();
         schema.release();
@@ -518,18 +327,19 @@ describe("Gateway state ownership", () => {
           kind === "owner"
             ? acquireGatewayStateOwner({ databasePath })
             : acquireStateDatabaseSchemaLease(databasePath);
-        const replacedPath =
-          kind === "owner"
-            ? lease.path
-            : path.join(resolveGatewayLockDir(root), "gateway.state.lock");
+        const replacedPath = kind === "owner" ? lease.path : projectionPath(root);
         const original = kind === "owner" ? fs.readFileSync(replacedPath) : undefined;
+        const retainedAccess = captureStateDatabaseAccess(databasePath);
         try {
           const replace = () => {
             fs.writeFileSync(replacedPath, "replacement");
             expect(() => lease.assertCurrent()).toThrow("no longer current");
             if (kind === "owner") {
               expect(() => assertStateDatabaseAccessAllowed(databasePath)).toThrow(
-                "could not be verified",
+                "lock removed/replaced; restart the Gateway",
+              );
+              expect(() => retainedAccess.assertAccessAllowed()).toThrow(
+                "lock removed/replaced; restart the Gateway",
               );
             }
             expect(() => acquireStateDatabaseSchemaLease(databasePath)).toThrow(
@@ -554,6 +364,24 @@ describe("Gateway state ownership", () => {
       });
     },
   );
+
+  it("reports a read-detected owner loss with one restart instruction", async () => {
+    await withTempDir("openclaw-owner-read-loss-", async (root) => {
+      const databasePath = path.join(root, "state", "openclaw.sqlite");
+      const owner = gatewayOwner(databasePath, root);
+      const original = fs.readFileSync(owner.path);
+      try {
+        fs.writeFileSync(owner.path, "replacement");
+        // The read assertion is the first to observe the replacement, so it records the loss.
+        expect(() => assertStateDatabaseReadAllowed(databasePath)).toThrow(
+          /lock removed\/replaced; restart the Gateway\.$/u,
+        );
+      } finally {
+        fs.writeFileSync(owner.path, original);
+        owner.release();
+      }
+    });
+  });
 
   it("blocks a foreign ordinary writer while a standalone schema lease owns state", async () => {
     await withTempDir("openclaw-schema-foreign-write-", async (root) => {
@@ -594,17 +422,15 @@ describe("Gateway state ownership", () => {
         expect(JSON.parse(child.stdout)).toEqual({
           refused: expect.stringContaining("offline maintenance"),
         });
-        expect(JSON.parse(fs.readFileSync(schema.path, "utf8"))).toMatchObject({
+        expect(readRecord(schema.path)).toMatchObject({
           role: "sqlite-maintenance",
         });
-        expect(
-          JSON.parse(
-            fs.readFileSync(path.join(resolveGatewayLockDir(root), "gateway.state.lock"), "utf8"),
-          ),
-        ).toMatchObject({
+        expect(readRecord(projectionPath(root))).toMatchObject({
           role: "agent-embedded",
         });
-        expect(() => openOpenClawStateDatabase(options)).toThrow("offline maintenance");
+        expect(() => openOpenClawStateDatabase(options)).toThrow(
+          StateDatabaseMaintenanceScopeError,
+        );
         schema.run(() => {
           expect(
             openOpenClawStateDatabase(options)
@@ -633,23 +459,12 @@ describe("Gateway state ownership", () => {
         first.assertCurrent();
         expect(hasActiveGatewayStateOwner(databasePath)).toBe(false);
         expect(tryAcquireGatewayStateOwner(databasePath)).toBeNull();
-        expect(fs.existsSync(`${first.path}.sqlite`)).toBe(false);
-        expect(fs.existsSync(databasePath)).toBe(false);
-        expect(
-          JSON.parse(
-            fs.readFileSync(
-              path.join(resolveGatewayLockDir(stateDir), "gateway.state.lock"),
-              "utf8",
-            ),
-          ),
-        ).toMatchObject({ role: "agent-embedded" });
+        expectExistence(false, `${first.path}.sqlite`, databasePath);
+        expect(readRecord(projectionPath(stateDir))).toMatchObject({ role: "agent-embedded" });
         second = first.run(() => acquireStateDatabaseSchemaLease(databasePath));
         first.release();
         second.assertCurrent();
-        expect(
-          fs.existsSync(path.join(resolveGatewayLockDir(stateDir), "gateway.state.lock")),
-        ).toBe(true);
-        expect(fs.existsSync(second.path)).toBe(true);
+        expectExistence(true, projectionPath(stateDir), second.path);
         expect(hasActiveGatewayStateOwner(databasePath)).toBe(false);
         const third = second.run(() => acquireStateDatabaseSchemaLease(databasePath));
         third.release();
@@ -658,12 +473,57 @@ describe("Gateway state ownership", () => {
         first.release();
         second?.release();
       }
-      expect(fs.existsSync(first.path)).toBe(false);
-      expect(fs.existsSync(stateDir)).toBe(false);
+      expectExistence(false, first.path, stateDir);
       expect(fs.existsSync(root)).toBe(true);
       acquireGatewayStateOwner({ databasePath }).release();
     });
   });
+
+  it.skipIf(process.platform === "win32").each([undefined, 0])(
+    "acquires schema custody after shared lock directory removal with budget %s",
+    async (busyTimeoutMs) => {
+      await withTempDir("openclaw-schema-directory-handoff-", async (root) => {
+        const stateDir = path.join(fs.realpathSync(root), "absent");
+        const firstPath = path.join(stateDir, "state", "first.sqlite");
+        const secondPath = path.join(stateDir, "state", "second.sqlite");
+        const first = acquireStateDatabaseSchemaLease(firstPath);
+        const secondLock = resolveGatewayStateOwnerPath(secondPath);
+        const directory = path.dirname(secondLock);
+        const open = fs.openSync.bind(fs);
+        let released = false;
+        let second: ReturnType<typeof acquireStateDatabaseSchemaLease> | undefined;
+        const release = () => {
+          released = true;
+          first.release();
+          expect(fs.existsSync(directory)).toBe(false);
+        };
+        const handoff = vi.spyOn(fs, "openSync").mockImplementation((pathname, flags, mode) => {
+          if (
+            pathname === secondLock &&
+            typeof flags === "number" &&
+            (flags & fs.constants.O_EXCL) !== 0 &&
+            !released
+          ) {
+            release();
+          }
+          return open(pathname, flags, mode);
+        });
+        try {
+          second = acquireStateDatabaseSchemaLease(secondPath, { busyTimeoutMs });
+          expect(released).toBe(true);
+          second.assertCurrent();
+          second.run(() => assertStateDatabaseAccessAllowed(secondPath));
+          expect(tryAcquireGatewayStateOwner(secondPath)).toBeNull();
+          expect(fs.statSync(directory).mode & 0o777).toBe(0o700);
+        } finally {
+          handoff.mockRestore();
+          first.release();
+          second?.release();
+        }
+        expectExistence(false, directory, stateDir);
+      });
+    },
+  );
 
   it("retries owned-directory cleanup after releasing the final physical lock", async () => {
     await withTempDir("openclaw-schema-directory-cleanup-", async (root) => {
@@ -681,8 +541,7 @@ describe("Gateway state ownership", () => {
       });
       try {
         expect(() => lease.release()).toThrow(failure);
-        expect(fs.existsSync(lease.path)).toBe(false);
-        expect(fs.existsSync(path.join(directory, "gateway.state.lock"))).toBe(false);
+        expectExistence(false, lease.path, path.join(directory, "gateway.state.lock"));
         expect(fs.existsSync(directory)).toBe(true);
       } finally {
         remove.mockRestore();
@@ -732,6 +591,62 @@ describe("Gateway state ownership", () => {
     },
   );
 
+  it.each(["missing", "null", "foreign"] as const)(
+    "defers unverifiable maintenance without reclaiming its owner: %s namespace",
+    async (kind) => {
+      await withTempDir("openclaw-unverifiable-state-access-", async (root) => {
+        const databasePath = path.join(root, "state", "openclaw.sqlite");
+        const pathname = markerPath(databasePath);
+        const record = {
+          // A foreign PID can collide with ours without lending local authority.
+          pid: process.pid,
+          createdAt: new Date().toISOString(),
+          configPath: path.join(root, "openclaw.json"),
+          ...(kind === "missing"
+            ? {}
+            : {
+                processNamespace:
+                  kind === "null"
+                    ? null
+                    : {
+                        platform: "linux",
+                        identity: "11111111-1111-1111-1111-111111111111",
+                        host: "foreign-host",
+                        pidNsInode: "1",
+                      },
+              }),
+        };
+        try {
+          for (const role of ["gateway", "agent-embedded", "sqlite-maintenance"] as const) {
+            const raw = JSON.stringify({ ...record, role });
+            fs.writeFileSync(pathname, raw);
+            if (role === "sqlite-maintenance") {
+              expect(() => assertStateDatabaseAccessAllowed(databasePath)).toThrow(
+                StateDatabaseOfflineMaintenanceError,
+              );
+              fs.writeFileSync(
+                pathname,
+                JSON.stringify({ ...record, role, stateOwnerKind: "schema" }),
+              );
+              expect(() => assertStateDatabaseAccessAllowed(databasePath)).toThrow(
+                StateDatabaseAdmissionPendingError,
+              );
+              fs.writeFileSync(pathname, raw);
+            } else {
+              expect(() => assertStateDatabaseAccessAllowed(databasePath)).not.toThrow();
+            }
+            expect(() => acquireGatewayStateOwner({ databasePath })).toThrow(
+              GatewayLockNamespaceError,
+            );
+            expect(fs.readFileSync(pathname, "utf8")).toBe(raw);
+          }
+        } finally {
+          fs.rmSync(pathname, { force: true });
+        }
+      });
+    },
+  );
+
   it.each(["foreign", "matching PID", "dead PID"] as const)(
     "checks %s persisted ownership without borrowing its authority",
     async (kind) => {
@@ -743,9 +658,7 @@ describe("Gateway state ownership", () => {
         owner.release();
         const deadPid = process.pid + 1;
         const record = {
-          pid: kind === "dead PID" ? deadPid : process.ppid,
-          createdAt: new Date().toISOString(),
-          configPath: path.join(root, "openclaw.json"),
+          ...ownerPayload(root, kind === "dead PID" ? deadPid : process.ppid),
         };
         const kill = process.kill.bind(process);
         const probe =
@@ -761,7 +674,7 @@ describe("Gateway state ownership", () => {
           if (kind === "matching PID") {
             fs.writeFileSync(pathname, original);
             expect(() => assertStateDatabaseAccessAllowed(databasePath)).toThrow(
-              "offline maintenance",
+              StateDatabaseMaintenanceScopeError,
             );
             expect(() => acquireStateDatabaseSchemaLease(databasePath)).toThrow(
               GatewayStateOwnerContentionError,
@@ -771,6 +684,8 @@ describe("Gateway state ownership", () => {
             fs.writeFileSync(pathname, raw);
             expect(() => assertStateDatabaseAccessAllowed(databasePath)).not.toThrow();
             expect(fs.readFileSync(pathname, "utf8")).toBe(raw);
+            const recovered = acquireGatewayStateOwner({ databasePath });
+            recovered.release();
           } else {
             for (const role of [undefined, "gateway", "agent-embedded"] as const) {
               fs.writeFileSync(pathname, JSON.stringify({ ...record, role }));

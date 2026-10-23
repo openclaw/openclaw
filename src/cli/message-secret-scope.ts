@@ -29,17 +29,10 @@ function resolveChannelFromTargets(targets: unknown): string | undefined {
   if (!Array.isArray(targets)) {
     return undefined;
   }
-  const seen = new Set<string>();
-  for (const target of targets) {
-    const channel = resolveChannelFromTargetValue(target);
-    if (channel) {
-      seen.add(channel);
-    }
-  }
-  if (seen.size !== 1) {
-    return undefined;
-  }
-  return [...seen][0];
+  const channels = new Set(
+    targets.map(resolveChannelFromTargetValue).filter((channel) => channel !== undefined),
+  );
+  return channels.size === 1 ? [...channels][0] : undefined;
 }
 
 function resolveScopedAccountId(value: unknown): string | undefined {

@@ -21,7 +21,7 @@ page.
 
 MiniMax M3 uses `minimax/MiniMax-M3` as its default provider/model reference.
 
-Explicit `provider/model` selections use the agent's canonical model resolver,
+Explicit `provider/model` selections use the agent's shared model resolver,
 including configured models and accepted bundled aliases. Ambiguous model-only
 selectors continue to enumerate matching discovered models. Invalid selectors and
 requested models that cannot be resolved are reported before checks run. Provider

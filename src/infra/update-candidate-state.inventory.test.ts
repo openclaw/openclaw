@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, expect, it, beforeEach, describe } from "vitest";
+import { afterEach, expect, it, beforeEach, describe, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runCommandBuffered } from "../process/exec.js";
 import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
@@ -12,6 +12,7 @@ import {
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { LegacyMigrationSourceClaim } from "./state-migrations.source-snapshot.js";
 import {
   UPDATE_CANDIDATE_PLUGIN_PLAN_FILENAME,
   resolveUpdateCandidateStatePath,
@@ -22,6 +23,7 @@ import {
 } from "./update-candidate-state.diagnostics.js";
 import {
   UpdateCandidateSnapshotInventorySchema,
+  collectStateDatabasePaths,
   readUpdateCandidateStateInventoryInProcess,
   snapshotUpdateCandidateState,
 } from "./update-candidate-state.js";
@@ -30,6 +32,42 @@ import { runUpdateCandidateSnapshotWorker } from "./update-candidate-state.test-
 describe("snapshot inventory", () => {
   const dirs = useAutoCleanupTempDirTracker(afterEach);
   afterEach(() => closeOpenClawStateDatabaseForTest());
+
+  it("queues retained custom shared-state roots for exact capture with plugins disabled", async () => {
+    const root = dirs.make("candidate-shared-roots-");
+    const stateDir = path.join(root, "selected");
+    const external = path.join(root, "external");
+    for (const parent of [path.join(stateDir, "voice-calls"), external]) {
+      const file = path.join(parent, "state", "openclaw.sqlite");
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(file, "");
+    }
+    const discovered = await collectStateDatabasePaths(
+      {
+        stateDir,
+        config: {
+          plugins: {
+            enabled: false,
+            entries: {
+              "voice-call": { enabled: false, config: { store: external } },
+              "@openclaw/voice-call": { config: { store: "~/retained-calls" } },
+            },
+          },
+        },
+        env: { HOME: root, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+      },
+      { includeUnconfiguredAgents: false },
+    );
+    const shared = path.join(stateDir, "state", "openclaw.sqlite");
+    expect(discovered.get(shared)).toEqual({ spellings: [shared], owners: [{ role: "global" }] });
+    for (const parent of [path.join(stateDir, "voice-calls"), external]) {
+      const file = path.join(parent, "state", "openclaw.sqlite");
+      expect(discovered.get(file)).toEqual({ spellings: [file] });
+    }
+    expect(discovered.has(path.join(root, "retained-calls", "state", "openclaw.sqlite"))).toBe(
+      false,
+    );
+  });
 
   it.each([
     "missing plugin dependency",
@@ -217,11 +255,17 @@ describe("snapshot inventory", () => {
       }),
     );
     expect((await fs.readFile(shared)).equals(sourceDatabase)).toBe(true);
-    if (change === "added file") {
+    if (change === "added file" || change === "locator symlink") {
       expect(snapshot.code, snapshot.stderr.toString("utf8")).toBe(0);
     } else {
       expect(snapshot.code, "snapshot must refuse uninventoried bytes").not.toBe(0);
-      expect(snapshot.stderr.toString("utf8")).toContain("changed after snapshot inventory");
+      expect(snapshot.stderr.toString("utf8")).toContain(
+        change === "enlarged file"
+          ? "file exceeds limit of 4096 bytes (got 16777216)"
+          : change === "install record"
+            ? "Plugin record locator was not inventoried"
+            : "changed after snapshot inventory",
+      );
       expectFailurePhase(
         snapshot,
         change === "database registration" ? "database snapshot" : "plugin snapshot",
@@ -235,6 +279,7 @@ describe("snapshot inventory", () => {
 describe("snapshot execution approvals", () => {
   const dirs = useAutoCleanupTempDirTracker((cleanup) => {
     afterEach(() => {
+      vi.restoreAllMocks();
       closeOpenClawStateDatabaseForTest();
       cleanup();
     });
@@ -313,17 +358,15 @@ describe("snapshot execution approvals", () => {
           : { version: 1, defaults: { security: "full" }, agents: {} },
       );
       await fs.writeFile(sourcePath, raw);
+      if (interrupted) {
+        vi.spyOn(LegacyMigrationSourceClaim.prototype, "remove").mockRejectedValueOnce(
+          new Error("synthetic interrupted cleanup"),
+        );
+      }
       const imported = await migrateLegacyExecApprovals({
         stateDir: source,
         env,
         detected: detectLegacyExecApprovals({ stateDir: source, doctorOnlyStateMigrations: true }),
-        ...(interrupted
-          ? {
-              removeSource: () => {
-                throw new Error("synthetic interrupted cleanup");
-              },
-            }
-          : {}),
       });
       if (interrupted) {
         expect(imported.warnings.join(" ")).toContain("cleanup failed");

@@ -2,7 +2,6 @@ import {
   buildMentionRegexes,
   classifyChannelInboundEvent,
   formatMediaPlaceholderText,
-  formatLocationText,
   implicitMentionKindWhen,
   logInboundDrop,
   matchesMentionWithExplicit,
@@ -40,8 +39,9 @@ import type {
 } from "./bot-message-context.types.js";
 import {
   buildSenderName,
-  extractTelegramLocation,
   getTelegramTextParts,
+  joinTelegramTextParts,
+  resolveTelegramNonTextBody,
   hasLeadingBotCommandAddressedToOtherBot,
   hasBotMentionInText,
   hasBotMention,
@@ -192,15 +192,15 @@ export async function resolveTelegramInboundBody(params: {
     formattedStickerDescription = `[Sticker${stickerContext ? ` ${stickerContext}` : ""}] ${cachedStickerDescription}`;
   }
 
-  const locationData = extractTelegramLocation(msg);
-  const locationText = locationData ? formatLocationText(locationData) : undefined;
+  const nonTextBody = resolveTelegramNonTextBody(msg);
   const rawText = renderTelegramTextEntities(
     messageTextParts.text,
     messageTextParts.entities,
   ).trim();
   const richText = resolveTelegramRichMessageText(msg);
-  const hasUserText = Boolean(rawText || locationText);
-  let rawBody = [rawText, locationText].filter(Boolean).join("\n").trim();
+  // Only text and locations participate in the audio transcription preflight.
+  const hasUserText = Boolean(rawText || nonTextBody?.kind === "location");
+  let rawBody = [rawText, nonTextBody?.text].filter(Boolean).join("\n").trim();
   if (!rawBody) {
     rawBody = richText ?? resolveTelegramRichMessagePlaceholder(msg) ?? "";
   }
@@ -244,6 +244,7 @@ export async function resolveTelegramInboundBody(params: {
         OriginatingChannel: "telegram",
         OriginatingTo: originatingTo,
         AccountId: accountId,
+        ChatType: isGroup ? "group" : "direct",
         MessageThreadId: replyThreadId,
         media: materializedMedia,
       };
@@ -265,23 +266,35 @@ export async function resolveTelegramInboundBody(params: {
   const historyBody =
     rawBody || formattedStickerDescription || formatMediaPlaceholderText(nativeMediaFacts);
 
-  const hasAnyMention = messageTextParts.entities.some((ent) => ent.type === "mention");
+  const mentionMessages = options?.bufferedMessages?.some((message) => message.contact)
+    ? options.bufferedMessages
+    : undefined;
+  const mentionTextParts = mentionMessages
+    ? joinTelegramTextParts(
+        mentionMessages.filter((message) => !message.contact),
+        "\n",
+      )
+    : messageTextParts;
+  const hasAnyMention = mentionTextParts.entities.some((ent) => ent.type === "mention");
   const explicitlyMentioned = botUsername
-    ? hasBotMention(msg, botUsername, primaryCtx.me?.id) ||
+    ? (mentionMessages
+        ? mentionMessages.some((message) => hasBotMention(message, botUsername, primaryCtx.me?.id))
+        : hasBotMention(msg, botUsername, primaryCtx.me?.id)) ||
       (richText ? hasBotMentionInText(richText, botUsername) : false)
     : false;
+  const mentionText = mentionMessages || !msg.contact ? mentionTextParts.text : "";
   const groupThread = resolveGroupThreadMentionFacts({
     cfg,
     channel: "telegram",
     peerId: isGroup ? String(chatId) : resolveTelegramDirectPeerId({ chatId, senderId }),
-    text: [messageTextParts.text, richText, preflightTranscript].filter(Boolean).join("\n"),
+    text: [mentionText, richText, preflightTranscript].filter(Boolean).join("\n"),
     sessionKey: params.sessionKey,
     acpBinding: params.acpBinding,
   });
   const computedWasMentioned =
     Boolean(groupThread?.mentionedAgentIds.length) ||
     matchesMentionWithExplicit({
-      text: messageTextParts.text || richText || "",
+      text: mentionText || richText || "",
       mentionRegexes,
       explicit: {
         hasAnyMention,
@@ -424,6 +437,6 @@ export async function resolveTelegramInboundBody(params: {
     nativeCommandBody,
     ...(audioTranscribedMediaIndex !== undefined ? { audioTranscribedMediaIndex } : {}),
     stickerCacheHit,
-    locationData: locationData ?? undefined,
+    locationData: nonTextBody?.kind === "location" ? nonTextBody.location : undefined,
   };
 }

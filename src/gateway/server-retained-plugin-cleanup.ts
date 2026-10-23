@@ -15,17 +15,21 @@ export async function cleanupGatewayRetiredPluginArtifacts(params: {
   };
   assertCurrent();
   try {
-    const [retention, captures, { hasPluginNativeCaptureCleanupCandidates }, paths] =
-      await Promise.all([
-        import("../plugins/managed-npm-retention.js"),
-        import("../plugins/plugin-source-capture-report.js"),
-        import("../plugins/plugin-source-capture-directory.js"),
-        import("../config/paths.js"),
-      ]);
+    const [
+      { hasRetainedManagedNpmInstallCandidates, cleanupRetainedManagedNpmInstallGenerations },
+      captures,
+      { hasPluginNativeCaptureCleanupCandidates },
+      paths,
+    ] = await Promise.all([
+      import("../plugins/managed-npm-retention.js"),
+      import("../plugins/plugin-source-capture-report.js"),
+      import("../plugins/plugin-source-capture-directory.js"),
+      import("../config/paths.js"),
+    ]);
     assertCurrent();
     const stateDir = paths.resolveStateDir();
     const candidates = await Promise.all([
-      retention.hasRetainedManagedNpmInstallCandidates(),
+      hasRetainedManagedNpmInstallCandidates(),
       hasPluginNativeCaptureCleanupCandidates(stateDir),
     ]);
     assertCurrent();
@@ -66,7 +70,7 @@ export async function cleanupGatewayRetiredPluginArtifacts(params: {
             params.log.warn(warning);
           }
           await assertInventoryCurrent();
-          const removedGenerations = await retention.cleanupRetainedManagedNpmInstallGenerations({
+          const removedGenerations = await cleanupRetainedManagedNpmInstallGenerations({
             assertCurrent: assertInventoryCurrent,
             activeInstallPaths: [
               ...params.startupInstallPaths,

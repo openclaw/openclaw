@@ -89,7 +89,7 @@ async function unsupportedDreamingSources(
         continue;
       }
       warnings.push(
-        `Memory Core ${source.label}: upgrades from pre-July-2026 dreaming JSON are no longer migrated (${source.filePath}). No canonical SQLite state was found; an empty ingestion store cannot be distinguished from unmigrated state. Restore a backup produced by a July 2026 or newer release, or back up and move this retired file aside after verifying the SQLite state, then rerun openclaw doctor --fix. The file was left unchanged.`,
+        `Memory Core ${source.label}: upgrades from pre-July-2026 dreaming JSON are no longer migrated (${source.filePath}). No current SQLite state was found; an empty ingestion store cannot be distinguished from unmigrated state. Restore a backup produced by a July 2026 or newer release, or back up and move this retired file aside after verifying the SQLite state, then rerun openclaw doctor --fix. The file was left unchanged.`,
       );
     }
   }

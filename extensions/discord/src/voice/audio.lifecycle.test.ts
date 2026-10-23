@@ -269,9 +269,44 @@ it("reports decoder initialization failure to the receive owner", async () => {
   await decodeOpusStreamChunks(Readable.from([Buffer.from([0xf8, 0xff, 0xfe])]), {
     onError,
     onChunk,
-    onVerbose: vi.fn(),
     onWarn: vi.fn(),
   });
   expect(onError).toHaveBeenCalledExactlyOnceWith(error);
   expect(onChunk).not.toHaveBeenCalled();
+});
+
+it("waits for received audio consumption and releases the decoder when it fails", async () => {
+  const codec = await vi.importActual<typeof import("libopus-wasm")>("libopus-wasm");
+  const decoder = await codec.createDecoder({ channels: 2, sampleRate: 48_000 });
+  const decode = vi.spyOn(decoder, "decode");
+  const free = vi.spyOn(decoder, "free");
+  createDecoderMock.mockResolvedValueOnce(decoder);
+  const entered = createDeferred<void>();
+  const consumed = createDeferred<void>();
+  const error = new Error("receive consumer failed");
+  const onError = vi.fn();
+  const packet = Buffer.from([0xf8, 0xff, 0xfe]);
+  const decoding = decodeOpusStreamChunks(Readable.from([packet, packet]), {
+    onWarn: vi.fn(),
+    onError,
+    onChunk: async () => {
+      entered.resolve();
+      await consumed.promise;
+    },
+  });
+  try {
+    await entered.promise;
+    expect(decode).toHaveBeenCalledOnce();
+    expect(free).not.toHaveBeenCalled();
+    consumed.reject(error);
+    await decoding;
+    expect(onError).toHaveBeenCalledExactlyOnceWith(error);
+    expect(decode).toHaveBeenCalledOnce();
+    expect(free).toHaveBeenCalledOnce();
+  } finally {
+    consumed.resolve();
+    await decoding;
+    decoder.free();
+    vi.restoreAllMocks();
+  }
 });

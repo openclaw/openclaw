@@ -61,6 +61,10 @@ export function applySessionsPatchSubagentPolicy(params: {
 
   for (const field of ["inheritedToolDeny", "inheritedToolAllow"] as const) {
     const raw = patch[field];
+    if (raw !== undefined) {
+      // An operator-modified ceiling cannot retain a spawn-owned exception to the old snapshot.
+      delete next.delegatedToolPolicy;
+    }
     if (raw === null) {
       delete next[field];
       continue;

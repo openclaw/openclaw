@@ -76,79 +76,67 @@ export class DiscordAudioWorker {
   }
 
   async connect(): Promise<void> {
-    // Readiness and retries share an elapsed budget; native timeout delays require whole milliseconds.
+    // Readiness has an elapsed budget; native timeout delays require whole milliseconds.
     const deadline = performance.now() + this.options.connectTimeoutMs;
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (this.stopped) {
+      return;
+    }
+    const connection = this.sdk.joinVoiceChannel({
+      guildId: this.options.guildId,
+      channelId: this.options.channelId,
+      group: this.options.group,
+      selfDeaf: this.options.selfDeaf,
+      selfMute: this.options.selfMute,
+      daveEncryption: this.options.daveEncryption,
+      decryptionFailureTolerance: this.options.decryptionFailureTolerance,
+      adapterCreator: (methods) => {
+        this.adapter = methods;
+        return {
+          sendPayload: (payload) => {
+            // Acceptance queues signalling only. A definite main-gateway send
+            // failure returns through gateway-failed and destroys this attempt.
+            this.post({ type: "gateway-send", payload });
+            return true;
+          },
+          destroy: () => {},
+        };
+      },
+    });
+    this.connection = connection;
+    connection.on("error", this.onError);
+    try {
+      await this.sdk.entersState(
+        connection,
+        this.sdk.VoiceConnectionStatus.Ready,
+        AbortSignal.any([
+          this.stopAbort.signal,
+          AbortSignal.timeout(Math.max(1, Math.floor(deadline - performance.now()))),
+        ]),
+      );
       if (this.stopped) {
         return;
       }
-      const connection = this.sdk.joinVoiceChannel({
-        guildId: this.options.guildId,
-        channelId: this.options.channelId,
-        group: this.options.group,
-        selfDeaf: this.options.selfDeaf,
-        selfMute: this.options.selfMute,
-        daveEncryption: this.options.daveEncryption,
-        decryptionFailureTolerance: this.options.decryptionFailureTolerance,
-        adapterCreator: (methods) => {
-          this.adapter = methods;
-          return {
-            sendPayload: (payload) => {
-              // Acceptance queues signalling only. A definite main-gateway send
-              // failure returns through gateway-failed and destroys this attempt.
-              this.post({ type: "gateway-send", payload });
-              return true;
-            },
-            destroy: () => {},
-          };
-        },
+      connection.subscribe(this.player);
+      connection.on("stateChange", (_old, state) => {
+        this.post({ type: "connection", status: state.status });
       });
-      this.connection = connection;
-      connection.on("error", this.onError);
-      try {
-        await this.sdk.entersState(
-          connection,
-          this.sdk.VoiceConnectionStatus.Ready,
-          AbortSignal.any([
-            this.stopAbort.signal,
-            AbortSignal.timeout(Math.max(1, Math.floor(deadline - performance.now()))),
-          ]),
-        );
-        if (this.stopped) {
-          return;
-        }
-        connection.subscribe(this.player);
-        connection.on("stateChange", (_old, state) => {
-          this.post({ type: "connection", status: state.status });
-        });
-        connection.on(this.sdk.VoiceConnectionStatus.Destroyed, this.onDestroyed);
-        connection.on(this.sdk.VoiceConnectionStatus.Disconnected, this.onDisconnected);
-        connection.receiver.speaking.on("start", this.onSpeakingStart);
-        connection.receiver.speaking.on("end", this.onSpeakingEnd);
-        for (const userId of connection.receiver.speaking.users.keys()) {
-          this.post({ type: "speaking", userId, speaking: true });
-        }
-        this.post({ type: "connection", status: connection.state.status });
-        this.post({ type: "ready" });
-        return;
-      } catch (error) {
-        if (this.stopped) {
-          return;
-        }
-        if (connection.state.status !== this.sdk.VoiceConnectionStatus.Destroyed) {
-          connection.destroy();
-        }
-        if (
-          attempt === 0 &&
-          !this.stopped &&
-          performance.now() < deadline &&
-          error instanceof Error &&
-          error.message.toLowerCase().includes("operation was aborted")
-        ) {
-          continue;
-        }
-        throw error;
+      connection.on(this.sdk.VoiceConnectionStatus.Destroyed, this.onDestroyed);
+      connection.on(this.sdk.VoiceConnectionStatus.Disconnected, this.onDisconnected);
+      connection.receiver.speaking.on("start", this.onSpeakingStart);
+      connection.receiver.speaking.on("end", this.onSpeakingEnd);
+      for (const userId of connection.receiver.speaking.users.keys()) {
+        this.post({ type: "speaking", userId, speaking: true });
       }
+      this.post({ type: "connection", status: connection.state.status });
+      this.post({ type: "ready" });
+    } catch (error) {
+      if (this.stopped) {
+        return;
+      }
+      if (connection.state.status !== this.sdk.VoiceConnectionStatus.Destroyed) {
+        connection.destroy();
+      }
+      throw error;
     }
   }
 
@@ -250,7 +238,7 @@ export class DiscordAudioWorker {
         break;
       }
       case "output-audio":
-        this.outputs.get(command.id)?.appendAdmitted(Buffer.from(command.audio), command.audible);
+        this.outputs.get(command.id)?.append(Buffer.from(command.audio), command.audible);
         break;
       case "output-mark":
         this.outputs
@@ -289,12 +277,11 @@ export class DiscordAudioWorker {
           break;
         }
         const writable = this.fileInput.stream.write(Buffer.from(command.audio));
+        const onDrain = () => this.post({ type: "stream-drain", id: command.id });
         if (writable) {
-          this.post({ type: "stream-drain", id: command.id });
+          onDrain();
         } else {
-          this.fileInput.stream.once("drain", () =>
-            this.post({ type: "stream-drain", id: command.id }),
-          );
+          this.fileInput.stream.once("drain", onDrain);
         }
         break;
       }
@@ -357,7 +344,6 @@ export class DiscordAudioWorker {
       sdk: this.sdk,
       reason,
       expirySeconds,
-      onVerbose: (message) => this.post({ type: "log", level: "verbose", message }),
       onWarn: (message) => this.post({ type: "log", level: "warn", message }),
     });
   }
@@ -517,7 +503,6 @@ export class DiscordAudioWorker {
           }
         },
         onError,
-        onVerbose: (message) => this.post({ type: "log", level: "verbose", message }),
         onWarn: (message) => this.post({ type: "log", level: "warn", message }),
       });
     } finally {

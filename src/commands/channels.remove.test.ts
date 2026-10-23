@@ -23,7 +23,7 @@ import {
 } from "./channels.plugin-install.test-helpers.js";
 import { createTestConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
-let channelsRemoveCommand: typeof import("./channels.js").channelsRemoveCommand;
+let channelsRemoveCommand: typeof import("./channels/remove.js").channelsRemoveCommand;
 
 const catalogMocks = vi.hoisted(() => ({
   listChannelPluginCatalogEntries: vi.fn((): ChannelPluginCatalogEntry[] => []),
@@ -89,14 +89,14 @@ function firstWrittenChannelsConfig() {
 }
 
 function mockInstalledPlugin(plugin: ChannelPlugin) {
-  vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
+  vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockResolvedValue(
     createTestRegistry([{ pluginId: "@vendor/external-chat-plugin", plugin, source: "test" }]),
   );
 }
 
 describe("channelsRemoveCommand", () => {
   beforeAll(async () => {
-    ({ channelsRemoveCommand } = await import("./channels.js"));
+    ({ channelsRemoveCommand } = await import("./channels/remove.js"));
   });
 
   beforeEach(() => {
@@ -132,7 +132,7 @@ describe("channelsRemoveCommand", () => {
       status: "installed",
     }));
     vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockClear();
-    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockResolvedValue(
       createTestRegistry(),
     );
     registryRefreshMocks.refreshPluginRegistryAfterConfigMutation.mockClear();
@@ -285,7 +285,7 @@ describe("channelsRemoveCommand", () => {
         ),
       },
     };
-    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockResolvedValue(
       createTestRegistry([
         {
           pluginId: "@vendor/external-chat-plugin",

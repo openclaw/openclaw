@@ -2,14 +2,15 @@ import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/com
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
-import { resolveDiscordChannelContext } from "./agent-components-context.js";
+import {
+  replyUnavailableComponentInteraction,
+  resolveDiscordChannelContext,
+} from "./agent-components-context.js";
 import { resolveInteractionContextWithDmAuth } from "./agent-components-dm-auth.js";
 import { resolveAgentComponentPolicyContext } from "./agent-components-live-policy.js";
-import { replySilently } from "./agent-components-reply.js";
 import type {
   AgentComponentContext,
   AgentComponentInteraction,
-  ComponentInteractionContext,
   DiscordUser,
 } from "./agent-components.types.js";
 import {
@@ -77,10 +78,6 @@ async function ensureGuildComponentMemberAllowed(params: {
     return true;
   }
 
-  const replyUnauthorized = async () => {
-    await replySilently(interaction, { content: unauthorizedReply, ephemeral: true });
-  };
-
   if (
     channelConfig?.enabled === false ||
     !resolveDiscordChannelPolicyCommandAuthorizer({
@@ -90,7 +87,7 @@ async function ensureGuildComponentMemberAllowed(params: {
     }).allowed ||
     channelConfig?.allowed === false
   ) {
-    await replyUnauthorized();
+    await replyUnavailableComponentInteraction(interaction, unauthorizedReply);
     return false;
   }
 
@@ -110,42 +107,7 @@ async function ensureGuildComponentMemberAllowed(params: {
   }
 
   logVerbose(`agent ${componentLabel}: blocked user ${user.id} (not in users/roles allowlist)`);
-  await replyUnauthorized();
-  return false;
-}
-
-async function ensureComponentUserAllowed(params: {
-  allowedUsers: string[];
-  interaction: AgentComponentInteraction;
-  user: DiscordUser;
-  componentLabel: string;
-  unauthorizedReply: string;
-  allowNameMatching: boolean;
-}) {
-  const allowList = normalizeDiscordAllowList(params.allowedUsers, ["discord:", "user:", "pk:"]);
-  if (!allowList) {
-    return true;
-  }
-  const match = resolveDiscordAllowListMatch({
-    allowList,
-    candidate: {
-      id: params.user.id,
-      name: params.user.username,
-      tag: formatDiscordUserTag(params.user),
-    },
-    allowNameMatching: params.allowNameMatching,
-  });
-  if (match.allowed) {
-    return true;
-  }
-
-  logVerbose(
-    `discord component ${params.componentLabel}: blocked user ${params.user.id} (not in allowedUsers)`,
-  );
-  await replySilently(params.interaction, {
-    content: params.unauthorizedReply,
-    ephemeral: true,
-  });
+  await replyUnavailableComponentInteraction(interaction, unauthorizedReply);
   return false;
 }
 
@@ -173,10 +135,10 @@ export async function ensureAgentComponentInteractionAllowed(params: {
     return null;
   }
   if (ctx.isPolicyCurrent?.() === false) {
-    await replySilently(params.interaction, {
-      content: "Access policy changed. Try this interaction again.",
-      ephemeral: true,
-    });
+    await replyUnavailableComponentInteraction(
+      params.interaction,
+      "Access policy changed. Try this interaction again.",
+    );
     return null;
   }
   return { parentId: guildContext.channelCtx.parentId };
@@ -215,29 +177,79 @@ export async function resolveAuthorizedComponentInteraction(params: {
     return null;
   }
 
-  const commandAuthorized = await resolveComponentCommandAuthorized({
-    ctx,
-    interactionCtx,
-    ...guildContext,
-  });
+  const { channelConfig, guildInfo, allowNameMatching } = guildContext;
+  const commandAuthorized = await (async () => {
+    if (interactionCtx.isDirectMessage) {
+      return true;
+    }
+
+    const sender = {
+      id: interactionCtx.user.id,
+      name: interactionCtx.user.username,
+      tag: formatDiscordUserTag(interactionCtx.user),
+    };
+    const { ownerAllowList, ownerAllowed: ownerOk } = resolveDiscordOwnerAccess({
+      allowFrom: ctx.allowFrom,
+      sender,
+      allowNameMatching,
+    });
+
+    const { hasAccessRestrictions, memberAllowed: commandMemberAllowed } =
+      resolveDiscordMemberAccessState({
+        channelConfig,
+        guildInfo,
+        memberRoleIds: interactionCtx.memberRoleIds,
+        sender,
+        allowNameMatching,
+      });
+    return resolveCommandAuthorizedFromAuthorizers({
+      useAccessGroups: true,
+      authorizers: [
+        { configured: ownerAllowList != null, allowed: ownerOk },
+        { configured: hasAccessRestrictions, allowed: commandMemberAllowed },
+      ],
+      modeWhenAccessGroupsOff: "configured",
+    });
+  })();
 
   if (ctx.isPolicyCurrent?.() === false) {
-    await replySilently(params.interaction, {
-      content: "Access policy changed. Try this interaction again.",
-      ephemeral: true,
-    });
+    await replyUnavailableComponentInteraction(
+      params.interaction,
+      "Access policy changed. Try this interaction again.",
+    );
     return null;
   }
-  if (
-    params.allowedUsers !== undefined &&
-    !(await ensureComponentUserAllowed({
-      ...params,
-      allowedUsers: params.allowedUsers,
-      user: interactionCtx.user,
-      allowNameMatching: guildContext.allowNameMatching,
-    }))
-  ) {
-    return null;
+  if (params.allowedUsers !== undefined) {
+    const { interaction, componentLabel, unauthorizedReply, allowedUsers } = params;
+    const user = interactionCtx.user;
+    const componentAllowNameMatching = guildContext.allowNameMatching;
+    async function ensureComponentUserAllowed() {
+      const allowList = normalizeDiscordAllowList(allowedUsers, ["discord:", "user:", "pk:"]);
+      if (!allowList) {
+        return true;
+      }
+      const match = resolveDiscordAllowListMatch({
+        allowList,
+        candidate: {
+          id: user.id,
+          name: user.username,
+          tag: formatDiscordUserTag(user),
+        },
+        allowNameMatching: componentAllowNameMatching,
+      });
+      if (match.allowed) {
+        return true;
+      }
+
+      logVerbose(
+        `discord component ${componentLabel}: blocked user ${user.id} (not in allowedUsers)`,
+      );
+      await replyUnavailableComponentInteraction(interaction, unauthorizedReply);
+      return false;
+    }
+    if (!(await ensureComponentUserAllowed())) {
+      return null;
+    }
   }
   return {
     ctx,
@@ -245,48 +257,6 @@ export async function resolveAuthorizedComponentInteraction(params: {
     channelCtx: guildContext.channelCtx,
     guildInfo: guildContext.guildInfo,
     channelConfig: guildContext.channelConfig,
-    allowNameMatching: guildContext.allowNameMatching,
     commandAuthorized,
-    user: interactionCtx.user,
   };
-}
-
-export async function resolveComponentCommandAuthorized(params: {
-  ctx: AgentComponentContext;
-  interactionCtx: ComponentInteractionContext;
-  channelConfig: ReturnType<typeof resolveDiscordChannelConfigWithFallback>;
-  guildInfo: ReturnType<typeof resolveDiscordGuildEntry>;
-  allowNameMatching: boolean;
-}) {
-  const { ctx, interactionCtx, channelConfig, guildInfo } = params;
-  if (interactionCtx.isDirectMessage) {
-    return true;
-  }
-
-  const sender = {
-    id: interactionCtx.user.id,
-    name: interactionCtx.user.username,
-    tag: formatDiscordUserTag(interactionCtx.user),
-  };
-  const { ownerAllowList, ownerAllowed: ownerOk } = resolveDiscordOwnerAccess({
-    allowFrom: ctx.allowFrom,
-    sender,
-    allowNameMatching: params.allowNameMatching,
-  });
-
-  const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState({
-    channelConfig,
-    guildInfo,
-    memberRoleIds: interactionCtx.memberRoleIds,
-    sender,
-    allowNameMatching: params.allowNameMatching,
-  });
-  return resolveCommandAuthorizedFromAuthorizers({
-    useAccessGroups: true,
-    authorizers: [
-      { configured: ownerAllowList != null, allowed: ownerOk },
-      { configured: hasAccessRestrictions, allowed: memberAllowed },
-    ],
-    modeWhenAccessGroupsOff: "configured",
-  });
 }

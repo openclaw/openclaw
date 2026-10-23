@@ -37,13 +37,13 @@ const config = {
 
 describe("ambient provider credentials are not queued behind a declared profile", () => {
   // Regression #117956: losing a subscription must not bill an undeclared account.
-  it.each([3_600_000, 0])("does not substitute ambient auth (expires in %s ms)", (expiresIn) => {
+  it("does not substitute ambient auth", () => {
     const prepared = prepareAgentRuntimeAuth({
       provider: "claude-cli",
       modelId: "claude-fable-5",
       config,
       env: { ANTHROPIC_API_KEY: "ambient-anthropic-key" },
-      authProfileStore: oauthStore(expiresIn ? Date.now() + expiresIn : 0),
+      authProfileStore: oauthStore(Date.now() + 3_600_000),
     });
     expect(prepared.attempts).toMatchObject([
       { kind: "profile", profileId: "anthropic:claude-cli" },

@@ -44,10 +44,9 @@ vi.mock("../../commands/doctor-gateway-services.js", async (original) => ({
   maybeScanExtraGatewayServices: vi.fn(),
   maybeResolveDuelingSystemdGatewayScopes: vi.fn(),
 }));
-vi.mock("../../commands/doctor-platform-notes.js", () => ({
-  noteMacLaunchAgentOverrides: vi.fn(),
-  noteMacStaleOpenClawUpdateLaunchdJobs: vi.fn(),
-  noteMacLaunchctlGatewayEnvOverrides: vi.fn(),
+vi.mock("../../commands/doctor-platform-notes.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../commands/doctor-platform-notes.js")>()),
+  noteMacGatewayPlatformWarnings: vi.fn(),
 }));
 vi.mock("../../commands/doctor-foreign-launchd-jobs.js", () => ({
   noteMacForeignLaunchdJobs: vi.fn(),
@@ -113,7 +112,11 @@ vi.mock("../../process/exec.js", async (original) => {
     },
   };
 });
-vi.mock("./progress.js", () => ({ printResult: vi.fn() }));
+vi.mock("./progress.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./progress.js")>()),
+  printResult: vi.fn(),
+  prepareResult: async () => () => {},
+}));
 vi.mock("../../commands/doctor-completion.js", async (original) => ({
   ...(await original<typeof import("../../commands/doctor-completion.js")>()),
   checkShellCompletionStatus: vi.fn(async () => ({ shell: null })),

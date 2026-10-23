@@ -116,6 +116,11 @@ final class GatewayOperatorFleet {
         // The session box is part of GatewayNodeSession's route identity. Keep it for
         // this runtime so a retry cannot replace an unchanged TLS transport.
         let sessionBox = config.webSocketSessionBox()
+        defer {
+            // Releases the session's delegate and idle pooled connections. It cannot reclaim a
+            // socket Foundation orphans when cancellation races the upgrade (WebSocketTaskBox.cancel).
+            (sessionBox?.session as? GatewayTLSPinningSession)?.finishTasksAndInvalidate()
+        }
         let runtimeID = runtime.id
         var attempt = 0
         while !Task.isCancelled, self.runtimes[key]?.id == runtime.id {

@@ -1,6 +1,6 @@
-export type TrajectoryRuntimeRetentionInput = { sessionId: string; maxGlobalRuntimeBytes?: number };
+import type { DatabaseFileIdentity } from "../infra/sqlite-worker-identity.js";
 
-export type TrajectoryRuntimeRetentionLease = { trajectoryRetentionLease: SharedArrayBuffer };
+export type TrajectoryRuntimeRetentionInput = { sessionId: string; maxGlobalRuntimeBytes?: number };
 
 export function readTrajectoryRuntimeRetentionLease(attachment: unknown): Int32Array {
   if (
@@ -29,9 +29,11 @@ export type TrajectoryRuntimeRetentionPlan = {
   }[];
 };
 
-export type TrajectoryRuntimeRetentionReadOperations = {
-  "trajectoryRetention.read": {
-    input: TrajectoryRuntimeRetentionInput & { agentId: string; now: number };
-    output: TrajectoryRuntimeRetentionPlan;
-  };
+export type TrajectoryRetentionWorkerInput = {
+  kind: "trajectory-retention";
+  database: { agentId: string; path: string };
+  env: NodeJS.ProcessEnv;
+  expectedIdentity: DatabaseFileIdentity;
+  input: TrajectoryRuntimeRetentionInput;
+  now: number;
 };

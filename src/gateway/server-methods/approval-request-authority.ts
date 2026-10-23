@@ -12,6 +12,7 @@ import { resolvePersistedSessionStoreOwner } from "../../config/sessions/session
 import { listConfiguredSessionStoreAgentIds } from "../../config/sessions/targets-configured-agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { assertionSucceeds } from "../../shared/assertion.js";
 import { captureGatewayAuthPolicy, isGatewayAuthPolicyCurrent } from "../auth-policy.js";
 import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
@@ -21,6 +22,7 @@ import {
 } from "../operator-approval-authorization.js";
 import type { OperatorApprovalStoreGuard } from "../operator-approval-store.types.js";
 import {
+  authorizeCurrentOperatorRoleScopes,
   onOperatorRolePolicyChanged,
   resolveGatewayOperatorRoleActor,
 } from "../operator-role-policy.js";
@@ -127,6 +129,7 @@ export function createApprovalRequestAuthority(options: GatewayRequestHandlerOpt
       const current = getConfig();
       configRevoked =
         !isGatewayAuthPolicyCurrent(authPolicy, current) ||
+        Boolean(authorizeCurrentOperatorRoleScopes(client, current)) ||
         !isDeepStrictEqual(configPolicy, captureConfigPolicy(current));
     } catch {
       configRevoked = true;
@@ -220,14 +223,7 @@ export function createApprovalRequestAuthority(options: GatewayRequestHandlerOpt
     bindSource,
     assertCurrent,
     assertCommitCurrent: guard.assertCurrent,
-    isCurrent: () => {
-      try {
-        assertCurrent();
-        return true;
-      } catch {
-        return false;
-      }
-    },
+    isCurrent: () => assertionSucceeds(assertCurrent),
     [Symbol.dispose]() {
       closed = true;
       releaseConfig();

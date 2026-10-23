@@ -1,4 +1,3 @@
-// Session conversation tests cover channel plugin conversation binding and session lookup.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -12,206 +11,132 @@ import {
   resolveSessionParentSessionKey,
   resolveSessionThreadInfo,
 } from "./session-conversation.js";
+import type { ChannelMessagingAdapter } from "./types.core.js";
+
+type HookResult = ReturnType<NonNullable<ChannelMessagingAdapter["resolveSessionConversation"]>>;
+const canonical = { id: "room:sender:user", baseConversationId: "base" };
+const orderedParents = ["topic", "room"];
+const untrimmedParents = [" topic ", "room", "topic", " "];
+const inherited = {
+  id: "room:sender:user",
+  __proto__: { parentConversationCandidates: ["topic", "room"] },
+};
+const telegramTopicKey = "agent:main:telegram:group:-100123:topic:77";
+
+function conversation(channel: string, kind: "group" | "channel", rawId: string, id = rawId) {
+  return {
+    channel,
+    kind,
+    rawId,
+    id,
+    threadId: undefined,
+    baseSessionKey: `agent:main:${channel}:${kind}:${id}`,
+    baseConversationId: id,
+    parentConversationCandidates: [],
+  };
+}
 
 describe("session conversation routing", () => {
   beforeEach(() => {
     setActivePluginRegistry(createSessionConversationTestRegistry());
   });
 
-  afterEach(() => {
-    clearRuntimeConfigSnapshot();
-  });
-
-  it("keeps generic :thread: parsing in core", () => {
-    expect(
-      resolveSessionConversationRef("agent:main:slack:channel:general:thread:1699999999.0001"),
-    ).toEqual({
-      channel: "slack",
-      kind: "channel",
-      rawId: "general:thread:1699999999.0001",
-      id: "general",
-      threadId: "1699999999.0001",
-      baseSessionKey: "agent:main:slack:channel:general",
-      baseConversationId: "general",
-      parentConversationCandidates: ["general"],
-    });
-  });
+  afterEach(clearRuntimeConfigSnapshot);
 
   it("lets Telegram own :topic: session grammar", () => {
-    expect(resolveSessionConversationRef("agent:main:telegram:group:-100123:topic:77")).toEqual({
-      channel: "telegram",
-      kind: "group",
-      rawId: "-100123:topic:77",
-      id: "-100123",
+    expect(resolveSessionConversationRef(telegramTopicKey)).toEqual({
+      ...conversation("telegram", "group", "-100123:topic:77", "-100123"),
       threadId: "77",
-      baseSessionKey: "agent:main:telegram:group:-100123",
-      baseConversationId: "-100123",
       parentConversationCandidates: ["-100123"],
     });
-    expect(resolveSessionThreadInfo("agent:main:telegram:group:-100123:topic:77")).toEqual({
+    expect(resolveSessionThreadInfo(telegramTopicKey)).toEqual({
       baseSessionKey: "agent:main:telegram:group:-100123",
       threadId: "77",
     });
-    expect(resolveSessionParentSessionKey("agent:main:telegram:group:-100123:topic:77")).toBe(
+    expect(resolveSessionParentSessionKey(telegramTopicKey)).toBe(
       "agent:main:telegram:group:-100123",
     );
   });
 
   it("does not load bundled session-key fallbacks for inactive channel plugins", () => {
     resetPluginRuntimeStateForTest();
-    setRuntimeConfigSnapshot({
-      plugins: {
-        entries: {
-          telegram: {
-            enabled: false,
-          },
-        },
-      },
-    });
+    setRuntimeConfigSnapshot({ plugins: { entries: { telegram: { enabled: false } } } });
 
-    expect(resolveSessionConversationRef("agent:main:telegram:group:-100123:topic:77")).toEqual({
-      channel: "telegram",
-      kind: "group",
-      rawId: "-100123:topic:77",
-      id: "-100123:topic:77",
-      threadId: undefined,
-      baseSessionKey: "agent:main:telegram:group:-100123:topic:77",
-      baseConversationId: "-100123:topic:77",
-      parentConversationCandidates: [],
-    });
+    expect(resolveSessionConversationRef(telegramTopicKey)).toEqual(
+      conversation("telegram", "group", "-100123:topic:77"),
+    );
   });
 
   it("lets Feishu own parent fallback candidates", () => {
-    expect(
-      resolveSessionConversationRef(
-        "agent:main:feishu:group:oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
-      ),
-    ).toEqual({
-      channel: "feishu",
-      kind: "group",
-      rawId: "oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
-      id: "oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
-      threadId: undefined,
-      baseSessionKey:
-        "agent:main:feishu:group:oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
+    const rawId = "oc_group_chat:topic:om_topic_root:sender:ou_topic_user";
+    const key = `agent:main:feishu:group:${rawId}`;
+    expect(resolveSessionConversationRef(key)).toEqual({
+      ...conversation("feishu", "group", rawId),
       baseConversationId: "oc_group_chat",
       parentConversationCandidates: ["oc_group_chat:topic:om_topic_root", "oc_group_chat"],
     });
-    expect(
-      resolveSessionParentSessionKey(
-        "agent:main:feishu:group:oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
-      ),
-    ).toBeNull();
+    expect(resolveSessionParentSessionKey(key)).toBeNull();
   });
 
   it.each([
-    {
-      name: "legacy-only parents",
-      canonical: null,
-      legacy: ["room"],
-      parents: ["room"],
-      base: "room",
-      legacyCalls: 1,
-    },
-    {
-      name: "explicit empty parents",
-      canonical: {
-        id: "room:sender:user",
-        baseConversationId: "base",
-        parentConversationCandidates: [],
-      },
-      legacy: ["legacy"],
-      parents: [],
-      base: "base",
-      legacyCalls: 0,
-    },
-    {
-      name: "explicit undefined parents",
-      canonical: {
-        id: "room:sender:user",
-        baseConversationId: "base",
-        parentConversationCandidates: undefined,
-      },
-      legacy: ["legacy"],
-      parents: [],
-      base: "base",
-      legacyCalls: 0,
-    },
-    {
-      name: "explicit ordered parents before legacy and base",
-      canonical: {
-        id: "room:sender:user",
-        baseConversationId: "base",
-        parentConversationCandidates: [" topic ", "room", "topic", " "],
-      },
-      legacy: ["legacy"],
-      parents: ["topic", "room"],
-      base: "room",
-      legacyCalls: 0,
-    },
-    {
-      name: "omitted parents use the legacy result",
-      canonical: { id: "room:sender:user" },
-      legacy: [" topic ", "room", "topic", " "],
-      parents: ["topic", "room"],
-      base: "room",
-      legacyCalls: 1,
-    },
-    {
-      name: "inherited parents survive a null legacy result",
-      canonical: {
-        id: "room:sender:user",
-        __proto__: { parentConversationCandidates: ["topic", "room"] },
-      },
-      legacy: null,
-      parents: ["topic", "room"],
-      base: "room",
-      legacyCalls: 1,
-    },
-    {
-      name: "an empty legacy result keeps the inherited base",
-      canonical: {
-        id: "room:sender:user",
-        __proto__: { parentConversationCandidates: ["topic", "room"] },
-      },
-      legacy: [],
-      parents: [],
-      base: "room",
-      legacyCalls: 1,
-    },
-  ])(
-    "keeps parent-candidate precedence for $name",
-    ({ canonical, legacy, parents, base, legacyCalls }) => {
+    ["legacy-only parents", null, ["room"], ["room"], "room", 1],
+    [
+      "explicit empty parents",
+      { ...canonical, parentConversationCandidates: [] },
+      ["legacy"],
+      [],
+      "base",
+      0,
+    ],
+    [
+      "explicit undefined parents",
+      { ...canonical, parentConversationCandidates: undefined },
+      ["legacy"],
+      [],
+      "base",
+      0,
+    ],
+    [
+      "explicit ordered parents before legacy and base",
+      { ...canonical, parentConversationCandidates: untrimmedParents },
+      ["legacy"],
+      orderedParents,
+      "room",
+      0,
+    ],
+    [
+      "omitted parents use the legacy result",
+      { id: canonical.id },
+      untrimmedParents,
+      orderedParents,
+      "room",
+      1,
+    ],
+    ["inherited parents survive a null legacy result", inherited, null, orderedParents, "room", 1],
+    ["an empty legacy result keeps the inherited base", inherited, [], [], "room", 1],
+  ] satisfies [string, HookResult, string[] | null, string[], string, number][])(
+    "keeps parent-candidate precedence for %s",
+    (_name, resolved, legacy, parents, base, legacyCalls) => {
       const resolveParents = vi.fn(({ rawId }: { rawId: string }) =>
         rawId.endsWith(":sender:user") ? legacy : null,
       );
+      const plugin = {
+        ...createChannelTestPluginBase({
+          id: "legacy-parent",
+          capabilities: { chatTypes: ["group"] },
+        }),
+        messaging: {
+          ...(resolved ? { resolveSessionConversation: () => resolved } : {}),
+          resolveParentConversationCandidates: resolveParents,
+        },
+      };
       setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "legacy-parent",
-            source: "test",
-            plugin: {
-              ...createChannelTestPluginBase({
-                id: "legacy-parent",
-                capabilities: { chatTypes: ["group"] },
-              }),
-              messaging: {
-                ...(canonical ? { resolveSessionConversation: () => canonical } : {}),
-                resolveParentConversationCandidates: resolveParents,
-              },
-            },
-          },
-        ]),
+        createTestRegistry([{ pluginId: plugin.id, source: "test", plugin }]),
       );
 
       const key = "agent:main:legacy-parent:group:room:sender:user";
       const expected = {
-        channel: "legacy-parent",
-        kind: "group",
-        rawId: "room:sender:user",
-        id: "room:sender:user",
-        threadId: undefined,
-        baseSessionKey: key,
+        ...conversation("legacy-parent", "group", "room:sender:user"),
         baseConversationId: base,
         parentConversationCandidates: parents,
       };

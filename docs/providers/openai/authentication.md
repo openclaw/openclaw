@@ -44,9 +44,22 @@ Choose your OpenAI authentication method based on the access you need:
 Credential refresh above refers to OpenClaw-stored profiles. Codex owns a
 separate native user-home login and its refresh.
 
+OpenClaw refreshes SIWC credentials on use within five minutes of expiry. For
+JWT access tokens, it caps the stored expiry at the `exp` claim so delayed responses do
+not extend its lifetime. If an OpenClaw runtime turn receives `token_expired`,
+it refreshes the selected SIWC profile and retries the same model once before
+using normal fallback. A failed refresh or an unauthorized retry keeps the
+existing fallback behavior.
+
 OpenClaw does not set per-app SIWC limits or show per-app usage. If ChatGPT
 offers app-specific controls for your account, manage them there. The Usage
 limits row does not compare limit settings for Codex login or API keys.
+
+When a SIWC usage-limit error reaches the Control UI, the recovery dialog offers
+**Manage usage** for consumer limits, linking to
+[ChatGPT Settings → Usage](https://chatgpt.com/settings/usage). For a Business
+workspace limit, **Copy request for admin** copies a message that you send to
+your workspace admin. It does not send the request or change the limit.
 
 Image and file input support depends on the selected model and is separate from
 image generation and Files API permissions. Realtime voice varies by route; see

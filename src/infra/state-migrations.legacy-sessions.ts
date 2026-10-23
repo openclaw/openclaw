@@ -8,26 +8,26 @@ import { readExistingAgentSchemaMeta } from "../state/openclaw-agent-db-schema-h
 import { readDeferredPluginMigrations } from "./deferred-plugin-migrations.js";
 import { preserveDeferredPluginSessionSource } from "./deferred-plugin-session-sources.js";
 import { isErrno } from "./errors.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { isPathInside } from "./path-guards.js";
+import { isPathInside, safeStatSync } from "./path-guards.js";
 import { resolveSqliteDatabaseFilePaths, SQLITE_SIDECAR_SUFFIXES } from "./sqlite-files.js";
 import { quoteSqliteIdentifier } from "./sqlite-schema-sql.js";
+import { openSqliteReadOnlyDatabase } from "./sqlite-snapshot-source.js";
 import {
   LEGACY_AGENT_DIR_RECEIPT,
   recordCompletedLegacyAgentDirMigration,
 } from "./state-migrations.agent-dir-receipt.js";
-import { migrationFileExists, readSessionStoreJson5 } from "./state-migrations.fs.js";
+import { readSessionStoreJson5 } from "./state-migrations.fs.js";
 import {
   aliasedSessionStoreMigrationWarning,
   canonicalizeSessionStore,
   distinctSessionStoreAliasWarning,
-  isAmbiguousSharedStoreKey,
   normalizeSessionEntry,
   removeDirIfEmpty,
   saveSessionStoreStrict,
   unresolvedSessionStoreIdentityWarning,
 } from "./state-migrations.session-store.js";
 import {
+  isAmbiguousSharedStoreKey,
   isLegacyDefaultMainAliasKey,
   type PreparedLegacySessionSurfaces,
 } from "./state-migrations.session-surfaces.js";
@@ -64,16 +64,16 @@ export function inspectLegacyAgentDir(
   if (!hasDatabaseFiles) {
     return { status: hasFilePayload ? "payload" : "empty" };
   }
-  if (!migrationFileExists(databasePath)) {
+  if (!safeStatSync(databasePath)?.isFile()) {
     return legacyAgentInspectionFailure(
       `legacy agent database ${databasePath}`,
       "main database is missing or not a regular file",
     );
   }
 
-  let database: ReturnType<typeof openNodeSqliteDatabase> | undefined;
+  let database: ReturnType<typeof openSqliteReadOnlyDatabase> | undefined;
   try {
-    const opened = openNodeSqliteDatabase(databasePath, { readOnly: true });
+    const opened = openSqliteReadOnlyDatabase(databasePath, { readOnly: true });
     database = opened;
     const schemaOwner = readExistingAgentSchemaMeta(opened);
     if (!schemaOwner || schemaOwner.role !== "agent") {
@@ -148,7 +148,7 @@ export async function migrateLegacySessions(
       ],
     };
   }
-  const targetParsed = migrationFileExists(detected.sessions.targetStorePath)
+  const targetParsed = safeStatSync(detected.sessions.targetStorePath)?.isFile()
     ? readSessionStoreJson5(detected.sessions.targetStorePath)
     : { store: {}, ok: true };
   if (!targetParsed.ok) {
@@ -410,7 +410,7 @@ export async function migrateLegacyAgentDir(
           ],
         };
       }
-      const owner = migrationFileExists(path.join(legacyDir, LEGACY_AGENT_DATABASE_BASENAME))
+      const owner = safeStatSync(path.join(legacyDir, LEGACY_AGENT_DATABASE_BASENAME))?.isFile()
         ? resolveInstallAgentDir({}, { agentDir: legacyDir }).directory.owner
         : undefined;
       const ownerMismatch = owner !== undefined && owner !== detected.targetAgentId;

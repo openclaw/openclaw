@@ -1,6 +1,9 @@
 import { AssistantMessageEventStream, type Message, type Model } from "openclaw/plugin-sdk/llm";
 import { expect, it, onTestFinished } from "vitest";
-import { consumeGoogleGenerateContentStream } from "../../packages/ai/src/providers/google-stream.js";
+import {
+  consumeGoogleGenerateContentStream,
+  type GoogleStreamChunk,
+} from "../../packages/ai/src/providers/google-stream.js";
 import { createResponsesAssistantOutput } from "../../packages/ai/src/providers/openai-responses-shared.js";
 import { createAssistantOutput } from "../../packages/ai/src/transports/assistant-output.js";
 import { processResponsesStream } from "../../packages/ai/src/transports/openai-responses-stream-internal.js";
@@ -23,7 +26,7 @@ import {
   emitAssistantTextEnd,
 } from "./embedded-agent-subscribe.e2e-harness.js";
 import { resolveManagedStreamMediaUrls } from "./embedded-agent-subscribe.handlers.messages.replies.js";
-import { resolveStreamingReply } from "./embedded-agent-subscribe.handlers.messages.stream.js";
+import { createStreamingReplyResolver } from "./embedded-agent-subscribe.handlers.messages.stream.js";
 
 const googleModel: Model<"google-generative-ai"> = {
   id: "gemini-2.5-flash",
@@ -46,6 +49,61 @@ const responsesModel: Model<"openai-responses"> = {
 };
 const audioUrl = "https://example.invalid/clip.ogg";
 const nextParagraph = "A second paragraph gives the completed example enough text to drain.\n\n";
+const texts = (payloads: ReplyPayload[]) => payloads.map((payload) => payload.text ?? "");
+const hasNoMedia = (payload: ReplyPayload) => !payload.mediaUrl && !payload.mediaUrls?.length;
+const hasNoReplyTarget = (payload: ReplyPayload) =>
+  !payload.replyToId && !payload.replyToCurrent && !payload.replyToTag;
+const googleChunk = (
+  parts: NonNullable<NonNullable<GoogleStreamChunk["candidates"]>[number]["content"]>["parts"],
+  finishReason?: string,
+): GoogleStreamChunk => ({
+  candidates: [{ ...(parts ? { content: { parts } } : {}), finishReason }],
+});
+function googleResponse(chunks: AsyncIterable<GoogleStreamChunk>, profile: "managed" | "sdk") {
+  const response = new AssistantMessageEventStream();
+  const producing = consumeGoogleGenerateContentStream({
+    chunks,
+    model: googleModel,
+    output: createAssistantOutput(googleModel),
+    stream: response,
+    profile,
+    nextToolCallId: () => "unused-tool",
+  });
+  return { response, producing };
+}
+
+function responsesResponse(chunks: string[], terminalText: string, release: Promise<void>) {
+  const response = new AssistantMessageEventStream();
+  const output = createResponsesAssistantOutput(responsesModel);
+  const item = { type: "message", id: "answer", role: "assistant", phase: "final_answer" };
+  async function* events() {
+    yield { type: "response.output_item.added", output_index: 0, item: { ...item, content: [] } };
+    for (const delta of chunks) {
+      yield { type: "response.output_text.delta", output_index: 0, delta };
+    }
+    await release;
+    yield {
+      type: "response.completed",
+      response: {
+        id: "response",
+        status: "completed",
+        output: [
+          {
+            ...item,
+            status: "completed",
+            content: [{ type: "output_text", text: terminalText, annotations: [] }],
+          },
+        ],
+      },
+    };
+  }
+  response.push({ type: "start", partial: output });
+  const producing = processResponsesStream(events(), output, response, responsesModel).then(() => {
+    response.push({ type: "done", reason: "stop", message: output });
+    response.end();
+  });
+  return { response, producing };
+}
 
 function createDeliveryHarness(
   options: { minChars?: number; blockReplyBreak?: "text_end" | "message_end" } = {},
@@ -69,7 +127,7 @@ function createDeliveryHarness(
       return { text, skip: !text.trim() };
     },
     applyReplyToMode: createReplyToModeFilterForChannel("all"),
-    typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
+    typingSignals: createTypingSignaler({ typing, mode: "never" }),
     blockStreamingEnabled: true,
     blockReplyPipeline: pipeline,
     directBlockDeliveries: [],
@@ -114,10 +172,8 @@ function runDeliveryLoop(
       model,
       convertToLlm: (messages) =>
         messages.filter(
-          (message): message is Message =>
-            message.role === "user" ||
-            message.role === "assistant" ||
-            message.role === "toolResult",
+          (m): m is Message =>
+            m.role === "user" || m.role === "assistant" || m.role === "toolResult",
         ),
     },
     async (event) => {
@@ -165,113 +221,47 @@ function emitText(
   });
 }
 
-const cases = [...blockDirectiveCases, ...inlineDirectiveCases] as const;
-
 const replacementChunks = [
   "The current value is one for this item. Continue. ",
   "Keep this sentence unchanged. Retain each result. ",
   "The final summary also remains unchanged.\n",
 ] as const;
-const prefixCorrectionCases = [
-  { value: "thirty-three", leadChunks: ["First lead stays.\n", "Next lead stays.\n"] },
-].map(({ value, leadChunks }) => ({
-  name: `authoritative prefix correction ${leadChunks.length ? "with early chunks" : value}`,
+const leadChunks = ["First lead stays.\n", "Next lead stays.\n"];
+const correctedText = replacementChunks.join("").replace("one", "thirty-three").trimEnd();
+const prefixCorrection = {
+  name: "authoritative prefix correction with early chunks",
   chunks: [...leadChunks, ...replacementChunks],
   marker: "Keep this sentence unchanged.",
   unchangedLeadSentences: leadChunks.map((text) => text.trimEnd()),
   literal: true,
-  prefixCorrection: true,
-  prepared: true,
-  terminalText:
-    leadChunks.join("") +
-    replacementChunks[0].replace("one", value) +
-    replacementChunks.slice(1).join(""),
-  correctedStatement: `The current value is ${value} for this item.`,
-}));
+  terminalText: leadChunks.join("") + correctedText + "\n",
+  correctedText,
+};
 
-it.each([...cases, ...prefixCorrectionCases])(
+it.each([...blockDirectiveCases, ...inlineDirectiveCases, prefixCorrection])(
   "preserves $name through the delivery handler",
   async (scenario) => {
-    const route = "prepared" in scenario ? "responses prepared" : "google raw";
-    const { delivered, pipeline, emit, subscription } = createDeliveryHarness();
+    const { delivered, pipeline, emit, subscription, flush } = createDeliveryHarness();
     const hasAudio = "audioAsVoice" in scenario;
     const chunks = [
       ...scenario.chunks,
-      ...("prefixCorrection" in scenario ? [] : [nextParagraph]),
+      ...("terminalText" in scenario ? [] : [nextParagraph]),
       ...(hasAudio ? [`MEDIA:${audioUrl}`] : []),
     ];
     const beforeEnd = createDeferred();
     const releaseTerminal = createDeferred();
-    const response = new AssistantMessageEventStream();
-    const model = route === "google raw" ? googleModel : responsesModel;
-    const output =
-      route === "google raw"
-        ? createAssistantOutput(googleModel)
-        : createResponsesAssistantOutput(responsesModel);
     async function* googleEvents() {
       for (const text of chunks) {
-        yield { candidates: [{ content: { parts: [{ text }] } }] };
+        yield googleChunk([{ text }]);
       }
       await releaseTerminal.promise;
-      yield { candidates: [{ finishReason: "STOP" }] };
+      yield googleChunk(undefined, "STOP");
     }
-    async function* responsesEvents() {
-      yield {
-        type: "response.output_item.added",
-        output_index: 0,
-        item: {
-          type: "message",
-          id: "answer",
-          role: "assistant",
-          phase: "final_answer",
-          content: [],
-        },
-      };
-      for (const delta of chunks) {
-        yield { type: "response.output_text.delta", output_index: 0, delta };
-      }
-      await releaseTerminal.promise;
-      yield {
-        type: "response.completed",
-        response: {
-          id: "response",
-          status: "completed",
-          output: [
-            {
-              type: "message",
-              id: "answer",
-              role: "assistant",
-              phase: "final_answer",
-              status: "completed",
-              content: [
-                {
-                  type: "output_text",
-                  text: "terminalText" in scenario ? scenario.terminalText : chunks.join(""),
-                  annotations: [],
-                },
-              ],
-            },
-          ],
-        },
-      };
-    }
-    if (route === "responses prepared") {
-      response.push({ type: "start", partial: output });
-    }
-    const producing =
-      route === "google raw"
-        ? consumeGoogleGenerateContentStream({
-            chunks: googleEvents(),
-            model: googleModel,
-            output,
-            stream: response,
-            profile: "managed",
-            nextToolCallId: () => "unused-tool",
-          })
-        : processResponsesStream(responsesEvents(), output, response, responsesModel).then(() => {
-            response.push({ type: "done", reason: "stop", message: output });
-            response.end();
-          });
+    const prepared = "terminalText" in scenario;
+    const model = prepared ? responsesModel : googleModel;
+    const { response, producing } = prepared
+      ? responsesResponse(chunks, scenario.terminalText, releaseTerminal.promise)
+      : googleResponse(googleEvents(), "managed");
     let receivedText = "";
     const running = runDeliveryLoop({ emit, subscription }, model, response, async (delta) => {
       receivedText += delta;
@@ -290,12 +280,12 @@ it.each([...cases, ...prefixCorrectionCases])(
       ]);
       expect(delivered.length).toBeGreaterThan(0);
       const beforeTerminalCount = delivered.length;
-      if ("prefixCorrection" in scenario) {
-        expect(delivered.map((payload) => payload.text).join("\n")).toBe(
+      if ("terminalText" in scenario) {
+        expect(texts(delivered).join("\n")).toBe(
           scenario.chunks.map((text) => text.trimEnd()).join("\n"),
         );
       }
-      const text = delivered.map((payload) => payload.text ?? "").join("");
+      const text = texts(delivered).join("");
       if ("preservedLiteral" in scenario) {
         expect(text).toContain(scenario.preservedLiteral);
       }
@@ -310,56 +300,34 @@ it.each([...cases, ...prefixCorrectionCases])(
         expect.soft(text).not.toContain(scenario.marker);
       }
       if ("replyToId" in scenario) {
-        expect
-          .soft(
-            delivered.filter((payload) => payload.replyToId).map((payload) => payload.replyToId),
-          )
-          .toContain(scenario.replyToId);
-        expect
-          .soft(
-            delivered.every(
-              (payload) =>
-                !payload.replyToId ||
-                (payload.replyToId === scenario.replyToId && payload.replyToTag),
-            ),
-          )
-          .toBe(true);
+        const targets = delivered.filter((payload) => payload.replyToId);
+        expect.soft(targets.map((payload) => payload.replyToId)).toContain(scenario.replyToId);
+        for (const payload of targets) {
+          expect.soft(payload.replyToId).toBe(scenario.replyToId);
+          expect.soft(Boolean(payload.replyToTag)).toBe(true);
+        }
       } else {
-        expect
-          .soft(
-            delivered.every(
-              (payload) => !payload.replyToId && !payload.replyToCurrent && !payload.replyToTag,
-            ),
-          )
-          .toBe(true);
+        expect.soft(delivered.every(hasNoReplyTarget)).toBe(true);
       }
       expect
         .soft(delivered.filter((payload) => payload.audioAsVoice && payload.text).length)
         .toBe("voiceEdges" in scenario ? scenario.voiceEdges : 0);
       if ("textOnly" in scenario) {
-        expect(delivered.every((payload) => !payload.mediaUrl && !payload.mediaUrls?.length)).toBe(
-          true,
-        );
+        expect(delivered.every(hasNoMedia)).toBe(true);
       }
       releaseTerminal.resolve();
       await settled;
-      await subscription.waitForPendingEvents();
-      await pipeline.flush({ force: true });
-      if ("prefixCorrection" in scenario) {
-        const recipientText = delivered.map((payload) => payload.text ?? "");
+      await flush();
+      if ("terminalText" in scenario) {
+        const recipientText = texts(delivered);
         const additional = recipientText.slice(beforeTerminalCount);
-        if (scenario.correctedStatement) {
-          expect(additional.join(" ")).toContain(scenario.correctedStatement);
-        }
-        expect(recipientText.join(" ").split(scenario.marker)).toHaveLength(2);
+        expect(additional.join(" ")).toBe(scenario.correctedText);
         for (const sentence of scenario.unchangedLeadSentences) {
           expect.soft(recipientText.join(" ").split(sentence)).toHaveLength(2);
         }
       }
       if ("textOnly" in scenario) {
-        expect(delivered.every((payload) => !payload.mediaUrl && !payload.mediaUrls?.length)).toBe(
-          true,
-        );
+        expect(delivered.every(hasNoMedia)).toBe(true);
       }
       if (hasAudio) {
         const audio = delivered.filter(isAudioPayload);
@@ -375,58 +343,30 @@ it.each([...cases, ...prefixCorrectionCases])(
 );
 
 it("does not replay signed Google text when a later part shares its signature", async () => {
-  const { delivered, pipeline, emit, subscription } = createDeliveryHarness();
+  const { delivered, pipeline, emit, subscription, flush } = createDeliveryHarness();
   const first = "Alpha  beta.\n";
   const signature = "c2lnXzE=";
   const firstDelivered = createDeferred();
   let firstCheckpoint = "";
-  const response = new AssistantMessageEventStream();
-  const output = createAssistantOutput(googleModel);
   async function* googleEvents() {
-    yield {
-      candidates: [{ content: { parts: [{ text: first, thoughtSignature: signature }] } }],
-    };
+    const part = (text: string) => ({ text, thoughtSignature: signature });
+    yield googleChunk([part(first)]);
     await firstDelivered.promise;
-    yield {
-      candidates: [
-        {
-          content: {
-            parts: [
-              { text: "[[reply_to_current]]", thoughtSignature: signature },
-              { text: "Second.\n", thoughtSignature: signature },
-            ],
-          },
-          finishReason: "STOP",
-        },
-      ],
-    };
+    yield googleChunk([part("[[reply_to_current]]"), part("Second.\n")], "STOP");
   }
-  const producing = consumeGoogleGenerateContentStream({
-    chunks: googleEvents(),
-    model: googleModel,
-    output,
-    stream: response,
-    profile: "sdk",
-    nextToolCallId: () => "unused-tool",
-  });
+  const { response, producing } = googleResponse(googleEvents(), "sdk");
   const running = runDeliveryLoop({ emit, subscription }, googleModel, response, async (delta) => {
     if (delta === first) {
       await pipeline.flush({ force: true });
-      firstCheckpoint = delivered.map((payload) => payload.text ?? "").join("");
+      firstCheckpoint = texts(delivered).join("");
       firstDelivered.resolve();
     }
   });
   try {
     await Promise.all([producing, running]);
-    await subscription.waitForPendingEvents();
-    await pipeline.flush({ force: true });
-
+    await flush();
     expect(firstCheckpoint).toBe("Alpha  beta.");
-    const text = delivered
-      .map((payload) => payload.text ?? "")
-      .join(" ")
-      .replace(/\s+/g, " ")
-      .trim();
+    const text = texts(delivered).join(" ").replace(/\s+/g, " ").trim();
     expect(text).toBe("Alpha beta. Second.");
   } finally {
     firstDelivered.resolve();
@@ -434,40 +374,27 @@ it("does not replay signed Google text when a later part shares its signature", 
   }
 });
 
-const prefix = "x".repeat(48);
-it.each([
-  {
-    name: "ordinary word completion",
-    initialText: `${prefix}\nM`,
-    deltas: ["e", "tal"],
-    expectedText: `${prefix}\nMetal`,
-    expectedMedia: [],
-  },
-])("holds a partial MEDIA prefix through $name", async (scenario) => {
-  const { delivered, blocks, emit, flush } = createDeliveryHarness({
-    minChars: 50,
-  });
-  let text = scenario.initialText;
+it("holds a partial MEDIA prefix through ordinary word completion", async () => {
+  const prefix = "x".repeat(48);
+  const { delivered, blocks, emit, flush } = createDeliveryHarness({ minChars: 50 });
+  let text = `${prefix}\nM`;
   emit({ type: "message_start", message: createAssistantOutput(googleModel) });
   emitText(emit, "text_delta", text);
   await flush();
-  expect.soft(blocks).toEqual([]);
-  expect.soft(delivered).toEqual([]);
+  expect.soft({ blocks, delivered }).toEqual({ blocks: [], delivered: [] });
 
-  for (const delta of scenario.deltas) {
+  for (const delta of ["e", "tal"]) {
     text += delta;
     emitText(emit, "text_delta", text, { delta });
   }
   emitText(emit, "text_end", text);
   emit({ type: "message_end", message: textMessage(text) });
   await flush();
-  expect.soft(delivered.map((payload) => payload.text ?? "").join("")).toBe(scenario.expectedText);
-  expect
-    .soft(delivered.flatMap((payload) => payload.mediaUrls ?? []))
-    .toEqual(scenario.expectedMedia);
+  expect.soft(texts(delivered).join("")).toBe(`${prefix}\nMetal`);
+  expect.soft(delivered.flatMap((payload) => payload.mediaUrls ?? [])).toEqual([]);
 });
 
-it.each(["literal", "voice", "silent"] as const)(
+it.each(["literal", "voice", "token"] as const)(
   "preserves terminal voice semantics for %s",
   async (kind) => {
     const { delivered, blocks, emit, flush } = createDeliveryHarness({
@@ -477,12 +404,12 @@ it.each(["literal", "voice", "silent"] as const)(
     const parts =
       kind === "literal"
         ? ["Use `" + "x".repeat(60), ` ${marker}\` literally.`]
-        : [marker + (kind === "silent" ? "NO_REPLY" : "")];
+        : [marker + (kind === "token" ? "NO_REPLY" : "")];
     emit({ type: "message_start", message: createAssistantOutput(googleModel) });
     emit({ type: "message_end", message: textMessage(parts) });
     await flush();
     if (kind === "literal") {
-      const text = delivered.map((payload) => payload.text ?? "").join("");
+      const text = texts(delivered).join("");
       expect.soft(text).toContain(marker);
       expect.soft(text.split(marker)).toHaveLength(2);
       for (const payload of [...blocks, ...delivered]) {
@@ -498,21 +425,19 @@ it.each(["literal", "voice", "silent"] as const)(
           silentReply: getReplyPayloadMetadata(payload)?.silentReply,
         })),
       ).toEqual([
-        { text: "", audioAsVoice: true, silentReply: kind === "silent" ? true : undefined },
+        { text: kind === "token" ? "NO_REPLY" : "", audioAsVoice: true, silentReply: undefined },
       ]);
     }
   },
 );
 
 it("applies a directive-only text_end to already-buffered audio", async () => {
-  const { delivered, pipeline, handler, emit, subscription } = createDeliveryHarness();
+  const { delivered, handler, emit, flush } = createDeliveryHarness();
   await handler({ mediaUrls: [audioUrl] });
   emit({ type: "message_start", message: { role: "assistant" } });
   emitAssistantTextDelta({ emit, delta: "[[audio_as_voice]]" });
   emitAssistantTextEnd({ emit });
-  await subscription.waitForPendingEvents();
-  await pipeline.flush({ force: true });
-
+  await flush();
   expect(delivered.filter(isAudioPayload)).toEqual([
     expect.objectContaining({ mediaUrls: [audioUrl], audioAsVoice: true }),
   ]);
@@ -527,39 +452,32 @@ it.each([
     name: "literal reclassification and restored authoritative text",
     expectedReplies: ["First reply."],
     updates: [
-      { type: "text_delta", text: first, item: 0, edges: 1 },
-      { type: "text_end", text: "```text\n" + corrected + "```\n\n", item: 0, edges: 1 },
-      { type: "text_end", text: corrected + nextParagraph, item: 0, edges: 2 },
+      ["text_delta", first, 0, 1],
+      ["text_end", "```text\n" + corrected + "```\n\n", 0, 1],
+      ["text_end", corrected + nextParagraph, 0, 2],
     ],
   },
   {
     name: "a new item owns its own genuine voice intent",
     expectedReplies: ["First reply.", "Second reply."],
     updates: [
-      { type: "text_delta", text: first, item: 0, edges: 1 },
-      {
-        type: "text_delta",
-        text: "[[audio_as_voice]]Second reply.\n\n" + nextParagraph,
-        item: 1,
-        edges: 2,
-      },
+      ["text_delta", first, 0, 1],
+      ["text_delta", "[[audio_as_voice]]Second reply.\n\n" + nextParagraph, 1, 2],
     ],
   },
 ] as const)("preserves $name", async ({ updates, expectedReplies }) => {
   const { delivered, blocks, handler, emit, flush } = createDeliveryHarness();
   await handler({ mediaUrls: [audioUrl] });
   emit({ type: "message_start", message: textMessage("", 0) });
-  for (const update of updates) {
-    emitText(emit, update.type, update.text, { item: update.item });
+  for (const [type, text, item, edges] of updates) {
+    emitText(emit, type, text, { item });
     await flush();
-    expect.soft(blocks.filter((payload) => payload.audioAsVoice)).toHaveLength(update.edges);
+    expect.soft(blocks.filter((payload) => payload.audioAsVoice)).toHaveLength(edges);
   }
   for (const text of expectedReplies) {
     expect(delivered.filter((payload) => payload.text === text)).toHaveLength(1);
   }
-  const audio = delivered.filter(isAudioPayload);
-  expect(audio).toHaveLength(1);
-  expect(audio[0]?.audioAsVoice).toBe(true);
+  expect(delivered.filter(isAudioPayload).map((payload) => payload.audioAsVoice)).toEqual([true]);
 });
 
 it("keeps generic directive URLs separate from tool-owned managed media", () => {
@@ -579,14 +497,14 @@ it("appends visible text across long blank runs without stalling the media scan"
   const delta = `before${"\n".repeat(60_000)}after`;
   const started = performance.now();
   expect(
-    resolveStreamingReply({
+    createStreamingReplyResolver()({
       evtType: "text_delta",
       next: delta,
       previousText: "",
       previousCleaned: "",
       visibleDelta: delta,
       appendDelta: delta,
-      parsedStreamDirectives: { text: delta, replyToTag: false, isSilent: false },
+      parsedStreamDirectives: { text: delta, replyToTag: false },
       previousAudioDirectiveCount: 0,
     }),
   ).toEqual({
@@ -594,8 +512,28 @@ it("appends visible text across long blank runs without stalling the media scan"
     delta,
     replace: false,
     hasText: true,
-    replyDirectives: { text: delta, replyToTag: false, isSilent: false },
+    replyDirectives: { text: delta, replyToTag: false },
     audioDirectiveCount: 0,
   });
   expect(performance.now() - started).toBeLessThan(1_000);
+});
+
+it("streams a long reply-tagged answer without a quadratic slowdown", () => {
+  const body = `${"Paragraph with `code` and **bold** text.\n\n- item `one`\n- item two\n\n".repeat(100)}\`\`\`ts\nconst x = 1;\n\`\`\`\n\nDone.`;
+  const text = `[[reply_to_current]] Intro.\n\n${body}`;
+  const partials: ReplyPayload[] = [];
+  const { emit } = createSubscribedSessionHarness({
+    runId: "run-tagged-stream",
+    onPartialReply: (payload) => {
+      partials.push(payload);
+    },
+  });
+  emit({ type: "message_start", message: textMessage("") });
+  const started = performance.now();
+  for (let end = 40; end - 40 < text.length; end += 40) {
+    emitText(emit, "text_delta", text.slice(0, end), { delta: text.slice(end - 40, end) });
+  }
+  emitText(emit, "text_end", text);
+  expect(performance.now() - started).toBeLessThan(1_000);
+  expect(partials.at(-1)?.text).toBe(`Intro.\n\n${body}`);
 });

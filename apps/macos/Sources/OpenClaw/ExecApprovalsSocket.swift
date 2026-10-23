@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import OpenClawKit
+import OSLog
 
 let execApprovalsSocketTimeoutMs = 15000
 
@@ -52,11 +53,7 @@ private struct DecodedExecApprovalDecision: Decodable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
-        guard let raw = try? container.decode(String.self) else {
-            self.decision = nil
-            return
-        }
-        self.decision = ExecApprovalDecision(rawValue: raw)
+        self.decision = (try? container.decode(String.self)).flatMap(ExecApprovalDecision.init(rawValue:))
     }
 }
 
@@ -128,6 +125,7 @@ struct ExecHostError: Codable, Error {
     var code: String
     var message: String
     var reason: String?
+    var details: OpenClawPermissionDetails?
 }
 
 struct ExecHostResponse: Codable {
@@ -174,12 +172,8 @@ func readLineFromSocket(_ fd: Int32, maxBytes: Int) throws -> String? {
             break
         }
     }
-    guard let newlineIndex = buffer.firstIndex(of: 0x0A) else {
-        guard !buffer.isEmpty else { return nil }
-        return String(data: buffer, encoding: .utf8)
-    }
-    let lineData = buffer.subdata(in: 0..<newlineIndex)
-    return String(data: lineData, encoding: .utf8)
+    guard !buffer.isEmpty else { return nil }
+    return String(data: buffer.prefix { $0 != 0x0A }, encoding: .utf8)
 }
 
 func timingSafeHexStringEquals(_ lhs: String, _ rhs: String) -> Bool {
@@ -217,18 +211,18 @@ func execHostTimestampIsFresh(
 final class ExecApprovalsPromptServer {
     static let shared = ExecApprovalsPromptServer()
 
+    private static let logger = Logger(subsystem: "ai.openclaw", category: "exec-approvals")
     private let retryDelay: Duration
     private let maximumRetryDelay: Duration
-    private let resolveSocketCredentials: @Sendable () -> (socketPath: String, token: String)
+    private let resolveSocketCredentials: @Sendable () throws -> (socketPath: String, token: String)
     private let onPrompt: @Sendable (ExecApprovalPromptRequest) async -> ExecApprovalDecision?
     private var startup = LocalSocketServer.Startup<ExecApprovalsSocketServer>()
 
     init(
         retryDelay: Duration = .seconds(1),
         maximumRetryDelay: Duration = .seconds(30),
-        resolveSocketCredentials: @escaping @Sendable () -> (socketPath: String, token: String) = {
-            let approvals = ExecApprovalsStore.resolve(agentId: nil)
-            return (approvals.socketPath, approvals.token)
+        resolveSocketCredentials: @escaping @Sendable () throws -> (socketPath: String, token: String) = {
+            try ExecApprovalsStore.localSocketCredentials()
         },
         onPrompt: @escaping @Sendable (ExecApprovalPromptRequest) async -> ExecApprovalDecision? = { request in
             await ExecApprovalsPromptPresenter.prompt(
@@ -274,16 +268,25 @@ final class ExecApprovalsPromptServer {
                     }
                 }
 
-                let credentials = await Task.detached(priority: .utility) {
-                    resolveSocketCredentials()
-                }.value
+                let credentials: (socketPath: String, token: String)
+                do {
+                    credentials = try await Task.detached(priority: .utility) {
+                        try resolveSocketCredentials()
+                    }.value
+                } catch {
+                    Self.logger.warning("execution socket retry: \(error.localizedDescription, privacy: .public)")
+                    continue
+                }
                 guard !Task.isCancelled,
                       let self,
                       self.startup.generation == generation
                 else { return }
 
                 let token = credentials.token.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !token.isEmpty else { continue }
+                guard !token.isEmpty else {
+                    Self.logger.warning("local execution socket token is empty; retrying")
+                    continue
+                }
 
                 let server = ExecApprovalsSocketServer(
                     socketPath: credentials.socketPath,

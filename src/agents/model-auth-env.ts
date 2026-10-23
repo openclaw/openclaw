@@ -42,19 +42,28 @@ export type EnvApiKeyLookupOptions = {
   skipSetupProviderFallback?: boolean;
 };
 
-function prepareEnvAuthLookupMaps(env: NodeJS.ProcessEnv, options: EnvApiKeyLookupOptions) {
+function prepareEnvAuthLookupMaps(
+  env: NodeJS.ProcessEnv,
+  options: EnvApiKeyLookupOptions & Pick<ProviderEnvVarLookupParams, "metadataSnapshot">,
+  includeSetupProviderFallback = false,
+) {
   const lookupMaps =
-    !options.aliasMap || !options.candidateMap || !options.authEvidenceMap
+    !options.aliasMap ||
+    !options.candidateMap ||
+    !options.authEvidenceMap ||
+    (includeSetupProviderFallback && !options.setupProviderFallbackRefs)
       ? resolveProviderEnvAuthLookupMaps({
           config: options.config,
           workspaceDir: options.workspaceDir,
           env,
+          ...(includeSetupProviderFallback ? { metadataSnapshot: options.metadataSnapshot } : {}),
         })
       : undefined;
   return {
     aliasMap: options.aliasMap ?? lookupMaps?.aliasMap ?? {},
     candidateMap: options.candidateMap ?? lookupMaps?.envCandidateMap ?? {},
     authEvidenceMap: options.authEvidenceMap ?? lookupMaps?.authEvidenceMap ?? {},
+    lookupMaps,
   };
 }
 
@@ -104,21 +113,11 @@ export function resolveProviderDirectAuthPlanningEvidence(
   env: NodeJS.ProcessEnv = process.env,
   options: EnvApiKeyLookupOptions & Pick<ProviderEnvVarLookupParams, "metadataSnapshot"> = {},
 ): ProviderDirectAuthPlanningEvidence | null {
-  const lookupMaps =
-    !options.aliasMap ||
-    !options.candidateMap ||
-    !options.authEvidenceMap ||
-    !options.setupProviderFallbackRefs
-      ? resolveProviderEnvAuthLookupMaps({
-          config: options.config,
-          workspaceDir: options.workspaceDir,
-          env,
-          metadataSnapshot: options.metadataSnapshot,
-        })
-      : undefined;
-  const aliasMap = options.aliasMap ?? lookupMaps?.aliasMap ?? {};
-  const candidateMap = options.candidateMap ?? lookupMaps?.envCandidateMap ?? {};
-  const authEvidenceMap = options.authEvidenceMap ?? lookupMaps?.authEvidenceMap ?? {};
+  const { aliasMap, candidateMap, authEvidenceMap, lookupMaps } = prepareEnvAuthLookupMaps(
+    env,
+    options,
+    true,
+  );
   const concrete = resolveProviderEnvAuthEvidence(provider, env, {
     aliasMap,
     candidateMap,
@@ -147,7 +146,7 @@ export function resolveEnvApiKey(
   const normalized = aliasMap[normalizedProvider] ?? normalizedProvider;
   const applied = new Set(getShellEnvAppliedKeys());
   const candidates = Object.hasOwn(candidateMap, normalized) ? candidateMap[normalized] : undefined;
-  if (Array.isArray(candidates)) {
+  if (candidates !== undefined) {
     for (const envVar of candidates) {
       const apiKey = normalizeOptionalSecretInput(env[envVar]);
       if (apiKey) {
@@ -164,7 +163,7 @@ export function resolveEnvApiKey(
     return { apiKey: authEvidence.credentialMarker, source: authEvidence.source };
   }
 
-  if (Array.isArray(candidates) || options.skipSetupProviderFallback === true) {
+  if (candidates !== undefined || options.skipSetupProviderFallback === true) {
     return null;
   }
 

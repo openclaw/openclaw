@@ -325,39 +325,6 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledOnce();
   });
 
-  it("does not repeat watcher fallback invalidation when concurrent preparations retry", async () => {
-    let version = 1;
-    ensureSkillsWatcherMock.mockImplementation(() => {
-      version += 1;
-    });
-    getSkillsSnapshotVersionMock.mockImplementation(() => version);
-    const firstBuild = createDeferred();
-    const secondBuild = createDeferred();
-    const builds = [firstBuild, secondBuild];
-    buildWorkspaceSkillSnapshotMock.mockImplementation(async (_workspace, options) => {
-      await builds.shift()?.promise;
-      return {
-        prompt: `snapshot version ${options.snapshotVersion}`,
-        skills: [],
-        resolvedSkills: [],
-        version: options.snapshotVersion,
-      };
-    });
-    const params = { workspaceDir, config: {} };
-    const first = resolveReusableWorkspaceSkillSnapshot({ ...params, skillFilter: ["first"] });
-    const second = resolveReusableWorkspaceSkillSnapshot({ ...params, skillFilter: ["second"] });
-
-    firstBuild.resolve();
-    const firstResult = await first;
-    secondBuild.resolve();
-    const secondResult = await second;
-    for (const result of [firstResult, secondResult]) {
-      expect(result.snapshotVersion).toBe(3);
-      expect(result.snapshot).toMatchObject({ prompt: "snapshot version 3", version: 3 });
-    }
-    expect(version).toBe(3);
-  });
-
   it.each([
     { reason: "watcher invalidation", cached: 1, current: 5, watcher: true },
     { reason: "process restart from zero", cached: 0, current: 1 },

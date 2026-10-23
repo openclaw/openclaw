@@ -2,12 +2,12 @@ import { basename, parse, win32 } from "node:path";
 import { sanitizeUntrustedFileName } from "openclaw/plugin-sdk/security-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { resolveIMessageActionChatGuid } from "./actions-chat-guid.js";
 import {
   type IMessageActionTransportOptions,
   runIMessageAction,
   throwIMessageRemoteUnsupported,
 } from "./actions-transport.js";
+import { resolveIMessageChat } from "./chat-lookup.js";
 import { authorizeIMessageResourceReference } from "./message-resource.js";
 import { resolveIMessageMessageId } from "./monitor-reply-cache.js";
 import { sanitizeIMessageFinalOutboundText } from "./monitor/sanitize-outbound.js";
@@ -155,7 +155,8 @@ export const imessageActionsRuntime = {
   resolveIMessageMessageId,
   authorizeMessageReference: authorizeIMessageResourceReference,
 
-  resolveChatGuidForTarget: resolveIMessageActionChatGuid,
+  resolveChatGuidForTarget: async (params: Parameters<typeof resolveIMessageChat>[0]) =>
+    (await resolveIMessageChat(params))?.guid ?? null,
 
   async sendReaction(params: MessageActionParams & { reaction: string; remove?: boolean }) {
     await runMessageAction(

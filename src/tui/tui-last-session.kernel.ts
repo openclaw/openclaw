@@ -1,6 +1,9 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import { updateConfigMachineState } from "../state/config-machine-state-write.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import {
+  updateConfigMachineState,
+  writeConfigMachineState,
+} from "../state/config-machine-state-write.js";
 import {
   readConfigMachineStateRowInDatabase,
   type ConfigMachineStateDatabase,
@@ -10,14 +13,36 @@ import type {
   OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db-contract.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
-import type {
-  OpenClawStateReadCommand,
-  OpenClawStateReadReply,
-} from "../state/openclaw-state-read.types.js";
-import { TUI_LAST_SESSION_STATE_KEY_PREFIX } from "./tui-last-session.contract.js";
+import type { OpenClawStateReadCommand } from "../state/openclaw-state-read.types.js";
+import type { WorkerWriteOperationContext } from "../state/worker-operation-registry.js";
+import {
+  TUI_LAST_SESSION_STATE_KEY_PREFIX,
+  type TuiLastSessionWorkerOperations,
+} from "./tui-last-session.contract.js";
+
+export const tuiLastSessionOperations = {
+  "tui.lastSession.write": (
+    input: TuiLastSessionWorkerOperations["tui.lastSession.write"]["input"],
+    context: WorkerWriteOperationContext,
+  ) =>
+    writeConfigMachineState(
+      `${TUI_LAST_SESSION_STATE_KEY_PREFIX}${input.scopeKey}`,
+      input.sessionKey,
+      { ...context.stateOptions(), database: context.open() },
+    ),
+  "tui.lastSession.clear": (
+    input: TuiLastSessionWorkerOperations["tui.lastSession.clear"]["input"],
+    context: WorkerWriteOperationContext,
+  ) =>
+    clearRetiredTuiPointers(
+      new Set(input.retiredSessionKeys),
+      context.stateOptions(),
+      context.open,
+    ),
+};
 
 function listRetiredTuiPointersInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   retiredSessionKeys: ReadonlySet<string>,
 ): string[] {
   const rows = executeSqliteQuerySync(
@@ -67,13 +92,13 @@ export function clearRetiredTuiPointers(
 }
 
 export function readTuiLastSessionCommand(
-  database: DatabaseSync,
+  database: EngineConnection,
   command: Extract<OpenClawStateReadCommand, { type: "tui.lastSession.read" }>,
-): Extract<OpenClawStateReadReply, { type: "tui.lastSession.read" }> {
+) {
   return {
-    ok: true,
+    ok: true as const,
     type: command.type,
-    sourceAdmitted: true,
+    sourceAdmitted: true as const,
     row: readConfigMachineStateRowInDatabase(database, command.stateKey),
   };
 }

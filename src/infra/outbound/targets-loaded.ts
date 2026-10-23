@@ -8,9 +8,9 @@ import {
 } from "./targets-resolve-shared.js";
 
 /** Resolves targets through an already-loaded channel plugin without bootstrap discovery. */
-export function tryResolveLoadedOutboundTarget(
+export async function tryResolveLoadedOutboundTarget(
   params: ResolveOutboundTargetParams,
-): OutboundTargetResolution | undefined {
+): Promise<OutboundTargetResolution | undefined> {
   return resolveOutboundTargetWithPlugin({
     plugin: getLoadedChannelPluginForRead(params.channel),
     target: params,

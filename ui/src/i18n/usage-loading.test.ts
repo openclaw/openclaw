@@ -28,7 +28,7 @@ afterAll(async () => {
 describe("Usage English loading", () => {
   it.each([
     { surface: "export", load: () => import("../pages/usage/export.ts") },
-    { surface: "Usage view", load: () => import("../pages/usage/view.ts") },
+    { surface: "Usage view", load: () => import("../pages/usage/view.tsx") },
   ])("loads fallback copy before $surface can use it", async ({ load }) => {
     const manager = createI18nManagerForTesting(async () => ({
       common: { health: "Gesundheit" },

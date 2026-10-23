@@ -65,7 +65,10 @@ export type TelegramPreparedSendPart = {
 type TextFallback = { index: number; count: number };
 type AcceptedPart = TelegramPreparedSendPart & { messageId: number; hasInlineKeyboard: boolean };
 type ObservePart = (part: AcceptedPart) => Promise<void>;
-type PartialDeliveryResult = Parameters<typeof mergeTelegramPartialDeliveryError>[1];
+type PartialDeliveryResult = Omit<
+  Parameters<typeof mergeTelegramPartialDeliveryError>[1],
+  "messageIds" | "visibleReplySent"
+>;
 type AcceptOptions = {
   partialDeliveryResult?: () => PartialDeliveryResult;
   start?: number;
@@ -83,8 +86,7 @@ export function createTelegramPreparedSender(config: {
   chatId: string;
   request: PreparedRequest;
   warn: (message: string) => void;
-  beforeTextPage?: () => Promise<void>;
-  beforeMedia?: () => Promise<void>;
+  beforeSend?: () => Promise<void>;
   assertPlatformSendAuthorized?: () => void;
   onMediaAccepted?: (mediaUrls: readonly string[]) => void;
 }) {
@@ -200,7 +202,7 @@ export function createTelegramPreparedSender(config: {
     for (const [index, page] of params.pages.entries()) {
       let prepared: ReturnType<typeof params.preparePage>;
       try {
-        await config.beforeTextPage?.();
+        await config.beforeSend?.();
         prepared = params.preparePage(index, acceptedPages);
       } catch (error) {
         reject(error);
@@ -304,33 +306,42 @@ export function createTelegramPreparedSender(config: {
     if (parts.length === start && firstSilentSkipError !== undefined) {
       fail(firstSilentSkipError, start);
     }
-    return parts.slice(start);
+    return parts[start]?.messageId;
   };
 
-  const sendMedia = async (params: {
-    sender: TelegramOutboundMediaSender;
-    documentSender?: TelegramOutboundMediaSender;
+  type CaptionedMediaParams = {
     requestParams: Record<string, unknown>;
     plainCaption?: string;
-  }) => {
-    const send = async (sender: TelegramOutboundMediaSender) => {
-      await config.beforeMedia?.();
-      return sendTelegramCaptionedMediaWithFallback({
-        operation: sender.operation,
-        requestParams: params.requestParams,
-        plainCaption: params.plainCaption,
-        shouldLog: (error) =>
-          sender.label === "photo"
-            ? !isTelegramPhotoLimitError(error)
-            : sender.label !== "voice" || !isTelegramVoiceMessagesForbiddenError(error),
-        send: (requestParams, shouldLog) =>
-          request(sender.operation, requestParams, sender.send, { shouldLog }),
-      });
-    };
+  };
+  const sendCaptioned = async <T>(
+    params: CaptionedMediaParams,
+    sender: Omit<TelegramOutboundMediaSender, "send"> & {
+      send: (effectiveParams: Record<string, unknown>) => Promise<T>;
+    },
+  ) => {
+    await config.beforeSend?.();
+    return sendTelegramCaptionedMediaWithFallback({
+      operation: sender.operation,
+      requestParams: params.requestParams,
+      plainCaption: params.plainCaption,
+      shouldLog: (error) =>
+        sender.label === "photo"
+          ? !isTelegramPhotoLimitError(error)
+          : sender.label !== "voice" || !isTelegramVoiceMessagesForbiddenError(error),
+      send: (requestParams, shouldLog) =>
+        request(sender.operation, requestParams, sender.send, { shouldLog }),
+    });
+  };
+  const sendMedia = async (
+    params: CaptionedMediaParams & {
+      sender: TelegramOutboundMediaSender;
+      documentSender?: TelegramOutboundMediaSender;
+    },
+  ) => {
     let sender = params.sender;
     let delivery;
     try {
-      delivery = await send(sender);
+      delivery = await sendCaptioned(params, sender);
     } catch (error) {
       if (sender.label !== "photo" || !isTelegramPhotoLimitError(error)) {
         throw error;
@@ -339,7 +350,7 @@ export function createTelegramPreparedSender(config: {
         `telegram sendPhoto exceeded photo limits; retrying as document: ${formatErrorMessage(error)}`,
       );
       sender = params.documentSender ?? sender;
-      delivery = await send(sender);
+      delivery = await sendCaptioned(params, sender);
     }
     return {
       ...delivery.result,
@@ -348,36 +359,23 @@ export function createTelegramPreparedSender(config: {
       sender,
     };
   };
-  const sendPhotoAlbum = async (params: {
-    files: readonly InputFile[];
-    requestParams: Record<string, unknown>;
-    plainCaption?: string;
-  }) => {
-    await config.beforeMedia?.();
-    const delivery = await sendTelegramCaptionedMediaWithFallback({
+  const sendPhotoAlbum = async (params: CaptionedMediaParams & { files: readonly InputFile[] }) => {
+    const delivery = await sendCaptioned(params, {
       operation: "sendMediaGroup",
-      requestParams: params.requestParams,
-      plainCaption: params.plainCaption,
-      shouldLog: (error) => !isTelegramPhotoLimitError(error),
-      send: (requestParams, shouldLog) =>
-        request(
-          "sendMediaGroup",
-          requestParams,
-          (effective) => {
-            const { caption, parse_mode, ...groupParams } = effective;
-            return config.api.sendMediaGroup(
-              config.chatId,
-              params.files.map((media, index) => ({
-                type: "photo" as const,
-                media,
-                ...(index === 0 && typeof caption === "string" ? { caption } : {}),
-                ...(index === 0 && parse_mode === "HTML" ? { parse_mode: "HTML" as const } : {}),
-              })),
-              groupParams,
-            );
-          },
-          { shouldLog },
-        ),
+      label: "photo",
+      send: (effective) => {
+        const { caption, parse_mode, ...groupParams } = effective;
+        return config.api.sendMediaGroup(
+          config.chatId,
+          params.files.map((media, index) => ({
+            type: "photo" as const,
+            media,
+            ...(index === 0 && typeof caption === "string" ? { caption } : {}),
+            ...(index === 0 && parse_mode === "HTML" ? { parse_mode: "HTML" as const } : {}),
+          })),
+          groupParams,
+        );
+      },
     });
     const prepared = delivery.result.result.map((result, index): TelegramPreparedSendPart => ({
       result,

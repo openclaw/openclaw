@@ -62,12 +62,14 @@ export async function prepareReplySessionParentFork(params: {
   if (!parentEntry?.sessionId) {
     return unresolvedParentFork();
   }
-  const decision = await resolveParentForkDecision({
+  const forkParams = {
     parentSessionKey: params.parentSessionKey,
     parentEntry,
     agentId: params.agentId,
+    sessionKey: params.sessionKey,
     storePath: params.storePath,
-  });
+  };
+  const decision = await resolveParentForkDecision(forkParams);
   if (decision.status === "skip") {
     // The parent branch is too large to inherit usefully. Start fresh and
     // mark as handled so the thread does not retry this decision every turn.
@@ -77,13 +79,7 @@ export async function prepareReplySessionParentFork(params: {
     );
     return { ...params.sessionEntry, forkedFromParent: true };
   }
-  const fork = await forkSessionFromParent({
-    parentEntry,
-    agentId: params.agentId,
-    parentSessionKey: params.parentSessionKey,
-    sessionKey: params.sessionKey,
-    storePath: params.storePath,
-  });
+  const fork = await forkSessionFromParent(forkParams);
   if (!fork) {
     return unresolvedParentFork();
   }

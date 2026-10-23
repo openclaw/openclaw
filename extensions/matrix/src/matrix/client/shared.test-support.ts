@@ -46,3 +46,20 @@ export function createMockClient(name: string, callOrder: string[] = []) {
     crypto: undefined,
   };
 }
+
+// These lifecycle fixtures exclude disk selection; real token-alias admission is
+// exercised with the factory's selected storage paths in create-client.storage.test.ts.
+export async function prepareMockMatrixClientStorage(auth: MatrixAuth) {
+  return {
+    homeserver: auth.homeserver,
+    matrixClientUserId: auth.userId,
+    storagePaths: {
+      idbSnapshotPath: JSON.stringify([
+        auth.homeserver,
+        auth.userId,
+        auth.accessToken,
+        auth.accountId,
+      ]),
+    },
+  };
+}

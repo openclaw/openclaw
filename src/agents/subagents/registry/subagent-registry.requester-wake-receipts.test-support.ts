@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
@@ -10,15 +9,12 @@ import { createSubagentRunParams } from "../../subagent-test-fixtures.test-helpe
 import { createSessionsYieldTool } from "../../tools/sessions-yield-tool.js";
 import * as completionStore from "../completion/subagent-completion-admission.store.js";
 import { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
+import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import {
-  mutateSubagentRuns,
-  SubagentRegistryVersionConflictError,
-} from "./subagent-registry-persistence.js";
+import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
-import type { GatewayRequest } from "./subagent-registry.lifecycle-fixture.test-support.js";
-import type { createLifecycleWaits } from "./subagent-registry.lifecycle-waits.test-support.js";
+import type { RequesterWakeFixture } from "./subagent-registry.requester-wake-session.test-support.js";
 import * as registry from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
@@ -127,9 +123,6 @@ function createRequesterWakeReceiptHolds(
               if (phase) {
                 executions.push(phase);
               }
-              if (typeof result === "object" && result !== null && "conflictRunIds" in result) {
-                return result;
-              }
               if (hold && phase) {
                 observed.add(phase);
                 hold.entered.resolve(members);
@@ -141,7 +134,7 @@ function createRequesterWakeReceiptHolds(
         workerOptions,
       ).catch((error: unknown) => {
         const phase = capturedMutation?.phase;
-        if (phase && !(error instanceof SubagentRegistryVersionConflictError)) {
+        if (phase) {
           holds[phase].entered.reject(error);
         }
         throw error;
@@ -174,6 +167,7 @@ async function driftCompletionCleanup(entry: SubagentRunRecord): Promise<void> {
     throw new Error("Synthetic terminal completion refusal");
   });
   const resume = vi.fn();
+  using _ = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
   const recovery = createSubagentRegistryCompletionRuntime({
     runs: subagentRuns,
     resumed: new Set([getSubagentRunRuntimeKey(entry)]),
@@ -181,7 +175,6 @@ async function driftCompletionCleanup(entry: SubagentRunRecord): Promise<void> {
     completeSubagentRun: failed,
     scheduleSweep: vi.fn(),
     resumeRun: resume,
-    warn: vi.fn(),
   });
   await recovery.completeSubagentRunWithRecovery(
     {
@@ -200,40 +193,22 @@ async function driftCompletionCleanup(entry: SubagentRunRecord): Promise<void> {
 
 export function registerRequesterWakeReceiptBoundaryTests({
   requesterSessionKey,
+  prepareChildSession,
   spawnVisibleChild,
+  settleTurn,
   emitCompleted,
   flushOwnedWork,
   waitForDeliveredCleanup,
   waitForAgentCallCount,
   getRequesterWakeCalls,
   createGatewayContext,
-  statePath,
   sendMessageMock,
   setEmptyReply,
   setWakeRefusal,
   holdAgentCall,
   releaseAgentCall,
   onReceiptsHeld,
-}: {
-  requesterSessionKey: string;
-  spawnVisibleChild: (params: {
-    runId: string;
-    childSessionKey: string;
-    requesterTurnRunId: string;
-    expectsCompletionMessage: boolean;
-  }) => Promise<void>;
-  emitCompleted: (
-    runId: string,
-    childSessionKey: string,
-    text: string,
-    modelRouteChange?: string,
-  ) => void;
-  flushOwnedWork: () => Promise<void>;
-  waitForDeliveredCleanup: ReturnType<typeof createLifecycleWaits>["waitForDeliveredCleanup"];
-  waitForAgentCallCount: (count: number) => Promise<void>;
-  getRequesterWakeCalls: () => GatewayRequest[];
-  createGatewayContext: () => GatewayRequestContext;
-  statePath: (...parts: string[]) => string;
+}: RequesterWakeFixture & {
   sendMessageMock: typeof import("../../../infra/outbound/message.js").sendMessage;
   setEmptyReply: (value: boolean) => void;
   setWakeRefusal: (wake: boolean, persistence: boolean) => void;
@@ -277,7 +252,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
       rejectRequesterWake: true,
     },
     {
-      name: "backs off when rejected-wake settlement persistence fails",
+      name: "retains rejected-wake settlement until sweep recovery",
       rejectRequesterWake: true,
       rejectPersistence: true,
     },
@@ -300,17 +275,14 @@ export function registerRequesterWakeReceiptBoundaryTests({
     const beta = visibleChild("beta");
     await spawnVisibleChild({ ...alpha, requesterTurnRunId });
     await spawnVisibleChild({ ...beta, requesterTurnRunId });
-    const heldReceipts =
-      !rejectRequesterWake && !emptyReply
-        ? holdRequesterWakeReceipts({ holdOutcome: outcomeDrift })
-        : undefined;
-
     holdAgentCall(beta.childSessionKey);
     emitCompleted(alpha.runId, alpha.childSessionKey, "alpha complete");
     await waitForAgentCallCount(1);
     const beforeCleanup = Date.now();
     await waitForDeliveredCleanup(alpha.runId, { allowPendingRequesterSettleWake: true });
     expect(Date.now(), "cleanup observation must not spend the retry clock").toBe(beforeCleanup);
+    // Join the ordinary singleton retirement before installing holds for the yielded cohort.
+    await flushOwnedWork();
     const modelRouteChange = "Model route changed: requested/model → actual/model.";
     emitCompleted(beta.runId, beta.childSessionKey, "beta complete", modelRouteChange);
     await waitForAgentCallCount(2);
@@ -332,6 +304,10 @@ export function registerRequesterWakeReceiptBoundaryTests({
       return { value: undefined, postimages: new Map([[next.runId, next]]) };
     });
 
+    const heldReceipts =
+      !rejectRequesterWake && !emptyReply
+        ? holdRequesterWakeReceipts({ holdOutcome: outcomeDrift })
+        : undefined;
     const settleWakeOwner = outcomeDrift || rejectPersistence ? observeRootWork() : undefined;
     const yieldTool = createRequesterYieldTool(requesterSessionKey, requesterTurnRunId);
     await expect(
@@ -339,24 +315,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
     ).resolves.toMatchObject({ details: { status: "yielded" } });
 
     setWakeRefusal(rejectRequesterWake, rejectPersistence);
-    const { withLocalSessionPlacementTurnSettlement } =
-      await import("../../session-placement-admission.js");
-    await withLocalSessionPlacementTurnSettlement(
-      {
-        sessionId: "sess-main",
-        sessionKey: requesterSessionKey,
-        agentId: "main",
-        runId: requesterTurnRunId,
-      },
-      async () => ({
-        acceptedSessionSpawns: [alpha, beta],
-        meta: {
-          durationMs: 1,
-          yielded: true,
-          executionTrace: { runner: "cli", attempts: [], fallbackUsed: false },
-        },
-      }),
-    );
+    await settleTurn(requesterTurnRunId, [alpha, beta]);
     if (heldReceipts) {
       const members = await heldReceipts.transition.entered.promise;
       expect(members).toHaveLength(2);
@@ -451,7 +410,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
     expect(getRequesterWakeCalls()).toHaveLength(rejectRequesterWake ? 0 : 1);
     if (rejectPersistence) {
       // Alpha was already delivered before yield. Join the rejected wake owner
-      // before measuring its backoff; delivered cleanup does not imply it settled.
+      // before observing recovery; delivered cleanup does not imply it settled.
       await settleWakeOwner?.(true);
       expect(registry.getSubagentRunByRunId(alpha.runId)?.requesterSettleWake).toMatchObject({
         status: "pending",
@@ -465,6 +424,12 @@ export function registerRequesterWakeReceiptBoundaryTests({
       });
       expect(getRequesterWakeCalls()).toHaveLength(0);
       await vi.advanceTimersByTimeAsync(1);
+      await settleWakeOwner?.(true);
+      expect(registry.getSubagentRunByRunId(alpha.runId)?.requesterSettleWake).toMatchObject({
+        status: "pending",
+        attemptCount: 0,
+      });
+      await registry.testing.sweepOnceForTests();
       await settleWakeOwner?.(true);
       await waitForDeliveredCleanup(alpha.runId);
       expect(getRequesterWakeCalls()).toHaveLength(0);
@@ -538,16 +503,18 @@ export function registerRequesterWakeReceiptBoundaryTests({
     expect(delivery?.lastDropReason).toBeUndefined();
   });
 
-  it.each(["unchanged", "source-change", "callback-failure"] as const)(
+  it.each(["unchanged", "callback-failure"] as const)(
     "keeps quiet retirement custody (%s)",
     async (change) => {
       const runId = "quiet-delete-wake";
       const childSessionKey = "agent:main:subagent:quiet-delete-wake";
       const gateway = createGatewayContext();
+      const sessionEntry = await prepareChildSession(childSessionKey, "sess-quiet-delete-wake");
       await registry.registerSubagentRun(
         createSubagentRunParams({
           runId,
           childSessionKey,
+          sessionEntry,
           requesterAgentId: "main",
           cleanup: "delete",
           expectsCompletionMessage: false,
@@ -568,30 +535,15 @@ export function registerRequesterWakeReceiptBoundaryTests({
       expect(loadSubagentRegistryFromSqlite().has(runId)).toBe(false);
       expect(isSameSubagentRunOwner(registry.getSubagentRunByRunId(runId), entry)).toBe(true);
       expect(registry.getSubagentRunByRunId(runId)?.requesterSettleWake).toEqual(wake);
-      await registry.testing.sweepOnceForTests();
+      if (change === "unchanged") {
+        await registry.testing.sweepOnceForTests();
+      }
       expect(getRequesterWakeCalls()).toHaveLength(0);
-      const originalStateDir = process.env.OPENCLAW_STATE_DIR;
-      assert(originalStateDir, "Quiet retirement requires its isolated original source");
       const database = openOpenClawStateDatabase();
       let replayTrigger = false;
       try {
-        if (change === "source-change") {
-          process.env.OPENCLAW_STATE_DIR = statePath("replacement-state");
-        }
         held.complete.release.resolve();
-        if (change === "source-change") {
-          await expect(held.publications.complete.promise).rejects.toMatchObject({
-            outcome: "committed",
-            publication: "superseded",
-          });
-          await flushOwnedWork();
-          await vi.advanceTimersByTimeAsync(30_000);
-          await flushOwnedWork();
-          expect(isSameSubagentRunOwner(registry.getSubagentRunByRunId(runId), entry)).toBe(true);
-          expect(getGatewayContextResolver(entry)).toBeDefined();
-          expect(getRequesterWakeCalls()).toHaveLength(0);
-          process.env.OPENCLAW_STATE_DIR = originalStateDir;
-        } else if (change === "callback-failure") {
+        if (change === "callback-failure") {
           await expect(held.publications.complete.promise).rejects.toMatchObject({
             outcome: "committed",
             publication: "published",
@@ -599,6 +551,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
           await flushOwnedWork();
           expect(registry.getSubagentRunByRunId(runId)).toBeUndefined();
           expect(getGatewayContextResolver(entry)).toBeDefined();
+          expect(held.executions).not.toContain("reconcile");
         } else {
           await expect(held.publications.complete.promise).resolves.toEqual({
             applied: true,
@@ -610,8 +563,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
             "CREATE TRIGGER reject_quiet_retirement_replay BEFORE DELETE ON subagent_runs BEGIN SELECT RAISE(ABORT, 'quiet retirement replayed'); END",
           );
           replayTrigger = true;
-          await registry.testing.sweepOnceForTests();
-          await vi.advanceTimersByTimeAsync(30_000);
+          await vi.advanceTimersByTimeAsync(60_000);
           await held.reconcile.entered.promise;
           held.reconcile.release.resolve();
           await expect(held.publications.reconcile.promise).resolves.toEqual({
@@ -627,12 +579,10 @@ export function registerRequesterWakeReceiptBoundaryTests({
         expect(getGatewayContextResolver(entry)).toBeUndefined();
         expect(getRequesterWakeCalls()).toHaveLength(0);
         expect(held.executions.filter((phase) => phase === "complete")).toHaveLength(1);
-        // A source change first refreshes its committed deletion after a version conflict.
         expect(held.executions.filter((phase) => phase === "reconcile")).toHaveLength(
-          change === "unchanged" ? 0 : change === "source-change" ? 2 : 1,
+          change === "unchanged" ? 0 : 1,
         );
       } finally {
-        process.env.OPENCLAW_STATE_DIR = originalStateDir;
         if (replayTrigger) {
           database.db.exec("DROP TRIGGER reject_quiet_retirement_replay");
         }

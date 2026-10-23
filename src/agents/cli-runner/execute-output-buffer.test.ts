@@ -1,32 +1,80 @@
-import { describe, expect, it } from "vitest";
-import { appendCliOutputTail } from "./execute-output-buffer.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildContext } from "./execute-events.tool-result-args.test-support.js";
+import { executePreparedCliRun as executePreparedCliRunImpl } from "./execute.js";
+import {
+  createManagedRun,
+  createSuccessfulProcessExit,
+  supervisorSpawnMock,
+  wrapPreparedCliRunWithTestAdmission,
+} from "./execute.test-support.js";
+import { cliBackendLog, CLI_BACKEND_LOG_OUTPUT_ENV } from "./log.js";
 
+// mock-isolation: The supervisor fixture owns execution; never spawn host CLI processes.
+vi.mock("../../process/supervisor/adapters/child.js", () => ({
+  createChildAdapter: vi.fn(),
+}));
+
+const executePreparedCliRun = wrapPreparedCliRunWithTestAdmission(executePreparedCliRunImpl);
 const CLI_RUNNER_OUTPUT_TAIL_BYTES = 64 * 1024;
 const REPLACEMENT_CHARACTER = String.fromCharCode(0xfffd);
 const MULTIBYTE_CHARACTER = String.fromCodePoint(0x1f642);
 
-describe("appendCliOutputTail", () => {
-  it("keeps large chunk tails UTF-8 safe when truncation starts inside a character", () => {
-    const chunk = `${"x".repeat(10)}${MULTIBYTE_CHARACTER}${"y".repeat(
-      CLI_RUNNER_OUTPUT_TAIL_BYTES - 3,
-    )}`;
+afterEach(() => {
+  supervisorSpawnMock.mockReset();
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 
-    const output = appendCliOutputTail("", chunk);
+describe.each(["stdout", "stderr"] as const)("CLI %s diagnostic tail", (stream) => {
+  it.each([
+    {
+      name: "a large chunk",
+      chunks: [
+        `${"x".repeat(10)}${MULTIBYTE_CHARACTER}${"y".repeat(CLI_RUNNER_OUTPUT_TAIL_BYTES - 3)}`,
+      ],
+      expected: "y".repeat(CLI_RUNNER_OUTPUT_TAIL_BYTES - 3),
+    },
+    {
+      name: "rolling overflow",
+      chunks: [
+        `${"x".repeat(10)}${MULTIBYTE_CHARACTER}${"y".repeat(CLI_RUNNER_OUTPUT_TAIL_BYTES - 14)}`,
+        "z".repeat(11),
+      ],
+      expected: `${"y".repeat(CLI_RUNNER_OUTPUT_TAIL_BYTES - 14)}${"z".repeat(11)}`,
+    },
+  ])(
+    "keeps $name UTF-8 safe when truncation starts inside a character",
+    async ({ chunks, expected }) => {
+      vi.stubEnv(CLI_BACKEND_LOG_OUTPUT_ENV, "1");
+      const info = vi.spyOn(cliBackendLog, "info").mockImplementation(() => {});
+      const context = buildContext(`output-tail-${stream}`);
+      Object.assign(context.preparedBackend.backend, { output: "text", serialize: false });
+      supervisorSpawnMock.mockImplementationOnce(async (input) => {
+        expect(input.captureOutput).toBe(false);
+        if (stream === "stderr") {
+          input.onStdout?.("done");
+        }
+        for (const chunk of chunks) {
+          if (stream === "stdout") {
+            input.onStdout?.(chunk);
+          } else {
+            input.onStderr?.(chunk);
+          }
+        }
+        return createManagedRun(createSuccessfulProcessExit());
+      });
 
-    expect(Buffer.byteLength(output)).toBeLessThanOrEqual(CLI_RUNNER_OUTPUT_TAIL_BYTES);
-    expect(output).not.toContain(REPLACEMENT_CHARACTER);
-    expect(output).toBe("y".repeat(CLI_RUNNER_OUTPUT_TAIL_BYTES - 3));
-  });
+      await executePreparedCliRun(context);
 
-  it("keeps appended tails UTF-8 safe when rolling overflow starts inside a character", () => {
-    const existingTail = `${"x".repeat(10)}${MULTIBYTE_CHARACTER}${"y".repeat(
-      CLI_RUNNER_OUTPUT_TAIL_BYTES - 14,
-    )}`;
-
-    const output = appendCliOutputTail(existingTail, "z".repeat(11));
-
-    expect(Buffer.byteLength(output)).toBeLessThanOrEqual(CLI_RUNNER_OUTPUT_TAIL_BYTES);
-    expect(output).not.toContain(REPLACEMENT_CHARACTER);
-    expect(output).toBe(`${"y".repeat(CLI_RUNNER_OUTPUT_TAIL_BYTES - 14)}${"z".repeat(11)}`);
-  });
+      const prefix = `cli ${stream}:\n`;
+      const messages = info.mock.calls
+        .map(([message]) => message)
+        .filter((message) => message.startsWith(prefix));
+      expect(messages).toHaveLength(1);
+      const output = messages[0]!.slice(prefix.length);
+      expect(Buffer.byteLength(output)).toBeLessThanOrEqual(CLI_RUNNER_OUTPUT_TAIL_BYTES);
+      expect(output).not.toContain(REPLACEMENT_CHARACTER);
+      expect(output).toBe(expected);
+    },
+  );
 });

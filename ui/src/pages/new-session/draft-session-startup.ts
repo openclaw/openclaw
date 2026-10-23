@@ -1,11 +1,10 @@
-import { SESSION_CREATE_RETRY_WINDOW_MS } from "../../../../packages/gateway-protocol/src/index.js";
+import { SESSION_CREATE_RETRY_WINDOW_MS } from "../../../../packages/gateway-protocol/src/session-limits.js";
 import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 
 type DraftSessionStartupIntent = DraftStartupResumption & {
   scope: string;
-  deadline: number;
   interrupted: boolean;
 };
 
@@ -42,7 +41,6 @@ export class DraftSessionStartup {
         params: Object.freeze({ ...params, idempotencyKey: generateUUID() }),
         scope,
         startedAt,
-        deadline: startedAt + SESSION_CREATE_RETRY_WINDOW_MS,
         interrupted: false,
         background,
       };
@@ -75,7 +73,7 @@ export class DraftSessionStartup {
     if (!this.pending?.interrupted) {
       return { kind: "wait" };
     }
-    if (Date.now() >= this.pending.deadline) {
+    if (Date.now() >= this.pending.startedAt + SESSION_CREATE_RETRY_WINDOW_MS) {
       this.clear();
       return { kind: "expired" };
     }

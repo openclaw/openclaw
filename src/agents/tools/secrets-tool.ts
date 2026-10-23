@@ -26,7 +26,11 @@ import {
   type GatewayQuestionCall,
 } from "./gateway-question-lifecycle.js";
 import { callGatewayTool } from "./gateway.js";
-import { type QuestionPromptDelivery, sendQuestionToolPrompt } from "./question-prompt-send.js";
+import {
+  type QuestionPromptDelivery,
+  QuestionPromptUnavailableError,
+  sendQuestionToolPrompt,
+} from "./question-prompt-send.js";
 import { jsonResult, textResult } from "./tool-results.js";
 
 const SecretsToolSchema = Type.Object(
@@ -200,6 +204,7 @@ async function storedSecretResult(
     "Report current hosts, not proposed hosts. Do not infer why they differ or prescribe Gateway config changes from the difference.",
     "Only available hosts are complete; [] means no egress. Otherwise make no host claims.",
     "Stored does not prove proxy enabled or current exec snapshot; config refs are independent.",
+    "Protected exec use is HTTPS proxy substitution only, not SSH/sudo passwords or stdin. `${secret:NAME}` is not shell substitution.",
   ];
   return textResult(`${guidance.join(" ")}\n\n${JSON.stringify(details)}`, details);
 }
@@ -354,6 +359,10 @@ export function createSecretsTool(params: {
             questionResult = await cancelPendingQuestion("prompt-delivery-failed");
             signal?.throwIfAborted();
             if (!questionResult) {
+              // Preserve trusted retry guidance without exposing transport diagnostics.
+              if (first.result.error instanceof QuestionPromptUnavailableError) {
+                throw first.result.error;
+              }
               throw new Error("credential-request prompt delivery failed", {
                 cause: first.result.error,
               });

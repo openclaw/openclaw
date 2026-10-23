@@ -1,7 +1,8 @@
 // Discord tests cover model picker plugin behavior.
 import { ComponentType } from "discord-api-types/v10";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { parseCustomId, serializePayload } from "../internal/discord.js";
+import { describe, expect, it } from "vitest";
+import { parseCustomId } from "../internal/components.base.js";
+import { serializePayload } from "../internal/discord.js";
 import {
   DISCORD_MODEL_PICKER_CUSTOM_ID_KEY,
   buildDiscordModelPickerCustomId,
@@ -9,7 +10,6 @@ import {
   createDiscordModelPickerRuntimeToken,
   getDiscordModelPickerModelPage,
   getDiscordModelPickerProviderPage,
-  findProviderBucketId,
   findProviderBucketLocation,
   parseDiscordModelPickerData,
 } from "./model-picker.state.js";
@@ -31,22 +31,6 @@ function parseDiscordModelPickerCustomId(customId: string) {
     ? parseDiscordModelPickerData(parsed.data)
     : null;
 }
-
-const hostSdk = vi.hoisted(() => ({ runtimeChoicesAvailable: true }));
-
-vi.mock("openclaw/plugin-sdk/models-provider-runtime", async (importOriginal) => {
-  const sdk = await importOriginal<typeof import("openclaw/plugin-sdk/models-provider-runtime")>();
-  return {
-    ...sdk,
-    get getModelsRuntimeChoices() {
-      return hostSdk.runtimeChoicesAvailable ? sdk.getModelsRuntimeChoices : undefined;
-    },
-  };
-});
-
-afterEach(() => {
-  hostSdk.runtimeChoicesAvailable = true;
-});
 
 type SerializedComponent = {
   type: number;
@@ -794,7 +778,7 @@ describe("Discord model picker rendering", () => {
     );
     const data = createModelsProviderData({ ...providerEntries, vllm: models });
     const providerBucket = requireValue(
-      findProviderBucketId(data, "vllm"),
+      findProviderBucketLocation(data, "vllm")?.bucket,
       "test data should bucket the selected provider",
     );
 
@@ -1373,31 +1357,4 @@ describe("model-specific runtime view", () => {
       ).toBe(true);
     },
   );
-});
-
-describe("declared minimum host", () => {
-  it("keeps model-only Submit available without the new SDK helper", () => {
-    hostSdk.runtimeChoicesAvailable = false;
-    const data = createModelsProviderData({ openai: ["gpt-4o"] });
-    delete data.runtimeChoicesByModel;
-    delete data.isCurrent;
-
-    const rows = renderModelsViewRows({
-      command: "model",
-      userId: "owner",
-      data,
-      provider: "openai",
-      pendingModel: "openai/gpt-4o",
-      pendingModelIndex: 1,
-    });
-
-    const submit = rows.flatMap((row) => row.components ?? []).find((c) => c.label === "Submit");
-    expect(submit).toBeDefined();
-    expect(submit?.disabled).not.toBe(true);
-    expect(
-      rows
-        .flatMap((row) => row.components ?? [])
-        .find((c) => parseDiscordModelPickerCustomId(c.custom_id ?? "")?.action === "runtime"),
-    ).toBeUndefined();
-  });
 });

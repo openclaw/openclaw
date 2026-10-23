@@ -1,10 +1,10 @@
 import { MessageChannel, receiveMessageOnPort, type MessagePort } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   encodeOpenClawStateWorkerError,
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,
+  type OpenClawStateWorkerErrorPayload,
 } from "../state/openclaw-state-worker-error.js";
 import { SqliteSnapshotCleanupError } from "./sqlite-readonly-location-cleanup.js";
 import type {
@@ -13,6 +13,7 @@ import type {
   SqliteNativeOwnerRequest,
   SqliteNativeCopyLaunch,
   SqliteNativeRequest,
+  SqliteNativeReply,
   SqliteNativeSessionLaunch,
   SqliteNativeStagingOptions,
 } from "./sqlite-readonly-native-resource.types.js";
@@ -47,26 +48,13 @@ export function createSqliteReadOnlyNativeResourceClient(port: MessagePort) {
     pending.clear();
     return unavailable;
   };
-  const receive = (value: unknown) => {
-    if (!isRecord(value)) {
-      fail();
-      return;
-    }
-    if (value.type === "session.closed" && typeof value.session === "number") {
+  const receive = (value: SqliteNativeReply) => {
+    if (value.type === "session.closed") {
       const session = sessions.get(value.session);
       if (session) {
         session.retired = true;
         session.closed = true;
       }
-      return;
-    }
-    if (
-      value.type !== "result" ||
-      typeof value.id !== "number" ||
-      (value.ok !== true && value.ok !== false) ||
-      (value.retired !== undefined && typeof value.retired !== "boolean")
-    ) {
-      fail();
       return;
     }
     const request = pending.get(value.id);
@@ -79,10 +67,6 @@ export function createSqliteReadOnlyNativeResourceClient(port: MessagePort) {
       session.retired = value.retired;
     }
     if (value.ok) {
-      if (value.value !== undefined && typeof value.value !== "string") {
-        request.completion.reject(fail());
-        return;
-      }
       request.completion.resolve({ ok: true, value: value.value });
     } else {
       const error = new Error("SQLite native resource operation failed");
@@ -263,62 +247,22 @@ export function createSqliteReadOnlyNativeResourceClient(port: MessagePort) {
 
 /** Host-port framing; the staging owner alone admits readers and retires directories. */
 export function createSqliteReadOnlyNativeResourceConnection(callbacks: {
-  receive(request: SqliteNativeOwnerRequest, owner: { disposed: boolean }): void;
+  receive(request: SqliteNativeOwnerRequest): void;
   onFailure(error: unknown): void;
-  onDispose(owner: { disposed: boolean }): void;
 }): NativeWorkerResourceConnection {
   const { port1, port2 } = new MessageChannel();
-  const owner = { disposed: false };
-  const receive = (value: unknown) => {
-    if (
-      !isRecord(value) ||
-      typeof value.id !== "number" ||
-      !Number.isSafeInteger(value.id) ||
-      value.id < 1
-    ) {
-      throw new SqliteSnapshotCleanupError("SQLite snapshot native owner sent an invalid request");
-    }
+  let disposed = false;
+  const receive = (request: SqliteNativeOwnerRequest) => {
     let reply: SqliteNativeOwnerReply;
     try {
-      if (
-        typeof value.directory !== "string" ||
-        !value.directory ||
-        value.directory.includes("\0")
-      ) {
-        throw new SqliteSnapshotCleanupError(
-          "SQLite snapshot native owner sent an invalid directory",
-        );
-      }
-      let request: SqliteNativeOwnerRequest;
-      if (value.type === "allocated") {
-        if (
-          typeof value.preparationId !== "number" ||
-          !Number.isSafeInteger(value.preparationId) ||
-          value.preparationId < 1
-        ) {
-          throw new SqliteSnapshotCleanupError("SQLite snapshot has no preparation identity");
-        }
-        request = {
-          id: value.id,
-          type: value.type,
-          directory: value.directory,
-          preparationId: value.preparationId,
-        };
-      } else if (value.type === "retire" || value.type === "removed") {
-        request = { id: value.id, type: value.type, directory: value.directory };
-      } else {
-        throw new SqliteSnapshotCleanupError(
-          "SQLite snapshot native owner sent an unsupported request",
-        );
-      }
-      callbacks.receive(request, owner);
-      reply = { id: value.id, ok: true };
+      callbacks.receive(request);
+      reply = { id: request.id, ok: true };
     } catch (error) {
       const encoded = encodeOpenClawStateWorkerError(error, { includeOrdinary: true });
       if (!encoded) {
         throw error;
       }
-      reply = { id: value.id, ok: false, error: encoded };
+      reply = { id: request.id, ok: false, error: encoded };
     }
     port1.postMessage(reply);
   };
@@ -326,7 +270,7 @@ export function createSqliteReadOnlyNativeResourceConnection(callbacks: {
     callbacks.onFailure(error);
     port1.close();
   };
-  const onMessage = (value: unknown) => {
+  const onMessage = (value: SqliteNativeOwnerRequest) => {
     try {
       receive(value);
     } catch (error) {
@@ -338,7 +282,7 @@ export function createSqliteReadOnlyNativeResourceConnection(callbacks: {
   return {
     port: port2,
     service() {
-      if (owner.disposed) {
+      if (disposed) {
         return;
       }
       for (;;) {
@@ -356,15 +300,15 @@ export function createSqliteReadOnlyNativeResourceConnection(callbacks: {
     },
     decodeCloseError(payload: unknown) {
       const remote = new Error("SQLite snapshot staging failed");
-      retainOpenClawStateWorkerErrorPayload(remote, payload);
+      // SAFETY: The SQLite resource worker encodes this private close-error payload.
+      retainOpenClawStateWorkerErrorPayload(remote, payload as OpenClawStateWorkerErrorPayload);
       const error = hydrateOpenClawStateWorkerError(remote, { includeOrdinary: true });
       return error instanceof AggregateError
         ? error
         : new SqliteSnapshotCleanupError(error.message, { cause: error });
     },
     dispose() {
-      owner.disposed = true;
-      callbacks.onDispose(owner);
+      disposed = true;
       port1.removeAllListeners();
       port1.close();
       port2.close();

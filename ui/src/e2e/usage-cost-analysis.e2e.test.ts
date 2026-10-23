@@ -1,9 +1,8 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
+import type { BrowserContextOptions, Locator } from "playwright";
 import { expect, it } from "vitest";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import type { SessionUsageEntry } from "../../../src/shared/usage-types.js";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { installUsageOverviewGateway as installMockGateway } from "./usage-overview-fixture.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI usage cost analysis mocked Gateway E2E",
@@ -12,7 +11,16 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not available at ${executablePath}`,
 });
 
-const recordVisuals = process.env.OPENCLAW_UI_E2E_RECORD === "1";
+const viewport = { height: 1_000, width: 1_440 };
+const pageOptions: BrowserContextOptions = { locale: "en-US", serviceWorkers: "block", viewport };
+const costMessages = {
+  total: 40,
+  user: 20,
+  assistant: 20,
+  toolCalls: 12,
+  toolResults: 12,
+  errors: 0,
+};
 
 const totals = {
   input: 1_200_000,
@@ -51,27 +59,92 @@ function dayOffset(offset: number): string {
 
 function dailyEntry(offset: number, totalCost: number, totalTokens: number) {
   return {
-    ...totals,
+    ...emptyTotals,
     date: dayOffset(offset),
     input: totalTokens,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
     totalTokens,
     totalCost,
     inputCost: totalCost,
-    outputCost: 0,
-    cacheReadCost: 0,
-    cacheWriteCost: 0,
   };
 }
 
-const daily = [
-  dailyEntry(-89, 5, 500_000),
-  dailyEntry(-29, 7, 700_000),
-  dailyEntry(-6, 9, 900_000),
-  dailyEntry(0, 11, 1_100_000),
+const modelUsage = [
+  { provider: "openai", model: "gpt-5.5", count: 30, totals: { ...totals, totalCost: 22 } },
+  {
+    provider: "anthropic",
+    model: "claude-opus-4-6",
+    count: 10,
+    totals: { ...totals, totalCost: 10 },
+  },
 ];
+
+function providerHistory(
+  provider: string,
+  displayName: string,
+  amount: number,
+  category: string,
+  rows: Array<[offset: number, amount: number, requests?: number]>,
+  name: string,
+) {
+  return {
+    provider,
+    displayName,
+    plan: "Admin API",
+    windows: [],
+    billing: [{ type: "spend", label: "30-day API spend", amount, unit: "USD" }],
+    costHistory: {
+      unit: "USD",
+      periodDays: 30,
+      daily: rows.map(([offset, dayAmount, requests]) => ({
+        date: dayOffset(offset),
+        amount: dayAmount,
+        inputTokens: 1_000,
+        cacheReadTokens: 100,
+        cacheWriteTokens: 0,
+        outputTokens: 100,
+        requests,
+      })),
+      models: [{ name, totalTokens: 1_000 }],
+      categories: [{ name: category, amount }],
+    },
+  };
+}
+
+function expectPopover(surface: Locator, open: boolean) {
+  return expect
+    .poll(() => surface.evaluate((element) => element.matches(":popover-open")))
+    .toBe(open);
+}
+
+function expectTexts(locator: Locator, expected: string[]) {
+  return expect.poll(() => locator.allTextContents()).toEqual(expected);
+}
+
+function expectText(locator: Locator) {
+  return expect.poll(() => locator.textContent());
+}
+
+async function trimmedTexts(locator: Locator) {
+  return (await locator.allTextContents()).map((text) => text.trim());
+}
+
+function makeSession(
+  key: string,
+  label: string,
+  updatedAt: number,
+  usage: SessionUsageEntry["usage"],
+  model: Pick<SessionUsageEntry, "model" | "modelProvider"> = {},
+) {
+  return { key, label, updatedAt, usage, agentId: "main", ...model };
+}
+
+function usageOnDay(date: string) {
+  return {
+    ...totals,
+    activityDates: [date],
+    dailyBreakdown: [{ ...totals, date, cost: totals.totalCost, tokens: totals.totalTokens }],
+  };
+}
 
 function emptyUsageResponses() {
   const updatedAt = Date.now();
@@ -123,19 +196,10 @@ suite.define(() => {
           ? { mode: "utc" }
           : { mode: "specific", timeZone: "America/New_York" }),
       };
-      const artifactDir = recordVisuals ? path.join(suite.artifactDir, "usage-hour-labels") : null;
-      if (artifactDir) {
-        await mkdir(artifactDir, { recursive: true });
-      }
       await suite.withPage(
         {
-          locale: "en-US",
-          serviceWorkers: "block",
+          ...pageOptions,
           timezoneId: "America/New_York",
-          viewport: { height: 1_000, width: 1_440 },
-          ...(artifactDir
-            ? { recordVideo: { dir: artifactDir, size: { height: 1_000, width: 1_440 } } }
-            : {}),
         },
         async ({ page }) => {
           await page.clock.setFixedTime(new Date("2026-03-07T17:00:00Z"));
@@ -158,19 +222,13 @@ suite.define(() => {
                       endDate: date,
                       totals: usageTotals,
                       sessions: [
-                        {
-                          key: "agent:main:historical-hour",
-                          label: "Historical hour",
-                          agentId: "main",
-                          updatedAt,
-                          usage: {
-                            ...usageTotals,
-                            activityDates: [date],
-                            messageCounts: messages,
-                            utcQuarterHourMessageCounts: [{ date, quarterIndex, ...messages }],
-                            utcQuarterHourTokenUsage: [{ date, quarterIndex, ...usageTotals }],
-                          },
-                        },
+                        makeSession("agent:main:historical-hour", "Historical hour", updatedAt, {
+                          ...usageTotals,
+                          activityDates: [date],
+                          messageCounts: messages,
+                          utcQuarterHourMessageCounts: [{ date, quarterIndex, ...messages }],
+                          utcQuarterHourTokenUsage: [{ date, quarterIndex, ...usageTotals }],
+                        }),
                       ],
                       aggregates: {
                         ...empty["sessions.usage"].aggregates,
@@ -189,6 +247,17 @@ suite.define(() => {
           await page
             .getByRole("combobox", { name: "Time zone", exact: true })
             .selectOption(timeZone);
+          // The page title stays with its subtitle instead of moving into the toolbar row.
+          await page.locator(".content-header--stacked .page-title").waitFor();
+          const content = page.locator("main.content");
+          await expect
+            .poll(() =>
+              content.evaluate((element) => element.classList.contains("content--hub-header")),
+            )
+            .toBe(true);
+          expect(await content.evaluate((element) => getComputedStyle(element).paddingTop)).toBe(
+            "16px",
+          );
           const dateInputs = await page.locator(".usage-date-input").all();
           expect(dateInputs).toHaveLength(2);
           for (const input of dateInputs) {
@@ -203,10 +272,7 @@ suite.define(() => {
           const refresh = page
             .locator("openclaw-usage-page")
             .getByRole("button", { name: "Refresh", exact: true });
-          for (const [stage, now] of [
-            ["control", "2026-03-07T17:00:00Z"],
-            ["dst-gap", "2026-03-08T16:00:00Z"],
-          ] as const) {
+          for (const now of ["2026-03-07T17:00:00Z", "2026-03-08T16:00:00Z"]) {
             await page.clock.setFixedTime(new Date(now));
             const requests = (await gateway.getRequests("sessions.usage")).length;
             await refresh.click();
@@ -216,49 +282,31 @@ suite.define(() => {
             await expect
               .poll(() => cells.nth(2).getAttribute("aria-label"))
               .toBe("2:00 · 100 tokens");
-            await expect
-              .poll(() => page.locator(".daily-bar-label").allTextContents())
-              .toEqual(["Jan 15"]);
+            await expectTexts(page.locator(".daily-bar-label"), ["Jan 15"]);
             await expect
               .poll(() => page.locator(".daily-bar-wrapper").getAttribute("aria-label"))
               .toBe("January 15, 2026: 100 tokens, $0.00");
             await hours.scrollIntoViewIfNeeded();
             await expect.poll(() => hours.isVisible()).toBe(true);
-            if (artifactDir) {
-              await page.screenshot({
-                animations: "disabled",
-                path: path.join(artifactDir, `${timeZone}-${stage}.png`),
-              });
-            }
             await expect
               .poll(async () => ({
-                labels: (await hours.locator(".usage-error-date").allTextContents()).map((text) =>
-                  text.trim(),
-                ),
-                rates: (await hours.locator(".usage-error-rate").allTextContents()).map((text) =>
-                  text.trim(),
-                ),
-                details: (await hours.locator(".usage-error-sub").allTextContents()).map((text) =>
-                  text.trim(),
-                ),
+                labels: await trimmedTexts(hours.locator(".usage-list-label")),
+                rates: await trimmedTexts(hours.locator(".usage-list-value")),
+                details: await trimmedTexts(hours.locator(".usage-list-sub")),
               }))
               .toEqual({ labels: ["2 AM"], rates: ["50.00%"], details: ["5 errors · 10 msgs"] });
           }
           await cells.nth(2).click();
           await expect.poll(() => cells.nth(2).getAttribute("aria-pressed")).toBe("true");
-          await expect
-            .poll(() => page.locator(".session-bar-title").allTextContents())
-            .toEqual(["Historical hour"]);
-          await expect.poll(() => hours.locator(".usage-error-date").textContent()).toBe("2 AM");
+          await expectTexts(page.locator(".session-bar-title"), ["Historical hour"]);
+          await expectText(hours.locator(".usage-list-label")).toBe("2 AM");
           await cells.nth(2).click();
           await cells.nth(3).click();
-          await expect.poll(() => page.locator(".session-bar-title").allTextContents()).toEqual([]);
+          await expectTexts(page.locator(".session-bar-title"), []);
           await expect.poll(() => hours.count()).toBe(0);
           await page.getByRole("button", { name: "Remove hours filter", exact: true }).click();
-          await expect
-            .poll(() => page.locator(".session-bar-title").allTextContents())
-            .toEqual(["Historical hour"]);
-          await expect.poll(() => hours.locator(".usage-error-date").textContent()).toBe("2 AM");
+          await expectTexts(page.locator(".session-bar-title"), ["Historical hour"]);
+          await expectText(hours.locator(".usage-list-label")).toBe("2 AM");
         },
       );
     },
@@ -273,157 +321,104 @@ suite.define(() => {
         { label: "Hidden", tokens: 300 },
         { label: "Visible B", tokens: 100 },
         { label: "Visible C", tokens: 200 },
-      ].map(({ label, tokens }, index) => ({
-        key: `agent:main:range-${index}`,
-        label,
-        agentId: "main",
-        updatedAt: updatedAt - index,
-        usage: { ...emptyTotals, input: tokens, totalTokens: tokens },
-      }));
-      const empty = emptyUsageResponses();
-      await suite.withPage(
-        { locale: "en-US", serviceWorkers: "block", viewport: { height: 1_000, width: 1_440 } },
-        async ({ page }) => {
-          await installMockGateway(page, {
-            methodResponses: {
-              ...empty,
-              "sessions.usage": { ...empty["sessions.usage"], sessions },
-              "sessions.usage.timeseries": { points: [] },
-              "sessions.usage.logs": { logs: [] },
-              "usage.status": { updatedAt, providers: [] },
-            },
-          });
-          await page.goto(`${suite.server.baseUrl}usage`);
-          const card = page.locator(".sessions-card");
-          let list = card.locator(".session-bars").first();
-          await expect
-            .poll(() => list.locator(".session-bar-title").allTextContents())
-            .toEqual(sessions.map((session) => session.label));
-          if (scenario === "filtered") {
-            await page.locator(".usage-query-input").fill("label:Visible");
-            await page.locator(".usage-query-input").press("Enter");
-            await expect.poll(() => list.locator(".session-bar-row").count()).toBe(3);
-          }
-          if (scenario === "recent-tab") {
-            for (const name of ["Visible C", "Visible A", "Visible B"]) {
-              await list.getByRole("button", { name, exact: true }).click();
-            }
-            await card.getByRole("button", { name: "Recently viewed", exact: true }).click();
-            list = card.locator(".session-bars--recent");
-            await expect
-              .poll(() => list.locator(".session-bar-title").allTextContents())
-              .toEqual(["Visible B", "Visible A", "Visible C"]);
-            await card.getByRole("button", { name: "Clear Selection", exact: true }).click();
-          }
-          const names = await list.locator(".session-bar-title").allTextContents();
-          await list.getByRole("button", { name: names[0], exact: true }).click();
-          await list
-            .getByRole("button", { name: "Visible C", exact: true })
-            .click({ modifiers: ["Shift"] });
-          if (recordVisuals) {
-            const artifactDir = path.join(suite.artifactDir, "usage-range-selection");
-            await card.screenshot({ path: path.join(artifactDir, `${scenario}.png`) });
-          }
-          await expect
-            .poll(async () =>
-              (
-                await list.locator('[aria-pressed="true"] .session-bar-title').allTextContents()
-              ).toSorted(),
-            )
-            .toEqual(names.toSorted());
-          if (scenario === "filtered") {
-            await page.locator(".usage-query-input").fill("");
-            await page.locator(".usage-query-input").press("Enter");
-            await expect.poll(() => list.locator(".session-bar-row").count()).toBe(4);
-            await expect
-              .poll(() =>
-                list
-                  .getByRole("button", { name: "Hidden", exact: true })
-                  .getAttribute("aria-pressed"),
-              )
-              .toBe("false");
-          }
-        },
+      ].map(({ label, tokens }, index) =>
+        makeSession(`agent:main:range-${index}`, label, updatedAt - index, {
+          ...emptyTotals,
+          input: tokens,
+          totalTokens: tokens,
+        }),
       );
+      const empty = emptyUsageResponses();
+      await suite.withPage(pageOptions, async ({ page }) => {
+        await installMockGateway(page, {
+          methodResponses: {
+            ...empty,
+            "sessions.usage": { ...empty["sessions.usage"], sessions },
+            "sessions.usage.timeseries": { points: [] },
+            "sessions.usage.logs": { logs: [] },
+            "usage.status": { updatedAt, providers: [] },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}usage`);
+        const card = page.locator(".sessions-card");
+        let list = card.locator(".session-bars").first();
+        await expectTexts(
+          list.locator(".session-bar-title"),
+          sessions.map((session) => session.label),
+        );
+        if (scenario === "filtered") {
+          await page.locator(".usage-query-input").fill("label:Visible");
+          await page.locator(".usage-query-input").press("Enter");
+          await expect.poll(() => list.locator(".session-bar-row").count()).toBe(3);
+        }
+        if (scenario === "recent-tab") {
+          for (const name of ["Visible C", "Visible A", "Visible B"]) {
+            await list.getByRole("button", { name, exact: true }).click();
+          }
+          await card.getByRole("button", { name: "Recently viewed", exact: true }).click();
+          list = card.locator(".session-bars--recent");
+          await expectTexts(list.locator(".session-bar-title"), [
+            "Visible B",
+            "Visible A",
+            "Visible C",
+          ]);
+          await card.getByRole("button", { name: "Clear Selection", exact: true }).click();
+        }
+        const names = await list.locator(".session-bar-title").allTextContents();
+        await list.getByRole("button", { name: names[0], exact: true }).click();
+        await list
+          .getByRole("button", { name: "Visible C", exact: true })
+          .click({ modifiers: ["Shift"] });
+        await expect
+          .poll(async () =>
+            (
+              await list.locator('[aria-pressed="true"] .session-bar-title').allTextContents()
+            ).toSorted(),
+          )
+          .toEqual(names.toSorted());
+        if (scenario === "filtered") {
+          await page.locator(".usage-query-input").fill("");
+          await page.locator(".usage-query-input").press("Enter");
+          await expect.poll(() => list.locator(".session-bar-row").count()).toBe(4);
+          await expect
+            .poll(() =>
+              list
+                .getByRole("button", { name: "Hidden", exact: true })
+                .getAttribute("aria-pressed"),
+            )
+            .toBe("false");
+        }
+      });
     },
   );
 
-  it("shows a visible provider usage warning when the usage status request fails", async () => {
-    await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 1_000, width: 1_440 },
-      },
-      async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          methodResponses: {
-            ...emptyUsageResponses(),
-            "usage.status": {
-              __mockError: { code: "INTERNAL_ERROR", message: "gateway transport unavailable" },
-            },
-          },
-        });
+  it.each([
+    { outcome: "request-failed", failed: true },
+    { outcome: "empty", failed: false },
+  ])("handles provider usage status $outcome", async ({ failed }) => {
+    await suite.withPage(pageOptions, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          ...emptyUsageResponses(),
+          "usage.status": failed
+            ? { __mockError: { code: "INTERNAL_ERROR", message: "gateway transport unavailable" } }
+            : { updatedAt: Date.now(), providers: [] },
+        },
+      });
 
-        await page.goto(`${suite.server.baseUrl}usage`);
-        await expect
-          .poll(async () => (await gateway.getRequests("usage.status")).length)
-          .toBeGreaterThan(0);
-        await page.locator(".usage-empty-state").waitFor();
-        await expect
-          .poll(() => page.locator(".usage-page").textContent())
-          .toContain("Provider usage is unavailable; the last request failed. Refresh to retry.");
-        if (recordVisuals) {
-          await mkdir(path.join(suite.artifactDir, "provider-usage-outcomes"), { recursive: true });
-          await page.locator(".usage-page").screenshot({
-            animations: "disabled",
-            path: path.join(
-              path.join(suite.artifactDir, "provider-usage-outcomes"),
-              "usage-status-request-failed.png",
-            ),
-          });
-        }
-      },
-    );
-  });
-
-  it("does not show the provider usage warning for a valid empty response", async () => {
-    await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 1_000, width: 1_440 },
-      },
-      async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          methodResponses: {
-            ...emptyUsageResponses(),
-            "usage.status": { updatedAt: Date.now(), providers: [] },
-          },
-        });
-
-        await page.goto(`${suite.server.baseUrl}usage`);
-        await expect
-          .poll(async () => (await gateway.getRequests("usage.status")).length)
-          .toBeGreaterThan(0);
-        await page.locator(".usage-empty-state").waitFor();
-        await expect
-          .poll(() => page.locator(".usage-page").textContent())
-          .not.toContain(
-            "Provider usage is unavailable; the last request failed. Refresh to retry.",
-          );
-        if (recordVisuals) {
-          await mkdir(path.join(suite.artifactDir, "provider-usage-outcomes"), { recursive: true });
-          await page.locator(".usage-page").screenshot({
-            animations: "disabled",
-            path: path.join(
-              path.join(suite.artifactDir, "provider-usage-outcomes"),
-              "usage-status-empty.png",
-            ),
-          });
-        }
-      },
-    );
+      await page.goto(`${suite.server.baseUrl}usage`);
+      await expect
+        .poll(async () => (await gateway.getRequests("usage.status")).length)
+        .toBeGreaterThan(0);
+      await page.locator(".usage-empty-state").waitFor();
+      const warning = "Provider usage is unavailable; the last request failed. Refresh to retry.";
+      const content = expectText(page.locator(".usage-page"));
+      if (failed) {
+        await content.toContain(warning);
+      } else {
+        await content.not.toContain(warning);
+      }
+    });
   });
 
   it("keeps pending sessions visible when their UTC activity day is selected", async () => {
@@ -432,12 +427,7 @@ suite.define(() => {
     const pendingSessionKey = "agent:main:pending-cache";
     const cachedSessionKey = "agent:main:cached-usage";
     await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        timezoneId: "America/Los_Angeles",
-        viewport: { height: 1_000, width: 1_440 },
-      },
+      { ...pageOptions, timezoneId: "America/Los_Angeles" },
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
           methodResponses: {
@@ -446,47 +436,13 @@ suite.define(() => {
               startDate: selectedDay,
               endDate: selectedDay,
               sessions: [
-                {
-                  key: cachedSessionKey,
-                  label: "Cached session",
-                  agentId: "main",
-                  updatedAt,
-                  usage: {
-                    ...totals,
-                    activityDates: [selectedDay],
-                    dailyBreakdown: [
-                      {
-                        ...totals,
-                        date: selectedDay,
-                        cost: totals.totalCost,
-                        tokens: totals.totalTokens,
-                      },
-                    ],
-                  },
-                },
-                {
-                  key: pendingSessionKey,
-                  label: "Pending session",
-                  agentId: "main",
-                  updatedAt,
-                  usage: null,
-                },
+                makeSession(cachedSessionKey, "Cached session", updatedAt, usageOnDay(selectedDay)),
+                makeSession(pendingSessionKey, "Pending session", updatedAt, null),
               ],
               totals,
               aggregates: {
-                messages: {
-                  total: 0,
-                  user: 0,
-                  assistant: 0,
-                  toolCalls: 0,
-                  toolResults: 0,
-                  errors: 0,
-                },
-                tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
-                byModel: [],
-                byProvider: [],
+                ...emptyUsageResponses()["sessions.usage"].aggregates,
                 byAgent: [{ agentId: "main", totals }],
-                byChannel: [],
                 costDaily: [{ ...totals, date: selectedDay }],
                 daily: [
                   {
@@ -505,6 +461,8 @@ suite.define(() => {
           },
         });
 
+        // The chart draws the selected calendar range, so "today" must contain the mocked day.
+        await page.clock.setFixedTime(new Date("2026-05-14T12:00:00.000Z"));
         await page.goto(`${suite.server.baseUrl}usage`);
         const pendingRow = page.locator(".session-bar-row").filter({ hasText: "Pending session" });
         const cachedRow = page.locator(".session-bar-row").filter({ hasText: "Cached session" });
@@ -515,7 +473,8 @@ suite.define(() => {
           .poll(async () => (await gateway.getRequests("sessions.usage")).at(-1)?.params)
           .toMatchObject({ mode: "utc" });
         await expect.poll(() => cachedRow.count(), { timeout: 10_000 }).toBe(1);
-        await page.locator(".daily-bar-wrapper").click();
+        // A refreshing report still draws the whole range; pick the recorded day.
+        await page.locator(".daily-bar-wrapper:not(.daily-bar-wrapper--pending)").last().click();
 
         await expect.poll(() => cachedRow.count()).toBe(1);
         await expect.poll(() => pendingRow.count()).toBe(1);
@@ -529,433 +488,257 @@ suite.define(() => {
     const sessions = [
       { provider: "openai", label: "Team Planning" },
       { provider: "anthropic", label: "Research Review" },
-    ].map(({ provider, label }) => ({
-      key: `agent:main:${provider}`,
-      label,
-      agentId: "main",
-      modelProvider: provider,
-      model: `${provider}-model`,
-      updatedAt,
-      usage: {
-        ...totals,
-        activityDates: [date],
-        dailyBreakdown: [{ ...totals, date, cost: totals.totalCost, tokens: totals.totalTokens }],
-      },
-    }));
-    const empty = emptyUsageResponses();
-    if (recordVisuals) {
-      await mkdir(path.join(suite.artifactDir, "usage-filter-repair"), { recursive: true });
-    }
-
-    await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 1_000, width: 1_440 },
-        ...(recordVisuals
-          ? {
-              recordVideo: {
-                dir: path.join(suite.artifactDir, "usage-filter-repair"),
-                size: { height: 1_000, width: 1_440 },
-              },
-            }
-          : {}),
-      },
-      async ({ page }) => {
-        await installMockGateway(page, {
-          methodResponses: {
-            "sessions.usage": {
-              ...empty["sessions.usage"],
-              sessions,
-              totals,
-              aggregates: {
-                ...empty["sessions.usage"].aggregates,
-                costDaily: [dailyEntry(0, totals.totalCost, totals.totalTokens)],
-              },
-            },
-            "usage.status": { updatedAt, providers: [] },
-          },
-        });
-
-        await page.goto(`${suite.server.baseUrl}usage`);
-        const sessionLabels = page.locator(".session-bar-title");
-        await expect
-          .poll(async () => (await sessionLabels.allTextContents()).toSorted())
-          .toEqual(["Research Review", "Team Planning"]);
-
-        const providerFilter = page.locator(".usage-filter-select").filter({
-          has: page.locator(".usage-filter-trigger", { hasText: "Provider" }),
-        });
-        await providerFilter.locator(".usage-filter-trigger").click();
-        await providerFilter.locator('wa-dropdown-item[value="command:select-all"]').click();
-        await expect.poll(() => providerFilter.locator(".settings-count").textContent()).toBe("2");
-        await expect
-          .poll(async () => (await sessionLabels.allTextContents()).toSorted())
-          .toEqual(["Research Review", "Team Planning"]);
-        if (recordVisuals) {
-          await writeFile(
-            path.join(
-              path.join(suite.artifactDir, "usage-filter-repair"),
-              "01-provider-alternatives.png",
-            ),
-            await takeControlUiViewportScreenshot(page, providerFilter.locator('[part="menu"]'), [
-              providerFilter.locator('wa-dropdown-item[value="option:openai"]'),
-            ]),
-          );
-        }
-
-        const query = page.locator(".usage-query-input");
-        await page.keyboard.press("Escape");
-        for (const token of ["PROVIDER:OpenAI", 'provider:"openai"']) {
-          await query.fill(`${token} provider:anthropic`);
-          await query.press("Enter");
-          await expect
-            .poll(async () => (await sessionLabels.allTextContents()).toSorted())
-            .toEqual(["Research Review", "Team Planning"]);
-          await providerFilter.locator(".usage-filter-trigger").click();
-          const openai = providerFilter.locator('wa-dropdown-item[value="option:openai"]');
-          await expect.poll(() => openai.getAttribute("aria-checked")).toBe("true");
-          await openai.click();
-          await expect.poll(() => sessionLabels.allTextContents()).toEqual(["Research Review"]);
-          await expect.poll(() => query.inputValue()).toBe("provider:anthropic ");
-          await page.keyboard.press("Escape");
-        }
-        await query.fill('label:"Team Planning"');
-        await query.press("Enter");
-        await expect.poll(() => sessionLabels.allTextContents()).toEqual(["Team Planning"]);
-        if (recordVisuals) {
-          await writeFile(
-            path.join(
-              path.join(suite.artifactDir, "usage-filter-repair"),
-              "02-quoted-session-label.png",
-            ),
-            await takeControlUiViewportScreenshot(page, page.locator(".usage-page"), [query]),
-          );
-        }
-      },
+    ].map(({ provider, label }) =>
+      makeSession(`agent:main:${provider}`, label, updatedAt, usageOnDay(date), {
+        modelProvider: provider,
+        model: `${provider}-model`,
+      }),
     );
+    const empty = emptyUsageResponses();
+    await suite.withPage(pageOptions, async ({ page }) => {
+      await installMockGateway(page, {
+        methodResponses: {
+          "sessions.usage": {
+            ...empty["sessions.usage"],
+            sessions,
+            totals,
+            aggregates: {
+              ...empty["sessions.usage"].aggregates,
+              costDaily: [dailyEntry(0, totals.totalCost, totals.totalTokens)],
+            },
+          },
+          "usage.status": { updatedAt, providers: [] },
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}usage`);
+      const sessionLabels = page.locator(".session-bar-title");
+      await expect
+        .poll(async () => (await sessionLabels.allTextContents()).toSorted())
+        .toEqual(["Research Review", "Team Planning"]);
+
+      const providerFilter = page.locator(".usage-filter-select").filter({
+        has: page.locator(".usage-filter-trigger", { hasText: "Provider" }),
+      });
+      await providerFilter.locator(".usage-filter-trigger").click();
+      await providerFilter.locator('[data-value="command:select-all"]').click();
+      await expectText(providerFilter.locator(".settings-count")).toBe("2");
+      await expect
+        .poll(async () => (await sessionLabels.allTextContents()).toSorted())
+        .toEqual(["Research Review", "Team Planning"]);
+
+      const query = page.locator(".usage-query-input");
+      await page.keyboard.press("Escape");
+      for (const token of ["PROVIDER:OpenAI", 'provider:"openai"']) {
+        await query.fill(`${token} provider:anthropic`);
+        await query.press("Enter");
+        await expect
+          .poll(async () => (await sessionLabels.allTextContents()).toSorted())
+          .toEqual(["Research Review", "Team Planning"]);
+        await providerFilter.locator(".usage-filter-trigger").click();
+        const openai = providerFilter.locator('[data-value="option:openai"]');
+        await expect.poll(() => openai.getAttribute("aria-checked")).toBe("true");
+        await openai.click();
+        await expectTexts(sessionLabels, ["Research Review"]);
+        await expect.poll(() => query.inputValue()).toBe("provider:anthropic ");
+        await page.keyboard.press("Escape");
+      }
+      await query.fill('label:"Team Planning"');
+      await query.press("Enter");
+      await expectTexts(sessionLabels, ["Team Planning"]);
+    });
   });
 
   it("renders cost analysis from Gateway usage data", async () => {
-    await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 1_000, width: 1_440 },
-      },
-      async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          methodResponses: {
-            "agents.list": {
-              agents: [
-                { id: "main", name: "Main" },
-                { id: "writer", name: "Writer" },
-              ],
-              defaultId: "main",
-              mainKey: "main",
-              scope: "agent",
-            },
-            "sessions.usage": {
-              updatedAt: Date.now(),
-              startDate: dayOffset(-89),
-              endDate: dayOffset(0),
-              sessions: [
-                {
-                  key: "agent:main:cost-analysis",
-                  label: "Cost analysis",
-                  agentId: "main",
-                  modelProvider: "openai",
-                  model: "gpt-5.5",
-                  updatedAt: Date.now(),
-                  usage: {
-                    ...totals,
-                    activityDates: daily.map((entry) => entry.date),
-                    dailyBreakdown: daily.map((entry) => ({
-                      ...entry,
-                      cost: entry.totalCost,
-                      tokens: entry.totalTokens,
-                    })),
-                    messageCounts: {
-                      total: 40,
-                      user: 20,
-                      assistant: 20,
-                      toolCalls: 12,
-                      toolResults: 12,
-                      errors: 0,
-                    },
-                    modelUsage: [
-                      {
-                        provider: "openai",
-                        model: "gpt-5.5",
-                        count: 30,
-                        totals: { ...totals, totalCost: 22 },
-                      },
-                      {
-                        provider: "anthropic",
-                        model: "claude-opus-4-6",
-                        count: 10,
-                        totals: { ...totals, totalCost: 10 },
-                      },
-                    ],
-                  },
-                },
-              ],
-              totals,
-              aggregates: {
-                messages: {
-                  total: 40,
-                  user: 20,
-                  assistant: 20,
-                  toolCalls: 12,
-                  toolResults: 12,
-                  errors: 0,
-                },
-                tools: { totalCalls: 12, uniqueTools: 2, tools: [{ name: "exec", count: 8 }] },
-                byModel: [
-                  {
-                    provider: "openai",
-                    model: "gpt-5.5",
-                    count: 30,
-                    totals: { ...totals, totalCost: 22 },
-                  },
-                  {
-                    provider: "anthropic",
-                    model: "claude-opus-4-6",
-                    count: 10,
-                    totals: { ...totals, totalCost: 10 },
-                  },
-                ],
-                byProvider: [
-                  { provider: "openai", count: 30, totals: { ...totals, totalCost: 22 } },
-                  { provider: "anthropic", count: 10, totals: { ...totals, totalCost: 10 } },
-                ],
-                byAgent: [{ agentId: "main", totals }],
-                byChannel: [],
-                costDaily: daily,
-                daily: daily.map((entry) => ({
-                  date: entry.date,
-                  tokens: entry.totalTokens,
-                  cost: entry.totalCost,
-                  messages: 10,
-                  toolCalls: 3,
-                  errors: 0,
-                })),
+    await suite.withPage(pageOptions, async ({ page }) => {
+      const daily = [
+        dailyEntry(-89, 5, 500_000),
+        dailyEntry(-29, 7, 700_000),
+        dailyEntry(-6, 9, 900_000),
+        dailyEntry(0, 11, 1_100_000),
+      ];
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "sessions.usage.timeseries": { points: [] },
+          "sessions.usage.logs": { logs: [] },
+          "agents.list": {
+            agents: [
+              { id: "main", name: "Main" },
+              { id: "writer", name: "Writer" },
+            ],
+            defaultId: "main",
+            mainKey: "main",
+            scope: "agent",
+          },
+          "sessions.usage": {
+            updatedAt: Date.now(),
+            startDate: dayOffset(-89),
+            endDate: dayOffset(0),
+            sessions: [
+              {
+                ...makeSession("agent:main:cost-analysis", "Cost analysis", Date.now(), {
+                  ...totals,
+                  activityDates: daily.map((entry) => entry.date),
+                  dailyBreakdown: daily.map((entry) => ({
+                    ...entry,
+                    cost: entry.totalCost,
+                    tokens: entry.totalTokens,
+                  })),
+                  messageCounts: costMessages,
+                  modelUsage,
+                }),
+                modelProvider: "openai",
+                model: "gpt-5.5",
               },
-            },
-            "usage.status": {
-              updatedAt: Date.now(),
-              providers: [
-                {
-                  provider: "openai",
-                  displayName: "OpenAI",
-                  plan: "Admin API",
-                  windows: [],
-                  billing: [
-                    { type: "spend", label: "30-day API spend", amount: 98.75, unit: "USD" },
-                  ],
-                  costHistory: {
-                    unit: "USD",
-                    periodDays: 30,
-                    daily: [
-                      {
-                        date: dayOffset(-6),
-                        amount: 38.5,
-                        requests: 12_300,
-                        inputTokens: 4_200_000,
-                        cacheReadTokens: 2_100_000,
-                        cacheWriteTokens: 0,
-                        outputTokens: 850_000,
-                        totalTokens: 5_050_000,
-                      },
-                      {
-                        date: dayOffset(0),
-                        amount: 60.25,
-                        requests: 18_450,
-                        inputTokens: 6_100_000,
-                        cacheReadTokens: 3_400_000,
-                        cacheWriteTokens: 0,
-                        outputTokens: 1_200_000,
-                        totalTokens: 7_300_000,
-                      },
-                    ],
-                    models: [
-                      {
-                        name: "gpt-5.5",
-                        requests: 30_750,
-                        inputTokens: 10_300_000,
-                        cacheReadTokens: 5_500_000,
-                        cacheWriteTokens: 0,
-                        outputTokens: 2_050_000,
-                        totalTokens: 12_350_000,
-                      },
-                    ],
-                    categories: [{ name: "Responses", amount: 98.75 }],
-                  },
-                },
-                {
-                  provider: "anthropic",
-                  displayName: "Anthropic",
-                  plan: "Admin API",
-                  windows: [],
-                  billing: [
-                    { type: "spend", label: "30-day API spend", amount: 42.4, unit: "USD" },
-                  ],
-                  costHistory: {
-                    unit: "USD",
-                    periodDays: 30,
-                    daily: [
-                      {
-                        date: dayOffset(-6),
-                        amount: 17.15,
-                        inputTokens: 1_800_000,
-                        cacheReadTokens: 900_000,
-                        cacheWriteTokens: 200_000,
-                        outputTokens: 350_000,
-                        totalTokens: 3_250_000,
-                      },
-                      {
-                        date: dayOffset(0),
-                        amount: 25.25,
-                        inputTokens: 2_600_000,
-                        cacheReadTokens: 1_400_000,
-                        cacheWriteTokens: 300_000,
-                        outputTokens: 500_000,
-                        totalTokens: 4_800_000,
-                      },
-                    ],
-                    models: [
-                      {
-                        name: "claude-opus-4-8",
-                        inputTokens: 4_400_000,
-                        cacheReadTokens: 2_300_000,
-                        cacheWriteTokens: 500_000,
-                        outputTokens: 850_000,
-                        totalTokens: 8_050_000,
-                      },
-                    ],
-                    categories: [{ name: "Claude API", amount: 42.4 }],
-                  },
-                },
-                {
-                  provider: "openrouter",
-                  displayName: "OpenRouter",
-                  plan: "Production",
-                  windows: [{ label: "API key budget", usedPercent: 25 }],
-                  billing: [
-                    {
-                      type: "balance",
-                      label: "Account balance",
-                      amount: 64.5,
-                      unit: "USD",
-                    },
-                    {
-                      type: "budget",
-                      label: "API key budget",
-                      used: 5,
-                      limit: 20,
-                      unit: "USD",
-                    },
-                  ],
-                  summary: "$1.25 today · $5.00 this month",
-                },
-              ],
+            ],
+            totals,
+            aggregates: {
+              messages: costMessages,
+              tools: { totalCalls: 12, uniqueTools: 2, tools: [{ name: "exec", count: 8 }] },
+              byModel: modelUsage,
+              byProvider: modelUsage.map(({ provider, count, totals: modelTotals }) => ({
+                provider,
+                count,
+                totals: modelTotals,
+              })),
+              byAgent: [{ agentId: "main", totals }],
+              byChannel: [],
+              costDaily: daily,
+              daily: daily.map((entry) => ({
+                date: entry.date,
+                tokens: entry.totalTokens,
+                cost: entry.totalCost,
+                messages: 10,
+                toolCalls: 3,
+                errors: 0,
+              })),
             },
           },
+          "usage.status": {
+            updatedAt: Date.now(),
+            providers: [
+              providerHistory(
+                "openai",
+                "OpenAI",
+                98.75,
+                "Responses",
+                [
+                  [-6, 38.5, 12_300],
+                  [0, 60.25, 18_450],
+                ],
+                "gpt-5.5",
+              ),
+              providerHistory(
+                "anthropic",
+                "Anthropic",
+                42.4,
+                "Claude API",
+                [
+                  [-6, 17.15],
+                  [0, 25.25],
+                ],
+                "claude-opus-4-8",
+              ),
+              {
+                provider: "openrouter",
+                displayName: "OpenRouter",
+                plan: "Production",
+                windows: [{ label: "API key budget", usedPercent: 25 }],
+                billing: [
+                  {
+                    type: "balance",
+                    label: "Account balance",
+                    amount: 64.5,
+                    unit: "USD",
+                  },
+                  {
+                    type: "budget",
+                    label: "API key budget",
+                    used: 5,
+                    limit: 20,
+                    unit: "USD",
+                  },
+                ],
+                summary: "$1.25 today · $5.00 this month",
+              },
+            ],
+          },
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}usage`);
+      await page.locator(".daily-chart-compact").waitFor({ state: "visible", timeout: 10_000 });
+      const agentScope = page.locator(".agent-scope-control openclaw-agent-select");
+      await agentScope.locator(".agent-select__trigger").click();
+      await agentScope
+        .locator(".agent-select__option[data-agent-option]")
+        .filter({ hasText: "All agents" })
+        .click();
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.usage")).at(-1)?.params)
+        .toMatchObject({ agentScope: "all" });
+      const requestsBeforeRangeChange = (await gateway.getRequests("sessions.usage")).length;
+      await page.getByRole("button", { name: "90d", exact: true }).click();
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.usage")).length)
+        .toBeGreaterThan(requestsBeforeRangeChange);
+      await page.getByRole("button", { name: "Cost", exact: true }).click();
+
+      const windowCards = page.locator(".cost-window");
+      await expect.poll(() => windowCards.count()).toBe(4);
+      await expect
+        .poll(async () => ({
+          labels: await windowCards.locator(".cost-window__label").allTextContents(),
+          values: await trimmedTexts(windowCards.locator(".cost-window__value")),
+        }))
+        .toEqual({
+          labels: ["Selected Range", "Today", "Last 7 days", "Last 30 days"],
+          values: ["$32.00", "$11.00", "$20.00", "$27.00"],
         });
+      await expectTexts(page.locator(".daily-chart-scale span"), ["$20", "$10", "$0"]);
+      await expectText(page.locator(".usage-insight-card", { hasText: "Top Providers" })).toContain(
+        "OpenAI",
+      );
+      const messagesHint = page.locator("#usage-summary-hint-messages");
+      const messagesTooltipHost = messagesHint.locator("xpath=..");
+      const messagesTooltip = messagesTooltipHost.locator(".tooltip-surface[popover]");
+      await messagesHint.hover();
+      await expectPopover(messagesTooltip, true);
+      await page.mouse.move(1, 1);
+      await expectPopover(messagesTooltip, false);
 
-        await page.goto(`${suite.server.baseUrl}usage`);
-        await page.locator(".daily-chart-compact").waitFor({ state: "visible", timeout: 10_000 });
-        const agentScope = page.locator(".agent-scope-control openclaw-agent-select");
-        await agentScope.locator(".agent-select__trigger").click();
-        await agentScope
-          .locator("wa-dropdown-item[data-agent-option]")
-          .filter({ hasText: "All agents" })
-          .click();
-        await expect
-          .poll(async () => (await gateway.getRequests("sessions.usage")).at(-1)?.params)
-          .toMatchObject({ agentScope: "all" });
-        const requestsBeforeRangeChange = (await gateway.getRequests("sessions.usage")).length;
-        await page.getByRole("button", { name: "90d", exact: true }).click();
-        await expect
-          .poll(async () => (await gateway.getRequests("sessions.usage")).length)
-          .toBeGreaterThan(requestsBeforeRangeChange);
-        await page.getByRole("button", { name: "Cost", exact: true }).click();
+      await page.keyboard.press("Tab");
+      await messagesHint.focus();
+      await expectPopover(messagesTooltip, true);
+      await page.getByRole("button", { name: "Cost", exact: true }).focus();
+      await expectPopover(messagesTooltip, false);
 
-        const windowCards = page.locator(".cost-window-card");
-        await expect.poll(() => windowCards.count()).toBe(4);
-        await expect
-          .poll(async () => ({
-            labels: await windowCards.locator(".cost-window-card__label").allTextContents(),
-            values: (await windowCards.locator(".cost-window-card__value").allTextContents()).map(
-              (value) => value.trim(),
-            ),
-          }))
-          .toEqual({
-            labels: ["Selected Range", "Today", "Last 7 days", "Last 30 days"],
-            values: ["$32.00", "$11.00", "$20.00", "$27.00"],
-          });
-        await expect
-          .poll(() => page.locator(".daily-chart-scale span").allTextContents())
-          .toEqual(["$11.00", "$5.50", "$0.00"]);
-        await expect
-          .poll(() =>
-            page.locator(".usage-insight-card", { hasText: "Top Providers" }).textContent(),
-          )
-          .toContain("openai");
-        const messagesHint = page.locator("#usage-summary-hint-messages");
-        const messagesTooltipHost = messagesHint.locator("xpath=..");
-        const messagesTooltip = messagesTooltipHost.locator("wa-tooltip");
-        await messagesHint.hover();
-        await expect.poll(() => messagesTooltip.getAttribute("open")).toBe("");
-        await page.mouse.move(1, 1);
-        await expect.poll(() => messagesTooltip.getAttribute("open")).toBeNull();
+      await messagesHint.click();
+      await expectPopover(messagesTooltip, true);
+      await expectText(messagesTooltipHost.locator('[slot="content"]')).toContain(
+        "Total user and assistant messages in range.",
+      );
+      await page.getByRole("button", { name: "Cost", exact: true }).click();
+      await expectPopover(messagesTooltip, false);
+      await page.keyboard.press("Tab");
+      await messagesHint.focus();
+      await expectPopover(messagesTooltip, true);
+      await messagesHint.press("Escape");
+      await expectPopover(messagesTooltip, false);
+      const providerCards = page.locator(".provider-usage-card");
+      await expect.poll(() => providerCards.count()).toBe(3);
+      await expect
+        .poll(async () => (await gateway.getRequests("usage.status")).length)
+        .toBeGreaterThan(0);
+      await expectText(providerCards.filter({ hasText: "OpenRouter" })).toContain("$64.50");
+      await expectText(providerCards.filter({ hasText: "OpenAI" })).toContain("$98.75");
+      await expectText(providerCards.filter({ hasText: "Anthropic" })).toContain("claude-opus-4-8");
 
-        await page.keyboard.press("Tab");
-        await messagesHint.focus();
-        await expect.poll(() => messagesTooltip.getAttribute("open")).toBe("");
-        await page.getByRole("button", { name: "Cost", exact: true }).focus();
-        await expect.poll(() => messagesTooltip.getAttribute("open")).toBeNull();
-
-        await messagesHint.click();
-        await expect.poll(() => messagesTooltip.getAttribute("open")).toBe("");
-        await expect
-          .poll(() => messagesTooltipHost.locator('[slot="content"]').textContent())
-          .toContain("Total user and assistant messages in range.");
-        await page.getByRole("button", { name: "Cost", exact: true }).click();
-        await expect.poll(() => messagesTooltip.getAttribute("open")).toBeNull();
-        await page.keyboard.press("Tab");
-        await messagesHint.focus();
-        await expect.poll(() => messagesTooltip.getAttribute("open")).toBe("");
-        await messagesHint.press("Escape");
-        await expect.poll(() => messagesTooltip.getAttribute("open")).toBeNull();
-        const providerCards = page.locator(".provider-usage-card");
-        await expect.poll(() => providerCards.count()).toBe(3);
-        await expect
-          .poll(async () => (await gateway.getRequests("usage.status")).length)
-          .toBeGreaterThan(0);
-        await expect
-          .poll(() => providerCards.filter({ hasText: "OpenRouter" }).textContent())
-          .toContain("$64.50");
-        await expect
-          .poll(() => providerCards.filter({ hasText: "OpenAI" }).textContent())
-          .toContain("$98.75");
-        await expect
-          .poll(() => providerCards.filter({ hasText: "Anthropic" }).textContent())
-          .toContain("claude-opus-4-8");
-
-        await page.locator(".usage-query-input").fill("missing-session");
-        await page.locator(".usage-query-input").press("Enter");
-        const topProviders = page.locator(".usage-insight-card", { hasText: "Top Providers" });
-        await expect.poll(() => topProviders.textContent()).toContain("No provider data");
-        await expect.poll(() => topProviders.textContent()).not.toContain("openai");
-
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          const artifactDir = path.join(suite.artifactDir, "provider-plans");
-          await page.locator(".usage-page").screenshot({
-            path: path.join(artifactDir, "after.png"),
-          });
-        }
-      },
-    );
+      await page.locator(".usage-query-input").fill("missing-session");
+      await page.locator(".usage-query-input").press("Enter");
+      const topProviders = page.locator(".usage-insight-card", { hasText: "Top Providers" });
+      await expectText(topProviders).toContain("No provider data");
+      await expectText(topProviders).not.toContain("OpenAI");
+    });
   });
 });

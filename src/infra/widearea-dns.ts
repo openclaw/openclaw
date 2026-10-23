@@ -4,7 +4,9 @@ import path from "node:path";
 import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { fnv1aUtf16 } from "../shared/fnv1a.js";
 import { CONFIG_DIR } from "../utils.js";
+import { ignoreMissingPath } from "./errno.js";
 
 const DNS_LABEL_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
 const MAX_DNS_NAME_LENGTH = 253;
@@ -34,11 +36,9 @@ export function normalizeWideAreaDomain(raw?: string | null): string | null {
 }
 
 export function resolveWideAreaDiscoveryDomain(params?: {
-  env?: NodeJS.ProcessEnv;
   configDomain?: string | null;
 }): string | null {
-  const env = params?.env ?? process.env;
-  const candidate = params?.configDomain ?? env.OPENCLAW_WIDE_AREA_DOMAIN ?? null;
+  const candidate = params?.configDomain ?? process.env.OPENCLAW_WIDE_AREA_DOMAIN ?? null;
   try {
     return normalizeWideAreaDomain(candidate);
   } catch {
@@ -84,45 +84,9 @@ function txtQuote(value: string): string {
   return `"${escaped}"`;
 }
 
-function formatYyyyMmDd(date: Date): string {
-  const y = date.getUTCFullYear();
-  const m = String(date.getUTCMonth() + 1).padStart(2, "0");
-  const d = String(date.getUTCDate()).padStart(2, "0");
-  return `${y}${m}${d}`;
-}
-
-function nextSerial(existingSerial: number | null, now: Date): number {
-  const base = Number.parseInt(`${formatYyyyMmDd(now)}01`, 10);
-  if (existingSerial === null || !Number.isFinite(existingSerial)) {
-    return base;
-  }
-  // RFC 1982 accepts only advances smaller than half the unsigned serial space.
-  const distance = (base - existingSerial) >>> 0;
-  return distance > 0 && distance < 0x80000000 ? base : (existingSerial + 1) >>> 0;
-}
-
-function extractSerial(zoneText: string): number | null {
-  const match = zoneText.match(/^\s*@\s+IN\s+SOA\s+\S+\s+\S+\s+(\d+)\s+/m);
-  if (!match) {
-    return null;
-  }
-  const parsed = Number.parseInt(expectDefined(match[1], "widearea dns regex capture 1"), 10);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
 function extractContentHash(zoneText: string): string | null {
   const match = zoneText.match(/^\s*;\s*openclaw-content-hash:\s*(\S+)\s*$/m);
   return match?.[1] ?? null;
-}
-
-function computeContentHash(body: string): string {
-  // Cheap stable hash; avoids importing crypto (and keeps deterministic across runtimes).
-  let h = 2166136261;
-  for (let i = 0; i < body.length; i++) {
-    h ^= body.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return (h >>> 0).toString(16).padStart(8, "0");
 }
 
 export type WideAreaGatewayZoneOpts = {
@@ -134,8 +98,6 @@ export type WideAreaGatewayZoneOpts = {
   gatewayTlsEnabled?: boolean;
   gatewayTlsFingerprintSha256?: string;
   gatewayDirectReachable?: boolean;
-  instanceLabel?: string;
-  hostLabel?: string;
   tailnetDns?: string;
   sshPort?: number;
   cliPath?: string;
@@ -145,8 +107,8 @@ export function renderWideAreaGatewayZoneText(
   opts: WideAreaGatewayZoneOpts & { serial: number },
 ): string {
   const hostname = os.hostname().split(".")[0] ?? "openclaw";
-  const hostLabel = dnsLabel(opts.hostLabel ?? hostname, "openclaw");
-  const instanceLabel = dnsLabel(opts.instanceLabel ?? `${hostname}-gateway`, "openclaw-gw");
+  const hostLabel = dnsLabel(hostname, "openclaw");
+  const instanceLabel = dnsLabel(`${hostname}-gateway`, "openclaw-gw");
   const domain = normalizeWideAreaDomain(opts.domain) ?? "local.";
 
   const txt = [
@@ -197,7 +159,8 @@ export function renderWideAreaGatewayZoneText(
       line === soaLine ? `@ IN SOA ns1 hostmaster SERIAL 7200 3600 1209600 60` : line,
     )
     .join("\n")}\n`;
-  const contentHash = computeContentHash(hashBody);
+  // Cheap stable hash; avoids importing crypto (and keeps deterministic across runtimes).
+  const contentHash = fnv1aUtf16(hashBody).toString(16).padStart(8, "0");
 
   return `; openclaw-content-hash: ${contentHash}\n${contentBody}`;
 }
@@ -215,8 +178,8 @@ export async function writeWideAreaGatewayZone(
   const existing = (() => {
     try {
       return fs.readFileSync(zonePath, "utf-8");
-    } catch {
-      return null;
+    } catch (error) {
+      return ignoreMissingPath(error) ?? null;
     }
   })();
 
@@ -228,8 +191,22 @@ export async function writeWideAreaGatewayZone(
     return { zonePath, changed: false };
   }
 
-  const existingSerial = existing ? extractSerial(existing) : null;
-  const serial = nextSerial(existingSerial, new Date());
+  const serialMatch = existing?.match(/^\s*@\s+IN\s+SOA\s+\S+\s+\S+\s+(\d+)\s+/m);
+  const parsedSerial = serialMatch
+    ? Number.parseInt(expectDefined(serialMatch[1], "widearea dns regex capture 1"), 10)
+    : Number.NaN;
+  const existingSerial = Number.isFinite(parsedSerial) ? parsedSerial : null;
+  const now = new Date();
+  const y = now.getUTCFullYear();
+  const m = String(now.getUTCMonth() + 1).padStart(2, "0");
+  const d = String(now.getUTCDate()).padStart(2, "0");
+  const base = Number.parseInt(`${y}${m}${d}01`, 10);
+  let serial = base;
+  if (existingSerial !== null && Number.isFinite(existingSerial)) {
+    // RFC 1982 accepts only advances smaller than half the unsigned serial space.
+    const distance = (base - existingSerial) >>> 0;
+    serial = distance > 0 && distance < 0x80000000 ? base : (existingSerial + 1) >>> 0;
+  }
   const next = renderWideAreaGatewayZoneText({ ...normalizedOpts, serial });
   replaceWideAreaZoneFile(zonePath, next);
   return { zonePath, changed: true };

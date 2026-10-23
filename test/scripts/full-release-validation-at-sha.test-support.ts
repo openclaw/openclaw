@@ -11,7 +11,7 @@ import {
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach } from "vitest";
+import { afterEach, expect } from "vitest";
 import { parse as parseYaml } from "yaml";
 import {
   SCRIPT_PATH,
@@ -27,6 +27,14 @@ export {
 } from "./full-release-validation-at-sha.repository.test-support.js";
 
 type DispatchWorkflow = { on?: { workflow_dispatch?: { inputs?: Record<string, unknown> } } };
+
+export function expectDispatchFailure(
+  result: { status: number | null; stderr: string },
+  error: string,
+) {
+  expect(result.status, result.stderr).toBe(1);
+  expect(result.stderr).toContain(error);
+}
 const dispatchWorkflows = new Map<string, DispatchWorkflow>();
 const fixtureCleanups = new Set<() => void>();
 afterEach(() => {
@@ -40,6 +48,7 @@ export function createDispatchFixture(
     candidateOwned?: boolean;
     admissionAcceptedFailure?: boolean;
     admissionMovedRef?: boolean;
+    advanceMainBeforeAdmission?: number;
     admissionWrongRunSha?: boolean;
     admissionRevokedActor?: boolean;
     admissionFailedUpload?: boolean;
@@ -52,10 +61,9 @@ export function createDispatchFixture(
     dispatchFailure?: boolean;
     acceptedDispatchFailure?: boolean;
     dispatchReturnsRunUrl?: boolean;
-    duplicateRuns?: boolean;
     duplicateOnSecondPage?: boolean;
     runIdentityOverrides?: Record<string, unknown>;
-    runPathStyle?: "bare" | "short-ref" | "full-ref";
+    runPathStyle?: "full-ref";
     witnessOverrides?: Record<string, unknown>;
     witnessInputs?: Record<string, unknown>;
     witnessMissing?: boolean;
@@ -68,15 +76,13 @@ export function createDispatchFixture(
     artifactReadError?: "metadata" | "archive";
     archiveEscapeFlag?: "required" | "unsupported";
     oversizedArtifactMetadata?: boolean;
-    archiveFailure?: "oversized" | "truncated" | "corrupt" | "digest";
-    inventoryError?: string;
-    malformedInventory?: boolean;
+    archiveFailure?: "oversized" | "corrupt" | "digest";
     incompletePagination?: boolean;
     dispatchHttpStatus?: number;
     failIntentWrite?: boolean;
     stopBeforeDispatch?: boolean;
     reopenDuringDispatch?: boolean;
-    payloadPreparationFailure?: "directory" | "write";
+    payloadPreparationFailure?: "write";
     payloadCleanupFailure?: boolean;
     parentRunStates?: Array<{
       conclusion: string | null;
@@ -95,6 +101,8 @@ export function createDispatchFixture(
     workflowSource?: string;
     targetSource?: Record<string, string>;
     omitPurpose?: boolean;
+    unreachableContributionRecord?: boolean;
+    releaseNotes?: string;
   } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "openclaw-release-dispatch-"));
@@ -176,9 +184,6 @@ fs.mkdtempSync = (prefix, ...args) => {
   if (intent.phase !== "prepared" || intent.refs.workflow !== "intended") {
     throw new Error("payload preparation requires durable prepared intent before the workflow ref");
   }
-  if (${JSON.stringify(options.payloadPreparationFailure ?? "")} === "directory") {
-    throw new Error("injected payload directory failure");
-  }
   const directory = makeDirectory(prefix, ...args);
   payloadEvent("created", directory);
   return directory;
@@ -246,10 +251,7 @@ Atomics.wait = (array, index, value, timeout) => {
 `,
   );
 
-  const { oldWorkflowSha, workflowSha, trustedWorkflowTag, targetSha } = prepareDispatchRepository(
-    root,
-    options,
-  );
+  const { workflowSha, trustedWorkflowTag, targetSha } = prepareDispatchRepository(root, options);
   const workflowSource = readFileSync(
     join(checkout, ".github", "workflows", "full-release-validation.yml"),
     "utf8",
@@ -347,12 +349,15 @@ const fs = require("node:fs");
 const { spawnSync } = require("node:child_process");
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.MOCK_GH_CALLS, JSON.stringify(args) + "\\n");
+const fail = (message, code = 1) => { console.error(message); process.exit(code); };
+const git = (args, stdio = "inherit") => spawnSync("git", args, {
+  env: { ...process.env, PATH: process.env.MOCK_REAL_PATH }, stdio,
+});
 if (process.argv[1] === ${JSON.stringify(ghPath)}) {
   fs.appendFileSync(process.env.MOCK_PATH_GH_CALLS, JSON.stringify(args) + "\\n");
 }
 if (args[0] === "auth" && args[1] === "token") {
-  console.error("fixture credentials belong to the selected CLI");
-  process.exit(90);
+  fail("fixture credentials belong to the selected CLI", 90);
 }
 const parentRunStates = ${JSON.stringify(options.parentRunStates ?? [{ conclusion: "success", status: "completed" }])};
 const parentRunIndexPath = ${JSON.stringify(parentRunIndexPath)};
@@ -378,8 +383,7 @@ const runMetadata = (id, state = parentRunStates[0]) => {
     ...state, id, head_sha: process.env.MOCK_WORKFLOW_SHA, run_attempt: state.attempt ?? 1,
     workflow_id: 17, head_branch: accepted.ref, event: "workflow_dispatch",
     path: ".github/workflows/full-release-validation.yml" + (
-      ${JSON.stringify(options.runPathStyle ?? "bare")} === "short-ref" ? "@" + accepted.ref
-      : ${JSON.stringify(options.runPathStyle ?? "bare")} === "full-ref" ? "@refs/heads/" + accepted.ref : ""
+      ${JSON.stringify(options.runPathStyle ?? "bare")} === "full-ref" ? "@refs/heads/" + accepted.ref : ""
     ),
     repository: { full_name: "openclaw/openclaw" },
     head_repository: { full_name: "openclaw/openclaw" },
@@ -389,8 +393,7 @@ const runMetadata = (id, state = parentRunStates[0]) => {
   };
 };
 if (args[0] === "api" && method === "GET" && !hasNoCache) {
-  console.error("authoritative reads require Cache-Control: max-age=0");
-  process.exit(18);
+  fail("authoritative reads require Cache-Control: max-age=0", 18);
 }
 const admissionEndpoint = endpoint.includes("/actions/workflows/openclaw-release-prepare.yml") ||
   endpoint.endsWith("/actions/workflows/18/runs") || endpoint.includes("/actions/runs/321/") ||
@@ -406,36 +409,20 @@ if (${JSON.stringify(options.candidateOwned ?? false)} && args[0] === "api" && a
   const ref = fields.get("ref") || "";
   const sha = fields.get("sha") || "";
   if (${JSON.stringify(options.createRefFailure ?? false)}) {
-    console.error("configured workflow ref creation failure");
-    process.exit(19);
+    fail("configured workflow ref creation failure", 19);
   }
-  const object = spawnSync(
-    "git",
-    ["--git-dir", process.env.MOCK_ORIGIN, "cat-file", "-e", sha + "^{object}"],
-    {
-      env: { ...process.env, PATH: process.env.MOCK_REAL_PATH },
-      stdio: "ignore",
-    },
-  );
+  const object = git(["--git-dir", process.env.MOCK_ORIGIN, "cat-file", "-e", sha + "^{object}"], "ignore");
   if (object.status !== 0) {
-    console.error("gh: Object does not exist (HTTP 422)");
-    process.exit(19);
+    fail("gh: Object does not exist (HTTP 422)", 19);
   }
-  const result = spawnSync("git", ["--git-dir", process.env.MOCK_ORIGIN, "update-ref", ref, sha], {
-    env: { ...process.env, PATH: process.env.MOCK_REAL_PATH },
-    stdio: "inherit",
-  });
+  const result = git(["--git-dir", process.env.MOCK_ORIGIN, "update-ref", ref, sha]);
   process.exit(result.status ?? 1);
 } else if (args[0] === "api" && method === "DELETE" && endpoint.includes("/git/refs/")) {
   const ref = "refs/" + endpoint.slice(endpoint.indexOf("/git/refs/") + "/git/refs/".length);
   if (${JSON.stringify(options.deleteRefFailure ?? false)}) {
-    console.error("configured workflow ref deletion failure");
-    process.exit(20);
+    fail("configured workflow ref deletion failure", 20);
   }
-  const result = spawnSync("git", ["--git-dir", process.env.MOCK_ORIGIN, "update-ref", "-d", ref], {
-    env: { ...process.env, PATH: process.env.MOCK_REAL_PATH },
-    stdio: "inherit",
-  });
+  const result = git(["--git-dir", process.env.MOCK_ORIGIN, "update-ref", "-d", ref]);
   process.exit(result.status ?? 1);
 } else if ((args[0] === "workflow" && args[1] === "run") || (method === "POST" && endpoint.endsWith("/dispatches"))) {
   const inputIndex = args.indexOf("--input");
@@ -458,8 +445,7 @@ if (${JSON.stringify(options.candidateOwned ?? false)} && args[0] === "api" && a
   const declaredInputs = new Set(JSON.parse(process.env.MOCK_WORKFLOW_INPUTS));
   for (const key of Object.keys(wireInputs)) {
     if (!declaredInputs.has(key)) {
-      console.error("workflow input is not declared: " + key);
-      process.exit(2);
+      fail("workflow input is not declared: " + key, 2);
     }
   }
   if (args[0] === "api") {
@@ -487,8 +473,7 @@ if (${JSON.stringify(options.candidateOwned ?? false)} && args[0] === "api" && a
     process.exit(1);
   }
   if (${JSON.stringify(options.dispatchFailure ?? false)}) {
-    console.error("configured workflow dispatch failure");
-    process.exit(21);
+    fail("configured workflow dispatch failure", 21);
   }
   fs.writeFileSync(acceptedRunPath, JSON.stringify({
     inputs: wireInputs,
@@ -498,8 +483,7 @@ if (${JSON.stringify(options.candidateOwned ?? false)} && args[0] === "api" && a
     ref: payload?.ref ?? (args[0] === "workflow" ? args[args.indexOf("--ref") + 1] : fields.get("ref")),
   }));
   if (${JSON.stringify(options.acceptedDispatchFailure ?? false)}) {
-    console.error("connection reset by peer after server acceptance");
-    process.exit(1);
+    fail("connection reset by peer after server acceptance");
   }
   if (args[0] === "api") {
     console.log("HTTP/2.0 204 No Content\\r\\nContent-Length: 0\\r\\n\\r\\n");
@@ -509,14 +493,9 @@ if (${JSON.stringify(options.candidateOwned ?? false)} && args[0] === "api" && a
 } else if (args[0] === "api" && endpoint.endsWith("/actions/workflows/full-release-validation.yml")) {
   console.log(JSON.stringify({ id: 17, path: ".github/workflows/full-release-validation.yml" }));
 } else if (args[0] === "api" && /\\/actions\\/workflows\\/(?:17|full-release-validation.yml)\\/runs$/.test(endpoint)) {
-  if (${JSON.stringify(options.inventoryError ?? "")}) {
-    console.error(${JSON.stringify(options.inventoryError ?? "")});
-    process.exit(1);
-  }
   const index = Number(fs.readFileSync(runDiscoveryIndexPath, "utf8"));
   fs.writeFileSync(runDiscoveryIndexPath, String(index + 1));
-  const ids = ${JSON.stringify(options.duplicateOnSecondPage ?? false)} ? Array.from({ length: 21 }, (_, i) => 123 + i)
-    : ${JSON.stringify(options.duplicateRuns ?? false)} ? [123, 124] : [123];
+  const ids = ${JSON.stringify(options.duplicateOnSecondPage ?? false)} ? Array.from({ length: 21 }, (_, i) => 123 + i) : [123];
   const runs = index < ${JSON.stringify(options.runDiscoveryMisses ?? 0)} || !fs.existsSync(acceptedRunPath)
     ? []
     : ids.map((id) => runMetadata(id));
@@ -529,7 +508,7 @@ if (${JSON.stringify(options.candidateOwned ?? false)} && args[0] === "api" && a
     }
     process.stdout.write(headers + "\\r\\n");
   }
-  console.log(${JSON.stringify(options.malformedInventory ?? false)} ? "{" : JSON.stringify({ total_count: runs.length, workflow_runs: runs.slice((page - 1) * 20, page * 20) }));
+  console.log(JSON.stringify({ total_count: runs.length, workflow_runs: runs.slice((page - 1) * 20, page * 20) }));
 } else if (args[0] === "api" && endpoint.endsWith("/actions/runs/123")) {
   const index = Number(fs.readFileSync(parentRunIndexPath, "utf8"));
   const state = parentRunStates[Math.max(0, Math.min(index, parentRunStates.length - 1))];
@@ -541,16 +520,13 @@ if (${JSON.stringify(options.candidateOwned ?? false)} && args[0] === "api" && a
   }
   const archive = endpoint.endsWith("/zip");
   if (archive && ${JSON.stringify(options.archiveEscapeFlag ?? "")} === "unsupported" && args.includes("--allow-escape-sequences")) {
-    console.error("unknown flag: --allow-escape-sequences");
-    process.exit(1);
+    fail("unknown flag: --allow-escape-sequences");
   }
   if (archive && ${JSON.stringify(options.archiveEscapeFlag ?? "")} === "required" && !args.includes("--allow-escape-sequences")) {
-    console.error("refusing to output binary content without --allow-escape-sequences");
-    process.exit(1);
+    fail("refusing to output binary content without --allow-escape-sequences");
   }
   if (${JSON.stringify(options.artifactReadError ?? "")} === (archive ? "archive" : "metadata")) {
-    console.error("artifact read denied (HTTP 403)");
-    process.exit(1);
+    fail("artifact read denied (HTTP 403)");
   }
   require(${JSON.stringify(artifactFixturePath)})().then(({ metadata, bytes }) => {
     if (!archive) {
@@ -561,7 +537,6 @@ if (${JSON.stringify(options.candidateOwned ?? false)} && args[0] === "api" && a
     }
     const failure = ${JSON.stringify(options.archiveFailure ?? "")};
     if (failure === "oversized") bytes = Buffer.alloc(256 * 1024 + 1);
-    if (failure === "truncated") bytes = bytes.subarray(0, bytes.length - 1);
     if (failure === "digest") bytes[0] ^= 1;
     process.stdout.write(bytes);
   });
@@ -579,8 +554,7 @@ if (${JSON.stringify(options.candidateOwned ?? false)} && args[0] === "api" && a
   const index = Number(fs.readFileSync(parentRunIndexPath, "utf8")) - 1;
   const state = parentRunStates[index];
   if (state.metadataError) {
-    console.error(state.metadataError);
-    process.exit(1);
+    fail(state.metadataError);
   }
   console.log(JSON.stringify({ artifacts: state.artifacts ?? (state.artifactReady ? [{
     name: "full-release-decision-123-" + (state.attempt ?? 1), expired: false,
@@ -604,11 +578,9 @@ if (${JSON.stringify(options.candidateOwned ?? false)} && args[0] === "api" && a
     }));
     process.exit(0);
   }
-  console.error(parentRunStates[index]?.status === "queued" ? "no artifact matches any of the names or patterns provided" : "no valid artifacts found");
-  process.exit(1);
+  fail(parentRunStates[index]?.status === "queued" ? "no artifact matches any of the names or patterns provided" : "no valid artifacts found");
 } else {
-  console.error("unexpected gh call: " + args.join(" "));
-  process.exit(2);
+  fail("unexpected gh call: " + args.join(" "), 2);
 }
 `,
   );
@@ -635,90 +607,67 @@ if (${JSON.stringify(options.candidateOwned ?? false)} && args[0] === "api" && a
     if (options.ghRoute !== "path") {
       githubEnv.OPENCLAW_GH_BIN = selectedGhPath;
     }
-    return spawnSync(
-      testNodeExecPath,
-      [
-        SCRIPT_PATH,
-        // This fixture exercises retained main-derived requests. New candidate-owned
-        // admission has its own P/Q boundary fixture below.
-        ...(!recoveryOnly &&
-        !options.candidateOwned &&
-        !extraArgs.includes("--trusted-workflow-ref")
-          ? ["--trusted-workflow-ref", "main", "--workflow-sha", workflowSha]
-          : []),
-        ...(!recoveryOnly && options.candidateOwned
-          ? [
-              "--admission-workflow-sha",
-              workflowSha,
-              "-f",
-              "provider=openai",
-              "-f",
-              "release_profile=stable",
-            ]
-          : []),
-        ...(!recoveryOnly &&
-        !options.omitPurpose &&
-        !extraArgs.some((arg) => arg.startsWith("validation_purpose="))
-          ? ["-f", "validation_purpose=diagnostic"]
-          : []),
-        ...(recoveryOnly
-          ? []
-          : [
-              "--sha",
-              targetSha,
-              ...(options.includeTargetRef === false ? [] : ["--target-ref", releaseRef]),
-            ]),
-        ...extraArgs,
-      ],
-      {
-        cwd: checkout,
-        encoding: "utf8",
-        env: {
-          ...githubEnv,
-          NODE_OPTIONS: [process.env.NODE_OPTIONS, "--import", preloadPath]
-            .filter(Boolean)
-            .join(" "),
-          MOCK_GH_CALLS: ghCallsPath,
-          MOCK_GIT_CALLS: gitCallsPath,
-          MOCK_ORIGIN: origin,
-          MOCK_PATH_GH_CALLS: pathGhCallsPath,
-          MOCK_REAL_PATH: process.env.PATH,
-          MOCK_TRUSTED_WORKFLOW_FULL_REF: trustedWorkflowFullRef,
-          MOCK_TRUSTED_WORKFLOW_REF: trustedWorkflowRef,
-          MOCK_WAIT_CALLS: waitCallsPath,
-          MOCK_WORKFLOW_INPUTS: JSON.stringify(declaredWorkflowInputs),
-          MOCK_WORKFLOW_SCHEMA: JSON.stringify(workflow.on?.workflow_dispatch?.inputs),
-          MOCK_REQUEST_FILE: extraArgs.includes("--request-file")
-            ? extraArgs[extraArgs.indexOf("--request-file") + 1]
-            : "",
-          MOCK_WORKFLOW_SHA: options.candidateOwned ? targetSha : workflowSha,
-          MOCK_VERIFIER_SHA: workflowSha,
-          GIT_AUTHOR_NAME: "Release Fixture",
-          GIT_AUTHOR_EMAIL: "release-fixture@openclaw.invalid",
-          GIT_COMMITTER_NAME: "Release Fixture",
-          GIT_COMMITTER_EMAIL: "release-fixture@openclaw.invalid",
-          PATH: `${binDir}:${process.env.PATH}`,
-        },
+    const args: string[] = [];
+    if (!recoveryOnly) {
+      if (options.candidateOwned) {
+        args.push(
+          "--admission-workflow-sha",
+          workflowSha,
+          "-f",
+          "provider=openai",
+          "-f",
+          "release_profile=stable",
+        );
+      } else if (!extraArgs.includes("--trusted-workflow-ref")) {
+        args.push("--trusted-workflow-ref", "main", "--workflow-sha", workflowSha);
+      }
+      if (!options.omitPurpose && !extraArgs.some((arg) => arg.startsWith("validation_purpose="))) {
+        args.push("-f", "validation_purpose=diagnostic");
+      }
+      args.push("--sha", targetSha);
+      if (options.includeTargetRef !== false) {
+        args.push("--target-ref", releaseRef);
+      }
+    }
+    return spawnSync(testNodeExecPath, [SCRIPT_PATH, ...args, ...extraArgs], {
+      cwd: checkout,
+      encoding: "utf8",
+      env: {
+        ...githubEnv,
+        NODE_OPTIONS: [process.env.NODE_OPTIONS, "--import", preloadPath].filter(Boolean).join(" "),
+        MOCK_GH_CALLS: ghCallsPath,
+        MOCK_GIT_CALLS: gitCallsPath,
+        MOCK_ORIGIN: origin,
+        MOCK_PATH_GH_CALLS: pathGhCallsPath,
+        MOCK_REAL_PATH: process.env.PATH,
+        MOCK_TRUSTED_WORKFLOW_FULL_REF: trustedWorkflowFullRef,
+        MOCK_TRUSTED_WORKFLOW_REF: trustedWorkflowRef,
+        MOCK_WAIT_CALLS: waitCallsPath,
+        MOCK_WORKFLOW_INPUTS: JSON.stringify(declaredWorkflowInputs),
+        MOCK_WORKFLOW_SCHEMA: JSON.stringify(workflow.on?.workflow_dispatch?.inputs),
+        MOCK_REQUEST_FILE: extraArgs.includes("--request-file")
+          ? extraArgs[extraArgs.indexOf("--request-file") + 1]
+          : "",
+        MOCK_WORKFLOW_SHA: options.candidateOwned ? targetSha : workflowSha,
+        MOCK_VERIFIER_SHA: workflowSha,
+        MOCK_ADVANCED_P_PATH: admissionCapturePath + ".advanced",
+        GIT_AUTHOR_NAME: "Release Fixture",
+        GIT_AUTHOR_EMAIL: "release-fixture@openclaw.invalid",
+        GIT_COMMITTER_NAME: "Release Fixture",
+        GIT_COMMITTER_EMAIL: "release-fixture@openclaw.invalid",
+        PATH: `${binDir}:${process.env.PATH}`,
       },
-    );
+    });
   };
+  const readLines = (path: string) => readFileSync(path, "utf8").trim().split("\n").filter(Boolean);
   const readCalls = (path: string): string[][] =>
-    readFileSync(path, "utf8")
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as string[]);
-  const readWaits = (): number[] =>
-    readFileSync(waitCallsPath, "utf8").trim().split("\n").filter(Boolean).map(Number);
+    readLines(path).map((line) => JSON.parse(line) as string[]);
+  const readWaits = (): number[] => readLines(waitCallsPath).map(Number);
   const readPayloadEvents = (): Array<{
     stage: string;
     path: string;
     options?: { flag: string; mode: number };
-  }> =>
-    readFileSync(payloadEventsPath, "utf8")
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line));
+  }> => readLines(payloadEventsPath).map((line) => JSON.parse(line));
 
   const requestPath = () => {
     const directory = join(checkout, ".artifacts", "full-release-validation");
@@ -742,7 +691,6 @@ if (${JSON.stringify(options.candidateOwned ?? false)} && args[0] === "api" && a
   return {
     checkout,
     acceptedRunPath,
-    admissionCapturePath,
     admissionReceiptPath,
     npmCallsPath,
     publishedVersionsPath,
@@ -766,7 +714,6 @@ if (${JSON.stringify(options.candidateOwned ?? false)} && args[0] === "api" && a
     fetchCallsPath,
     gitCallsPath,
     origin,
-    oldWorkflowSha,
     pathGhCallsPath,
     readCalls,
     readWaits,
@@ -784,7 +731,6 @@ if (${JSON.stringify(options.candidateOwned ?? false)} && args[0] === "api" && a
     requestPath,
     releaseRef,
     run,
-    selectedGhPath,
     targetSha,
     trustedWorkflowTag,
     workflowSha,

@@ -9,7 +9,7 @@ Goal: one coherent visual system across onboarding, settings, and future screens
 - Strong readability first.
 - One clear primary action per screen state.
 - Progressive disclosure for advanced controls.
-- Deterministic flows: validate early, fail clearly.
+- Predictable flows: validate early, fail clearly.
 
 ## 2. Style Baseline
 

@@ -3,8 +3,7 @@
 # Sourced by trusted CI steps; native check owners still run every command.
 ci_static_kind="$1"
 case "$ci_static_kind" in
-  tsgo) ci_static_failure=2 ;;
-  oxlint) ci_static_failure=1 ;;
+  tsgo|oxlint) ;;
   *) echo "Unsupported static check: $ci_static_kind" >&2; exit 64 ;;
 esac
 ci_static_groups=0
@@ -18,15 +17,16 @@ run_static_check() {
   else
     child_exit=$?
   fi
-  if [ "${OPENCLAW_CI_STATIC_EVIDENCE:-0}" != "1" ] || [ "$child_exit" != "$ci_static_failure" ]; then
+  # Timeouts and cancellation deliberately stop admitting new work.
+  if [ "$child_exit" = 124 ] || [ "$child_exit" -ge 128 ]; then
     exit "$child_exit"
   fi
-  ci_static_exit="$child_exit"
+  if [ "$ci_static_exit" = 0 ]; then
+    ci_static_exit="$child_exit"
+  fi
 }
 
 finish_static_checks() {
-  if [ "${OPENCLAW_CI_STATIC_EVIDENCE:-0}" = "1" ]; then
-    printf '[ci-static:%s:step] {"version":1,"groups":%s}\n' "$ci_static_kind" "$ci_static_groups"
-  fi
+  printf '[ci-static:%s:step] {"version":1,"groups":%s}\n' "$ci_static_kind" "$ci_static_groups"
   exit "$ci_static_exit"
 }

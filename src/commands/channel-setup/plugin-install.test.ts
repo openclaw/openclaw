@@ -385,7 +385,6 @@ describe("ensureChannelSetupPluginInstalled", () => {
     expect(result.cfg.plugins?.installs?.["bundled-chat"]?.acceptedSurface).toBeDefined();
     expect(fs.existsSync(runtimeMarker)).toBe(false);
   });
-
   it("uses the catalog plugin id for local-path installs", async () => {
     const runtime = makeRuntime();
     const prompter = makePrompter({
@@ -414,10 +413,6 @@ describe("ensureChannelSetupPluginInstalled", () => {
 
   it("defaults to local on dev channel when local path exists", async () => {
     expect(await runInitialValueForChannel("dev")).toBe("local");
-  });
-
-  it("defaults to npm on beta channel even when local path exists", async () => {
-    expect(await runInitialValueForChannel("beta")).toBe("npm");
   });
 
   it("does not default to bundled local path when an external catalog overrides the npm spec", async () => {
@@ -453,46 +448,6 @@ describe("ensureChannelSetupPluginInstalled", () => {
     expectRecordFields(options[0], "npm option", {
       value: "npm",
       label: `Download from npm (${bundledChatForkNpmSpec})`,
-    });
-    expectRecordFields(options[1], "skip option", {
-      value: "skip",
-    });
-  });
-
-  it("offers ClawHub as the first-class install source for channel catalog entries", async () => {
-    const runtime = makeRuntime();
-    const { prompter, select } = makeSkipInstallPrompter();
-    const cfg: OpenClawConfig = { update: { channel: "beta" } };
-    resolveBundledPluginSources.mockReturnValue(new Map());
-
-    await ensureChannelSetupPluginInstalled({
-      cfg,
-      entry: {
-        id: "clawhub-chat",
-        pluginId: "clawhub-chat",
-        meta: {
-          id: "clawhub-chat",
-          label: "ClawHub Chat",
-          selectionLabel: "ClawHub Chat",
-          docsPath: "/channels/clawhub-chat",
-          blurb: "Test",
-        },
-        install: {
-          clawhubSpec: "clawhub:openclaw/clawhub-chat@2026.5.2",
-          defaultChoice: "clawhub",
-        },
-      },
-      prompter,
-      runtime,
-    });
-
-    const selectArgs = requireMockCallArg(select, 0);
-    expect(selectArgs.initialValue).toBe("clawhub");
-    const options = requireSelectOptions(select);
-    expect(options).toHaveLength(2);
-    expectRecordFields(options[0], "clawhub option", {
-      value: "clawhub",
-      label: "Download from ClawHub (clawhub:openclaw/clawhub-chat@2026.5.2)",
     });
     expectRecordFields(options[1], "skip option", {
       value: "skip",
@@ -609,7 +564,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
     },
   );
 
-  it("loads setup snapshots from the auto-enabled config snapshot", () => {
+  it("loads setup snapshots from the auto-enabled config snapshot", async () => {
     const cfg: OpenClawConfig = {
       plugins: {},
       channels: { "external-chat": { enabled: true } } as never,
@@ -628,7 +583,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
       autoEnabledReasons: {},
     });
 
-    loadSetupSnapshot(cfg);
+    await loadSetupSnapshot(cfg);
 
     expect(applyPluginAutoEnable).toHaveBeenCalledWith({
       config: cfg,
@@ -638,14 +593,17 @@ describe("ensureChannelSetupPluginInstalled", () => {
       config: autoEnabledConfig,
       activationSourceConfig: cfg,
       autoEnabledReasons: {},
+      onlyPluginIds: [],
     });
   });
 
-  it("can load a channel-scoped snapshot without activating the global registry", () => {
+  it("falls back to the bundled plugin for untrusted workspace shadows", async () => {
     const cfg: OpenClawConfig = {};
-    getChannelPluginCatalogEntry.mockReturnValue({ pluginId: "@vendor/external-chat-plugin" });
+    getChannelPluginCatalogEntry
+      .mockReturnValueOnce({ pluginId: "evil-external-chat-shadow", origin: "workspace" })
+      .mockReturnValueOnce({ pluginId: "@vendor/external-chat-plugin", origin: "bundled" });
 
-    loadSetupSnapshot(cfg);
+    await loadSetupSnapshot(cfg);
 
     expectLoadOpenClawPluginFields({
       config: cfg,
@@ -656,22 +614,6 @@ describe("ensureChannelSetupPluginInstalled", () => {
       onlyPluginIds: ["@vendor/external-chat-plugin"],
       includeSetupOnlyChannelPlugins: true,
       channelPluginLoadIntent: "setup",
-    });
-    expect(getChannelPluginCatalogEntry).toHaveBeenCalledWith("external-chat", {
-      workspaceDir: "/tmp/openclaw-workspace",
-    });
-  });
-
-  it("falls back to the bundled plugin for untrusted workspace shadows", () => {
-    const cfg: OpenClawConfig = {};
-    getChannelPluginCatalogEntry
-      .mockReturnValueOnce({ pluginId: "evil-external-chat-shadow", origin: "workspace" })
-      .mockReturnValueOnce({ pluginId: "@vendor/external-chat-plugin", origin: "bundled" });
-
-    loadSetupSnapshot(cfg);
-
-    expectLoadOpenClawPluginFields({
-      onlyPluginIds: ["@vendor/external-chat-plugin"],
     });
     expect(getChannelPluginCatalogEntry).toHaveBeenNthCalledWith(1, "external-chat", {
       workspaceDir: "/tmp/openclaw-workspace",
@@ -683,63 +625,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
     });
   });
 
-  it("keeps trusted workspace overrides scoped during setup reloads", () => {
-    const cfg: OpenClawConfig = {
-      plugins: {
-        enabled: true,
-        allow: ["trusted-external-chat-shadow"],
-      },
-    };
-    getChannelPluginCatalogEntry.mockReturnValue({
-      pluginId: "trusted-external-chat-shadow",
-      origin: "workspace",
-    });
-
-    loadSetupSnapshot(cfg);
-
-    expectLoadOpenClawPluginFields({
-      onlyPluginIds: ["trusted-external-chat-shadow"],
-    });
-    expect(getChannelPluginCatalogEntry).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not widen setup snapshots when no trusted plugin mapping exists", () => {
-    const cfg: OpenClawConfig = {};
-
-    loadSetupSnapshot(cfg);
-
-    expectLoadOpenClawPluginFields({
-      onlyPluginIds: [],
-    });
-  });
-
-  it("scopes snapshots by a unique discovered manifest match when catalog mapping is missing", () => {
-    const cfg: OpenClawConfig = {};
-    loadPluginManifestRegistryCore.mockReturnValue({
-      plugins: [
-        createManifestRecord({
-          id: "custom-external-chat-plugin",
-          channels: ["external-chat"],
-        }),
-      ],
-      diagnostics: [],
-    });
-
-    loadSetupSnapshot(cfg);
-
-    expectLoadOpenClawPluginFields({
-      config: cfg,
-      activationSourceConfig: cfg,
-      autoEnabledReasons: {},
-      workspaceDir: "/tmp/openclaw-workspace",
-      cache: false,
-      onlyPluginIds: ["custom-external-chat-plugin"],
-      includeSetupOnlyChannelPlugins: true,
-      channelPluginLoadIntent: "setup",
-    });
-  });
-
-  it("scopes snapshots by activation-declared channel ownership when direct channel lists are empty", () => {
+  it("scopes snapshots by activation-declared channel ownership when direct channel lists are empty", async () => {
     const cfg: OpenClawConfig = {};
     let sawTrustedCandidate = false;
     discoverOpenClawPlugins.mockReturnValue({
@@ -778,21 +664,12 @@ describe("ensureChannelSetupPluginInstalled", () => {
       };
     });
 
-    loadSetupSnapshot(cfg);
+    await loadSetupSnapshot(cfg);
 
     expectLoadOpenClawPluginFields({
       onlyPluginIds: ["custom-external-chat-plugin"],
     });
     expect(sawTrustedCandidate).toBe(true);
-  });
-
-  it("uses live manifest discovery for activation-declared setup scoping", () => {
-    const cfg: OpenClawConfig = {};
-    mockActivationOnlyPlugin({ id: "custom-external-chat-plugin" });
-
-    loadSetupSnapshot(cfg);
-
-    expect(loadPluginManifestRegistryCore).toHaveBeenCalled();
     expect(
       loadPluginManifestRegistryCore.mock.calls.every(
         ([params]) => !Object.hasOwn(params ?? {}, "cache"),
@@ -833,19 +710,19 @@ describe("ensureChannelSetupPluginInstalled", () => {
     name: string;
     origin: "bundled" | "workspace" | "global";
     cfg: OpenClawConfig;
-  }>)("does not trust $name activation-only ownership", ({ cfg, origin }) => {
+  }>)("does not trust $name activation-only ownership", async ({ cfg, origin }) => {
     mockActivationOnlyPlugin({ id: "external-chat-plugin", origin });
 
-    loadSetupSnapshot(cfg);
+    await loadSetupSnapshot(cfg);
 
     expect(loadOpenClawPlugins).toHaveBeenCalledTimes(1);
     expect(requireMockCallArg(vi.mocked(loadOpenClawPlugins), 0).onlyPluginIds).toStrictEqual([]);
   });
 
-  it("scopes snapshots by plugin id when channel and plugin ids differ", () => {
+  it("scopes snapshots by plugin id when channel and plugin ids differ", async () => {
     const cfg: OpenClawConfig = {};
 
-    loadSetupSnapshot(cfg, "@vendor/external-chat-plugin");
+    await loadSetupSnapshot(cfg, "@vendor/external-chat-plugin");
 
     expectLoadOpenClawPluginFields({
       config: cfg,

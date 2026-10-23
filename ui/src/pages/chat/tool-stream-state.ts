@@ -1,54 +1,9 @@
-import type { ToolStreamHost } from "./tool-stream-contract.ts";
-
-type ToolStreamState = Pick<
-  ToolStreamHost,
-  | "toolStreamById"
-  | "toolStreamOrder"
-  | "chatToolMessages"
-  | "chatStreamSegments"
-  | "activityEventSeqById"
-  | "knownAgentRunIds"
-  | "waitingApprovalStatuses"
-> & { toolStreamSyncTimer?: number | null };
-
-export function canResetToolStream(host: Partial<ToolStreamState>): host is ToolStreamState {
-  return (
-    host.toolStreamById instanceof Map &&
-    Array.isArray(host.toolStreamOrder) &&
-    Array.isArray(host.chatToolMessages) &&
-    Array.isArray(host.chatStreamSegments)
-  );
-}
+import type { ToolStreamState } from "./tool-stream-contract.ts";
 
 export function syncToolStreamMessages(host: ToolStreamState) {
   host.chatToolMessages = host.toolStreamOrder
     .map((id) => host.toolStreamById.get(id)?.message)
     .filter((msg): msg is Record<string, unknown> => Boolean(msg));
-}
-
-export function closeToolStreamBoundary(
-  host: Partial<Pick<ToolStreamHost, "toolStreamById" | "chatToolMessages">>,
-  runId: string,
-  boundaryRunId: string,
-): number | undefined {
-  let latestTimestamp: number | undefined;
-  const replacements = new Map<Record<string, unknown>, Record<string, unknown>>();
-  for (const entry of host.toolStreamById?.values() ?? []) {
-    if (entry.runId !== runId || entry.boundaryRunId) {
-      continue;
-    }
-    latestTimestamp = Math.max(latestTimestamp ?? entry.startedAt, entry.startedAt);
-    entry.boundaryRunId = boundaryRunId;
-    const message = { ...entry.message, boundaryRunId };
-    replacements.set(entry.message, message);
-    entry.message = message;
-  }
-  if (replacements.size && host.chatToolMessages) {
-    host.chatToolMessages = host.chatToolMessages.map(
-      (message) => replacements.get(message) ?? message,
-    );
-  }
-  return latestTimestamp;
 }
 
 export function cancelToolStreamSync(host: Pick<ToolStreamState, "toolStreamSyncTimer">) {
@@ -58,13 +13,18 @@ export function cancelToolStreamSync(host: Pick<ToolStreamState, "toolStreamSync
   }
 }
 
-export function resetToolStream(host: ToolStreamState) {
+export function resetToolStream(
+  host: ToolStreamState,
+  options?: { preserveStreamSegments?: boolean },
+) {
   cancelToolStreamSync(host);
   host.toolStreamById.clear();
   host.toolStreamOrder = [];
   host.activityEventSeqById?.clear();
   host.chatToolMessages = [];
-  host.chatStreamSegments = [];
+  if (!options?.preserveStreamSegments) {
+    host.chatStreamSegments = [];
+  }
   host.knownAgentRunIds?.clear();
   host.waitingApprovalStatuses?.clear();
   // Resolution can beat the overlay queue update. Keep tombstones across transient stream resets

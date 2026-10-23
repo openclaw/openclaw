@@ -87,12 +87,25 @@ struct GatewayDiscoveryHelpersTests {
         #expect(GatewayDiscoveryHelpers.directUrl(for: localGateway) == "ws://127.0.0.1:18789")
     }
 
-    @Test func `direct url rejects public plaintext service endpoint`() {
+    @Test(arguments: ["gateway.example", "127.gateway.example", "127.0.0.1.gateway.example"])
+    func `direct url rejects public plaintext service endpoint`(host: String) {
         let gateway = self.makeGateway(
-            serviceHost: "gateway.example",
+            serviceHost: host,
             servicePort: 18789,
             gatewayTls: false)
 
+        #expect(GatewayDiscoveryHelpers.directUrl(for: gateway) == nil)
+    }
+
+    @Test(arguments: ["localhost", "127.0.0.2", "[::1]", "[::ffff:127.0.0.1]"])
+    func `direct url accepts canonical loopback hosts`(host: String) {
+        let gateway = self.makeGateway(serviceHost: host, servicePort: 18789)
+        #expect(GatewayDiscoveryHelpers.directUrl(for: gateway) == "ws://\(host):18789")
+    }
+
+    @Test(arguments: [nil, 0, 65536] as [Int?])
+    func `direct url requires a valid resolved service port`(port: Int?) {
+        let gateway = self.makeGateway(serviceHost: "gateway.local", servicePort: port)
         #expect(GatewayDiscoveryHelpers.directUrl(for: gateway) == nil)
     }
 

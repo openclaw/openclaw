@@ -2,11 +2,13 @@ import fs from "node:fs/promises";
 import { performance } from "node:perf_hooks";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
+import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   replaceSessionEntry,
-  replaceTranscriptEvents,
   waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
@@ -35,6 +37,7 @@ it.each(["default", "custom", "configured alias", "selected alias"] as const)(
         ...(store === "default" ? {} : { session: { store: configuredPath } }),
       };
       await state.writeConfig(config);
+      setRuntimeConfigSnapshot(config);
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:artifact-reader-lifetime",
@@ -103,6 +106,7 @@ it.runIf(process.env.OPENCLAW_DB_WORKER_BENCH === "1")(
   "measures artifacts.list over 500 files and persisted transcript metadata",
   async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:artifact-bench",

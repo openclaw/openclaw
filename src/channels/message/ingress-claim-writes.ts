@@ -96,31 +96,29 @@ export function createIngressWriter<TPayload, TMetadata, TCompletedMetadata>(
     });
   };
 
-  const releaseClaim = async (
+  const releaseClaim = (
     claim: ChannelIngressQueueClaim<TPayload, TMetadata>,
     releaseOptions?: { lastError?: string; recordAttempt?: boolean },
-  ) => {
-    return await commitClaimWriteWithRetry({
+  ) =>
+    commitClaimWriteWithRetry({
       claim,
       label: "release",
       write: () => queue.release(claim, { ...releaseOptions, releasedAt: now() }),
       falseMeansReclaimed: false,
     });
-  };
 
-  const failClaim = async (
+  const failClaim = (
     claim: ChannelIngressQueueClaim<TPayload, TMetadata>,
     reason: string,
     message: string,
-  ) => {
-    return await commitClaimWriteWithRetry({
+  ) =>
+    commitClaimWriteWithRetry({
       claim,
       label: "dead-letter",
       write: () => queue.fail(claim, { reason, message, failedAt: now() }),
       // Fail false after guillotine/supersede race: treat as already settled.
       falseMeansReclaimed: false,
     });
-  };
 
   return { completeClaimWithRetry, releaseClaim, failClaim };
 }

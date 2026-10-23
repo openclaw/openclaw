@@ -15,6 +15,7 @@ import {
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveTelegramReplyId } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import type { TelegramDraftStream } from "./draft-stream.js";
 import { applyTextToPayload } from "./interactive-fallback.js";
@@ -91,57 +92,22 @@ type CreateLaneTextDelivererParams = {
   markDelivered: () => void;
 };
 
-type DeliverLaneTextParams = {
+type DeliverLaneTextParams = Omit<
+  TelegramSendPayloadOptions,
+  "afterAcceptedDraft" | "silent" | "textMode"
+> & {
   laneName: LaneName;
   text: string;
   payload: ReplyPayload;
-  /** Target before caller-side recovery; omitted uses the incoming payload. */
-  replyTargetBeforeRecovery?: Readonly<Pick<ReplyPayload, "replyToId">>;
   infoKind: string;
   buttons?: TelegramInlineButtons;
   finalizePreview?: boolean;
-  durable?: boolean;
   allowStream?: boolean;
-  promptContextSequence?: TelegramPromptContextProjectionSequence;
-  onPlatformSendDispatch?: () => Promise<void>;
-  assertPlatformSendAuthorized?: () => void;
-  bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
-  onMediaAccepted?: (mediaUrls: readonly string[]) => void;
 };
 
 export type LaneTextDeliverer = (params: DeliverLaneTextParams) => Promise<LaneDeliveryResult>;
 
 export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): LaneTextDeliverer {
-  const clearUnfinalizedStream = async (lane: DraftLaneState) => {
-    if (!lane.stream || lane.finalized) {
-      return;
-    }
-    await lane.stream.clear();
-    lane.lastPartialText = "";
-    lane.hasStreamedMessage = false;
-  };
-
-  const discardUnmaterializedStream = async (lane: DraftLaneState) => {
-    const stream = lane.stream;
-    if (stream) {
-      await stream.discard();
-      stream.forceNewMessage();
-    }
-    lane.lastPartialText = "";
-    lane.hasStreamedMessage = false;
-    lane.finalized = false;
-  };
-
-  const rotateFinalizedStream = (lane: DraftLaneState) => {
-    if (!lane.stream || !lane.finalized) {
-      return;
-    }
-    lane.stream.forceNewMessage();
-    lane.lastPartialText = "";
-    lane.hasStreamedMessage = false;
-    lane.finalized = false;
-  };
-
   const recordRetainedPromptContextPages = async (
     lane: DraftLaneState,
     sequence: TelegramPromptContextProjectionSequence,
@@ -155,7 +121,6 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
     laneName,
     text: initialText,
     payload: initialPayload,
-    replyTargetBeforeRecovery = initialPayload,
     infoKind,
     buttons,
     finalizePreview: requestedFinalizePreview,
@@ -172,7 +137,6 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
     const lane = params.lanes[laneName];
     const promptContextSequence =
       suppliedPromptContextSequence ?? params.createPromptContextSequence();
-    const originalReplyToId = replyTargetBeforeRecovery.replyToId;
     let reply = resolveSendableOutboundReplyParts(payload, { text });
     const isDurableFinal = infoKind === "final";
     const finalizePreview = requestedFinalizePreview ?? isDurableFinal;
@@ -185,7 +149,8 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
       bindPendingFinalDelivery,
       onMediaAccepted,
     };
-    let streamedErrorDraftText =
+    let streamedErrorDraftText: string | undefined;
+    if (
       allowStream &&
       isDurableFinal &&
       payload.isError === true &&
@@ -195,18 +160,12 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
       !lane.finalized &&
       !reply.hasMedia &&
       text.trim()
-        ? (() => {
-            const existing = (
-              lane.lastPartialText ||
-              lane.stream?.lastDeliveredText() ||
-              ""
-            ).trimEnd();
-            const notice = text.trim();
-            return existing && !existing.endsWith(notice)
-              ? `${existing}\n\n${notice}`
-              : existing || notice;
-          })()
-        : undefined;
+    ) {
+      const existing = (lane.lastPartialText || lane.stream.lastDeliveredText() || "").trimEnd();
+      const notice = text.trim();
+      streamedErrorDraftText =
+        existing && !existing.endsWith(notice) ? `${existing}\n\n${notice}` : existing || notice;
+    }
     const recoveryText = streamedErrorDraftText ?? text;
     const canRecoverFromTextPreview =
       allowStream && !reply.hasMedia && (!payload.isError || streamedErrorDraftText !== undefined);
@@ -244,8 +203,11 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
         streamedErrorDraftText = streamedErrorDraftText === undefined ? undefined : text;
       }
     }
+    // Telegram edits cannot retarget an already-sent preview.
     const preservesPreviewReplyTarget =
-      payload.replyToId === undefined || payload.replyToId === originalReplyToId;
+      payload.replyToId === undefined ||
+      resolveTelegramReplyId(payload.replyToId) ===
+        lane.stream?.currentMessageSnapshot()?.replyToMessageId;
     const canFinalizeMediaPreview =
       finalizePreview &&
       lane.stream &&
@@ -260,7 +222,12 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
       if (!stream || previewInput.length === 0 || (payload.isError && !allowErrorPayload)) {
         return undefined;
       }
-      rotateFinalizedStream(lane);
+      if (lane.finalized) {
+        stream.forceNewMessage();
+        lane.lastPartialText = "";
+        lane.hasStreamedMessage = false;
+        lane.finalized = false;
+      }
 
       const finalText = previewInput.trimEnd();
       const recoveredText = isDurableFinal
@@ -333,7 +300,14 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
           };
         }
         if (!finalizePreview) {
-          await discardUnmaterializedStream(lane);
+          const unmaterializedStream = lane.stream;
+          if (unmaterializedStream) {
+            await unmaterializedStream.discard();
+            unmaterializedStream.forceNewMessage();
+          }
+          lane.lastPartialText = "";
+          lane.hasStreamedMessage = false;
+          lane.finalized = false;
         }
         return undefined;
       }
@@ -458,24 +432,22 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
         if (stripButtons || buttons) {
           const channelData = mediaPayload.channelData ?? {};
           const telegramData = asOptionalRecord(channelData.telegram);
-          if (stripButtons) {
-            if (telegramData && telegramData.buttons !== undefined) {
-              const { buttons: _buttons, ...telegramRest } = telegramData;
-              const remainingChannelData = { ...channelData };
-              if (Object.keys(telegramRest).length > 0) {
-                remainingChannelData.telegram = telegramRest;
-              } else {
-                delete remainingChannelData.telegram;
-              }
-              const { channelData: _channelData, ...rest } = mediaPayload;
-              mediaPayload = copyReplyPayloadMetadata(
-                mediaPayload,
-                Object.keys(remainingChannelData).length > 0
-                  ? { ...rest, channelData: remainingChannelData }
-                  : rest,
-              );
+          if (stripButtons && telegramData && telegramData.buttons !== undefined) {
+            const { buttons: _buttons, ...telegramRest } = telegramData;
+            const remainingChannelData = { ...channelData };
+            if (Object.keys(telegramRest).length > 0) {
+              remainingChannelData.telegram = telegramRest;
+            } else {
+              delete remainingChannelData.telegram;
             }
-          } else if (buttons && !(telegramData && "buttons" in telegramData)) {
+            const { channelData: _channelData, ...rest } = mediaPayload;
+            mediaPayload = copyReplyPayloadMetadata(
+              mediaPayload,
+              Object.keys(remainingChannelData).length > 0
+                ? { ...rest, channelData: remainingChannelData }
+                : rest,
+            );
+          } else if (!stripButtons && buttons && !(telegramData && "buttons" in telegramData)) {
             mediaPayload = copyReplyPayloadMetadata(mediaPayload, {
               ...mediaPayload,
               channelData: { ...channelData, telegram: { ...telegramData, buttons } },
@@ -536,8 +508,16 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
         ...(retainedFinalContent?.sourceTextMode === "html" ? { textMode: "html" } : {}),
       },
     );
-    if (deliveryResult.visibleReplySent && finalizePreview && !isDurableFinal) {
-      await clearUnfinalizedStream(lane);
+    if (
+      deliveryResult.visibleReplySent &&
+      finalizePreview &&
+      !isDurableFinal &&
+      lane.stream &&
+      !lane.finalized
+    ) {
+      await lane.stream.clear();
+      lane.lastPartialText = "";
+      lane.hasStreamedMessage = false;
     }
     return { kind: deliveryResult.visibleReplySent ? "sent" : "skipped", deliveryResult };
   };

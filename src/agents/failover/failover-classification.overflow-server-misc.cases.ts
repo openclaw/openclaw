@@ -14,6 +14,15 @@ import {
 export const overflowServerMiscCases = [
   // Transient transport and provider failures.
   {
+    id: "openai-sdk-malformed-sse",
+    source: "openai/core/streaming",
+    signal: {
+      provider: "openai",
+      message: "Error reading response: malformed server-sent event JSON.",
+    },
+    expected: reason("server_error"),
+  },
+  {
     id: "bedrock-incomplete-terminal-stream",
     source: "extensions/amazon-bedrock/stream.runtime.ts",
     signal: { provider: "amazon-bedrock", message: "Bedrock stream ended before messageStop" },

@@ -105,6 +105,7 @@ type RealtimeVoiceConnectAttemptOptions = {
   onTimeout: () => void;
   timeoutError: () => Error;
   timeoutMs: number;
+  ref?: boolean;
 };
 
 export class RealtimeVoiceSessionLifecycle {
@@ -239,6 +240,9 @@ export class RealtimeVoiceSessionLifecycle {
           reject(options.timeoutError());
         }
       }, options.timeoutMs);
+      if (options.ref === false) {
+        timeout.unref?.();
+      }
     };
     const onAbort = () => {
       const outcome = this.terminalOutcome(options.connection);

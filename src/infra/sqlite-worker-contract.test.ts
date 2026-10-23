@@ -1,11 +1,55 @@
 import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
+import { classifyGatewayStorageFailure } from "./sqlite-error-diagnostics.js";
 import {
   hasSqliteWorkerOutcomeUnknown,
   isSqliteWorkerError,
   retainSqliteWorkerErrorCode,
   SqliteWorkerError,
+  wrapSqliteWorkerError,
 } from "./sqlite-worker-contract.js";
+
+describe("worker failure causes", () => {
+  it.each([false, true])(
+    "preserves one direct cause for duplicate failures (copied: %s)",
+    (copied) => {
+      const failure = Object.assign(new Error("Run lease admission reply was lost"), {
+        code: "EIO",
+      });
+      const duplicate = copied
+        ? Object.assign(new Error(failure.message), { code: failure.code })
+        : failure;
+      expect(
+        wrapSqliteWorkerError("Unknown outcome", "outcome-unknown", failure, duplicate).cause,
+      ).toBe(failure);
+    },
+  );
+
+  it.each(["code", "nested cause"] as const)(
+    "retains failures with a distinct %s",
+    (difference) => {
+      const failure =
+        difference === "code"
+          ? Object.assign(new Error("Persistence failed"), { code: "REPLY_LOST" })
+          : new Error("Persistence failed", { cause: new Error("Reply lost") });
+      const storageFailure =
+        difference === "code"
+          ? Object.assign(new Error("Persistence failed"), { code: "SQLITE_FULL" })
+          : new Error("Persistence failed", {
+              cause: Object.assign(new Error("Disk full"), { code: "SQLITE_FULL" }),
+            });
+      const wrapped = wrapSqliteWorkerError(
+        "Unknown outcome",
+        "outcome-unknown",
+        failure,
+        storageFailure,
+      );
+      expect(wrapped.cause).toBeInstanceOf(AggregateError);
+      expect(wrapped.cause).toMatchObject({ errors: [failure, storageFailure] });
+      expect(classifyGatewayStorageFailure(wrapped)).toBe("SQLITE_FULL");
+    },
+  );
+});
 
 describe("unknown worker outcome classification", () => {
   it.each([false, true])(

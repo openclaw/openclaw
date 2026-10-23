@@ -115,16 +115,20 @@ describe("anthropic payload policy", () => {
         {
           type: "compact_20260112",
           trigger: { type: "input_tokens", value: expectedThreshold },
+          instructions: expect.stringContaining("Do not call any tools"),
         },
       ],
     });
   });
 
-  it("keeps compaction opt-in and preserves authored context management", () => {
+  it("honors the compaction opt-out and preserves authored context management", () => {
     const disabledPolicy = resolveAnthropicPayloadPolicy({
+      provider: "anthropic",
+      api: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com/v1",
       contextWindow: 200_000,
       enableServerCompaction: true,
-      extraParams: {},
+      extraParams: { anthropicServerCompaction: false },
     });
     const disabledPayload = simpleTextPayload();
     applyAnthropicPayloadPolicyToParams(disabledPayload, disabledPolicy, new Set());
@@ -141,7 +145,7 @@ describe("anthropic payload policy", () => {
     expect(configuredPayload.context_management).toBe(existing);
   });
 
-  it("applies native Anthropic service tier and cache markers without widening cache scope", () => {
+  it("applies native Anthropic service tier and checkpoints the user-message tail", () => {
     const policy = cachePolicy({ cacheRetention: "long", serviceTier: "standard_only" });
     const payload: TestPayload = {
       system: [
@@ -177,7 +181,7 @@ describe("anthropic payload policy", () => {
     expect(payload.messages[1]).toEqual({
       role: "user",
       content: [
-        { type: "text", text: "Hello", cache_control: { type: "ephemeral", ttl: "1h" } },
+        { type: "text", text: "Hello" },
         {
           type: "tool_result",
           tool_use_id: "tool_1",
@@ -188,7 +192,7 @@ describe("anthropic payload policy", () => {
     });
   });
 
-  it("falls back to the latest tool result when no user text or image exists", () => {
+  it("keeps the previous tool-result checkpoint when the latest result advances", () => {
     const policy = cachePolicy();
     const payload: TestPayload = {
       system: [{ type: "text", text: "Follow policy." }],
@@ -212,7 +216,14 @@ describe("anthropic payload policy", () => {
 
     expect(payload.messages[0]).toEqual({
       role: "user",
-      content: [{ type: "tool_result", tool_use_id: "tool_1", content: "first" }],
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "tool_1",
+          content: "first",
+          cache_control: { type: "ephemeral" },
+        },
+      ],
     });
     expect(payload.messages[2]).toEqual({
       role: "user",

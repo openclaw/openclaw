@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { beforeEach, describe, expect, vi } from "vitest";
 import { createCommandTest } from "../../../test/helpers/command-fixture.js";
-import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import { setRuntimeConfigSnapshot } from "../../config/io.js";
+import { runSessionMutation } from "../../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   openOpenClawStateDatabase,
@@ -30,13 +31,14 @@ describe("worker placement dispatch reclaim", () => {
   let placementStore: PlacementStore;
 
   beforeEach(async () => {
+    setRuntimeConfigSnapshot({});
     root = tempDirs.make("openclaw-dispatch-");
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     placementStore = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
   });
 
   it("admits an unrelated provider provision after Stop while another provision never settles", async () => {
-    const harness = createHarness(database, placementStore, {
+    const harness = await createHarness(database, placementStore, {
       workspacePath: root,
       reconcileChanged: false,
       reconcileCommitsManifest: false,
@@ -83,7 +85,7 @@ describe("worker placement dispatch reclaim", () => {
   });
 
   it("releases a failed reclaim before an older provisioning recovery without losing accepted work", async () => {
-    const harness = createHarness(database, placementStore, {
+    const harness = await createHarness(database, placementStore, {
       workspacePath: root,
       destroyFailureCount: 1,
       reconcileChanged: false,
@@ -129,7 +131,7 @@ describe("worker placement dispatch reclaim", () => {
   });
 
   it("keeps the accepted placement draining when provider destruction is not proven", async () => {
-    const harness = createHarness(database, placementStore, {
+    const harness = await createHarness(database, placementStore, {
       workspacePath: path.join(root, "workspace"),
       destroyFails: true,
     });
@@ -157,7 +159,7 @@ describe("worker placement dispatch reclaim", () => {
   });
 
   it("attaches before opening one tunnel for workspace sync and activation", async () => {
-    const harness = createHarness(database, placementStore);
+    const harness = await createHarness(database, placementStore);
 
     await expect(harness.service.dispatch(REQUEST)).resolves.toMatchObject({
       state: "active",
@@ -186,7 +188,7 @@ describe("worker placement dispatch reclaim", () => {
   });
 
   it("reclaims an unchanged active placement through the fenced teardown lifecycle", async () => {
-    const harness = createHarness(database, placementStore, {
+    const harness = await createHarness(database, placementStore, {
       reconcileChanged: false,
       reconcileCommitsManifest: false,
     });
@@ -226,7 +228,7 @@ describe("worker placement dispatch reclaim", () => {
   });
 
   it("moves an active placement back to the Gateway without a reclaimed intermediate", async () => {
-    const harness = createHarness(database, placementStore, {
+    const harness = await createHarness(database, placementStore, {
       reconcileChanged: false,
       reconcileCommitsManifest: false,
     });
@@ -253,14 +255,14 @@ describe("worker placement dispatch reclaim", () => {
     expect(harness.log).toContain("placement:draining");
     expect(harness.log).toContain("placement:reconciling");
     expect(harness.log).not.toContain("placement:reclaimed");
-    expect(placementStore.getPlacementMove(REQUEST.sessionId)).toBeUndefined();
+    expect(await placementStore.getPlacementMoveAsync(REQUEST.sessionId)).toBeUndefined();
   });
 
   it.each(["stop", "move"])(
     "finishes %s after authority closes during committed environment destruction",
     async (operation) => {
       let authorized = true;
-      const harness = createHarness(database, placementStore, {
+      const harness = await createHarness(database, placementStore, {
         reconcileChanged: false,
         reconcileCommitsManifest: false,
         afterDestroy: () => {
@@ -299,7 +301,7 @@ describe("worker placement dispatch reclaim", () => {
   );
 
   it("carries session authorization from move source teardown into destination dispatch", async () => {
-    const harness = createHarness(database, placementStore, {
+    const harness = await createHarness(database, placementStore, {
       reconcileChanged: false,
       reconcileCommitsManifest: false,
     });
@@ -313,10 +315,12 @@ describe("worker placement dispatch reclaim", () => {
     });
     const destinationDispatch = vi.fn(
       async (
-        _request: Parameters<ReturnType<typeof createHarness>["service"]["dispatch"]>[0],
-        _onTransition: Parameters<ReturnType<typeof createHarness>["service"]["dispatch"]>[1],
+        _request: Parameters<Awaited<ReturnType<typeof createHarness>>["service"]["dispatch"]>[0],
+        _onTransition: Parameters<
+          Awaited<ReturnType<typeof createHarness>>["service"]["dispatch"]
+        >[1],
         destinationAuthorize: Parameters<
-          ReturnType<typeof createHarness>["service"]["dispatch"]
+          Awaited<ReturnType<typeof createHarness>>["service"]["dispatch"]
         >[2],
       ) => {
         authorized = false;
@@ -388,7 +392,7 @@ describe("worker placement dispatch reclaim", () => {
   });
 
   it("recovers a durable Gateway move intent before generic draining recovery", async () => {
-    const harness = createHarness(database, placementStore, {
+    const harness = await createHarness(database, placementStore, {
       reconcileChanged: false,
       reconcileCommitsManifest: false,
       failMoveAfterBegin: true,
@@ -409,13 +413,13 @@ describe("worker placement dispatch reclaim", () => {
       }),
     ).rejects.toThrow("move barrier interrupted");
     expect(placementStore.get(active.sessionId)).toMatchObject({ state: "draining" });
-    expect(placementStore.getPlacementMove(active.sessionId)).toMatchObject({
+    expect(await placementStore.getPlacementMoveAsync(active.sessionId)).toMatchObject({
       target: { kind: "gateway" },
       lastError: "move barrier interrupted",
     });
 
     const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
-    const restarted = createHarness(database, restartedStore, {
+    const restarted = await createHarness(database, restartedStore, {
       reconcileChanged: false,
       reconcileCommitsManifest: false,
     });
@@ -423,12 +427,12 @@ describe("worker placement dispatch reclaim", () => {
     await restarted.service.reconcile();
 
     expect(restartedStore.get(active.sessionId)).toMatchObject({ state: "local" });
-    expect(restartedStore.getPlacementMove(active.sessionId)).toBeUndefined();
+    expect(await restartedStore.getPlacementMoveAsync(active.sessionId)).toBeUndefined();
   });
 
   it("completes a restarted pending result through its Gateway move intent", async () => {
     const workspacePath = path.join(root, "pending-gateway-move");
-    const harness = createHarness(database, placementStore, { workspacePath });
+    const harness = await createHarness(database, placementStore, { workspacePath });
     const active = await harness.service.dispatch(REQUEST);
 
     const claim = await placementStore.claimTurn({
@@ -456,19 +460,19 @@ describe("worker placement dispatch reclaim", () => {
     await placementStore.markWorkspaceResultPending(claim);
 
     const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
-    const restarted = createHarness(database, restartedStore, { workspacePath });
+    const restarted = await createHarness(database, restartedStore, { workspacePath });
     restarted.markEnvironmentOwnerEpoch(active.activeOwnerEpoch);
     await restarted.service.reconcile();
 
     expect(restartedStore.get(active.sessionId)).toMatchObject({ state: "local" });
-    expect(restartedStore.getPlacementMove(active.sessionId)).toBeUndefined();
+    expect(await restartedStore.getPlacementMoveAsync(active.sessionId)).toBeUndefined();
     expect(restarted.log).not.toContain("placement:reclaimed");
   });
 
   it.each([false, true])(
     "serializes concurrent failed reclaim back to local (coordinated=%s)",
     async (coordinated) => {
-      const harness = createHarness(database, placementStore);
+      const harness = await createHarness(database, placementStore);
       const requested = await placementStore.startDispatch(REQUEST);
       const failed = await placementStore.fail({
         sessionId: REQUEST.sessionId,
@@ -498,7 +502,7 @@ describe("worker placement dispatch reclaim", () => {
   it.each(["active", "failed"] as const)(
     "rejects %s reclaim before its first durable cleanup action when authorization changes",
     async (state) => {
-      const harness = createHarness(database, placementStore);
+      const harness = await createHarness(database, placementStore);
       if (state === "active") {
         await harness.service.dispatch(REQUEST);
       } else {
@@ -531,7 +535,7 @@ describe("worker placement dispatch reclaim", () => {
   );
 
   it("retains and reports cloud versions that conflict during an idle reclaim", async () => {
-    const harness = createHarness(database, placementStore, {
+    const harness = await createHarness(database, placementStore, {
       reconcileConflictPaths: ["src/local.ts"],
     });
     await harness.service.dispatch(REQUEST);
@@ -570,7 +574,7 @@ describe("worker placement dispatch reclaim", () => {
       paths: ["notes.md"],
       stagedResultRef: "refs/openclaw/worker-results/prior-conflict",
     };
-    const harness = createHarness(database, placementStore, {
+    const harness = await createHarness(database, placementStore, {
       priorWorkspaceResultConflict: priorConflict,
       reconcileChanged: false,
       reconcileCommitsManifest: false,
@@ -594,7 +598,7 @@ describe("worker placement dispatch reclaim", () => {
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
   });
 
-  it.each(["retireSessionPlacement", "retireSessionPlacementAsync"] as const)(
+  it.each(["retireSessionPlacementAsync"] as const)(
     "%s retires only the exact unclaimed safe placement generation",
     async (method) => {
       const retire = async (input: Parameters<PlacementStore[typeof method]>[0]) =>
@@ -611,7 +615,7 @@ describe("worker placement dispatch reclaim", () => {
           expectedState: "local",
           expectedGeneration: 0,
         }),
-      ).rejects.toThrow("changed before retirement");
+      ).rejects.toThrow("during an active turn");
       await placementStore.releaseTurn(claim);
       const retirement = {
         sessionId: REQUEST.sessionId,
@@ -620,15 +624,7 @@ describe("worker placement dispatch reclaim", () => {
       };
       await retire(retirement);
       expect(placementStore.get(REQUEST.sessionId)).toBeUndefined();
-      if (method === "retireSessionPlacement") {
-        expect(() => placementStore.retireSessionPlacement(retirement)).toThrow(
-          "changed before retirement",
-        );
-      } else {
-        await expect(
-          placementStore.retireSessionPlacementAsync(retirement),
-        ).resolves.toBeUndefined();
-      }
+      await expect(placementStore.retireSessionPlacementAsync(retirement)).resolves.toBeUndefined();
 
       const requested = await placementStore.startDispatch(REQUEST);
       const failed = await placementStore.fail({
@@ -651,10 +647,10 @@ describe("worker placement dispatch reclaim", () => {
     },
   );
 
-  it.each(["sync", "worker-after-peer"] as const)(
+  it.each(["worker", "worker-after-peer"] as const)(
     "retires a reclaimed placement with child rows and clears %s conflict projection",
     async (mode) => {
-      const harness = createHarness(database, placementStore);
+      const harness = await createHarness(database, placementStore);
       const active = await harness.placements.seedActive(7);
       if (active.state !== "active") {
         throw new Error("expected active worker placement");
@@ -728,7 +724,7 @@ describe("worker placement dispatch reclaim", () => {
         await peer.retireSessionPlacementAsync(retirement);
         await placementStore.retireSessionPlacementAsync(retirement);
       } else {
-        placementStore.retireSessionPlacement(retirement);
+        await placementStore.retireSessionPlacementAsync(retirement);
       }
 
       expect(placementStore.get(active.sessionId)).toBeUndefined();
@@ -744,7 +740,7 @@ describe("worker placement dispatch reclaim", () => {
   );
 
   it("applies a prepared staged result before requiring its manifest commit", async () => {
-    const harness = createHarness(database, placementStore, {
+    const harness = await createHarness(database, placementStore, {
       reconcileCommitsManifest: false,
       reconcileCommitsManifestOnApply: true,
     });
@@ -765,7 +761,7 @@ describe("worker placement dispatch reclaim", () => {
   });
 
   it("claims and cancels a reclaim workspace result atomically", async () => {
-    const harness = createHarness(database, placementStore);
+    const harness = await createHarness(database, placementStore);
     const active = await harness.service.dispatch(REQUEST);
     const claim = await placementStore.claimReclaimWorkspaceResult({
       ...REQUEST,
@@ -797,7 +793,7 @@ describe("worker placement dispatch reclaim", () => {
       timeout: 10_000,
     });
     expect(initialized.status).toBe(0);
-    const harness = createHarness(database, placementStore, {
+    const harness = await createHarness(database, placementStore, {
       reconcileFailureCount: 1,
       workspacePath,
     });
@@ -819,7 +815,7 @@ describe("worker placement dispatch reclaim", () => {
   it("rejects a replaced reclaimed owner after waiting to enter the lifecycle fence", async () => {
     const entered = createDeferredCore();
     const resume = createDeferredCore();
-    const harness = createHarness(database, placementStore, {
+    const harness = await createHarness(database, placementStore, {
       runReclaimBarrier: async ({ beforeDrain, begin, reclaim, authorize }) => {
         entered.resolve();
         await resume.promise;
@@ -832,27 +828,31 @@ describe("worker placement dispatch reclaim", () => {
       },
     });
     const active = await harness.service.dispatch(REQUEST);
-    const stop = prepareSessionWorkerPlacementStop({
-      ...REQUEST,
-      action: "delete",
-      context: {
-        workerSessionPlacementService: placementStore,
-        workerPlacementDispatchService: harness.service,
-        workerEnvironmentService: harness.environments,
-      },
-    }).stop();
+    const stop = (
+      await prepareSessionWorkerPlacementStop({
+        ...REQUEST,
+        action: "delete",
+        context: {
+          workerSessionPlacementService: placementStore,
+          workerPlacementDispatchService: harness.service,
+          workerEnvironmentService: harness.environments,
+        },
+      })
+    ).stop();
     const rejected = expect(stop).rejects.toThrow("cloud worker placement identity changed");
     await entered.promise;
     try {
-      const peer = createHarness(database, placementStore);
+      const peer = await createHarness(database, placementStore);
       peer.markEnvironmentOwnerEpoch(2);
       const reclaimed = await peer.service.reclaim(REQUEST);
-      placementStore.retireSessionPlacement({
+      await placementStore.retireSessionPlacementAsync({
         sessionId: reclaimed.sessionId,
         expectedState: "reclaimed",
         expectedGeneration: reclaimed.generation,
       });
-      const replacement = createHarness(database, placementStore, { environmentGeneration: 2 });
+      const replacement = await createHarness(database, placementStore, {
+        environmentGeneration: 2,
+      });
       await replacement.placements.seedActive(2);
       replacement.markEnvironmentOwnerEpoch(2);
       const settled = await replacement.service.reclaim(REQUEST);
@@ -867,8 +867,8 @@ describe("worker placement dispatch reclaim", () => {
     }
   });
 
-  it("completes a session stop when a dropped tunnel loses the race to durable teardown", async () => {
-    const harness = createHarness(database, placementStore, {
+  it("preserves completed teardown and permits retry after a late tunnel disconnect", async () => {
+    const harness = await createHarness(database, placementStore, {
       terminalizeReclaimOnTunnelDrop: true,
     });
     await harness.service.dispatch(REQUEST);
@@ -878,29 +878,21 @@ describe("worker placement dispatch reclaim", () => {
       sessionKey: REQUEST.sessionKey,
       agentId: REQUEST.agentId,
     };
-    const first = prepareSessionWorkerPlacementStop({
-      ...request,
-      action: "delete",
-      context: {
-        workerSessionPlacementService: placementStore,
-        workerPlacementDispatchService: harness.service,
-        workerEnvironmentService: harness.environments,
-      },
-    }).stop();
-    const coalesced = harness.service.reclaim(request);
-
-    await expect(Promise.all([first, coalesced])).resolves.toMatchObject([
-      undefined,
-      { state: "reclaimed", turnClaim: null },
-    ]);
+    await expect(harness.service.reclaim(request)).rejects.toThrow(
+      "Worker tunnel owner is no longer connected",
+    );
 
     expect(harness.placements.current()).toMatchObject({ state: "reclaimed", turnClaim: null });
     expect(harness.environments.get(REQUEST.sessionId)).toMatchObject({ state: "destroyed" });
-    expect(harness.log).toContain("teardown:destroy");
+    await expect(harness.service.reclaim(request)).resolves.toMatchObject({
+      state: "reclaimed",
+      turnClaim: null,
+    });
+    expect(harness.log.filter((event) => event === "teardown:destroy")).toHaveLength(1);
   });
 
   it("does not hide an unrelated failure after durable teardown", async () => {
-    const harness = createHarness(database, placementStore, {
+    const harness = await createHarness(database, placementStore, {
       terminalizeReclaimOnTunnelDrop: true,
       terminalizedReclaimError: new Error("credential rejected"),
     });
@@ -921,7 +913,7 @@ describe("worker placement dispatch reclaim", () => {
       paths: ["data.txt"],
       stagedResultRef: "refs/openclaw/worker-results/prior-conflict",
     };
-    const harness = createHarness(database, placementStore, {
+    const harness = await createHarness(database, placementStore, {
       priorWorkspaceResultConflict: priorConflict,
       reconcileChanged: false,
       leaseFailureCount: 1,
@@ -949,7 +941,7 @@ describe("worker placement dispatch reclaim", () => {
   });
 
   it("keeps a changed result fenced when quiescence fails after apply", async () => {
-    const harness = createHarness(database, placementStore, { leaseFailureCall: 2 });
+    const harness = await createHarness(database, placementStore, { leaseFailureCall: 2 });
     await harness.service.dispatch(REQUEST);
 
     await expect(
@@ -974,7 +966,7 @@ describe("worker placement dispatch reclaim", () => {
       paths: ["data.txt"],
       stagedResultRef: "refs/openclaw/worker-results/prior-conflict",
     };
-    const harness = createHarness(database, placementStore, {
+    const harness = await createHarness(database, placementStore, {
       priorWorkspaceResultConflict: priorConflict,
       reconcileChanged: false,
       verifyFailurePhase: "before-apply",
@@ -1004,7 +996,7 @@ describe("worker placement dispatch reclaim", () => {
       paths: ["notes.md"],
       stagedResultRef: "refs/openclaw/worker-results/prior-conflict",
     };
-    const harness = createHarness(database, placementStore, {
+    const harness = await createHarness(database, placementStore, {
       priorWorkspaceResultConflict: priorConflict,
       reconcileCommitsManifest: false,
       reconcileCommitsManifestOnApply: true,
@@ -1036,13 +1028,13 @@ describe("worker placement dispatch reclaim", () => {
     const locked = createDeferredCore();
     const resume = createDeferredCore();
     const identities = [REQUEST.sessionKey, REQUEST.sessionId];
-    const harness = createHarness(database, placementStore, {
+    const harness = await createHarness(database, placementStore, {
       workspacePath: root,
       reconcileChanged: false,
       reconcileCommitsManifest: false,
       runReclaimBarrier: async ({ authorize, beforeDrain, begin, reclaim }) => {
         queued.resolve();
-        return await runExclusiveSessionLifecycleMutation("placement-reclaim", {
+        return await runSessionMutation({
           scope,
           identities,
           run: async () => {
@@ -1057,7 +1049,7 @@ describe("worker placement dispatch reclaim", () => {
       },
     });
     await harness.service.dispatch(REQUEST);
-    const owner = runExclusiveSessionLifecycleMutation("placement-reclaim", {
+    const owner = runSessionMutation({
       scope,
       identities,
       run: async () => {

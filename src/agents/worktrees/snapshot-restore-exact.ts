@@ -53,7 +53,7 @@ const binding = (record: ManagedWorktreeRecord) =>
 export async function readExactRestoreReceipt(
   record: ManagedWorktreeRecord,
   options: GitOptions,
-): Promise<Receipt | undefined> {
+): Promise<(Receipt & { ref: string }) | undefined> {
   const found = await runGit(
     record.repoRoot,
     ["rev-parse", "--verify", "--quiet", receiptRef(record) + "^{commit}"],
@@ -79,7 +79,7 @@ export async function readExactRestoreReceipt(
   ) {
     throw new Error("Exact restore receipt ownership changed; source and snapshot preserved");
   }
-  return { ...receipt, commit };
+  return { ...receipt, commit, ref: receiptRef(record) };
 }
 
 export async function clearExactRestoreReceipt(

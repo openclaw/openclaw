@@ -6,6 +6,7 @@ import type {
 } from "./package-update-swap-contract.js";
 import { createUpdateErrorFact, createUpdateFailureFact } from "./update-failure-facts.js";
 import type { NpmGlobalPrefixLayout } from "./update-npm-prefix.js";
+import { verifyRuntimeLauncher } from "./update-runtime-relocation.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
 /** Result reporting shares warnings with the swap owner but never performs recovery effects. */
@@ -59,7 +60,24 @@ export function createPackageSwapResults(
   return {
     warnings,
     step,
-    activationWarning: (message: string) => {
+    async verifyLaunchers(launchers: readonly { destination: string }[]) {
+      if (!params.stage.native) {
+        return;
+      }
+      for (const { destination } of launchers) {
+        try {
+          await verifyRuntimeLauncher(destination, "openclaw.mjs");
+        } catch (error) {
+          warnings.push(
+            `Published launcher ${destination} could not be verified: ${formatErrorMessage(error)}. Reinstall the current ${params.packageName} version with ${params.installTarget.manager} to recreate the launcher.`,
+          );
+        }
+      }
+    },
+    activationWarning: (message: string | undefined) => {
+      if (message === undefined) {
+        return;
+      }
       if (!warnings.includes(message)) {
         warnings.push(message);
       }

@@ -1,5 +1,7 @@
 import { afterAll, afterEach, expect, it, vi } from "vitest";
+import * as runtimeOwnership from "../../agents/harness/session-runtime-ownership.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../../config/config.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
@@ -61,6 +63,15 @@ it("selects delivery aliases across agents without narrowing provider planning",
   while (projection.needsMaterialization) {
     await projection.ensureMaterialized();
   }
+  using ownership = vi.spyOn(runtimeOwnership, "readSessionRuntimeOwnershipAsync");
+  ownership.mockRejectedValue(
+    new Error("Runtime ownership is unavailable during catalog enumeration"),
+  );
+  replaceSessionEntrySync(
+    { agentId: "main", sessionKey: "agent:main:main" },
+    { sessionId: "main-main", updatedAt: 2 },
+  );
+  await projection.prepareSelection({ metadataOnly: true });
   const planning = createSessionCatalogRequestEntrySnapshot({
     cfg,
     fallbackAgentId: "main",
@@ -71,9 +82,6 @@ it("selects delivery aliases across agents without narrowing provider planning",
   const instances = new Map();
   for (const host of hosts) {
     planning.captureHostInstances(host, instances);
-  }
-  while (projection.needsMaterialization) {
-    await projection.ensureMaterialized();
   }
   const delivery = createSessionCatalogRequestEntrySnapshot({
     cfg,

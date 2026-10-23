@@ -4,6 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { Value } from "typebox/value";
 import { AgentActivityItemSchema } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
+import { cliAssistantItemId } from "../../agents/cli-runner/assistant-identity.js";
 import { stripOpenClawMcpToolPrefix } from "../../agents/cli-runner/tool-policy.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import type { MediaImageLayout } from "../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
@@ -31,6 +32,7 @@ import {
 } from "./agent-event-bridge.js";
 
 type RunCliAgentInternalParams = RunCliAgentParams & {
+  awaitSessionDiffBaseline?: () => Promise<void>;
   mediaImageLayout?: MediaImageLayout;
 };
 
@@ -135,12 +137,7 @@ function readToolEventPayload(evt: AgentEventPayload): CliToolEventPayload | und
   };
 }
 
-/**
- * Tracks CLI tool start/result events and renders the same durable tool
- * summaries the embedded runner emits: a formatToolAggregate line per result
- * (args-derived meta captured at start), plus the output block under full
- * verbose. Keeps CLI runs at tool-summary parity with embedded runs.
- */
+/** CLI result summaries use start-event metadata; full verbosity also carries raw output. */
 export function createCliToolSummaryTracker(params: {
   detailMode?: "explain" | "raw";
   commandDetailsVisible: boolean;
@@ -153,12 +150,13 @@ export function createCliToolSummaryTracker(params: {
     noteToolEvent: async (payload: CliToolEventPayload): Promise<boolean> => {
       if (payload.phase === "start") {
         if (payload.toolCallId && payload.name) {
+          const name = stripOpenClawMcpToolPrefix(payload.name);
           toolByCallId.set(payload.toolCallId, {
-            name: payload.name,
-            meta: inferToolMetaFromArgsCore(payload.name, payload.args, {
+            name,
+            meta: inferToolMetaFromArgsCore(name, payload.args, {
               detailMode: params.detailMode ?? "explain",
             }),
-            commandBearing: isCommandBearingToolCall(payload.name, payload.args),
+            commandBearing: isCommandBearingToolCall(name, payload.args),
           });
         }
         return false;
@@ -167,16 +165,14 @@ export function createCliToolSummaryTracker(params: {
         return false;
       }
       const storedTool = payload.toolCallId ? toolByCallId.get(payload.toolCallId) : undefined;
-      const toolName = payload.name ?? storedTool?.name;
+      const toolName =
+        payload.name === undefined ? storedTool?.name : stripOpenClawMcpToolPrefix(payload.name);
       const meta =
         params.commandDetailsVisible || !storedTool?.commandBearing ? storedTool?.meta : undefined;
       if (payload.toolCallId) {
         toolByCallId.delete(payload.toolCallId);
       }
-      if (
-        payload.isError !== true &&
-        isAgentPlanProgressToolName(stripOpenClawMcpToolPrefix(toolName ?? ""))
-      ) {
+      if (payload.isError !== true && isAgentPlanProgressToolName(toolName ?? "")) {
         return false;
       }
       if (!params.shouldEmitToolResult()) {
@@ -207,6 +203,8 @@ type RunCliAgentWithLifecycleParams = {
   runParams: RunCliAgentInternalParams;
   startedAt?: number;
   onAgentRunStart?: () => void;
+  /** Scheduled admission must precede lifecycle publication and native preparation. */
+  deferLifecycleStartUntilExecution?: true;
   suppressAssistantBridge?: boolean;
   /**
    * Stamped before every delivered CLI progress event (assistant, reasoning,
@@ -295,16 +293,26 @@ async function runCliAgentWithLifecycleInternal(
     fastModeAutoProgressState.offAnnounced = true;
     await emitFastModeAutoProgress(next);
   };
-  params.onAgentRunStart?.();
-  emitAgentEvent({
-    runId: params.runId,
-    ...(params.runParams.agentId ? { agentId: params.runParams.agentId } : {}),
-    ...(params.runParams.sessionKey ? { sessionKey: params.runParams.sessionKey } : {}),
-    ...(params.runParams.sessionId ? { sessionId: params.runParams.sessionId } : {}),
-    ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
-    stream: "lifecycle",
-    data: { phase: "start", startedAt },
-  });
+  let lifecycleStarted = false;
+  const startLifecycle = () => {
+    if (lifecycleStarted) {
+      return;
+    }
+    params.onAgentRunStart?.();
+    lifecycleStarted = true;
+    emitAgentEvent({
+      runId: params.runId,
+      ...(params.runParams.agentId ? { agentId: params.runParams.agentId } : {}),
+      ...(params.runParams.sessionKey ? { sessionKey: params.runParams.sessionKey } : {}),
+      ...(params.runParams.sessionId ? { sessionId: params.runParams.sessionId } : {}),
+      ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
+      stream: "lifecycle",
+      data: { phase: "start", startedAt },
+    });
+  };
+  if (!params.deferLifecycleStartUntilExecution) {
+    startLifecycle();
+  }
   const progressStartOrder = createAgentEventDeliveryStartOrder({
     preserveCallbackStartOrder: params.preserveProgressCallbackStartOrder === true,
   });
@@ -459,8 +467,20 @@ async function runCliAgentWithLifecycleInternal(
     }),
   ].filter((bridge): bridge is AgentEventBridge => bridge !== undefined);
   try {
+    // CLI backends own native tool execution, so attribution must settle before launch.
+    await params.runParams.awaitSessionDiffBaseline?.();
     const rawResult = await runCliAgent({
       ...params.runParams,
+      ...(params.deferLifecycleStartUntilExecution
+        ? {
+            onExecutionStarted: async () => {
+              await params.runParams.onExecutionStarted?.();
+              params.runParams.abortSignal?.throwIfAborted();
+              params.runParams.assertCurrent?.();
+              startLifecycle();
+            },
+          }
+        : {}),
       emitCommentaryText: params.runParams.emitCommentaryText ?? Boolean(params.onCommentaryText),
     });
     const restartAbortReason = params.runParams.abortSignal?.reason;
@@ -484,7 +504,7 @@ async function runCliAgentWithLifecycleInternal(
       emitAgentEvent({
         runId: params.runId,
         stream: "assistant",
-        data: { text: cliText },
+        data: { itemId: cliAssistantItemId(params.runId), text: cliText },
       });
     }
 
@@ -494,9 +514,6 @@ async function runCliAgentWithLifecycleInternal(
     await params.onErrorBeforeLifecycle?.(err);
     throw err;
   } finally {
-    for (const bridge of bridges) {
-      bridge.unsubscribe();
-    }
     if (
       params.runParams.isFinalFallbackAttempt !== false &&
       params.runParams.fastMode === "auto" &&

@@ -81,6 +81,10 @@ import { updateTopicName } from "./topic-name-cache.js";
 
 const TELEGRAM_EMOJI_LIST_LIMIT = 100;
 const TELEGRAM_REACTION_HINT_LIMIT = 20;
+const TELEGRAM_DEFAULT_REACTIONS = TELEGRAM_SUPPORTED_REACTION_EMOJI_LIST.map((emoji) => ({
+  type: "emoji" as const,
+  emoji,
+}));
 const TELEGRAM_ACTION_ALIASES = {
   ...TELEGRAM_MESSAGE_ACTION_MAP,
   createForumTopic: "createForumTopic",
@@ -213,7 +217,12 @@ export async function handleTelegramAction(
     cfg,
     accountId,
   });
-  const apiOptions = { cfg, accountId, gatewayClientScopes: options?.gatewayClientScopes };
+  const apiOptions = {
+    cfg,
+    accountId,
+    gatewayClientScopes: options?.gatewayClientScopes,
+    assertPlatformSendAuthorized: options?.assertDirectAdapterHandoff,
+  };
   const requireToken = () => {
     const token = resolveTelegramToken(cfg, { accountId }).token;
     if (!token) {
@@ -274,9 +283,7 @@ export async function handleTelegramAction(
       token,
       accountId,
     });
-    const reactions =
-      allowed ??
-      TELEGRAM_SUPPORTED_REACTION_EMOJI_LIST.map((emoji) => ({ type: "emoji" as const, emoji }));
+    const reactions = allowed ?? TELEGRAM_DEFAULT_REACTIONS;
     return jsonResult({
       ok: true,
       emojis: reactions
@@ -346,12 +353,7 @@ export async function handleTelegramAction(
       if (reactions === undefined) {
         return "";
       }
-      const allowed =
-        reactions ??
-        TELEGRAM_SUPPORTED_REACTION_EMOJI_LIST.map((value) => ({
-          type: "emoji" as const,
-          emoji: value,
-        }));
+      const allowed = reactions ?? TELEGRAM_DEFAULT_REACTIONS;
       // Preserve portable alternatives when Telegram returns custom reactions first.
       const emojis = allowed
         .filter((reaction) => reaction.type === "emoji")
@@ -624,7 +626,6 @@ export async function handleTelegramAction(
     if (action === "deleteMessage") {
       const result = await deleteMessageTelegram(authorizedChatId, messageId, {
         ...apiOptions,
-        assertPlatformSendAuthorized: options?.assertDirectAdapterHandoff,
       });
       if (!result.ok) {
         return jsonResult({ ok: false, deleted: false, warning: result.warning });
@@ -667,7 +668,6 @@ export async function handleTelegramAction(
     const editOptions = {
       ...apiOptions,
       token,
-      assertPlatformSendAuthorized: options?.assertDirectAdapterHandoff,
     };
     const result = markupOnly
       ? await editMessageReplyMarkupTelegram(authorizedChatId, messageId, buttons, editOptions)
@@ -752,36 +752,31 @@ export async function handleTelegramAction(
     return jsonResult({ ok: true, ...stats });
   }
 
-  if (action === "createForumTopic") {
-    if (!isActionEnabled("createForumTopic")) {
-      throw new Error("Telegram createForumTopic is disabled.");
+  if (action === "createForumTopic" || action === "editForumTopic") {
+    if (!isActionEnabled(action)) {
+      throw new Error(`Telegram ${action} is disabled.`);
     }
     const chatId = readTelegramChatId(params);
-    const name =
-      readStringParam(params, "name") ??
-      readStringParam(params, "threadName", { required: true, label: "name" });
-    const iconColor = readTelegramForumTopicIconColor(params);
-    const iconCustomEmojiId = readStringParam(params, "iconCustomEmojiId");
-    const token = requireToken();
-    const result = await createForumTopicTelegram(chatId ?? "", name, {
-      ...apiOptions,
-      token,
-      iconColor,
-      iconCustomEmojiId,
-    });
-    return jsonResult({
-      ok: true,
-      topicId: result.topicId,
-      name: result.name,
-      chatId: result.chatId,
-    });
-  }
-
-  if (action === "editForumTopic") {
-    if (!isActionEnabled("editForumTopic")) {
-      throw new Error("Telegram editForumTopic is disabled.");
+    if (action === "createForumTopic") {
+      const name =
+        readStringParam(params, "name") ??
+        readStringParam(params, "threadName", { required: true, label: "name" });
+      const iconColor = readTelegramForumTopicIconColor(params);
+      const iconCustomEmojiId = readStringParam(params, "iconCustomEmojiId");
+      const token = requireToken();
+      const result = await createForumTopicTelegram(chatId ?? "", name, {
+        ...apiOptions,
+        token,
+        iconColor,
+        iconCustomEmojiId,
+      });
+      return jsonResult({
+        ok: true,
+        topicId: result.topicId,
+        name: result.name,
+        chatId: result.chatId,
+      });
     }
-    const chatId = readTelegramChatId(params);
     const messageThreadId = readTelegramThreadId(params);
     if (typeof messageThreadId !== "number") {
       throw new Error("messageThreadId or threadId is required.");
@@ -796,13 +791,10 @@ export async function handleTelegramAction(
       iconCustomEmojiId,
     });
     if (result.chatId) {
-      const patch: { name?: string; iconCustomEmojiId?: string } = {};
-      if (name) {
-        patch.name = name;
-      }
-      if (iconCustomEmojiId) {
-        patch.iconCustomEmojiId = iconCustomEmojiId;
-      }
+      const patch = {
+        ...(name ? { name } : {}),
+        ...(iconCustomEmojiId ? { iconCustomEmojiId } : {}),
+      };
       if (Object.keys(patch).length > 0) {
         await updateTopicName(
           result.chatId,

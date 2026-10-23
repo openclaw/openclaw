@@ -1,5 +1,7 @@
 import { resolveGatewayWebSocketUrl } from "../../lib/gateway-websocket-url.ts";
 import { isApplePlatform } from "../../lib/keyboard-shortcut-contract.ts";
+import { listen } from "../../lib/reactive/listener.ts";
+import type { DesktopSizingMode } from "./desktop-panel-state.ts";
 
 export type DesktopDisconnectDetail = {
   clean: boolean;
@@ -12,7 +14,92 @@ type DesktopSecurityFailureDetail = {
   status?: number;
 };
 
-export type DesktopSizingMode = "fit" | "actual" | "match";
+/** noVNC creates and owns the canvas inside the retained desktop surface. */
+export function desktopCanvas(surface: HTMLElement | undefined): HTMLCanvasElement | null {
+  return surface?.querySelector<HTMLCanvasElement>("canvas") ?? null;
+}
+
+/** Connection-local geometry; noVNC still owns canvas scaling and input coordinates. */
+function createDesktopViewport(host: HTMLElement) {
+  const viewport = host.ownerDocument.createElement("div");
+  viewport.style.cssText = "width:100%;height:100%;overflow:hidden";
+  const target = host.ownerDocument.createElement("div");
+  target.style.cssText = "width:100%;height:100%";
+  viewport.append(target);
+  host.append(viewport);
+  let mode: DesktopSizingMode = "fit";
+  let resize: ResizeObserver | undefined;
+  let framebuffer: MutationObserver | undefined;
+
+  const update = () => {
+    const canvas = desktopCanvas(target);
+    if (!canvas?.width || !canvas.height) {
+      return;
+    }
+    const box = viewport.getBoundingClientRect();
+    // Decide gutter reservation from the outer box: a classic scrollbar must not
+    // remove its own overflow by shrinking clientWidth/clientHeight on the next frame.
+    const overflows =
+      mode === "fit-height"
+        ? box.height * canvas.width > box.width * canvas.height
+        : box.width * canvas.height > box.height * canvas.width;
+    viewport.style.overflowX = mode === "fit-height" && overflows ? "scroll" : "hidden";
+    viewport.style.overflowY = mode === "fit-width" && overflows ? "scroll" : "hidden";
+    const width = viewport.clientWidth;
+    const height = viewport.clientHeight;
+    // Hidden retained viewers keep their last geometry until presentation resumes.
+    if (!width || !height) {
+      return;
+    }
+    // Enlarge only the unconstrained dimension of noVNC's public target. Its
+    // normal fit calculation then selects the requested axis, including input scale.
+    target.style.width = `${mode === "fit-height" ? Math.max(width, (height * canvas.width) / canvas.height) : width}px`;
+    target.style.height = `${mode === "fit-width" ? Math.max(height, (width * canvas.height) / canvas.width) : height}px`;
+  };
+  const stopObserving = () => {
+    resize?.disconnect();
+    framebuffer?.disconnect();
+    resize = undefined;
+    framebuffer = undefined;
+  };
+  return {
+    target,
+    setMode(next: DesktopSizingMode) {
+      if (next === mode) {
+        return;
+      }
+      mode = next;
+      const axis = mode === "fit-height" || mode === "fit-width";
+      if (axis) {
+        if (!resize) {
+          resize = new ResizeObserver(update);
+          resize.observe(viewport);
+          // Canvas bitmap dimensions are the framebuffer, unlike its scaled CSS size.
+          // Child observation also covers noVNC attaching the canvas after connect().
+          framebuffer = new MutationObserver(update);
+          framebuffer.observe(target, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ["width", "height"],
+          });
+        }
+        update();
+      } else {
+        stopObserving();
+        viewport.style.overflow = "hidden";
+        target.style.width = "100%";
+        target.style.height = "100%";
+        viewport.scrollLeft = 0;
+        viewport.scrollTop = 0;
+      }
+    },
+    dispose() {
+      stopObserving();
+      viewport.remove();
+    },
+  };
+}
 
 type DesktopConnectOptions = {
   background?: string;
@@ -54,10 +141,7 @@ type RfbConstructor = new (
   options?: { credentials?: { username?: string; password?: string } },
 ) => RfbClient;
 
-type RfbLoader = () => Promise<RfbConstructor>;
-type WebSocketFactory = (url: string) => WebSocket;
-
-const loadDefaultRfb: RfbLoader = async () => {
+const loadDefaultRfb = async () => {
   // @novnc/novnc 1.7 exports RFB from the package root; keeping this import
   // here ensures the substantial client stays in the lazy desktop chunk.
   const module = (await import("@novnc/novnc")) as { default: RfbConstructor };
@@ -66,29 +150,31 @@ const loadDefaultRfb: RfbLoader = async () => {
 
 /** Thin owner for one noVNC RFB lifecycle. */
 export class DesktopClient {
-  constructor(
-    private readonly rfbConstructor?: RfbConstructor,
-    private readonly createWebSocket: WebSocketFactory = (url) => new WebSocket(url),
-    private readonly loadRfb: RfbLoader = loadDefaultRfb,
-  ) {}
-
   async connect(options: DesktopConnectOptions): Promise<DesktopConnectionHandle> {
-    const Rfb = this.rfbConstructor ?? (await this.loadRfb());
+    const Rfb = await loadDefaultRfb();
     const wsUrl = resolveGatewayWebSocketUrl(options.wsUrl, options.gatewayUrl);
     // The socket claims control before RFB authentication; canceled lazy loads must not open it.
     if (!options.isCurrent()) {
       throw new DOMException("Desktop connection is no longer current", "AbortError");
     }
-    const socket = this.createWebSocket(wsUrl);
+    const socket = new WebSocket(wsUrl);
     let closeDetail: Pick<CloseEvent, "code" | "reason"> | undefined;
-    socket.addEventListener("close", (event) => {
+    const trackSocketClose = (event: CloseEvent) => {
       closeDetail = { code: event.code, reason: event.reason };
-    });
-    const rfb = new Rfb(
-      options.target,
-      socket,
-      options.credentials ? { credentials: options.credentials } : undefined,
-    );
+    };
+    const stopSocketClose = listen(socket, "close", trackSocketClose, { once: true });
+    const viewport = createDesktopViewport(options.target);
+    let rfb: RfbClient;
+    try {
+      rfb = new Rfb(
+        viewport.target,
+        socket,
+        options.credentials ? { credentials: options.credentials } : undefined,
+      );
+    } catch (error) {
+      viewport.dispose();
+      throw error;
+    }
     rfb.background = options.background ?? getComputedStyle(options.target).backgroundColor;
     rfb.viewOnly = options.viewOnly;
     rfb.resizeSession = false;
@@ -99,7 +185,7 @@ export class DesktopClient {
     let sizingMode = options.sizingMode ?? "fit";
     const dispatchKeyboardEvent = (event: KeyboardEvent) => {
       // noVNC owns translation for both canvas input and the mobile keyboard bridge.
-      options.target.querySelector("canvas")?.dispatchEvent(event);
+      desktopCanvas(options.target)?.dispatchEvent(event);
     };
     const cloneKeyboardEvent = (event: KeyboardEvent, type = event.type) =>
       new KeyboardEvent(type, {
@@ -141,19 +227,16 @@ export class DesktopClient {
     };
     const trackPointerDown = (event: PointerEvent) => activePointers.add(event.pointerId);
     const trackPointerUp = (event: PointerEvent) => activePointers.delete(event.pointerId);
-    options.target.addEventListener("keydown", trackKeyDown, true);
-    options.target.addEventListener("keyup", trackKeyUp, true);
-    options.target.addEventListener("pointerdown", trackPointerDown, true);
-    window.addEventListener("pointerup", trackPointerUp, true);
-    window.addEventListener("pointercancel", trackPointerUp, true);
-    window.addEventListener("blur", clearHeldKeys);
+    const inputListeners = [
+      listen(options.target, "keydown", trackKeyDown, true),
+      listen(options.target, "keyup", trackKeyUp, true),
+      listen(options.target, "pointerdown", trackPointerDown, true),
+      listen(window, "pointerup", trackPointerUp, true),
+      listen(window, "pointercancel", trackPointerUp, true),
+      listen(window, "blur", clearHeldKeys),
+    ];
     const stopInputTracking = () => {
-      options.target.removeEventListener("keydown", trackKeyDown, true);
-      options.target.removeEventListener("keyup", trackKeyUp, true);
-      options.target.removeEventListener("pointerdown", trackPointerDown, true);
-      window.removeEventListener("pointerup", trackPointerUp, true);
-      window.removeEventListener("pointercancel", trackPointerUp, true);
-      window.removeEventListener("blur", clearHeldKeys);
+      inputListeners.forEach((stop) => stop());
       heldKeys.clear();
       activePointers.clear();
     };
@@ -170,6 +253,7 @@ export class DesktopClient {
       if (retired || !options.isCurrent()) {
         return;
       }
+      viewport.setMode(sizingMode);
       rfb.scaleViewport = sizingMode !== "actual";
       rfb.resizeSession =
         presented &&
@@ -179,29 +263,35 @@ export class DesktopClient {
         sizingMode === "match";
     };
     applySizing();
-    rfb.addEventListener("connect", () => {
-      if (retired || !options.isCurrent()) {
+    // noVNC's EventTargetMixin ignores listener options, including AbortSignal.
+    const stopRfb = [
+      listen(rfb, "connect", () => {
+        if (retired || !options.isCurrent()) {
+          disableInput();
+          return;
+        }
+        connected = true;
+        options.onConnect?.();
+        applySizing();
+      }),
+      listen(rfb, "disconnect", (event) => {
+        // noVNC's terminal state is permanent; callbacks may synchronously retire this handle.
+        retired = true;
         disableInput();
-        return;
-      }
-      connected = true;
-      options.onConnect?.();
-      applySizing();
-    });
-    rfb.addEventListener("disconnect", (event) => {
-      // noVNC's terminal state is permanent; callbacks may synchronously retire this handle.
-      retired = true;
-      disableInput();
-      stopInputTracking();
-      // SAFETY: noVNC's public disconnect event carries clean, even before the socket closes.
-      const { clean } = (event as CustomEvent<{ clean: boolean }>).detail;
-      options.onDisconnect?.({ ...closeDetail, clean });
-    });
-    rfb.addEventListener("securityfailure", (event) => {
-      disableInput();
-      const detail = (event as CustomEvent<DesktopSecurityFailureDetail>).detail ?? {};
-      options.onSecurityFailure?.(detail);
-    });
+        stopInputTracking();
+        stopSocketClose();
+        stopRfb.forEach((stop) => stop());
+        viewport.dispose();
+        // SAFETY: noVNC's public disconnect event carries clean, even before the socket closes.
+        const { clean } = (event as CustomEvent<{ clean: boolean }>).detail;
+        options.onDisconnect?.({ ...closeDetail, clean });
+      }),
+      listen(rfb, "securityfailure", (event) => {
+        disableInput();
+        const detail = (event as CustomEvent<DesktopSecurityFailureDetail>).detail ?? {};
+        options.onSecurityFailure?.(detail);
+      }),
+    ];
     return {
       disconnect: () => {
         if (!retired) {
@@ -209,6 +299,7 @@ export class DesktopClient {
           disableInput();
           stopInputTracking();
           rfb.disconnect();
+          viewport.dispose();
         }
       },
       disableInput,

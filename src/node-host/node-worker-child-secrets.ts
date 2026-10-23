@@ -1,8 +1,5 @@
 import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
-import {
-  nodeWorkerNativeInferenceSecretsForDescriptor,
-  type NodeWorkerNativeInferenceSnapshot,
-} from "./node-worker-native-inference.js";
+import type { NodeWorkerNativeInferenceSnapshot } from "./node-worker-native-inference.js";
 
 /** Collect every secret exposed to one physical worker child for diagnostic scrubbing. */
 export function nodeWorkerLaunchSecrets(
@@ -11,10 +8,17 @@ export function nodeWorkerLaunchSecrets(
 ): string[] {
   const endpoint = descriptor.connectionEndpoint;
   const access = endpoint.kind === "websocket" ? endpoint.cloudflareAccess : undefined;
-  return [
+  const secrets = [
     descriptor.admission.credential,
     ...(access ? [access.clientId, access.clientSecret] : []),
     ...(descriptor.assignment.github ? [descriptor.assignment.github.token] : []),
-    ...nodeWorkerNativeInferenceSecretsForDescriptor(nativeInference, descriptor),
   ];
+  if (descriptor.assignment.inference === "runtime-local" && nativeInference) {
+    for (const { model, credential } of nativeInference.models.values()) {
+      secrets.push(
+        ...[credential, ...Object.values(model.headers ?? {})].filter((value) => value.length > 0),
+      );
+    }
+  }
+  return secrets;
 }

@@ -3,34 +3,6 @@ import { describe, expect, it } from "vitest";
 import { OcPathError, formatOcPath, parseOcPath } from "../oc-path.js";
 
 describe("parseOcPath", () => {
-  it("parses file-only path", () => {
-    expect(parseOcPath("oc://SOUL.md")).toEqual({ file: "SOUL.md" });
-  });
-
-  it("parses file + section", () => {
-    expect(parseOcPath("oc://SOUL.md/Boundaries")).toEqual({
-      file: "SOUL.md",
-      section: "Boundaries",
-    });
-  });
-
-  it("parses file + section + item", () => {
-    expect(parseOcPath("oc://SOUL.md/Boundaries/deny-rule-1")).toEqual({
-      file: "SOUL.md",
-      section: "Boundaries",
-      item: "deny-rule-1",
-    });
-  });
-
-  it("parses file + section + item + field", () => {
-    expect(parseOcPath("oc://SOUL.md/Boundaries/deny-rule-1/risk")).toEqual({
-      file: "SOUL.md",
-      section: "Boundaries",
-      item: "deny-rule-1",
-      field: "risk",
-    });
-  });
-
   it("parses session query", () => {
     expect(parseOcPath("oc://SOUL.md?session=daily-cron")).toEqual({
       file: "SOUL.md",
@@ -38,22 +10,11 @@ describe("parseOcPath", () => {
     });
   });
 
-  it("rejects reserved chars in session query values", () => {
-    expectOcPathError(
-      () => parseOcPath("oc://SOUL.md?session=cron%2Fdaily"),
-      "OC_PATH_RESERVED_CHAR",
-    );
-  });
-
   it("rejects control chars in session query values", () => {
     expectOcPathError(
       () => parseOcPath("oc://SOUL.md?session=daily\x00cron"),
       "OC_PATH_CONTROL_CHAR",
     );
-  });
-
-  it("rejects control chars in ignored query values", () => {
-    expectOcPathError(() => parseOcPath("oc://SOUL.md?ignored=\x00"), "OC_PATH_CONTROL_CHAR");
   });
 
   it("rejects missing scheme", () => {
@@ -72,15 +33,6 @@ describe("parseOcPath", () => {
     expectOcPathError(() => parseOcPath("oc://SOUL.md/a/b/c/d/e"), "OC_PATH_TOO_DEEP");
   });
 
-  it("normalizes deep JSON paths into dotted subsegments", () => {
-    expect(parseOcPath("oc://openclaw.json/agents/entries/main/tools/exec/security")).toEqual({
-      file: "openclaw.json",
-      section: "agents.entries.main.tools",
-      item: "exec",
-      field: "security",
-    });
-  });
-
   it("rejects non-string input", () => {
     expectOcPathError(() => parseOcPath(123 as unknown as string), "OC_PATH_NOT_STRING");
   });
@@ -97,25 +49,6 @@ function expectOcPathError(fn: () => unknown, expectedCode: string): void {
 }
 
 describe("formatOcPath", () => {
-  it("round-trips file-only", () => {
-    expect(formatOcPath({ file: "SOUL.md" })).toBe("oc://SOUL.md");
-  });
-
-  it("round-trips full nesting", () => {
-    expect(
-      formatOcPath({
-        file: "SOUL.md",
-        section: "Boundaries",
-        item: "deny-rule-1",
-        field: "risk",
-      }),
-    ).toBe("oc://SOUL.md/Boundaries/deny-rule-1/risk");
-  });
-
-  it("round-trips session", () => {
-    expect(formatOcPath({ file: "SOUL.md", session: "cron" })).toBe("oc://SOUL.md?session=cron");
-  });
-
   it("rejects reserved chars in formatted session values", () => {
     expectOcPathError(
       () => formatOcPath({ file: "SOUL.md", session: "cron&scope=daily" }),

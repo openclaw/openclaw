@@ -3,7 +3,6 @@
  * tloncorp/tlon-apps. Removal is targeted for the next Plugin SDK major.
  */
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
-import type { DispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.types.js";
 import { mapReplyDispatchCounts } from "../auto-reply/reply/reply-dispatcher.types.js";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import {
@@ -18,6 +17,7 @@ import {
   type OutboundReplyPayload,
 } from "../infra/outbound/reply-payload-normalize.js";
 import { dispatchChannelInboundReply } from "./channel-inbound.js";
+import type { DispatchReplyWithBufferedBlockDispatcher } from "./reply-dispatch-runtime.js";
 
 type ReplyOptionsWithoutModelSelected = Omit<
   Omit<GetReplyOptions, "onBlockReply">,

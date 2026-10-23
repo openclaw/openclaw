@@ -3,56 +3,9 @@ import type { SystemAgentChatQuestion } from "../../packages/gateway-protocol/sr
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef, normalizeSecretInputString } from "../config/types.secrets.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
-import {
-  createSetupTranslator,
-  resolveWizardLocale,
-  type SetupTranslator,
-} from "../wizard/i18n/index.js";
+import { createSetupTranslator, resolveWizardLocale } from "../wizard/i18n/index.js";
 import type { SystemAgentChatEngine } from "./chat-engine.js";
 import { formatSystemAgentOnboardingWelcome } from "./overview.js";
-
-/**
- * Card-client questions for the two welcome variants. Replies are texts the
- * engine already understands; the prose welcome always stands alone for
- * text-only clients (macOS app, TUI).
- */
-function readyWelcomeQuestion(translate: SetupTranslator): SystemAgentChatQuestion {
-  return {
-    id: "onboarding-next-step",
-    header: translate("nextStep"),
-    question: translate("firstAction"),
-    options: [
-      {
-        label: translate("talkToAgent"),
-        reply: "talk to agent",
-        recommended: true,
-        description: translate("meetAgent"),
-      },
-      { label: translate("connectWhatsApp"), reply: "connect whatsapp" },
-      { label: translate("connectTelegram"), reply: "connect telegram" },
-      { label: translate("allChannels"), reply: "channels" },
-    ],
-    isOther: true,
-    skipAction: "exit",
-  };
-}
-
-function setupWelcomeQuestion(translate: SetupTranslator): SystemAgentChatQuestion {
-  return {
-    id: "onboarding-apply-setup",
-    header: translate("readyWhenYouAre"),
-    question: translate("applyQuestion"),
-    options: [
-      { label: translate("applyYes"), reply: "yes", recommended: true },
-      {
-        label: translate("inspectChanges"),
-        reply: "what exactly will you set up?",
-        description: translate("askBeforeWriting"),
-      },
-    ],
-    isOther: true,
-  };
-}
 
 /**
  * The basic bootstrap is conversational: the welcome message carries the plan
@@ -60,14 +13,26 @@ function setupWelcomeQuestion(translate: SetupTranslator): SystemAgentChatQuesti
  * This path starts only after a live inference turn. Already-configured
  * installs get the channels/handoff guide instead.
  */
-/**
- * "Configured" must match the app onboarding gate (wizard metadata or gateway
- * auth), not just a model: a model-only config would otherwise get the
- * ready-guide welcome while the gate stays locked, stranding the page.
- */
-async function loadAuthoredSetupConfig(params: { configExists: boolean; configValid: boolean }) {
+export async function buildOnboardingWelcome(params: {
+  engine: SystemAgentChatEngine;
+  workspace?: string;
+  agentName?: string;
+  locale?: string;
+  /** Only the local terminal can finish the machine-owned Gateway installation. */
+  localRecovery?: true;
+}) {
+  const translate = createSetupTranslator({
+    keyPrefix: "wizard.onboardingWelcome",
+    locale: params.locale === undefined ? undefined : resolveWizardLocale(params.locale),
+  });
+  const overview = await params.engine.loadOverview();
+  /**
+   * "Configured" must match the app onboarding gate (wizard metadata or gateway
+   * auth), not just a model: a model-only config would otherwise get the
+   * ready-guide welcome while the gate stays locked, stranding the page.
+   */
   let authoredConfig: OpenClawConfig | undefined;
-  if (params.configExists && params.configValid) {
+  if (overview.config.exists && overview.config.valid) {
     try {
       const { readConfigFileSnapshot } = await import("../config/config.js");
       const snapshot = await readConfigFileSnapshot();
@@ -86,36 +51,15 @@ async function loadAuthoredSetupConfig(params: { configExists: boolean; configVa
   const hasWizardMetadata =
     authoredConfig?.wizard !== undefined && Object.keys(authoredConfig.wizard).length > 0;
   const hasAuthoredSetup = hasWizardMetadata || hasAuthMode || hasAuthSecret;
-  return { ...(authoredConfig ? { authoredConfig } : {}), hasAuthoredSetup };
-}
-
-export async function buildOnboardingWelcome(params: {
-  engine: SystemAgentChatEngine;
-  workspace?: string;
-  agentName?: string;
-  locale?: string;
-  /** Only the local terminal can finish the machine-owned Gateway installation. */
-  localRecovery?: true;
-}) {
-  const translate = createSetupTranslator({
-    keyPrefix: "wizard.onboardingWelcome",
-    locale: params.locale === undefined ? undefined : resolveWizardLocale(params.locale),
-  });
-  const overview = await params.engine.loadOverview();
-  const { authoredConfig, hasAuthoredSetup } = await loadAuthoredSetupConfig({
-    configExists: overview.config.exists,
-    configValid: overview.config.valid,
-  });
   const localSetup =
     params.localRecovery === true &&
     overview.config.exists &&
     overview.config.valid &&
     authoredConfig !== undefined &&
     authoredConfig?.gateway?.mode !== "remote"
-      ? (await import("../state/local-onboarding-state.js")).readLocalOnboardingStateForConfig(
-          overview.config.path,
-          authoredConfig,
-        )
+      ? await (
+          await import("../state/local-onboarding-state.js")
+        ).readLocalOnboardingStateForConfigAsync(overview.config.path, authoredConfig)
       : undefined;
   const pendingSetup = localSetup?.status === "pending" ? localSetup : undefined;
   const setupModel = (overview.defaultModel ?? overview.setupModel)?.trim();
@@ -133,7 +77,30 @@ export async function buildOnboardingWelcome(params: {
   ) {
     const welcome = formatSystemAgentOnboardingWelcome(overview, translate);
     params.engine.noteAssistantMessage(welcome);
-    return { text: welcome, question: readyWelcomeQuestion(translate) };
+    /**
+     * Card-client questions for the two welcome variants. Replies are texts the
+     * engine already understands; the prose welcome always stands alone for
+     * text-only clients (macOS app, TUI).
+     */
+    const question: SystemAgentChatQuestion = {
+      id: "onboarding-next-step",
+      header: translate("nextStep"),
+      question: translate("firstAction"),
+      options: [
+        {
+          label: translate("talkToAgent"),
+          reply: "talk to agent",
+          recommended: true,
+          description: translate("meetAgent"),
+        },
+        { label: translate("connectWhatsApp"), reply: "connect whatsapp" },
+        { label: translate("connectTelegram"), reply: "connect telegram" },
+        { label: translate("allChannels"), reply: "channels" },
+      ],
+      isOther: true,
+      skipAction: "exit",
+    };
+    return { text: welcome, question };
   }
   if (!setupModel) {
     throw new Error(
@@ -168,5 +135,19 @@ export async function buildOnboardingWelcome(params: {
     translate(overview.defaultModel ? "afterSetup" : "setupModelNext"),
   ].join("\n");
   params.engine.noteAssistantMessage(welcome);
-  return { text: welcome, question: setupWelcomeQuestion(translate) };
+  const question: SystemAgentChatQuestion = {
+    id: "onboarding-apply-setup",
+    header: translate("readyWhenYouAre"),
+    question: translate("applyQuestion"),
+    options: [
+      { label: translate("applyYes"), reply: "yes", recommended: true },
+      {
+        label: translate("inspectChanges"),
+        reply: "what exactly will you set up?",
+        description: translate("askBeforeWriting"),
+      },
+    ],
+    isOther: true,
+  };
+  return { text: welcome, question };
 }

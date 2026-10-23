@@ -1,8 +1,11 @@
 import { prepareCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
-import { assertSessionWriterDeliveryAuthorized } from "../../auto-reply/reply/session-writer-delivery-authority.js";
+import {
+  assertSessionWriterDeliveryAuthorized,
+  prepareSessionWriterDeliveryAuthority,
+} from "../../auto-reply/reply/session-writer-delivery-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GatewayOperatorAccessDeniedError } from "../../gateway/operator-access-policy.js";
-import { parseCommandOwnerReference } from "../../state/user-channel-identities.js";
+import { parseCommandOwnerReference } from "../../state/user-channel-authorization-reference.js";
 import {
   resolveDeliveryQueueStateEnv,
   type DeliveryQueueStateContext,
@@ -50,6 +53,11 @@ export async function buildRecoveryDeliverParams(
       throw rejection(new GatewayOperatorAccessDeniedError());
     }
   }
+  const writer = await prepareSessionWriterDeliveryAuthority(
+    pendingFinal?.sessionWriterDeliveryAuthority,
+    pendingFinal?.storePath,
+    resolveDeliveryQueueStateEnv(stateDir, stateContext),
+  );
   const assertCurrent = () => {
     try {
       if (pendingFinal?.commandOwnerReference !== undefined && !owner?.isCurrent(cfg)) {
@@ -59,9 +67,10 @@ export async function buildRecoveryDeliverParams(
     } catch (error) {
       throw rejection(error);
     }
-    assertSessionWriterDeliveryAuthorized(pendingFinal?.sessionWriterDeliveryAuthority);
+    assertSessionWriterDeliveryAuthorized(writer.authority);
   };
   return {
+    release: writer.release,
     cfg,
     ...projectQueuedDeliveryOptions(entry),
     ...(entry.queuePolicy !== undefined ? { queuePolicy: entry.queuePolicy } : {}),
@@ -102,5 +111,5 @@ export async function buildRecoveryDeliverParams(
     skipQueue: true, // Prevent re-enqueueing during recovery.
     deferredDeliveryAdmissionPassed: true,
     deferCommitHooks: true,
-  } satisfies DeliverOutboundPayloadsParams;
+  } satisfies DeliverOutboundPayloadsParams & { release: () => void };
 }

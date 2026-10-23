@@ -19,6 +19,7 @@ import { enableNodeSqliteKyselyStatementCache } from "../../infra/kysely-sync.js
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { tryBeginGatewayRootWorkAdmission } from "../../process/gateway-work-admission.js";
+import { onSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
   openOpenClawStateDatabase,
@@ -42,6 +43,7 @@ import {
   getWorkerTurnExecutionIdentityCapability,
   runWorkerTurnAdmissionContinuation,
 } from "./placement-turn-claim-events.js";
+import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import { createWorkerTranscriptCommitStore } from "./transcript-commit-ledger.js";
 import { createWorkerTranscriptCommitter } from "./transcript-commit.js";
 
@@ -113,13 +115,40 @@ it("projects worker-turn workspace reconciliation at its owned boundary", async 
   expect(
     (await store.readProjection([active.sessionId])).placements.get(active.sessionId),
   ).not.toHaveProperty("workspaceResultConflict");
-  await store.acceptWorkspaceResult(claim);
-  await store.completeWorkspaceResultAndReleaseTurn(claim);
-  expect(
-    (await store.readProjection([active.sessionId])).workspaceResultReconcilingSessionIds.has(
-      active.sessionId,
-    ),
-  ).toBe(false);
+  const published: unknown[] = [];
+  const unsubscribe = onSessionLifecycleEvent((event) => {
+    if (event.sessionKey === active.sessionKey) {
+      published.push({
+        event,
+        placement: store.get(active.sessionId),
+        resultCurrent: store.validateWorkspaceResultClaim(claim),
+      });
+    }
+  });
+  try {
+    await store.acceptWorkspaceResult(claim);
+    expect(published).toEqual([]);
+    await store.completeWorkspaceResultAndReleaseTurn(claim);
+    expect(published).toEqual([
+      {
+        event: {
+          sessionKey: active.sessionKey,
+          agentId: active.agentId,
+          reason: "placement",
+          scope: "runtime",
+        },
+        placement: expect.objectContaining({ state: "active", turnClaim: null }),
+        resultCurrent: false,
+      },
+    ]);
+    expect(
+      (await store.readProjection([active.sessionId])).workspaceResultReconcilingSessionIds.has(
+        active.sessionId,
+      ),
+    ).toBe(false);
+  } finally {
+    unsubscribe();
+  }
 });
 
 it("batches placement facts in one statement per chunk and keeps the snapshot across a peer commit", async () => {
@@ -466,6 +495,7 @@ it("rejects retained worker lineage capabilities after either owner closes", asy
     () => {},
   );
   const placementCapability = getWorkerTurnExecutionIdentityCapability(store, placementClosedClaim);
+  const placementGate = createWorkerSessionPlacementGate(store);
   if (!placementCapability) {
     throw new Error("expected placement-bound lineage capability");
   }
@@ -485,6 +515,7 @@ it("rejects retained worker lineage capabilities after either owner closes", asy
     expect(getWorkerTurnExecutionIdentityCapability(store, placementClosedClaim)).toBe(
       placementCapability,
     );
+    expect(placementGate.validateWorkerTurn(placementClosedClaim)).toBe(true);
     await placementCapability.run((identity) => {
       placementReceiptAuthority = identity.receiptAuthority;
       identity.receiptAuthority();
@@ -494,6 +525,7 @@ it("rejects retained worker lineage capabilities after either owner closes", asy
     sql.restore();
   }
   await store.releaseTurn(placementClosedClaim);
+  expect(placementGate.validateWorkerTurn(placementClosedClaim)).toBe(false);
   expect(() => placementReceiptAuthority?.()).toThrow("worker turn authority changed");
   await expect(placementCapability.run(async () => "stale")).rejects.toThrow(
     "worker turn authority changed",

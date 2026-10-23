@@ -4,14 +4,7 @@ import {
 } from "openclaw/plugin-sdk/channel-mention-gating";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
-import {
-  getComparableIdentityValues,
-  getMentionIdentities,
-  getSelfIdentity,
-  identitiesOverlap,
-  type WhatsAppIdentity,
-} from "../identity.js";
-import { requireWhatsAppInboundAdmission } from "../inbound/admission.js";
+import { getMentionIdentities, getSelfIdentity, identitiesOverlap } from "../identity.js";
 import type { AdmittedWebInboundMessage } from "../inbound/types.js";
 import { isSelfChatMode } from "../targets-runtime.js";
 
@@ -19,11 +12,6 @@ export type MentionConfig = {
   mentionRegexes: RegExp[];
   allowFrom?: Array<string | number>;
   isSelfChat?: boolean;
-};
-
-type MentionTargets = {
-  normalizedMentions: WhatsAppIdentity[];
-  self: WhatsAppIdentity;
 };
 
 export function buildMentionConfig(
@@ -35,19 +23,22 @@ export function buildMentionConfig(
   return { mentionRegexes, allowFrom: cfg.channels?.whatsapp?.allowFrom };
 }
 
-function isBotMentionedFromTargets(
+export function isBotMentioned(
   msg: AdmittedWebInboundMessage,
   mentionCfg: MentionConfig,
-  targets: MentionTargets,
+  authDir?: string,
 ): boolean {
-  const explicitSelfChatOverride = typeof mentionCfg.isSelfChat === "boolean";
+  const targets = {
+    normalizedMentions: getMentionIdentities(msg, authDir),
+    self: getSelfIdentity(msg, authDir),
+  };
   // Having our own number in allowFrom suppresses native self-mentions only in DMs.
   // Explicit caller overrides also apply to groups.
-  const admission = requireWhatsAppInboundAdmission(msg);
+  const admission = msg.admission;
   const isGroupConversation = admission.conversation.kind === "group";
-  const isSelfChat = explicitSelfChatOverride
-    ? Boolean(mentionCfg.isSelfChat)
-    : isSelfChatMode(targets.self.e164, mentionCfg.allowFrom) && !isGroupConversation;
+  const isSelfChat =
+    mentionCfg.isSelfChat ??
+    (isSelfChatMode(targets.self.e164, mentionCfg.allowFrom) && !isGroupConversation);
 
   const hasMentions = targets.normalizedMentions.length > 0;
   const hasNativeMentionsOutsideSelfChat = hasMentions && !isSelfChat;
@@ -73,37 +64,9 @@ function isBotMentionedFromTargets(
   return Boolean(selfDigits && bodyClean.replace(/\D/g, "").includes(selfDigits));
 }
 
-export function debugMention(
-  msg: AdmittedWebInboundMessage,
-  mentionCfg: MentionConfig,
-  authDir?: string,
-): { wasMentioned: boolean; details: Record<string, unknown> } {
-  const mentionTargets = {
-    normalizedMentions: getMentionIdentities(msg, authDir),
-    self: getSelfIdentity(msg, authDir),
-  };
-  const result = isBotMentionedFromTargets(msg, mentionCfg, mentionTargets);
-  const admission = requireWhatsAppInboundAdmission(msg);
-  const details = {
-    from: admission.conversation.id,
-    body: msg.payload.body,
-    bodyClean: normalizeMentionText(msg.payload.body),
-    mentionedJids: msg.group?.mentions?.jids ?? null,
-    normalizedMentionedJids: mentionTargets.normalizedMentions.length
-      ? mentionTargets.normalizedMentions.map((identity) => getComparableIdentityValues(identity))
-      : null,
-    selfJid: msg.platform.self?.jid ?? msg.platform.selfJid ?? null,
-    selfLid: msg.platform.self?.lid ?? msg.platform.selfLid ?? null,
-    selfE164: msg.platform.self?.e164 ?? msg.platform.selfE164 ?? null,
-    resolvedSelf: mentionTargets.self,
-  };
-  return { wasMentioned: result, details };
-}
-
 export function resolveOwnerList(mentionCfg: MentionConfig, selfE164?: string | null) {
   const allowFrom = mentionCfg.allowFrom;
-  const raw =
-    Array.isArray(allowFrom) && allowFrom.length > 0 ? allowFrom : selfE164 ? [selfE164] : [];
+  const raw = allowFrom?.length ? allowFrom : selfE164 ? [selfE164] : [];
   return raw
     .filter((entry): entry is string => Boolean(entry && entry !== "*"))
     .map((entry) => normalizeE164(entry))

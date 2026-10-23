@@ -1,6 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
-import { isActiveUnusableWindow } from "./auth-profiles/usage-state.js";
 import { shouldUseTransientCooldownProbeSlot } from "./failover-policy.js";
 import type { FailoverReason } from "./failover/signal.js";
 import type { ModelFallbackAuthRuntime } from "./model-fallback-attempt.js";
@@ -15,7 +14,6 @@ const lastProbeAttempt = new Map<string, number>();
 const MIN_PROBE_INTERVAL_MS = 30_000;
 const PROBE_MARGIN_MS = 2 * 60 * 1000;
 const PROBE_SCOPE_DELIMITER = "::";
-const PROBE_STATE_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_PROBE_KEYS = 256;
 
 export function resolveProbeThrottleKey(provider: string, agentDir?: string): string {
@@ -23,51 +21,21 @@ export function resolveProbeThrottleKey(provider: string, agentDir?: string): st
   return scope ? `${scope}${PROBE_SCOPE_DELIMITER}${provider}` : provider;
 }
 
-function pruneProbeState(now: number): void {
-  for (const [key, ts] of lastProbeAttempt) {
-    if (!Number.isFinite(ts) || ts <= 0 || now - ts > PROBE_STATE_TTL_MS) {
-      lastProbeAttempt.delete(key);
-    }
-  }
-}
-
 function isProbeThrottleOpen(now: number, throttleKey: string): boolean {
-  pruneProbeState(now);
   const lastProbe = lastProbeAttempt.get(throttleKey) ?? 0;
   return now - lastProbe >= MIN_PROBE_INTERVAL_MS;
 }
 
 export function markProbeAttempt(now: number, throttleKey: string): void {
-  pruneProbeState(now);
+  lastProbeAttempt.delete(throttleKey);
   lastProbeAttempt.set(throttleKey, now);
-  while (lastProbeAttempt.size > MAX_PROBE_KEYS) {
-    let oldestKey: string | null = null;
-    let oldestTs = Number.POSITIVE_INFINITY;
-    for (const [key, ts] of lastProbeAttempt) {
-      if (ts < oldestTs) {
-        oldestKey = key;
-        oldestTs = ts;
-      }
-    }
-    if (!oldestKey) {
+  if (lastProbeAttempt.size > MAX_PROBE_KEYS) {
+    for (const key of lastProbeAttempt.keys()) {
+      lastProbeAttempt.delete(key);
       break;
     }
-    lastProbeAttempt.delete(oldestKey);
   }
 }
-
-/** @internal – exposed for unit tests only */
-export const probeThrottleInternals = {
-  lastProbeAttempt,
-  MIN_PROBE_INTERVAL_MS,
-  PROBE_MARGIN_MS,
-  PROBE_STATE_TTL_MS,
-  MAX_PROBE_KEYS,
-  resolveProbeThrottleKey,
-  isProbeThrottleOpen,
-  pruneProbeState,
-  markProbeAttempt,
-} as const;
 
 type CooldownDecision =
   | { type: "skip"; reason: FailoverReason; error: string }
@@ -100,25 +68,7 @@ export function resolveCooldownDecision(params: {
       params.profileIds,
       { now: params.now, forModel: params.candidate.model },
     );
-    // Generic 429 backoff can become stale before its local cooldown expires.
-    // Provider-recorded reset windows still remain authoritative until near expiry.
-    const staleRateLimit =
-      inferredReason === "rate_limit" &&
-      !params.profileIds.some((profileId) => {
-        const stats = params.authStore.usageStats?.[profileId];
-        return (
-          stats &&
-          isActiveUnusableWindow(stats.blockedUntil, params.now) &&
-          stats.blockedReason === "subscription_limit" &&
-          stats.blockedSource &&
-          (!stats.blockedModel || stats.blockedModel === params.candidate.model)
-        );
-      });
-    shouldProbe =
-      staleRateLimit ||
-      soonest === null ||
-      !Number.isFinite(soonest) ||
-      params.now >= soonest - PROBE_MARGIN_MS;
+    shouldProbe = soonest === null || params.now >= soonest - PROBE_MARGIN_MS;
   }
 
   const isPersistentAuthIssue = inferredReason === "auth" || inferredReason === "auth_permanent";

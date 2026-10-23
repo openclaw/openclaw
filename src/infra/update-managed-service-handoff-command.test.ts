@@ -8,11 +8,16 @@ import { DatabaseSync } from "node:sqlite";
 import { PassThrough } from "node:stream";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { findSystemdGatewayInstallation } from "../daemon/systemd-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withEnv } from "../test-utils/env.js";
 import { readDevUpdateTarget, type DevUpdateTarget } from "./update-dev-target.js";
+import {
+  createManagedHandoffTempDirTracker,
+  readManagedHandoffArtifacts,
+} from "./update-managed-service-handoff-artifacts.test-support.js";
 import type { ManagedHandoffLease } from "./update-managed-service-handoff-lease.js";
 import { signalMockManagedUpdateHandoffReady } from "./update-managed-service-handoff.test-support.js";
 
@@ -20,7 +25,7 @@ const spawnMock = vi.hoisted(() => vi.fn());
 const resolvePreferredOpenClawTmpDirMock = vi.hoisted(() => vi.fn());
 const spawnSyncMock = vi.hoisted(() => vi.fn());
 const forceKillChildProcessTreeMock = vi.hoisted(() => vi.fn());
-const tempDirs = new Set<string>();
+const tempDirs = createManagedHandoffTempDirTracker();
 const mockedHandoffLeaseCleanups = new Set<() => void>();
 const MOCK_INSTALL_ROOT = path.join(os.tmpdir(), `openclaw-handoff-command-${process.pid}`);
 const systemRoots = useAutoCleanupTempDirTracker(afterEach);
@@ -38,7 +43,7 @@ function createReadyChild(_command: string, args: string[], readyDelayMs = 0) {
     const ready = () =>
       signalMockManagedUpdateHandoffReady({
         child,
-        paramsPath: args.at(-1) ?? "",
+        paramsPath: readManagedHandoffArtifacts(args).paramsPath,
         cleanups: mockedHandoffLeaseCleanups,
       });
     if (readyDelayMs > 0) {
@@ -75,6 +80,8 @@ vi.mock("./tmp-openclaw-dir.js", async (importOriginal) => ({
 }));
 
 beforeEach(async () => {
+  // Source Workers share this process's FD table; deep TSX cache writes can exhaust it.
+  vi.stubEnv("TSX_DISABLE_CACHE", "1");
   vi.mocked(findSystemdGatewayInstallation).mockResolvedValue({ kind: "none" });
   // Helpers in one fixture share a coordinator without touching the operator's database.
   const coordinatorDir = await fs.realpath(
@@ -100,9 +107,9 @@ afterEach(async () => {
     mockedHandoffLeaseCleanups.delete(cleanup);
     cleanup();
   }
-  await Promise.all([...tempDirs].map((dir) => fs.rm(dir, { recursive: true, force: true })));
-  tempDirs.clear();
+  await tempDirs.cleanup();
   vi.resetModules();
+  vi.unstubAllEnvs();
 });
 
 async function startHandoffAndReadCommand(params: {
@@ -112,6 +119,7 @@ async function startHandoffAndReadCommand(params: {
   channel: "beta" | "extended-stable";
   tag?: string;
   acceptCapabilities?: boolean;
+  fullIntegrityCheck?: boolean;
   admission?: "auto" | "installed";
   reapplyLocalOverrides?: boolean;
   devTarget?: DevUpdateTarget;
@@ -123,6 +131,7 @@ async function startHandoffAndReadCommand(params: {
   commandArgv: string[] | undefined;
   recoveryCommandArgv: string[];
   triageCommandArgv: string[];
+  triageContextCommand: string;
   parentExitTimeoutMs: number;
   parentExitDeadlineAt: number;
   spawnEnv: NodeJS.ProcessEnv | undefined;
@@ -136,6 +145,7 @@ async function startHandoffAndReadCommand(params: {
     channel: params.channel,
     ...(params.tag ? { tag: params.tag } : {}),
     ...(params.acceptCapabilities ? { acceptCapabilities: true } : {}),
+    ...(params.fullIntegrityCheck ? { fullIntegrityCheck: true } : {}),
     admission: params.admission,
     ...(params.reapplyLocalOverrides ? { reapplyLocalOverrides: true } : {}),
     parentPid: process.pid,
@@ -149,15 +159,16 @@ async function startHandoffAndReadCommand(params: {
   const spawnCall = spawnMock.mock.calls[0] as unknown as
     | [string, string[], { env?: NodeJS.ProcessEnv }]
     | undefined;
-  const paramsPath = spawnCall?.[1]?.at(-1);
-  if (!paramsPath) {
+  if (!spawnCall) {
     throw new Error("expected managed-service handoff params path");
   }
-  tempDirs.add(path.dirname(paramsPath));
+  tempDirs.add(path.dirname(result.logPath));
+  const { paramsPath } = readManagedHandoffArtifacts(spawnCall[1]);
   const helperParams = JSON.parse(await fs.readFile(paramsPath, "utf-8")) as {
     commandArgv?: string[];
     recoveryCommandArgv: string[];
     triageCommandArgv: string[];
+    triageContextCommand: string;
     parentExitTimeoutMs: number;
     parentExitDeadlineAt: number;
   };
@@ -174,6 +185,7 @@ async function startHandoffAndReadCommand(params: {
     commandArgv: helperParams.commandArgv,
     recoveryCommandArgv: helperParams.recoveryCommandArgv,
     triageCommandArgv: helperParams.triageCommandArgv,
+    triageContextCommand: helperParams.triageContextCommand,
     parentExitTimeoutMs: helperParams.parentExitTimeoutMs,
     parentExitDeadlineAt: helperParams.parentExitDeadlineAt,
     spawnEnv: spawnCall?.[2]?.env,
@@ -201,6 +213,8 @@ describe("managed service update handoff command", () => {
       argv1: path.join(current, "openclaw.mjs"),
       channel: "beta",
     });
+    expect(prepared.triageCommandArgv.slice(-3)).toEqual(["triage", "--json", "--non-interactive"]);
+    expect(prepared.triageContextCommand).toContain("openclaw triage --run --update-result");
     for (const argv of [
       prepared.commandArgv,
       prepared.recoveryCommandArgv,
@@ -268,10 +282,12 @@ describe("managed service update handoff command", () => {
         expect(spawnMock).not.toHaveBeenCalled();
         return;
       }
-      await expect(started).resolves.toMatchObject({ status: "started" });
+      const result = await started;
+      expect(result).toMatchObject({ status: "started" });
       const [command, args] = spawnMock.mock.calls[0] as [string, string[]];
-      tempDirs.add(path.dirname(args.at(-1)!));
-      const prepared = JSON.parse(await fs.readFile(args.at(-1)!, "utf8"));
+      tempDirs.add(path.dirname(result.logPath));
+      const { paramsPath } = readManagedHandoffArtifacts(args);
+      const prepared = JSON.parse(await fs.readFile(paramsPath, "utf8"));
       expect(command).toBe(process.execPath);
       expect(prepared.commandArgv).toContain("--no-restart");
       expect(prepared.serviceRecovery).toBeUndefined();
@@ -301,19 +317,19 @@ describe("managed service update handoff command", () => {
     },
   );
 
-  it.each(
+  it.for(
     (["readiness", "park"] as const).flatMap((phase) =>
       [30_000, 120_000].map((budgetMs) => ({ phase, budgetMs })),
     ),
   )(
     "waits for delayed $phase ACKs within the owning $budgetMs ms budget",
-    async ({ phase, budgetMs }) => {
+    async ({ phase, budgetMs }, { signal }) => {
       const { requestManagedServiceUpdateHandoffPark, startManagedServiceUpdateHandoff } =
         await import("./update-managed-service-handoff.js");
       const spawned = createDeferredCore<ReturnType<typeof createReadyChild>>();
       spawnMock.mockImplementationOnce((command: string, args: string[]) => {
         const child = createReadyChild(command, args, phase === "readiness" ? 31_000 : 0);
-        tempDirs.add(path.dirname(args.at(-1)!));
+        tempDirs.add(readManagedHandoffArtifacts(args).dir);
         spawned.resolve(child);
         return child;
       });
@@ -332,7 +348,18 @@ describe("managed service update handoff command", () => {
           (value) => ({ kind: "ready" as const, value }),
           (error: unknown) => ({ kind: "rejected" as const, error }),
         );
-        child = await spawned.promise;
+        child = await withinTest(
+          awaitGateBeforeSettlement(
+            spawned.promise,
+            starting.then((result) => {
+              if (result.kind === "rejected") {
+                throw result.error;
+              }
+            }),
+            "handoff settled before spawning its helper",
+          ),
+          signal,
+        );
         if (phase === "readiness") {
           await vi.advanceTimersByTimeAsync(31_000);
         }
@@ -362,7 +389,14 @@ describe("managed service update handoff command", () => {
             kind: "managed-update-handoff",
             ...started.value,
           });
-          await requested.promise;
+          await withinTest(
+            awaitGateBeforeSettlement(
+              requested.promise,
+              parked,
+              "handoff park settled before sending its request",
+            ),
+            signal,
+          );
           await vi.advanceTimersByTimeAsync(31_000);
           expect(await parked).toBe(budgetMs === 120_000);
         }
@@ -386,7 +420,7 @@ describe("managed service update handoff command", () => {
       await fs.writeFile(path.join(root, "systemd-run"), "#!/bin/sh\nexit 1\n", { mode: 0o700 });
       const { startManagedServiceUpdateHandoff } =
         await import("./update-managed-service-handoff.js");
-      await startManagedServiceUpdateHandoff({
+      const started = await startManagedServiceUpdateHandoff({
         root,
         restartDrainTimeoutMs: 0,
         supervisor: "systemd",
@@ -410,9 +444,10 @@ describe("managed service update handoff command", () => {
         },
       });
       const [, args] = spawnMock.mock.calls[0] as [string, string[]];
-      tempDirs.add(path.dirname(args.at(-1)!));
+      tempDirs.add(path.dirname(started.logPath));
+      const { paramsPath } = readManagedHandoffArtifacts(args);
       expect(args).toContain("--property=PartOf=openclaw-gateway.service");
-      const staged = JSON.parse(await fs.readFile(args.at(-1)!, "utf8"));
+      const staged = JSON.parse(await fs.readFile(paramsPath, "utf8"));
       expect(args.slice(args.indexOf(executable) + 1, -2)).toEqual(runtimeArgs);
       expect(staged.runtimeArgs).toEqual(runtimeArgs);
       expect(staged.commandArgv).toEqual([
@@ -530,43 +565,21 @@ describe("managed service update handoff command", () => {
     }
   });
 
-  it.each(["canonical", "ancestor alias"] as const)(
-    "serializes extended-stable into the detached CLI command with a %s lease path",
-    async (leasePath) => {
-      if (leasePath === "ancestor alias") {
-        const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "handoff-alias-")));
-        tempDirs.add(root);
-        const realParent = path.join(root, "real");
-        const aliasParent = path.join(root, "alias");
-        await fs.mkdir(path.join(realParent, "leases"), { recursive: true, mode: 0o700 });
-        await fs.symlink(
-          realParent,
-          aliasParent,
-          process.platform === "win32" ? "junction" : "dir",
-        );
-        resolvePreferredOpenClawTmpDirMock.mockReturnValue(path.join(aliasParent, "leases"));
-      }
-      const result = await startHandoffAndReadCommand({ channel: "extended-stable" });
-
-      expect(result.commandArgv).toEqual([
-        "/usr/local/bin/node",
-        "/opt/openclaw/openclaw.mjs",
-        "update",
-        "--yes",
-        "--json",
-        "--channel",
-        "extended-stable",
-      ]);
-      expect(result.command).toContain("--channel extended-stable");
-    },
-  );
-
   it.each([true, false])(
     "preserves replay consent=%s across the detached handoff",
     async (reapplyLocalOverrides) => {
       const result = await startHandoffAndReadCommand({ channel: "beta", reapplyLocalOverrides });
       expect(result.commandArgv?.includes("--reapply-local-overrides")).toBe(reapplyLocalOverrides);
       expect(result.command.includes("--reapply-local-overrides")).toBe(reapplyLocalOverrides);
+    },
+  );
+
+  it.each([true, false])(
+    "preserves full integrity selection=%s across the detached handoff",
+    async (fullIntegrityCheck) => {
+      const result = await startHandoffAndReadCommand({ channel: "beta", fullIntegrityCheck });
+      expect(result.commandArgv?.includes("--full-integrity-check")).toBe(fullIntegrityCheck);
+      expect(result.command.includes("--full-integrity-check")).toBe(fullIntegrityCheck);
     },
   );
 

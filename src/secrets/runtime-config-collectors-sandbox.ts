@@ -7,7 +7,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { appendConfigPathSegment } from "../shared/dot-path.js";
 import { runtimeSandboxSecretOwnerId } from "./runtime-sandbox-secret-owner.js";
 import {
-  collectCanonicalSecretInputAssignment as collectSecretInputAssignment,
+  createConfigSecretInputCollector,
   type ResolverContext,
   type SecretAssignmentOwner,
   type SecretDefaults,
@@ -28,26 +28,6 @@ function sandboxSecretOwner(agentId: string, contract: unknown): SecretAssignmen
   };
 }
 
-function collectAssignment(params: {
-  target: Record<string, unknown>;
-  key: SandboxSshSecretKey;
-  path: string;
-  defaults: SecretDefaults | undefined;
-  context: ResolverContext;
-  active: boolean;
-  inactiveReason: string;
-  owner: SecretAssignmentOwner;
-}): void {
-  collectSecretInputAssignment({
-    ...params,
-    value: params.target[params.key],
-    expected: "string",
-    apply: (value) => {
-      params.target[params.key] = value;
-    },
-  });
-}
-
 /** Collects SSH material once for every agent whose current backend can manage it. */
 export function collectAgentSandboxAssignments(params: {
   config: OpenClawConfig;
@@ -55,6 +35,7 @@ export function collectAgentSandboxAssignments(params: {
   context: ResolverContext;
   agentId?: string;
 }): void {
+  const collect = createConfigSecretInputCollector(params);
   const rawAgents: unknown = params.config.agents;
   const agents = isRecord(rawAgents) ? rawAgents : undefined;
   if (!agents) {
@@ -106,12 +87,7 @@ export function collectAgentSandboxAssignments(params: {
     for (const key of SANDBOX_SSH_SECRET_KEYS) {
       const hasAgentOverride = Boolean(ssh && Object.hasOwn(ssh, key));
       if (hasAgentOverride && ssh) {
-        collectAssignment({
-          target: ssh,
-          key,
-          path: `${agentPath}.sandbox.ssh.${key}`,
-          defaults: params.defaults,
-          context: params.context,
+        collect(ssh, key, `${agentPath}.sandbox.ssh.${key}`, {
           active: scope !== "shared" && active,
           inactiveReason:
             scope === "shared"
@@ -131,12 +107,7 @@ export function collectAgentSandboxAssignments(params: {
         continue;
       }
       activeDefaultKeys.add(key);
-      collectAssignment({
-        target: defaultsSsh,
-        key,
-        path: `agents.defaults.sandbox.ssh.${key}`,
-        defaults: params.defaults,
-        context: params.context,
+      collect(defaultsSsh, key, `agents.defaults.sandbox.ssh.${key}`, {
         active: true,
         inactiveReason: "sandbox SSH backend is not configured for this agent.",
         owner,
@@ -158,12 +129,7 @@ export function collectAgentSandboxAssignments(params: {
       params.agentId === undefined
         ? resolveDefaultAgentId(params.config)
         : normalizeAgentId(params.agentId);
-    collectAssignment({
-      target: defaultsSsh,
-      key,
-      path: `agents.defaults.sandbox.ssh.${key}`,
-      defaults: params.defaults,
-      context: params.context,
+    collect(defaultsSsh, key, `agents.defaults.sandbox.ssh.${key}`, {
       active,
       inactiveReason: "no enabled agent uses the sandbox SSH material.",
       owner: sandboxSecretOwner(fallbackAgentId, {

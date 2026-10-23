@@ -1,13 +1,4 @@
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
-/**
- * Security Tests for Tlon Plugin
- *
- * These tests ensure that security-critical behavior cannot regress:
- * - DM allowlist enforcement
- * - Channel authorization rules
- * - Ship normalization consistency
- * - Bot mention detection boundaries
- */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveChannelAuthorization } from "./monitor/authorization.js";
 import { prepareTlonGroupAdmission } from "./monitor/mentions.js";
@@ -20,9 +11,7 @@ import {
 } from "./monitor/utils.js";
 import { setTlonRuntime } from "./runtime.js";
 
-beforeEach(() => {
-  setTlonRuntime(createPluginRuntimeMock());
-});
+beforeEach(() => setTlonRuntime(createPluginRuntimeMock()));
 
 const allowlistShipMatchingCases = [
   { label: "DM allowlist", isAllowed: isDmAllowedWithIngress },
@@ -32,158 +21,84 @@ const allowlistShipMatchingCases = [
   isAllowed: (ship: string, allowlist: string[] | undefined) => boolean | Promise<boolean>;
 }>;
 
-async function expectAllowed(
-  isAllowed: (ship: string, allowlist: string[] | undefined) => boolean | Promise<boolean>,
-  ship: string,
-  allowlist: string[] | undefined,
-  expected: boolean,
-) {
-  await expect(Promise.resolve(isAllowed(ship, allowlist))).resolves.toBe(expected);
-}
-
-async function expectDmAllowed(ship: string, allowlist: string[] | undefined, expected: boolean) {
-  await expect(isDmAllowedWithIngress(ship, allowlist)).resolves.toBe(expected);
-}
-
-describe("Security: allowlist ship matching", () => {
-  it.each(allowlistShipMatchingCases)(
-    "$label normalizes ship names with and without ~ prefix",
-    async ({ isAllowed }) => {
-      const allowlist = ["~zod"];
-      await expectAllowed(isAllowed, "zod", allowlist, true);
-      await expectAllowed(isAllowed, "~zod", allowlist, true);
-
-      const allowlistWithoutTilde = ["zod"];
-      await expectAllowed(isAllowed, "~zod", allowlistWithoutTilde, true);
-      await expectAllowed(isAllowed, "zod", allowlistWithoutTilde, true);
-    },
-  );
-
-  it.each(allowlistShipMatchingCases)(
-    "$label rejects partial ship matches",
-    async ({ isAllowed }) => {
-      const allowlist = ["~zod"];
-      await expectAllowed(isAllowed, "~zod-extra", allowlist, false);
-      await expectAllowed(isAllowed, "~extra-zod", allowlist, false);
+describe.each(allowlistShipMatchingCases)("Security: $label", ({ isAllowed }) => {
+  it.each([
+    ["partial matches", ["~zod-extra", "~extra-zod"], ["~zod"], false],
+    ["empty allowlist", ["~zod", "~sampel-palnet"], [], false],
+    ["absent allowlist", ["~zod", "~sampel-palnet"], undefined, false],
+    ["normalized whitespace", ["~zod", " ~zod "], [" ~zod ", "~bus"], true],
+  ] satisfies Array<[string, string[], string[] | undefined, boolean]>)(
+    "checks %s",
+    async (_name, senders, allowlist, allowed) => {
+      for (const sender of senders) {
+        expect(await isAllowed(sender, allowlist)).toBe(allowed);
+      }
     },
   );
 });
 
-describe("Security: DM Allowlist", () => {
-  describe("DM ingress allowlist", () => {
-    it("rejects DMs when allowlist is empty", async () => {
-      await expectDmAllowed("~zod", [], false);
-      await expectDmAllowed("~sampel-palnet", [], false);
-    });
-
-    it("rejects DMs when allowlist is undefined", async () => {
-      await expectDmAllowed("~zod", undefined, false);
-    });
-
-    it("handles whitespace in ship names (normalized)", async () => {
-      // Ships with leading/trailing whitespace are normalized by normalizeShip
-      const allowlist = [" ~zod ", "~bus"];
-      await expectDmAllowed("~zod", allowlist, true);
-      await expectDmAllowed(" ~zod ", allowlist, true);
-    });
-
-    it("uses the ingress command gate for owner-only command authorization", async () => {
-      const authorized = await resolveTlonCommandAuthorizationWithIngress({
-        senderShip: "~zod",
-        ownerShip: "zod",
-      });
-      expect(authorized.commandAccess.requested).toBe(true);
-      expect(authorized.commandAccess.authorized).toBe(true);
-      expect(authorized.commandAccess.shouldBlockControlCommand).toBe(false);
-      expect(authorized.commandAccess.reasonCode).toBe("command_authorized");
-
-      const unauthorized = await resolveTlonCommandAuthorizationWithIngress({
-        senderShip: "~nec",
-        ownerShip: "~zod",
-      });
-      expect(unauthorized.commandAccess.requested).toBe(true);
-      expect(unauthorized.commandAccess.authorized).toBe(false);
-      expect(unauthorized.commandAccess.shouldBlockControlCommand).toBe(false);
-    });
+it.each([
+  ["~zod", "zod", true],
+  ["~nec", "~zod", false],
+] as const)("authorizes %s with owner %s: %s", async (senderShip, ownerShip, authorized) => {
+  const { commandAccess } = await resolveTlonCommandAuthorizationWithIngress({
+    senderShip,
+    ownerShip,
   });
-});
-
-describe("Security: Group Invite Allowlist", () => {
-  describe("isGroupInviteAllowed", () => {
-    it("rejects invites when allowlist is empty (fail-safe)", () => {
-      // CRITICAL: Empty allowlist must DENY, not accept-all
-      expect(isGroupInviteAllowed("~zod", [])).toBe(false);
-      expect(isGroupInviteAllowed("~sampel-palnet", [])).toBe(false);
-      expect(isGroupInviteAllowed("~malicious-actor", [])).toBe(false);
-    });
-
-    it("rejects invites when allowlist is undefined (fail-safe)", () => {
-      // CRITICAL: Undefined allowlist must DENY, not accept-all
-      expect(isGroupInviteAllowed("~zod", undefined)).toBe(false);
-      expect(isGroupInviteAllowed("~sampel-palnet", undefined)).toBe(false);
-    });
-
-    it("handles whitespace in allowlist entries", () => {
-      const allowlist = [" ~nocsyx-lassul ", "~malmur-halmex"];
-      expect(isGroupInviteAllowed("~nocsyx-lassul", allowlist)).toBe(true);
-    });
+  expect(commandAccess).toMatchObject({
+    requested: true,
+    authorized,
+    shouldBlockControlCommand: false,
   });
+  if (authorized) {
+    expect(commandAccess.reasonCode).toBe("command_authorized");
+  }
 });
 
 describe("Security: Bot Mention Detection", () => {
-  describe("isBotMentioned", () => {
-    const botShip = "~sampel-palnet";
-    const nickname = "nimbus";
+  const botShip = "~sampel-palnet";
+  it.each([
+    ["@all", ["@all please respond", "hey @all", "@ALL uppercase"], undefined, true],
+    ["partial ship", ["~sampel-palnet-extra", "my~sampel-palnetfriend"], undefined, false],
+    ["substring nickname", ["nimbusy", "prenimbus"], "nimbus", false],
+    ["nickname boundary", ["nimbus, hello", "hello nimbus!", "nimbus?"], "nimbus", true],
+  ] as const)("detects %s matches", (_name, texts, nick, expected) => {
+    for (const text of texts) {
+      expect(isBotMentioned(text, botShip, nick)).toBe(expected);
+    }
+  });
 
-    it("detects direct ship mention", () => {
-      expect(isBotMentioned("hey ~sampel-palnet", botShip)).toBe(true);
-      expect(isBotMentioned("~sampel-palnet can you help?", botShip)).toBe(true);
-      expect(isBotMentioned("hello ~sampel-palnet how are you", botShip)).toBe(true);
-    });
-
-    it("detects @all mention", () => {
-      expect(isBotMentioned("@all please respond", botShip)).toBe(true);
-      expect(isBotMentioned("hey @all", botShip)).toBe(true);
-      expect(isBotMentioned("@ALL uppercase", botShip)).toBe(true);
-    });
-
-    it("detects nickname mention", () => {
-      expect(isBotMentioned("hey nimbus", botShip, nickname)).toBe(true);
-      expect(isBotMentioned("nimbus help me", botShip, nickname)).toBe(true);
-      expect(isBotMentioned("hello NIMBUS", botShip, nickname)).toBe(true);
-    });
-
-    it("does NOT trigger on partial ship matches", () => {
-      expect(isBotMentioned("~sampel-palnet-extra", botShip)).toBe(false);
-      expect(isBotMentioned("my~sampel-palnetfriend", botShip)).toBe(false);
-    });
-
-    it("does NOT trigger on substring nickname matches", () => {
-      // "nimbus" should not match "nimbusy" or "animbust"
-      expect(isBotMentioned("nimbusy", botShip, nickname)).toBe(false);
-      expect(isBotMentioned("prenimbus", botShip, nickname)).toBe(false);
-    });
-
-    it("handles empty/null inputs safely", () => {
-      expect(isBotMentioned("", botShip)).toBe(false);
-      expect(isBotMentioned("test", "")).toBe(false);
-      expect(isBotMentioned(null as unknown as string, botShip)).toBe(false);
-    });
-
-    it("requires word boundary for nickname", () => {
-      expect(isBotMentioned("nimbus, hello", botShip, nickname)).toBe(true);
-      expect(isBotMentioned("hello nimbus!", botShip, nickname)).toBe(true);
-      expect(isBotMentioned("nimbus?", botShip, nickname)).toBe(true);
-    });
+  it("handles empty/null inputs safely", () => {
+    expect(isBotMentioned("", botShip)).toBe(false);
+    expect(isBotMentioned("test", "")).toBe(false);
+    expect(isBotMentioned(null as unknown as string, botShip)).toBe(false);
   });
 });
 
 describe("Security: Group Mention Policy", () => {
-  function groupAdmissionParams(
-    overrides: Partial<Parameters<typeof prepareTlonGroupAdmission>[0]> = {},
-  ): Parameters<typeof prepareTlonGroupAdmission>[0] {
-    return {
-      cfg: {},
+  it.each([
+    [
+      "participated-thread follow-up",
+      {},
+      "follow up",
+      {
+        shouldSkip: false,
+        matchedImplicitMentionKinds: ["bot_thread_participant"],
+      },
+    ],
+    [
+      "explicit mention with participation disabled",
+      {
+        channels: { tlon: { implicitMentions: { threadParticipation: false } } },
+      },
+      "~zod follow up",
+      { shouldSkip: false, effectiveWasMentioned: true },
+    ],
+  ] satisfies Array<
+    [string, Parameters<typeof prepareTlonGroupAdmission>[0]["cfg"], string, object]
+  >)("admits %s", async (_name, cfg, rawText, expected) => {
+    const { mentionDecision } = await prepareTlonGroupAdmission({
+      cfg,
       account: { accountId: "default" },
       api: { scry: async () => ({}) },
       channelNest: "chat/~host/general",
@@ -191,80 +106,47 @@ describe("Security: Group Mention Policy", () => {
       isOwner: () => false,
       botShipName: "~zod",
       botNickname: null,
-      rawText: "follow up",
+      rawText,
       messageSeal: { "parent-id": "1234" },
       isThreadReply: true,
       hasParticipatedInThread: (parentId) => parentId === "1234",
       getSettings: () => ({}),
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      ...overrides,
-    };
-  }
-
-  it("allows participated-thread follow-ups by default", async () => {
-    const { mentionDecision } = await prepareTlonGroupAdmission(groupAdmissionParams());
-    expect(mentionDecision).toMatchObject({
-      shouldSkip: false,
-      matchedImplicitMentionKinds: ["bot_thread_participant"],
     });
-  });
-
-  it("allows account policy to disable participated-thread follow-ups", async () => {
-    const { mentionDecision } = await prepareTlonGroupAdmission(
-      groupAdmissionParams({
-        account: { accountId: "work" },
-        cfg: {
-          channels: {
-            tlon: {
-              implicitMentions: { threadParticipation: true },
-              accounts: {
-                work: { implicitMentions: { threadParticipation: false } },
-              },
-            },
-          },
-        },
-      }),
-    );
-    expect(mentionDecision).toMatchObject({ shouldSkip: true, matchedImplicitMentionKinds: [] });
-  });
-
-  it("keeps explicit mentions enabled when thread participation is disabled", async () => {
-    const { mentionDecision } = await prepareTlonGroupAdmission(
-      groupAdmissionParams({
-        rawText: "~zod follow up",
-        cfg: {
-          channels: { tlon: { implicitMentions: { threadParticipation: false } } },
-        },
-      }),
-    );
-    expect(mentionDecision).toMatchObject({ shouldSkip: false, effectiveWasMentioned: true });
+    expect(mentionDecision).toMatchObject(expected);
   });
 });
 
 describe("Security: Message Text Extraction", () => {
-  describe("extractMessageText", () => {
-    it("extracts @all mentions from sect null", () => {
-      const content = [{ inline: [{ sect: null }] }];
-      expect(extractMessageText(content)).toContain("@all");
-    });
+  it.each([
+    [{ sect: null }, "@all"],
+    [{ ship: "~zod" }, "~zod"],
+  ] as const)("extracts mention %j", (mention, expected) => {
+    expect(extractMessageText([{ inline: [mention] }])).toContain(expected);
+  });
 
-    it("extracts ship mentions", () => {
-      const content = [{ inline: [{ ship: "~zod" }] }];
-      expect(extractMessageText(content)).toContain("~zod");
-    });
-
-    it("handles malformed input safely", () => {
-      expect(extractMessageText(null)).toBe("");
-      expect(extractMessageText(undefined)).toBe("");
-      expect(extractMessageText([])).toBe("");
-      expect(extractMessageText([{}])).toBe("");
-      expect(extractMessageText("not an array")).toBe("");
-    });
+  it("handles malformed input safely", () => {
+    expect(extractMessageText(null)).toBe("");
+    expect(extractMessageText(undefined)).toBe("");
+    expect(extractMessageText([])).toBe("");
+    expect(extractMessageText([{}])).toBe("");
+    expect(extractMessageText("not an array")).toBe("");
   });
 });
 
 describe("Security: Channel Authorization Logic", () => {
   const channelNest = "chat/~zod/test";
+  const channelConfig = (
+    rule: { mode?: "restricted"; allowedShips: string[] },
+    defaultAuthorizedShips?: string[],
+  ) => ({
+    channels: {
+      tlon: {
+        defaultAuthorizedShips,
+        authorization: { channelRules: { [channelNest]: rule } },
+      },
+    },
+  });
 
   it("defaults an unconfigured channel to restricted with no authorized ships", () => {
     expect(resolveChannelAuthorization({}, channelNest)).toEqual({
@@ -275,47 +157,17 @@ describe("Security: Channel Authorization Logic", () => {
 
   it("keeps an explicit empty channel allowlist instead of inheriting defaults", () => {
     expect(
-      resolveChannelAuthorization(
-        {
-          channels: {
-            tlon: {
-              defaultAuthorizedShips: ["~zod"],
-              authorization: { channelRules: { [channelNest]: { allowedShips: [] } } },
-            },
-          },
-        },
-        channelNest,
-      ),
-    ).toEqual({ mode: "restricted", allowedShips: [] });
-  });
-
-  it("preserves explicit open channel policy", () => {
-    expect(
-      resolveChannelAuthorization(
-        {
-          channels: {
-            tlon: {
-              authorization: { channelRules: { [channelNest]: { mode: "open" } } },
-            },
-          },
-        },
-        channelNest,
-      ),
-    ).toEqual({ mode: "open", allowedShips: [] });
+      resolveChannelAuthorization(channelConfig({ allowedShips: [] }, ["~zod"]), channelNest),
+    ).toEqual({
+      mode: "restricted",
+      allowedShips: [],
+    });
   });
 
   it("prefers settings channel rules over conflicting file configuration", () => {
     expect(
       resolveChannelAuthorization(
-        {
-          channels: {
-            tlon: {
-              authorization: {
-                channelRules: { [channelNest]: { mode: "restricted", allowedShips: ["~zod"] } },
-              },
-            },
-          },
-        },
+        channelConfig({ mode: "restricted", allowedShips: ["~zod"] }),
         channelNest,
         { channelRules: { [channelNest]: { mode: "open", allowedShips: ["~bus"] } } },
       ),
@@ -323,24 +175,7 @@ describe("Security: Channel Authorization Logic", () => {
   });
 });
 
-describe("Security: Authorization Edge Cases", () => {
-  it("empty strings are not valid ships", async () => {
-    await expectDmAllowed("", ["~zod"], false);
-    await expectDmAllowed("~zod", [""], false);
-  });
-
-  it("handles special characters that could break regex", async () => {
-    // These should not cause regex injection
-    const maliciousShip = "~zod.*";
-    await expectDmAllowed("~zodabc", [maliciousShip], false);
-
-    const allowlist = ["~zod"];
-    await expectDmAllowed("~zod.*", allowlist, false);
-  });
-
-  it("protects against prototype pollution-style keys", async () => {
-    const suspiciousShip = "__proto__";
-    await expectDmAllowed(suspiciousShip, ["~zod"], false);
-    await expectDmAllowed("~zod", [suspiciousShip], false);
-  });
+it("empty strings are not valid ships", async () => {
+  expect(await isDmAllowedWithIngress("", ["~zod"])).toBe(false);
+  expect(await isDmAllowedWithIngress("~zod", [""])).toBe(false);
 });

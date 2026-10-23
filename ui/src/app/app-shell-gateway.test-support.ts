@@ -1,7 +1,7 @@
-import { expect, vi } from "vitest";
+import { expect, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import { createChatPageSessions } from "../pages/chat/chat-page.test-support.ts";
+import { createChatPageSessions } from "../pages/chat/chat-page-sessions.test-support.ts";
 import { createShellConfigFixture } from "./app-host.test-support.ts";
 import { ShellGatewayOwner, type ShellGatewayHost } from "./app-shell-gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "./context.ts";
@@ -11,9 +11,13 @@ export function createProfileAppearanceGateway(profileId: string | null) {
   let requestStarted = createDeferred();
   const request = vi.fn(
     () =>
-      new Promise<{ status: string; entries: { "ui.accent": string } }>((resolve) => {
+      new Promise<{
+        status: string;
+        entries: { "ui.accent": string; "ui.railShortcuts": string[] };
+      }>((resolve) => {
         pendingResponses.push((accent) =>
-          resolve({ status: "ok", entries: { "ui.accent": accent } }),
+          // Existing personal navigation keeps this appearance fixture out of legacy inventory.
+          resolve({ status: "ok", entries: { "ui.accent": accent, "ui.railShortcuts": [] } }),
         );
         requestStarted.resolve();
       }),
@@ -30,6 +34,7 @@ export function createProfileAppearanceGateway(profileId: string | null) {
     hello: { auth: { role: "operator", scopes: ["operator.write"] } },
   } as ApplicationGatewaySnapshot;
   const refreshTheme = vi.fn();
+  const invalidate = vi.fn();
   const connectionBootstrap = {
     reset: vi.fn(),
     run: (_key: string, task: () => Promise<unknown>) => task(),
@@ -60,9 +65,12 @@ export function createProfileAppearanceGateway(profileId: string | null) {
     activeSessionKey: "",
     lastLocalePrefSignature: null,
     outboxStoreImport: { load: vi.fn(async () => undefined) },
-    recoverDeletedActiveSession: vi.fn(),
+    shellNavigation: { recoverDeletedActiveSession: vi.fn() },
+    invalidate,
     routeState: {},
   } as unknown as ShellGatewayHost;
+  const owner = new ShellGatewayOwner(host);
+  onTestFinished(() => owner.reset());
   return {
     async completeProfileAppearance(this: void, accent = "#336699") {
       // The first request follows a lazy import; synchronize on its arrival, not loader speed.
@@ -81,8 +89,9 @@ export function createProfileAppearanceGateway(profileId: string | null) {
     },
     context,
     host,
-    owner: new ShellGatewayOwner(host),
+    owner,
     refreshTheme,
+    invalidate,
     request,
     snapshot,
   };

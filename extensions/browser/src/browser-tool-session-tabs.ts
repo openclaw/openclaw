@@ -3,7 +3,8 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { BrowserSessionTabAuthority } from "./browser-runtime-state.js";
-import type { BrowserTabOwnership } from "./browser/client.types.js";
+import type { BrowserOpenResult, BrowserTabOwnership } from "./browser/client.types.js";
+import { resolveBrowserSessionKey } from "./browser/session-tab-identity.js";
 import type * as sessionTabRegistry from "./browser/session-tab-registry.js";
 import type { BrowserSessionTabRoute } from "./browser/session-tab-route.js";
 
@@ -40,16 +41,13 @@ function readOpenedTab(result: unknown): {
   return { targetId, aliases: [...new Set(aliases)], profile, ownership };
 }
 
-export function stripBrowserOpenInternalMetadata(value: unknown): unknown {
-  const record = asNullableRecord(value);
-  if (!record) {
-    return value;
-  }
-  const { ownership: _ownership, resolvedProfile: _resolvedProfile, ...agentVisible } = record;
+export function stripBrowserOpenInternalMetadata(value: BrowserOpenResult) {
+  const { ownership: _ownership, resolvedProfile: _resolvedProfile, ...agentVisible } = value;
   return agentVisible;
 }
 
 export function createBrowserToolSessionTabs(params: {
+  agentId?: string;
   sessionKey?: string;
   requestedProfile?: string;
   defaultProfile: string;
@@ -60,6 +58,12 @@ export function createBrowserToolSessionTabs(params: {
   registry: SessionTabRegistry;
   authority?: BrowserSessionTabAuthority;
 }) {
+  const sessionKey = resolveBrowserSessionKey(params.sessionKey, params.agentId);
+  if (params.sessionKey?.trim() && !sessionKey) {
+    throw new Error(
+      "Browser tab ownership requires an agent-qualified session key or an explicit agent id.",
+    );
+  }
   const trackedRoute = (): BrowserSessionTabRoute =>
     params.nodeRoute && !params.isHostFallbackActive?.()
       ? params.nodeRoute
@@ -73,7 +77,7 @@ export function createBrowserToolSessionTabs(params: {
   const identity = (targetId: string) => {
     const route = trackedRoute();
     return {
-      sessionKey: params.sessionKey,
+      sessionKey,
       targetId,
       route,
       profile: trackedProfile(route),
@@ -101,7 +105,7 @@ export function createBrowserToolSessionTabs(params: {
       const profile = opened.profile ?? fallbackProfile;
       try {
         await params.registry.trackSessionBrowserTab({
-          sessionKey: params.sessionKey,
+          sessionKey,
           targetId: opened.targetId,
           route,
           profile,

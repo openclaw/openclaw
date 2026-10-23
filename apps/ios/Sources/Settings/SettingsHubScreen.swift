@@ -14,6 +14,7 @@ struct SettingsHubScreen: View {
     var body: some View {
         NavigationStack(path: self.$navigationPath) {
             self.root
+                .background(SidebarNavigationMarginAnchor())
                 .navigationDestination(for: SettingsRoute.self) { route in
                     self.nativeScreen(route: route)
                 }
@@ -122,7 +123,7 @@ struct SettingsHubScreen: View {
         case .diagnostics: .diagnostics
         case .licenses: .licenses
         case .about: .about
-        case .quickChatShortcut, .microphoneTest, .browserImport, .debug: nil
+        case .aiSetup, .quickChatShortcut, .microphoneTest, .browserImport, .debug: nil
         }
     }
 }
@@ -170,6 +171,9 @@ struct EmbeddedDashboardContent: View {
                     storedOperatorToken: storedOperatorToken,
                     usesNativeNavigationChrome: true),
                 tls: self.config?.tls,
+                basicProxyCredentialProvider: {
+                    AuthenticatedControlUI.basicProxyCredential(config: self.config)
+                },
                 deviceSettingsBridge: self.bridge,
                 usesNativeEmbed: true,
                 embedCompatibility: self.embedCompatibility)

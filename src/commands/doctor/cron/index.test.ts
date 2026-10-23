@@ -13,12 +13,17 @@ import {
   saveCronStore,
 } from "../../../cron/store.js";
 import { cronStoreKey } from "../../../cron/store/key.js";
+import * as quarantine from "../../../cron/store/quarantine.js";
+import * as staging from "../../../infra/sqlite-snapshot-staging.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../../../state/openclaw-state-db-async-lifecycle.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
+import { admitOpenClawMaintenanceLiveAuthorityReads } from "../../../state/openclaw-state-maintenance-context.js";
 import { collectLegacyCronStoreHealthFindings, maybeRepairLegacyCronStore } from "./index.js";
+import { inspectCronJobsForDoctor } from "./store-repair.js";
 
 type StoredJob = Record<string, unknown>;
 const WEBHOOK = "https://example.invalid/cron-finished";
@@ -181,6 +186,33 @@ describe("collectLegacyCronStoreHealthFindings", () => {
     });
   });
 });
+
+it.each(["structured", "interactive"])(
+  "reports the original quarantine observation failure in %s Doctor output",
+  async (mode) => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.dirname(path.dirname(storePath)));
+    await writeCurrentCronStore([]);
+    const observation = vi
+      .spyOn(quarantine, "loadCronQuarantinedJobs")
+      .mockRejectedValueOnce(new Error("quarantine observation unavailable"));
+    try {
+      if (mode === "structured") {
+        expect(await collectLegacyCronStoreHealthFindings({ cfg: createCronConfig() })).toEqual([
+          expect.objectContaining({
+            requirement: "cron-store-readable",
+            fixHint: expect.stringContaining("quarantine observation unavailable"),
+          }),
+        ]);
+      } else {
+        await repairCronStore();
+        expectNoteContaining("Unable to read cron job store");
+        expectNoteContaining("quarantine observation unavailable");
+      }
+    } finally {
+      observation.mockRestore();
+    }
+  },
+);
 
 describe("maybeRepairLegacyCronStore", () => {
   it("preserves prompt-window runtime state and authority while repairing config", async () => {
@@ -835,4 +867,32 @@ describe("maybeRepairLegacyCronStore", () => {
     expectNoteContaining("Unable to read cron job store at");
     expectNoteContaining("later health checks will continue");
   });
+});
+
+it("inspects cron under offline Doctor custody when disposable snapshot allocation is unavailable", async () => {
+  const env = { ...process.env, OPENCLAW_STATE_DIR: tempRoot! };
+  vi.stubEnv("OPENCLAW_STATE_DIR", tempRoot!);
+  await saveCronStore(storePath, { version: 1, jobs: [createLegacyCronJob() as never] });
+  await closeOpenClawStateDatabaseAsync();
+  const databasePath = resolveOpenClawStateSqlitePath(env);
+  const maintenance = createOpenClawDatabaseMaintenanceScope({
+    schemaMaintenance: true,
+    assertOwnerCurrent() {},
+    assertDatabaseAccess(pathname) {
+      expect(pathname).toBe(databasePath);
+    },
+  });
+  const allocation = vi
+    .spyOn(staging, "createSqliteSnapshotStagingDirectory")
+    .mockRejectedValue(new Error("SQLite snapshot allocation and cleanup failed"));
+  try {
+    await maintenance.run(async () => {
+      admitOpenClawMaintenanceLiveAuthorityReads(databasePath);
+      const inventory = await inspectCronJobsForDoctor({ env });
+      expect(inventory.jobs.map(({ id }) => id)).toEqual(["legacy-job"]);
+    });
+  } finally {
+    await maintenance.close();
+    allocation.mockRestore();
+  }
 });

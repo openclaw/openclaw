@@ -1,3 +1,4 @@
+import type { SessionEventSourcePolicy } from "../auto-reply/reply/session-event-contract.js";
 import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { GroupToolPolicyConfig } from "../config/types.tools.js";
@@ -16,15 +17,15 @@ import type {
   AgentRunChannelContext,
 } from "./command/shared-types.js";
 import type { ResolvedConversationCapabilityProfile } from "./conversation-capability-profile.js";
-import type { OpenClawCodingToolConstructionPlan } from "./core-tool-factory-descriptors.js";
 import type { DelegationCapability } from "./delegation-capability.js";
 import type { ModelAuthMode } from "./model-auth.js";
 import type { ModelAwareToolContext } from "./openclaw-tools.model-context.js";
 import type { OpenClawSharedToolsOptions } from "./openclaw-tools.types.js";
-import type { SandboxContext } from "./sandbox.js";
+import type { SandboxContext } from "./sandbox/types.js";
 import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { TrustedSubagentCompletionHandoff } from "./subagents/announce/subagent-announce-handoff.js";
+import type { OpenClawCodingToolConstructionPlan } from "./tool-catalog.js";
 import type { PreparedSessionPermissionPolicy } from "./tool-fs-policy.js";
 import type {
   ToolSearchCatalogRef,
@@ -55,8 +56,6 @@ export type OpenClawCodingToolsOptions = {
   trace?: DiagnosticTraceContext;
   /** What initiated this run (for trigger-specific tool restrictions). */
   trigger?: string;
-  /** Heartbeat-transported turn that continues a conversation (its own command completion). */
-  continuesConversation?: boolean;
   /** Stable cron job identifier populated for cron-triggered runs. */
   jobId?: string;
   /** Relative workspace path that memory-triggered writes may append to. */
@@ -76,6 +75,8 @@ export type OpenClawCodingToolsOptions = {
   modelApi?: string;
   /** Resolved endpoint for provider-native tool eligibility. */
   modelBaseUrl?: string;
+  /** Secret-free capability facts from the selected runtime model route. */
+  modelParams?: Record<string, unknown>;
   /** Resolved runtime model compatibility hints. */
   modelCompat?: ModelCompatConfig;
   /** If false, keep OpenClaw web_search even when a provider-native search tool is active. */
@@ -103,8 +104,6 @@ export type OpenClawCodingToolsOptions = {
   skillInstructionDeliveryCache?: SkillInstructionDeliveryCache;
   /** Keep the message tool available even when the selected profile omits it. */
   forceMessageTool?: boolean;
-  /** Keep the heartbeat response tool available even when the selected profile omits it. */
-  forceHeartbeatTool?: boolean;
   /** If false, build plugin tools only while preserving the shared policy pipeline. */
   includeCoreTools?: boolean;
   /** Include Tool Search control tools when enabled for this run. */
@@ -143,3 +142,22 @@ export type OpenClawCodingToolsOptions = {
   AgentRunClientContext &
   AgentRunMessageContext &
   AgentRunChannelContext;
+
+export type InternalCodingToolsOptions = OpenClawCodingToolsOptions & {
+  assertInvocationCurrent?: () => void;
+  pluginExecutionAuthority?: import("./admitted-run-context.js").AdmittedRunOperatorAuthority;
+  pluginExecutionSkillsSnapshot?: SkillSnapshot;
+  awaitSessionDiffBaseline?: () => Promise<void>;
+  /** Policy-approved tool names unavailable here but usable in a child's own workspace. */
+  additionalInheritedToolNamesRef?: string[];
+  /** The host owns continuation policy when this factory builds only part of its tool surface. */
+  sessionEventSourcePolicy?: SessionEventSourcePolicy;
+};
+
+export type PluginCodingToolsOptions = Omit<
+  OpenClawCodingToolsOptions,
+  | "sessionReadScopeKey"
+  | "onProgressCardPlanSaved"
+  | "authProfileStoreSource"
+  | "onWebSearchConfiguration"
+>;

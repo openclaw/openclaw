@@ -13,8 +13,9 @@ How inbound and outbound Telegram messages are routed, previewed, acknowledged, 
 ## Runtime behavior
 
 - Telegram message handling runs inside the gateway process.
-- Routing is deterministic: Telegram inbound replies back to Telegram (the model does not pick channels).
+- Replies to Telegram messages go back to Telegram (the model does not pick channels).
 - Inbound messages normalize into the shared channel envelope with reply metadata, media placeholders, and persisted reply-chain context for replies the gateway has observed.
+- Dice rolls carry neither text nor a downloadable file. They fold into the message body as a one-line marker (`[Dice 🎲 = 4]`) instead of normalizing to an empty body and being dropped; the envelope supplies the sender as it does for any other message. Group mention policy is unchanged. A dice message has no text to mention the bot with, so in a mention-required group a bare roll follows the usual unmentioned path and is kept in the group history window when one is configured (`historyLimit: 0` disables that window). A roll sent as a reply to the bot counts as an implicit mention and starts a turn like any other reply.
 - Group sessions are isolated by group ID. Forum topics append `:topic:<threadId>`.
 - When the bot joins an allowed group or supergroup, it posts one introduction grounded in available room metadata: the group title, description, and pinned message. The Telegram Bot API cannot read group messages from before the bot joined, so introductions never claim to use prior chat history. Introductions are enabled by default, never run in private chats, and can be disabled with `channels.telegram.joinIntro: false` or overridden per account with `channels.telegram.accounts.<accountId>.joinIntro`. See [group join introductions](/channels#group-join-introductions) for once-per-room behavior and untrusted-content handling.
 - DM messages can carry `message_thread_id`; OpenClaw preserves it for replies. DM topic sessions split only when Telegram `getMe` reports `has_topics_enabled: true` for the bot; otherwise DMs stay on the flat session.
@@ -78,6 +79,8 @@ Ordinary text batches are bounded to 12 messages and 50,000 characters. Their co
     - legacy `channels.telegram.streamMode`, boolean `streaming` values, and retired native draft preview keys are detected; run `openclaw doctor --fix` to migrate them
 
     Tool-progress lines are the short status updates shown while tools run (command execution, file reads, planning updates, patch summaries, Codex preamble/commentary in app-server mode). `partial` and `block` previews show them by default; the `progress` draft shows them only with `streaming.progress.toolProgress: true`. Compaction status follows the same settings and appears as soon as compaction starts, including before the first model output.
+
+    In default `progress` mode, `/verbose on` sends separate tool summaries and `/verbose full` also sends completed tool output. An explicit `toolProgress: false` wins over `/verbose`; `streaming.mode: "off"` also suppresses these diagnostics.
 
     Keep answer-preview edits but hide tool-progress lines:
 
@@ -195,9 +198,13 @@ Ordinary text batches are bounded to 12 messages and 50,000 characters. Their co
 
     `channels.telegram.replyToMode`: `off` (default), `first`, `all`.
 
+    With `first`, message-tool sends share one implicit reply target per turn; each admitted queued follow-up starts with a fresh target. Explicit replies are still honored. Final answers and streaming previews keep their own reply-target tracking.
+
     When reply threading is enabled and the original text/caption is available, OpenClaw adds a native quote excerpt automatically. Telegram caps native quote text at 1024 UTF-16 code units; longer messages are quoted from the start and fall back to a plain reply if Telegram rejects the quote.
 
     `off` disables implicit reply threading only; explicit `[[reply_to_*]]` tags are still honored.
+
+    In partial streaming mode, a final reply that targets a different message replaces the preview instead of editing it in place. Telegram does not allow edits to change a message's reply target.
 
   </Accordion>
 
@@ -251,6 +258,7 @@ Ordinary text batches are bounded to 12 messages and 50,000 characters. Their co
     - Inbound albums in one chat or topic reach the agent in arrival order, and an album waiting behind an earlier one keeps its delivery claim alive while the earlier album is still being processed.
     - When an inbound attachment cannot be downloaded and the message proceeds to the agent, its body includes a `[media unavailable: ...]` notice. Oversize notices include the effective size limit; partial albums include the failed and total attachment counts. This also applies to admitted channel posts, even when their separate chat warning is suppressed.
     - automatic group context uses `channels.telegram.historyLimit` or `messages.groupChat.historyLimit` (default 50); `0` disables the automatic window, not retained history.
+    - Replies to downloaded media keep the saved attachment kind and MIME type. An image sent as a file reaches the agent as an image; genuine documents stay documents. Selected quote text is preserved.
     - reply/quote/forward supplemental context normalizes into one selected conversation context window when the gateway has observed the parent messages; the observed-message cache lives in OpenClaw SQLite plugin state. To import pre-June cache sidecars, [upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions) and run its Doctor first. Telegram only includes one shallow `reply_to_message` per update, so chains older than the cache are limited to that payload.
     - Telegram allowlists primarily gate who can trigger the agent, not a full supplemental-context redaction boundary.
     - DM history: `channels.telegram.dmHistoryLimit`, `channels.telegram.dms["<user_id>"].historyLimit`. Automatic observed-DM context defaults to 10 messages and is capped at 200; `0` disables that extra context, and the JSON integer maximum selects the default.

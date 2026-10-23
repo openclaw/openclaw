@@ -1,7 +1,9 @@
 {
   "id": "anthropic",
   "categories": ["models"],
-  "doctorContract": {},
+  "doctorContract": {
+    "configRepair": true
+  },
   "sessionRouteStateOwners": [
     {
       "id": "anthropic",
@@ -29,166 +31,7 @@
     },
     "providers": {
       "claude-cli": {
-        "models": [
-          {
-            "id": "claude-haiku-5-5",
-            "name": "Claude Haiku 5.5 (Claude CLI)",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "mediaInput": {
-              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
-            },
-            "contextWindow": 1000000,
-            "contextWindows": [
-              { "id": "200k", "label": "200K", "contextWindow": 200000 },
-              { "id": "1m", "label": "1M", "contextWindow": 1000000 }
-            ],
-            "contextWindowDefault": "1m",
-            "maxTokens": 128000
-          },
-          {
-            "id": "claude-opus-5-5",
-            "name": "Claude Opus 5.5 (Claude CLI)",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "mediaInput": {
-              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
-            },
-            "contextWindow": 1000000,
-            "contextWindows": [
-              { "id": "200k", "label": "200K", "contextWindow": 200000 },
-              { "id": "1m", "label": "1M", "contextWindow": 1000000 }
-            ],
-            "contextWindowDefault": "1m",
-            "maxTokens": 128000
-          },
-          {
-            "id": "claude-opus-5",
-            "name": "Claude Opus 5 (Claude CLI)",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "mediaInput": {
-              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
-            },
-            "contextWindow": 1000000,
-            "contextWindows": [
-              { "id": "200k", "label": "200K", "contextWindow": 200000 },
-              { "id": "1m", "label": "1M", "contextWindow": 1000000 }
-            ],
-            "contextWindowDefault": "1m",
-            "maxTokens": 128000
-          },
-          {
-            "id": "claude-sonnet-5-5",
-            "name": "Claude Sonnet 5.5 (Claude CLI)",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "mediaInput": {
-              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
-            },
-            "contextWindow": 1000000,
-            "contextWindows": [
-              { "id": "200k", "label": "200K", "contextWindow": 200000 },
-              { "id": "1m", "label": "1M", "contextWindow": 1000000 }
-            ],
-            "contextWindowDefault": "1m",
-            "maxTokens": 128000
-          },
-          {
-            "id": "claude-sonnet-5",
-            "name": "Claude Sonnet 5 (Claude CLI)",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "mediaInput": {
-              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
-            },
-            "contextWindow": 1000000,
-            "contextWindows": [
-              { "id": "200k", "label": "200K", "contextWindow": 200000 },
-              { "id": "1m", "label": "1M", "contextWindow": 1000000 }
-            ],
-            "contextWindowDefault": "1m",
-            "maxTokens": 128000
-          },
-          {
-            "id": "claude-fable-5-1",
-            "name": "Claude Fable 5.1 (Claude CLI)",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "mediaInput": {
-              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
-            },
-            "contextWindow": 1000000,
-            "contextWindows": [
-              { "id": "200k", "label": "200K", "contextWindow": 200000 },
-              { "id": "1m", "label": "1M", "contextWindow": 1000000 }
-            ],
-            "contextWindowDefault": "1m",
-            "maxTokens": 128000
-          },
-          {
-            "id": "claude-fable-5",
-            "name": "Claude Fable 5 (Claude CLI)",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "mediaInput": {
-              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
-            },
-            "contextWindow": 1000000,
-            "contextWindows": [
-              { "id": "200k", "label": "200K", "contextWindow": 200000 },
-              { "id": "1m", "label": "1M", "contextWindow": 1000000 }
-            ],
-            "contextWindowDefault": "1m",
-            "maxTokens": 128000
-          },
-          {
-            "id": "claude-opus-4-8",
-            "name": "Claude Opus 4.8 (Claude CLI)",
-            "status": "deprecated",
-            "replacedBy": "claude-opus-5",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "mediaInput": {
-              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
-            },
-            "contextWindow": 200000,
-            "maxTokens": 128000
-          },
-          {
-            "id": "claude-opus-4-7",
-            "name": "Claude Opus 4.7 (Claude CLI)",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "mediaInput": {
-              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
-            },
-            "contextWindow": 200000,
-            "maxTokens": 128000
-          },
-          {
-            "id": "claude-sonnet-4-6",
-            "name": "Claude Sonnet 4.6 (Claude CLI)",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "mediaInput": {
-              "image": { "maxSidePx": 1568, "preferredSidePx": 1568, "tokenMode": "provider" }
-            },
-            "contextWindow": 200000,
-            "maxTokens": 128000
-          },
-          {
-            "id": "claude-opus-4-6",
-            "name": "Claude Opus 4.6 (Claude CLI)",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "mediaInput": {
-              "image": { "maxSidePx": 1568, "preferredSidePx": 1568, "tokenMode": "provider" }
-            },
-            "contextWindow": 200000,
-            "maxTokens": 128000
-          }
-        ]
+        "models": []
       },
       "anthropic": {
         "baseUrl": "https://api.anthropic.com",
@@ -319,7 +162,7 @@
             "mediaInput": {
               "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
             },
-            "cost": { "input": 2, "output": 10, "cacheRead": 0.2, "cacheWrite": 2.5 },
+            "cost": { "input": 2, "output": 10, "cacheRead": 0.1, "cacheWrite": 2.5 },
             "contextWindow": 1000000,
             "contextWindows": [
               { "id": "200k", "label": "200K", "contextWindow": 200000 },
@@ -404,7 +247,7 @@
       }
     },
     "discovery": {
-      "claude-cli": "static",
+      "claude-cli": "refreshable",
       "anthropic": "refreshable"
     }
   },
@@ -448,6 +291,9 @@
         "liteLLM": {
           "provider": "anthropic"
         }
+      },
+      "claude-cli": {
+        "priceAs": "anthropic"
       }
     }
   },
@@ -550,7 +396,7 @@
       "id": "native-sessions",
       "title": "Native sessions",
       "order": 10,
-      "properties": ["sessionCatalog"]
+      "properties": ["sessionCatalog", "historyRecovery"]
     }
   ],
   "configSchema": {
@@ -563,6 +409,13 @@
         "properties": {
           "enabled": { "type": "boolean", "default": true }
         }
+      },
+      "historyRecovery": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "attestNativeLogin": { "type": "boolean", "default": false }
+        }
       }
     }
   },
@@ -574,6 +427,14 @@
     "sessionCatalog.enabled": {
       "label": "Discover Claude Code Sessions",
       "help": "List native Claude Code sessions in the sidebar from this Gateway and eligible paired nodes."
+    },
+    "historyRecovery": {
+      "label": "Claude CLI History Recovery",
+      "help": "Controls whether a fresh Claude CLI session that runs on the native Claude login can receive the conversation's saved OpenClaw history."
+    },
+    "historyRecovery.attestNativeLogin": {
+      "label": "Attest Native Claude Login",
+      "help": "Off by default. When on, OpenClaw reads the access token of the native Claude login on this Gateway and sends it only to https://api.anthropic.com/api/oauth/profile to learn which account owns it, so saved history is replayed only to that same account. When off, history recovery never reads or sends that token, and fresh native-login sessions get no saved history."
     }
   }
 }

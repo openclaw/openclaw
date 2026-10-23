@@ -1,6 +1,5 @@
 import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
 import {
-  addWildcardAllowFrom,
   DEFAULT_ACCOUNT_ID,
   formatCliCommand,
   formatDocsLink,
@@ -52,19 +51,6 @@ function setZalouserAccountScopedConfig(
     accountId,
     patch: defaultPatch,
     accountPatch,
-  });
-}
-
-function setZalouserDmPolicy(
-  cfg: OpenClawConfig,
-  accountId: string,
-  policy: DmPolicy,
-): OpenClawConfig {
-  const resolvedAccountId = normalizeAccountId(accountId);
-  const resolved = resolveZalouserAccountSync({ cfg, accountId: resolvedAccountId });
-  return setZalouserAccountScopedConfig(cfg, resolvedAccountId, {
-    dmPolicy: policy,
-    ...(policy === "open" ? { allowFrom: addWildcardAllowFrom(resolved.config.allowFrom) } : {}),
   });
 }
 
@@ -171,52 +157,6 @@ const zalouserDmPolicy = createChannelDmPolicy({
     });
   },
 });
-
-async function promptZalouserQuickstartDmPolicy(params: {
-  cfg: OpenClawConfig;
-  prompter: Parameters<NonNullable<ChannelSetupWizard["prepare"]>>[0]["prompter"];
-  accountId: string;
-}): Promise<OpenClawConfig> {
-  const { cfg, prompter, accountId } = params;
-  const resolved = resolveZalouserAccountSync({ cfg, accountId });
-  const existingPolicy = resolved.config.dmPolicy ?? "pairing";
-  const existingAllowFrom = resolved.config.allowFrom ?? [];
-  const existingLabel = existingAllowFrom.length > 0 ? existingAllowFrom.join(", ") : "unset";
-
-  await prompter.note(
-    [
-      t("wizard.zalouser.dmHelpSeparate"),
-      t("wizard.zalouser.dmHelpPairing"),
-      t("wizard.zalouser.dmHelpAllowlist"),
-      t("wizard.zalouser.dmHelpOpen"),
-      t("wizard.zalouser.dmHelpDisabled"),
-      "",
-      `Current: dmPolicy=${existingPolicy}, allowFrom=${existingLabel}`,
-      t("wizard.zalouser.dmHelpAllowlistEmpty"),
-    ].join("\n"),
-    ZALOUSER_DM_ACCESS_TITLE,
-  );
-
-  const policy = (await prompter.select({
-    message: t("wizard.zalouser.dmPolicyPrompt"),
-    options: [
-      { value: "pairing", label: t("wizard.channels.dmPolicyPairing") },
-      { value: "allowlist", label: t("wizard.channels.dmPolicyAllowlistOption") },
-      { value: "open", label: t("wizard.channels.dmPolicyOpenOption") },
-      { value: "disabled", label: t("wizard.channels.dmPolicyDisabledOption") },
-    ],
-    initialValue: existingPolicy,
-  })) as DmPolicy;
-
-  if (policy === "allowlist") {
-    return await promptZalouserAllowFrom({
-      cfg,
-      prompter,
-      accountId,
-    });
-  }
-  return setZalouserDmPolicy(cfg, accountId, policy);
-}
 
 export { zalouserSetupAdapter } from "./setup-core.js";
 
@@ -339,11 +279,47 @@ export const zalouserSetupWizard: ChannelSetupWizard = {
     );
 
     if (options?.quickstartDefaults) {
-      next = await promptZalouserQuickstartDmPolicy({
-        cfg: next,
-        prompter,
-        accountId,
-      });
+      const quickstartConfig = next;
+      next = await (async (): Promise<OpenClawConfig> => {
+        const resolved = resolveZalouserAccountSync({ cfg: quickstartConfig, accountId });
+        const existingPolicy = resolved.config.dmPolicy ?? "pairing";
+        const existingAllowFrom = resolved.config.allowFrom ?? [];
+        const existingLabel = existingAllowFrom.length > 0 ? existingAllowFrom.join(", ") : "unset";
+
+        await prompter.note(
+          [
+            t("wizard.zalouser.dmHelpSeparate"),
+            t("wizard.zalouser.dmHelpPairing"),
+            t("wizard.zalouser.dmHelpAllowlist"),
+            t("wizard.zalouser.dmHelpOpen"),
+            t("wizard.zalouser.dmHelpDisabled"),
+            "",
+            `Current: dmPolicy=${existingPolicy}, allowFrom=${existingLabel}`,
+            t("wizard.zalouser.dmHelpAllowlistEmpty"),
+          ].join("\n"),
+          ZALOUSER_DM_ACCESS_TITLE,
+        );
+
+        const policy = (await prompter.select({
+          message: t("wizard.zalouser.dmPolicyPrompt"),
+          options: [
+            { value: "pairing", label: t("wizard.channels.dmPolicyPairing") },
+            { value: "allowlist", label: t("wizard.channels.dmPolicyAllowlistOption") },
+            { value: "open", label: t("wizard.channels.dmPolicyOpenOption") },
+            { value: "disabled", label: t("wizard.channels.dmPolicyDisabledOption") },
+          ],
+          initialValue: existingPolicy,
+        })) as DmPolicy;
+
+        if (policy === "allowlist") {
+          return await promptZalouserAllowFrom({
+            cfg: quickstartConfig,
+            prompter,
+            accountId,
+          });
+        }
+        return zalouserDmPolicy.setPolicy(quickstartConfig, policy, accountId);
+      })();
     }
 
     return { cfg: next };

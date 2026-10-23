@@ -1,24 +1,17 @@
-// Codex tests cover periodic Computer Use health monitoring.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerClient } from "./client.js";
 import { startCodexComputerUseHealthMonitor } from "./computer-use-health.js";
+import { createComputerUseRequest } from "./computer-use.test-support.js";
 import type { ResolvedCodexComputerUseConfig } from "./config.js";
 
 describe("Codex Computer Use periodic health", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
 
   it("runs the live list_apps probe on the configured cadence and clears on client close", async () => {
-    vi.useFakeTimers();
     const client = createClient();
 
-    const result = startCodexComputerUseHealthMonitor({
-      client: client.client,
-      config: computerUseConfig({ healthCheckEnabled: true, healthCheckIntervalMinutes: 30 }),
-    });
-
-    expect(result).toEqual({ started: true, intervalMs: 30 * 60_000 });
+    startMonitor(client);
     expect(client.request).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(30 * 60_000);
@@ -32,216 +25,90 @@ describe("Codex Computer Use periodic health", () => {
       },
       { timeoutMs: 60_000 },
     );
-    expect(client.request).toHaveBeenCalledWith(
-      "mcpServer/tool/call",
-      {
-        threadId: "health-probe-thread-1",
-        server: "computer-use",
-        tool: "list_apps",
-        arguments: {},
-      },
-      { timeoutMs: 60_000 },
-    );
+    expectProbe(client, "computer-use", "list_apps", {}, 60_000);
 
     client.close();
     await vi.advanceTimersByTimeAsync(30 * 60_000);
-    expect(
-      client.request.mock.calls.filter(([method]) => method === "mcpServer/tool/call"),
-    ).toHaveLength(1);
-  });
-
-  it("keeps unified Computer Use health checks on the JavaScript probe", async () => {
-    vi.useFakeTimers();
-    const client = createClient();
-
-    startCodexComputerUseHealthMonitor({
-      client: client.client,
-      config: computerUseConfig({
-        healthCheckEnabled: true,
-        healthCheckIntervalMinutes: 30,
-        mcpServerName: "cua_repl",
-        pluginName: "unified-computer-use",
-      }),
-      tools: ["js", "js_reset", "turn_ended"],
-    });
-
-    await vi.advanceTimersByTimeAsync(30 * 60_000);
-
-    expect(client.request).toHaveBeenCalledWith(
-      "mcpServer/tool/call",
-      {
-        threadId: "health-probe-thread-1",
-        server: "cua_repl",
-        tool: "js",
-        arguments: { code: "await cua.listApps();" },
-      },
-      { timeoutMs: 60_000 },
-    );
+    expectToolCalls(client, 1);
   });
 
   it("reloads the owner-managed MCP runtime and retries once after a failed probe", async () => {
-    vi.useFakeTimers();
     const client = createClient({ liveTestFailures: 1 });
 
-    startCodexComputerUseHealthMonitor({
-      client: client.client,
-      config: computerUseConfig({
-        autoRepair: true,
-        healthCheckEnabled: true,
-        healthCheckIntervalMinutes: 30,
-      }),
-    });
+    startMonitor(client, { autoRepair: true });
 
     await vi.advanceTimersByTimeAsync(30 * 60_000);
 
-    expect(
-      client.request.mock.calls.filter(([method]) => method === "mcpServer/tool/call"),
-    ).toHaveLength(2);
+    expectToolCalls(client, 2);
     expect(client.request).toHaveBeenCalledWith("config/mcpServer/reload", undefined, {
       timeoutMs: 60_000,
     });
   });
 
-  it("stops an existing monitor when health checks are disabled", async () => {
-    vi.useFakeTimers();
+  it.each([
+    { config: { healthCheckEnabled: false }, reason: "health_disabled" },
+    { config: { enabled: false, healthCheckEnabled: true }, reason: "disabled" },
+  ])("stops an existing monitor when $reason", async ({ config }) => {
     const client = createClient();
-
-    startCodexComputerUseHealthMonitor({
-      client: client.client,
-      config: computerUseConfig({ healthCheckEnabled: true, healthCheckIntervalMinutes: 30 }),
-    });
-    expect(
-      startCodexComputerUseHealthMonitor({
-        client: client.client,
-        config: computerUseConfig({ healthCheckEnabled: false }),
-      }),
-    ).toEqual({ started: false, reason: "health_disabled" });
-
+    startMonitor(client);
+    startMonitor(client, config);
     await vi.advanceTimersByTimeAsync(30 * 60_000);
     expect(client.request).not.toHaveBeenCalled();
   });
 
-  it("stops an existing monitor when Computer Use is disabled", async () => {
-    vi.useFakeTimers();
-    const client = createClient();
+  it("replaces a same-interval monitor and probes the new unified tool configuration", async () => {
+    const tools = ["js", "js_reset", "turn_ended"];
+    const client = createClient({ mcpServerName: "cua_repl", mcpTools: tools });
 
-    startCodexComputerUseHealthMonitor({
-      client: client.client,
-      config: computerUseConfig({ healthCheckEnabled: true, healthCheckIntervalMinutes: 30 }),
-    });
-    expect(
-      startCodexComputerUseHealthMonitor({
-        client: client.client,
-        config: computerUseConfig({ enabled: false, healthCheckEnabled: true }),
-      }),
-    ).toEqual({ started: false, reason: "disabled" });
-
-    await vi.advanceTimersByTimeAsync(30 * 60_000);
-    expect(client.request).not.toHaveBeenCalled();
-  });
-
-  it("replaces a same-interval monitor when probe configuration changes", async () => {
-    vi.useFakeTimers();
-    const client = createClient();
-
-    startCodexComputerUseHealthMonitor({
-      client: client.client,
-      config: computerUseConfig({ healthCheckEnabled: true, healthCheckIntervalMinutes: 30 }),
-    });
-    expect(
-      startCodexComputerUseHealthMonitor({
-        client: client.client,
-        config: computerUseConfig({
-          healthCheckEnabled: true,
-          healthCheckIntervalMinutes: 30,
-          mcpServerName: "replacement-computer-use",
-          toolCallTimeoutMs: 45_000,
-        }),
-      }),
-    ).toEqual({ started: true, intervalMs: 30 * 60_000 });
-
-    await vi.advanceTimersByTimeAsync(30 * 60_000);
-    expect(client.request).toHaveBeenCalledWith(
-      "mcpServer/tool/call",
+    startMonitor(client);
+    startMonitor(
+      client,
       {
-        threadId: "health-probe-thread-1",
-        server: "replacement-computer-use",
-        tool: "list_apps",
-        arguments: {},
+        pluginName: "unified-computer-use",
+        mcpServerName: "cua_repl",
+        toolCallTimeoutMs: 45_000,
       },
-      { timeoutMs: 45_000 },
+      tools,
     );
-    expect(
-      client.request.mock.calls.filter(([method]) => method === "mcpServer/tool/call"),
-    ).toHaveLength(1);
-  });
 
-  it("does not start when Computer Use is disabled", () => {
-    const client = createClient();
-
-    expect(
-      startCodexComputerUseHealthMonitor({
-        client: client.client,
-        config: computerUseConfig({ enabled: false }),
-      }),
-    ).toEqual({ started: false, reason: "disabled" });
-    expect(client.addCloseHandler).not.toHaveBeenCalled();
-  });
-
-  it("does not start periodic health checks unless explicitly enabled", () => {
-    const client = createClient();
-
-    expect(
-      startCodexComputerUseHealthMonitor({
-        client: client.client,
-        config: computerUseConfig(),
-      }),
-    ).toEqual({ started: false, reason: "health_disabled" });
-    expect(client.addCloseHandler).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    expectProbe(client, "cua_repl", "js", { code: "await cua.listApps();" }, 45_000);
+    expectToolCalls(client, 1);
   });
 });
 
-function createClient(options: { liveTestFailures?: number } = {}) {
+function createClient(
+  options: { liveTestFailures?: number; mcpServerName?: string; mcpTools?: string[] } = {},
+) {
   const closeHandlers = new Set<(client: CodexAppServerClient) => void>();
-  let threadStarts = 0;
-  let liveTestFailures = options.liveTestFailures ?? 0;
+  const fixture = createComputerUseRequest({
+    installed: true,
+    probeThreadPrefix: "health-probe-thread",
+    ...options,
+  });
   const request = vi.fn(async (method: string, params?: unknown) => {
-    if (method === "thread/start") {
-      threadStarts += 1;
-      return {
-        thread: { id: `health-probe-thread-${threadStarts}` },
-        model: "gpt-5.1",
-        modelProvider: "openai",
-      };
-    }
-    if (method === "mcpServer/tool/call") {
-      if (liveTestFailures > 0) {
-        liveTestFailures -= 1;
-        throw new Error("hung");
-      }
-      return { content: [{ type: "text", text: "[]" }] };
-    }
-    if (method === "config/mcpServer/reload") {
-      return undefined;
-    }
-    if (method === "thread/unsubscribe") {
-      expect(params).toEqual({ threadId: `health-probe-thread-${threadStarts}` });
-      return undefined;
+    if (
+      [
+        "thread/start",
+        "mcpServer/tool/call",
+        "config/mcpServer/reload",
+        "thread/unsubscribe",
+      ].includes(method)
+    ) {
+      return fixture(method, params);
     }
     throw new Error(`unexpected request ${method}`);
   });
-  const addCloseHandler = vi.fn((handler: (client: CodexAppServerClient) => void) => {
-    closeHandlers.add(handler);
-    return () => closeHandlers.delete(handler);
-  });
   const client = {
     request,
-    addCloseHandler,
+    addCloseHandler(handler: (client: CodexAppServerClient) => void) {
+      closeHandlers.add(handler);
+      return () => closeHandlers.delete(handler);
+    },
   } as unknown as CodexAppServerClient;
   return {
     client,
     request,
-    addCloseHandler,
     close: () => {
       for (const handler of closeHandlers) {
         handler(client);
@@ -250,22 +117,48 @@ function createClient(options: { liveTestFailures?: number } = {}) {
   };
 }
 
-function computerUseConfig(
+function startMonitor(
+  client: ReturnType<typeof createClient>,
   overrides: Partial<ResolvedCodexComputerUseConfig> = {},
-): ResolvedCodexComputerUseConfig {
-  return {
-    enabled: true,
-    autoInstall: true,
-    marketplaceDiscoveryTimeoutMs: 60_000,
-    liveTestTimeoutMs: 60_000,
-    toolCallTimeoutMs: 60_000,
-    healthCheckEnabled: false,
-    healthCheckIntervalMinutes: 60,
-    pluginCacheMode: "shared",
-    strictReadiness: false,
-    autoRepair: false,
-    pluginName: "computer-use",
-    mcpServerName: "computer-use",
-    ...overrides,
-  };
+  tools?: readonly string[],
+) {
+  return startCodexComputerUseHealthMonitor({
+    client: client.client,
+    tools,
+    config: {
+      enabled: true,
+      autoInstall: true,
+      marketplaceDiscoveryTimeoutMs: 60_000,
+      liveTestTimeoutMs: 60_000,
+      toolCallTimeoutMs: 60_000,
+      healthCheckEnabled: true,
+      healthCheckIntervalMinutes: 30,
+      pluginCacheMode: "shared",
+      strictReadiness: false,
+      autoRepair: false,
+      pluginName: "computer-use",
+      mcpServerName: "computer-use",
+      ...overrides,
+    },
+  });
+}
+
+function expectToolCalls(client: ReturnType<typeof createClient>, count: number) {
+  expect(
+    client.request.mock.calls.filter(([method]) => method === "mcpServer/tool/call"),
+  ).toHaveLength(count);
+}
+
+function expectProbe(
+  client: ReturnType<typeof createClient>,
+  server: string,
+  tool: string,
+  args: Record<string, string>,
+  timeoutMs: number,
+) {
+  expect(client.request).toHaveBeenCalledWith(
+    "mcpServer/tool/call",
+    { threadId: "health-probe-thread-1", server, tool, arguments: args },
+    { timeoutMs },
+  );
 }

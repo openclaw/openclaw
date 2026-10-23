@@ -1,4 +1,3 @@
-// Shared workspace filesystem access for gateway file browsers and editors.
 // Local access uses fs-safe roots; remote access stays with the registered
 // workspace provider and its path/byte/lifecycle checks.
 import { randomUUID } from "node:crypto";
@@ -196,7 +195,7 @@ export async function readWorkspaceFile(
     return {
       buffer,
       stat: { size: buffer.length, mtimeMs: stat.mtimeMs },
-      canonicalPath: path.relative(workspaceRoot.rootReal, filePath).split(path.sep).join("/"),
+      canonicalPath: workspaceRelativePath(workspaceRoot.rootReal, filePath),
       // The existing remote bridge does not provide an atomic old-content CAS.
       readOnly: true,
     };
@@ -205,7 +204,7 @@ export async function readWorkspaceFile(
     const read = await workspaceRoot.read(browserPath, { maxBytes: opts?.maxBytes });
     return {
       ...read,
-      canonicalPath: path.relative(workspaceRoot.rootReal, read.realPath).split(path.sep).join("/"),
+      canonicalPath: workspaceRelativePath(workspaceRoot.rootReal, read.realPath),
     };
   } catch (err) {
     if (err instanceof FsSafeError && err.code === "too-large") {
@@ -239,10 +238,7 @@ export async function readWorkspaceFilePrefix(
     const bytesRead = await readFileWindowFully(handle, buffer, 0);
     return {
       buffer: buffer.subarray(0, bytesRead),
-      canonicalPath: path
-        .relative(workspaceRoot.rootReal, opened.realPath)
-        .split(path.sep)
-        .join("/"),
+      canonicalPath: workspaceRelativePath(workspaceRoot.rootReal, opened.realPath),
       stat: opened.stat,
     };
   } catch {
@@ -261,6 +257,7 @@ export async function updateWorkspaceFile(
   content: string | Buffer,
   expectedHash: string | undefined,
   assertCurrent?: () => void,
+  options?: { maxBytes?: number },
 ): Promise<WorkspaceFileUpdateResult> {
   const workspaceRoot = await openWorkspaceRoot(rootDir);
   if (!workspaceRoot) {
@@ -275,7 +272,7 @@ export async function updateWorkspaceFile(
   return await enqueueWorkspaceFileUpdate<WorkspaceFileUpdateResult>(async () => {
     let current: ReadResult;
     try {
-      current = await workspaceRoot.read(browserPath);
+      current = await workspaceRoot.read(browserPath, { maxBytes: options?.maxBytes });
     } catch {
       return { status: "unsafe" };
     }
@@ -298,10 +295,7 @@ export async function updateWorkspaceFile(
     }
     return {
       status: "updated",
-      canonicalPath: path
-        .relative(workspaceRoot.rootReal, current.realPath)
-        .split(path.sep)
-        .join("/"),
+      canonicalPath: workspaceRelativePath(workspaceRoot.rootReal, current.realPath),
       hash: sha256Hex(content),
       stat,
     };
@@ -376,6 +370,10 @@ export function decodeUtf8Strict(buffer: Buffer): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+export function workspaceRelativePath(root: string, resolved: string): string {
+  return path.relative(root, resolved).split(path.sep).join("/");
 }
 
 /** Collapses `.` segments and separators into a canonical root-relative path. */

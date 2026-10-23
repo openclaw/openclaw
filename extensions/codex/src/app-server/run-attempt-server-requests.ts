@@ -11,9 +11,6 @@ import { shouldAutoApproveCodexAppServerApprovals } from "./config.js";
 import { createCodexDynamicToolDiagnostics } from "./dynamic-tool-diagnostics.js";
 import {
   handleDynamicToolCallWithTimeout,
-  hasPendingDynamicToolTerminalDiagnostic,
-  isDynamicToolTerminalDiagnosticEvent,
-  isMatchingDynamicToolTerminalDiagnostic,
   resolveDynamicToolCallTimeoutMs,
   toCodexDynamicToolProgressResponse,
   toCodexDynamicToolProtocolResponse,
@@ -32,7 +29,7 @@ import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import {
   isCodexCommandBearingToolCall,
   resolveCodexToolProgressDetailMode,
-  sanitizeCodexToolArguments,
+  asCodexToolArguments,
 } from "./tool-progress-normalization.js";
 import type { CodexAppServerServerRequest, CodexThreadRouteScope } from "./turn-router.js";
 
@@ -110,7 +107,7 @@ export function createCodexAttemptServerRequestController(
     request: CodexAppServerServerRequest,
     scope: CodexThreadRouteScope,
     requestSignal: AbortSignal = new AbortController().signal,
-    setExecutionTimeoutMs?: (timeoutMs: number) => void,
+    setExecutionTimeoutMs?: (timeoutMs: number | null) => void,
   ) => {
     const signal = AbortSignal.any([runAbortController.signal, requestSignal]);
     const turnId = turnIdRef.current;
@@ -180,6 +177,15 @@ export function createCodexAttemptServerRequestController(
       }
       const replayedExecution = openClawDynamicToolExecutions.get(call);
       if (replayedExecution) {
+        if (call.tool === "autoreview") {
+          setExecutionTimeoutMs?.(
+            resolveDynamicToolCallTimeoutMs({
+              call,
+              config: params.config,
+              parentTimeoutMs: params.timeoutMs,
+            }),
+          );
+        }
         markCurrentTurnRequestProgress();
         const response = await replayedExecution;
         await settlePluginRuntimeRefresh(turnId);
@@ -209,7 +215,7 @@ export function createCodexAttemptServerRequestController(
       const toolMeta = inferToolMetaFromArgs(call.tool, call.arguments, {
         detailMode: resolveCodexToolProgressDetailMode(params.toolProgressDetail),
       });
-      const toolArgs = sanitizeCodexToolArguments(call.arguments);
+      const toolArgs = asCodexToolArguments(call.arguments);
       const commandBearing = isCodexCommandBearingToolCall(call.tool, toolArgs);
       const shouldEmitDynamicToolProgress = shouldEmitTranscriptToolProgress(call.tool);
       if (shouldEmitDynamicToolProgress) {
@@ -238,27 +244,21 @@ export function createCodexAttemptServerRequestController(
         call,
         config: params.config,
         toolBridge,
+        parentTimeoutMs: params.timeoutMs,
       });
       setExecutionTimeoutMs?.(dynamicToolTimeoutMs);
       const toolStartedAt = Date.now();
-      const diagnosticContext = {
+      const diagnostics = createCodexDynamicToolDiagnostics({
         call,
         agentId: sessionAgentId,
         runId: params.runId,
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
-      };
-      const diagnostics = createCodexDynamicToolDiagnostics(diagnosticContext);
+      });
       let terminalDiagnosticObserved = false;
       const unsubscribeToolDiagnosticObserver = onInternalDiagnosticEvent(
         (event) => {
-          if (
-            isDynamicToolTerminalDiagnosticEvent(event) &&
-            isMatchingDynamicToolTerminalDiagnostic({
-              ...diagnosticContext,
-              event,
-            })
-          ) {
+          if (diagnostics.matchesTerminal(event)) {
             terminalDiagnosticObserved = true;
           }
         },
@@ -355,10 +355,7 @@ export function createCodexAttemptServerRequestController(
           });
           void emitCodexAppServerEvent(params, { stream: "item", data: activity });
         }
-        if (
-          !terminalDiagnosticObserved &&
-          !hasPendingDynamicToolTerminalDiagnostic(diagnosticContext)
-        ) {
+        if (!terminalDiagnosticObserved && !diagnostics.hasPendingTerminal()) {
           diagnostics.terminal(response, toolDurationMs);
         }
         pendingOpenClawDynamicToolCompletionIds.delete(call.callId);
@@ -370,10 +367,12 @@ export function createCodexAttemptServerRequestController(
         return protocolResponse as JsonValue;
       } catch (error) {
         pendingOpenClawDynamicToolCompletionIds.delete(call.callId);
-        if (
-          !terminalDiagnosticObserved &&
-          !hasPendingDynamicToolTerminalDiagnostic(diagnosticContext)
-        ) {
+        recordDynamicToolResult({
+          call,
+          response: { contentItems: [], success: false },
+          durationMs: Math.max(0, Date.now() - toolStartedAt),
+        });
+        if (!terminalDiagnosticObserved && !diagnostics.hasPendingTerminal()) {
           diagnostics.error(Math.max(0, Date.now() - toolStartedAt));
         }
         await settlePluginRuntimeRefresh(turnId);

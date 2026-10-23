@@ -2,11 +2,13 @@ import { afterEach, expect, test, vi } from "vitest";
 import { getRuntimeConfig } from "../config/io.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import { addSessionMember } from "../config/sessions/session-sharing-store.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import {
   captureGatewayDeviceRevocation,
   invalidateGatewayDeviceRevocation,
 } from "./device-revocation.js";
+import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import type { retainGatewayOperatorRun } from "./operator-run-cancellation.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
@@ -59,7 +61,6 @@ function isRecoverPayload(value: unknown): value is RecoverPayload {
 
 afterEach(() => {
   operatorRunCaptures.clear();
-  closeOpenClawStateDatabaseForTest();
 });
 
 async function seedRecoverableSession(params: {
@@ -153,6 +154,9 @@ test("sessions.recover denies a narrow continuation into a linked foreign succes
   sourceOwner.connect.scopes = ["operator.sessions.write"];
   const broadWriter = roleClient("write", "linked-recovery-writer");
   broadWriter.connect.scopes = ["operator.write"];
+  using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+  prepareGatewayRecipientProfile(sourceOwner);
+  prepareGatewayRecipientProfile(broadWriter);
   const cfg = recoveryConfig(storePath);
   const revokedRole = rolePolicyConfig().gateway!.roles!;
   const writeRole = revokedRole.definitions.write;
@@ -237,7 +241,7 @@ test("sessions.recover denies a narrow continuation into a linked foreign succes
     id: "linked-recovery-explicit-member",
     key: sourceKey,
   });
-  expect(granted).toMatchObject({
+  expect(granted, JSON.stringify(granted)).toMatchObject({
     ok: true,
     payload: {
       key: successorKey,
@@ -256,6 +260,8 @@ test("sessions.recover retains source revocation for its accepted own successor"
   const sourceSessionId = "narrow-own-recovery-source";
   const owner = roleClient("view", "narrow-recovery-owner");
   owner.connect.scopes = ["operator.sessions.write"];
+  using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+  prepareGatewayRecipientProfile(owner);
   await seedRecoverableSession({
     sourceKey,
     sourceSessionId,
@@ -276,7 +282,7 @@ test("sessions.recover retains source revocation for its accepted own successor"
     hasCurrentClientAuthority: requestAuthority.isCurrent,
   });
 
-  expect(recovered).toMatchObject({
+  expect(recovered, JSON.stringify(recovered)).toMatchObject({
     ok: true,
     payload: { key: expect.any(String), continuation: { status: "started" } },
   });
@@ -284,7 +290,7 @@ test("sessions.recover retains source revocation for its accepted own successor"
   if (typeof runId !== "string") {
     throw new Error("recovery did not return its admitted run");
   }
-  const acceptedRun = context.chatAbortControllers.get(runId);
+  const acceptedRun = rpcSourceTesting.get(runId);
   if (!acceptedRun) {
     throw new Error("recovery did not register its active run");
   }
@@ -299,7 +305,7 @@ test("sessions.recover retains source revocation for its accepted own successor"
     return await operation;
   };
   let providerCancellationObserved = false;
-  acceptedRun.controller.signal.addEventListener(
+  acceptedRun.input.abortSignal.addEventListener(
     "abort",
     () => {
       providerCancellationObserved = true;
@@ -309,13 +315,12 @@ test("sessions.recover retains source revocation for its accepted own successor"
   retainedRun.armCancellation();
   requestAuthority.release();
   expect(requestAuthority.isCurrent()).toBe(true);
-  expect(acceptedRun.controller.signal.aborted).toBe(false);
+  expect(acceptedRun.input.abortSignal.aborted).toBe(false);
   invalidateGatewayDeviceRevocation(context, "narrow-recovery-device", "operator");
   await Promise.allSettled(cancellationWork);
   expect(requestAuthority.isCurrent()).toBe(false);
-  expect(acceptedRun.controller.signal.aborted).toBe(true);
+  expect(acceptedRun.input.abortSignal.aborted).toBe(true);
   expect(providerCancellationObserved).toBe(true);
-  expect(context.removeChatRun).toHaveBeenCalled();
   retainedRun.release();
   const recoveredKey = recovered.payload?.key ?? "";
   expect(

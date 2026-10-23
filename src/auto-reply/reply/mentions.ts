@@ -58,7 +58,7 @@ function escapeJoinerTolerantLiteral(literal: string): string {
   // stripping runs on the raw text that still carries them. A literal has to
   // accept both forms or an identity built only from a ZWJ sequence can be
   // stripped but never matched.
-  if (Array.from(literal).every((character) => JOINER_ONLY.test(character))) {
+  if (!literal || JOINER_ONLY.test(literal)) {
     // Nothing survives normalization. Emitting the optional joiner class alone
     // would match the empty string, i.e. every message.
     return "";
@@ -235,11 +235,10 @@ function warnRejectedMentionPattern(
   if (mentionPatternWarningCache.has(key)) {
     return;
   }
-  mentionPatternWarningCache.add(key);
-  if (mentionPatternWarningCache.size > MAX_MENTION_PATTERN_WARNING_KEYS) {
+  if (mentionPatternWarningCache.size >= MAX_MENTION_PATTERN_WARNING_KEYS) {
     mentionPatternWarningCache.clear();
-    mentionPatternWarningCache.add(key);
   }
+  mentionPatternWarningCache.add(key);
   log.warn("Ignoring unsupported group mention pattern", {
     pattern,
     flags,
@@ -282,13 +281,10 @@ function resolveMentionPatterns(cfg: OpenClawConfig | undefined, agentId?: strin
     return { patterns: [], unicode: false };
   }
   const agentConfig = agentId ? resolveAgentConfig(cfg, agentId) : undefined;
-  const agentGroupChat = agentConfig?.groupChat;
-  if (agentGroupChat && Object.hasOwn(agentGroupChat, "mentionPatterns")) {
-    return { patterns: agentGroupChat.mentionPatterns ?? [], unicode: false };
-  }
-  const globalGroupChat = cfg.messages?.groupChat;
-  if (globalGroupChat && Object.hasOwn(globalGroupChat, "mentionPatterns")) {
-    return { patterns: globalGroupChat.mentionPatterns ?? [], unicode: false };
+  for (const groupChat of [agentConfig?.groupChat, cfg.messages?.groupChat]) {
+    if (groupChat && Object.hasOwn(groupChat, "mentionPatterns")) {
+      return { patterns: groupChat.mentionPatterns ?? [], unicode: false };
+    }
   }
   const derived = deriveMentionPatterns(agentConfig?.identity);
   return { patterns: derived, unicode: derived.length > 0 };
@@ -359,10 +355,7 @@ export function stripStructuralPrefixes(text: string): string {
     afterEnvelope === text ? /^[ \t]*(?!\/)[^\n:]{1,120}:\s+/gm : /^[ \t]*[^\n:]{1,120}:\s+/gm;
 
   const stripped = afterEnvelope.replace(senderPrefixPattern, "").replace(/\\n/g, " ").trim();
-  if (stripped.startsWith("/")) {
-    return stripped.replace(/[ \t]+/g, " ");
-  }
-  return stripped.replace(/\s+/g, " ");
+  return stripped.replace(stripped.startsWith("/") ? /[ \t]+/g : /\s+/g, " ");
 }
 
 export function stripMentions(

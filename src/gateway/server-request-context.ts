@@ -5,7 +5,8 @@ import {
   type GatewayClientId,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { getUserProfileDisplay } from "../state/user-profiles.js";
+import { getAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
+import { getResidentUserProfileDisplay } from "../state/user-profile-list.js";
 import { NODE_DESKTOP_SERVICE_CONTEXT } from "./desktop/node-source-context.js";
 import { invalidateGatewayDeviceRevocation } from "./device-revocation.js";
 import { ScopeUpgradeCoordinator } from "./device-scope-upgrade.js";
@@ -68,8 +69,6 @@ type GatewayRequestContextRuntime = Pick<
   | "validateAgentRuntimeApprovalAuthority"
   | "terminalSessions"
   | "agentRunSeq"
-  | "chatAbortControllers"
-  | "chatQueuedTurns"
   | "chatRunState"
   | "addChatRun"
   | "removeChatRun"
@@ -100,6 +99,7 @@ type GatewayRequestContextRuntime = Pick<
     | "resolveSharedGatewaySessionGenerationForRuntimeSnapshot"
     | "workerPlacementControlAvailable"
     | "getAttachedGatewayMethodRegistry"
+    | "getReadiness"
   > & {
     sessionObserver: NonNullable<GatewayRequestContext["sessionObserver"]>;
     sessionActivitySummaries?: GatewayRequestContext["sessionActivitySummaries"];
@@ -137,7 +137,7 @@ type GatewayRequestContextRuntime = Pick<
     >;
     sessionMessageSubscribers: Pick<
       GatewayCoreRuntime["sessionMessageSubscribers"],
-      "unsubscribeAll"
+      "get" | "unsubscribeAll"
     >;
     toolEventRecipients: Pick<
       GatewayCoreRuntime["toolEventRecipients"],
@@ -147,7 +147,12 @@ type GatewayRequestContextRuntime = Pick<
     kernel: Pick<
       GatewayCoreRuntime["kernel"],
       "applyPluginLifecycleChange" | "getConfigReloaderHotReloadStatus"
-    >;
+    > & {
+      pluginRuntimeGeneration: Pick<
+        GatewayCoreRuntime["kernel"]["pluginRuntimeGeneration"],
+        "getReloadStatus"
+      >;
+    };
     workerEnvironmentStartup:
       | Pick<NonNullable<GatewayCoreRuntime["workerEnvironmentStartup"]>, "placementStore">
       | undefined;
@@ -211,6 +216,7 @@ export function createGatewayRequestContext(
   params: GatewayRequestContextParams,
 ): GatewayRequestContext {
   const { runtime } = params;
+  const agentDatabaseStartup = getAgentDatabaseStartupAdmission();
   const {
     connectionWork,
     runtimeState,
@@ -265,6 +271,17 @@ export function createGatewayRequestContext(
       return runtimeState.cronState.storePath;
     },
     getRuntimeConfig,
+    ...(agentDatabaseStartup
+      ? {
+          agentDatabaseStartup: {
+            get hasPendingAgents() {
+              return agentDatabaseStartup.hasPendingAgents;
+            },
+            waitForAgentPreparation:
+              agentDatabaseStartup.waitForAgentPreparation.bind(agentDatabaseStartup),
+          },
+        }
+      : {}),
     resolveSessionRequestTargets: (request) =>
       resolveSessionRequestTargets({ ...request, context }),
     getCommittedRuntimeConfig: () =>
@@ -325,6 +342,7 @@ export function createGatewayRequestContext(
       ? { readChatStartupProjection: params.chatMetadataLifecycle.readStartup }
       : {}),
     getHealthCache,
+    getReadiness: runtime.getReadiness,
     refreshHealthSnapshot: runtime.refreshGatewayHealthSnapshotWithRuntime,
     logHealth: params.logHealth,
     logGateway: params.log,
@@ -396,7 +414,7 @@ export function createGatewayRequestContext(
               ? profile
               : undefined
             : canonicalProfileId
-              ? getUserProfileDisplay(canonicalProfileId)
+              ? getResidentUserProfileDisplay(canonicalProfileId)
               : undefined;
           // Global invalidation must not renew unchanged presence rows. Explicit
           // callbacks can arrive after their caller has attached the new profile.
@@ -520,8 +538,6 @@ export function createGatewayRequestContext(
       : {}),
     terminalSessions: runtime.terminalSessions,
     agentRunSeq: runtime.agentRunSeq,
-    chatAbortControllers: runtime.chatAbortControllers,
-    chatQueuedTurns: runtime.chatQueuedTurns,
     chatRunState: runtime.chatRunState,
     addChatRun: runtime.addChatRun,
     removeChatRun: runtime.removeChatRun,
@@ -540,6 +556,7 @@ export function createGatewayRequestContext(
       runtimeState.sessionViewerPresence?.unsubscribe(connId);
     },
     getSessionEventSubscriberConnIds: sessionEventSubscribers.getAll,
+    getSessionMessageSubscriberConnIds: sessionMessageSubscribers.get,
     registerToolEventRecipient: runtime.toolEventRecipients.add,
     dedupe: runtime.dedupe,
     wizardSessions: runtime.wizardSessions,
@@ -549,6 +566,7 @@ export function createGatewayRequestContext(
     getRuntimeSnapshot: runtime.getRuntimeSnapshot,
     getEventLoopHealth: runtime.readinessEventLoopHealth.snapshot,
     getConfigReloaderHotReloadStatus: runtime.kernel.getConfigReloaderHotReloadStatus,
+    getPluginReloadStatus: runtime.kernel.pluginRuntimeGeneration.getReloadStatus,
     startChannel: runtime.startChannel,
     stopChannel: runtime.stopChannel,
     markChannelLoggedOut: runtime.markChannelLoggedOut,

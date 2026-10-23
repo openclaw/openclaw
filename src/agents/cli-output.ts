@@ -4,11 +4,7 @@
  * reconstruction.
  */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type {
-  CliBackendConfig,
-  CliBackendParseJsonlEvent,
-  CliBackendParseJsonlLifecycleEvent,
-} from "../plugins/cli-backend.types.js";
+import type { CliBackendConfig } from "../plugins/cli-backend.types.js";
 import type { CliOutput } from "./cli-output-contracts.js";
 import {
   collectExplicitCliErrorText,
@@ -69,13 +65,10 @@ export function formatCliOutputError(
   ].join(" ");
 }
 
-/** Parses CLI backend output using the configured JSON/JSONL/plain-text mode. */
 export function parseCliOutput(params: {
   raw: string;
   backend: CliBackendConfig;
   providerId: string;
-  parseJsonlEvent?: CliBackendParseJsonlEvent;
-  parseJsonlLifecycleEvent?: CliBackendParseJsonlLifecycleEvent;
   outputMode?: "json" | "jsonl" | "text";
   fallbackSessionId?: string;
 }): CliOutput {
@@ -84,8 +77,6 @@ export function parseCliOutput(params: {
     const parser = createCliJsonlStreamingParser({
       backend: params.backend,
       providerId: params.providerId,
-      parseJsonlEvent: params.parseJsonlEvent,
-      parseJsonlLifecycleEvent: params.parseJsonlLifecycleEvent,
       onAssistantDelta: () => {},
     });
     parser.push(params.raw);

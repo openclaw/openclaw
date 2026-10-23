@@ -143,12 +143,8 @@ const HKDF_INFO = utf8("reef-v1");
 const ULID_PATTERN = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/;
 
 export function seal(options: SealOptions): Envelope {
-  validateEnvelopeMetadata(
-    options.id,
-    options.from,
-    options.to,
-    options.ts ?? Math.floor(Date.now() / 1000),
-  );
+  const ts = options.ts ?? Math.floor(Date.now() / 1000);
+  validateEnvelopeMetadata(options.id, options.from, options.to, ts);
   validateMessageBody(options.body);
   const plaintext = canonicalBytes(options.body);
   if (plaintext.length > REEF_MAX_PLAINTEXT_BYTES) {
@@ -169,7 +165,7 @@ export function seal(options: SealOptions): Envelope {
     id: options.id,
     from: options.from,
     to: options.to,
-    ts: options.ts ?? Math.floor(Date.now() / 1000),
+    ts,
     epk: base64(ephemeral.publicKey),
     n: base64(nonce),
     ct: base64(gcm(key, nonce).encrypt(plaintext)),
@@ -193,7 +189,9 @@ export async function openClaimed(options: OpenOptions): Promise<ClaimedOpenResu
       canonicalBytes(unsigned),
       decodeKey(options.senderSigningPublicKey),
     );
-  } catch {}
+  } catch {
+    // Malformed signature/key material follows the same BadSignatureError path as a mismatch.
+  }
   if (!validSignature) {
     throw new BadSignatureError();
   }

@@ -100,6 +100,7 @@ export async function preparePluginUpdateConfigMigration(params: {
     let activationWarning: string | undefined;
     return {
       config,
+      deferredPluginMigrations: pending,
       changed: selectedPending.length > 0 || !isDeepStrictEqual(config, params.config),
       get activationWarning() {
         return activationWarning;
@@ -140,7 +141,7 @@ export async function preparePluginUpdateConfigMigration(params: {
           }
           const active = new Set<string>();
           const stateless = new Set(
-            availability?.statelessPluginIds.filter((id) => selectedIds.has(id)),
+            availability?.statelessPlugins.map(({ id }) => id).filter((id) => selectedIds.has(id)),
           );
           listPluginDoctorStateMigrationEntries({
             config: activationConfig,

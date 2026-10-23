@@ -165,10 +165,6 @@ export function nodeText(nodes: readonly HtmlNode[], preserveMediaSources = fals
   return parts.join("");
 }
 
-function normalizeIslandText(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
-}
-
 // Raw round-trip of a subtree; keeps unsupported wrappers fully literal.
 function serializeHtmlNodes(nodes: readonly HtmlNode[]): string {
   return nodes
@@ -207,14 +203,9 @@ export function htmlNodesToRichText(
   nodes: readonly HtmlNode[],
   renderer: HtmlRichTextRenderer = defaultHtmlRenderer,
 ): RichText {
-  const parts: RichText[] = [];
-  for (const node of nodes) {
+  const renderNode = (node: HtmlNode): RichText | undefined => {
     if (node.kind === "text") {
-      const value = renderer.text(node);
-      if (value) {
-        parts.push(value);
-      }
-      continue;
+      return renderer.text(node) || undefined;
     }
     const children = () => htmlNodesToRichText(node.children, renderer);
     const emit = (build: () => RichText): RichText =>
@@ -229,52 +220,49 @@ export function htmlNodesToRichText(
     const atom = (value: RichText) => emit(() => renderer.atom(node, value));
     const style = Object.hasOwn(INLINE_STYLE_TAGS, node.name) && INLINE_STYLE_TAGS[node.name];
     if (style) {
-      parts.push(wrap((text) => ({ type: style, text })));
-      continue;
+      return wrap((text) => ({ type: style, text }));
     }
     if (node.name === "a") {
       const href = parseHtmlAttrs(node.raw).get("href");
       if (href?.startsWith("#")) {
         // In-message fragments are RichTextAnchorLink, not RichTextUrl.
-        parts.push(wrap((text) => ({ type: "anchor_link", text, anchor_name: href.slice(1) })));
-      } else {
-        parts.push(href ? wrap((text) => richTextLink(text, href)) : emit(children));
+        return wrap((text) => ({ type: "anchor_link", text, anchor_name: href.slice(1) }));
       }
-      continue;
+      return href ? wrap((text) => richTextLink(text, href)) : emit(children);
     }
     if (node.name === "tg-math") {
-      parts.push(atom({ type: "mathematical_expression", expression: nodeText(node.children) }));
-      continue;
+      return atom({ type: "mathematical_expression", expression: nodeText(node.children) });
     }
     if (node.name === "tg-emoji") {
       const emojiId = parseHtmlAttrs(node.raw).get("emoji-id");
-      const alternative = normalizeIslandText(nodeText(node.children));
+      const alternative = nodeText(node.children).replace(/\s+/g, " ").trim();
       // Wire contract: custom_emoji_id must be a valid Number (live-verified
       // 400 otherwise); unknown-but-numeric IDs degrade server-side.
       if (emojiId && /^\d+$/.test(emojiId) && alternative) {
-        parts.push(
-          atom({
-            type: "custom_emoji",
-            custom_emoji_id: emojiId,
-            alternative_text: alternative,
-          }),
-        );
-        continue;
+        return atom({
+          type: "custom_emoji",
+          custom_emoji_id: emojiId,
+          alternative_text: alternative,
+        });
       }
-      parts.push(atom(alternative));
-      continue;
+      return atom(alternative);
     }
     if (node.name === "br") {
-      parts.push(atom("\n"));
-      continue;
+      return atom("\n");
     }
     if (node.name === "p" || node.name === "span" || node.name === "div") {
-      parts.push(emit(children));
-      continue;
+      return emit(children);
     }
     // Unsupported HTML and its HTML descendants stay literal, but independently
     // authored Markdown spans must still apply inside that text range.
-    parts.push(renderer.literal(node, () => serializeHtmlNodes([node])));
+    return renderer.literal(node, () => serializeHtmlNodes([node]));
+  };
+  const parts: RichText[] = [];
+  for (const node of nodes) {
+    const value = renderNode(node);
+    if (value !== undefined) {
+      parts.push(value);
+    }
   }
   return parts.length > 1 ? parts : (parts[0] ?? "");
 }

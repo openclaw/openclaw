@@ -247,9 +247,8 @@ printf '${edit}\\n' > src/subject.ts
     expect(readFileSync(join(f.worktree, "src", "subject.ts"), "utf8")).toBe(`${edit}\n`);
     expect(existsSync(join(f.canonical, ".worktrees", ".templates"))).toBe(false);
     expect(f.git(f.canonical, "status", "--porcelain")).toBe("");
-    expect(
-      f.git(f.canonical, "rev-parse", "--verify", "refs/openclaw/pr-operation-locks/42"),
-    ).toMatch(/^[0-9a-f]{40}$/);
+    // The failed hook run drained, so the supervisor released the lock; the checkout keeps the evidence.
+    expect(f.git(f.canonical, "for-each-ref", "refs/openclaw/pr-operation-locks")).toBe("");
   });
 
   it("preserves a caller fsmonitor hook without enabling it in managed Git", () => {
@@ -285,9 +284,8 @@ printf '${edit}\\n' > src/subject.ts
     expect(readFileSync(join(f.worktree, "hook-evidence.txt"), "utf8")).toBe(
       "retained hook evidence\n",
     );
-    expect(
-      f.git(f.canonical, "rev-parse", "--verify", "refs/openclaw/pr-operation-locks/42"),
-    ).toMatch(/^[0-9a-f]{40}$/);
+    // The failed hook run drained, so the supervisor released the lock; the checkout keeps the evidence.
+    expect(f.git(f.canonical, "for-each-ref", "refs/openclaw/pr-operation-locks")).toBe("");
   });
 
   it("does not repair a caller seed moved by a checkout hook", () => {
@@ -359,6 +357,46 @@ ${changeLock}
   );
 
   // Only an actual accelerated host can prove this cell; a skip is not APFS proof.
+  it.skipIf(process.platform !== "darwin")(
+    "removes a failed template clone after losing its PR registration, then retries",
+    () => {
+      const f = coldFixture(false);
+      const fault = join(f.root, "lose-registration.mjs");
+      const receipt = join(f.root, "lost-registration");
+      writeFileSync(
+        fault,
+        `import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+const marker = ${JSON.stringify(join(f.worktree, ".git"))};
+const admin = ${JSON.stringify(join(f.canonical, ".git/worktrees/pr-42"))};
+if (process.argv.includes('.git/worktrees/pr-42') && existsSync(marker) &&
+    !readFileSync(marker, 'utf8').includes('/pr-42')) {
+  writeFileSync(${JSON.stringify(receipt)}, readFileSync(marker));
+  rmSync(admin, { recursive: true, force: true });
+}
+`,
+      );
+      const gitShim = join(f.root, "bin/git");
+      writeFileSync(
+        gitShim,
+        readFileSync(gitShim, "utf8").replace(
+          "#!/bin/sh\n",
+          `#!/bin/sh\ncase "$*" in *'.git/worktrees/pr-42 rev-parse HEAD --symbolic-full-name HEAD'*) node '${fault}' "$@" || exit $? ;; esac\n`,
+        ),
+      );
+      const failed = f.run("review-init");
+      expect(failed.status).not.toBe(0);
+      expect(readFileSync(receipt, "utf8")).toMatch(/worktrees\/[0-9a-f-]{36}\n$/);
+      expect(failed.stderr).toContain("not a git repository");
+      expect(existsSync(f.worktree)).toBe(false);
+      expect(f.git(f.canonical, "rev-parse", "refs/heads/temp/pr-42")).toBe(f.main);
+      // The same PR can provision again, without a replacement PR or manual repair.
+      writeFileSync(fault, "");
+      const retried = f.run("review-init");
+      expect(retried.status, retried.stderr).toBe(0);
+      expectSeed(f);
+    },
+  );
+
   it.skipIf(process.platform !== "darwin")(
     "materializes full cold/warm PR siblings, then preserves native sparse transitions",
     async () => {

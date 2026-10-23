@@ -22,6 +22,7 @@ import {
 import {
   createPublicationAdmission,
   publicationObservationJson,
+  publicationSourceJson,
   publicationSourceReuseIdentity,
   validatePublicationAdmissionBinding,
   validatePublicationSourceBinding,
@@ -36,6 +37,8 @@ import {
   classifyReleaseSnapshot,
   composeReleaseChildAttemptEvidence,
   formatReleaseStateOutcome,
+  isReleaseGhServerError,
+  readReleaseJobListing,
   releasePlanGateFailures,
   MAX_RELEASE_ARTIFACT_BYTES,
   serializeReleaseArtifact,
@@ -136,7 +139,11 @@ async function runGh(args, options = {}) {
       if (options.signal?.aborted) {
         throw options.signal.reason ?? error;
       }
-      if (attempt === attempts || classifyReleaseGhTransportError(error) !== "transient") {
+      if (
+        attempt === attempts ||
+        (options.smallerPageFallback && isReleaseGhServerError(error)) ||
+        classifyReleaseGhTransportError(error) !== "transient"
+      ) {
         throw error;
       }
       const delay = releaseGhRetryDelayMs(attempt, ghRetryDeadline, performance.now());
@@ -156,18 +163,19 @@ async function githubJson(path, signal) {
 }
 
 async function githubAttemptJobs(runId, runAttempt, signal) {
-  return (
-    await runGh(
+  const output = await readReleaseJobListing((perPage, { smallerPageFallback }) =>
+    runGh(
       [
         "api",
         "--paginate",
-        `repos/${process.env.GITHUB_REPOSITORY}/actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100`,
+        `repos/${process.env.GITHUB_REPOSITORY}/actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=${perPage}`,
         "--jq",
         ".jobs[] | @json",
       ],
-      { signal },
-    )
-  )
+      { signal, smallerPageFallback },
+    ),
+  );
+  return output
     .split("\n")
     .filter(Boolean)
     .map((line) => JSON.parse(line));
@@ -455,6 +463,14 @@ async function validateReuse(executionPlan, signal) {
     return { blockers: [], children: plan, errors: [] };
   }
   try {
+    const admission = executionPlan.sourceAdmission?.qualificationAdmission;
+    const verifier = admission
+      ? {
+          ref: admission.workflowHeadBranch,
+          fullRef: admission.workflowFullRef,
+          sha: admission.workflowSha,
+        }
+      : trustedWorkflow;
     const args = [
       RELEASE_SUMMARY_PATH,
       "--validate-run",
@@ -462,13 +478,13 @@ async function validateReuse(executionPlan, signal) {
       "--repo",
       requiredString(process.env.GITHUB_REPOSITORY, "GitHub repository"),
       "--trusted-workflow-ref",
-      requiredString(trustedWorkflow?.ref, "trusted workflow ref"),
+      requiredString(verifier?.ref, "trusted workflow ref"),
       "--trusted-workflow-full-ref",
-      requiredString(trustedWorkflow?.fullRef, "trusted workflow full ref"),
+      requiredString(verifier?.fullRef, "trusted workflow full ref"),
       "--trusted-workflow-sha",
-      requiredString(trustedWorkflow?.sha, "trusted workflow SHA"),
+      requiredString(verifier?.sha, "trusted workflow SHA"),
       "--verifier-source-sha",
-      requiredString(executionPlan.workflowSha, "workflow SHA"),
+      requiredString(admission?.workflowSha ?? executionPlan.workflowSha, "verifier source SHA"),
       "--verifier-source-file",
       RELEASE_SUMMARY_PATH,
       "--expected-target-sha",
@@ -485,6 +501,18 @@ async function validateReuse(executionPlan, signal) {
       JSON.stringify(changedPathsValue(evidenceReuse.changedPaths)),
       "--json",
     ];
+    if (admission) {
+      args.push(
+        "--qualification-reuse-json",
+        JSON.stringify({
+          candidateSha: executionPlan.targetSha,
+          qualificationSha: executionPlan.workflowSha,
+          workflowRef: executionPlan.workflowRef,
+          descriptor: admission,
+          inputs: executionPlan.qualificationInputs,
+        }),
+      );
+    }
     const result = await execFileAsync(process.execPath, args, {
       encoding: "utf8",
       env: process.env,
@@ -827,6 +855,61 @@ async function publicationMode(mode) {
       process.env.FULL_RELEASE_EXECUTION_PLAN_PATH,
       "execution plan path",
     );
+    const inputsPath = stringValue(process.env.FULL_RELEASE_PLAN_INPUTS_PATH).trim();
+    if (!existsSync(planPath) && inputsPath && existsSync(inputsPath)) {
+      const inputs = parsePlanInputs(
+        JSON.stringify(readArtifact(inputsPath, "execution plan inputs")),
+      );
+      const inputRecord = {
+        sourceAdmissionContract: inputs.sourceAdmissionContract,
+        sourceAdmission: inputs.sourceAdmission,
+      };
+      const source = validatePublicationSourceBinding(inputRecord, {
+        repository: request.repository,
+        targetSha: request.candidateSha,
+        targetContextRef: request.targetContextRef,
+        trustedWorkflowFullRef: request.tooling.ref,
+        trustedWorkflowSha: request.tooling.sha,
+        parentRunId: request.runId,
+        sourceParentRunAttempt: 1,
+        workflowRef: request.workflow.ref.replace(/^refs\/(?:heads|tags)\//u, ""),
+        workflowSha: request.workflow.sha,
+        releaseProfile: request.coverage.release_profile,
+        rerunGroup: request.coverage.rerun_group,
+      });
+      const record = readArtifact(
+        join(dirname(inputsPath), "publication-admission.json"),
+        "pre-seal publication admission",
+      );
+      const checkpointSource = validatePublicationSourceBinding(record, {
+        repository: request.repository,
+        targetSha: request.candidateSha,
+        targetContextRef: request.targetContextRef,
+        trustedWorkflowFullRef: request.tooling.ref,
+        trustedWorkflowSha: request.tooling.sha,
+        parentRunId: request.runId,
+        sourceParentRunAttempt: 1,
+        workflowRef: request.workflow.ref.replace(/^refs\/(?:heads|tags)\//u, ""),
+        workflowSha: request.workflow.sha,
+        releaseProfile: request.coverage.release_profile,
+        rerunGroup: request.coverage.rerun_group,
+      });
+      if (
+        publicationSourceJson(source) !== publicationSourceJson(checkpointSource) ||
+        publicationSourceJson(source.coverage) !== publicationSourceJson(request.coverage) ||
+        publicationSourceJson(source.publicationSelection) !==
+          publicationSourceJson(request.publicationSelection) ||
+        source.validationPurpose !== request.validationPurpose
+      ) {
+        throw new Error("publication preparation inputs differ from this attempt");
+      }
+      validatePublicationAdmissionBinding(record, {
+        publicationAdmissionContract: "1",
+      });
+      writeArtifact(sourcePath, source);
+      writeArtifact(admissionPath, record);
+      return;
+    }
     const restored = await restoreOriginalPublicationAdmission({
       request,
       cachedPlan: existsSync(planPath) ? readArtifact(planPath, "execution plan") : undefined,
@@ -995,6 +1078,7 @@ async function planMode() {
   );
   const expected = planExpected();
   const currentAttempt = positiveInteger(process.env.GITHUB_RUN_ATTEMPT, "parent run attempt");
+  const presealRecovery = process.env.FULL_RELEASE_PRESEAL_RECOVERY === "true";
 
   if (process.env.FULL_RELEASE_RESTORE_PLAN === "true") {
     const restoredPayload = readArtifact(outputPath, "execution plan");
@@ -1038,8 +1122,17 @@ async function planMode() {
     writeExecutionPlan(outputPath, restored);
     return;
   }
-  if (currentAttempt !== 1) {
+  if (currentAttempt !== 1 && !presealRecovery) {
     throw new Error("collector retry omitted the immutable attempt-one execution plan");
+  }
+  const sourceParentRunAttempt = presealRecovery
+    ? positiveInteger(
+        process.env.FULL_RELEASE_PREPARATION_SOURCE_ATTEMPT,
+        "pre-seal preparation source attempt",
+      )
+    : currentAttempt;
+  if (presealRecovery && sourceParentRunAttempt !== 1) {
+    throw new Error("pre-seal recovery requires authenticated attempt-one preparation");
   }
 
   const planInputs = {
@@ -1094,13 +1187,14 @@ async function planMode() {
     children: hydrateReusedPlan(built.children, { childReuse: planInputs.childReuse ?? {} }),
     childReuse: planInputs.childReuse,
     evidenceReuse: evidenceReuseFromInputs(planInputs),
-    expected: { ...expected, candidateRequest, parentRunAttempt: currentAttempt },
+    expected: { ...expected, candidateRequest, parentRunAttempt: sourceParentRunAttempt },
     gates: built.gates,
     releaseProfile: expected.releaseProfile,
     rerunGroup: expected.rerunGroup,
     telegramWaiver: planInputs.telegramWaiver,
     targetVersion: planInputs.targetVersion,
     trustedWorkflow: planInputs.trustedWorkflow,
+    ...(presealRecovery ? { sealParentRunAttempt: currentAttempt } : {}),
   };
   let plan = buildReleaseExecutionPlanArtifact(artifactInputs);
   const stop = () => {
@@ -1122,7 +1216,7 @@ async function planMode() {
       expected: {
         ...expected,
         candidateRequest: plan.candidateRequest,
-        parentRunAttempt: currentAttempt,
+        parentRunAttempt: sourceParentRunAttempt,
       },
       releaseProfile: expected.releaseProfile,
       rerunGroup: expected.rerunGroup,

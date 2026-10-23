@@ -24,7 +24,7 @@ export async function withTrustedPluginUserProfileIdentity<T>(
         )))
   ) {
     throw new Error(
-      "Profile identity requires a profileId and at most 500 canonical emails or verified GitHub account IDs",
+      "Profile identity requires a profileId and at most 500 normalized email addresses or verified GitHub account IDs",
     );
   }
   const scope = getPluginRuntimeGatewayRequestScope();

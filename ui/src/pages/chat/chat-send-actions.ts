@@ -8,6 +8,7 @@ import {
   reorderChatQueueItems,
 } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store-scope.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import {
@@ -22,16 +23,11 @@ import {
 } from "./chat-outbox-drain.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { chatProviderReviewRow } from "./chat-provider-review.ts";
-import {
-  admitQueuedMessageForSession,
-  readQueuedMessageById,
-  updateQueuedMessage,
-} from "./chat-queue.ts";
+import { readQueuedMessageById, updateQueuedMessage } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import { chatOutboxDrainDependencies, deliverChatQueueItem } from "./chat-send-delivery.ts";
 import { canSendVolatileQueueItem, reconnectSafeQueuedSendState } from "./chat-send-queue-state.ts";
 import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
-import { storedChatOutboxScopeKey } from "./composer-persistence.ts";
 import {
   isQueuedMessageBeingEdited,
   QUEUED_MESSAGE_RETRY_CONFLICT_ERROR,
@@ -221,7 +217,7 @@ export async function retryQueuedChatMessage(
       ...captureChatOutboxAdmission(host, located.scope.sessionKey, located.scope.agentId),
       scope: located.scope,
     };
-    if (!admitQueuedMessageForSession(host, admission, item)) {
+    if (chatOutboxOwner(host).admit(host, admission, item) !== "admitted") {
       if (
         wasVolatile &&
         !item.localCommandName &&

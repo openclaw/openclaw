@@ -1,4 +1,5 @@
 /** Rewrites transcript entries by branching and re-appending the active suffix. */
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { stripCompactionReplayCheckpoint } from "@openclaw/ai/transports";
 import { withSessionPendingInputRelocation } from "../../config/sessions/session-accessor.js";
 import type {
@@ -53,10 +54,7 @@ function remapEntryId(
   entryId: string | null | undefined,
   rewrittenEntryIds: ReadonlyMap<string, string>,
 ): string | null {
-  if (!entryId) {
-    return null;
-  }
-  return rewrittenEntryIds.get(entryId) ?? entryId;
+  return entryId ? (rewrittenEntryIds.get(entryId) ?? entryId) : null;
 }
 
 async function appendBranchEntry(params: {
@@ -200,6 +198,7 @@ export async function rewriteTranscriptEntriesInSessionManager(params: {
     return entryId;
   };
   const rewrittenEntryIds = new Map<string, string>();
+  let turnStartedAt = performance.now();
   // Every re-appended message follows the rewritten prefix, so its prefix-bound checkpoint is stale.
   for (const entry of branch.slice(firstMatchedIndex)) {
     const newEntryId = await appendBranchEntry({
@@ -210,6 +209,11 @@ export async function rewriteTranscriptEntriesInSessionManager(params: {
       replacement: entry.type === "message" ? replacementsById.get(entry.id) : undefined,
     });
     rewrittenEntryIds.set(entry.id, newEntryId);
+    // Detached appends settle in microtasks; long rewrites must also admit socket I/O.
+    if (performance.now() - turnStartedAt >= 4) {
+      await nextTurn();
+      turnStartedAt = performance.now();
+    }
   }
 
   await rewrite.commit(rewrittenEntryIds);

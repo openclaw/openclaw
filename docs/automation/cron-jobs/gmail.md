@@ -86,13 +86,13 @@ Why this shape is safer:
 - `allow: ["session_status"]` is an absolute per-agent clamp, so global `tools.alsoAllow` additions cannot leak into the reader. The minimal profile and explicit deny list make the intended boundary auditable.
 - `deliver: false` disables automatic successful announcements; completion is logged instead. To announce a summary externally after validating the reader, set `deliver: true` and add an explicit `channel` and `to`. Agent-to-agent access is on by default: set [`tools.agentToAgent.enabled: false`](/gateway/config-tools#tools-agenttoagent) to disable cross-agent handoff, or deliberately expose the exact coordination tool and constrain permitted agent pairs with `tools.agentToAgent.allow`.
 
-Tool policies can only become more restrictive as global, provider, agent, and sandbox rules are combined. The per-agent allowlist cannot restore `session_status` if an earlier policy removed it. Ensure inherited policies retain `session_status`; an empty effective tool set aborts before the model sees the email.
+Tool policies can only become more restrictive as global, provider, agent, and sandbox rules are combined. The per-agent allowlist cannot restore `session_status` if an earlier policy removed it. Check that inherited policies retain `session_status`; an empty effective tool set aborts before the model sees the email.
 
 If you intentionally route Gmail to a more capable agent, treat that as a security decision: keep external-content wrapping enabled, sandbox the run, and grant only the tools required by that workflow.
 
 ### Authenticate the reader model
 
-Authenticate the provider selected by `mail_reader`, or ensure its effective auth configuration can use a supported shared credential, then verify the route before connecting Gmail:
+Authenticate the provider selected by `mail_reader`, or check that its effective auth configuration can use a supported shared credential, then verify the route before connecting Gmail:
 
 ```bash
 openclaw models auth --agent mail_reader login --provider openai

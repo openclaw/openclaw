@@ -1,5 +1,38 @@
 import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import type { XAccountConfig } from "./config-schema.js";
+import type { XGitHubPermission } from "./github.js";
+
+export type XGitHubEntry = {
+  xUserId: string;
+  xHandle: string;
+  githubLogin: string;
+  permission: XGitHubPermission;
+  syncedAt: number;
+};
+
+export type XGitHubStatus = {
+  repo: string;
+  entries: XGitHubEntry[];
+  unresolvedHandles: string[];
+  lastSyncAt?: number;
+  stale: boolean;
+  message?: string;
+};
+
+export type XGitHubSnapshot = XGitHubStatus & {
+  minPermission: XGitHubPermission;
+  lookupResults: Record<string, string | null>;
+};
+type GitHubConfig = XAccountConfig["verifiedFromGitHub"];
+
+function matchesGitHubConfig(snapshot: XGitHubSnapshot | undefined, config: GitHubConfig) {
+  return Boolean(
+    config?.repo &&
+    snapshot?.repo.toLowerCase() === config.repo.toLowerCase() &&
+    snapshot.minPermission === (config.minPermission ?? "push"),
+  );
+}
 
 export type XAllowlistEntry = {
   userId: string;
@@ -34,7 +67,12 @@ export class XAllowlistChangedError extends Error {
 // Only mutation lifetimes live here; SQLite remains the owner of allowlist entries.
 const mutations = resolveGlobalMap<
   string,
-  { generation: object; pending: number; allowFrom?: readonly string[] }
+  {
+    generation: object;
+    pending: number;
+    allowFrom?: readonly string[];
+    github?: XGitHubSnapshot;
+  }
 >(Symbol.for("openclaw.x.allowlist-mutations"), "close-and-restart");
 
 export function readPublishedXAllowlist(
@@ -42,9 +80,17 @@ export function readPublishedXAllowlist(
     state: Pick<PluginRuntime["state"], "resolveStateDir">;
   },
   accountId: string,
+  githubConfig?: GitHubConfig,
 ): readonly string[] {
   const state = mutations.get(JSON.stringify([runtime.state.resolveStateDir(), accountId]));
-  return state && !state.pending ? (state.allowFrom ?? []) : [];
+  return state && !state.pending
+    ? [
+        ...(state.allowFrom ?? []),
+        ...(matchesGitHubConfig(state.github, githubConfig)
+          ? (state.github?.entries.map((entry) => entry.xUserId) ?? [])
+          : []),
+      ]
+    : [];
 }
 
 export function openXAllowlist(runtime: {
@@ -54,6 +100,11 @@ export function openXAllowlist(runtime: {
   const store = runtime.state.openKeyedStore<XAllowlistEntry>({
     namespace: "x.allowlist",
     maxEntries: 10_000,
+    overflowPolicy: "reject-new",
+  });
+  const githubStore = runtime.state.openKeyedStore<XGitHubSnapshot>({
+    namespace: "x.verified-github",
+    maxEntries: 1_000,
     overflowPolicy: "reject-new",
   });
   const accountPrefix = (accountId: string) => `${encodeURIComponent(accountId)}:`;
@@ -75,6 +126,7 @@ export function openXAllowlist(runtime: {
     const { state } = mutationState(accountId);
     state.generation = {};
     state.allowFrom = undefined;
+    state.github = undefined;
     state.pending++;
     try {
       return await write();
@@ -92,7 +144,41 @@ export function openXAllowlist(runtime: {
   };
   return {
     list,
-    async readSnapshot(accountId: string) {
+    async readGitHub(
+      accountId: string,
+      config: GitHubConfig,
+    ): Promise<XGitHubSnapshot | undefined> {
+      if (!config?.repo) {
+        return undefined;
+      }
+      const snapshot = await githubStore.lookup(accountId);
+      return matchesGitHubConfig(snapshot, config) ? snapshot : undefined;
+    },
+    async replaceGitHub(accountId: string, snapshot: XGitHubSnapshot, assertCurrent: () => void) {
+      const previous = await githubStore.lookup(accountId);
+      assertCurrent();
+      const ids = (entries: readonly XGitHubEntry[]) =>
+        JSON.stringify([...new Set(entries.map((entry) => entry.xUserId))].toSorted());
+      if (
+        (!previous ||
+          (previous.repo === snapshot.repo && previous.minPermission === snapshot.minPermission)) &&
+        ids(previous?.entries ?? []) === ids(snapshot.entries)
+      ) {
+        // Freshness, errors, and paid lookup checkpoints do not revoke unchanged access.
+        await githubStore.register(accountId, snapshot, { assertCurrent });
+        return;
+      }
+      await mutate(accountId, assertCurrent, () =>
+        githubStore.register(accountId, snapshot, { assertCurrent }),
+      );
+    },
+    invalidate(accountId: string) {
+      const { state } = mutationState(accountId);
+      state.generation = {};
+      state.allowFrom = undefined;
+      state.github = undefined;
+    },
+    async readSnapshot(accountId: string, githubConfig?: GitHubConfig) {
       const { key, state } = mutationState(accountId);
       const generation = state.generation;
       const assertCurrent = () => {
@@ -101,10 +187,19 @@ export function openXAllowlist(runtime: {
         }
       };
       assertCurrent();
-      const allowFrom = (await list(accountId)).map((entry) => entry.userId);
+      const [entries, github] = await Promise.all([
+        list(accountId),
+        githubConfig?.repo ? githubStore.lookup(accountId) : undefined,
+      ]);
+      const allowFrom = entries.map((entry) => entry.userId);
       assertCurrent();
       state.allowFrom = allowFrom;
-      return { allowFrom, assertCurrent };
+      state.github = matchesGitHubConfig(github, githubConfig) ? github : undefined;
+      return {
+        allowFrom: [...allowFrom, ...(state.github?.entries.map((entry) => entry.xUserId) ?? [])],
+        github: state.github,
+        assertCurrent,
+      };
     },
     async put(accountId: string, entry: XAllowlistEntry, assertCurrent?: () => void) {
       await mutate(accountId, assertCurrent, () =>

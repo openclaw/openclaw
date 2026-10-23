@@ -1,10 +1,6 @@
-import type { ExecHost } from "../infra/exec-approvals.js";
-import { requireValidExecTarget } from "../infra/exec-approvals.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import { EXEC_RETENTION_CAP_NOTE, renderExecOutputText } from "./bash-tools.exec-output.js";
-import type { ExecToolArgs } from "./bash-tools.exec-request-preparation.js";
-import { resolveExecTarget } from "./bash-tools.exec-runtime.js";
 import type {
   ExecProcessOutcome,
   ExecToolApprovalReview,
@@ -33,6 +29,19 @@ export function buildExecForegroundResult(params: {
 }): AgentToolResult<ExecToolDetails> {
   const warningText = params.warningText?.trim() ? `${params.warningText}\n\n` : "";
   const retentionCapNote = params.aggregateOutputDropped ? EXEC_RETENTION_CAP_NOTE : "";
+  const outcome = params.outcome;
+  const details: ExecToolDetails = {
+    status: outcome.status,
+    exitCode: outcome.status === "failed" ? (outcome.exitCode ?? null) : outcome.exitCode,
+    exitSignal: outcome.exitSignal,
+    ...(outcome.status === "failed" ? { failureKind: outcome.failureKind } : {}),
+    exitReason: outcome.exitReason,
+    durationMs: outcome.durationMs,
+    aggregated: outcome.aggregated,
+    ...(outcome.status === "failed" ? { timedOut: outcome.timedOut } : {}),
+    noOutputTimedOut: outcome.noOutputTimedOut,
+    cwd: params.cwd,
+  };
   if (params.outcome.status === "failed") {
     const linuxOomGuidance =
       params.outcome.failureKind === "signal" &&
@@ -44,30 +53,10 @@ export function buildExecForegroundResult(params: {
           "Check cgroup memory events or kernel logs. If they show memory pressure, narrow the command or adjust memory, concurrency, or resource limits."
         : "";
     const outputText = `${retentionCapNote}${warningText}${params.outcome.reason}${linuxOomGuidance}`;
-    return failedTextResult(outputText, {
-      status: "failed",
-      exitCode: params.outcome.exitCode ?? null,
-      exitSignal: params.outcome.exitSignal,
-      failureKind: params.outcome.failureKind,
-      exitReason: params.outcome.exitReason,
-      durationMs: params.outcome.durationMs,
-      aggregated: params.outcome.aggregated,
-      timedOut: params.outcome.timedOut,
-      noOutputTimedOut: params.outcome.noOutputTimedOut,
-      cwd: params.cwd,
-    });
+    return failedTextResult(outputText, { ...details, status: "failed" });
   }
   const outputText = `${retentionCapNote}${warningText}${renderExecOutputText(params.outcome.aggregated)}`;
-  return textResult(outputText, {
-    status: "completed",
-    exitCode: params.outcome.exitCode,
-    exitSignal: params.outcome.exitSignal,
-    exitReason: params.outcome.exitReason,
-    durationMs: params.outcome.durationMs,
-    aggregated: params.outcome.aggregated,
-    noOutputTimedOut: params.outcome.noOutputTimedOut,
-    cwd: params.cwd,
-  });
+  return textResult(outputText, details);
 }
 
 export function resolveExecReviewerDefaults(params: {
@@ -81,36 +70,4 @@ export function resolveExecReviewerDefaults(params: {
   const agentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
   const agentExec = agentId && cfg ? resolveAgentConfig(cfg, agentId)?.tools?.exec : undefined;
   return agentExec?.reviewer ?? cfg?.tools?.exec?.reviewer;
-}
-
-// Preparation and execution must interpret elevation identically before host policy runs.
-export function resolveExecElevatedMode(
-  defaults: ExecToolDefaults | undefined,
-  requested: unknown,
-) {
-  const elevated = defaults?.elevated;
-  const defaultMode =
-    elevated?.defaultLevel === "full"
-      ? "full"
-      : elevated?.defaultLevel === "ask" || elevated?.defaultLevel === "on"
-        ? "ask"
-        : "off";
-  if (typeof requested === "boolean") {
-    return requested ? (defaultMode === "full" ? "full" : "ask") : "off";
-  }
-  return elevated?.enabled && elevated.allowed && !defaults?.sandboxRequired ? defaultMode : "off";
-}
-
-export function createExecHostResolver(defaults?: ExecToolDefaults) {
-  return (params: ExecToolArgs): ExecHost => {
-    const elevatedMode = resolveExecElevatedMode(defaults, params.elevated);
-    const requestedTarget = requireValidExecTarget(params.host);
-    return resolveExecTarget({
-      configuredTarget: defaults?.host,
-      requestedTarget,
-      elevatedRequested: elevatedMode !== "off",
-      sandboxAvailable: Boolean(defaults?.sandbox),
-      sandboxRequired: defaults?.sandboxRequired,
-    }).effectiveHost;
-  };
 }

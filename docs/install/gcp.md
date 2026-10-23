@@ -171,7 +171,7 @@ network.
 gcloud compute os-login describe-profile
 ```
 
-Ensure your account has Compute OS Login or Compute OS Admin Login permission.
+Check that your account has Compute OS Login or Compute OS Admin Login permission.
 
 ### Resize after an out-of-memory build
 

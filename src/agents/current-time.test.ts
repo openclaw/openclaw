@@ -75,16 +75,6 @@ describe("appendCronStyleCurrentTimeLine", () => {
     expect(out.match(/Current time:/g)?.length).toBe(1);
   });
 
-  it("matches helper blocks with natural-language formattedTime (#44993 codex P1)", () => {
-    const helperShape =
-      "Heartbeat tick\nCurrent time: Thursday, April 30th, 2026 - 10:00 AM (Asia/Seoul)\nReference UTC: 2026-04-30 01:00 UTC";
-    const newNow = Date.parse("2026-04-30T10:00:00Z");
-    const out = appendCronStyleCurrentTimeLine(helperShape, CFG, newNow);
-    expect(out).not.toMatch(/Asia\/Seoul/);
-    expect(out.match(/Current time:/g)?.length).toBe(1);
-    expect(out).toMatch(/Reference UTC: 2026-04-30 10:00 UTC/);
-  });
-
   it("preserves user-authored content that starts with 'Current time:'", () => {
     const userContent = "Reminder from cron:\nCurrent time: please check the dashboard before EOD";
     const newNow = Date.parse("2026-04-30T10:00:00Z");

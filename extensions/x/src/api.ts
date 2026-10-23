@@ -1,9 +1,13 @@
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { asOptionalRecord as record } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { fetchXService, type XAssertActive } from "./fetch.js";
+import { uploadXMedia, type XMediaUploadParams } from "./media-api.js";
+import { createXOAuthAccess, type XOAuthOptions } from "./oauth.js";
 import { X_POST_READ_MICRO_USD, X_USER_READ_MICRO_USD, xReadCost, xReplyCost } from "./pricing.js";
 import { XBudgetExceededError, type XSpend } from "./spend.js";
 
-const X_API_ORIGIN = "https://api.x.com";
+export type { XTokenState } from "./oauth.js";
+
 const POST_FIELDS =
   "author_id,conversation_id,created_at,in_reply_to_user_id,referenced_tweets,entities,withheld";
 
@@ -11,9 +15,6 @@ export type XPost = NonNullable<ReturnType<typeof parseXPost>>;
 export type XUser = { id: string; username: string; name?: string; protected?: boolean };
 export type XPage = ReturnType<typeof parsePage>;
 export type XPostEnvelope = { post: XPost; users: XUser[]; recipientPending?: true };
-export type XFetch = (input: string, init?: RequestInit) => Promise<Response>;
-export type XTokenState = "idle" | "refreshing" | "ready" | "error";
-export type XAssertActive = () => void | (() => void) | Promise<void | (() => void)>;
 
 export class XApiError extends Error {
   constructor(
@@ -26,7 +27,7 @@ export class XApiError extends Error {
   }
 }
 
-async function readActivityErrorDetail(
+async function readErrorDetail(
   response: Response,
   signal: AbortSignal,
   secrets: (string | undefined)[],
@@ -186,129 +187,13 @@ function parsePage(input: unknown) {
 
 export type XApiClient = ReturnType<typeof createXApiClient>;
 
-export function createXApiClient(options: {
-  spend: XSpend;
-  clientId: string;
-  clientSecret: string;
-  refreshToken: string;
-  bearerToken?: string;
-  fetch?: XFetch;
-  signal?: AbortSignal;
-  loadRefreshToken?: () => Promise<string | undefined>;
-  saveRefreshToken: (token: string) => Promise<void>;
-  onTokenState?: (state: XTokenState) => void;
-}) {
+export function createXApiClient(options: XOAuthOptions & { spend: XSpend; bearerToken?: string }) {
   let accessToken: string | undefined;
-  let expiresAt = 0;
-  let refreshToken = options.refreshToken;
-  let loadedRefreshToken = false;
-  let pendingRefreshToken: string | undefined;
-  let refreshTask: Promise<void> | undefined;
-
-  async function fetcher(
-    url: string,
-    init: RequestInit,
-    assertActive?: XAssertActive,
-    onDispatch?: () => void,
-  ) {
-    if (options.fetch) {
-      const assertCurrent = await assertActive?.();
-      init.signal?.throwIfAborted();
-      assertCurrent?.();
-      onDispatch?.();
-      return options.fetch(url, init);
-    }
-    const [{ fetchWithSsrFGuard }, { responseWithRelease }, { fetchWithRuntimeDispatcher }] =
-      await Promise.all([
-        import("openclaw/plugin-sdk/ssrf-runtime"),
-        import("openclaw/plugin-sdk/fetch-runtime"),
-        import("openclaw/plugin-sdk/runtime-fetch"),
-      ]);
-    const guarded = await fetchWithSsrFGuard({
-      url,
-      init,
-      capture: false,
-      requireHttps: true,
-      policy: { hostnameAllowlist: ["api.x.com"] },
-      maxRedirects: 0,
-      fetchImpl: async (input, prepared) => {
-        const assertCurrent = await assertActive?.();
-        prepared?.signal?.throwIfAborted();
-        assertCurrent?.();
-        onDispatch?.();
-        return fetchWithRuntimeDispatcher(input, prepared);
-      },
-    });
-    // Includes long-lived Activity bodies: release the pinned dispatcher only after consumption.
-    return responseWithRelease(guarded.response, guarded.release);
-  }
+  const oauth = createXOAuthAccess(options);
 
   function requestSignal(signal?: AbortSignal): AbortSignal {
-    return AbortSignal.any([
-      ...[options.signal, signal].filter((value): value is AbortSignal => Boolean(value)),
-      AbortSignal.timeout(30_000),
-    ]);
-  }
-
-  async function refresh() {
-    options.onTokenState?.("refreshing");
-    try {
-      if (!loadedRefreshToken) {
-        refreshToken = (await options.loadRefreshToken?.()) ?? refreshToken;
-        loadedRefreshToken = true;
-      }
-      if (pendingRefreshToken) {
-        await options.saveRefreshToken(pendingRefreshToken);
-        pendingRefreshToken = undefined;
-      }
-      const response = await fetcher(`${X_API_ORIGIN}/2/oauth2/token`, {
-        method: "POST",
-        redirect: "error",
-        headers: {
-          Authorization: `Basic ${Buffer.from(`${encodeURIComponent(options.clientId)}:${encodeURIComponent(options.clientSecret)}`).toString("base64")}`,
-          "Content-Type": "application/x-www-form-urlencoded",
-        },
-        body: new URLSearchParams({
-          grant_type: "refresh_token",
-          refresh_token: refreshToken,
-        }).toString(),
-        signal: requestSignal(),
-      });
-      if (!response.ok) {
-        await response.body?.cancel();
-        throw new XApiError(response.status, "token refresh");
-      }
-      const token = record(await readJson(response));
-      if (!token || typeof token.access_token !== "string" || !token.access_token) {
-        throw new Error("X API returned an invalid token response");
-      }
-      if (typeof token.refresh_token === "string" && token.refresh_token) {
-        // Rotation is committed before any request uses the new access token.
-        refreshToken = token.refresh_token;
-        pendingRefreshToken = refreshToken;
-        await options.saveRefreshToken(refreshToken);
-        pendingRefreshToken = undefined;
-      }
-      accessToken = token.access_token;
-      expiresAt =
-        Date.now() +
-        (typeof token.expires_in === "number" ? Math.max(0, token.expires_in - 30) : 7_170) * 1000;
-      options.onTokenState?.("ready");
-    } catch {
-      accessToken = undefined;
-      options.onTokenState?.("error");
-      throw new Error("X token refresh failed; check the account credentials and token storage");
-    }
-  }
-
-  async function ensureAccessToken() {
-    if (accessToken && Date.now() < expiresAt) {
-      return;
-    }
-    refreshTask ??= refresh().finally(() => {
-      refreshTask = undefined;
-    });
-    await refreshTask;
+    const timeout = AbortSignal.timeout(30_000);
+    return signal ? AbortSignal.any([signal, timeout]) : timeout;
   }
 
   type RequestOptions = {
@@ -343,43 +228,48 @@ export function createXApiClient(options: {
       let cost = 0;
       try {
         if (!params.appOnly) {
-          await ensureAccessToken();
+          accessToken = await oauth.ensure(params.signal);
         }
         const token = params.appOnly ? options.bearerToken : accessToken;
         if (!token) {
           throw new Error("X Activity API requires a bearer token");
         }
         const signal = params.stream
-          ? AbortSignal.any(
-              [options.signal, params.signal].filter((value): value is AbortSignal =>
-                Boolean(value),
-              ),
-            )
+          ? (params.signal ?? AbortSignal.any([]))
           : requestSignal(params.signal);
         signal.throwIfAborted();
+        const body =
+          params.body instanceof FormData
+            ? params.body
+            : params.body
+              ? JSON.stringify(params.body)
+              : undefined;
+        const multipart = body instanceof FormData;
         let response: Response;
         let authorityRejected = false;
         let authorityError: unknown;
         try {
-          response = await fetcher(
-            `${X_API_ORIGIN}${path}`,
+          response = await fetchXService(
+            "api.x.com",
+            path,
             {
               method: params.method ?? "GET",
               redirect: "error",
               headers: {
                 Authorization: `Bearer ${token}`,
-                ...(params.body ? { "Content-Type": "application/json" } : {}),
+                ...(params.body && !multipart ? { "Content-Type": "application/json" } : {}),
               },
-              ...(params.body ? { body: JSON.stringify(params.body) } : {}),
+              ...(body ? { body } : {}),
               signal,
             },
-            params.assertActive
+            params.assertActive || options.assertCurrent
               ? async () => {
                   try {
                     const assertCurrent = await params.assertActive?.();
                     return () => {
                       try {
                         assertCurrent?.();
+                        options.assertCurrent?.();
                       } catch (error) {
                         authorityRejected = true;
                         authorityError = error;
@@ -419,6 +309,7 @@ export function createXApiClient(options: {
           if (!params.appOnly && attempt === 0) {
             await response.body?.cancel().catch(() => {});
             if (accessToken === token) {
+              oauth.invalidate(token);
               accessToken = undefined;
             }
             continue;
@@ -426,17 +317,23 @@ export function createXApiClient(options: {
         }
         if (!response.ok) {
           let detail: string | undefined;
-          if (path.startsWith("/2/activity/")) {
-            detail = await readActivityErrorDetail(response, signal, [
+          if (path.startsWith("/2/activity/") || path.startsWith("/2/media/")) {
+            detail = await readErrorDetail(response, signal, [
               token,
               accessToken,
               options.bearerToken,
-              refreshToken,
+              oauth.currentRefreshToken(),
               options.refreshToken,
               options.clientSecret,
             ]);
           } else {
             await response.body?.cancel().catch(() => {});
+          }
+          if (
+            path.startsWith("/2/media/") &&
+            (response.status === 401 || response.status === 403)
+          ) {
+            detail = `${detail ? `${detail}; ` : ""}check the app permissions and reauthorize the X account with the media.write scope`;
           }
           throw new XApiError(response.status, path.split("?")[0] ?? path, detail);
         }
@@ -527,11 +424,55 @@ export function createXApiClient(options: {
         Math.max(10, Math.min(Math.floor(params.maxPosts), 100)),
         params.signal,
       ),
-    async getUserByUsername(username: string, signal?: AbortSignal): Promise<XUser> {
+    async getUsersByUsernames(
+      usernames: string[],
+      signal?: AbortSignal,
+      assertActive?: XAssertActive,
+    ): Promise<XUser[]> {
+      const handles = usernames.map((username) => username.replace(/^@/, ""));
+      if (
+        !handles.length ||
+        handles.length > 100 ||
+        handles.some((handle) => !/^[A-Za-z0-9_]{1,15}$/.test(handle))
+      ) {
+        throw new Error("X user lookup requires 1–100 valid usernames");
+      }
+      const query = new URLSearchParams({
+        usernames: handles.join(","),
+        "user.fields": "id,username,name",
+      });
+      return request(`/2/users/by?${query}`, {
+        signal,
+        assertActive,
+        billing: {
+          maximum: handles.length * X_USER_READ_MICRO_USD,
+          actual: (value) => xReadCost(value, "users"),
+          parse: (value) => {
+            const row = record(value);
+            if (!row || (row.data !== undefined && !Array.isArray(row.data))) {
+              throw new Error("X API returned an invalid users response");
+            }
+            return (row.data ?? []).map((entry: unknown) => {
+              const user = parseUser(entry);
+              if (!user || !/^[A-Za-z0-9_]{1,15}$/.test(user.username)) {
+                throw new Error("X API returned an invalid user");
+              }
+              return user;
+            });
+          },
+        },
+      });
+    },
+    async getUserByUsername(
+      username: string,
+      signal?: AbortSignal,
+      assertActive?: XAssertActive,
+    ): Promise<XUser> {
       const user = await request(
         `/2/users/by/username/${encodeURIComponent(username.replace(/^@/, ""))}?user.fields=id,username,name`,
         {
           signal,
+          assertActive,
           billing: {
             maximum: X_USER_READ_MICRO_USD,
             actual: (value) => xReadCost(value, "users"),
@@ -557,9 +498,32 @@ export function createXApiClient(options: {
       }
       return user;
     },
+    async uploadMedia(params: XMediaUploadParams): Promise<string> {
+      try {
+        params.signal?.throwIfAborted();
+        return await uploadXMedia(params, request);
+      } catch (cause) {
+        if (cause instanceof PlatformMessageNotDispatchedError) {
+          throw cause;
+        }
+        // Even an uncertain upload cannot create a Post. Never classify it as an
+        // ambiguous tweet delivery or fall back to publishing text without media.
+        throw new PlatformMessageNotDispatchedError(
+          cause instanceof Error ? cause.message : "X media upload failed before posting",
+          {
+            cause,
+            retryable:
+              !params.signal?.aborted &&
+              !(cause instanceof XBudgetExceededError) &&
+              (!(cause instanceof XApiError) || cause.status === 429 || cause.status >= 500),
+          },
+        );
+      }
+    },
     async reply(params: {
       text: string;
       inReplyToId: string;
+      mediaIds?: string[];
       signal?: AbortSignal;
       assertActive?: XAssertActive;
     }): Promise<string> {
@@ -579,7 +543,11 @@ export function createXApiClient(options: {
             },
           },
           method: "POST",
-          body: { text: params.text, reply: { in_reply_to_tweet_id: params.inReplyToId } },
+          body: {
+            ...(params.text ? { text: params.text } : {}),
+            reply: { in_reply_to_tweet_id: params.inReplyToId },
+            ...(params.mediaIds?.length ? { media: { media_ids: params.mediaIds } } : {}),
+          },
           signal: params.signal,
           assertActive: params.assertActive,
           onDispatch: () => {
@@ -610,7 +578,7 @@ export function createXApiClient(options: {
         }
         throw new PlatformMessageNotDispatchedError(
           cause instanceof Error ? cause.message : "X reply failed before dispatch",
-          { cause, retryable: !params.signal?.aborted && !options.signal?.aborted },
+          { cause, retryable: !params.signal?.aborted },
         );
       }
     },

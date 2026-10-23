@@ -1,21 +1,23 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { BrowserScreencastClient } from "./browser-screencast-client.ts";
 import { screencastFrame, TestScreencastSocket } from "./browser-screencast-test-support.ts";
 
 function connect() {
   const socket = new TestScreencastSocket("");
-  const createSocket = vi.fn(() => socket as unknown as WebSocket);
+  const createSocket = vi.fn(function () {
+    return socket;
+  });
+  vi.stubGlobal("WebSocket", createSocket);
   const callbacks = { onReady: vi.fn(), onMeta: vi.fn(), onFrame: vi.fn(), onClose: vi.fn() };
-  const client = new BrowserScreencastClient(
-    {
-      gatewayUrl: "https://gateway.example.test/chat",
-      wsPath: "/browser/screencast?token=abc",
-      ...callbacks,
-    },
-    createSocket,
-  );
+  const client = new BrowserScreencastClient({
+    gatewayUrl: "https://gateway.example.test/chat",
+    wsPath: "/browser/screencast?token=abc",
+    ...callbacks,
+  });
   return { socket, createSocket, callbacks, client };
 }
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe("BrowserScreencastClient", () => {
   it("resolves the gateway socket and decodes metadata and JPEG bytes", async () => {

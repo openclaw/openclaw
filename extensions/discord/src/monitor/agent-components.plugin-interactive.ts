@@ -72,9 +72,7 @@ export async function dispatchPluginDiscordInteractiveEvent(params: {
     // Deferred component replies edit the public source; follow-ups preserve reply visibility.
     reply: (payload) => replyWithText(acknowledged ? "followUp" : "reply", payload),
     followUp: (payload) => replyWithText("followUp", payload),
-    editMessage: async (
-      input: Parameters<DiscordInteractiveHandlerContext["respond"]["editMessage"]>[0],
-    ) => {
+    editMessage: async (input) => {
       const { text, components } = input;
       responded = true;
       await updateOriginalMessage({
@@ -160,10 +158,7 @@ export async function dispatchPluginDiscordInteractiveEvent(params: {
     respond,
     onMatched: acknowledgeSilently,
   });
-  if (!dispatched.matched) {
-    return "unmatched";
-  }
-  if (dispatched.handled) {
+  if (dispatched.matched && dispatched.handled) {
     if (!responded) {
       await acknowledgeSilently();
     }

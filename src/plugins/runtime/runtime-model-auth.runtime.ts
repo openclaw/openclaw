@@ -1,6 +1,10 @@
 import { getApiKeyForModelCore } from "../../agents/model-auth.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Model } from "../../llm/types.js";
+import {
+  attachProviderAuthAuthority,
+  getProviderAuthAuthority,
+} from "../provider-auth-authority.js";
 import { prepareProviderRuntimeAuth } from "../provider-runtime.runtime.js";
 import type { ResolvedProviderRuntimeAuth } from "./model-auth-types.js";
 
@@ -39,7 +43,7 @@ export async function getRuntimeAuthForModelCore(params: {
       env: process.env,
       provider: params.model.provider,
       modelId: params.model.id,
-      model: params.model,
+      model: attachProviderAuthAuthority(params.model, getProviderAuthAuthority(resolvedAuth)),
       apiKey: resolvedAuth.apiKey,
       authMode: resolvedAuth.mode,
       profileId: resolvedAuth.profileId,

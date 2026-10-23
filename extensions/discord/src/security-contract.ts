@@ -13,10 +13,7 @@ export const unsupportedSecretRefSurfacePatterns = [
 export function collectUnsupportedSecretRefConfigCandidates(
   raw: unknown,
 ): UnsupportedSecretRefConfigCandidate[] {
-  if (!isRecord(raw)) {
-    return [];
-  }
-  if (!isRecord(raw.channels) || !isRecord(raw.channels.discord)) {
+  if (!isRecord(raw) || !isRecord(raw.channels) || !isRecord(raw.channels.discord)) {
     return [];
   }
 

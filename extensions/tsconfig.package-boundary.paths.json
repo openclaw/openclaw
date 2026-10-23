@@ -1,6 +1,7 @@
 {
   "extends": "../tsconfig.json",
   "compilerOptions": {
+    "rootDir": "..",
     "paths": {
       "openclaw/plugin-sdk/*": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/*.d.ts"
@@ -64,9 +65,6 @@
       ],
       "openclaw/plugin-sdk/node-selection-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/node-selection-runtime.d.ts"
-      ],
-      "openclaw/plugin-sdk/heartbeat-runtime": [
-        "../packages/plugin-sdk/dist/src/plugin-sdk/heartbeat-runtime.d.ts"
       ],
       "openclaw/plugin-sdk/expect-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/expect-runtime.d.ts"
@@ -975,6 +973,33 @@
       ],
       "openclaw/plugin-sdk/memory-host-search": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/memory-host-search.d.ts"
+      ],
+      "openclaw/plugin-sdk/codex-client-version-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/codex-client-version-runtime.d.ts"
+      ],
+      "openclaw/plugin-sdk/realtime-transcription-provider": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/realtime-transcription-provider.d.ts"
+      ],
+      "openclaw/plugin-sdk/meeting-config": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/meeting-config.d.ts"
+      ],
+      "openclaw/plugin-sdk/collection-input-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/collection-input-runtime.d.ts"
+      ],
+      "openclaw/plugin-sdk/http-response-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/http-response-runtime.d.ts"
+      ],
+      "openclaw/plugin-sdk/node-crypto-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/node-crypto-runtime.d.ts"
+      ],
+      "openclaw/plugin-sdk/path-existence-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/path-existence-runtime.d.ts"
+      ],
+      "openclaw/plugin-sdk/provider-auth-markers": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/provider-auth-markers.d.ts"
+      ],
+      "openclaw/plugin-sdk/terminal-safe-text": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/terminal-safe-text.d.ts"
       ]
     }
   }

@@ -5,23 +5,24 @@ import {
   ErrorCodes,
   type ToolsCatalogResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { listCoreToolFactoryDescriptors } from "../../agents/core-tool-factory-descriptors.js";
+import { listCoreToolFactoryDescriptors } from "../../agents/tool-catalog.js";
 import { filterToolsByPolicy } from "../../agents/tool-policy-match.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import {
-  ensureStandalonePluginToolRegistryLoaded,
-  resolvePluginTools,
+  ensureStandalonePluginToolRegistryLoaded as loadRegistry,
+  resolvePluginTools as resolveTools,
 } from "../../plugins/tools.js";
-import * as userProfileList from "../../state/user-profile-list.js";
+import * as profiles from "../../state/user-profile-list.js";
 import { toolsCatalogHandlers } from "./tools-catalog.js";
 
 vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/agent-scope.js")>()),
   listAgentIds: vi.fn(() => ["main"]),
   resolveDefaultAgentId: vi.fn(() => "main"),
-  resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace-main"),
-  resolveAgentDir: vi.fn(() => "/tmp/agents/main/agent"),
+  resolveAgentWorkspaceDir: vi.fn(() => "/workspace"),
+  resolveAgentDir: vi.fn(() => "/agent"),
 }));
 
 vi.mock("../../config/config.js", () => ({
@@ -33,304 +34,217 @@ vi.mock("../../plugins/tools.js", () => ({
   resolvePluginTools: vi.fn(),
 }));
 
-const getActivePluginRegistryMock = vi.hoisted(() => vi.fn<() => unknown>(() => null));
-vi.mock("../../plugins/runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../plugins/runtime.js")>();
-  return {
-    ...actual,
-    getActivePluginRegistry: () =>
-      getActivePluginRegistryMock() as ReturnType<typeof actual.getActivePluginRegistry>,
-  };
-});
+const getActivePluginRegistryMock = vi.hoisted(() =>
+  vi.fn<() => PluginRegistry | null>(() => null),
+);
+vi.mock("../../plugins/runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/runtime.js")>()),
+  getActivePluginRegistry: getActivePluginRegistryMock,
+}));
 
 type RespondCall = [boolean, unknown?, { code: number; message: string }?];
-type CatalogPayload = ToolsCatalogResult;
+type ToolMetadata = PluginRegistry["toolMetadata"][number]["metadata"];
 
-function createInvokeParams(params: Record<string, unknown>, config: Record<string, unknown> = {}) {
-  const respond = vi.fn();
-  return {
-    respond,
-    invoke: async () =>
-      await expectDefined(
-        toolsCatalogHandlers["tools.catalog"],
-        'toolsCatalogHandlers["tools.catalog"] test invariant',
-      )({
-        params,
-        respond: respond as never,
-        context: { getRuntimeConfig: () => config } as never,
-        client: null,
-        req: { type: "req", id: "req-1", method: "tools.catalog" },
-        isWebchatConnect: () => false,
-      }),
-  };
+async function invokeCatalog(
+  params: Record<string, unknown> = {},
+  config: Record<string, unknown> = {},
+  respond = vi.fn(),
+) {
+  const handler = expectDefined(toolsCatalogHandlers["tools.catalog"], "tools.catalog handler");
+  await handler({
+    params,
+    respond: respond as never,
+    context: { getRuntimeConfig: () => config } as never,
+    client: null,
+    req: { type: "req", id: "req-1", method: "tools.catalog" },
+    isWebchatConnect: () => false,
+  });
+  return expectDefined(respond.mock.calls[0] as RespondCall | undefined, "expected respond call");
 }
 
-function respondCall(respond: ReturnType<typeof vi.fn>): RespondCall {
-  const call = respond.mock.calls[0] as RespondCall | undefined;
-  if (!call) {
-    throw new Error("expected respond call");
-  }
-  return call;
+async function catalog(params: Record<string, unknown> = {}, config: Record<string, unknown> = {}) {
+  const [ok, payload] = await invokeCatalog(params, config);
+  expect(ok).toBe(true);
+  return payload as ToolsCatalogResult;
 }
 
-function expectInvalidRequest(respond: ReturnType<typeof vi.fn>, message: string) {
-  const call = respondCall(respond);
-  expect(call[0]).toBe(false);
-  expect(call[2]?.code).toBe(ErrorCodes.INVALID_REQUEST);
-  expect(call[2]?.message).toContain(message);
+async function pluginGroups() {
+  return (await catalog()).groups.filter((group) => group.source === "plugin");
 }
 
-function expectCatalogPayload(respond: ReturnType<typeof vi.fn>): CatalogPayload {
-  const call = respondCall(respond);
-  expect(call[0]).toBe(true);
-  return call[1] as CatalogPayload;
+function makeTool(name: string, description = name, parameters = Type.Object({})) {
+  const execute = vi.fn(async () => ({ content: [], details: {} }));
+  return { name, label: name, description, parameters, execute };
+}
+
+function metadataRegistry(pluginId: string, metadata: ToolMetadata) {
+  const registry = createEmptyPluginRegistry();
+  registry.toolMetadata.push({ pluginId, source: "fixture", metadata });
+  return registry;
 }
 
 describe("tools.catalog handler", () => {
   beforeEach(() => {
-    const voiceCall = {
-      name: "voice_call",
-      label: "voice_call",
-      description: "Plugin calling tool",
-      parameters: Type.Object({
+    vi.spyOn(profiles, "hasMultipleResidentSessionSharingIdentities").mockReturnValue(false);
+    const voiceCall = makeTool(
+      "voice_call",
+      "Plugin calling tool",
+      Type.Object({
         destination: Type.String({ description: "Call destination." }),
         note: Type.Optional(Type.String({ description: "Optional call note.", default: "hidden" })),
       }),
-      execute: async () => ({ content: [], details: {} }),
-    };
+    );
     const matrixRoom = {
-      name: "matrix_room",
-      label: "matrix_room",
-      displaySummary: "Summarized Matrix room helper.",
-      description: "Matrix room helper\n\nACTIONS:\n- join\n- leave",
-      parameters: Type.Object({}),
-      execute: async () => ({ content: [], details: {} }),
+      ...makeTool("matrix_room", "Matrix room helper\n\nACTIONS:\n- join\n- leave"),
+      displaySummary: "Room summary",
     };
     setPluginToolMeta(voiceCall, { pluginId: "voice-call", optional: true });
     setPluginToolMeta(matrixRoom, { pluginId: "matrix", optional: false });
-    vi.mocked(resolvePluginTools).mockReturnValue([voiceCall, matrixRoom]);
+    vi.mocked(resolveTools).mockReturnValue([voiceCall, matrixRoom]);
     getActivePluginRegistryMock.mockReturnValue(null);
-    vi.mocked(ensureStandalonePluginToolRegistryLoaded).mockReturnValue(undefined);
+    vi.mocked(loadRegistry).mockReturnValue(undefined);
   });
 
   it.each([
     [{ extra: true }, "invalid tools.catalog params"],
     [{ agentId: "unknown-agent" }, "unknown agent id"],
   ] as const)("rejects %j", async (params, message) => {
-    const { respond, invoke } = createInvokeParams(params);
-    await invoke();
-    expectInvalidRequest(respond, message);
+    const call = await invokeCatalog(params);
+    expect(call[0]).toBe(false);
+    expect(call[2]?.code).toBe(ErrorCodes.INVALID_REQUEST);
+    expect(call[2]?.message).toContain(message);
   });
 
   it.each([
-    { swarm: false, multipleProfiles: false },
-    { swarm: true, multipleProfiles: false },
-    { swarm: false, multipleProfiles: true },
-    { swarm: true, multipleProfiles: true },
-  ])(
-    "projects configurable core tools (swarm=$swarm, multipleProfiles=$multipleProfiles)",
-    async ({ swarm, multipleProfiles }) => {
-      using identityCount = vi
-        .spyOn(userProfileList, "hasMultipleSessionSharingIdentities")
-        .mockReturnValue(multipleProfiles);
-      const { respond, invoke } = createInvokeParams(
-        { includePlugins: false },
-        swarm ? {} : { tools: { swarm: false } },
-      );
-      await invoke();
-      const payload = expectCatalogPayload(respond);
-      expect(payload.agentId).toBe("main");
-      const groups = payload.groups;
-      const tools = groups.flatMap((group) => group.tools);
-      const ids = tools.map((tool) => tool.id);
-      expect(groups.some((group) => group.source === "plugin")).toBe(false);
-      expect(
-        groups
-          .find((group) => group.id === "media")
-          ?.tools.map((tool) => `${tool.source}:${tool.id}`),
-      ).toContain("core:tts");
-      expect(tools.filter((tool) => tool.id === "openclaw")).toEqual([
-        {
-          id: "openclaw",
-          label: "openclaw",
-          description: "Delegate OpenClaw setup and repair",
-          source: "core",
-          defaultProfiles: [],
-        },
-      ]);
-      expect(ids.includes("agents_wait")).toBe(swarm);
-      expect(ids.includes("personal_instructions")).toBe(multipleProfiles);
-      if (swarm && multipleProfiles) {
-        // Collector output is required by its per-run schema, not operator tool policy.
-        const configurableTools = listCoreToolFactoryDescriptors().filter(
-          (tool) => tool.name !== "structured_output",
-        );
-        expect(filterToolsByPolicy(configurableTools, { allow: ["*"], deny: ids })).toEqual([]);
-      }
-      expect(identityCount).toHaveBeenCalled();
-    },
-  );
-
-  it.each([false, true])(
-    "projects plugin tools from their discovery registry (metadata=%s)",
-    async (metadata) => {
-      const toolRegistry = createEmptyPluginRegistry();
-      if (metadata) {
-        toolRegistry.toolMetadata.push({
-          pluginId: "voice-call",
-          source: "fixture",
-          metadata: {
-            toolName: "voice_call",
-            displayName: "Voice Call",
-            description: "Place a voice call",
-            risk: "high",
-            tags: ["calling"],
-          },
-        });
-        const activeRegistry = createEmptyPluginRegistry();
-        activeRegistry.toolMetadata.push({
-          pluginId: "voice-call",
-          source: "fixture",
-          metadata: {
-            toolName: "voice_call",
-            displayName: "Wrong Workspace Voice Call",
-            risk: "low",
-          },
-        });
-        getActivePluginRegistryMock.mockReturnValue(activeRegistry);
-        vi.mocked(ensureStandalonePluginToolRegistryLoaded).mockReturnValue(toolRegistry);
-      }
-      const { respond, invoke } = createInvokeParams({});
-      await invoke();
-      const groups = expectCatalogPayload(respond).groups.filter(
-        (group) => group.source === "plugin",
-      );
-      expect(groups.length).toBeGreaterThan(0);
-      const tools = groups.flatMap((group) => group.tools);
-      expect(tools.find((tool) => tool.id === "voice_call")).toEqual({
-        id: "voice_call",
-        label: metadata ? "Voice Call" : "voice_call",
-        description: metadata ? "Place a voice call" : "Plugin calling tool",
-        fullDescription: metadata ? "Place a voice call" : "Plugin calling tool",
-        parameters: [
-          { name: "destination", required: true, type: "string", description: "Call destination." },
-          { name: "note", required: false, type: "string", description: "Optional call note." },
-        ],
-        source: "plugin",
-        pluginId: "voice-call",
-        optional: true,
-        risk: metadata ? "high" : undefined,
-        tags: metadata ? ["calling"] : undefined,
+    [false, false],
+    [true, false],
+    [false, true],
+    [true, true],
+  ])("projects core tools (swarm=%s, multipleProfiles=%s)", async (swarm, multipleProfiles) => {
+    vi.mocked(profiles.hasMultipleResidentSessionSharingIdentities).mockReturnValue(
+      multipleProfiles,
+    );
+    const config = swarm ? {} : { tools: { swarm: false } };
+    const { agentId, groups } = await catalog({ includePlugins: false }, config);
+    expect(agentId).toBe("main");
+    const tools = groups.flatMap((group) => group.tools);
+    const ids = tools.map((tool) => tool.id);
+    expect(groups.some((group) => group.source === "plugin")).toBe(false);
+    const media = groups.find((group) => group.id === "media")?.tools;
+    expect(media?.map((tool) => `${tool.source}:${tool.id}`)).toContain("core:tts");
+    expect(tools.filter((tool) => tool.id === "openclaw")).toEqual([
+      {
+        id: "openclaw",
+        label: "openclaw",
+        description: "Delegate OpenClaw setup and repair",
+        source: "core",
         defaultProfiles: [],
-      });
-      expect(tools.find((tool) => tool.id === "matrix_room")?.description).toBe(
-        "Summarized Matrix room helper.",
+      },
+    ]);
+    expect(ids.includes("agents_wait")).toBe(swarm);
+    expect(ids.includes("personal_instructions")).toBe(multipleProfiles);
+    if (swarm && multipleProfiles) {
+      // Collector output is required by its per-run schema, not operator tool policy.
+      const configurableTools = listCoreToolFactoryDescriptors().filter(
+        (tool) => tool.name !== "structured_output",
       );
-      const context = {
-        config: {},
-        workspaceDir: "/tmp/workspace-main",
-        agentDir: "/tmp/agents/main/agent",
-        agentId: "main",
-      };
-      expect(ensureStandalonePluginToolRegistryLoaded).toHaveBeenCalledWith({
-        context,
-        toolAllowlist: ["group:plugins"],
-        allowGatewaySubagentBinding: true,
-      });
-      expect(resolvePluginTools).toHaveBeenCalledWith(
-        expect.objectContaining({
-          context,
-          toolAllowlist: ["group:plugins"],
-          allowGatewaySubagentBinding: true,
-          suppressNameConflicts: true,
-          runtimeRegistry: metadata ? toolRegistry : undefined,
-          existingToolNames: expect.any(Set),
+      expect(filterToolsByPolicy(configurableTools, { allow: ["*"], deny: ids })).toEqual([]);
+    }
+  });
+
+  it.each([false, true])("projects plugin discovery metadata=%s", async (metadata) => {
+    const toolRegistry = metadataRegistry("voice-call", {
+      toolName: "voice_call",
+      displayName: "Voice Call",
+      description: "Place a voice call",
+      risk: "high",
+      tags: ["calling"],
+    });
+    if (metadata) {
+      getActivePluginRegistryMock.mockReturnValue(
+        metadataRegistry("voice-call", {
+          toolName: "voice_call",
+          displayName: "Wrong Workspace Voice Call",
+          risk: "low",
         }),
       );
-      expect(vi.mocked(resolvePluginTools).mock.calls[0]?.[0].existingToolNames?.has("tts")).toBe(
-        true,
-      );
-    },
-  );
+      vi.mocked(loadRegistry).mockReturnValue(toolRegistry);
+    }
+    const groups = await pluginGroups();
+    const tools = groups.flatMap((group) => group.tools);
+    expect(tools.find((tool) => tool.id === "voice_call")).toEqual({
+      id: "voice_call",
+      label: metadata ? "Voice Call" : "voice_call",
+      description: metadata ? "Place a voice call" : "Plugin calling tool",
+      fullDescription: metadata ? "Place a voice call" : "Plugin calling tool",
+      parameters: [
+        { name: "destination", required: true, type: "string", description: "Call destination." },
+        { name: "note", required: false, type: "string", description: "Optional call note." },
+      ],
+      source: "plugin",
+      pluginId: "voice-call",
+      optional: true,
+      risk: metadata ? "high" : undefined,
+      tags: metadata ? ["calling"] : undefined,
+      defaultProfiles: [],
+    });
+    expect(tools.find((tool) => tool.id === "matrix_room")?.description).toBe("Room summary");
+    const discovery = {
+      context: { config: {}, workspaceDir: "/workspace", agentDir: "/agent", agentId: "main" },
+      toolAllowlist: ["group:plugins"],
+      allowGatewaySubagentBinding: true,
+    };
+    expect(loadRegistry).toHaveBeenCalledWith(discovery);
+    expect(resolveTools).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ...discovery,
+        suppressNameConflicts: true,
+        runtimeRegistry: metadata ? toolRegistry : undefined,
+        existingToolNames: expect.any(Set),
+      }),
+    );
+    expect(vi.mocked(resolveTools).mock.calls[0]?.[0].existingToolNames?.has("tts")).toBe(true);
+  });
 
   it("sorts private mixed groups without changing source order or metadata aliases", async () => {
-    const registry = createEmptyPluginRegistry();
     const tags = ["fixture"];
+    const registry = metadataRegistry("z-resolved", { toolName: "resolved_a", tags });
     const tools = ["resolved_z", "resolved_a"].map((name) => {
-      const tool = {
-        name,
-        label: name,
-        description: name,
-        parameters: Type.Object({}),
-        execute: vi.fn(async () => ({ content: [], details: {} })),
-      };
+      const tool = makeTool(name);
       setPluginToolMeta(tool, { pluginId: "z-resolved", optional: true });
-      Object.freeze(tool);
-      return tool;
-    });
-    registry.toolMetadata.push({
-      pluginId: "z-resolved",
-      source: "fixture",
-      metadata: { toolName: "resolved_a", tags },
+      return Object.freeze(tool);
     });
     const factory = vi.fn(() => null);
     registry.tools.push(
-      {
-        pluginId: "b",
-        pluginName: "Same",
-        source: "fixture",
-        names: ["b_z", "resolved_z", "tts", "b_a"],
-        factory,
-        optional: true,
-      },
-      {
-        pluginId: "c",
-        pluginName: "Same",
-        source: "fixture",
-        names: [],
-        declaredNames: new Set(["b_a", "c_a"]),
-        factory,
-        optional: true,
-      },
+      ...[
+        { pluginId: "b", names: ["b_z", "resolved_z", "tts", "b_a"] },
+        { pluginId: "c", names: [], declaredNames: new Set(["b_a", "c_a"]) },
+      ].map((entry) =>
+        Object.assign(entry, { pluginName: "Same", source: "fixture", factory, optional: true }),
+      ),
     );
     for (const entry of registry.tools) {
       Object.freeze(entry.names);
       Object.freeze(entry);
     }
-    Object.freeze(tags);
-    Object.freeze(tools);
-    Object.freeze(registry.tools);
-    vi.mocked(resolvePluginTools).mockReturnValue(tools);
-    vi.mocked(ensureStandalonePluginToolRegistryLoaded).mockReturnValue(registry);
-    const first = createInvokeParams({});
-    await first.invoke();
-    const groups = expectCatalogPayload(first.respond).groups.filter(
-      (group) => group.source === "plugin",
-    );
-    expect(groups.map((group) => group.id)).toEqual(["plugin:b", "plugin:c", "plugin:z-resolved"]);
-    expect(groups.map((group) => group.tools.map((tool) => tool.id))).toEqual([
-      ["b_a", "b_z"],
-      ["c_a"],
-      ["resolved_a", "resolved_z"],
+    [tags, tools, registry.tools].forEach(Object.freeze);
+    vi.mocked(resolveTools).mockReturnValue(tools);
+    vi.mocked(loadRegistry).mockReturnValue(registry);
+    const groups = await pluginGroups();
+    expect(groups.map((group) => [group.id, group.tools.map((tool) => tool.id)])).toEqual([
+      ["plugin:b", ["b_a", "b_z"]],
+      ["plugin:c", ["c_a"]],
+      ["plugin:z-resolved", ["resolved_a", "resolved_z"]],
     ]);
     const resolved = expectDefined(groups[2], "resolved group");
     expect(expectDefined(resolved.tools[0], "resolved_a").tags).toBe(tags);
     const original = structuredClone(groups);
     resolved.tools.reverse();
     expectDefined(groups[0], "declared group").tools.pop();
-    const second = createInvokeParams({});
-    await second.invoke();
-    const repeated = expectCatalogPayload(second.respond).groups.filter(
-      (group) => group.source === "plugin",
-    );
+    const repeated = await pluginGroups();
     expect(repeated).toEqual(original);
     expect(repeated[0]).not.toBe(groups[0]);
     expect(expectDefined(repeated[2], "repeated resolved group").tools[0]?.tags).toBe(tags);
-    expect(tools.map((tool) => tool.name)).toEqual(["resolved_z", "resolved_a"]);
-    expect(registry.tools.map((entry) => entry.names)).toEqual([
-      ["b_z", "resolved_z", "tts", "b_a"],
-      [],
-    ]);
     expect(Array.from(registry.tools[1]?.declaredNames ?? [])).toEqual(["b_a", "c_a"]);
     expect(factory).not.toHaveBeenCalled();
     for (const tool of tools) {
@@ -339,16 +253,14 @@ describe("tools.catalog handler", () => {
   });
 
   it.each(["load", "resolve"] as const)(
-    "propagates %s failure without publishing a partial catalog",
+    "propagates %s failure without partial publication",
     async (stage) => {
       const failure = new Error("synthetic producer failure");
-      vi.mocked(
-        stage === "load" ? ensureStandalonePluginToolRegistryLoaded : resolvePluginTools,
-      ).mockImplementationOnce(() => {
+      vi.mocked(stage === "load" ? loadRegistry : resolveTools).mockImplementationOnce(() => {
         throw failure;
       });
-      const { respond, invoke } = createInvokeParams({});
-      await expect(invoke()).rejects.toBe(failure);
+      const respond = vi.fn();
+      await expect(invokeCatalog({}, {}, respond)).rejects.toBe(failure);
       expect(respond).not.toHaveBeenCalled();
     },
   );

@@ -17,11 +17,8 @@ import { coerceFiniteScheduleNumber } from "../../../cron/schedule-number.js";
 import { inferCronJobName } from "../../../cron/service/normalize.js";
 import { resolveCronCurrentSessionTarget } from "../../../cron/session-target.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../../../cron/stagger.js";
+import { decodeStoredCronJobConfig } from "../../../cron/store/job-config-codec.js";
 import type { CronQuarantinedJob, QuarantinedCronConfigJob } from "../../../cron/types-shared.js";
-import {
-  isBlockedLegacyCodexModelRef,
-  type LegacyCodexModelIdentity,
-} from "../shared/codex-route-model-ref.js";
 import {
   hasLegacyToolNameList,
   IMAGE_INSPECTION_TOOL_NAME_MIGRATION,
@@ -37,7 +34,7 @@ import {
   normalizePayloadKind,
   stripLegacyTopLevelFields,
 } from "./payload-migration.js";
-import { createScheduledToolPolicyMigrationCollector } from "./scheduled-tool-policy-migration.js";
+import { migrateScheduledToolPolicy } from "./scheduled-tool-policy-migration.js";
 import { migrateLegacyCronTriggerScript } from "./trigger-script-migration.js";
 
 type CronStoreIssueKey =
@@ -76,7 +73,6 @@ export function cronCodexRuntimePolicyTargetKey(target: CronCodexRuntimePolicyTa
 
 export function collectStoredCronCodexRuntimePolicyTargets(
   jobs: ReadonlyArray<Record<string, unknown>>,
-  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
 ): CronCodexRuntimePolicyTarget[] {
   const targets = new Map<string, CronCodexRuntimePolicyTarget>();
   for (const job of jobs) {
@@ -87,14 +83,6 @@ export function collectStoredCronCodexRuntimePolicyTargets(
       ...collectLegacyOpenAICodexCronModelRoutes({ model: job.model }),
     ];
     for (const route of routes) {
-      if (
-        isBlockedLegacyCodexModelRef({
-          modelRef: route.legacyModelRef,
-          blockedModelIdentities,
-        })
-      ) {
-        continue;
-      }
       const target = {
         ...(agentId ? { agentId } : {}),
         modelRef: route.canonicalModelRef,
@@ -181,7 +169,8 @@ export function normalizeStoredCronJobs(
   const unsupportedLegacyTriggerScriptJobs: string[] = [];
   const unsupportedDeliveryModeJobs: string[] = [];
   const legacyGatewayExecJobs: string[] = [];
-  const scheduledToolPolicyMigrations = createScheduledToolPolicyMigrationCollector();
+  const legacyScheduledToolPolicyJobs: string[] = [];
+  const invalidScheduledToolPolicyJobs: string[] = [];
   const unresolvedAgentTurnPromptJobsByKind = {
     commandPromptWithoutShellAccess: unresolvedAgentTurnCommandPromptJobs,
     shellToolPrompt: unresolvedAgentTurnShellToolPromptJobs,
@@ -228,23 +217,24 @@ export function normalizeStoredCronJobs(
       trackIssue("legacyScheduleString");
     }
 
-    const nameRaw = raw.name;
-    if (typeof nameRaw !== "string" || nameRaw.trim().length === 0) {
+    let name = normalizeOptionalString(raw.name);
+    if (!name) {
       raw.name = inferCronJobName({
         schedule: raw.schedule as never,
         payload: raw.payload as never,
       });
+      name = normalizeOptionalString(raw.name);
       mutated = true;
     } else {
-      raw.name = nameRaw.trim();
+      raw.name = name;
     }
 
+    const jobName = name ?? normalizeOptionalString(raw.id);
     const trigger = raw.trigger;
     if (isRecord(trigger) && typeof trigger.script === "string") {
       const migration = migrateLegacyCronTriggerScript(trigger.script);
       const id = normalizeOptionalString(raw.id);
-      const name = normalizeOptionalString(raw.name);
-      const jobIdentity = name && id && name !== id ? `${name} (${id})` : (name ?? id);
+      const jobIdentity = name && id && name !== id ? `${name} (${id})` : jobName;
       if (migration.kind === "supported") {
         trigger.script = migration.script;
         mutated = true;
@@ -284,15 +274,6 @@ export function normalizeStoredCronJobs(
       if (normalizePayloadKind(payloadRecord)) {
         trackChange("legacyPayloadKind");
       }
-      if (!payloadRecord.kind) {
-        if (normalizeOptionalString(payloadRecord.message)) {
-          payloadRecord.kind = "agentTurn";
-          trackChange("legacyPayloadKind");
-        } else if (normalizeOptionalString(payloadRecord.text)) {
-          payloadRecord.kind = "systemEvent";
-          trackChange("legacyPayloadKind");
-        }
-      }
       if (payloadRecord.kind === "agentTurn" && copyTopLevelAgentTurnFields(raw, payloadRecord)) {
         mutated = true;
       }
@@ -307,14 +288,11 @@ export function normalizeStoredCronJobs(
     }
 
     const removedTopLevel = stripLegacyTopLevelFields(raw);
-    if (removedTopLevel.payload || removedTopLevel.delivery) {
-      mutated = true;
-      if (removedTopLevel.payload) {
-        trackIssue("legacyTopLevelPayloadFields");
-      }
-      if (removedTopLevel.delivery) {
-        trackIssue("legacyTopLevelDeliveryFields");
-      }
+    if (removedTopLevel.payload) {
+      trackChange("legacyTopLevelPayloadFields");
+    }
+    if (removedTopLevel.delivery) {
+      trackChange("legacyTopLevelDeliveryFields");
     }
 
     if (payloadRecord) {
@@ -324,21 +302,10 @@ export function normalizeStoredCronJobs(
           (tool) =>
             typeof tool === "string" && normalizeOptionalLowercaseString(tool) === "gateway_exec",
         );
-      if (hasLegacyGatewayExec) {
-        const name = normalizeOptionalString(raw.name) ?? normalizeOptionalString(raw.id);
-        if (name) {
-          legacyGatewayExecJobs.push(name);
-        }
+      if (hasLegacyGatewayExec && jobName) {
+        legacyGatewayExecJobs.push(jobName);
       }
       const hadLegacyPayloadProvider = Boolean(normalizeOptionalString(payloadRecord.provider));
-      const hadLegacyTaskSuggestionToolName = hasLegacyToolNameList(
-        payloadRecord.toolsAllow,
-        TASK_SUGGESTION_TOOL_NAME_MIGRATION,
-      );
-      const hadLegacyImageInspectionToolName = hasLegacyToolNameList(
-        payloadRecord.toolsAllow,
-        IMAGE_INSPECTION_TOOL_NAME_MIGRATION,
-      );
       const legacyCodexModelRoutes = collectLegacyOpenAICodexCronModelRoutes(payloadRecord);
       const hadLegacyPayloadCodexModel = legacyCodexModelRoutes.length > 0;
       const agentId = normalizeOptionalString(raw.agentId);
@@ -351,11 +318,13 @@ export function normalizeStoredCronJobs(
       if (hadLegacyPayloadCodexModel) {
         trackIssue("legacyPayloadCodexModel");
       }
-      if (hadLegacyTaskSuggestionToolName) {
-        trackIssue("legacyTaskSuggestionToolName");
-      }
-      if (hadLegacyImageInspectionToolName) {
-        trackIssue("legacyImageInspectionToolName");
+      for (const [issue, migration] of [
+        ["legacyTaskSuggestionToolName", TASK_SUGGESTION_TOOL_NAME_MIGRATION],
+        ["legacyImageInspectionToolName", IMAGE_INSPECTION_TOOL_NAME_MIGRATION],
+      ] as const) {
+        if (hasLegacyToolNameList(payloadRecord.toolsAllow, migration)) {
+          trackIssue(issue);
+        }
       }
       if (
         migrateLegacyCronPayload(payloadRecord, {
@@ -386,9 +355,8 @@ export function normalizeStoredCronJobs(
         const unresolvedPromptKind = classifyCronAgentTurnShellPrompt(payloadRecord);
         if (unresolvedPromptKind) {
           trackIssue("unresolvedAgentTurnShellToolPrompt");
-          const name = normalizeOptionalString(raw.name) ?? normalizeOptionalString(raw.id);
-          if (name) {
-            unresolvedAgentTurnPromptJobsByKind[unresolvedPromptKind].push(name);
+          if (jobName) {
+            unresolvedAgentTurnPromptJobsByKind[unresolvedPromptKind].push(jobName);
           }
         }
       }
@@ -415,30 +383,23 @@ export function normalizeStoredCronJobs(
         sched.kind = "at";
         mutated = true;
       }
-      const atRaw = normalizeOptionalString(sched.at) ?? "";
       const atMsRaw = sched.atMs;
       const parsedAtMs =
         typeof atMsRaw === "number"
           ? atMsRaw
           : typeof atMsRaw === "string"
             ? parseAbsoluteTimeMs(atMsRaw)
-            : atRaw
-              ? parseAbsoluteTimeMs(atRaw)
-              : null;
-      const parsedAt = parsedAtMs !== null ? timestampMsToIsoString(parsedAtMs) : undefined;
-      const fallbackAtMs = !parsedAt && atRaw ? parseAbsoluteTimeMs(atRaw) : null;
-      const fallbackAt = fallbackAtMs !== null ? timestampMsToIsoString(fallbackAtMs) : undefined;
-      const normalizedAt = parsedAt ?? fallbackAt;
-      if (normalizedAt) {
+            : null;
+      const normalizedAt =
+        timestampMsToIsoString(parsedAtMs) ??
+        timestampMsToIsoString(parseAbsoluteTimeMs(normalizeOptionalString(sched.at) ?? ""));
+      if (normalizedAt && (sched.at !== normalizedAt || "atMs" in sched)) {
         sched.at = normalizedAt;
-        if ("atMs" in sched) {
-          delete sched.atMs;
-        }
+        delete sched.atMs;
         mutated = true;
       }
 
-      const everyMsRaw = sched.everyMs;
-      const everyMsCoerced = coerceFiniteScheduleNumber(everyMsRaw);
+      const everyMsCoerced = coerceFiniteScheduleNumber(sched.everyMs);
       const everyMs = everyMsCoerced !== undefined ? Math.floor(everyMsCoerced) : null;
       if (everyMs !== null) {
         setField(sched, "everyMs", everyMs);
@@ -454,10 +415,8 @@ export function normalizeStoredCronJobs(
       }
 
       const exprRaw = normalizeOptionalString(sched.expr) ?? "";
-      const legacyCronRaw = normalizeOptionalString(sched.cron) ?? "";
-      let normalizedExpr = exprRaw;
-      if (!normalizedExpr && legacyCronRaw) {
-        normalizedExpr = legacyCronRaw;
+      const normalizedExpr = exprRaw || normalizeOptionalString(sched.cron) || "";
+      if (!exprRaw && normalizedExpr) {
         sched.expr = normalizedExpr;
         trackChange("legacyScheduleCron");
       }
@@ -497,8 +456,7 @@ export function normalizeStoredCronJobs(
       mutated = true;
     }
 
-    const payloadKind =
-      payloadRecord && typeof payloadRecord.kind === "string" ? payloadRecord.kind : "";
+    const payloadKind = payloadRecord?.kind;
     const isRunnablePayload =
       payloadKind === "agentTurn" || payloadKind === "command" || payloadKind === "script";
     const rawSessionTarget = normalizeOptionalString(raw.sessionTarget) ?? "";
@@ -540,10 +498,19 @@ export function normalizeStoredCronJobs(
       mutated = true;
     }
 
-    const scheduledPolicyMutated = scheduledToolPolicyMigrations.migrate(raw, (kind) =>
-      trackIssue(kind === "owner" ? "reconciledOwnerAccount" : "migratedScheduledToolPolicy"),
-    );
-    mutated ||= scheduledPolicyMutated;
+    const policyMigration = migrateScheduledToolPolicy(raw);
+    if (policyMigration.status === "migrated") {
+      trackIssue("migratedScheduledToolPolicy");
+    }
+    if (policyMigration.ownerReconciled) {
+      trackIssue("reconciledOwnerAccount");
+    }
+    if (jobName && policyMigration.status === "legacy") {
+      legacyScheduledToolPolicyJobs.push(jobName);
+    } else if (jobName && policyMigration.status === "invalid") {
+      invalidScheduledToolPolicyJobs.push(jobName);
+    }
+    mutated ||= policyMigration.mutated;
 
     const invalidPersistedReason = getInvalidPersistedCronJobReason(raw);
     if (invalidPersistedReason) {
@@ -577,8 +544,8 @@ export function normalizeStoredCronJobs(
     legacyTriggerScriptJobs,
     unsupportedLegacyTriggerScriptJobs,
     unsupportedDeliveryModeJobs,
-    legacyScheduledToolPolicyJobs: scheduledToolPolicyMigrations.legacyJobs,
-    invalidScheduledToolPolicyJobs: scheduledToolPolicyMigrations.invalidJobs,
+    legacyScheduledToolPolicyJobs,
+    invalidScheduledToolPolicyJobs,
     legacyGatewayExecJobs,
     jobs,
     mutated,
@@ -611,7 +578,7 @@ export function recoverValidQuarantinedCronScheduleJobs(
       retainedEntries.push(entry);
       continue;
     }
-    const candidate = structuredClone(entry.job);
+    const candidate = decodeStoredCronJobConfig(structuredClone(entry.job));
     const jobId = storedCronJobId(candidate);
     if (jobId && (activeJobIds.has(jobId) || recoveredJobIds.has(jobId))) {
       retainedEntries.push(entry);

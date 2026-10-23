@@ -6,11 +6,8 @@ import {
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { writeCronJobScratchInDatabase } from "../scratch-write.kernel.js";
 import { loadedCronStoreFromRows, loadCronRows } from "./row-codec.js";
-import {
-  prepareCronRuntimeMutation,
-  retainCronRuntimeMutationOutcome,
-} from "./runtime-mutation.worker.js";
 import type { CronRuntimeWorkerOperations } from "./runtime-worker.types.js";
+import { CronJobsStoreChangedError } from "./save-error.js";
 
 export function writeCronScratchInWorker(
   database: OpenClawStateDatabase,
@@ -22,11 +19,14 @@ export function writeCronScratchInWorker(
         loadCronRows(db, input.storeKey, new Set([input.jobId])),
         input.createdAtMsFallback,
       ).store.jobs[0];
-      prepareCronRuntimeMutation("cron.writeScratch", input.nonce, {
-        configRevision: job ? resolveCronJobConfigRevision(job) : undefined,
-      });
+      if (
+        input.snapshot.expectedConfigRevision !== undefined &&
+        (!job || resolveCronJobConfigRevision(job) !== input.snapshot.expectedConfigRevision)
+      ) {
+        throw new CronJobsStoreChangedError(input.storeKey);
+      }
       const outcome = writeCronJobScratchInDatabase(db, input);
-      return retainCronRuntimeMutationOutcome("cron.writeScratch", db, input.nonce, outcome);
+      return { outcome };
     },
     { database, path: database.path, env: getSqliteWorkerStateContext().environment },
     { operationLabel: "cron.scratch.write" },

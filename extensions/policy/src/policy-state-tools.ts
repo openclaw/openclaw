@@ -162,20 +162,9 @@ function riskFromMeta(meta: string): string | undefined {
     return namedRisk.toLowerCase();
   }
   const alias = /\bR([0-5])\b/.exec(meta)?.[1];
-  switch (alias) {
-    case "0":
-    case "1":
-      return "low";
-    case "2":
-    case "3":
-      return "medium";
-    case "4":
-      return "high";
-    case "5":
-      return "critical";
-    default:
-      return undefined;
-  }
+  return alias === undefined
+    ? undefined
+    : ["low", "low", "medium", "medium", "high", "critical"][Number(alias)];
 }
 
 function capabilityTokensFromMetaLines(lines: readonly string[]): readonly string[] {

@@ -1,6 +1,10 @@
 import path from "node:path";
 import { setImmediate, setTimeout as delay } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   claimCodexAppServerLiveThread,
@@ -9,8 +13,11 @@ import {
 } from "./client-runtime.js";
 import { CodexAppServerClient } from "./client.js";
 import { threadStartResult } from "./codex-app-server.test-fixtures.js";
-import { compactCodexSessionWithTestHost as maybeCompactCodexAppServerSession } from "./compact.test-support.js";
-import { resolveCodexAppServerRuntimeOptions } from "./config.js";
+import {
+  compactCodexSessionWithTestHost as maybeCompactCodexAppServerSession,
+  compactionItemEvent,
+} from "./compact.test-support.js";
+import { resolveCodexAppServerRuntimeOptions, type CodexPluginConfig } from "./config.js";
 import {
   registerCodexTestSessionIdentity,
   resetCodexTestBindingStore,
@@ -42,7 +49,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let directory: string;
 let agentDir: string;
 let sessionFile: string;
-const pluginConfig = {
+const pluginConfig: CodexPluginConfig = {
   appServer: { command: process.execPath, args: ["app-server"], homeScope: "user" },
 };
 let runtime: ReturnType<typeof resolveCodexAppServerRuntimeOptions>;
@@ -52,6 +59,7 @@ beforeEach(() => {
   directory = tempDirs.make("codex-compact-owner-");
   agentDir = path.join(directory, "agent");
   sessionFile = path.join(directory, "session.jsonl");
+  setRuntimeConfigSnapshot({});
   runtime = resolveCodexAppServerRuntimeOptions({
     pluginConfig,
     codexConfigToml: null,
@@ -64,6 +72,7 @@ afterEach(async () => {
   await Promise.all(transports.splice(0).map(({ client }) => client.closeAndWait()));
   resetCodexTestBindingStore();
   resetThreadLifecycleTestFixtures();
+  clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
 });
 
@@ -103,15 +112,8 @@ function sendCompactionCompleted(
     method: "turn/started",
     params: { threadId, turn: { ...turn, status: "inProgress" } },
   });
-  for (const method of ["item/started", "item/completed"]) {
-    send({
-      method,
-      params: {
-        threadId,
-        turnId,
-        item: { id: "compacted", type: "contextCompaction" },
-      },
-    });
+  for (const method of ["item/started", "item/completed"] as const) {
+    send(compactionItemEvent(method, turnId, "compacted", threadId));
   }
   send({ method: "turn/completed", params: { threadId, turn } });
 }
@@ -364,6 +366,7 @@ it.each([
         client,
         params: {
           ...createParams(sessionFile, directory),
+          disableTools: false,
           sessionId: "session-final-owner",
           sessionKey,
           agentDir,

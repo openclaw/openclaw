@@ -10,7 +10,6 @@ import type { GatewaySessionRow } from "./session-utils.js";
 export function buildGatewaySessionSnapshot(params: {
   sessionRow: GatewaySessionRow | null | undefined;
   agentId?: string;
-  includeSession?: boolean;
   lifecycle?: boolean;
   event?: AgentEventRuntimePayload;
   lifecycleRunId?: string;
@@ -84,6 +83,7 @@ export function buildGatewaySessionSnapshot(params: {
     archivedBy: sessionRow.archivedBy ?? null,
     archiveReason: sessionRow.archiveReason ?? null,
     pinned: sessionRow.pinned ?? false,
+    sidebarRoot: sessionRow.sidebarRoot ?? false,
     pinnedAt: sessionRow.pinnedAt ?? null,
     snoozedUntil: sessionRow.snoozedUntil ?? null,
     snoozedAt: sessionRow.snoozedAt ?? null,
@@ -109,7 +109,10 @@ export function buildGatewaySessionSnapshot(params: {
         }),
     spawnedWorkspaceDir: sessionRow.spawnedWorkspaceDir,
     spawnedCwd: sessionRow.spawnedCwd,
+    deviceFolder: sessionRow.deviceFolder ?? null,
     permissionMode: sessionRow.permissionMode ?? null,
+    communication: sessionRow.communication ?? null,
+    effectiveCommunication: sessionRow.effectiveCommunication,
     permissionModePending: sessionRow.permissionModePending ?? false,
     ...(sessionRow.permissionMode !== undefined && sessionRow.sessionRoot !== undefined
       ? { sessionRoot: sessionRow.sessionRoot }
@@ -130,6 +133,8 @@ export function buildGatewaySessionSnapshot(params: {
     category: sessionRow.category ?? null,
     boardPresentation: sessionRow.boardPresentation ?? null,
     displayName: params.displayName ?? sessionRow.displayName ?? null,
+    titlePending: sessionRow.titlePending ?? false,
+    lastAssistantMessage: sessionRow.lastAssistantMessage ?? null,
     deliveryContext: sessionRow.deliveryContext,
     parentSessionKey: params.parentSessionKey ?? sessionRow.parentSessionKey,
     childSessions: sessionRow.childSessions,
@@ -142,13 +147,16 @@ export function buildGatewaySessionSnapshot(params: {
     verboseLevel: sessionRow.verboseLevel,
     traceLevel: sessionRow.traceLevel,
     reasoningLevel: sessionRow.reasoningLevel,
+    reasoningDefault: sessionRow.reasoningDefault,
     elevatedLevel: sessionRow.elevatedLevel,
     sendPolicy: sessionRow.sendPolicy,
     systemSent: sessionRow.systemSent,
     abortedLastRun: sessionRow.abortedLastRun,
     restartRecoveryStatus: sessionRow.restartRecoveryStatus ?? null,
+    restartRecoveryCycleId: sessionRow.restartRecoveryCycleId ?? null,
     inputTokens: sessionRow.inputTokens,
     outputTokens: sessionRow.outputTokens,
+    usageReport: sessionRow.usageReport,
     lastChannel: sessionRow.lastChannel,
     lastTo: sessionRow.lastTo,
     lastAccountId: sessionRow.lastAccountId,
@@ -170,6 +178,7 @@ export function buildGatewaySessionSnapshot(params: {
     runtimeSelectionLocked: sessionRow.runtimeSelectionLocked,
     status: status ?? sessionRow.status,
     lastRunError: sessionRow.lastRunError ?? null,
+    suppressErrorNotice: sessionRow.suppressErrorNotice ?? false,
     providerReview: sessionRow.providerReview ?? null,
     lastRunId: sessionRow.lastRunId ?? null,
     hasAutomation: sessionRow.hasAutomation ?? false,
@@ -200,20 +209,21 @@ export function buildGatewaySessionSnapshot(params: {
       delete eventFields[field];
     }
   }
-  const session: Record<string, unknown> | undefined = params.includeSession
-    ? Object.assign(
-        sessionRow,
-        Object.fromEntries(Object.entries(eventFields).filter(([, value]) => value !== undefined)),
-      )
-    : undefined;
-  if (session && sessionRow.key === "global" && !params.agentId) {
+  const session: Record<string, unknown> = sessionRow;
+  for (const key in eventFields) {
+    const value = eventFields[key];
+    if (value !== undefined) {
+      session[key] = value;
+    }
+  }
+  if (sessionRow.key === "global" && !params.agentId) {
     delete session.goal;
   }
-  if (session && (sessionRow.key === "global" || sessionRow.key === "unknown") && !params.agentId) {
+  if ((sessionRow.key === "global" || sessionRow.key === "unknown") && !params.agentId) {
     delete session.swarm;
   }
   return {
-    ...(session ? { session } : {}),
+    session,
     ...eventFields,
     subagentRunState: sessionRow.subagentRunState,
     hasActiveSubagentRun: sessionRow.hasActiveSubagentRun,

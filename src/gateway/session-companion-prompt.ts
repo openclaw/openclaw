@@ -1,5 +1,4 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { redactToolPayloadText } from "../logging/redact.js";
 import {
   selectSessionCompanionReferenceItems,
   type SessionCompanionThread,
@@ -111,7 +110,7 @@ export function composePromptMessages(params: {
 }
 
 export function sanitizeAnswer(value: string): string {
-  const redacted = redactToolPayloadText(value).trim();
+  const redacted = value.trim();
   if (redacted.includes(PRIVATE_REFERENCE_BEGIN) || redacted.includes(PRIVATE_REFERENCE_END)) {
     return "";
   }

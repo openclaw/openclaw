@@ -1,8 +1,9 @@
+import { createAsyncLock } from "@openclaw/fs-safe/advanced";
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { Type, type Static } from "typebox";
-import { formatErrorMessage } from "../../infra/errors.js";
 import {
   type EligibleNodeMessages,
   resolveEligibleNodeFromList,
@@ -398,15 +399,7 @@ export function createMobileUiTool(options?: {
   idempotencyScope?: string;
 }): AnyAgentTool {
   const observations = new Map<string, MobileUiSnapshot>();
-  let opQueue: Promise<unknown> = Promise.resolve();
-  const serialize = <T>(fn: () => Promise<T>): Promise<T> => {
-    const result = opQueue.then(fn, fn);
-    opQueue = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    return result;
-  };
+  const serialize = createAsyncLock();
 
   return {
     label: "Mobile UI",

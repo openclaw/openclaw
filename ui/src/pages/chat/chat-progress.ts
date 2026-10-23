@@ -2,9 +2,12 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
 import type { ChatGuardianNotice, ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
 import type { CompactionStatus, RunOutputUsage } from "./tool-stream-contract.ts";
+
+registerChatComposerEnglish();
 
 type WorkingProgress = {
   key: string;
@@ -43,6 +46,9 @@ export function buildGuardianNoticeItem(
     icon: "shieldCheck" as const,
     timestamp: notice.timestamp,
   };
+  if (notice.permissionMissing) {
+    return { ...item, text: "", permissionMissing: notice.permissionMissing };
+  }
   if (notice.source === "system") {
     return {
       ...item,
@@ -258,7 +264,7 @@ export type TurnRecapWatch = {
   sessionKey: string;
   agentId: string | null;
   gatewayClient: GatewayBrowserClient | null;
-  runId: string;
+  runId: string | null;
   /** For a run that resumed a handoff: when its request was asked and the runs before it. */
   request: TurnRequest | null;
   recap: TurnRecap | null;
@@ -274,7 +280,7 @@ export function sumRunOutputTokens(
   let total = 0;
   for (const runId of runIds) {
     const usage = usageByRun?.get(runId);
-    if (!usage) {
+    if (!usage || usage.outputTokens === null) {
       return null;
     }
     total += usage.outputTokens;
@@ -289,11 +295,22 @@ export function resolveTurnRecap(
     agentId?: string | null;
     gatewayClient?: GatewayBrowserClient | null;
     indicator?: { runId?: string; request?: TurnRequest };
+    startingNewTurn?: boolean;
+    activeRunId?: string | null;
     row?: Pick<GatewaySessionRow, "lastRunId" | "status" | "runtimeMs" | "endedAt">;
     usageByRun?: ReadonlyMap<string, RunOutputUsage>;
   },
 ): (TurnRecap & { runId: string }) | null {
-  const { sessionKey, agentId = null, gatewayClient = null, indicator, row, usageByRun } = params;
+  const {
+    sessionKey,
+    agentId = null,
+    gatewayClient = null,
+    indicator,
+    startingNewTurn,
+    activeRunId,
+    row,
+    usageByRun,
+  } = params;
   let watch = host.turnRecapWatch;
   if (
     watch?.sessionKey !== sessionKey ||
@@ -302,25 +319,30 @@ export function resolveTurnRecap(
   ) {
     watch = null;
   }
-  if (indicator) {
-    const runId = indicator.runId;
-    if (!runId) {
-      host.turnRecapWatch = null;
-      return null;
+  if (indicator || activeRunId) {
+    const runId = indicator?.runId ?? activeRunId ?? null;
+    // A stale running row can outlive local completion. Anonymous activity
+    // hides the recap without revoking its observed run; a new input does.
+    if (runId || startingNewTurn || indicator?.request || !watch) {
+      if (watch?.runId !== runId) {
+        // An answer can identify a resumed run after its working indicator has vanished.
+        const request = watch?.runId === null ? watch.request : null;
+        watch = { sessionKey, agentId, gatewayClient, runId, request, recap: null };
+      }
+      if (indicator) {
+        watch.request = indicator.request ?? null;
+      }
     }
-    if (watch?.runId !== runId) {
-      watch = { sessionKey, agentId, gatewayClient, runId, request: null, recap: null };
-    }
-    watch.request = indicator.request ?? null;
   }
   host.turnRecapWatch = watch;
-  if (!watch) {
+  if (!watch?.runId) {
     return null;
   }
-  const outputTokens =
-    sumRunOutputTokens(usageByRun, [...(watch.request?.runIds ?? []), watch.runId]) ??
-    watch.recap?.outputTokens ??
-    null;
+  const runIds = [...(watch.request?.runIds ?? []), watch.runId];
+  const unavailable = runIds.some((runId) => usageByRun?.get(runId)?.outputTokens === null);
+  const outputTokens = unavailable
+    ? null
+    : (sumRunOutputTokens(usageByRun, runIds) ?? watch.recap?.outputTokens ?? null);
   if (row?.lastRunId === watch.runId) {
     const runtimeMs = row.runtimeMs;
     if (row.status === "done" && typeof runtimeMs === "number" && Number.isFinite(runtimeMs)) {

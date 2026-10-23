@@ -8,9 +8,14 @@ import {
   type CodexAppInventoryCache,
 } from "./app-inventory-cache.js";
 import type { CodexAppServerClient } from "./client.js";
-import { resolveCodexPluginsPolicy, type CodexPluginConfig } from "./config.js";
+import {
+  resolveCodexPluginsPolicy,
+  type CodexPluginConfig,
+  type ResolvedCodexPluginsPolicy,
+} from "./config.js";
 import { disableCodexPluginThreadConfig } from "./dynamic-tool-build.js";
 import {
+  createCodexAppInventoryRequest,
   resolveRecoverableCodexPluginConfigKeys,
   type CodexPluginRuntimeRequest,
 } from "./plugin-inventory.js";
@@ -18,11 +23,11 @@ import {
   defaultCodexPluginMetadataCache,
   type CodexPluginMetadataCache,
 } from "./plugin-metadata-cache.js";
+import { resolveCodexPluginThreadAppCacheKey } from "./plugin-thread-app-admission.js";
 import {
   buildCodexPluginThreadConfig,
   buildCodexPluginThreadConfigTimeoutFallback,
   buildCodexPluginThreadConfigInputFingerprint,
-  shouldBuildCodexPluginThreadConfig,
   type CodexPluginThreadConfig,
 } from "./plugin-thread-config.js";
 import {
@@ -44,8 +49,9 @@ type CodexPluginThreadConfigDeadlineRequest = (
 
 type BuildCodexPluginThreadConfigWithinDeadlineParams = Omit<
   Parameters<typeof buildCodexPluginThreadConfig>[0],
-  "request"
+  "request" | "policy"
 > & {
+  policy: ResolvedCodexPluginsPolicy;
   requestTimeoutMs: number;
   signal: AbortSignal;
   request: CodexPluginThreadConfigDeadlineRequest;
@@ -70,20 +76,19 @@ export function resolveCodexPluginThreadConfigStartupPolicy(params: {
   hostedAppsSupported?: boolean;
   scheduledRuntimeAuthority?: EmbeddedRunAttemptParams["scheduledRuntimeAuthority"];
 }) {
-  const pluginThreadConfigRequired =
-    params.hostedAppsSupported === false ||
-    Boolean(params.scheduledRuntimeAuthority) ||
-    !params.nativeToolSurfaceEnabled ||
-    shouldBuildCodexPluginThreadConfig(params.pluginConfig);
   // Restricted runs disable the native apps feature without inventory discovery.
   const pluginThreadConfigPluginConfig =
     params.hostedAppsSupported !== false &&
     (params.nativeToolSurfaceEnabled || params.scheduledRuntimeAuthority)
       ? params.pluginConfig
       : disableCodexPluginThreadConfig(params.pluginConfig);
-  const resolvedPluginPolicy = pluginThreadConfigRequired
-    ? resolveCodexPluginsPolicy(pluginThreadConfigPluginConfig)
-    : undefined;
+  const policy = resolveCodexPluginsPolicy(pluginThreadConfigPluginConfig);
+  const pluginThreadConfigRequired =
+    params.hostedAppsSupported === false ||
+    Boolean(params.scheduledRuntimeAuthority) ||
+    !params.nativeToolSurfaceEnabled ||
+    policy.configured;
+  const resolvedPluginPolicy = pluginThreadConfigRequired ? policy : undefined;
   return {
     pluginThreadConfigRequired,
     pluginThreadConfigPluginConfig,
@@ -159,7 +164,7 @@ async function buildCodexPluginThreadConfigWithinDeadline(
       );
     }
     return buildCodexPluginThreadConfigTimeoutFallback({
-      pluginConfig: buildParams.pluginConfig,
+      policy: buildParams.policy,
       appCacheKey: buildParams.appCacheKey,
       message: `Codex plugin discovery exceeded its ${timeoutMs} ms startup budget; plugin apps were disabled for this turn.`,
     });
@@ -173,16 +178,13 @@ export function prepareCodexPluginThreadConfigStartupProvider(prepared: {
   scheduledRuntimeAuthority?: EmbeddedRunAttemptParams["scheduledRuntimeAuthority"];
 }) {
   const { startupPolicy, appCacheKey } = prepared;
-  if (!startupPolicy.pluginThreadConfigRequired) {
+  const policy = startupPolicy.resolvedPluginPolicy;
+  if (!policy) {
     return undefined;
   }
-  const {
-    pluginThreadConfigPluginConfig: pluginConfig,
-    resolvedPluginPolicy: policy,
-    enabledPluginConfigKeys,
-  } = startupPolicy;
+  const { pluginThreadConfigPluginConfig: pluginConfig, enabledPluginConfigKeys } = startupPolicy;
   const inputFingerprint = buildScheduledCodexAppAuthorityInputFingerprint(
-    buildCodexPluginThreadConfigInputFingerprint({ pluginConfig, appCacheKey }),
+    buildCodexPluginThreadConfigInputFingerprint({ policy, appCacheKey }),
     prepared.scheduledRuntimeAuthority,
   );
   return (params: {
@@ -200,22 +202,21 @@ export function prepareCodexPluginThreadConfigStartupProvider(prepared: {
       enabled: true,
       // The bound context stores admitted apps only; native config owns excluded
       // app IDs and tool/link overrides that can change between turns.
-      requiresCurrentPolicyCheck: Boolean(policy?.enabled || params.scheduledRuntimeAuthority),
+      requiresCurrentPolicyCheck: Boolean(policy.enabled || params.scheduledRuntimeAuthority),
       inputFingerprint,
       enabledPluginConfigKeys,
-      accountAppRecoveryEnabled: policy?.allowAllPlugins,
-      recoverablePluginConfigKeys: policy
-        ? resolveRecoverableCodexPluginConfigKeys({
-            policy,
-            metadataCache,
-            appCacheKey,
-            configCwd: params.configCwd,
-          })
-        : undefined,
+      accountAppRecoveryEnabled: policy.allowAllPlugins,
+      recoverablePluginConfigKeys: resolveRecoverableCodexPluginConfigKeys({
+        policy,
+        metadataCache,
+        appCacheKey,
+        configCwd: params.configCwd,
+      }),
       build: async (buildOptions?: { threadId?: string }) => {
         const config = await buildCodexPluginThreadConfigWithinDeadline({
           ...buildParams,
           pluginConfig,
+          policy,
           appCacheKey,
           threadId: buildOptions?.threadId,
           appCache: appCache ?? defaultCodexAppInventoryCache,
@@ -230,6 +231,17 @@ export function prepareCodexPluginThreadConfigStartupProvider(prepared: {
                     request,
                     configCwd: params.configCwd,
                     threadId: buildOptions?.threadId,
+                    appInventory: (appCache ?? defaultCodexAppInventoryCache).read({
+                      key: resolveCodexPluginThreadAppCacheKey({
+                        appCacheKey,
+                        threadId: buildOptions?.threadId,
+                      }),
+                      request: createCodexAppInventoryRequest({
+                        request,
+                        threadId: buildOptions?.threadId,
+                      }),
+                      suppressRefresh: true,
+                    }).snapshot?.apps,
                   }),
                 )
             : undefined,
@@ -245,15 +257,11 @@ export function prepareCodexPluginThreadConfigStartupProvider(prepared: {
 }
 
 function resolveCodexPluginThreadConfigTimeoutMs(requestTimeoutMs: number): number {
-  const finiteRequestTimeoutMs =
-    Number.isFinite(requestTimeoutMs) && requestTimeoutMs > 0
-      ? requestTimeoutMs
-      : CODEX_PLUGIN_THREAD_CONFIG_MAX_TIMEOUT_MS * CODEX_PLUGIN_THREAD_CONFIG_TIMEOUT_DIVISOR;
   return Math.min(
     CODEX_PLUGIN_THREAD_CONFIG_MAX_TIMEOUT_MS,
     Math.max(
       CODEX_PLUGIN_THREAD_CONFIG_MIN_TIMEOUT_MS,
-      Math.floor(finiteRequestTimeoutMs / CODEX_PLUGIN_THREAD_CONFIG_TIMEOUT_DIVISOR),
+      Math.floor(requestTimeoutMs / CODEX_PLUGIN_THREAD_CONFIG_TIMEOUT_DIVISOR),
     ),
   );
 }

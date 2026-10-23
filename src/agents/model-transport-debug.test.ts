@@ -1,5 +1,6 @@
 import { emitModelTransportDebug } from "@openclaw/ai/diagnostics";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withModelTransportContext } from "../llm/model-transport-context.js";
 import { closeProviderTransportDispatcherPool } from "./provider-transport-dispatcher-pool.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
@@ -94,6 +95,60 @@ describe("emitModelTransportDebug", () => {
 });
 
 describe("guarded model fetch logging", () => {
+  it("keeps concurrent model fetches correlated across asynchronous response headers", async () => {
+    const pending: Array<() => void> = [];
+    fetchWithSsrFGuardMock.mockImplementation(async () => {
+      await new Promise<void>((resolve) => {
+        pending.push(resolve);
+      });
+      return {
+        response: new Response("ok", { headers: { "x-request-id": "req_upstream" } }),
+        finalUrl: requestUrl,
+        release: async () => undefined,
+      };
+    });
+    const fetch = buildGuardedModelFetch(model);
+    const identities = ["1", '2\n\r\u001b[31m"\\'];
+    const requests = identities.map((number) =>
+      withModelTransportContext(
+        {
+          sessionKey: `session-${number}`,
+          runId: `run-${number}`,
+          requestId: `run-${number}:model:3`,
+        },
+        () => fetch(requestUrl),
+      ),
+    );
+    await Promise.resolve();
+    for (const resolve of pending.toReversed()) {
+      resolve();
+    }
+    const responses = await Promise.all(requests);
+    await Promise.all(responses.map((response) => response.text()));
+    for (const number of identities) {
+      const messages = log.debug.mock.calls.map(([message]) => String(message));
+      const correlated = messages.filter((message) =>
+        message.includes(`sessionKey=${JSON.stringify(`session-${number}`)} `),
+      );
+      expect(correlated).toHaveLength(2);
+      expect(
+        correlated.every((message) =>
+          message.includes(
+            `runId=${JSON.stringify(`run-${number}`)} requestId=${JSON.stringify(`run-${number}:model:3`)} requestNumber=3`,
+          ),
+        ),
+      ).toBe(true);
+      for (const message of correlated) {
+        for (const control of ["\n", "\r", "\u001b"]) {
+          expect(message).not.toContain(control);
+        }
+      }
+      expect(correlated.find((message) => message.includes("[model-fetch] response "))).toContain(
+        "httpRequestId=req_upstream",
+      );
+    }
+  });
+
   beforeEach(() => {
     fetchWithSsrFGuardMock.mockReset();
     log.info.mockClear();
@@ -113,7 +168,8 @@ describe("guarded model fetch logging", () => {
   it.each([
     { status: 200, elapsedMs: 999, level: "debug" },
     { status: 299, elapsedMs: 42, level: "debug" },
-    { status: 200, elapsedMs: 1_000, level: "info" },
+    { status: 200, elapsedMs: 1_000, level: "debug" },
+    { status: 200, elapsedMs: 30_000, level: "debug" },
     { status: 300, elapsedMs: 42, level: "info" },
     { status: 500, elapsedMs: 42, level: "info" },
   ] as const)(
@@ -145,12 +201,38 @@ describe("guarded model fetch logging", () => {
     },
   );
 
-  it("keeps transport failures at warning level", async () => {
-    fetchWithSsrFGuardMock.mockRejectedValueOnce(new Error("network down"));
+  it.each([
+    { abort: false, error: new Error("network down"), level: "warn" },
+    { abort: false, error: new DOMException("upstream abort", "AbortError"), level: "warn" },
+    { abort: false, error: new DOMException("fetch deadline", "TimeoutError"), level: "warn" },
+    { abort: true, error: new DOMException("caller deadline", "TimeoutError"), level: "warn" },
+    { abort: true, error: new Error("unknown caller failure"), level: "warn" },
+    { abort: true, error: new DOMException("caller cancelled", "AbortError"), level: "debug" },
+    {
+      abort: true,
+      error: new DOMException("caller cancelled", "AbortError"),
+      level: "debug",
+      request: true,
+    },
+  ] as const)("logs $error at $level (caller abort: $abort, Request: $request)", async (test) => {
+    const controller = new AbortController();
+    fetchWithSsrFGuardMock.mockImplementationOnce(async () => {
+      if (test.abort) {
+        controller.abort(test.error);
+      }
+      throw test.error;
+    });
+    const fetch = buildGuardedModelFetch(model);
+    const pending =
+      "request" in test
+        ? fetch(new Request(requestUrl, { signal: controller.signal }))
+        : fetch(requestUrl, { signal: controller.signal });
 
-    await expect(buildGuardedModelFetch(model)(requestUrl)).rejects.toThrow("network down");
+    await expect(pending).rejects.toBe(test.error);
 
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("[model-fetch] error "));
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("message=network down"));
+    expect(log[test.level]).toHaveBeenCalledWith(
+      expect.stringContaining(`[model-fetch] ${test.level === "debug" ? "aborted" : "error"} `),
+    );
+    expect(log.warn).toHaveBeenCalledTimes(test.level === "warn" ? 1 : 0);
   });
 });

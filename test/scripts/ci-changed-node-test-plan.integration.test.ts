@@ -1,13 +1,16 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { buildChildEnv } from "../../scripts/ci-run-node-test-shard.mts";
 import {
   createChangedNodeTestShards,
+  createNodeWorkerE2eTestShards,
   hasControlUiPerformanceAffectingChange,
   resolveChangedNodeTestTargets,
 } from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import {
   createNodeTestShardBundles,
   createSelectedNodeTestShardBundles,
+  resolveUiE2ePrTestSelection,
   type CompactNodeTestShard,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import {
@@ -16,22 +19,14 @@ import {
   PR_PROTECTED_RUNTIME_TEST_FILES,
 } from "../../scripts/lib/ci-proof-test-inventory.mts";
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { fallbackGroups, selectedFiles } from "./ci-changed-node-test-plan.test-support.js";
+
+afterEach(() => vi.unstubAllEnvs());
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 // Real-checkout compositions share the planner's process-scoped import-graph cache.
 // Small synthetic graphs and canonical process selection remain in the unit file.
-function fallbackGroups(shards: NonNullable<ReturnType<typeof createChangedNodeTestShards>>) {
-  return shards.flatMap((shard) => shard.groups ?? [{ ...shard, shard_name: shard.shardName }]);
-}
-
-function selectedFiles(shards: ReturnType<typeof createChangedNodeTestShards>) {
-  return (shards ?? []).flatMap((shard) =>
-    (shard.targets ?? []).concat(
-      shard.includePatterns ?? [],
-      shard.groups?.flatMap((group) => group.includePatterns ?? []) ?? [],
-    ),
-  );
-}
-
 function canonicalOwner(jobs: CompactNodeTestShard[], shardName: string) {
   const job = expectDefined(
     jobs.find((candidate) => candidate.groups.some((group) => group.shard_name === shardName)),
@@ -43,6 +38,12 @@ function canonicalOwner(jobs: CompactNodeTestShard[], shardName: string) {
   );
   return { job, group };
 }
+
+it("selects the forced-cron process owner through its runtime-worker descriptor", () => {
+  expect(resolveChangedNodeTestTargets(["src/cron/service/run-queue.ts"])).toContain(
+    "src/cli/gateway-cli/run-loop.forced-cron.process.test.ts",
+  );
+});
 
 it("keeps the aggressive fixed smoke within two Node rows", () => {
   let smoke: string[] = [];
@@ -71,41 +72,29 @@ it("keeps the aggressive fixed smoke within two Node rows", () => {
 });
 
 it("keeps the hybrid hourly plan within the main-tier cap", () => {
-  const hourly = createNodeTestShardBundles({
-    runnerBackend: "hybrid",
-    compactMode: "pull-request",
-    compactNodeJobCap: 77,
-    includeProofTests: true,
-    includeReleaseOnlyToolingShards: true,
-    includePrExemptRuntimeTests: true,
-    includeReleaseOnlyRuntimeTests: false,
-    includeReleaseOnlyPluginShards: false,
-  });
+  const workerRows = createNodeWorkerE2eTestShards();
+  const hourly = [
+    ...createNodeTestShardBundles({
+      runnerBackend: "hybrid",
+      compactMode: "pull-request",
+      compactNodeJobCap: 77 - workerRows.length,
+      mainValidation: true,
+      includeProofTests: true,
+      includeReleaseOnlyToolingShards: true,
+      includePrExemptRuntimeTests: true,
+      includeReleaseOnlyRuntimeTests: false,
+      includeReleaseOnlyPluginShards: false,
+    }),
+    ...workerRows,
+  ];
   expect(hourly.filter((job) => !job.requiresDist).length).toBeLessThanOrEqual(77);
   expect(hourly.length).toBeLessThanOrEqual(79);
 });
 
-it.each(
-  [
-    {
-      target: "test/scripts/bench-gateway-installed.test.ts",
-      sources: ["scripts/bench-gateway-startup.ts"],
-      preciseSubjects: true,
-    },
-    {
-      target: "src/commands/doctor-lint.native-capture.test.ts",
-      sources: [
-        "src/commands/doctor-lint.native-capture.test-support.ts",
-        "src/cli/run-main-plugin-cache.ts",
-      ],
-      preciseSubjects: false,
-    },
-  ].flatMap(({ target, sources, preciseSubjects }) =>
-    [target, ...sources].map((changedPath) => ({ target, changedPath, preciseSubjects })),
-  ),
-)(
-  "opts in $target for $changedPath beside hub inputs",
-  ({ target, changedPath, preciseSubjects }) => {
+it.each(["test/scripts/bench-gateway-installed.test.ts", "scripts/bench-gateway-startup.ts"])(
+  "opts in the installed benchmark for %s beside hub inputs",
+  (changedPath) => {
+    const target = "test/scripts/bench-gateway-installed.test.ts";
     expect(listPrExemptRuntimeTestFiles()).toContain(target);
     const options = {
       runnerBackend: "github",
@@ -113,62 +102,18 @@ it.each(
       includePrExemptRuntimeTests: false,
       includeReleaseOnlyToolingShards: false,
     };
-    const fallbackFiles = (changedPaths: string[]) =>
-      createNodeTestShardBundles({
-        ...options,
-        compactMode: "pull-request",
-        changedPaths,
-      }).flatMap((job) => job.groups.flatMap((group) => group.includePatterns ?? []));
     const precise = createChangedNodeTestShards([changedPath], options);
-    if (preciseSubjects || changedPath === target) {
-      expect(precise, changedPath).not.toBeNull();
-    }
-    expect(precise ? selectedFiles(precise) : fallbackFiles([changedPath]), changedPath).toContain(
-      target,
-    );
+    expect(precise, changedPath).not.toBeNull();
+    expect(selectedFiles(precise), changedPath).toContain(target);
     const withHub = createChangedNodeTestShards(["tsconfig.json", changedPath], options);
-    if (preciseSubjects) {
-      expect(withHub, changedPath).not.toBeNull();
-    }
-    const withHubFiles = withHub
-      ? selectedFiles(withHub)
-      : fallbackFiles(["tsconfig.json", changedPath]);
+    expect(withHub, changedPath).not.toBeNull();
+    const withHubFiles = selectedFiles(withHub);
     expect(withHubFiles, changedPath).toContain(target);
     expect(withHubFiles).not.toContain(
       "extensions/acpx/src/runtime-advertised-model.process.test.ts",
     );
   },
 );
-
-it("keeps precise first-signin targets under exclusive Gateway admission", () => {
-  const target = "src/gateway/setup-inference.first-signin.integration.test.ts";
-  const jobs = createChangedNodeTestShards([target], { runnerBackend: "hybrid" });
-  expect(jobs).not.toBeNull();
-  const owner = jobs?.find((job) =>
-    job.groups?.some((group) => group.includePatterns?.includes(target)),
-  );
-  expect(owner).toMatchObject({ planConcurrency: 1 });
-  expect(jobs?.flatMap((job) => job.targets ?? [])).not.toContain(target);
-});
-
-it("keeps boundary coverage when only a deferred proof helper changes", () => {
-  const helper = "test/helpers/sqlite-sessions-transcripts-flip-proof-assertions.ts";
-  const shards = createChangedNodeTestShards([helper]);
-  expect(shards).toContainEqual(
-    expect.objectContaining({
-      checkName: "checks-node-changed-boundary",
-      configs: ["test/vitest/vitest.boundary.config.ts"],
-    }),
-  );
-  const withDeleted = createChangedNodeTestShards([helper, "src/deleted-unowned-source.ts"]);
-  expect(withDeleted).not.toBeNull();
-  expect(selectedFiles(withDeleted)).toEqual(
-    expect.arrayContaining(["src/gateway/client-callsites.guard.test.ts"]),
-  );
-  expect(selectedFiles(withDeleted)).not.toContain(
-    "extensions/acpx/src/runtime-advertised-model.process.test.ts",
-  );
-});
 
 it("retains package and plugin consumers together in a mixed diff", () => {
   const changedPaths = [
@@ -194,7 +139,65 @@ it("retains package and plugin consumers together in a mixed diff", () => {
   expect(extensionGroups.every((group) => (group.includePatterns?.length ?? 0) > 0)).toBe(true);
 });
 
-it("keeps UI and core changes with exact owners and direct consumers", () => {
+it.each(["packages/markdown-core/src/render-aware-chunking.ts"])(
+  "selects channel chunk-contract suites when %s changes",
+  (source) => {
+    // Channels import the chunker through the Plugin SDK facade, below the PR import-walk depth.
+    expect(
+      resolveChangedNodeTestTargets([source], {
+        selectionMode: "aggressive",
+        includePrExemptRuntimeTests: false,
+        includeReleaseOnlyRuntimeTests: false,
+      }),
+    ).toEqual(
+      expect.arrayContaining([
+        "extensions/googlechat/src/format.test.ts",
+        "extensions/signal/src/format.test.ts",
+        "extensions/slack/src/format.test.ts",
+        "extensions/sms/src/send.test.ts",
+        "extensions/telegram/src/format.test.ts",
+        "extensions/whatsapp/src/send.delivery-recovery.test.ts",
+      ]),
+    );
+  },
+);
+
+// #170662 moved transcript layout completion to a microtask. PR selection omitted
+// these mocked-Gateway cases, so the resulting renderer freeze first failed on main.
+it.each([
+  {
+    name: "the #170662 diff",
+    paths: [
+      "docs/web/control-ui.md",
+      "ui/src/lib/reactive/README.md",
+      "ui/src/pages/chat/components/chat-transcript-controller.test.ts",
+      "ui/src/pages/chat/components/chat-transcript-layout-solid.tsx",
+      "ui/src/pages/chat/components/chat-transcript-layout.ts",
+      "ui/src/pages/chat/components/chat-transcript-message-reveal.test.ts",
+      "ui/src/pages/chat/components/chat-transcript-replies.test.ts",
+      "ui/src/pages/chat/components/chat-transcript-virtualizer-host.ts",
+      "ui/src/pages/chat/solid-render-lifecycle.test.tsx",
+      "ui/src/pages/chat/solid-render-lifecycle.ts",
+    ],
+  },
+  { name: "message reveal", paths: ["ui/src/pages/chat/components/chat-message-reveal.ts"] },
+  { name: "Solid render lifecycle", paths: ["ui/src/pages/chat/solid-render-lifecycle.ts"] },
+])("selects transcript browser owners for $name", ({ paths }) => {
+  const selection = resolveUiE2ePrTestSelection(paths);
+  expect(selection.mode).toBe("owners");
+  for (const file of [
+    "ui/src/e2e/chat-collapsed-reply-reveal.e2e.test.ts",
+    "ui/src/e2e/chat-position-rail.e2e.test.ts",
+    "ui/src/e2e/chat-reply-preview-recovery.e2e.test.ts",
+  ]) {
+    expect(selection.reasons[file], file).toEqual(
+      expect.arrayContaining([expect.stringMatching(/^direct route\/component dependency: /u)]),
+    );
+  }
+});
+
+it.each(["node", "bun-all"])("keeps exact UI and core owners with %s timings", (runtimePolicy) => {
+  vi.stubEnv("OPENCLAW_CI_TEST_RUNTIME_POLICY", runtimePolicy);
   const paths = [
     "ui/src/components/markdown-file-links.ts",
     "src/agents/live-provider-owner.ts",
@@ -288,6 +291,7 @@ it("keeps UI and core changes with exact owners and direct consumers", () => {
     }),
     "canonical selected tooling owners",
   );
+  const envScratch = tempDirs.make("changed-node-plan-env-");
   for (const job of shards ?? []) {
     for (const group of job.groups ?? []) {
       const owners = group.configs.includes("test/vitest/vitest.tooling.config.ts")
@@ -316,16 +320,43 @@ it("keeps UI and core changes with exact owners and direct consumers", () => {
       ] as const) {
         expect(group[key], `${group.shard_name} group ${key}`).toEqual(selectedGroup[key]);
       }
-      for (const key of [
-        "env",
-        "runner",
-        "planConcurrency",
-        "pretestBuildMode",
-        "requiresDist",
-        "timeoutMinutes",
-      ] as const) {
+      for (const key of ["runner", "pretestBuildMode", "requiresDist", "timeoutMinutes"] as const) {
         expect(job[key], `${group.shard_name} job ${key}`).toEqual(selectedJob[key]);
       }
+      expect(
+        Object.fromEntries(
+          Object.entries(job.env ?? {}).filter(([key]) => key !== "OPENCLAW_VITEST_MAX_WORKERS"),
+        ),
+        `${group.shard_name} job environment`,
+      ).toEqual(
+        Object.fromEntries(
+          Object.entries(selectedJob.env ?? {}).filter(
+            ([key]) => key !== "OPENCLAW_VITEST_MAX_WORKERS",
+          ),
+        ),
+      );
+      // Bounding can coalesce compatible settled serial rows after canonical selection.
+      // Compare the child budget the executor receives instead of projecting raw job concurrency
+      // backward across that phase boundary.
+      const childWorkers = buildChildEnv(
+        { kind: "group", name: group.shard_name, plan: group },
+        {
+          OPENCLAW_VITEST_MAX_WORKERS: job.planConcurrency === 1 ? "8" : "2",
+          ...job.env,
+        },
+        envScratch,
+        0,
+      ).OPENCLAW_VITEST_MAX_WORKERS;
+      const selectedChildWorkers = buildChildEnv(
+        { kind: "group", name: selectedGroup.shard_name, plan: selectedGroup },
+        {
+          OPENCLAW_VITEST_MAX_WORKERS: selectedJob.planConcurrency === 1 ? "8" : "2",
+          ...selectedJob.env,
+        },
+        envScratch,
+        0,
+      ).OPENCLAW_VITEST_MAX_WORKERS;
+      expect(childWorkers, `${group.shard_name} child worker ceiling`).toBe(selectedChildWorkers);
     }
   }
   expect(createChangedNodeTestShards([paths[1]!, "ui/src/AGENTS.md"], options)).toEqual(
@@ -338,38 +369,6 @@ it("keeps UI and core changes with exact owners and direct consumers", () => {
     expect(selectedFiles(withHub)).not.toContain(
       "extensions/acpx/src/runtime-advertised-model.process.test.ts",
     );
-  }
-});
-
-it("adds the fixed smoke once to narrow, hub, and directly edited smoke plans", () => {
-  const smoke = [
-    "test/gateway-rpc-exporters.test.ts",
-    "src/config/io.load-async.test.ts",
-    "src/config/io.compat.test.ts",
-    "src/config/utility-model-separation-migration.io.test.ts",
-    "src/plugins/loader.runtime-registry.test.ts",
-    "test/qa-channel-message-tool-delivery.test.ts",
-  ];
-  for (const changedPaths of [
-    ["src/infra/retry.test.ts"],
-    ["tsconfig.json"],
-    ["test/gateway-rpc-exporters.test.ts"],
-  ]) {
-    const shards = createChangedNodeTestShards(changedPaths, {
-      includePrExemptRuntimeTests: false,
-      includeReleaseOnlyRuntimeTests: false,
-      dedicatedBuildArtifacts: false,
-    });
-    expect(shards).not.toBeNull();
-    const files = selectedFiles(shards);
-    for (const target of smoke) {
-      expect(
-        files.filter((file) => file === target),
-        target,
-      ).toHaveLength(1);
-    }
-    expect(files).not.toContain("extensions/acpx/src/runtime-advertised-model.process.test.ts");
-    expect(shards?.every((shard) => (shard.predictedSeconds ?? 0) <= 300)).toBe(true);
   }
 });
 

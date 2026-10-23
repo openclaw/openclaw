@@ -202,26 +202,6 @@ export function toMediaProbeResult(result: PlaybackMediaProbeResult | null): Med
   };
 }
 
-/** Probes a local audio or video file; every failure degrades to absent fields. */
-async function probeMediaFile(
-  filePath: string,
-  kind: MediaProbeKind,
-  options: MediaProbeOptions = {},
-): Promise<MediaProbeResult> {
-  try {
-    const handle = await fs.open(filePath, "r");
-    try {
-      return toMediaProbeResult(
-        await probeMediaSource({ stdinFileDescriptor: handle.fd }, kind, options),
-      );
-    } finally {
-      await handle.close().catch(() => {});
-    }
-  } catch {
-    return {};
-  }
-}
-
 /** Probes a bounded batch under one elapsed-time budget, unaffected by wall-clock steps. */
 export async function probeMediaFilesWithinBudget(
   inputs: readonly MediaFileProbeInput[],
@@ -238,7 +218,20 @@ export async function probeMediaFilesWithinBudget(
     const batchEnd = Math.min(offset + options.concurrency, probeCount);
     const batch = inputs.slice(offset, batchEnd);
     const batchResults = await Promise.all(
-      batch.map((input) => probeMediaFile(input.filePath, input.kind, { timeoutMs })),
+      batch.map(async ({ filePath, kind }) => {
+        try {
+          const handle = await fs.open(filePath, "r");
+          try {
+            return toMediaProbeResult(
+              await probeMediaSource({ stdinFileDescriptor: handle.fd }, kind, { timeoutMs }),
+            );
+          } finally {
+            await handle.close().catch(() => {});
+          }
+        } catch {
+          return {};
+        }
+      }),
     );
     for (const [batchIndex, metadata] of batchResults.entries()) {
       results[offset + batchIndex] = metadata;

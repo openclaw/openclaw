@@ -7,7 +7,6 @@ import {
   resolveDiscordMessageSnapshots,
   resolveDiscordMessageStickers,
   resolveDiscordReferencedForwardMessage,
-  resolveDiscordSnapshotStickers,
   type DiscordSnapshotMessage,
 } from "./message-forwarded.js";
 import { formatDiscordMediaText } from "./message-media.js";
@@ -26,14 +25,12 @@ function resolveDiscordEmbedText(
 
 export function resolveDiscordMessageText(
   message: Message,
-  options?: { fallbackText?: string; includeForwarded?: boolean },
+  options?: { includeForwarded?: boolean },
 ): string {
   const rawText =
     resolveDiscordMessageMentionDocuments(message)
       .map((text) => text.trim())
-      .join("\n") ||
-    normalizeOptionalString(options?.fallbackText) ||
-    "";
+      .join("\n") || "";
   const baseText = resolveDiscordMentions(rawText, message);
   if (!options?.includeForwarded) {
     return baseText;
@@ -56,7 +53,7 @@ export function resolveDiscordMessageMentionDocuments(message: Message): string[
     return embedDocuments;
   }
   const componentDocuments: string[] = [];
-  collectDiscordTextDisplayDocuments(resolveDiscordMessageComponents(message), componentDocuments);
+  collectDiscordTextDisplayDocuments(message.components, componentDocuments);
   return componentDocuments;
 }
 
@@ -72,18 +69,6 @@ export function resolveDiscordMessageBatch(last: Message, preceding: readonly Me
     ...Object.getOwnPropertyDescriptors(last),
     content: { value: content, enumerable: true, configurable: true },
     attachments: { value: [], enumerable: true, configurable: true },
-    message_snapshots: {
-      // SAFETY: This optional transport field stays opaque until snapshot normalization.
-      value: (last as { message_snapshots?: unknown }).message_snapshots,
-      enumerable: true,
-      configurable: true,
-    },
-    messageSnapshots: {
-      // SAFETY: This optional wrapper field stays opaque until snapshot normalization.
-      value: (last as { messageSnapshots?: unknown }).messageSnapshots,
-      enumerable: true,
-      configurable: true,
-    },
     rawData: {
       value: { ...last.rawData },
       enumerable: true,
@@ -95,11 +80,11 @@ export function resolveDiscordMessageBatch(last: Message, preceding: readonly Me
 /** Adds native media text only for history surfaces that cannot carry structured facts. */
 export function resolveDiscordMessageHistoryText(
   message: Message,
-  options?: { fallbackText?: string; includeForwarded?: boolean },
+  options?: { includeForwarded?: boolean },
 ): string {
   const text = resolveDiscordMessageText(message, options);
   const mediaText = formatDiscordMediaText({
-    attachments: message.attachments ?? undefined,
+    attachments: message.attachments,
     stickers: resolveDiscordMessageStickers(message),
   });
   return [text, mediaText].filter(Boolean).join("\n");
@@ -134,18 +119,6 @@ function resolveDiscordForwardedMessagesText(message: Message): string {
     resolveDiscordMessageHistoryText(referencedForward),
     referencedForward.author,
   );
-}
-
-function resolveDiscordMessageComponents(message: Message): unknown {
-  const components = (message as { components?: unknown }).components;
-  if (components !== undefined) {
-    return components;
-  }
-  try {
-    return (message as { rawData?: { components?: unknown } }).rawData?.components;
-  } catch {
-    return undefined;
-  }
 }
 
 function extractDiscordComponentsV2Text(components: unknown): string {
@@ -213,7 +186,7 @@ export function resolveDiscordRawMessageText(
   const content = normalizeOptionalString(message.content) ?? "";
   const mediaText = formatDiscordMediaText({
     attachments: message.attachments ?? undefined,
-    stickers: resolveDiscordSnapshotStickers(message),
+    stickers: resolveDiscordMessageStickers(message),
   });
   const text =
     content ||

@@ -1,5 +1,10 @@
 import { createHash } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core";
+import {
+  extractErrorCode,
+  formatErrorMessage,
+  readErrorName,
+} from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
 import type { WebPushNotificationCategory } from "../../packages/gateway-protocol/src/schema/push.js";
@@ -16,7 +21,7 @@ import {
   prepareWebPushNotificationSender,
   type BoundWebPushSubscription,
 } from "../infra/push-web.js";
-import { createSubsystemLogger, type SubsystemLogger } from "../logging/subsystem.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 import { resolveControlUiWebPushUrl } from "./control-ui-shared.js";
 import { QUESTIONS_SCOPE } from "./method-scopes.js";
@@ -29,9 +34,10 @@ import {
   webPushTargetClient,
   webPushSessionAccess,
 } from "./web-push-authority.js";
+import { currentWebPushAgentIcon, prepareWebPushAgentIcon } from "./web-push-avatar.js";
 
 const EVENT_PUSH_TTL_SECONDS = 5 * 60;
-const defaultLog = createSubsystemLogger("gateway/web-push");
+const log = createSubsystemLogger("gateway/web-push");
 
 type EventNotification = {
   category: WebPushNotificationCategory;
@@ -120,10 +126,8 @@ function resolveEventWebPushNotification(
 /** Routes attention events to offline browsers without expanding live session visibility. */
 export function createEventWebPushDelivery(params: {
   getRuntimeConfig: () => OpenClawConfig;
-  log?: Pick<SubsystemLogger, "warn">;
   stateDir?: string;
 }) {
-  const log = params.log ?? defaultLog;
   const deliver = (
     notification: EventNotification,
     event: string,
@@ -131,15 +135,21 @@ export function createEventWebPushDelivery(params: {
     opts?: GatewayBroadcastOpts,
     mention?: HumanMentionWebPush,
   ): void => {
+    let stage = "subscriptions";
     void (async () => {
       if (!(await hasBoundWebPushSubscriptions(params.stateDir))) {
         return;
       }
+      stage = "sender";
       const sender = await prepareWebPushNotificationSender(params.stateDir);
+      stage = "authority";
       const agentId = normalizeOptionalString(
         opts?.agentId ?? (isRecord(payload) ? payload.agentId : undefined),
       );
       const sessionKeys = opts?.sessionKeys ?? [];
+      const preparedIcon = mention
+        ? undefined
+        : await prepareWebPushAgentIcon(params.getRuntimeConfig(), agentId);
       const groupedResults = await withCurrentWebPushAuthority(
         { ...params, sessionKeys, agentId, preparePublication: mention?.prepare },
         (authority) => {
@@ -174,9 +184,15 @@ export function createEventWebPushDelivery(params: {
             ...(mention ? { visibilityScopes: [ADMIN_SCOPE] } : {}),
           });
           const agentLabel = normalizeWebPushDisplayLabel(agentId);
+          const agentIcon = currentWebPushAgentIcon(cfg, preparedIcon);
           const groups = new Map<
             string,
-            { title: string; body: string; subscriptions: BoundWebPushSubscription[] }
+            {
+              title: string;
+              body: string;
+              icon?: string;
+              subscriptions: BoundWebPushSubscription[];
+            }
           >();
           for (const target of targets) {
             if (mention && target.userProfileId !== recipientProfileId) {
@@ -216,8 +232,9 @@ export function createEventWebPushDelivery(params: {
                 ? notification.body
                 : (notification.identifiedBody ??
                   (agentLabel ? `${agentLabel}: ${notification.body}` : notification.body));
-            const key = JSON.stringify({ title, body });
-            const group = groups.get(key) ?? { title, body, subscriptions: [] };
+            const icon = preferences.detailLevel === "private" ? undefined : agentIcon;
+            const key = JSON.stringify({ title, body, icon });
+            const group = groups.get(key) ?? { title, body, icon, subscriptions: [] };
             group.subscriptions.push(target.subscription);
             groups.set(key, group);
           }
@@ -231,14 +248,16 @@ export function createEventWebPushDelivery(params: {
             .digest("base64url")
             .slice(0, 32);
           return {
-            start: () =>
-              Promise.all(
+            start: () => {
+              stage = "delivery";
+              return Promise.all(
                 [...groups.values()].map((group) =>
                   sender({
                     subscriptions: group.subscriptions,
                     payload: {
                       title: group.title,
                       body: group.body,
+                      ...(group.icon ? { icon: group.icon } : {}),
                       tag: notification.tag,
                       renotify: false,
                       url,
@@ -250,7 +269,8 @@ export function createEventWebPushDelivery(params: {
                     },
                   }),
                 ),
-              ),
+              );
+            },
           };
         },
       );
@@ -266,9 +286,16 @@ export function createEventWebPushDelivery(params: {
           failed,
         });
       }
-    })().catch(() => {
-      // Transport failures can contain endpoints and payload bytes; log only the closed category.
-      log.warn("event Web Push delivery could not complete", { category: notification.category });
+    })().catch((error: unknown) => {
+      log.warn("event Web Push delivery could not complete", {
+        category: notification.category,
+        stage,
+        error: formatErrorMessage(error),
+        errorName: readErrorName(error),
+        errorCode: extractErrorCode(error),
+        stack: error instanceof Error ? error.stack : undefined,
+        retry: false,
+      });
     });
   };
 

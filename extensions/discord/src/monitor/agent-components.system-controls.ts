@@ -1,11 +1,10 @@
+import { ComponentType } from "discord-api-types/v10";
 import { logDebug, logError } from "openclaw/plugin-sdk/logging-core";
 import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
-import {
-  Button,
-  StringSelectMenu,
-  type ButtonInteraction,
-  type ComponentData,
-  type StringSelectMenuInteraction,
+import type {
+  BaseMessageInteractiveComponent,
+  BaseComponentInteraction,
+  ComponentData,
 } from "../internal/discord.js";
 import {
   ackComponentInteraction,
@@ -79,7 +78,9 @@ async function runAgentSystemControlInteraction(params: AgentSystemControlParams
   });
 
   const eventText = params.formatEventText({ componentId, username, userId });
-  logDebug(`${label}: enqueuing event for channel ${channelId}: ${eventText}`);
+  logDebug(
+    `${label}: enqueuing event for channel ${channelId} interaction=${params.interaction.id}`,
+  );
 
   enqueueRoutedSystemEvent(eventText, route, {
     // The immutable interaction ID identifies one occurrence, preserving repeat clicks while
@@ -93,50 +94,42 @@ async function runAgentSystemControlInteraction(params: AgentSystemControlParams
   });
 }
 
-class AgentComponentButton extends Button {
-  override label = AGENT_BUTTON_KEY;
-  customId = `${AGENT_BUTTON_KEY}:seed=1`;
-  constructor(private readonly ctx: AgentComponentContext) {
-    super();
-  }
+export function createAgentComponentButton(
+  ctx: AgentComponentContext,
+): BaseMessageInteractiveComponent {
+  return {
+    type: ComponentType.Button,
+    customId: `${AGENT_BUTTON_KEY}:seed=1`,
 
-  override async run(interaction: ButtonInteraction, data: ComponentData): Promise<void> {
-    await runAgentSystemControlInteraction({
-      ctx: this.ctx,
-      interaction,
-      data,
-      kind: "button",
-      formatEventText: ({ componentId, username, userId }) =>
-        `[Discord component: ${componentId} clicked by ${username} (${userId})]`,
-    });
-  }
+    async run(interaction: BaseComponentInteraction, data: ComponentData): Promise<void> {
+      await runAgentSystemControlInteraction({
+        ctx,
+        interaction,
+        data,
+        kind: "button",
+        formatEventText: ({ componentId, username, userId }) =>
+          `[Discord component: ${componentId} clicked by ${username} (${userId})]`,
+      });
+    },
+  };
 }
 
-class AgentSelectMenu extends StringSelectMenu {
-  customId = `${AGENT_SELECT_KEY}:seed=1`;
-  options = [];
-  constructor(private readonly ctx: AgentComponentContext) {
-    super();
-  }
+export function createAgentSelectMenu(ctx: AgentComponentContext): BaseMessageInteractiveComponent {
+  return {
+    type: ComponentType.StringSelect,
+    customId: `${AGENT_SELECT_KEY}:seed=1`,
 
-  override async run(interaction: StringSelectMenuInteraction, data: ComponentData): Promise<void> {
-    const values = interaction.values ?? [];
-    const valuesText = values.length > 0 ? ` (selected: ${values.join(", ")})` : "";
-    await runAgentSystemControlInteraction({
-      ctx: this.ctx,
-      interaction,
-      data,
-      kind: "select",
-      formatEventText: ({ componentId, username, userId }) =>
-        `[Discord select menu: ${componentId} interacted by ${username} (${userId})${valuesText}]`,
-    });
-  }
-}
-
-export function createAgentComponentButton(ctx: AgentComponentContext): Button {
-  return new AgentComponentButton(ctx);
-}
-
-export function createAgentSelectMenu(ctx: AgentComponentContext): StringSelectMenu {
-  return new AgentSelectMenu(ctx);
+    async run(interaction: BaseComponentInteraction, data: ComponentData): Promise<void> {
+      const values = interaction.values ?? [];
+      const valuesText = values.length > 0 ? ` (selected: ${values.join(", ")})` : "";
+      await runAgentSystemControlInteraction({
+        ctx,
+        interaction,
+        data,
+        kind: "select",
+        formatEventText: ({ componentId, username, userId }) =>
+          `[Discord select menu: ${componentId} interacted by ${username} (${userId})${valuesText}]`,
+      });
+    },
+  };
 }

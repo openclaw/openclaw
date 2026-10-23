@@ -29,15 +29,7 @@ const DECCKM_SS3_KEYS: Record<string, string> = {
   end: `${ESC}OF`,
 };
 
-const namedKeyMap = new Map<string, string>([
-  ["enter", CR],
-  ["return", CR],
-  ["tab", TAB],
-  ["escape", ESC],
-  ["esc", ESC],
-  ["space", " "],
-  ["bspace", BACKSPACE],
-  ["backspace", BACKSPACE],
+const modifiableNamedKeys = new Map<string, string>([
   ["up", `${ESC}[A`],
   ["down", `${ESC}[B`],
   ["right", `${ESC}[C`],
@@ -55,7 +47,6 @@ const namedKeyMap = new Map<string, string>([
   ["delete", `${ESC}[3~`],
   ["del", `${ESC}[3~`],
   ["dc", `${ESC}[3~`],
-  ["btab", `${ESC}[Z`],
   ["f1", `${ESC}OP`],
   ["f2", `${ESC}OQ`],
   ["f3", `${ESC}OR`],
@@ -68,6 +59,19 @@ const namedKeyMap = new Map<string, string>([
   ["f10", `${ESC}[21~`],
   ["f11", `${ESC}[23~`],
   ["f12", `${ESC}[24~`],
+]);
+
+const namedKeyMap = new Map<string, string>([
+  ...modifiableNamedKeys,
+  ["enter", CR],
+  ["return", CR],
+  ["tab", TAB],
+  ["escape", ESC],
+  ["esc", ESC],
+  ["space", " "],
+  ["bspace", BACKSPACE],
+  ["backspace", BACKSPACE],
+  ["btab", `${ESC}[Z`],
   ["kp/", `${ESC}Oo`],
   ["kp*", `${ESC}Oj`],
   ["kp-", `${ESC}Om`],
@@ -84,38 +88,6 @@ const namedKeyMap = new Map<string, string>([
   ["kp0", `${ESC}Op`],
   ["kp.", `${ESC}On`],
   ["kpenter", `${ESC}OM`],
-]);
-
-const modifiableNamedKeys = new Set([
-  "up",
-  "down",
-  "left",
-  "right",
-  "home",
-  "end",
-  "pageup",
-  "pgup",
-  "ppage",
-  "pagedown",
-  "pgdn",
-  "npage",
-  "insert",
-  "ic",
-  "delete",
-  "del",
-  "dc",
-  "f1",
-  "f2",
-  "f3",
-  "f4",
-  "f5",
-  "f6",
-  "f7",
-  "f8",
-  "f9",
-  "f10",
-  "f11",
-  "f12",
 ]);
 
 type KeyEncodingRequest = {
