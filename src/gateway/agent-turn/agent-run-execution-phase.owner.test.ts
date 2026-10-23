@@ -1,7 +1,11 @@
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  createDeferredGate as createGate,
+} from "../../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { prepareEmbeddedSessionState } from "../../agents/command/session-preparation.js";
 import {
@@ -80,19 +84,6 @@ vi.mock("../../agents/command/runtime-loaders.js", async (importOriginal) => ({
     resolveNodeExecEligibilityAsync: () => ({ canExec: false }),
   }),
 }));
-
-function createGate() {
-  const entered = createDeferred();
-  const finish = createDeferred();
-  return {
-    entered: entered.promise,
-    resolve: finish.resolve,
-    wait: () => {
-      entered.resolve();
-      return finish.promise;
-    },
-  };
-}
 
 function expectCalls(count: number, ...spies: unknown[]) {
   for (const spy of spies) {

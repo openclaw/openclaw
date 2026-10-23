@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, createDeferredGate as createGate } from "../../../test/helpers/promise.js";
 import type { AgentCommandDeliveryResult } from "../../agents/command/delivery-result.js";
 import type { AgentCommandOpts } from "../../agents/command/types.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
@@ -42,19 +42,6 @@ vi.mock(import("../../infra/agent-run-registry.js"), async (importOriginal) => (
   validateAgentRunDelegatedAuthority: () => true,
 }));
 vi.mock("./agent-dedupe.js", () => ({ setGatewayDedupeEntries: vi.fn() }));
-
-function createGate() {
-  const entered = createDeferred();
-  const finish = createDeferred();
-  return {
-    entered: entered.promise,
-    resolve: finish.resolve,
-    wait: () => {
-      entered.resolve();
-      return finish.promise;
-    },
-  };
-}
 
 function expectCalls(count: number, ...spies: unknown[]) {
   for (const spy of spies) {

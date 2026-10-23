@@ -1,6 +1,20 @@
+import { createDeferredCore as createDeferred } from "../../src/shared/deferred.js";
 import type { StoreWriterQueue } from "../../src/shared/store-writer-queue.js";
 
-export { createDeferredCore as createDeferred } from "../../src/shared/deferred.js";
+export { createDeferred };
+
+export function createDeferredGate() {
+  const entered = createDeferred();
+  const finish = createDeferred();
+  return {
+    entered: entered.promise,
+    resolve: finish.resolve,
+    wait: () => {
+      entered.resolve();
+      return finish.promise;
+    },
+  };
+}
 
 /** Waits for active drains to settle while rejecting still-pending test writes. */
 export async function drainStoreWriterQueuesForTest(
