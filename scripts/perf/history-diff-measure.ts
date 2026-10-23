@@ -362,7 +362,7 @@ async function measure() {
   const scopedReader = values["scoped-reader"];
   const readerIdentity = "history-diff-reader@example.invalid";
   const readerOrigin = "https://history-diff.example.invalid";
-  let gatewayEnv = {
+  let gatewayEnv: NodeJS.ProcessEnv = {
     ...env,
     ...(values["history-source"]
       ? { OPENCLAW_BENCH_HISTORY_SOURCE: path.resolve(values["history-source"]) }
