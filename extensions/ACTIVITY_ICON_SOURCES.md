@@ -125,6 +125,8 @@ FaceTime reuses the existing [Voice Call phone glyph](voice-call/assets/activity
 
 Kie reuses the existing [Vydra video glyph](vydra/assets/activity.svg) byte-for-byte for video generation.
 
+kokoro.cpp reuses the existing [Local CLI TTS glyph](tts-local-cli/assets/activity.svg) byte-for-byte for local speech synthesis.
+
 QuickJS Code Mode reuses the existing [mxc sandbox glyph](mxc/assets/activity.svg) byte-for-byte for its isolated executor.
 
 Other defaults are OpenClaw functional glyphs drawn for the 24-unit activity grid. They indicate the capability rather than reproducing a service’s larger app tile. Related actions deliberately share a visual family:
@@ -137,7 +139,7 @@ Other defaults are OpenClaw functional glyphs drawn for the 24-unit activity gri
 | Files and knowledge     | `document-extract`, `file-transfer`, `imap`, `logbook`, `memory-wiki`, `oc-path`, `web-readability`, `workboard` |
 | Compute and location    | `crabbox`, `cua-computer`, `geolocation`, `gmi`, `radius`, `sglang`                                              |
 | Security and migration  | `migrate-claude`, `migrate-hermes`, `mxc`, `openshell`, `policy`, `visitor-access`                               |
-| Audio and media         | `gradium`, `inworld`, `kie`, `senseaudio`, `talk-voice`, `tts-local-cli`, `voice-call`, `vydra`                  |
+| Audio and media         | `gradium`, `inworld`, `kie`, `kokoro-cpp`, `senseaudio`, `talk-voice`, `tts-local-cli`, `voice-call`, `vydra`    |
 | Utilities and reports   | `parallel`, `qa-channel`, `qa-lab`, `team-reports`, `tokenjuice`                                                 |
 
 ## License notices

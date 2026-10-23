@@ -718,6 +718,11 @@
           - "extensions/kie/**"
           - "docs/providers/kie.md"
           - "docs/plugins/reference/kie.md"
+"extensions: kokoro-cpp":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/kokoro-cpp/**"
+          - "docs/plugins/reference/kokoro-cpp.md"
 "extensions: kimi-coding":
   - changed-files:
       - any-glob-to-any-file:

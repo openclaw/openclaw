@@ -1498,6 +1498,12 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/kokoro-cpp:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/levanto:
     devDependencies:
       '@openclaw/plugin-sdk':

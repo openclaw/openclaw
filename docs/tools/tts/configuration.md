@@ -441,6 +441,43 @@ for the packaged server, model cache, and standalone command syntax.
   </Tab>
 </Tabs>
 
+### Local kokoro.cpp
+
+[kokoro.cpp](https://github.com/larroy/kokoro.cpp) runs Kokoro on the CPU (or
+CUDA) without Python. Its `kokoro-server` keeps the model loaded and serves an
+OpenAI-compatible `/v1/audio/speech` endpoint that the bundled `kokoro-cpp`
+provider calls. Build it and start the server from the checkout root:
+
+```bash
+uv run bootstrap.py configure
+uv run bootstrap.py build
+./build/kokoro-server
+```
+
+The server listens on `127.0.0.1:8880` and has no authentication, so keep it on
+loopback. Then select the provider; an empty `kokoro-cpp` block uses the
+default endpoint and voice:
+
+```json5
+{
+  tts: {
+    auto: "always",
+    provider: "kokoro-cpp",
+    providers: {
+      "kokoro-cpp": {
+        voice: "bf_vale",
+      },
+    },
+  },
+}
+```
+
+`openclaw infer tts voices --provider kokoro-cpp` lists the voices the server
+loaded. Install `ffmpeg` when a channel needs voice notes; OpenClaw converts the
+server's WAV output to Opus. Spanish and German voices need the matching
+model and voices file: start the server with `-m` and `--voices`, as described
+in the kokoro.cpp README.
+
 ### Per-agent voice overrides
 
 Use `agents.entries.*.tts` when one agent should speak with a different provider,

@@ -1,0 +1,19 @@
+{
+  "id": "kokoro-cpp",
+  "categories": ["voice"],
+  "capabilityCatalogEntry": "./capability-catalog.ts",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "name": "kokoro.cpp",
+  "description": "Local kokoro.cpp server text-to-speech with voice notes and telephony output.",
+  "contracts": {
+    "speechProviders": ["kokoro-cpp"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

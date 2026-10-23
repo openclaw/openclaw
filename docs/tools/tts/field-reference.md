@@ -193,4 +193,13 @@ and resolved values still fail startup or reject the update.
     <ParamField path="format" type='"mp3" | "wav"'>Default `mp3`. Env: `XIAOMI_TTS_FORMAT`.</ParamField>
     <ParamField path="style" type="string">Optional natural-language style instruction sent as the user message; not spoken. For `mimo-v2.5-tts-voicedesign`, this is the voice-design prompt; OpenClaw supplies a default when omitted.</ParamField>
   </Accordion>
+
+  <Accordion title="kokoro.cpp (kokoro-cpp)">
+    <ParamField path="baseUrl" type="string">Local `kokoro-server` endpoint. Default `http://127.0.0.1:8880/v1`. The provider counts as configured only when a `tts.providers.kokoro-cpp` block exists; `{}` uses the defaults.</ParamField>
+    <ParamField path="voice" type="string">Kokoro voice name (e.g. `af_maple`, `bf_vale`, `ef_dora`). Default `af_maple`. `openclaw infer tts voices --provider kokoro-cpp` lists the voices the server loaded. Aliases: `voiceId`, `speakerVoice`.</ParamField>
+    <ParamField path="speed" type="number">Speaking rate `0.25..4`. Default: the server's `1.0`.</ParamField>
+
+    OpenClaw requests WAV for audio files, transcodes it to Opus with FFmpeg for voice notes, and requests raw 24 kHz PCM for telephony.
+
+  </Accordion>
 </AccordionGroup>

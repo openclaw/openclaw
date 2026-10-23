@@ -81,6 +81,10 @@ export const pluginRegistrationContractCases = {
     pluginId: "kie",
     videoGenerationProviderIds: ["kie"],
   },
+  "kokoro-cpp": {
+    pluginId: "kokoro-cpp",
+    speechProviderIds: ["kokoro-cpp"],
+  },
   lmstudio: {
     pluginId: "lmstudio",
     providerIds: ["lmstudio"],

@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/kokoro-cpp",
+  "version": "2026.10.3",
+  "private": true,
+  "description": "OpenClaw kokoro.cpp local TTS plugin",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
