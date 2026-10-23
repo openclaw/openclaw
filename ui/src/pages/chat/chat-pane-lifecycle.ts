@@ -1,5 +1,4 @@
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
-import { onCleanup } from "solid-js";
 import type {
   SessionSuggestionEvent,
   SessionTypingEvent,
@@ -121,9 +120,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       },
     });
     this.panelActions = { syncLaunch, flush };
-    onCleanup(() => {
-      this.panelActions = undefined;
-    });
   }
 
   private chatRouteReadyReported = false;
@@ -661,6 +657,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
   }
 
   override dispose() {
+    this.panelActions = undefined;
     this.activeSessionResources.sync(null);
     this.syncSessionCompanionPresentation(false);
     this.composerPresentation?.dispose();

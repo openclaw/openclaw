@@ -20,6 +20,7 @@ import { DEFAULT_AGENT_WORKSPACE_DIR } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, getRuntimeConfig } from "../../config/config.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
+import { resolveSessionModelOverrideSource } from "../../config/sessions/model-override-provenance.js";
 import { logVerbose } from "../../globals.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
@@ -577,6 +578,10 @@ async function resolveReplyFromConfig(
                 useSubagentFallbacks: scheduledModel.useSubagentFallbacks,
                 inheritDefaultFallbacksForAgentStringModel:
                   scheduledModel.inheritDefaultFallbacksForAgentStringModel,
+                sessionModelOverrideSource:
+                  scheduledModel.modelSource === "session"
+                    ? (resolveSessionModelOverrideSource(sessionEntry) ?? undefined)
+                    : undefined,
               },
             },
           }

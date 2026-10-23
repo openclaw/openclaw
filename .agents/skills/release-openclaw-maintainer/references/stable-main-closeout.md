@@ -126,6 +126,10 @@ new evidence. Invalid or mismatched assets remain blocking.
    replay preserves those fields byte-for-byte. Any other feed mismatch still
    fails. The later hotfix release (for example `2026.9.7`) verifies its own
    appcast at its own closeout; the withdrawn record is never rewritten.
+9. Finish with the [release retrospective](retrospective.md): once publication,
+   platform assets, and this closeout are terminal, write the report and open
+   its `openclaw/maintainers` PR with the shared issue-ledger update. The stable
+   release is not done until that PR is open and its ledger check passes.
 
 ## Recover a failed publication parent
 
