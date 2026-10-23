@@ -1,7 +1,14 @@
 // Declarative CLI command catalog for startup policy and fast-path routing.
 import { hasFlag } from "./argv.js";
-import { PASSIVE_STARTUP_POLICY } from "./command-catalog-policies.js";
-import type { CliCommandCatalogEntry } from "./command-catalog-types.js";
+import type { CliCommandCatalogEntry, CliCommandPathPolicy } from "./command-catalog-types.js";
+
+// These commands own their state boundary; bootstrap must not observe or initialize it first.
+const PASSIVE_STARTUP_POLICY = {
+  configGuard: "skip",
+  loadPlugins: "never",
+  ensureCliPath: false,
+  networkProxy: "bypass",
+} satisfies Partial<CliCommandPathPolicy>;
 
 function hasCliOption(argv: readonly string[], name: string): boolean {
   for (const arg of argv.slice(2)) {

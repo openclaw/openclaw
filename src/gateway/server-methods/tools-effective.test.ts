@@ -1,11 +1,20 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { McpToolCatalog } from "../../agents/agent-bundle-mcp-types.js";
+import * as toolSchemaRuntime from "../../agents/embedded-agent-runner/tool-schema-runtime.js";
+import { createStubTool } from "../../agents/test-helpers/agent-tool-stubs.js";
 import { makeProviderModelFixture } from "../../agents/test-helpers/provider-model-fixture.js";
 import type { EffectiveToolInventoryResult as ToolsEffectivePayload } from "../../agents/tools-effective-inventory.types.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
 import { setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { toolsEffectiveHandlers, testing } from "./tools-effective.js";
@@ -515,6 +524,96 @@ describe("tools.effective handler", () => {
       expect(runtimeMocks.peekSessionMcpRuntime).not.toHaveBeenCalled();
     },
   );
+
+  it("preserves MCP inventory ownership and fallback without loading registry metadata", async () => {
+    const registrySnapshot = captureActivePluginRegistrySnapshot();
+    onTestFinished(() => restoreActivePluginRegistrySnapshot(registrySnapshot));
+    const registry = createEmptyPluginRegistry();
+    const readMetadata = vi.fn(() => []);
+    Object.defineProperty(registry, "toolMetadata", { get: readMetadata });
+    setActivePluginRegistry(registry);
+    const normalizeTools = vi
+      .spyOn(toolSchemaRuntime, "normalizeProviderToolSchemas")
+      .mockImplementation((options) => options.tools);
+    onTestFinished(() => normalizeTools.mockRestore());
+    let acquisitions = 0;
+    let mcpProjections = 0;
+    runtimeMocks.acquireEffectiveToolInventoryRuntimeModelContext.mockImplementation(async () => {
+      const isMcpProjection = ++acquisitions === 2;
+      return {
+        run: (project) => {
+          const metadataReads = readMetadata.mock.calls.length;
+          const result = project({
+            modelApi: "openai-responses",
+            runtimeModel: makeProviderModelFixture({
+              id: "gpt-4.1",
+              provider: "openai",
+              api: "openai-responses",
+              baseUrl: "https://api.openai.com/v1",
+            }),
+          });
+          if (isMcpProjection) {
+            expect(readMetadata.mock.calls).toHaveLength(metadataReads);
+            mcpProjections += 1;
+          }
+          return result;
+        },
+        [Symbol.asyncDispose]: vi.fn(async () => {}),
+      };
+    });
+    const tool = {
+      ...createStubTool("fixture_lookup"),
+      label: "Lookup",
+      displaySummary: "Search the fixture.",
+    };
+    setPluginToolMeta(tool, {
+      pluginId: "fixture-plugin",
+      optional: false,
+      mcp: {
+        serverName: "fixture",
+        safeServerName: "fixture",
+        toolName: "lookup",
+        operation: "tool",
+        deniedBySession: true,
+      },
+    });
+    mockMcpConfigSummary();
+    mockWarmMcpRuntime(makeMcpCatalog());
+    runtimeMocks.buildBundleMcpToolsFromCatalog.mockReturnValueOnce([
+      tool,
+      { ...createStubTool("other_lookup"), label: "Lookup", description: "Another lookup." },
+      {
+        ...createStubTool("invalid"),
+        label: "Invalid",
+        description: "Invalid schema",
+        parameters: Type.Array(Type.String()),
+      },
+    ]);
+
+    const respond = await invokeTools();
+
+    expectResponsesOk(respond);
+    expectPayloadGroupIds(respond, ["core", "mcp"]);
+    const payload = payloadOf(respond);
+    expect(payload.groups[1]?.tools[0]).toEqual({
+      id: "fixture_lookup",
+      label: "Lookup (bundle-mcp)",
+      description: "Search the fixture.",
+      rawDescription: "Search the fixture.",
+      source: "mcp",
+      pluginId: "bundle-mcp",
+      mcpServer: "fixture",
+      mcpToolName: "lookup",
+      deniedBySession: true,
+    });
+    expect(payload.groups[1]?.tools[1]?.label).toBe("Lookup (bundle-mcp)");
+    expect(payload.notices?.[0]?.message).toContain('Tool "invalid" from plugin "bundle-mcp"');
+    expect(normalizeTools).toHaveBeenCalledWith(
+      expect.objectContaining({ allowRuntimePluginLoad: false }),
+    );
+    expect(acquisitions).toBe(2);
+    expect(mcpProjections).toBe(1);
+  });
 
   it("preserves raw MCP identities and session denials across sanitized collisions", async () => {
     const enabled = makeMcpTool(undefined, {
