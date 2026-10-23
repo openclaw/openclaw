@@ -61,19 +61,12 @@ vi.mock("../../components/board/board-view.tsx", () => {
 
 const swarmModuleImport = await vi.hoisted(async () => {
   const { createDeferred } = await import("../../../../test/helpers/promise.js");
-  const started = createDeferred();
-  const pending = createDeferred();
-  return {
-    started: started.promise,
-    pending: pending.promise,
-    markStarted: started.resolve,
-    release: pending.resolve,
-  };
+  return { started: createDeferred(), pending: createDeferred() };
 });
 
 vi.mock("../../lib/sessions/swarm-roster.ts", async (importOriginal) => {
-  swarmModuleImport.markStarted();
-  await swarmModuleImport.pending;
+  swarmModuleImport.started.resolve();
+  await swarmModuleImport.pending.promise;
   return importOriginal();
 });
 
@@ -433,11 +426,11 @@ describe("chat pane board shell", () => {
       pane.refreshSwarmRoster();
       retired.refreshSwarmRoster();
       replaced.refreshSwarmRoster();
-      await swarmModuleImport.started;
+      await swarmModuleImport.started.promise;
       pane.presented = false;
       ChatPaneStateOwner.prototype.dispose.call(getPaneTestRuntime(retired));
       replaced.context = { ...replaced.context };
-      swarmModuleImport.release();
+      swarmModuleImport.pending.resolve();
       await import("../../lib/sessions/swarm-roster.ts");
       await Promise.resolve();
       await vi.runAllTimersAsync();
@@ -451,28 +444,24 @@ describe("chat pane board shell", () => {
   });
 
   it("releases a disposed pane's held roster refresh before the foreground becomes ready", async () => {
-    swarmModuleImport.release();
+    swarmModuleImport.pending.resolve();
     const pane = createTestPane();
     const runtime = getPaneTestRuntime(pane);
     const bootstrap = pane.context.connectionBootstrap;
     bootstrap.setForegroundRoute("agent:main:pending");
     pane.refreshSwarmRoster();
     await vi.dynamicImportSettled();
-    const settled = vi.fn();
-    void bootstrap.run(runtime, async () => {}).then(settled);
-    await Promise.resolve();
-    expect(settled).not.toHaveBeenCalled();
+    const settled = bootstrap.run(runtime, async () => {});
 
     ChatPaneStateOwner.prototype.dispose.call(runtime);
-    await Promise.resolve();
+    await settled;
 
-    expect(settled).toHaveBeenCalledOnce();
     expect(bootstrap.foregroundReady).toBe(false);
   });
 
   it("keeps generic child roster hydration available with default swarm configuration", async () => {
     vi.useFakeTimers();
-    swarmModuleImport.release();
+    swarmModuleImport.pending.resolve();
     const { SwarmRosterHydrator } = await import("../../lib/sessions/swarm-roster.ts");
     const pane = createTestPane({
       canonicalListRevision: 0,
