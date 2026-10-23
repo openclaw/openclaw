@@ -210,13 +210,9 @@
   padding: 10px;
   border: 0;
   background: transparent;
-  color: var(--text);
+  color: color-mix(in srgb, var(--muted) 94%, transparent);
   cursor: var(--cursor-action);
   place-items: center;
-}
-
-.markdown-table__actions button {
-  color: var(--muted);
 }
 
 .markdown-table__actions .markdown-table__expand {
@@ -276,6 +272,7 @@
 }
 
 .markdown-table-dialog__close {
+  color: var(--text);
   position: fixed;
   top: 8px;
   right: 8px;
