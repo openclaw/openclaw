@@ -244,9 +244,20 @@ export async function admitScheduledOccurrence(
       const childPlacement =
         job.sessionTarget !== "main" && !resolveCronSessionTargetSessionKey(job.sessionTarget);
       if (parentState === "current" && !pause && childPlacement && parent.entry) {
+        const entry = parent.entry;
+        const bindsWorkspace = Boolean(
+          !parentRow.missing && (parentRow.workspaceDir || parentRow.cwd || parentRow.worktree),
+        );
         childParent = {
-          binding: { sessionKey: parentSessionKey, entry: parent.entry },
-          ...(parent.entry.sandbox === "required" ? { sandbox: "required" as const } : {}),
+          ...(bindsWorkspace ? { binding: { sessionKey: parentSessionKey, entry } } : {}),
+          ...(entry.sandbox === "required" ? { sandbox: "required" as const } : {}),
+          // Reads the lease at call time: it fails once the parent resets or the occurrence settles.
+          assertCurrent: () => {
+            if (!generation) {
+              throw new Error("Scheduled occurrence has settled");
+            }
+            generation.assertCurrent();
+          },
         };
       }
       if (parentState === "current") {

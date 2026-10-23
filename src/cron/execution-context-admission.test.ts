@@ -420,17 +420,39 @@ describe("occurrence pause", () => {
     occurrence.release();
   });
 
-  it("hands a child run its current parent's row and sandbox requirement", async () => {
+  it("hands a child run its current parent's bound row, sandbox requirement and live check", async () => {
     const parentEntry = {
       sessionId: "parent-session",
       lifecycleRevision: "rev-1",
       sandbox: "required" as const,
+      spawnedCwd: "/work/project",
     };
     readSessionEntryInWorker.mockResolvedValue(parentEntry);
     const occurrence = await admit(linked);
     expect(occurrence.childParent).toEqual({
       binding: { sessionKey: PARENT_KEY, entry: parentEntry },
       sandbox: "required",
+      assertCurrent: expect.any(Function),
+    });
+    expect(() => occurrence.childParent?.assertCurrent()).not.toThrow();
+    generationAssert.mockImplementationOnce(() => {
+      throw new Error("parent reset");
+    });
+    expect(() => occurrence.childParent?.assertCurrent()).toThrow("parent reset");
+    occurrence.release();
+    expect(() => occurrence.childParent?.assertCurrent()).toThrow("settled");
+  });
+
+  it("hands an unbound parent's child only its sandbox requirement", async () => {
+    readSessionEntryInWorker.mockResolvedValue({
+      sessionId: "parent-session",
+      lifecycleRevision: "rev-1",
+      sandbox: "required",
+    });
+    const occurrence = await admit(linked);
+    expect(occurrence.childParent).toEqual({
+      sandbox: "required",
+      assertCurrent: expect.any(Function),
     });
     occurrence.release();
   });

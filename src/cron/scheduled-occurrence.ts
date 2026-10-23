@@ -42,11 +42,14 @@ export type MintedScheduledExecution = Readonly<{
 export type ScheduledOccurrence = Readonly<{
   /** Set when the exact parent is removed or archived, or its bound worktree is gone. */
   pause?: CronParentUnavailable;
-  /** A child run's parent row, read once by the admission; its persisted binding selects the child's workspace. */
+  /** A child run's parent row, read once by the admission. */
   childParent?: Readonly<{
-    binding: Readonly<{ sessionKey: string; entry: SessionEntry }>;
+    /** Set when the parent row persists a workspace binding; it selects the child's workspace. */
+    binding?: Readonly<{ sessionKey: string; entry: SessionEntry }>;
     /** Set when the parent row requires a sandbox. */
     sandbox?: "required";
+    /** Fails once the parent is reset or removed, or the occurrence settles. */
+    assertCurrent: () => void;
   }>;
   mint: (run: ScheduledOccurrenceRun) => MintedScheduledExecution;
   /** Releases the parent generation; the occurrence owner calls it once the occurrence settles. */

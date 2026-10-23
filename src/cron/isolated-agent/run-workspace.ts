@@ -11,6 +11,7 @@ import {
   resolveCronSessionWorkspaceOwnershipError,
 } from "../run-authority.js";
 import { prepareCronSessionWorktree, type CronWorkspaceLease } from "../run-workspace.js";
+import type { ScheduledOccurrence } from "../scheduled-occurrence.js";
 import { resolveCronSessionTargetSessionKey } from "../session-target.js";
 import type { RunCronAgentTurnParams } from "./run-prepare-runtime.js";
 import type { MutableCronSession } from "./run-session-state.js";
@@ -30,8 +31,8 @@ export async function prepareCronSessionWorkspace(params: {
   defaultWorkspaceDir: string;
   sessionPreparationEffect: SessionEffectRef;
   isFastTestEnv: boolean;
-  /** A child run's parent row, whose persisted binding replaces the run session's. */
-  parentBinding?: CronParentWorkspaceBinding;
+  /** A child run's parent; its persisted binding replaces the run session's. */
+  childParent?: ScheduledOccurrence["childParent"];
 }) {
   const { sessionKey } = params;
   const abortSignal = params.input.abortSignal ?? params.input.signal;
@@ -39,6 +40,10 @@ export async function prepareCronSessionWorkspace(params: {
     abortSignal?.throwIfAborted();
     if (!params.sessionPreparationEffect.isActive()) {
       throw new CronSessionLifecycleClaimError(sessionKey);
+    }
+    // Workspace access inherited from the parent ends when the parent resets.
+    if (params.childParent?.binding) {
+      params.childParent.assertCurrent();
     }
   };
   const selected = await resolveCronSessionWorkspace({
@@ -50,7 +55,7 @@ export async function prepareCronSessionWorkspace(params: {
     sessionKey: params.sessionKey,
     entry: params.cronSession.initialSessionEntry,
     defaultWorkspaceDir: params.defaultWorkspaceDir,
-    parentBinding: params.parentBinding,
+    parentBinding: params.childParent?.binding,
     assertCurrent,
   });
   try {
