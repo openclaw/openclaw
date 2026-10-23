@@ -90,7 +90,7 @@ export function createWorkerProviderOwnerLifecycle(
         }
       };
       try {
-        return await callProvider(record.environmentId, async () => {
+        return await callProvider(record.environmentId, "ssh-identity", async () => {
           assertAuthorized();
           const identity = await resolveSshIdentity({
             provider,
@@ -166,6 +166,7 @@ export function createWorkerProviderOwnerLifecycle(
         : undefined;
     await options.callProvider(
       record.environmentId,
+      "destroy",
       () => {
         // An earlier timed-out operation can keep this call queued across owner changes.
         if (requireCurrentOwner(record).state !== record.state) {
@@ -288,7 +289,11 @@ export function createWorkerProviderOwnerLifecycle(
     );
   };
 
-  const finishDestroy = async (record: WorkerEnvironmentRecord, provider?: WorkerProvider) => {
+  const finishDestroy = async (
+    record: WorkerEnvironmentRecord,
+    provider?: WorkerProvider,
+    signal?: AbortSignal,
+  ) => {
     let r = record;
     if (r.state === "requested") {
       return move(r, "failed", {
@@ -305,18 +310,26 @@ export function createWorkerProviderOwnerLifecycle(
       let allocation: Awaited<ReturnType<WorkerProvider["resolveAllocation"]>>;
       try {
         allocation = requireWorkerAllocation(
-          await callProvider(r.environmentId, () => {
-            requireCurrentOwner(r);
-            return owningProvider.resolveAllocation(
-              requireWorkerProfile(r.profileSnapshot.settings),
-              r.provisionOperationId,
-            );
-          }),
+          await callProvider(
+            r.environmentId,
+            "resolve-allocation",
+            () => {
+              requireCurrentOwner(r);
+              return owningProvider.resolveAllocation(
+                requireWorkerProfile(r.profileSnapshot.settings),
+                r.provisionOperationId,
+              );
+            },
+            undefined,
+            signal,
+          ),
         );
       } catch (error) {
+        signal?.throwIfAborted();
         await saveError(r, error);
         throw serviceError("provider_failure", boundedWorkerError(error));
       }
+      signal?.throwIfAborted();
       // Publish only the cleanup identity, never a fabricated transport or admission receipt.
       r = await move(r, "draining", { ...allocation, lastError: r.lastError });
       leaseId = allocation.leaseId;

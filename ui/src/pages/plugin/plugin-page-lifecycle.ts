@@ -12,7 +12,7 @@ import { uiDevGatewayResourceUrl } from "../../dev-gateway.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { postWidgetTheme, registerWidgetThemeFrame } from "../../lib/widget-theme.ts";
 import { openPluginFrameSession } from "./plugin-frame-session-navigation.ts";
-import { pluginTabKey } from "./route.ts";
+import { pluginTabKey } from "./route.tsx";
 
 function pluginFrameGrantCoversTab(
   grant: ControlUiPluginFrameGrantAck,
@@ -51,6 +51,7 @@ export class PluginPageOwner {
   pluginFrameGeneration: object = {};
 
   private readonly stopListeners: (() => void)[];
+  private actionLifetime = Promise.withResolvers<void>();
 
   constructor(
     readonly props: PluginPageProps,
@@ -58,10 +59,26 @@ export class PluginPageOwner {
     private readonly host: HTMLElement,
     private readonly notify: () => void,
   ) {
+    let location = context.router.getState().location;
     this.stopListeners = [
       listen(document, "visibilitychange", this.handleVisibilityChange),
       listen(window, "message", this.handlePluginSessionOpen),
+      context.router.subscribe((state) => {
+        if (state.location !== location) {
+          location = state.location;
+          this.retireActions();
+        }
+      }),
     ];
+  }
+
+  get actionRetired() {
+    return this.actionLifetime.promise;
+  }
+
+  private retireActions() {
+    this.actionLifetime.resolve();
+    this.actionLifetime = Promise.withResolvers<void>();
   }
 
   bundledViewHost: object = {};
@@ -98,6 +115,7 @@ export class PluginPageOwner {
   };
 
   dispose() {
+    this.retireActions();
     this.disposed = true;
     this.stopListeners.forEach((stop) => stop());
     this.syncPluginThemeFrame(null);
@@ -119,7 +137,11 @@ export class PluginPageOwner {
       return;
     }
     const info = this.tabInfo();
-    this.syncExternalTabAuth(info, this.hasBundledView(info));
+    const bundled = this.hasBundledView(info);
+    if (!bundled) {
+      this.retireActions();
+    }
+    this.syncExternalTabAuth(info, bundled);
     this.notify();
   };
 
@@ -202,7 +224,7 @@ export class PluginPageOwner {
           clearTimeout(timeout);
         }
         stopMessage();
-        signal.removeEventListener("abort", handleAbort);
+        stopAbort();
         frame.remove();
         resolve(result);
       };
@@ -217,7 +239,7 @@ export class PluginPageOwner {
       };
       const handleAbort = () => finish(false);
       const stopMessage = listen(window, "message", handleMessage);
-      signal.addEventListener("abort", handleAbort, { once: true });
+      const stopAbort = listen(signal, "abort", handleAbort, { once: true });
       timeout = setTimeout(() => finish(false), EXTERNAL_AUTH_PROBE_TIMEOUT_MS);
       frame.src = url.toString();
       document.body.append(frame);
@@ -460,6 +482,7 @@ export class PluginPageOwner {
       return;
     }
     const externalAuthTargetKey = this.externalAuthTargetKey;
+    this.retireActions();
     // A new key retires the bundled view's owner and all of its pending work.
     this.bundledViewHost = {};
     this.gatewaySource = gateway;

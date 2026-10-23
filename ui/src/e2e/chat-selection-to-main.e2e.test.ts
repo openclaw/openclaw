@@ -129,11 +129,10 @@ suite.define(() => {
     { scenario: "oversized selection", viewport: viewports[0] },
     { scenario: "low media limit", viewport: viewports[0] },
     { scenario: "oversized edit", viewport: viewports[0] },
-    { scenario: "empty question", viewport: viewports[0] },
     { scenario: "normal", viewport: viewports[0] },
     { scenario: "normal", viewport: viewports[1] },
   ])(
-    "keeps side-chat selection drafts usable with $scenario at $viewport.width px",
+    "stages side-chat selection comments without a prefilled question with $scenario at $viewport.width px",
     async ({ scenario, viewport }) => {
       await withPage(
         async ({ page, composer, editor, comment, side, sideComposer, toolbar }) => {
@@ -165,12 +164,24 @@ suite.define(() => {
             expect(await editor.isVisible()).toBe(true);
           }
           await submitComment(comment, "Check the rollback steps.");
+          if (scenario === "oversized selection") {
+            // A passage Side chat cannot carry stays correctable in the editor.
+            await page
+              .getByText("These comments are too long for Side chat.", { exact: false })
+              .waitFor();
+            expect(await editor.isVisible()).toBe(true);
+            expect(await side.locator(".chat-selection-annotations__chip").count()).toBe(0);
+            expect(await gateway.getRequests("sessions.companion.ask")).toHaveLength(0);
+            expect(await composer.inputValue()).toBe(draft);
+            return;
+          }
           await sideComposer.waitFor({ state: "visible" });
-          const quotedDraft = await sideComposer.inputValue();
-          expect(quotedDraft).toContain(passage.slice(0, 300));
-          expect(quotedDraft.length).toBeLessThan(400);
+          // The comment chip carries the passage; the question field stays the user's.
+          expect(await sideComposer.inputValue()).toBe("");
+          await expect
+            .poll(() => sideComposer.evaluate((element) => document.activeElement === element))
+            .toBe(true);
           if (scenario === "normal") {
-            expect(quotedDraft).toBe(`Regarding "${selectedText}": `);
             expect(
               await page
                 .locator(".agent-chat__composer-shell .chat-selection-annotations__chip")
@@ -180,59 +191,45 @@ suite.define(() => {
           }
           const chip = side.locator(".chat-selection-annotations__chip");
           // The preview loads independently of the side-chat textarea.
-          if (scenario !== "oversized selection") {
-            await chip.waitFor({ state: "visible" });
-          }
-          expect(await chip.count()).toBe(scenario === "oversized selection" ? 0 : 1);
-          if (["normal", "oversized edit", "low media limit"].includes(scenario)) {
-            await chip.click();
-            await button(side, "Edit comment 1").click();
-            if (scenario === "oversized edit") {
-              await submitComment(comment, "x".repeat(16_001), "Save");
-              expect(await editor.isVisible()).toBe(true);
-              expect(await comment.inputValue()).toHaveLength(16_001);
-              expect(await sideComposer.inputValue()).toBe(quotedDraft);
-              expect(await gateway.getRequests("sessions.companion.ask")).toHaveLength(0);
-            }
-            await submitComment(
-              comment,
-              scenario === "normal"
-                ? "Check the rollback steps and the owner."
-                : "Corrected comment.",
-              "Save",
-            );
-            if (scenario === "normal") {
-              expect(await sideComposer.inputValue()).toBe(quotedDraft);
-            }
-            await editor.waitFor({ state: "detached" });
-          }
-          const send = side.locator(".chat-session-rail__composer button[type=submit]");
-          if (scenario === "empty question") {
-            await sideComposer.fill("");
-            expect(await send.isDisabled()).toBe(true);
-            await sideComposer.press("Enter");
+          await chip.waitFor({ state: "visible" });
+          expect(await chip.count()).toBe(1);
+          await chip.click();
+          await button(side, "Edit comment 1").click();
+          if (scenario === "oversized edit") {
+            await submitComment(comment, "x".repeat(16_001), "Save");
+            expect(await editor.isVisible()).toBe(true);
+            expect(await comment.inputValue()).toHaveLength(16_001);
+            expect(await sideComposer.inputValue()).toBe("");
             expect(await gateway.getRequests("sessions.companion.ask")).toHaveLength(0);
-            expect(await chip.count()).toBe(1);
-            await sideComposer.fill("Explain the selected text.");
           }
+          await submitComment(
+            comment,
+            scenario === "normal"
+              ? "Check the rollback steps and the owner."
+              : "Corrected comment.",
+            "Save",
+          );
+          if (scenario === "normal") {
+            expect(await sideComposer.inputValue()).toBe("");
+          }
+          await editor.waitFor({ state: "detached" });
+          const send = side.locator(".chat-session-rail__composer button[type=submit]");
+          // A text comment alone is not a question.
+          expect(await send.isDisabled()).toBe(true);
+          await sideComposer.press("Enter");
+          expect(await gateway.getRequests("sessions.companion.ask")).toHaveLength(0);
+          expect(await chip.count()).toBe(1);
+          await sideComposer.fill("Explain the selected text.");
           await send.click();
           const params = await sideQuestion(gateway);
-          expect(params.question).toBe(
-            scenario === "empty question" ? "Explain the selected text." : quotedDraft.trim(),
-          );
+          expect(params.question).toBe("Explain the selected text.");
           expect(params.attachments).toBeUndefined();
-          if (scenario === "oversized selection") {
-            expect(params.selectionContext).toBeUndefined();
-          } else {
-            expect(params.selectionContext).toContain(`Selected text:\n${passage}`);
-            expect(params.selectionContext).toContain(
-              scenario === "normal"
-                ? "User comment:\nCheck the rollback steps and the owner."
-                : scenario === "oversized edit" || scenario === "low media limit"
-                  ? "Corrected comment."
-                  : "Check the rollback steps.",
-            );
-          }
+          expect(params.selectionContext).toContain(`Selected text:\n${passage}`);
+          expect(params.selectionContext).toContain(
+            scenario === "normal"
+              ? "User comment:\nCheck the rollback steps and the owner."
+              : "Corrected comment.",
+          );
           expect(await composer.inputValue()).toBe(draft);
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         },

@@ -5,6 +5,7 @@ import {
   createOptimistic,
   createSignal,
   createStore,
+  Errored,
   For,
   lazy,
   Loading,
@@ -39,7 +40,7 @@ type ResourceProps = {
 
 type OperationScope = { live: boolean; abort: AbortController | undefined };
 
-const ResourcePreview = lazy(() => import("../../../components/mcp-app-view-registration.ts"), {
+const ResourcePreview = lazy(() => import("../../../components/mcp-app-view.tsx"), {
   export: "McpAppView",
 });
 
@@ -49,7 +50,9 @@ export function ChatQuestionResource(props: ResourceProps) {
   const context = useOptionalApplication();
   const gateway = context && projectGateway(context.gateway);
   const [isBusy, setBusy] = createOptimistic(false);
-  const [error, setError] = createSignal("");
+  const [attempt, setAttempt] = createSignal<{ result: Promise<void> }>();
+  // Outcome observation must not hold the controls presenting the admitted operation.
+  const outcome = createMemo(() => attempt()?.result.then(() => null), { loadingValue: undefined });
   const [uploaded, setUploaded] = createStore<Array<{ uri: string; name: string }>>([]);
   const [preview, setPreview] = createSignal<{
     view?: { id: string };
@@ -111,7 +114,6 @@ export function ChatQuestionResource(props: ResourceProps) {
       operationIdentity === key() &&
       context.gateway.snapshot.client === client &&
       gatewayPresentationScope(context.gateway).key === scope;
-    setError("");
     const pending = (async () => {
       try {
         const request = await prepare(current);
@@ -182,7 +184,7 @@ export function ChatQuestionResource(props: ResourceProps) {
         }
       } catch (failure) {
         if (current()) {
-          setError(formatUiError(failure));
+          throw failure;
         }
       } finally {
         if (current()) {
@@ -190,8 +192,11 @@ export function ChatQuestionResource(props: ResourceProps) {
         }
       }
     })();
+    // The scoped boundary may retire before it observes this attempt's rejection.
+    void pending.catch(() => {});
+    setAttempt({ result: pending });
     await Promise.resolve();
-    await presentOperation(pending, abort.signal);
+    await presentOperation(pending, abort.signal).catch(() => {});
   }
 
   async function upload(input: HTMLInputElement) {
@@ -247,7 +252,7 @@ export function ChatQuestionResource(props: ResourceProps) {
                 onSettled(() => {
                   const next: OperationScope = { live: true, abort: undefined };
                   operationScope = next;
-                  setError("");
+                  setAttempt(undefined);
                   setPreview(null);
                   return () => {
                     next.live = false;
@@ -317,7 +322,11 @@ export function ChatQuestionResource(props: ResourceProps) {
             )}
           </For>
           {isBusy() && <div role="status">{t("common.loading")}</div>}
-          {error() && <div role="alert">{error()}</div>}
+          <Show when={!isBusy()}>
+            <Errored fallback={(error) => <div role="alert">{formatUiError(error())}</div>}>
+              {outcome()}
+            </Errored>
+          </Show>
           <Show
             when={preview()?.view}
             keyed

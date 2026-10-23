@@ -295,6 +295,7 @@ export function renderPluginCapabilitySection(
 function renderPluginMcpServers(
   names: readonly string[],
   details: PluginDiscoveryDetailResult["detail"]["mcpServerDetails"] = [],
+  description?: string,
 ): JSX.Element {
   return renderPluginCapabilitySection(
     t(names.length === 1 ? "pluginsPage.detailMcpServer" : "pluginsPage.detailMcpServers"),
@@ -311,6 +312,7 @@ function renderPluginMcpServers(
           server?.auth ? t(`pluginsPage.mcpDetails.auth.${server.auth}`) : undefined,
         ],
         [t("pluginsPage.mcpDetails.scope"), server?.scope],
+        [t("pluginsPage.mcpDetails.description"), description],
       ].filter(([, value]) => value);
       return {
         name,
@@ -328,7 +330,7 @@ function renderPluginMcpServers(
                 </For>
               </dl>
             ) : undefined}
-            {server?.setup ? <p>{server.setup}</p> : undefined}
+            {!description && server?.setup ? <p>{server.setup}</p> : undefined}
             {!fields.length && !server?.setup ? (
               <p>{t("pluginsPage.mcpDetails.unavailable")}</p>
             ) : undefined}
@@ -387,6 +389,7 @@ export function renderPluginContentCapabilities(params: {
   tools: Array<{ name: string; description?: string; onOpen?: () => void }>;
   mcpServers: readonly string[];
   mcpServerDetails?: PluginDiscoveryDetailResult["detail"]["mcpServerDetails"];
+  mcpDescription?: string;
 }): JSX.Element {
   return (
     <>
@@ -398,7 +401,7 @@ export function renderPluginContentCapabilities(params: {
       {renderPluginCapabilitySection(t("pluginsPage.detailTools"), params.tools, () => (
         <Icon name="wrench" />
       ))}
-      {renderPluginMcpServers(params.mcpServers, params.mcpServerDetails)}
+      {renderPluginMcpServers(params.mcpServers, params.mcpServerDetails, params.mcpDescription)}
     </>
   );
 }

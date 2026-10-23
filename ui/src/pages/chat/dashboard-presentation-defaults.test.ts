@@ -34,9 +34,8 @@ import {
 } from "./sidebar-layout.ts";
 
 vi.mock("../../lib/toast.ts", () => ({ showToast: vi.fn() }));
-// Board widgets own their rendering tests; these tests keep the real pane, page
-// state, settings, session capability, and header/menu composition.
-vi.mock("../../components/board/board-view.ts", () => {
+// mock-isolation: Board widgets have their own tests; isolate their rendering from pane settings and menus.
+vi.mock("../../components/board/board-view.tsx", () => {
   if (!customElements.get("openclaw-board-view")) {
     customElements.define("openclaw-board-view", class extends HTMLElement {});
   }
@@ -94,7 +93,7 @@ describe("dashboard default activation and personal layout persistence", () => {
   );
 
   it("relocates a visible full-width singleton in split and fullscreen views when a task menu exists", async () => {
-    await import("../../components/board/board-view.ts");
+    await import("../../components/board/board-view.tsx");
     const { pane } = createDashboardHarness();
     const board = { ...pane.resolveBoardView(), activeTabId: "research" };
     const resolveBoard = vi.spyOn(pane, "resolveBoardView").mockReturnValue(board);

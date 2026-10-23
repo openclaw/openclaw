@@ -8,7 +8,7 @@ import { currentThemeBranding, subscribeThemeBranding } from "../../../app/theme
 import { ElapsedTime } from "../../../components/elapsed-time.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { ThemeBrandIcon } from "../../../components/theme-brand-icon.tsx";
-import "../../../components/working-phrase.ts";
+import "../../../components/working-phrase-solid.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { formatDurationLong } from "../../../lib/format-duration.ts";

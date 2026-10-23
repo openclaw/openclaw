@@ -96,9 +96,7 @@ export class NewSessionPageOwner {
 
   retainedForHandoff: object | null = null;
   openedFor: string | null = null;
-  readonly critterImport = createIdleImport(
-    () => import("../../components/lobster-pet.runtime.ts"),
-  );
+  readonly critterImport = createIdleImport(() => import("../../components/lobster-pet.tsx"));
   openedGroupDefaults = "";
   openedAgentId = "";
   messageOwnerKey = "";
@@ -253,6 +251,7 @@ export class NewSessionPageOwner {
           if (state.location !== location) {
             location = state.location;
             this.retireSubmissionPresentation();
+            this.browser.close();
           }
         }),
       );
@@ -268,6 +267,7 @@ export class NewSessionPageOwner {
     if (!this.isConnected) {
       return;
     }
+    this.browser.close();
     for (const stop of this.contextSubscriptions.splice(0)) {
       stop();
     }

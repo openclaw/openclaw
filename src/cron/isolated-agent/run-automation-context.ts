@@ -59,12 +59,12 @@ export async function prepareCronAutomationPrompt(
     Pick<
       Parameters<typeof buildCronCommandBody>[0],
       "baseSessionKey" | "hookExternalContentSource" | "formattedTime" | "timeLine"
-    > & { signal?: AbortSignal },
+    > & { cronStorePath?: string; signal?: AbortSignal },
 ) {
   const message = await resolveCronAutomationMessage(params);
   const prompt = await buildCronCommandBody({ ...params, message });
   const scratchSnapshot = await readCronScratchSnapshot(
-    resolveCronJobsStorePathFromConfig(params.cfg),
+    params.cronStorePath ?? resolveCronJobsStorePathFromConfig(params.cfg),
     { kind: "job", jobId: params.job.id, createdAtMsFallback: params.job.createdAtMs },
     {},
     { assertCurrent: params.assertCurrent, signal: params.signal },

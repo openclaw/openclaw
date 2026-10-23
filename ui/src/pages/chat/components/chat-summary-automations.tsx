@@ -1,4 +1,15 @@
-import { For, Show, createMemo, createSignal, onSettled, untrack } from "solid-js";
+import type { JSX } from "@solidjs/web";
+import {
+  Errored,
+  For,
+  Loading,
+  Show,
+  createMemo,
+  createSignal,
+  isPending,
+  latest,
+  onSettled,
+} from "solid-js";
 import type { CronCompactJob } from "../../../api/types.ts";
 import { pathForRoute } from "../../../app-route-paths.ts";
 import { gatewayPresentationScope } from "../../../app/gateway-presentation-scope.ts";
@@ -23,6 +34,15 @@ import { sessionAutomationSchedule } from "./session-automation-schedule.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
+class AutomationReadError extends Error {
+  constructor(
+    message: string,
+    readonly readDenied: boolean,
+  ) {
+    super(message);
+  }
+}
+
 export type SessionAutomationInventoryProps = {
   gateway: ApplicationGateway | undefined;
   sessionKey: string;
@@ -43,7 +63,10 @@ export function createSessionAutomationInventory(
   const publish = () => setRevision((value) => value + 1);
   // The loader owns synchronous request state; Solid only observes its revision.
   let cron = createInitialCronState<CronCompactJob>();
-  let showError: false | "read" | "access" = false;
+  const [receipt, setReceipt] = createSignal<{
+    state: typeof cron;
+    result: Promise<void>;
+  }>();
   let readAccess = false;
   let dirty = true;
   let retryPending = false;
@@ -59,10 +82,24 @@ export function createSessionAutomationInventory(
     revision();
     return cron;
   };
-  const error = () => {
-    revision();
-    return Boolean(showError);
-  };
+  const scope = createMemo(state);
+  // Observe the admitted read, including its trailing refresh. Consumers never send an RPC.
+  // Throw the settled failure in the readiness slot so pending probes can retain the retry UI.
+  const read = createMemo<AutomationReadError | undefined>(() => {
+    const current = scope();
+    const admitted = receipt();
+    return admitted?.state === current
+      ? admitted.result.then(() => {
+          if (current.cronJobsError) {
+            return new AutomationReadError(
+              current.cronJobsError,
+              current.cronJobsReadDenied === true,
+            );
+          }
+          return undefined;
+        })
+      : Promise.resolve(undefined);
+  });
 
   const readable = () => {
     revision();
@@ -93,17 +130,21 @@ export function createSessionAutomationInventory(
       canCallGatewayMethod(source?.snapshot, "cron.list", "operator.read", {
         requireAdvertisement: false,
       });
-    const scope = source ? gatewayPresentationScope(source).key : 0;
-    if (retain && readAccess && scope !== 0 && scope === presentationScope) {
+    const nextPresentationScope = source ? gatewayPresentationScope(source).key : 0;
+    if (
+      retain &&
+      readAccess &&
+      nextPresentationScope !== 0 &&
+      nextPresentationScope === presentationScope
+    ) {
       next.cronJobs = cron.cronJobs;
       next.cronJobsSnapshotRevision = cron.cronJobsSnapshotRevision;
       next.cronJobsTotal = cron.cronJobsTotal;
       next.cronJobsHasMore = cron.cronJobsHasMore;
       next.cronJobsNextOffset = cron.cronJobsNextOffset;
     }
-    presentationScope = scope;
+    presentationScope = nextPresentationScope;
     cron = next;
-    showError = false;
     dirty = true;
     publish();
   }
@@ -130,17 +171,21 @@ export function createSessionAutomationInventory(
     retry.cancel();
     retryPending = false;
     dirty = false;
+    const alreadyLoading = current.cronLoading || current.cronJobsLoadingMore;
     const pending = loadCompactCronJobsPage(current, { append, event });
+    // Coalesced events return early; retain the active read's completion receipt.
+    if (!alreadyLoading && (current.cronLoading || current.cronJobsLoadingMore)) {
+      setReceipt({ state: current, result: pending });
+    }
     publish();
     await pending;
     if (cron !== current || !active || !host()?.isConnected) {
       return;
     }
     // The loader pauses trailing reads while hidden; retain one visible catch-up.
-    showError =
-      current.cronJobsError !== null ? (current.cronJobsReadDenied ? "access" : "read") : false;
-    dirty ||= !visible() || Boolean(showError);
-    if (showError && visible() && !current.cronJobsReadDenied) {
+    const failed = current.cronJobsError !== null;
+    dirty ||= !visible() || failed;
+    if (failed && visible() && !current.cronJobsReadDenied) {
       retryPending = true;
       retry.schedule(() => {
         retryPending = false;
@@ -148,7 +193,7 @@ export function createSessionAutomationInventory(
           void load();
         }
       });
-    } else if (!showError || current.cronJobsReadDenied) {
+    } else if (!failed || current.cronJobsReadDenied) {
       retry.reset();
     }
     publish();
@@ -248,14 +293,11 @@ export function createSessionAutomationInventory(
     hasMore: () => state().cronJobsHasMore,
     loading: () => state().cronLoading || state().cronJobsLoadingMore,
     loaded: () => state().cronJobsSnapshotRevision !== null,
-    connected: () => state().connected,
+    connected: () => scope().connected,
     available: () => readable() && Boolean(state().cronSessionFilter),
     readable,
-    error,
-    readDenied: () => {
-      revision();
-      return showError === "access";
-    },
+    error: () => state().cronJobsError !== null,
+    read,
     refresh: () => load(),
     loadMore: () => load({ append: true }),
   };
@@ -263,11 +305,38 @@ export function createSessionAutomationInventory(
 
 export type SessionAutomationInventory = ReturnType<typeof createSessionAutomationInventory>;
 
+/** Readiness is separate from rows so refresh errors retain their DOM and focus. */
+export function SessionAutomationRead(props: {
+  inventory: SessionAutomationInventory;
+  loading?: JSX.Element;
+  error: JSX.Element;
+  readDeniedOnly?: boolean;
+}) {
+  const ready = () => {
+    const failure = latest(props.inventory.read);
+    if (failure) {
+      throw failure;
+    }
+    return !props.inventory.loaded() && isPending(props.inventory.read) ? props.loading : null;
+  };
+  return (
+    <Errored
+      fallback={(error) => {
+        const cause = error();
+        return !props.readDeniedOnly ||
+          (cause instanceof AutomationReadError && cause.readDenied) ? (
+          <Loading>{props.error}</Loading>
+        ) : null;
+      }}
+    >
+      <Loading fallback={props.loading}>{ready()}</Loading>
+    </Errored>
+  );
+}
+
 export type ChatSummaryAutomationsProps = SessionAutomationInventoryProps & {
   /** Supplied only by the native desktop Details composition. */
   desktop?: { expanded: boolean; onExpandedChange: (expanded: boolean) => void };
-  /** Stable session-owned instance shared with mobile, when supplied by the parent. */
-  inventory?: SessionAutomationInventory;
   onNavigate?: (jobId: string) => void;
 };
 
@@ -283,8 +352,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
       }
     };
   };
-  const initialInventory = untrack(() => props.inventory);
-  const inventory = initialInventory ?? createSessionAutomationInventory(props, () => host);
+  const inventory = createSessionAutomationInventory(props, () => host);
   const presented = createMemo(() => props.presented);
   const sessionKey = createMemo(() => props.sessionKey);
   // Reopening or replacing the session resets only the local reveal count.
@@ -389,8 +457,28 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
     }
     return job.schedule ? sessionAutomationSchedule(job.schedule) : "";
   }
+  const errorNotice = () =>
+    inventory.connected() && (
+      <div class="chat-summary__automation-error">
+        <span role="status">
+          {t(
+            inventory.loaded()
+              ? "chat.sessionDetails.automationUpdateError"
+              : "chat.sessionDetails.automationError",
+          )}
+        </span>
+        <button
+          type="button"
+          class="chat-summary__automation-retry"
+          aria-disabled={isPending(inventory.read) ? "true" : "false"}
+          onClick={(event) => void retry(event.currentTarget)}
+        >
+          {t("common.retry")}
+        </button>
+      </div>
+    );
   const content = () => (
-    <div class="chat-summary__automations" aria-busy={inventory.loading() ? "true" : "false"}>
+    <div class="chat-summary__automations" aria-busy={isPending(inventory.read) ? "true" : "false"}>
       <For each={jobs()} keyed={(job) => job.id}>
         {(job) => {
           let row: HTMLAnchorElement | undefined;
@@ -468,30 +556,11 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
           );
         }}
       </For>
-      {inventory.readDenied() && inventory.connected() && (
-        <div class="chat-summary__automation-error">
-          <span role="status">
-            {t(
-              inventory.loaded()
-                ? "chat.sessionDetails.automationUpdateError"
-                : "chat.sessionDetails.automationError",
-            )}
-          </span>
-          <button
-            type="button"
-            class="chat-summary__automation-retry"
-            aria-disabled={inventory.loading() ? "true" : "false"}
-            onClick={(event) => void retry(event.currentTarget)}
-          >
-            {t("common.retry")}
-          </button>
-        </div>
-      )}
       {more() && (
         <button
           type="button"
           class="chat-summary__automation-more"
-          disabled={!hasCachedRows() && (inventory.loading() || !inventory.connected())}
+          disabled={!hasCachedRows() && (isPending(inventory.read) || !inventory.connected())}
           onClick={(event) => void reveal(event.currentTarget)}
         >
           {t("chat.sessionDetails.automationShowMore")}
@@ -501,38 +570,49 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
   );
   return (
     <openclaw-chat-summary-automations ref={(element) => (host = element)}>
-      {initialInventory ? null : inventory.lifecycle}
-      <Show when={inventory.readable()}>
-        <Show
-          when={inventory.jobs().length > 0}
-          fallback={<>{inventory.readDenied() && inventory.connected() && content()}</>}
-        >
-          <Show
-            when={props.desktop}
-            fallback={
-              <details class="chat-details__group" data-details-group="automations" open>
-                <summary class="chat-details__caption">
-                  {t("chat.sessionDetails.automations")}
-                  <Icon name="chevronDown" />
-                </summary>
-                {content()}
-              </details>
-            }
-          >
-            {(desktop) => (
-              <ChatDetailsDesktopSection
-                section="automations"
-                title={t("chat.sessionDetails.automations")}
-                expanded={desktop().expanded}
-                presented={props.presented}
-                onExpandedChange={(expanded) => desktop().onExpandedChange(expanded)}
-              >
-                {content()}
-              </ChatDetailsDesktopSection>
-            )}
+      {inventory.lifecycle}
+      <Loading>
+        <Show when={inventory.readable()}>
+          <Show when={inventory.jobs().length > 0}>
+            <Show
+              when={props.desktop}
+              fallback={
+                <details class="chat-details__group" data-details-group="automations" open>
+                  <summary class="chat-details__caption">
+                    {t("chat.sessionDetails.automations")}
+                    <Icon name="chevronDown" />
+                  </summary>
+                  {content()}
+                </details>
+              }
+            >
+              {(desktop) => (
+                <ChatDetailsDesktopSection
+                  section="automations"
+                  title={t("chat.sessionDetails.automations")}
+                  expanded={desktop().expanded}
+                  presented={props.presented}
+                  onExpandedChange={(expanded) => desktop().onExpandedChange(expanded)}
+                >
+                  {content()}
+                </ChatDetailsDesktopSection>
+              )}
+            </Show>
           </Show>
+          <SessionAutomationRead
+            inventory={inventory}
+            readDeniedOnly
+            error={
+              <div
+                class="chat-summary__automations"
+                aria-busy={isPending(inventory.read) ? "true" : "false"}
+              >
+                {errorNotice()}
+              </div>
+            }
+          />
         </Show>
-      </Show>
+      </Loading>
     </openclaw-chat-summary-automations>
   );
 }

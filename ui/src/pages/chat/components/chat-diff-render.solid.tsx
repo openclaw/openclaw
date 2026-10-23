@@ -182,7 +182,6 @@ export function createDiffPresentation(props: {
     });
   return {
     SyntaxLifetime,
-    rows,
     visibility,
     closed,
     toggle,
@@ -256,7 +255,6 @@ export function DiffBlock(props: {
   outcome?: ToolCardOutcome;
   renderSkip?: (line: DiffLine) => JSX.Element;
   file?: DiffFilePaths;
-  rows?: readonly SessionSplitDiffRow[];
   presentation?: DiffPresentation;
 }) {
   const initialPresentation = untrack(() => props.presentation);
@@ -268,9 +266,6 @@ export function DiffBlock(props: {
       },
       get file() {
         return props.file ?? { path: "" };
-      },
-      get rows() {
-        return props.rows;
       },
     });
   const renderLine = presentation.renderLine;

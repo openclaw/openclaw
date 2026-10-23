@@ -11,7 +11,7 @@ import {
 import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import type { SessionPlacementRecovery } from "../../lib/sessions/session-placement-recovery.ts";
 import { assertUploadsEnabled, uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
-import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "../chat/composer-persistence.ts";
+import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "../chat/composer-persistence-feedback.ts";
 import type { buildLocalUserMessage } from "../chat/user-message-content.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import { promptNewSessionNotifications } from "./background-session-notice.ts";
@@ -19,10 +19,11 @@ import { NewSessionCapabilities } from "./capabilities.ts";
 import * as catalog from "./catalog-target.ts";
 import { createNewSessionComposerTextarea } from "./composer-textarea.ts";
 import type { DraftSessionCreateOverrides, NewSessionVisibility } from "./create-params.ts";
-import { CreationComposer, retainCreatedComposer } from "./creation-composer.ts";
+import { retainCreatedComposer } from "./creation-composer-registry.ts";
+import { CreationComposer } from "./creation-composer.ts";
 import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
-import { NewSessionDraftPersistence } from "./draft-persistence.ts";
+import { NewSessionDraftPersistence, type NewSessionDraftHandoff } from "./draft-persistence.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
 import {
   completeDraftSessionPlacement,
@@ -56,7 +57,6 @@ import {
 import { submitDraftInTerminal } from "./terminal-start.ts";
 
 registerNewSessionSetupEnglish();
-type SubmittedDraft = ReturnType<NewSessionDraftPersistence["captureSubmission"]>;
 
 export class DraftSubmissionFlow {
   private visibilityValue: NewSessionVisibility = "normal";
@@ -718,7 +718,7 @@ export class DraftSubmissionFlow {
     });
   }
 
-  private clearSubmittedDraft(releasePayloads: boolean, draft: SubmittedDraft, keepPending = true) {
+  private clearSubmittedDraft(release: boolean, draft: NewSessionDraftHandoff, keepPending = true) {
     return this.draftPersistence.clearSubmittedDraft(draft, () => {
       // Acceptance consumes only the captured mutation, not a newer route's input.
       if (!keepPending) {
@@ -729,7 +729,7 @@ export class DraftSubmissionFlow {
       this.updateMessage("");
       this.mentionsValue = [];
       this.draftPersistence.noteDraftReplaced();
-      this.attachmentDraft.clearAfterSubmit(releasePayloads);
+      this.attachmentDraft.clearAfterSubmit(release);
       this.sessionStartup.clear();
     });
   }

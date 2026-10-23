@@ -16,6 +16,12 @@ const {
 
 describe("monitorTlonProvider bot-owned thread mention policy", () => {
   it.each([
+    {
+      name: "memo and raw reply id take precedence over a simultaneous post essay",
+      parallelPost: true,
+      rawReplyId: " reply-stable ",
+      admitted: true,
+    },
     { name: "another ship's root", rootAuthor: "~bus" },
     { name: "unavailable root", lookupFails: true },
     {
@@ -153,8 +159,11 @@ describe("monitorTlonProvider bot-owned thread mention policy", () => {
           post: {
             id: parentId,
             "r-post": {
+              ...(row.parallelPost
+                ? { set: { essay: messageEssay("~bus", "parent essay"), seal: { parent: "9999" } } }
+                : {}),
               reply: {
-                id: "5678",
+                id: row.rawReplyId ?? "5678",
                 "r-reply": { set: { memo, seal: { "parent-id": parentId } } },
               },
             },
@@ -208,6 +217,11 @@ describe("monitorTlonProvider bot-owned thread mention policy", () => {
       await handling;
 
       expect(inboundRuntimeMock.dispatch).toHaveBeenCalledTimes(row.admitted ? 1 : 0);
+      if (row.rawReplyId) {
+        expect(inboundRuntimeMock.buildContext).toHaveBeenCalledWith(
+          expect.objectContaining({ messageId: row.rawReplyId }),
+        );
+      }
       if (row.summary) {
         const replies = sseClientMock.poke.mock.calls.filter(
           ([value]) => value.mark === "channel-action-1",

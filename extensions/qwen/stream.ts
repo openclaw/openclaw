@@ -154,33 +154,6 @@ function patchTokenPlanKimiPayload(
   }
 }
 
-function normalizeTokenPlanThinkingToolChoice(
-  payload: Record<string, unknown>,
-  enableThinking: boolean,
-  forceThinking: boolean,
-): boolean {
-  if (!enableThinking) {
-    return false;
-  }
-  const toolChoice = payload.tool_choice;
-  const toolChoiceType = asPayloadRecord(toolChoice)?.type;
-  if (toolChoiceType === "auto" || toolChoiceType === "none") {
-    payload.tool_choice = toolChoiceType;
-    return true;
-  }
-  const toolChoiceCompatible = toolChoice == null || toolChoice === "auto" || toolChoice === "none";
-  if (toolChoiceCompatible) {
-    return true;
-  }
-  const pinnedToolChoice = toolChoiceType === "tool" || toolChoiceType === "function";
-  if (!forceThinking && pinnedToolChoice) {
-    payload.enable_thinking = false;
-    return false;
-  }
-  payload.tool_choice = "auto";
-  return true;
-}
-
 function patchTokenPlanGlmPayload(
   payload: Record<string, unknown>,
   thinkingLevel: QwenThinkingLevel,
@@ -363,11 +336,26 @@ export function wrapQwenProviderStream(ctx: ProviderWrapStreamFnContext): Stream
                 enableThinking = false;
               }
               payload.enable_thinking = enableThinking;
-              enableThinking = normalizeTokenPlanThinkingToolChoice(
-                payload,
-                enableThinking,
-                forceThinking,
-              );
+              if (enableThinking) {
+                const toolChoice = payload.tool_choice;
+                const toolChoiceType = asPayloadRecord(toolChoice)?.type;
+                if (toolChoiceType === "auto" || toolChoiceType === "none") {
+                  payload.tool_choice = toolChoiceType;
+                } else {
+                  const toolChoiceCompatible =
+                    toolChoice == null || toolChoice === "auto" || toolChoice === "none";
+                  if (!toolChoiceCompatible) {
+                    const pinnedToolChoice =
+                      toolChoiceType === "tool" || toolChoiceType === "function";
+                    if (!forceThinking && pinnedToolChoice) {
+                      payload.enable_thinking = false;
+                      enableThinking = false;
+                    } else {
+                      payload.tool_choice = "auto";
+                    }
+                  }
+                }
+              }
               if (tokenPlanContract?.family === "qwen-3.8") {
                 patchQwen38Payload(
                   payload,

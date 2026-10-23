@@ -11,7 +11,7 @@
     "type": "function"
   },
   {
-    "description": "Send/manage channel messages. Supports actions: send.",
+    "description": "Send/manage channel messages. Supports actions: react, send. When the current WebChat prompt permits reactions, react with emoji (and optional remove:true) as the agent. Omit channel, target, and messageId. This stays local; use an explicit external channel and messageId for external reactions.",
     "inputSchema": {
       "properties": {
         "accountId": {
@@ -19,7 +19,7 @@
         },
         "action": {
           "description": "Select one action. For action=\"send\", provide message or another send payload; fields for other actions do not count as send content.",
-          "enum": ["send"],
+          "enum": ["react", "send"],
           "type": "string"
         },
         "asDocument": {
@@ -76,6 +76,10 @@
           "description": "sendWithEffect id/name.",
           "type": "string"
         },
+        "emoji": {
+          "description": "One Unicode emoji for the current WebChat prompt; explicit external channels validate their own emoji.",
+          "type": "string"
+        },
         "filename": {
           "type": "string"
         },
@@ -96,12 +100,23 @@
         "gifPlayback": {
           "type": "boolean"
         },
+        "groupId": {
+          "type": "string"
+        },
         "media": {
           "description": "Media URL/path. data: use buffer.",
           "type": "string"
         },
         "message": {
           "description": "Text for action=\"send\". A send needs message or another send payload such as media, attachments, or presentation.",
+          "type": "string"
+        },
+        "message_id": {
+          "description": "snake_case alias of messageId; same defaults.",
+          "type": "string"
+        },
+        "messageId": {
+          "description": "Target read/react/edit/delete/pin/unpin id; reactions default current inbound.",
           "type": "string"
         },
         "mimeType": {
@@ -111,6 +126,9 @@
           "description": "Telegram reply quote text.",
           "type": "string"
         },
+        "remove": {
+          "type": "boolean"
+        },
         "replyTo": {
           "type": "string"
         },
@@ -119,6 +137,12 @@
         },
         "target": {
           "description": "Recipient/channel: E.164 for WhatsApp/Signal, Telegram chat id/@username, Discord/Slack/Mattermost <channelId|user:ID|channel:ID>, or iMessage handle/chat_id",
+          "type": "string"
+        },
+        "targetAuthor": {
+          "type": "string"
+        },
+        "targetAuthorUuid": {
           "type": "string"
         },
         "targets": {
@@ -134,6 +158,14 @@
         "timeoutMs": {
           "minimum": 1,
           "type": "integer"
+        },
+        "track_tool_calls": {
+          "description": "snake_case alias of trackToolCalls.",
+          "type": "boolean"
+        },
+        "trackToolCalls": {
+          "description": "Use the reacted message for this turn's status reaction lifecycle.",
+          "type": "boolean"
         },
         "voiceId": {
           "description": "Per-send speech voice override.",
@@ -1448,7 +1480,7 @@
       },
       {
         "deferLoading": true,
-        "description": "Run a permitted session on this Gateway by sessionKey/label, or a configured local agent by agentId; sessionKey wins redundant label. Explicit per-agent send destinations can permit messaging without transcript access. A session identifies model context, not an external address. A peer reply reaches you once: inline when available, otherwise as a later inter-session input. Continue with another sessions_send; post to channels with message. Accepted results report target admission as `targetDisposition: \"queued\"` or `\"steered\"`; `delivery.status` is only later reply delivery state, and neither proves target completion. Omit mode to automatically continue your paused native child task; returns runId/taskRunId with task-owned completion instead of an inline wait or watch. With timeoutSeconds:0, your own running child is steered into its active run (admission only, no separate completion turn; use mode:followup for one); other sessions use ordinary message delivery. mode:notify queues ephemeral context for the next turn without waking or starting work (bounded process memory, not a durable inbox). mode:steer injects guidance into an active supported run and never starts idle work. mode:followup starts a separate turn without steering or resuming a paused task. mode:resume requires a paused native child task and rejects watch:true and positive timeoutSeconds. For an exact external destination, use `conversations_list` plus `conversations_send`/`conversations_turn`. Thread chats rejected: target parent channel. Missing configured-agent main created. status \"no_reply\" is terminal, so do not wait for another reply. A timeoutSeconds:0 followup to your existing native child gives this turn a completion to await with sessions_yield, even while queued. watch:true requires status visibility and additionally reports later target-session changes; on a steer it can claim the child's existing pending completion.",
+        "description": "Send a message to a permitted session on this Gateway by sessionKey/label, or a configured local agent by agentId; sessionKey wins redundant label. Explicit per-agent send destinations can permit messaging without transcript access. A session identifies model context, not an external address. When a new turn starts, its reply reaches you once: inline when available, otherwise as a later inter-session input. Continue with another sessions_send; post to channels with message. Accepted results report target admission as `targetDisposition: \"queued\"` or `\"steered\"`; `delivery.status` is only later reply delivery state, and neither proves target completion. Omit mode to automatically continue your paused native child task; returns runId/taskRunId with task-owned completion instead of an inline wait or watch. Ordinary peer sends start a separate turn. A zero-wait send to your own busy child or an eligible run-scoped target may use its active input queue. An idle recipient or a default self-send starts a new turn; timeoutSeconds bounds waiting for the separately admitted turn’s reply. mode:notify queues ephemeral context for the next turn without waking or starting work (bounded process memory, not a durable inbox). mode:steer injects guidance into an active supported run and never starts idle work. mode:followup always starts a separate turn and preserves its independent reply; it does not resume a paused task. mode:resume requires a paused native child task and rejects watch:true and positive timeoutSeconds. For an exact external destination, use `conversations_list` plus `conversations_send`/`conversations_turn`. Thread chats rejected: target parent channel. Missing configured-agent main created. status \"no_reply\" is terminal, so do not wait for another reply. A timeoutSeconds:0 send that starts a new turn for your existing native child gives this turn a completion to await with sessions_yield, even while queued. watch:true requires status visibility and additionally reports later target-session changes; on a steer it can claim the child's existing pending completion.",
         "inputSchema": {
           "properties": {
             "agentId": {
@@ -1669,45 +1701,6 @@
     "description": "",
     "name": "openclaw_direct",
     "tools": [
-      {
-        "description": "Accept heartbeat result for post-turn handling. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only.",
-        "inputSchema": {
-          "additionalProperties": false,
-          "properties": {
-            "nextCheck": {
-              "type": "string"
-            },
-            "notificationText": {
-              "type": "string"
-            },
-            "notify": {
-              "type": "boolean"
-            },
-            "outcome": {
-              "enum": ["no_change", "progress", "done", "blocked", "needs_attention"],
-              "type": "string"
-            },
-            "priority": {
-              "enum": ["low", "normal", "high"],
-              "type": "string"
-            },
-            "reason": {
-              "type": "string"
-            },
-            "scratch": {
-              "description": "Complete replacement for heartbeat monitor prose; not a recurring schedule.",
-              "type": "string"
-            },
-            "summary": {
-              "type": "string"
-            }
-          },
-          "required": ["outcome", "notify", "summary"],
-          "type": "object"
-        },
-        "name": "heartbeat_respond",
-        "type": "function"
-      },
       {
         "description": "End this turn to await pending child completions, not submit a final result. Return completed work normally. Does not message other sessions; use sessions_send. Unfinished subagents awaiting an incoming continuation must set waitFor:\"message\". For background tools, follow their continuation instructions. Collector runs require agents_wait instead.",
         "inputSchema": {

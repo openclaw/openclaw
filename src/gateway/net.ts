@@ -16,7 +16,6 @@ import { isContainerEnvironment } from "../infra/container-environment.js";
 import {
   pickMatchingExternalInterfaceAddress,
   safeNetworkInterfaces,
-  type NetworkInterfacesSnapshot,
 } from "../infra/network-interfaces.js";
 import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
 import { firstHeaderValue } from "./http-header-value.js";
@@ -79,15 +78,12 @@ export function isLocalDirectRequest(req?: IncomingMessage): boolean {
   );
 }
 
-export function resolveLocalInterfaceAddressMatch(
-  ip: string | undefined,
-  snapshot?: NetworkInterfacesSnapshot,
-): boolean | undefined {
+export function resolveLocalInterfaceAddressMatch(ip: string | undefined): boolean | undefined {
   const normalized = normalizeIpAddress(ip);
   if (!normalized) {
     return false;
   }
-  const effectiveSnapshot = arguments.length >= 2 ? snapshot : safeNetworkInterfaces();
+  const effectiveSnapshot = safeNetworkInterfaces();
   if (!effectiveSnapshot) {
     return undefined;
   }

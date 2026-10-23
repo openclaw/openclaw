@@ -302,10 +302,12 @@ it("reuses descendants after parent progress while keeping inherited models curr
             undefined,
             context.resolveGatewayContext,
           ),
-        ).presentation.snapshot({
-          agentId: "main",
-          key,
-        }).row!;
+        )
+          .getPresentation()
+          .snapshot({
+            agentId: "main",
+            key,
+          }).row!;
       const siblingSnapshot = snapshot(siblingKey);
       const parentSnapshot = snapshot(parentKey);
       const siblingBytes = JSON.stringify(siblingSnapshot);

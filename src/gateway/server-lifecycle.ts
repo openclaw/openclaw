@@ -5,6 +5,7 @@ import { prepareWorktreeRunEndClose } from "../agents/worktrees/run-end-lifecycl
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import { listLoadedChannelPluginsForRegistry } from "../channels/plugins/registry-loaded.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { markGatewaySuspendExiting } from "../infra/gateway-suspend-coordinator.js";
 import { commitPresence, upsertPresence } from "../infra/system-presence.js";
 import { stopGatewayDiagnosticHeartbeat } from "../logging/diagnostic.js";
@@ -67,7 +68,6 @@ export async function prepareGatewayLifecycle(params: {
   const sandboxRegistry = prepareSandboxRegistryClose();
   const talkClose = prepareTalkConnectionClose(runtime.clients, log);
   const {
-    minimalTestGateway,
     transportBridge,
     sessionMessageSubscribers,
     isConnectionActive,
@@ -86,6 +86,7 @@ export async function prepareGatewayLifecycle(params: {
     runtimeStateRef,
     gatewayInstanceRuntimeRef,
     startupState,
+    unavailableGatewayMethods,
     readinessEventLoopHealth,
     browserAuthRateLimiter,
     chatRunState,
@@ -210,6 +211,9 @@ export async function prepareGatewayLifecycle(params: {
     await import("./terminal/session-manager.js");
   const { TERMINAL_EVENT_DATA } = await import("./terminal/session-types.js");
   const terminalSessions = new TerminalSessionManager({
+    disableGatewayLocalTerminals: isTruthyEnvValue(
+      process.env.OPENCLAW_DISABLE_GATEWAY_LOCAL_TERMINALS,
+    ),
     withOpenAdmission: withAgentTerminalOpenAdmission,
     emit: (connId: string, event: string, payload: unknown) =>
       broadcastToConnIds(event, payload, new Set([connId]), {
@@ -244,9 +248,6 @@ export async function prepareGatewayLifecycle(params: {
       runtimeState.pluginServices = services;
     },
   });
-  const unavailableGatewayMethods = new Set<string>(
-    minimalTestGateway ? [] : STARTUP_UNAVAILABLE_GATEWAY_METHODS,
-  );
   // Kernel methods are the only writers for readiness and advertised-method state.
   const kernel = {
     pluginRuntimeGeneration,
@@ -258,10 +259,20 @@ export async function prepareGatewayLifecycle(params: {
       startupState.sidecarsReady = true;
     },
     unlockStartupMethods: (options?: { keepChatSendUnavailable?: boolean }) => {
+      const chatWasUnavailable = unavailableGatewayMethods.has("chat.send");
       for (const method of STARTUP_UNAVAILABLE_GATEWAY_METHODS) {
         if (method !== "chat.send" || !options?.keepChatSendUnavailable) {
           unavailableGatewayMethods.delete(method);
         }
+      }
+      if (
+        chatWasUnavailable &&
+        !unavailableGatewayMethods.has("chat.send") &&
+        startupState.sidecarsReady &&
+        runtime.getReadiness().ready
+      ) {
+        runtime.startupTrace.mark("ready");
+        log.info("gateway ready");
       }
     },
     publishMethodSurface: (methods: readonly string[]) => {
@@ -278,10 +289,10 @@ export async function prepareGatewayLifecycle(params: {
       return previous;
     },
     setScheduledServiceHandles: (handles: {
-      heartbeatRunner: typeof runtimeState.heartbeatRunner;
+      stopScheduledServices: typeof runtimeState.stopScheduledServices;
       stopDeliveryRecovery: typeof runtimeState.stopDeliveryRecovery;
     }) => {
-      runtimeState.heartbeatRunner = handles.heartbeatRunner;
+      runtimeState.stopScheduledServices = handles.stopScheduledServices;
       runtimeState.stopDeliveryRecovery = handles.stopDeliveryRecovery;
     },
     setPostAttachHandles: (handles: {
@@ -298,7 +309,6 @@ export async function prepareGatewayLifecycle(params: {
     getReloadState: () => ({
       hooksConfig: runtimeState.hooksConfig,
       hookClientIpConfig: runtimeState.hookClientIpConfig,
-      heartbeatRunner: runtimeState.heartbeatRunner,
       cronState: runtimeState.cronState,
     }),
     setReloadHookState: (next: {
@@ -308,9 +318,6 @@ export async function prepareGatewayLifecycle(params: {
       runtimeState.hooksConfig = next.hooksConfig;
       publishHooksTokenEnvKey(next.hooksConfig);
       runtimeState.hookClientIpConfig = next.hookClientIpConfig;
-    },
-    setHeartbeatRunner: (next: typeof runtimeState.heartbeatRunner) => {
-      runtimeState.heartbeatRunner = next;
     },
     // Stable callbacks keep reload transactions out of retained plugin contexts.
     getCronService: () => runtimeState.cronState.cron,
@@ -485,6 +492,7 @@ export async function prepareGatewayLifecycle(params: {
         getEventLoopHealth: readinessEventLoopHealth.snapshot,
         getConfigReloaderHotReloadStatus: kernel.getConfigReloaderHotReloadStatus,
         getSessionRowProjection: runtime.getSessionRowProjection,
+        getCronStorePath: () => runtimeState.cronState.storePath,
       }),
     );
   };
@@ -583,7 +591,7 @@ export async function prepareGatewayLifecycle(params: {
               pluginServices: runtimeState.pluginServices,
               cron: runtimeState.cronState.cron,
               stopCronMaintenance: shutdownRuntime.stopCronMaintenance,
-              heartbeatRunner: runtimeState.heartbeatRunner,
+              stopScheduledServices: runtimeState.stopScheduledServices,
               maintenance: runtimeState.maintenance,
               stopMediaCleanup: stopMediaCleanupForClose,
               agentUnsub: runtimeState.agentUnsub,

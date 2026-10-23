@@ -9,6 +9,7 @@ import { tryResolveCronJobEffectiveAgentId } from "../../cron/agent-id.js";
 import { assertValidCronCreateDelivery } from "../../cron/delivery-channel-validation.js";
 import { resolveCronDeliveryPreview } from "../../cron/delivery-preview.js";
 import { cronAddResultReadView } from "../../cron/job-read-view.js";
+import { readPluginCommandCreation } from "../../cron/plugin-command-creation.js";
 import { CronStreamApprovalEndedError } from "../../cron/stream-approval-outcome.js";
 import { cronCreateRequiresStreamExecAuthority } from "../../cron/stream-exec-authority.js";
 import { cronJobUsesToolRuntime } from "../../cron/tools-allow.js";
@@ -41,7 +42,7 @@ import type { GatewayRequestHandler } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const cronAddHandler: GatewayRequestHandler = async ({
-  params,
+  params: rawParams,
   respond,
   context,
   client,
@@ -54,6 +55,8 @@ export const cronAddHandler: GatewayRequestHandler = async ({
   if (hasCurrentClientAuthority?.() === false) {
     throw new Error("Automation caller authority is no longer active");
   }
+  const commandCreation = readPluginCommandCreation(rawParams);
+  const params = commandCreation.params;
   let candidate: unknown;
   let enabledExplicit: boolean;
   try {
@@ -77,6 +80,23 @@ export const cronAddHandler: GatewayRequestHandler = async ({
     hasCurrentClientAuthority,
     retainExecutionPolicy: cronCreateRequiresStreamExecAuthority(candidate),
   });
+  if (commandCreation.creation) {
+    const envelope = commandCreation.creation.envelope;
+    const identity = client?.internal?.agentRuntimeIdentity;
+    const parent = creator.session;
+    if (
+      !identity ||
+      identity.agentId !== envelope.parent.agentId ||
+      identity.sessionKey !== envelope.parent.sessionKey ||
+      identity.operationalRunInstance.runId !== envelope.sourceRunId ||
+      parent?.agentId !== envelope.parent.agentId ||
+      parent.sessionKey !== envelope.parent.sessionKey ||
+      parent.entry.sessionId !== envelope.parent.sessionId ||
+      parent.entry.lifecycleRevision !== envelope.parent.lifecycleRevision
+    ) {
+      throw new Error("Scheduled command creator does not match its admitted parent incarnation.");
+    }
+  }
   let execPolicy: ReturnType<typeof resolveCronStreamExecPolicy>;
   let capture: ReturnType<typeof resolveCronCreatorAuthorityCapture>;
   try {
@@ -131,6 +151,7 @@ export const cronAddHandler: GatewayRequestHandler = async ({
   }
   let creatorOptions: Awaited<ReturnType<typeof captureCronCreatorSession>> | undefined;
   const commitGuard = () => {
+    commandCreation.creation?.assertCurrent();
     assertMutationCurrent?.();
     capture?.assertCurrent();
     creatorOptions?.assertInferenceSelectionCurrent?.();
@@ -193,6 +214,12 @@ export const cronAddHandler: GatewayRequestHandler = async ({
 
           enabledExplicit,
           ...creatorOptions,
+          ...(commandCreation.creation
+            ? {
+                pluginCommand: commandCreation.creation.envelope,
+                pluginCommandSourceDigest: commandCreation.creation.sourceDigest,
+              }
+            : {}),
           commitGuard,
           ...(capture ? { captureRuntimeAuthority: capture.captureRuntimeAuthority } : {}),
           matchesExisting: (job) =>
@@ -240,6 +267,7 @@ export const cronAddHandler: GatewayRequestHandler = async ({
     creatorOptions.disposeInferenceAuthorization?.();
   }
   const job = "job" in result ? result.job : result;
+  commandCreation.creation?.record(job);
   context.logGateway.info("cron: job added", {
     jobId: job.id,
     declarationKey: job.declarationKey,

@@ -10,7 +10,7 @@ import {
 } from "./runtime-guard.js";
 
 const state = vi.hoisted(() => ({
-  version: "24.16.0",
+  version: "24.22.1",
   error: vi.fn(),
   run: vi.fn(),
   diagnosticLoads: 0,
@@ -74,7 +74,7 @@ function runtimeDetails(
 ) {
   return {
     kind,
-    version: kind === "bun" ? "1.4.3" : "24.16.0",
+    version: kind === "bun" ? "1.4.3" : "24.22.1",
     execPath: `/usr/bin/${kind}`,
     pathEnv: "/usr/bin",
     hasNodeSqlite: true,
@@ -88,9 +88,19 @@ function createRuntime() {
 }
 
 describe("runtime-guard", () => {
+  it.each(["24.22.0", "26.12.0"])(
+    "refuses Node %s with compromised-key trust even when SQLite is healthy",
+    async (version) => {
+      state.version = version;
+      state.lossless = true;
+      const runtime = createExitingRuntime();
+      await expect(assertSupportedRuntime(runtime)).rejects.toThrow("exit");
+      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Upgrade Node"));
+    },
+  );
   it("validates ordinary CLI runtimes without initializing SQLite worker policy", async () => {
     state.initializeSqlite.mockClear();
-    state.version = "24.16.0";
+    state.version = "24.22.1";
     state.lossless = true;
     await assertSupportedRuntime(createExitingRuntime());
     expect(state.initializeSqlite).not.toHaveBeenCalled();
@@ -107,9 +117,9 @@ describe("runtime-guard", () => {
   });
 
   it.each([
-    ["24.16.0", true, true],
-    ["24.16.0", false, false],
-    ["24.15.0+vendor.1", true, true],
+    ["24.22.1", true, true],
+    ["24.22.1", false, false],
+    ["24.15.0+vendor.1", true, false],
     ["24.15.0+vendor.1", false, false],
   ] as const)("gates Node %s with lossless SQLite %s", async (version, lossless, admitted) => {
     const runtime = createRuntime();
@@ -121,7 +131,9 @@ describe("runtime-guard", () => {
     await assertSupportedRuntime(runtime, details);
     expect(runtime.exit).toHaveBeenCalledTimes(admitted ? 0 : 1);
     if (!admitted) {
-      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("nodejs/node#61954"));
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining(lossless ? "openclaw requires Node" : "nodejs/node#61954"),
+      );
     }
   });
 
@@ -216,17 +228,17 @@ describe("runtime-guard", () => {
   });
 
   it("preserves the target package's numeric engine range", () => {
-    const engine = ">=24.16.0 <25 || >=26.1.0";
+    const engine = ">=24.22.1 <25 || >=26.12.1";
     expect(nodeVersionSatisfiesEngine("22.23.2", engine)).toBe(false);
     expect(nodeVersionSatisfiesEngine("22.22.2", engine)).toBe(false);
     expect(nodeVersionSatisfiesEngine("23.11.0", engine)).toBe(false);
     expect(nodeVersionSatisfiesEngine("24.14.1", engine)).toBe(false);
     expect(nodeVersionSatisfiesEngine("24.15.0+vendor.1", engine)).toBe(false);
-    expect(nodeVersionSatisfiesEngine("24.16.0", engine)).toBe(true);
+    expect(nodeVersionSatisfiesEngine("24.22.1", engine)).toBe(true);
     expect(nodeVersionSatisfiesEngine("25.8.1", engine)).toBe(false);
     expect(nodeVersionSatisfiesEngine("25.9.0", engine)).toBe(false);
     expect(nodeVersionSatisfiesEngine("26.0.0", engine)).toBe(false);
-    expect(nodeVersionSatisfiesEngine("26.1.0", engine)).toBe(true);
+    expect(nodeVersionSatisfiesEngine("26.12.1", engine)).toBe(true);
     expect(nodeVersionSatisfiesEngine(null, engine)).toBe(false);
     expect(nodeVersionSatisfiesEngine("unknown", engine)).toBe(false);
   });
@@ -235,20 +247,20 @@ describe("runtime-guard", () => {
     ["22.23.2", false],
     ["23.11.0", false],
     ["24.15.0", false],
-    ["24.16.0", true],
+    ["24.22.1", true],
     ["25.9.0", false],
     ["26.0.0", false],
-    ["26.1.0", true],
+    ["26.12.1", true],
     ["27.0.0", true],
     ["v27.0.0-head", true],
     ["27.0.0-nightly20261018f88a1d25e9", true],
     ["27.0.0-rc.1+vendor.1", true],
-    ["24.16.0-rc.1", false],
-    ["26.1.0-rc.1", false],
+    ["24.22.1-rc.1", false],
+    ["26.12.1-rc.1", false],
     ["27.0.0-01", false],
     ["27.0.0-nightly..1", false],
     ["27.0.0-", false],
-    ["24.16.0+local.1", true],
+    ["24.22.1+local.1", true],
     ["24.15.0-rc.1", false],
     ["25.9.1-nightly.20260714", false],
     ["24.15", false],
@@ -305,7 +317,7 @@ describe("runtime-guard", () => {
     expect(runtime.error).toHaveBeenCalledOnce();
     expect(runtime.error).toHaveBeenCalledWith(
       [
-        "openclaw requires Node >=24.16.0 <25, or >=26.1.0.",
+        "openclaw requires Node >=24.22.1 <25, or >=26.12.1.",
         `Detected: ${detected}.`,
         `PATH searched: ${path}`,
         "Install Node: https://nodejs.org/en/download",
@@ -442,8 +454,8 @@ describe("sealed worker runtime", () => {
   it.each([
     { version: "22.23.2", supported: false },
     { version: "26.0.0", supported: false },
-    { version: "24.16.0", supported: true },
-    { version: "26.1.0", supported: true },
+    { version: "24.22.1", supported: true },
+    { version: "26.12.1", supported: true },
   ])("handles worker runtime $version", async ({ version, supported }) => {
     state.version = version;
     state.lossless = supported;

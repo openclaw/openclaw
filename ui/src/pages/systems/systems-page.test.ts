@@ -5,6 +5,7 @@ import type {
   EnvironmentSummary,
   SystemInfoResult,
 } from "@openclaw/gateway-protocol";
+import { createRouter, definePage } from "@openclaw/uirouter";
 import { createComponent, createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
@@ -100,7 +101,17 @@ function harness(
   const context = createContext(gateway.gateway, createSessions("main", []));
   const runtimeConfig = createRuntimeConfigCapability(gateway.gateway);
   runtimeConfigs.push(runtimeConfig);
-  Object.assign(context, { basePath: "", navigate: vi.fn(), runtimeConfig });
+  Object.assign(context, {
+    basePath: "",
+    navigate: vi.fn(),
+    runtimeConfig,
+    router: createRouter({
+      routes: [
+        definePage({ id: "systems", path: "/systems", component: () => ({}) }),
+        definePage({ id: "debug", path: "/debug", component: () => ({}) }),
+      ],
+    }),
+  });
   const controller = createSystems(context);
   return { controller, gateway, context, request };
 }
@@ -166,17 +177,48 @@ describe("Systems workspace", () => {
     expect(page.querySelectorAll(".systems-backups")).toHaveLength(1);
     expect(text(page, ".systems-backups")).toContain("Loading backups…");
     pending.reject(new Error("Backup history unavailable"));
-    await pending.promise.catch(() => {});
-    flush();
-    expect(text(page, '.systems-backups [role="alert"]')).toContain("Backup history unavailable");
+    await waitForSolid(() =>
+      expect(text(page, '.systems-backups [role="alert"]')).toContain("Backup history unavailable"),
+    );
     await controller.refreshBackups();
-    flush();
-    expect(text(page, ".systems-backups")).toContain("No backups recorded —");
+    await waitForSolid(() =>
+      expect(text(page, ".systems-backups")).toContain("No backups recorded —"),
+    );
     expect(text(page, ".systems-backups code")).toBe("openclaw backup enable --to <location>");
     const backupReads = () => calls(request, "backup.status");
     expect(backupReads()).toHaveLength(2);
     await vi.advanceTimersByTimeAsync(15_000);
     expect(backupReads()).toHaveLength(3);
+  });
+
+  it("retains inventory while a failed refresh is retried through its visible error", async () => {
+    let read: () => Promise<EnvironmentSummary[]> = async () => [host, worker];
+    const { controller, request } = harness(() => read());
+    const { page, sidebar } = await mount(controller);
+    const original = controller.state.inventory;
+    const pending = createDeferred<EnvironmentSummary[]>();
+    read = () => pending.promise;
+    const refresh = controller.refresh("manual");
+    await waitForSolid(() =>
+      expect(sidebar.querySelector<HTMLButtonElement>(".systems-filter__refresh")?.disabled).toBe(
+        true,
+      ),
+    );
+    expect(controller.state.inventory).toBe(original);
+    pending.reject(new Error("Inventory unavailable"));
+    await refresh;
+    await waitForSolid(() =>
+      expect(text(page, '[role="alert"]')).toContain("Inventory unavailable"),
+    );
+    expect(controller.state.inventory).toBe(original);
+    expect(sidebar.querySelectorAll(".systems-machine")).toHaveLength(2);
+    expect(calls(request, "environments.list")).toHaveLength(2);
+    read = async () => [host, worker, offline];
+    page.querySelector<HTMLButtonElement>('[role="alert"] button')!.click();
+    await waitForSolid(() => expect(sidebar.querySelectorAll(".systems-machine")).toHaveLength(3));
+    expect(page.querySelector('[role="alert"]')).toBeNull();
+    expect(calls(request, "environments.list")).toHaveLength(3);
+    expect(controller.state.selectedId).toBe(host.id);
   });
 
   it("renders backup outcomes and namespace-owned schedules, probing storage only on request", async () => {
@@ -324,6 +366,30 @@ describe("Systems workspace", () => {
     expect(text(page, ".systems-backups")).not.toContain("old-host");
   });
 
+  it("retires a pending storage probe when the connection leaves", async () => {
+    const { controller, gateway, request } = harness(undefined, undefined, async () => ({
+      targets: [],
+      schedules: [],
+      locations: [{ name: "offsite", provider: "filesystem", encrypted: false }],
+    }));
+    const { page } = await mount(controller);
+    await waitForSolid(() =>
+      expect(page.querySelector('[aria-label="Check offsite"]')).not.toBeNull(),
+    );
+    const pending = createDeferred<{ state: "ok"; freeBytes: number }>();
+    request.mockReturnValueOnce(pending.promise);
+    page.querySelector<HTMLButtonElement>('[aria-label="Check offsite"]')!.click();
+    await waitForSolid(() => expect(page.textContent).toContain("Checking"));
+    gateway.publish({ phase: "offline" });
+    await waitForSolid(() => expect(page.textContent).not.toContain("Checking"));
+    pending.resolve({ state: "ok", freeBytes: 1024 ** 3 });
+    await pending.promise;
+    flush();
+    expect(controller.storageProbes.size).toBe(0);
+    expect(calls(request, "storage.locations.probe")).toHaveLength(1);
+    expect(text(page, ".systems-backups")).not.toContain("1 GB free");
+  });
+
   it("defers hidden initial and event reads, preserving inventory until visible recovery", async () => {
     vi.useFakeTimers();
     let visibility: DocumentVisibilityState = "hidden";
@@ -396,6 +462,7 @@ describe("Systems workspace", () => {
     flush();
     expect(mounted.container.querySelector(".systems-state button")).toBe(enable);
     expect(enable.disabled).toBe(true);
+    expect(enable.textContent).toContain("Enabling");
     pending.reject(new Error("Desktop configuration could not be saved"));
     await waitForSolid(() =>
       expect(text(mounted.container, '[role="alert"]')).toContain(
@@ -403,6 +470,57 @@ describe("Systems workspace", () => {
       ),
     );
     expect(enable.disabled).toBe(false);
+  });
+
+  it("retires desktop setup presentation when the route is parked before loading finishes", async () => {
+    const loaded = createDeferred();
+    const { controller, context } = harness(async () => [desktopSetupHost]);
+    vi.spyOn(context.runtimeConfig, "ensureLoaded").mockReturnValue(loaded.promise);
+    const patch = vi.spyOn(context.runtimeConfig, "patch");
+    const [presented, setPresented] = createSignal(true);
+    const data = { controller };
+    const mounted = mountSolid(() => routeView(() => data, presented));
+    await waitForSolid(() => expect(controller.state.inventory).not.toBeNull());
+    mounted.container.querySelector<HTMLButtonElement>(".systems-state button")!.click();
+    await waitForSolid(() => expect(controller.desktopSetupBusy()).toBe(true));
+    const navigation = context.router.navigate("debug", context);
+    setPresented(false);
+    await navigation;
+    await waitForSolid(() => expect(controller.desktopSetupBusy()).toBe(false));
+    loaded.resolve();
+    await loaded.promise;
+    await waitForSolid(() => expect(patch).not.toHaveBeenCalled());
+    setPresented(true);
+    await waitForSolid(() =>
+      expect(text(mounted.container, ".systems-state button")).toContain(
+        "Enable desktop access in OpenClaw",
+      ),
+    );
+  });
+
+  it("reconciles desktop enablement from the accepted configuration", async () => {
+    const pending = createDeferred();
+    const { controller, context, request } = harness(async () => [desktopSetupHost]);
+    vi.spyOn(context.runtimeConfig, "ensureLoaded").mockResolvedValue();
+    const patch = vi.spyOn(context.runtimeConfig, "patch").mockImplementation(async () => {
+      await pending.promise;
+      request.mockResolvedValueOnce({
+        config: { desktop: { host: { enabled: true } } },
+        hash: "enabled",
+        valid: true,
+      });
+      await context.runtimeConfig.refresh();
+      return true;
+    });
+    const { page } = await mount(controller);
+    page.querySelector<HTMLButtonElement>(".systems-state button")!.click();
+    await waitForSolid(() => expect(text(page, ".systems-state button")).toContain("Enabling"));
+    pending.resolve();
+    await waitForSolid(() =>
+      expect(text(page, ".systems-state h2")).toBe("Desktop access is enabled"),
+    );
+    expect(page.querySelector(".systems-state button")).toBeNull();
+    expect(patch).toHaveBeenCalledOnce();
   });
 
   it("updates desktop setup when only the configuration owner publishes", async () => {
@@ -462,6 +580,7 @@ describe("Systems workspace", () => {
   );
 
   it("sorts and filters the machine inventory without replacing the selected machine", async () => {
+    const warnings = vi.spyOn(console, "warn");
     // Open menus need frame boundaries instead of the sidebar fixture's recursive microtasks.
     vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
     const environments: EnvironmentSummary[] = [
@@ -502,6 +621,9 @@ describe("Systems workspace", () => {
       vi.advanceTimersToNextFrame();
       await sidebar.updateComplete;
       flush();
+      expect(menu?.querySelector(`[data-value="${value}"]`)?.getAttribute("aria-checked")).toBe(
+        "true",
+      );
     };
     const search = async (value: string) => {
       const input = sidebar.querySelector<HTMLInputElement>('input[type="search"]')!;
@@ -555,6 +677,11 @@ describe("Systems workspace", () => {
     await choose("status:all");
     expect(nodeNames()).toEqual(["Alpha laptop", "Delta laptop", "Beta laptop", "Zulu laptop"]);
     expect(names()).toContain("Preparing worker");
+    expect(
+      warnings.mock.calls
+        .map(([message]) => String(message))
+        .filter((message) => message.includes("[NO_OWNER_EFFECT]")),
+    ).toEqual([]);
   });
 
   it("keeps disk histories attached to mount paths through reordering, removal, and return", async () => {

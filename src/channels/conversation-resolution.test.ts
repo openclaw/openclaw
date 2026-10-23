@@ -19,7 +19,7 @@ function registerChannelPlugin({ id, config, ...overrides }: TestPlugin): void {
   setActivePluginRegistry(createTestRegistry([{ pluginId: plugin.id, source: "test", plugin }]));
 }
 
-function command(channel: string, originatingTo: string, accountId = "default", threadId?: number) {
+function command(channel: string, originatingTo: string, accountId?: string, threadId?: number) {
   return resolveCommandConversationResolution({
     cfg: testConfig,
     channel,
@@ -56,13 +56,7 @@ describe("conversation resolution", () => {
       },
     });
 
-    expect(
-      resolveCommandConversationResolution({
-        cfg: testConfig,
-        channel: "discord",
-        originatingTo: "discord:channel:123",
-      }),
-    ).toEqual({
+    expect(command("discord", "discord:channel:123")).toEqual({
       channel: "discord",
       accountId: "work",
       conversationId: "channel:123",

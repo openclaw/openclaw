@@ -61,8 +61,6 @@ export type SessionWorkspaceMobileProps = {
   onOpenFileInsideFiles: SessionWorkspaceProps["onOpenFile"];
   onOpenArtifactInsideFiles: SessionWorkspaceProps["onOpenArtifact"];
   onToggleGroup: (kind: SessionWorkspaceMobileGroup["kind"]) => void;
-  /** The mobile host expands on editable focus; blur does not minimize it. */
-  onSearchFocus: () => void;
   /** Host owns route scroll restoration and retention, including while hidden. */
   onScrollElement: (element: HTMLDivElement | null) => void;
   onScroll: (scrollTop: number) => void;
@@ -342,7 +340,6 @@ export function SessionWorkspaceMobile(props: SessionWorkspaceMobileProps) {
             }
             ref={liveValue(() => props.search)}
             onInput={(event) => props.onSearch(event.currentTarget.value)}
-            onFocus={() => props.onSearchFocus()}
           />
         </label>
       </div>

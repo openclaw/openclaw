@@ -38,7 +38,6 @@ function createActiveRun(kind: "chat-send" | "agent" = "agent"): RpcSourceRef {
 function createMaintenanceTimerDeps() {
   return {
     ...createGatewayMaintenanceStateForTest(),
-    runManagedOutgoingMediaGc: async () => undefined,
   };
 }
 

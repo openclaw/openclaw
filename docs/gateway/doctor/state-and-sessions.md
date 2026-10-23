@@ -150,6 +150,11 @@ memory sources to rebuild the PostgreSQL index and may re-embed them. See
     before converting the roster. Current keyed `agents.entries` configurations
     without a legacy marker keep their dynamic system-agent selection.
 
+    When adopting inference accounts for legacy jobs, Doctor shares one captured
+    configuration across the migration. Agent workspaces can reuse provider
+    preparation, while each job still resolves its own model, account preferences,
+    and authorization. Existing bindings and model selections stay unchanged.
+
     Missing interval anchors are repaired by Doctor. Runtime scheduling can
     calculate the next run without writing an anchor into an old definition.
     Schedule maintenance and run outcomes preserve stored ownership and authored
@@ -184,6 +189,7 @@ memory sources to rebuild the PostgreSQL index and may re-embed them. See
     - **Linux SD or eMMC state dir**: warns when state resolves to an `mmcblk*` mount source, because SD/eMMC-backed random I/O can be slower and wear faster under session and credential writes.
     - **Linux volatile state dir**: warns when state resolves to `tmpfs` or `ramfs`, because sessions, credentials, config, and SQLite state (with WAL/journal sidecars) disappear on reboot. Docker `overlay` mounts are intentionally not flagged because their writable layers persist across host reboots while the container remains.
     - **Session directory permissions**: checks existing session and store directories for writability. Missing archive directories are healthy on fresh profiles and are created when needed.
+    - **Legacy OAuth directory**: a missing directory is a warning, including when channel pairing or `OPENCLAW_OAUTH_DIR` selects it. Doctor can create it with `--fix`; its absence alone does not block update readiness. Existing-directory writability and credential migration checks still apply.
     - **Legacy transcript mismatch**: warns when recent legacy session entries have missing transcript files. SQLite-owned sessions do not require archived JSONL files.
     - **Legacy main session "1-line JSONL"**: flags when an unimported main transcript has only one line (history was not accumulating).
     - **State directory scope**: integrity diagnostics inspect the active state directory selected by the profile or `OPENCLAW_STATE_DIR`. Separate profiles intentionally keep separate histories; Doctor does not probe the default `~/.openclaw` directory merely to warn that it also exists. The macOS launch-agent disablement warning reads only the active state directory's `disable-launchagent` marker. Two released migration exceptions are named in `resolveLegacyProfileMigrationExceptions`: `profileWorkspace` may read and migrate only `~/.openclaw/workspace-<active-profile>` into that profile's workspace, and `standaloneAgent` follows the default-install or explicit-path rule above. Neither migration scans other profiles' entries.
@@ -209,6 +215,8 @@ memory sources to rebuild the PostgreSQL index and may re-embed them. See
     OAuth credential sidecar imports are retired. Doctor leaves their files and encryption keys untouched. When a legacy `auth-profiles.json` still references a sidecar, Doctor refuses the migration: upgrade through `2026.9.7` and run `openclaw doctor --fix` from an interactive terminal on the original host before retrying; that release can recover the historical key and import the credentials. Unreferenced sidecars stay in place without blocking. See [retention policy](/gateway/doctor/config-migrations#retention-policy).
 
     Stale OAuth shadow cleanup preserves profiles with sidecar references in either the legacy file or the canonical store. If a legacy auth file cannot be read or parsed, Doctor skips that agent's shadow cleanup and warns with the file path; inspect or restore it before retrying. A missing legacy file does not prevent cleanup of ordinary SQLite-only profiles.
+
+    Legacy auth-profile JSON, retired `identity/*device-auth.json` files, and `logs/config-health.json` must contain valid UTF-8. Doctor refuses malformed bytes before importing them, preserves the source, and reports the affected path. Keep the original bytes and restore valid UTF-8 JSON from a verified backup before rerunning `openclaw doctor --fix`; do not use a lossy conversion. Valid Unicode, including a literal replacement character, remains supported. Malformed auth archives cannot authorize recovered profile mappings.
 
   </Accordion>
   <Accordion title="6. Hooks model validation">

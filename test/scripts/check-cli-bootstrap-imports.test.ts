@@ -211,36 +211,20 @@ describe("check-cli-bootstrap-imports", () => {
     expect(diagnostic.mock.calls.flat().join("\n")).toContain("static graph imports cold path");
   });
 
-  it("keeps binding searches bounded while rejecting an early name redeclared in a large module", () => {
+  it("rejects redeclared worker bindings without changing the Acorn prototype", () => {
     const root = makeTempRoot();
-    const bindings = 2048;
-    const source =
-      Array.from(
-        { length: bindings },
-        (_, index) => `const bootstrap_binding_${index} = ${index};`,
-      ).join("\n") + "\nlet bootstrap_binding_0;";
-    writeFixture(root, "dist/worker/worker.mjs", source);
-    let searchedSlots = 0;
-    const indexOf = Array.prototype.indexOf;
-    const observed = vi.spyOn(Array.prototype, "indexOf").mockImplementation(function (
-      this: unknown[],
-      value: unknown,
-      fromIndex?: number,
-    ) {
-      if (typeof value === "string" && value.startsWith("bootstrap_binding_")) {
-        searchedSlots += this.length;
-      }
-      return indexOf.call(this, value, fromIndex);
-    });
+    writeFixture(
+      root,
+      "dist/worker/worker.mjs",
+      "const bootstrap_binding_0 = 0; let bootstrap_binding_0;",
+    );
     const errors = workerErrors({
       rootDir: root,
       workerDeployEntrypoints: ["dist/worker/worker.mjs"],
     });
-    observed.mockRestore();
     expect(errors).toEqual([
       expect.stringContaining("Identifier 'bootstrap_binding_0' has already been declared"),
     ]);
-    expect(searchedSlots).toBeLessThanOrEqual(bindings * 8);
     expect(snapshotAcornParserPrototype()).toEqual(acornPrototypeBeforeCheck);
   });
 

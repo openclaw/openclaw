@@ -50,6 +50,76 @@ function progress(step: { id: string; message?: string; externalUrl?: string }):
   };
 }
 
+it("retains the draft and controls through a failed cancellation and a held retry", async () => {
+  const firstCancellation = createDeferred<{ status: "running" }>();
+  const secondCancellation = createDeferred<{ status: "running" }>();
+  const client = new GatewayBrowserClient({ url: "ws://gateway.example.test" });
+  let cancellations = 0;
+  vi.spyOn(client, "request").mockImplementation(async (method) => {
+    if (method === "models.authLogin") {
+      return { sessionId: "00000000-0000-4000-8000-000000000003", done: false, status: "running" };
+    }
+    if (method === "wizard.next") {
+      return { done: false, status: "running", step: { id: "credentials", type: "text" } };
+    }
+    if (method === "wizard.cancel") {
+      cancellations += 1;
+      if (cancellations === 3) {
+        return { status: "cancelled" };
+      }
+      return await (cancellations === 1 ? firstCancellation.promise : secondCancellation.promise);
+    }
+    if (method === "wizard.status") {
+      return { status: "cancelled" };
+    }
+    throw new Error(`Unexpected request: ${method}`);
+  });
+  const view = loginFixture(client);
+  const { container, controller, clickButton } = view;
+  try {
+    await controller.runner.start("provider", "models.authLogin");
+    flush();
+    const input = expectDefined(container.querySelector("input"), "credential input");
+    input.value = "retained draft";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    flush();
+    clickButton("Cancel");
+    clickButton("Cancel");
+    expect(cancellations).toBe(1);
+    flush();
+    expect(controller.cancelling).toBe(true);
+    firstCancellation.reject(new Error("Cancellation response lost"));
+    await waitForFast(() => expect(container.textContent).toContain("Cancellation response lost"));
+    expect(controller.cancelling).toBe(false);
+    expect(container.querySelector("input")).toBe(input);
+    expect(input.value).toBe("retained draft");
+
+    clickButton("Cancel");
+    flush();
+    expect(controller.cancelling).toBe(true);
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(container.querySelector("input")).toBe(input);
+    secondCancellation.resolve({ status: "running" });
+    await waitForFast(() => {
+      expect(controller.cancelling).toBe(false);
+      expect(container.querySelector('[role="alert"]')).not.toBeNull();
+    });
+    expect(container.textContent).not.toContain("Cancellation response lost");
+    expect(controller.runner.state.phase).toBe("step");
+    expect(input.value).toBe("retained draft");
+    expect(cancellations).toBe(2);
+    clickButton("Cancel");
+    await waitForFast(() => {
+      expect(controller.runner.state.phase).toBe("idle");
+      expect(container.querySelector("openclaw-modal-dialog")).toBeNull();
+    });
+  } finally {
+    firstCancellation.resolve({ status: "running" });
+    secondCancellation.resolve({ status: "running" });
+    view.unmount();
+  }
+});
+
 it("retires an active sign-in when its owner is removed without publishing during teardown", async () => {
   const sessionId = "00000000-0000-4000-8000-000000000003";
   vi.spyOn(uuid, "generateUUID").mockReturnValue(sessionId);

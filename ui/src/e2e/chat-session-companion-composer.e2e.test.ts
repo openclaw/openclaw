@@ -138,7 +138,7 @@ suite.define(() => {
           expect(await gateway.getRequests("sessions.companion.reset")).toEqual([]);
           await capture("recovered-image.png");
         } else {
-          await side.locator(".chat-session-rail__answer").waitFor();
+          await text("The next step is ready.").waitFor();
           expect(
             await side.locator(".chat-session-rail__composer .chat-attachment-thumb").count(),
           ).toBe(0);

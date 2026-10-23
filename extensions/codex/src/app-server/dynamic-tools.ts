@@ -148,7 +148,6 @@ export type CodexDynamicToolBridge = {
 export function createCodexDynamicToolBridge(params: {
   tools: AnyAgentTool[];
   registeredTools?: readonly CodexToolDescriptor[];
-  registeredFallbackTools?: AnyAgentTool[];
   registeredSpecs?: readonly CodexDynamicToolSpec[];
   signal: AbortSignal;
   assertCurrent?: () => void;
@@ -184,13 +183,6 @@ export function createCodexDynamicToolBridge(params: {
     availableProjection.tools.filter((entry) => registrationNames.has(entry.name)),
   );
   const availableTools = finalized.tools;
-  const registeredFallbackProjection = projectCodexExecutableDynamicToolSurface(
-    params.registeredFallbackTools ?? [],
-    params.hookContext,
-  );
-  const registeredFallbackTools = registeredFallbackProjection.tools.filter(
-    (entry) => registrationNames.has(entry.name) && !finalized.preparedNames.has(entry.name),
-  );
   const pluginLocalMediaTrustByToolName = new Map<string, ReadonlySet<string>>();
   for (const { name, tool } of availableTools) {
     const pluginMeta = getPluginToolMeta(tool);
@@ -203,9 +195,8 @@ export function createCodexDynamicToolBridge(params: {
     }
   }
   availableProjection.quarantinedTools.push(...finalized.quarantinedTools);
-  const toolMap = new Map(availableTools.map((entry) => [entry.name, entry]));
-  const executionToolMap = new Map(
-    [...registeredFallbackTools, ...availableTools].map((entry) => [
+  const toolMap = new Map(
+    availableTools.map((entry) => [
       entry.name,
       {
         ...entry,
@@ -228,7 +219,6 @@ export function createCodexDynamicToolBridge(params: {
     inheritedNames ?? new Set(registeredSpecTools.map((entry) => entry.name));
   const quarantinedTools = dedupeQuarantinedDynamicTools([
     ...availableProjection.quarantinedTools,
-    ...registeredFallbackProjection.quarantinedTools,
     ...registeredProjection.quarantinedTools,
   ]);
   reportQuarantinedDynamicTools({
@@ -328,7 +318,7 @@ export function createCodexDynamicToolBridge(params: {
           toolName,
           toolCallOrdinal: options?.toolCallOrdinal,
         });
-      const toolEntry = executionToolMap.get(call.tool);
+      const toolEntry = toolMap.get(call.tool);
       if (!toolEntry) {
         const executedArguments = asNonArrayRecord(call.arguments);
         const message = registeredToolNames.has(call.tool)
@@ -704,13 +694,11 @@ export function projectCodexExecutableDynamicTools(params: {
   hookContext?: CodexDynamicToolHookContext;
 }): {
   availableTools: AnyAgentTool[];
-  quarantinedTools: CodexDynamicToolSchemaQuarantine[];
 } {
   const projected = projectCodexExecutableDynamicToolSurface(params.tools, params.hookContext);
   const finalized = finalizeCodexToolAvailability(projected.tools);
   return {
     availableTools: finalized.tools.map((entry) => entry.tool),
-    quarantinedTools: [...projected.quarantinedTools, ...finalized.quarantinedTools],
   };
 }
 

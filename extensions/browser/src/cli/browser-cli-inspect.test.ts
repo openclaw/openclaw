@@ -57,7 +57,7 @@ describe("browser cli snapshot defaults", () => {
     return sharedMocks.callBrowserRequest.mock.calls.at(-1)?.[1];
   };
 
-  const runSnapshot = async (args: string[]) => await runBrowserInspect(["snapshot", ...args]);
+  const runSnapshot = (args: string[]) => runBrowserInspect(["snapshot", ...args]);
 
   beforeAll(async () => {
     installInspectSpies();
@@ -129,28 +129,32 @@ describe("browser cli snapshot defaults", () => {
   );
 
   it.each([
-    {
-      args: [],
-      browser: { snapshotDefaults: { mode: "efficient" } },
-      query: { format: "ai", mode: "efficient" },
-    },
-    { args: ["--efficient"], browser: {}, query: { format: "ai", mode: "efficient" } },
-    { args: ["--urls"], browser: {}, query: { format: "ai", urls: true } },
-    { args: ["--limit", "+10", "--depth", "+0"], browser: {}, query: { limit: 10, depth: 0 } },
-  ])("builds snapshot query $query for $args", async ({ args, browser, query }) => {
+    [[], { snapshotDefaults: { mode: "efficient" } }, { format: "ai", mode: "efficient" }],
+    [["--efficient"], {}, { format: "ai", mode: "efficient" }],
+    [["--urls"], {}, { format: "ai", urls: true }],
+    [["--limit", "+10", "--depth", "+0"], {}, { limit: 10, depth: 0 }],
+  ] as const)("builds snapshot query for %j", async (args, browser, query) => {
     configMocks.getRuntimeConfig.mockReturnValue({ browser });
-    expect(await runSnapshot(args)).toMatchObject({ path: "/snapshot", query });
+    expect(await runSnapshot([...args])).toMatchObject({ path: "/snapshot", query });
   });
 
-  it.each([
-    ["--limit", "1e3", "Invalid --limit: must be an integer >= 1"],
-    ["--depth", "-1", "Invalid --depth: must be an integer >= 0"],
-    ["--mode", "full", "Invalid --mode: expected efficient"],
-  ])("rejects snapshot %s %s before dispatch", async (option, value, message) => {
-    await expect(runSnapshot([option, value])).rejects.toThrow("__exit__:1");
-    expect(runtime.error.mock.calls.at(-1)?.[0]).toContain(message);
-    expect(sharedMocks.callBrowserRequest).not.toHaveBeenCalled();
-  });
+  it.each([false, true])(
+    "lets the CLI render invalid inspect options (json: %s)",
+    async (withJson) => {
+      for (const [args, message] of [
+        [["snapshot", "--limit", "1e3"], "Invalid --limit: must be an integer >= 1"],
+        [["snapshot", "--depth", "-1"], "Invalid --depth: must be an integer >= 0"],
+        [["snapshot", "--format", "full"], "Invalid --format: expected aria or ai"],
+        [["snapshot", "--mode", "full"], "Invalid --mode: expected efficient"],
+        [["screenshot", "--type", "gif"], "Invalid --type: expected png or jpeg"],
+      ] as const) {
+        await expect(runBrowserInspect([...args], withJson)).rejects.toThrow(message);
+      }
+      expect(sharedMocks.callBrowserRequest).not.toHaveBeenCalled();
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(runtime.exit).not.toHaveBeenCalled();
+    },
+  );
 
   it("sends screenshot request with trimmed target id and jpeg type", async () => {
     const params = await runBrowserInspect(["screenshot", " tab-1 ", "--type", "jpeg"], true);

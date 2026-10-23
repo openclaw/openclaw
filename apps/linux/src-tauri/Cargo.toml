@@ -9,6 +9,10 @@ rust-version = "1.97.1"
 name = "openclaw-desktop"
 path = "src/main.rs"
 
+[[test]]
+name = "updater_check"
+harness = false
+
 [build-dependencies]
 tauri-build = { version = "2.7.2", features = [] }
 

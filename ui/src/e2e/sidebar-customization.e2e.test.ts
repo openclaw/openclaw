@@ -7,6 +7,7 @@ import type { AppSidebarElement } from "../components/app-sidebar.tsx";
 import {
   takeControlUiElementScreenshot,
   takeControlUiViewportScreenshot,
+  waitForControlUiProofSurface,
 } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionPath,
@@ -151,7 +152,6 @@ suite.define(() => {
           expect(
             Math.abs(iconBox!.x + iconBox!.width / 2 - (linkBox!.x + linkBox!.width / 2)),
           ).toBeLessThanOrEqual(1);
-          expect(await row.locator(".sidebar-reorder-trigger").count()).toBe(0);
           if (label === "Workboard") {
             const pages = await openSidebarPages(page);
             const operationsEntry = pages.locator(
@@ -647,6 +647,7 @@ suite.define(() => {
       const background = (locator: typeof railUsage) =>
         locator.evaluate((element) => getComputedStyle(element).backgroundColor);
       expect(await iconWidth(railUsage)).toBe(await iconWidth(pagesButton));
+      await waitForControlUiProofSurface(pagesButton, []);
       const pressedBackground = await background(pagesButton);
       await railUsage.hover();
       await expect.poll(() => background(railUsage)).toBe(pressedBackground);

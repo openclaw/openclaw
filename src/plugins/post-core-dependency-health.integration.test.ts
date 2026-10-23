@@ -4,6 +4,7 @@ import type http from "node:http";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
+import { closeHttpServer } from "../../test/helpers/gateway-integration-fixtures.js";
 import { preparePostCorePluginConfig } from "../cli/update-cli/update-command-config.js";
 import { updatePluginsAfterCoreUpdate } from "../cli/update-cli/update-command-plugins.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -29,22 +30,13 @@ afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   for (const server of servers.splice(0)) {
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
+    await closeHttpServer(server);
   }
 });
 
-const payloads = [
-  "missing",
-  "empty",
-  "ancestor",
-  "outside-symlink",
-  "empty-manifest",
-  "malformed-manifest",
-  "hoisted",
-  "optional",
-] as const;
+// Layout/manifest variants live in status-dependencies-core and install.npm-dependencies.
+// Keep real post-core publication, malformed-package reporting, and rollback here.
+const payloads = ["missing", "malformed-manifest", "hoisted", "optional"] as const;
 it.each([
   ...payloads.map((payload): [typeof payload, number | null | undefined] => [payload, undefined]),
   ["missing", 90_000],
@@ -157,27 +149,10 @@ it.each([
               successfulNpmInstalls += 1;
               const hoisted = path.join(attemptRoot, "node_modules", dependency);
               expect(await readPackage(hoisted)).toMatchObject({ name: dependency });
-              if (payload === "empty-manifest" || payload === "malformed-manifest") {
-                await fs.writeFile(
-                  path.join(hoisted, "package.json"),
-                  payload === "empty-manifest" ? "" : "{",
-                );
+              if (payload === "malformed-manifest") {
+                await fs.writeFile(path.join(hoisted, "package.json"), "{");
               } else if (payload !== "hoisted") {
                 await fs.rm(hoisted, { recursive: true });
-                if (payload === "empty") {
-                  await fs.mkdir(hoisted);
-                }
-                if (payload === "ancestor" || payload === "outside-symlink") {
-                  const outside = path.join(npmDir, "node_modules", dependency);
-                  await fs.mkdir(outside, { recursive: true });
-                  await fs.writeFile(
-                    path.join(outside, "package.json"),
-                    JSON.stringify({ name: dependency, version: "1.0.0" }),
-                  );
-                  if (payload === "outside-symlink") {
-                    await fs.symlink(outside, hoisted, "junction");
-                  }
-                }
               }
               return result;
             },

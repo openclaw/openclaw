@@ -112,6 +112,21 @@ function expectChatEvent(broadcast: ReturnType<typeof vi.fn>, fields: Record<str
     expect.anything(),
   );
 }
+function expectPreparedProject(
+  entry: SessionEntry | null | undefined,
+  sessionId: string,
+  project: Awaited<ReturnType<typeof registerProjectRegistry>>,
+  projectRoot: string,
+  worktree: boolean,
+) {
+  expect(entry).toMatchObject({
+    sessionId,
+    projectId: project.id,
+    ...(worktree
+      ? { worktree: { canonicalWorkspaceDir: projectRoot } }
+      : { spawnedCwd: projectRoot, sessionRoot: projectRoot }),
+  });
+}
 async function remoteProjectFixture<T = Awaited<ReturnType<typeof registerProjectRegistry>>>(
   prefix: string,
   options: { sandboxed?: boolean; alias?: boolean; recordInput?: boolean } = {},
@@ -320,16 +335,7 @@ test.each([
           );
         }
         const prepared = readEntry(storePath, key);
-        expect(prepared).toMatchObject({
-          sessionId,
-          projectId: project.id,
-          ...(worktree
-            ? { worktree: { canonicalWorkspaceDir: projectRoot } }
-            : {
-                spawnedCwd: projectRoot,
-                sessionRoot: projectRoot,
-              }),
-        });
+        expectPreparedProject(prepared, sessionId, project, projectRoot, worktree);
         if (worktree) {
           expect((await managedWorktrees.findLiveByOwner("session", key))?.baseRef).toBe("main");
           expect(prepared?.spawnedCwd).not.toBe(projectRoot);
@@ -432,18 +438,12 @@ test.each([
           await vi.waitFor(() => expect(projectCloneMocks.materialize).toHaveBeenCalledTimes(2));
           expect(readEntry(storePath, key)?.lastRunError).toBe(undefined);
           expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-          expect(entryAfterCreation).toMatchObject({
-            sessionId,
-            pendingProjectGitUrl: "https://github.com/openclaw/openclaw.git",
-          });
-          expect(entryAfterFailure).toMatchObject({
-            sessionId,
-            pendingProjectGitUrl: "https://github.com/openclaw/openclaw.git",
-          });
-          expect(readEntry(storePath, key)).toMatchObject({
-            sessionId,
-            pendingProjectGitUrl: "https://github.com/openclaw/openclaw.git",
-          });
+          for (const entry of [entryAfterCreation, entryAfterFailure, readEntry(storePath, key)]) {
+            expect(entry).toMatchObject({
+              sessionId,
+              pendingProjectGitUrl: "https://github.com/openclaw/openclaw.git",
+            });
+          }
 
           retriedMaterialization.resolve(project);
           await settleWorkspaceRuns(restartedContext, storePath, key);
@@ -456,13 +456,7 @@ test.each([
           expect(error?.[1]).toBeUndefined();
           expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
           const preparedEntry = readEntry(storePath, key);
-          expect(preparedEntry).toMatchObject({
-            sessionId,
-            projectId: project.id,
-            ...(worktree
-              ? { worktree: { canonicalWorkspaceDir: projectRoot } }
-              : { spawnedCwd: projectRoot, sessionRoot: projectRoot }),
-          });
+          expectPreparedProject(preparedEntry, sessionId, project, projectRoot, worktree);
           expect(preparedEntry).not.toHaveProperty("pendingProjectGitUrl");
           expect(preparedEntry).not.toHaveProperty("pendingWorktree");
           if (preparedEntry?.worktree) {

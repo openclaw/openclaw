@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type { NodePermissionRequest } from "../../../../../packages/gateway-protocol/src/node-permissions.js";
+import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../../../app/context.ts";
 import {
   createNativeDeviceSettingsCapability,
@@ -202,14 +203,37 @@ it("shows app guidance for another node and rejects a stale local node action", 
   expect(f.post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "resolve-permission" }));
 });
 
-it("shows grant failures and never claims success", async () => {
+it("shows grant failures, clears them during retry, and waits for observed access", async () => {
   const f = await fixture("denied");
-  f.post.mockRejectedValueOnce(new Error("Permission request was cancelled"));
-  f.view.getByRole("button", { name: "Open System Settings" }).click();
+  const failed = createDeferred();
+  const retried = createDeferred();
+  onTestFinished(() => {
+    failed.resolve();
+    retried.resolve();
+  });
+  f.post.mockImplementationOnce(() => failed.promise);
+  const button = f.view.getByRole<HTMLButtonElement>("button", { name: "Open System Settings" });
+  button.click();
+  await waitForSolid(() => expect(button.disabled).toBe(true));
+  expect(f.view.queryByRole("alert")).toBeNull();
+  expect(f.view.queryByRole("button", { name: "Try again" })).toBeNull();
+  failed.reject(new Error("Permission request was cancelled"));
   await waitForSolid(() =>
     expect(f.view.getByRole("alert").textContent).toBe("Permission request was cancelled"),
   );
+  expect(button.disabled).toBe(false);
+  f.post.mockImplementationOnce(() => retried.promise);
+  button.click();
+  await waitForSolid(() => expect(button.disabled).toBe(true));
+  expect(f.view.queryByRole("alert")).toBeNull();
+  retried.resolve();
+  await waitForSolid(() => expect(button.disabled).toBe(false));
+  expect(f.view.queryByRole("alert")).toBeNull();
   expect(f.view.queryByRole("button", { name: "Try again" })).toBeNull();
+  f.snapshot.permissions.entries = [{ id: "screenRecording", status: "granted" }];
+  f.publish();
+  f.view.getByRole("button", { name: "Try again" }).click();
+  expect(f.retry).toHaveBeenCalledExactlyOnceWith("I granted Screen Recording, try again.");
 });
 
 it.each(

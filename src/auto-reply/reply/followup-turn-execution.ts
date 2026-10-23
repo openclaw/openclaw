@@ -27,7 +27,7 @@ import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { admitFollowupRunLifecycle } from "./queue/lifecycle.js";
 import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./reply-agent-turn-preparation.js";
 import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
-import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
+import { prepareReplyRunToolAuthority } from "./reply-tool-authority.js";
 import { resolveFollowupReplyExpectation } from "./source-reply-delivery-mode.js";
 import { resolveReplySourceTurnId, setChannelSourceTurnId } from "./source-turn-id.js";
 import { createTypingSignaler, type TypingSignaler } from "./typing-mode.js";
@@ -88,8 +88,6 @@ export async function executeFollowupTurn(params: {
   const sourceOpts = defaults.opts;
   const terminalReplyExpectation = resolveFollowupReplyExpectation(turn.queued, turn.config);
   turn.queued.run.terminalReplyExpectation = terminalReplyExpectation;
-  // Queued turns are never heartbeats; heartbeat runs never supply the drain callback.
-  const isHeartbeat = false;
   const roomEvent = turn.queued.currentInboundEventKind === "room_event";
   const deliveryAllowed = () => turn.sendPolicy === "allow" && !roomEvent;
   const progressAllowed = () =>
@@ -190,7 +188,6 @@ export async function executeFollowupTurn(params: {
   const baseTypingSignals = createTypingSignaler({
     typing: defaults.typing,
     mode: progressAllowed() ? defaults.typingMode : "never",
-    isHeartbeat,
   });
   const typingSignals: TypingSignaler = {
     ...baseTypingSignals,
@@ -208,7 +205,6 @@ export async function executeFollowupTurn(params: {
     ...sourceOpts,
     // Derived follow-ups take execution capabilities from their queued input.
     cronCreatorAuthorityCapability: undefined,
-    isHeartbeat,
     sourceReplyDeliveryMode: turn.queued.run.sourceReplyDeliveryMode,
     bootstrapContextMode: turn.queued.run.bootstrapContextMode,
     cleanupBundleMcpOnRunEnd: undefined,
@@ -382,9 +378,9 @@ export async function executeFollowupTurn(params: {
         ? sessionPersonalProfileId(turn.session.current())
         : undefined;
       await turn.operation.bindToolAuthoritySnapshotAsync(
-        prepareReplyToolAuthority(
+        prepareReplyRunToolAuthority(
           turn.queued,
-          undefined,
+          turn.session.current(),
           captureReplyOperationSessionReader(turn.operation),
         ),
       );
@@ -418,7 +414,6 @@ export async function executeFollowupTurn(params: {
           shouldEmitToolResult,
           shouldEmitToolOutput,
           pendingToolTasks,
-          isHeartbeat,
           sessionKey: turn.session.kind === "session" ? turn.session.key : undefined,
           runtimePolicySessionKey: turn.queued.run.runtimePolicySessionKey,
           getActiveSessionEntry: turn.session.current,
@@ -448,7 +443,6 @@ export async function executeFollowupTurn(params: {
         isFreshChannelCronAuthorityTurn({
           messageProvider: run.messageProvider,
           senderId: run.senderId,
-          isHeartbeat,
           isRoomEvent: roomEvent,
           inputProvenance: run.inputProvenance,
           spawnedBy: run.spawnedBy,
@@ -486,7 +480,6 @@ export async function executeFollowupTurn(params: {
       outcome: {
         kind: "rejected",
         payload: buildTerminalAgentRunFailureReplyPayload({
-          isHeartbeat,
           replyExpectation: terminalReplyExpectation,
           visibleReplyDelivered,
         }),

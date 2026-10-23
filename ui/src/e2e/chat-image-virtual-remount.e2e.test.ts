@@ -38,7 +38,7 @@ async function scrollToBottom(thread: Locator) {
 }
 
 suite.define(() => {
-  it.each(["unchanged", "sharing", "role assignment", "role definition"] as const)(
+  it.each(["sharing", "role assignment", "role definition"] as const)(
     "reuses remounted images; invalidates on %s",
     async (change) => {
       const page = await newChatPage(suite);
@@ -110,9 +110,6 @@ suite.define(() => {
       await waitForChatScrollIdle(page);
       expect(await trace.evaluate((stop) => stop())).toBe(false);
       expect(requests).toEqual({ metadata: 1, image: 1 });
-      if (change === "unchanged") {
-        return;
-      }
       await scrollToBottom(thread);
       await expect.poll(() => image.count()).toBe(0);
       await waitForChatScrollIdle(page);

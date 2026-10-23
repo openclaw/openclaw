@@ -44,8 +44,11 @@ function outcome(overrides: Partial<CodexCyberAttemptOutcome> = {}): CodexCyberA
   };
 }
 
-function verdict(overrides: Partial<CodexCyberAttemptOutcome> = {}) {
-  return readCodexCyberAttemptVerdict(outcome(overrides));
+function expectVerdict(
+  attempt: CodexCyberAttemptOutcome | undefined,
+  expected: Partial<ReturnType<typeof readCodexCyberAttemptVerdict>>,
+) {
+  expect(readCodexCyberAttemptVerdict(attempt)).toMatchObject(expected);
 }
 
 function refusal(category: string, provider = "openai") {
@@ -68,49 +71,39 @@ it.each([undefined, { mode: "off", model: "gpt-daybreak-red-latest" }] as const)
 );
 
 it("escalates only OpenAI's own cyber refusal on this attempt", () => {
-  expect(readCodexCyberAttemptVerdict(refusal("cyber"))).toMatchObject({
-    cyberRefused: true,
-    replaySafe: true,
-  });
-  expect(readCodexCyberAttemptVerdict(refusal("bio")).cyberRefused).toBe(false);
-  expect(readCodexCyberAttemptVerdict(refusal("misalignment")).cyberRefused).toBe(false);
-  expect(readCodexCyberAttemptVerdict(refusal("cyber", "other")).cyberRefused).toBe(false);
-  expect(verdict({ lastAssistant: refusal("cyber").currentAttemptAssistant })).toMatchObject({
-    cyberRefused: false,
-    replaySafe: false,
-  });
-  expect(readCodexCyberAttemptVerdict(undefined)).toMatchObject({
-    cyberRefused: false,
-    replaySafe: false,
-  });
+  expectVerdict(refusal("cyber"), { cyberRefused: true, replaySafe: true });
+  for (const attempt of [refusal("bio"), refusal("misalignment"), refusal("cyber", "other")]) {
+    expectVerdict(attempt, { cyberRefused: false });
+  }
+  const previousRefusal = outcome({ lastAssistant: refusal("cyber").currentAttemptAssistant });
+  for (const attempt of [previousRefusal, undefined]) {
+    expectVerdict(attempt, { cyberRefused: false, replaySafe: false });
+  }
 });
 
 it("counts only a real reply as answered", () => {
-  expect(
-    verdict({
-      currentAttemptAssistant: makeAgentAssistantMessage({
-        content: [{ type: "text", text: "Reply" }],
-      }),
-    }).answered,
-  ).toBe(true);
-  expect(
-    verdict({ terminal: { kind: "failed", source: "prompt", error: "stream disconnected" } }),
-  ).toMatchObject({ answered: false, unavailable: false });
-  expect(
-    verdict({
-      terminal: { kind: "aborted", source: "runtime" },
-      currentAttemptAssistant: makeAgentAssistantMessage({ content: [], stopReason: "aborted" }),
-    }).answered,
-  ).toBe(false);
-  expect(readCodexCyberAttemptVerdict(refusal("bio")).answered).toBe(false);
-  expect(verdict().answered).toBe(false);
+  const reply = makeAgentAssistantMessage({ content: [{ type: "text", text: "Reply" }] });
+  const aborted = makeAgentAssistantMessage({ content: [], stopReason: "aborted" });
+  expectVerdict(outcome({ currentAttemptAssistant: reply }), { answered: true });
+  expectVerdict(
+    outcome({ terminal: { kind: "failed", source: "prompt", error: "stream disconnected" } }),
+    { answered: false, unavailable: false },
+  );
+  expectVerdict(
+    outcome({ terminal: { kind: "aborted", source: "runtime" }, currentAttemptAssistant: aborted }),
+    { answered: false },
+  );
+  expectVerdict(refusal("bio"), { answered: false });
+  expectVerdict(outcome(), { answered: false });
 });
 
 it("reads an unauthorized target from the canonical terminal", () => {
   const error = new Error(
     "unexpected status 401 Unauthorized: not authorized to access this model.",
   );
-  expect(verdict({ terminal: { kind: "failed", source: "prompt", error } }).unavailable).toBe(true);
+  expectVerdict(outcome({ terminal: { kind: "failed", source: "prompt", error } }), {
+    unavailable: true,
+  });
 });
 
 it.each([

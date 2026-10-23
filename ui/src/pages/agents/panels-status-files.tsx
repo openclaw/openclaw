@@ -1,4 +1,5 @@
-import { createMemo } from "solid-js";
+import type { JSX } from "@solidjs/web";
+import { createMemo, Errored, For, isPending, Loading, Show } from "solid-js";
 import type { ChannelAccountSnapshot, ChannelsStatusSnapshot } from "../../api/types.ts";
 import {
   SettingsEmpty,
@@ -9,7 +10,11 @@ import {
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import type { AgentContext } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
-import { resolveChannelExtras as resolveChannelExtrasFromConfig } from "../../lib/channels/index.ts";
+import {
+  resolveChannelExtras as resolveChannelExtrasFromConfig,
+  type ChannelRead,
+} from "../../lib/channels/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import type { AgentsPageView } from "./agents-page-state.ts";
@@ -71,6 +76,36 @@ function summarizeChannelAccounts(accounts: ChannelAccountSnapshot[]) {
   };
 }
 
+function ChannelReadBoundary(props: {
+  read: ChannelRead | null;
+  retainedError: string | null;
+  children: (pending: boolean, error: string | null) => JSX.Element;
+}) {
+  return (
+    <Show when={props.read} keyed fallback={props.children(false, props.retainedError)}>
+      {(receipt) => {
+        const complete = createMemo(async () => {
+          const error = await receipt.completion;
+          if (error) {
+            throw new Error(error);
+          }
+          return null;
+        });
+        return (
+          <Errored fallback={(error) => props.children(false, formatUiError(error()))}>
+            <Loading fallback={props.children(true, props.retainedError)}>
+              {props.children(
+                isPending(() => complete()),
+                complete(),
+              )}
+            </Loading>
+          </Errored>
+        );
+      }}
+    </Show>
+  );
+}
+
 export function AgentChannels(
   params: AgentsPageView["channels"] & {
     context: AgentContext;
@@ -92,9 +127,12 @@ export function AgentChannels(
         t("agents.context.configurationSubtitle"),
         params.onSelectPanel,
       )}
-      {params.readState().channelsError ? (
-        <div class="callout danger">{params.readState().channelsError}</div>
-      ) : undefined}
+      <ChannelReadBoundary
+        read={params.readState().channelsRead}
+        retainedError={params.readState().channelsError}
+      >
+        {(_pending, error) => (error ? <div class="callout danger">{error}</div> : undefined)}
+      </ChannelReadBoundary>
       {!params.readState().channelsSnapshot ? (
         <div class="callout info">{t("agents.channels.loadHint")}</div>
       ) : undefined}
@@ -107,50 +145,62 @@ export function AgentChannels(
           </>
         }
         actions={
-          <AgentPanelAction
-            label={
-              params.readState().channelsLoading ? t("common.refreshing") : t("common.refresh")
-            }
-            disabled={params.readState().channelsLoading}
-            onClick={params.onRefresh}
-          />
+          <ChannelReadBoundary
+            read={params.readState().channelsRead}
+            retainedError={params.readState().channelsError}
+          >
+            {(pending) => (
+              <AgentPanelAction
+                label={pending ? t("common.refreshing") : t("common.refresh")}
+                disabled={pending}
+                onClick={params.onRefresh}
+              />
+            )}
+          </ChannelReadBoundary>
         }
       >
-        {entries().length === 0 ? (
-          <SettingsEmpty message={t("agents.channels.empty")} />
-        ) : (
-          entries().map((entry) => {
-            const summary = summarizeChannelAccounts(entry.accounts);
-            const status = summary.total
-              ? t("agents.channels.connectedCount", {
-                  connected: String(summary.connected),
-                  total: String(summary.total),
-                })
-              : t("agents.channels.noAccounts");
-            const configLabel = summary.configured
-              ? t("agents.channels.configuredCount", { count: String(summary.configured) })
-              : t("agents.channels.notConfigured");
-            const enabled = summary.total
-              ? t("agents.channels.enabledCount", { count: String(summary.enabled) })
-              : t("common.disabled");
-            const extras = resolveChannelExtrasFromConfig({
-              configForm: params.configForm,
-              channelId: entry.id,
-              fields: CHANNEL_EXTRA_FIELDS,
-            });
-            const metaParts = [
-              entry.id,
-              configLabel,
-              enabled,
-              ...extras.map((extra) => `${extra.label}: ${extra.value}`),
+        <For
+          each={entries()}
+          keyed={(entry) => entry.id}
+          fallback={<SettingsEmpty message={t("agents.channels.empty")} />}
+        >
+          {(entry) => {
+            const summary = createMemo(() => summarizeChannelAccounts(entry().accounts));
+            const status = () =>
+              summary().total
+                ? t("agents.channels.connectedCount", {
+                    connected: String(summary().connected),
+                    total: String(summary().total),
+                  })
+                : t("agents.channels.noAccounts");
+            const configLabel = () =>
+              summary().configured
+                ? t("agents.channels.configuredCount", { count: String(summary().configured) })
+                : t("agents.channels.notConfigured");
+            const enabled = () =>
+              summary().total
+                ? t("agents.channels.enabledCount", { count: String(summary().enabled) })
+                : t("common.disabled");
+            const extras = createMemo(() =>
+              resolveChannelExtrasFromConfig({
+                configForm: params.configForm,
+                channelId: entry().id,
+                fields: CHANNEL_EXTRA_FIELDS,
+              }),
+            );
+            const metaParts = () => [
+              entry().id,
+              configLabel(),
+              enabled(),
+              ...extras().map((extra) => `${extra.label}: ${extra.value}`),
             ];
             return (
               <SettingsRow
-                title={entry.label}
-                description={metaParts.join(" · ")}
+                title={entry().label}
+                description={metaParts().join(" · ")}
                 control={
                   <>
-                    {summary.configured === 0 ? (
+                    {summary().configured === 0 ? (
                       <a
                         class="settings-row__value"
                         href="https://docs.openclaw.ai/channels"
@@ -161,15 +211,15 @@ export function AgentChannels(
                       </a>
                     ) : undefined}
                     <SettingsStatus
-                      kind={summary.connected > 0 ? "ok" : summary.total ? "warn" : "muted"}
-                      label={status}
+                      kind={summary().connected > 0 ? "ok" : summary().total ? "warn" : "muted"}
+                      label={status()}
                     />
                   </>
                 }
               />
             );
-          })
-        )}
+          }}
+        </For>
       </SettingsSection>
     </>
   );

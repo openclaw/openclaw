@@ -1,5 +1,9 @@
 import crypto from "node:crypto";
 import type { SessionEventTarget } from "../../auto-reply/reply/session-event-contract.js";
+import {
+  captureSessionEventTargetForHost,
+  enqueueSessionEventForHost,
+} from "../../auto-reply/reply/session-event-handoff.js";
 import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { shouldLogVerbose } from "../../globals.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
@@ -13,7 +17,9 @@ import { beginDiagnosticBackendActivity } from "../../logging/diagnostic-run-act
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import { appendCapturedOutput, createCapturedOutputBuffers } from "../../process/exec-output.js";
 import { withChildProcessOperation } from "../../process/spawn-diagnostics.js";
+import { getProcessSupervisor } from "../../process/supervisor/index.js";
 import type { RunExit } from "../../process/supervisor/types.js";
+import { truncateUtf8Suffix } from "../../utils/utf8-truncate.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { runWithAgentToolSourceExecutionScope } from "../agent-tool-source-execution-guard.js";
 import type { CliOutput, CliTerminalInterruption } from "../cli-output-contracts.js";
@@ -24,10 +30,8 @@ import { EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS } from "../embedded-agent-runner/run
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import { classifyFailoverReason } from "../failover/classify.js";
 import { CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE } from "../failover/error.js";
-import type { CliExecuteDeps } from "./execute-deps.js";
 import type { CliEventHandlers } from "./execute-events.js";
 import { createCliAbortError, executeNodeClaudeRun } from "./execute-node-claude.js";
-import { appendCliOutputTail } from "./execute-output-buffer.js";
 import { executePluginOwnedProcess } from "./execute-plugin.js";
 import type { CliToolTracking } from "./execute-tool-tracking.js";
 import { attachCliReplyBackend } from "./execution-target.js";
@@ -46,6 +50,7 @@ import { buildCliSupervisorScopeKey } from "./reliability.js";
 import type { NodeClaudePlacement, PreparedCliRunContext } from "./types.js";
 
 const CLI_RUNNER_OUTPUT_PARSE_BYTES = 1024 * 1024;
+const CLI_RUNNER_OUTPUT_TAIL_BYTES = 64 * 1024;
 
 type ExecuteCliProcessOptions = {
   onPhase?: (phase: "send" | "resolve" | "cleanup") => void;
@@ -55,7 +60,6 @@ export async function executeCliProcess(params: {
   context: PreparedCliRunContext;
   assertCurrent: SessionSourceAssertion;
   backend: CliBackendConfig;
-  deps: CliExecuteDeps;
   events: CliEventHandlers;
   toolTracking: CliToolTracking;
   diagnostics: ReturnType<typeof createClaudeCliModelCallDiagnostics>;
@@ -159,7 +163,7 @@ export async function executeCliProcess(params: {
   let eventTarget: SessionEventTarget | undefined;
   if (eventSessionKey && eventAgentId && params.events.emitLiveEvents) {
     try {
-      eventTarget = await params.deps.captureSessionEventTarget(eventAgentId, eventSessionKey, {
+      eventTarget = await captureSessionEventTargetForHost(eventAgentId, eventSessionKey, {
         producerPolicy: context.sessionEventSourcePolicy,
         assertCaptureCurrent: params.assertCurrent,
       });
@@ -236,7 +240,7 @@ export async function executeCliProcess(params: {
     }
     stdoutBytes += chunkBytes;
     stdoutHash.update(chunk);
-    stdoutTail = appendCliOutputTail(stdoutTail, chunk);
+    stdoutTail = truncateUtf8Suffix(`${stdoutTail}${chunk}`, CLI_RUNNER_OUTPUT_TAIL_BYTES);
     if (chunk && stdoutCapture.truncatedBytes === 0) {
       appendCapturedOutput(stdoutCapture, chunk, CLI_RUNNER_OUTPUT_PARSE_BYTES, "head");
     }
@@ -249,7 +253,7 @@ export async function executeCliProcess(params: {
     params.diagnostics?.observeCliOutput(chunk, "stderr");
     stderrBytes += Buffer.byteLength(chunk);
     stderrHash.update(chunk);
-    stderrTail = appendCliOutputTail(stderrTail, chunk);
+    stderrTail = truncateUtf8Suffix(`${stderrTail}${chunk}`, CLI_RUNNER_OUTPUT_TAIL_BYTES);
     if (chunk && stderrCapture.truncatedBytes === 0) {
       appendCapturedOutput(stderrCapture, chunk, CLI_RUNNER_OUTPUT_PARSE_BYTES, "head");
     }
@@ -295,7 +299,6 @@ export async function executeCliProcess(params: {
         noOutputTimeoutMs: params.noOutputTimeoutMs,
         consumeStdout,
         consumeStderr,
-        deps: params.deps,
       });
       result = nodeRun.result;
       nodeRunAbortSignal = nodeRun.nodeRunAbortSignal;
@@ -304,7 +307,6 @@ export async function executeCliProcess(params: {
       result = await executePluginOwnedProcess({
         context,
         execute: context.executionTarget.execute,
-        watchdogClock: params.deps.watchdogClock,
         executionCommand: params.executionCommand,
         executionArgv0: params.executionArgv0,
         executionArgs: [...params.executionLeadingArgv, ...params.resolveExecutionArgs()],
@@ -374,7 +376,7 @@ export async function executeCliProcess(params: {
         throw resolveCliResumeAtError(error, resumeAtArg, failoverContext) ?? error;
       });
     } else {
-      const supervisor = params.deps.getProcessSupervisor();
+      const supervisor = getProcessSupervisor();
       const scopeKey = buildCliSupervisorScopeKey({
         backend: params.backend,
         backendId: context.backendResolved.id,
@@ -577,7 +579,7 @@ export async function executeCliProcess(params: {
         ].join(" ");
         if (eventSessionKey && eventAgentId && eventTarget) {
           try {
-            const receipt = params.deps.enqueueSessionEvent(stallNotice, {
+            const receipt = enqueueSessionEventForHost(stallNotice, {
               agentId: eventAgentId,
               sessionKey: eventSessionKey,
               source: "exec",

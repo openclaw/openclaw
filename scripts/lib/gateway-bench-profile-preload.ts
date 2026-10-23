@@ -1,8 +1,10 @@
 import { readFileSync, realpathSync, writeFileSync, writeSync } from "node:fs";
 import { Session } from "node:inspector/promises";
+import { registerHooks, syncBuiltinESMExports } from "node:module";
 import { availableParallelism } from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { getHeapSpaceStatistics, queryObjects, writeHeapSnapshot } from "node:v8";
+import v8, { getHeapSpaceStatistics, queryObjects, writeHeapSnapshot } from "node:v8";
 import { isMainThread } from "node:worker_threads";
 import { getWorkerMessageMetrics } from "../../src/infra/worker-message-metrics.ts";
 import { startGatewayBenchDiagnostics } from "./gateway-bench-diagnostics.ts";
@@ -56,6 +58,81 @@ function sampleResources(): GatewayResourceSnapshot {
 if (isMainThread) {
   if (!process.send) {
     throw new Error("Gateway profiling requires the benchmark IPC channel");
+  }
+  const broadcastTiming = process.env.OPENCLAW_BENCH_BROADCAST_TIMING === "1";
+  const sessionProjectionSource = process.env.OPENCLAW_BENCH_SESSION_PROJECTION_SOURCE;
+  let broadcastTimingInstalled = false;
+  if (broadcastTiming || sessionProjectionSource) {
+    const entry = new URL("../../src/entry.ts", import.meta.url);
+    if (!process.argv[1] || realpathSync(process.argv[1]) !== realpathSync(entry)) {
+      throw new Error(
+        "Broadcast timing and session projection sources require --entry src/entry.ts",
+      );
+    }
+    const projectionSources = new Map<string, string>();
+    if (sessionProjectionSource) {
+      for (const file of [
+        "session-event-projection.ts",
+        "session-row-presentation.ts",
+        "session-sharing-read.ts",
+        "session-utils-list.ts",
+      ]) {
+        projectionSources.set(
+          new URL(`../../src/gateway/${file}`, import.meta.url).href,
+          readFileSync(path.join(sessionProjectionSource, file), "utf8"),
+        );
+      }
+    }
+    const owner = new URL("../../src/gateway/server-broadcast.ts", import.meta.url).href;
+    registerHooks({
+      load(url, context, nextLoad) {
+        const loaded = nextLoad(url, context);
+        const projectionSource = projectionSources.get(url);
+        if (projectionSource !== undefined) {
+          // Preserve canonical imports and original TypeScript lines in sampled stacks.
+          return { ...loaded, format: "module-typescript", source: projectionSource };
+        }
+        if (url !== owner) {
+          return loaded;
+        }
+        let source = readFileSync(new URL(url), "utf8");
+        // Native source preserves the broadcaster's name in allocation profiles without a timer.
+        if (!broadcastTiming) {
+          return { ...loaded, format: "module-typescript", source };
+        }
+        const opening = "  ) => {\n    if (!retained) {";
+        const closing = "\n  };\n\n  const broadcast: GatewayBroadcastFn";
+        if (source.split(opening).length !== 2 || source.split(closing).length !== 2) {
+          throw new Error("Broadcast timing source anchors changed; update the benchmark observer");
+        }
+        // Keep the original body and early returns; only numeric timing crosses this private channel.
+        source = source
+          .replace(
+            opening,
+            `  ) => {
+    const benchmarkBroadcastStarted = benchmarkBroadcastChannel.hasSubscribers ? performance.now() : undefined;
+    try {
+    if (!retained) {`,
+          )
+          .replace(
+            closing,
+            `
+    } finally {
+      if (benchmarkBroadcastStarted !== undefined) {
+        benchmarkBroadcastChannel.publish({ operation: event, durationMs: performance.now() - benchmarkBroadcastStarted });
+      }
+    }
+  };
+
+  const broadcast: GatewayBroadcastFn`,
+          );
+        source = `import { channel as benchmarkBroadcastDiagnosticChannel } from "node:diagnostics_channel";
+const benchmarkBroadcastChannel = benchmarkBroadcastDiagnosticChannel("openclaw.benchmark.broadcast");
+${source}`;
+        broadcastTimingInstalled = true;
+        return { ...loaded, format: "module-typescript", source };
+      },
+    });
   }
   if (process.env.OPENCLAW_BENCH_FIRST_TEXT === "1") {
     const { onAgentEvent } = await import("../../src/infra/agent-events.js");
@@ -116,6 +193,31 @@ if (isMainThread) {
     GatewayProfileCommand["kind"],
     ReturnType<typeof getWorkerMessageMetrics>
   >();
+  const deserializeCaptures = new Map<
+    GatewayProfileCommand["kind"],
+    Map<string, { count: number; bytes: number }>
+  >();
+  const nativeDeserialize = v8.deserialize;
+  const measuredDeserialize: typeof v8.deserialize = (buffer) => {
+    const value: unknown = nativeDeserialize(buffer);
+    const kind =
+      value !== null &&
+      typeof value === "object" &&
+      "kind" in value &&
+      typeof value.kind === "string"
+        ? value.kind
+        : "untyped";
+    for (const groups of deserializeCaptures.values()) {
+      let metric = groups.get(kind);
+      if (!metric) {
+        metric = { count: 0, bytes: 0 };
+        groups.set(kind, metric);
+      }
+      metric.count++;
+      metric.bytes += buffer.byteLength;
+    }
+    return value;
+  };
   const namedDiagnostics = new Map<
     string | undefined,
     ReturnType<typeof startGatewayBenchDiagnostics>
@@ -205,12 +307,25 @@ if (isMainThread) {
       return;
     }
     if (message.kind === "cpu-usage" && message.action === "sample") {
-      process.send?.({
-        channel: GATEWAY_PROFILE_CHANNEL,
-        kind: message.kind,
-        action: message.action,
-        cpuUsage: sampleCpu(),
-      });
+      void (async () => {
+        const workerCpu = message.includeWorkers ? await workers.sampleCpu() : undefined;
+        return { ...sampleCpu(), ...(workerCpu ? { workerCpu } : {}) };
+      })().then(
+        (cpuUsage) =>
+          process.send?.({
+            channel: GATEWAY_PROFILE_CHANNEL,
+            kind: message.kind,
+            action: message.action,
+            cpuUsage,
+          }),
+        (error: unknown) =>
+          process.send?.({
+            channel: GATEWAY_PROFILE_CHANNEL,
+            kind: message.kind,
+            action: message.action,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+      );
       return;
     }
     const reply = (error?: string) => {
@@ -222,6 +337,10 @@ if (isMainThread) {
         ...(message.kind === "diagnostics" ? { captureId: message.captureId } : {}),
       });
     };
+    if (broadcastTiming && !broadcastTimingInstalled && message.action === "start") {
+      reply("Broadcast timing owner was not loaded; source attribution is unavailable");
+      return;
+    }
     if (message.kind === "diagnostics") {
       const captureId = message.captureId;
       if (message.action === "start") {
@@ -292,12 +411,21 @@ if (isMainThread) {
         }
         diagnosticCaptures.set(message.kind, startGatewayBenchDiagnostics());
         workerMessageStarts.set(message.kind, getWorkerMessageMetrics());
+        deserializeCaptures.set(message.kind, new Map());
+        v8.deserialize = measuredDeserialize;
+        syncBuiltinESMExports();
         if (message.kind === "heap") {
           markGc("heap-start", message.profilePath);
         }
       } else if (message.action === "stop") {
         if (!active.has(message.kind)) {
           throw new Error(`Gateway ${message.kind} profile has not started`);
+        }
+        const deserialized = Object.fromEntries(deserializeCaptures.get(message.kind) ?? []);
+        deserializeCaptures.delete(message.kind);
+        if (deserializeCaptures.size === 0) {
+          v8.deserialize = nativeDeserialize;
+          syncBuiltinESMExports();
         }
         if (message.kind === "heap") {
           // Exclude diagnostics aggregation and profile materialization from promotion.
@@ -336,6 +464,11 @@ if (isMainThread) {
             JSON.stringify(workerMessages),
             { mode: 0o600 },
           );
+          writeFileSync(
+            `${message.profilePath}.deserialize.json`,
+            JSON.stringify({ scope: "main-isolate", groups: deserialized }),
+            { mode: 0o600 },
+          );
           if (diagnostics) {
             writeFileSync(`${message.profilePath}.diagnostics.json`, JSON.stringify(diagnostics), {
               mode: 0o600,
@@ -359,6 +492,9 @@ if (isMainThread) {
     );
   });
   process.once("disconnect", () => {
+    v8.deserialize = nativeDeserialize;
+    syncBuiltinESMExports();
+    deserializeCaptures.clear();
     for (const finish of namedDiagnostics.values()) {
       finish();
     }

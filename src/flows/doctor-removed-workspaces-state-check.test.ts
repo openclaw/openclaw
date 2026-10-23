@@ -31,37 +31,33 @@ async function fingerprint(kind: "sqlite" | "widgets-data" = "sqlite") {
 const detect = (cfg: OpenClawConfig = {}) => check.detect({ ...context(cfg), mode: "lint" });
 const repair = (cfg: OpenClawConfig = {}) => check.repair!(context(cfg), []);
 
-it("previews and removes the stale plugin state directory", async () => {
-  await fingerprint();
-  const findings = await detect();
-  expect(findings).toEqual([
-    expect.objectContaining({
-      checkId: "core/doctor/removed-workspaces-state",
-      path: staleDir,
-      severity: "warning",
-    }),
-  ]);
-  await expect(check.detect(context(), { paths: [join(root, "other")] })).resolves.toEqual([]);
-  const effect = { dryRunSafe: false, kind: "state", target: staleDir };
-  expect(await check.repair!({ ...context(), dryRun: true }, findings)).toMatchObject({
-    changes: [expect.stringContaining("Would remove retired Workspaces plugin state")],
-    effects: [{ ...effect, action: "would-remove-retired-workspaces-state" }],
-  });
-  await expect(fs.stat(staleDir)).resolves.toBeDefined();
-  expect(await check.repair!(context(), findings)).toMatchObject({
-    changes: [expect.stringContaining("Removed retired Workspaces plugin state")],
-    effects: [{ ...effect, action: "remove-retired-workspaces-state" }],
-  });
-  await expect(fs.stat(staleDir)).rejects.toMatchObject({ code: "ENOENT" });
-  await expect(detect()).resolves.toEqual([]);
-});
-
-it("detects the widgets/data plugin layout fingerprint", async () => {
-  await fingerprint("widgets-data");
-  await expect(detect()).resolves.toEqual([
-    expect.objectContaining({ checkId: "core/doctor/removed-workspaces-state", path: staleDir }),
-  ]);
-});
+it.each(["sqlite", "widgets-data"] as const)(
+  "previews and removes the %s plugin state",
+  async (kind) => {
+    await fingerprint(kind);
+    const findings = await detect();
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/removed-workspaces-state",
+        path: staleDir,
+        severity: "warning",
+      }),
+    ]);
+    await expect(check.detect(context(), { paths: [join(root, "other")] })).resolves.toEqual([]);
+    const effect = { dryRunSafe: false, kind: "state", target: staleDir };
+    expect(await check.repair!({ ...context(), dryRun: true }, findings)).toMatchObject({
+      changes: [expect.stringContaining("Would remove retired Workspaces plugin state")],
+      effects: [{ ...effect, action: "would-remove-retired-workspaces-state" }],
+    });
+    await expect(fs.stat(staleDir)).resolves.toBeDefined();
+    expect(await check.repair!(context(), findings)).toMatchObject({
+      changes: [expect.stringContaining("Removed retired Workspaces plugin state")],
+      effects: [{ ...effect, action: "remove-retired-workspaces-state" }],
+    });
+    await expect(fs.stat(staleDir)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(detect()).resolves.toEqual([]);
+  },
+);
 
 it("ignores a plain user directory without plugin fingerprints", async () => {
   const notes = join(staleDir, "notes.md");
@@ -71,26 +67,7 @@ it("ignores a plain user directory without plugin fingerprints", async () => {
   await expect(fs.readFile(notes, "utf8")).resolves.toBe("personal");
 });
 
-it("skips cleanup when the agent workspace resolves to the retired state directory", async () => {
-  await fingerprint();
-  const cfg = { agents: { entries: { ops: { workspace: join(staleDir, "..", "workspaces") } } } };
-  const findings = await detect(cfg);
-  expect(findings).toEqual([
-    expect.objectContaining({
-      message: expect.stringContaining("Automatic removal is disabled"),
-      path: staleDir,
-      severity: "warning",
-    }),
-  ]);
-  expect(await check.repair!(context(cfg), findings)).toMatchObject({
-    status: "skipped",
-    changes: [],
-    warnings: [expect.stringContaining("Automatic removal is disabled")],
-  });
-  await expect(fs.stat(staleDir)).resolves.toBeDefined();
-});
-
-it.each(["symlink beneath state", "ancestor of state"])(
+it.each(["retired directory", "symlink beneath state", "ancestor of state"])(
   "preserves an overlapping agent workspace (%s)",
   async (overlap) => {
     await fingerprint();
@@ -102,11 +79,24 @@ it.each(["symlink beneath state", "ancestor of state"])(
       await fs.mkdir(preserved);
       await fs.symlink(preserved, workspace, "dir");
     }
-    const cfg = { agents: { defaults: { workspace } } };
+    const cfg = {
+      agents:
+        overlap === "retired directory"
+          ? { entries: { ops: { workspace: join(staleDir, "..", "workspaces") } } }
+          : { defaults: { workspace } },
+    };
     const findings = await detect(cfg);
+    expect(findings).toEqual([
+      expect.objectContaining({
+        message: expect.stringContaining("Automatic removal is disabled"),
+        path: staleDir,
+        severity: "warning",
+      }),
+    ]);
     expect(await check.repair!(context(cfg), findings)).toMatchObject({
       status: "skipped",
       changes: [],
+      warnings: [expect.stringContaining("Automatic removal is disabled")],
     });
     await expect(fs.stat(preserved)).resolves.toBeDefined();
   },

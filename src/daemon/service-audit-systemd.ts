@@ -86,16 +86,16 @@ function parseSystemdUnit(directives: UnitDirective[]) {
     if (!value) {
       continue;
     }
-    if (key === "After" || key === "Wants") {
+    if (section === "[Unit]" && (key === "After" || key === "Wants")) {
       const dependencies = key === "After" ? after : wants;
       for (const entry of value.split(/\s+/)) {
         if (entry) {
           dependencies.add(entry);
         }
       }
-    } else if (key === "RestartSec") {
+    } else if (section === "[Service]" && key === "RestartSec") {
       restartSec = value;
-    } else if (key === "KillMode") {
+    } else if (section === "[Service]" && key === "KillMode") {
       killMode = value;
     }
   }
@@ -372,9 +372,11 @@ async function auditSystemdDefinition(
                   sourcePath !== unitPath
                     ? "Operator drop-in overrides installer policy."
                     : "The installer would replace a custom directive in the managed unit.",
-                message: SYSTEMD_DIRECTIVES.has(key)
-                  ? `Custom systemd ${key}; not changed.`
-                  : `Systemd ${key} contains an unrecognized setting.`,
+                // Ignored application metadata still belongs to the operator during rewrites.
+                message:
+                  SYSTEMD_DIRECTIVES.has(key) || /(?:^|\.)X-/.test(key)
+                    ? `Custom systemd ${key}; not changed.`
+                    : `Systemd ${key} contains an unrecognized setting.`,
               },
       );
     }

@@ -1,4 +1,4 @@
-import type { RouteLocation } from "@openclaw/uirouter";
+import { createRouter, type RouteLocation } from "@openclaw/uirouter";
 import { createComponent, createSignal, flush } from "solid-js";
 import { onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -387,6 +387,7 @@ export function createContext(
     plugins,
     basePath: "",
     resourceBasePath: "",
+    router: createRouter({ routes: [] }),
     runtimeConfig: harness.runtimeConfig,
     navigate: vi.fn(),
     replace: vi.fn(),

@@ -1,6 +1,7 @@
 import * as crypto from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { convertToLlm } from "../../../packages/agent-core/src/harness/messages.js";
+import { convertProviderResponsesMessages } from "../../../packages/ai/src/transports/openai-responses-replay-messages-internal.js";
 import {
   normalizeTranscriptJsonValue,
   isOwnedTranscriptPayload,
@@ -9,6 +10,7 @@ import type { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import type { Message, TextContent } from "../../llm/types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { withEnv, withEnvAsync } from "../../test-utils/env.js";
+import { projectAgentHarnessTranscriptMessageForDisplay } from "../harness/transcript-visibility.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { sanitizeToolUseResultPairingForModel } from "../session-transcript-repair.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
@@ -157,6 +159,47 @@ describe("prompt cache history fingerprints", () => {
       for (const [observation] of observed.mock.calls) {
         expect(observation.changes).toBeNull();
       }
+    });
+  });
+
+  it("keeps recovered coordination history stable when persistence adds display metadata", async () => {
+    await withEnvAsync({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, async () => {
+      const model = makeProviderModelFixture({
+        api: "openai-responses",
+        provider: "openai",
+        id: "test-model",
+        baseUrl: "https://example.test",
+      });
+      const live = makeAgentAssistantMessage({
+        api: "openai-responses",
+        provider: "openai",
+        model: "test-model",
+        content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
+        stopReason: "toolUse",
+        timestamp: 1,
+      });
+      const persisted = projectAgentHarnessTranscriptMessageForDisplay({
+        hidden: true,
+        inputProvenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+        message: live,
+      });
+      const before = convertToLlm([live]);
+      const recovered = convertToLlm([structuredClone(persisted)]);
+      expect(live).not.toHaveProperty("display");
+      expect(recovered[0]).toHaveProperty("display", false);
+      const wire = (messages: Message[]) =>
+        JSON.stringify(convertProviderResponsesMessages(model, { messages }, new Set(["openai"])));
+      expect(wire(recovered)).toBe(wire(before));
+      const observer = createPromptCacheRequestObserver(
+        { sessionId: scopedKey("recovered-coordination"), streamStrategy: "test" },
+        () => {},
+      );
+      await observer.onModelRequest(model, { messages: before });
+      recovered.push({ role: "user", content: "Continue after recovery", timestamp: 2 });
+      expect(await observer.onModelRequest(model, { messages: recovered })).toMatchObject({
+        prefixUnchanged: true,
+        changes: null,
+      });
     });
   });
 

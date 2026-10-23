@@ -168,6 +168,26 @@ describe("voice-call tunnels", () => {
     await expect(result).rejects.toThrow("ngrok error: xERR_NGROK_108: invalid tunnel config");
   });
 
+  it.each([
+    ["short", "ERR_NGROK short", "ERR_NGROK short"],
+    [
+      "bounded tail",
+      `ERR_NGROK discarded${"a".repeat(16_384)}`,
+      `[output truncated]\n${"a".repeat(16_384)}`,
+    ],
+    [
+      "surrogate boundary",
+      `ERR_NGROK discarded🤖${"a".repeat(16_383)}`,
+      `[output truncated]\n${"a".repeat(16_383)}`,
+    ],
+  ])("preserves the %s in ngrok startup errors", async (_name, input, diagnostic) => {
+    const { proc, result } = nextProcess("/hook");
+    const rejection = expect(result).rejects.toThrow(`ngrok error: ${diagnostic}`);
+    proc.stderr.write(input);
+    await rejection;
+    expect(proc.killedWith).toBe("SIGKILL");
+  });
+
   it("preserves UTF-8 across real child stderr pipe chunks", async () => {
     const message = "bad 😀 ERR_NGROK_3200: invalid token";
     mockSpawnUtf8SplitChild(message);

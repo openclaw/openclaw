@@ -1,15 +1,20 @@
+import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
-  validateApprovalGetParams,
-  validateApprovalGetResult,
   validateApprovalHistoryParams,
   validateApprovalHistoryResult,
-  validateApprovalPresentation,
-  validateApprovalResolveParams,
-  validateExecApprovalResolveParams,
-  validatePluginApprovalResolveParams,
   validateApprovalResolveResult,
+  SessionApprovalEventSchema,
+  SessionApprovalReplaySchema,
+  validateSessionsMessagesSubscribeParams,
+  validateApprovalGetParams as validateGet,
+  validateApprovalGetResult as validateResult,
+  validateApprovalPresentation as validatePresentation,
+  validateApprovalResolveParams as validateResolve,
+  validateExecApprovalResolveParams as validateExecResolve,
+  validatePluginApprovalResolveParams as validatePluginResolve,
 } from "./index.js";
+import { check } from "./schema/protocol-validation.test-support.js";
 
 const execPresentation = {
   kind: "exec",
@@ -20,6 +25,13 @@ const execPresentation = {
   nodeId: null,
   agentId: "main",
   allowedDecisions: ["allow-once", "allow-always", "deny"],
+} as const;
+const execRecord = {
+  id: "approval:01JZ4K6M2X8YQW9N7R3T5V1C0B",
+  urlPath: "/approve/approval%3A01JZ4K6M2X8YQW9N7R3T5V1C0B",
+  presentation: execPresentation,
+  createdAtMs: 1_780_000_000_000,
+  expiresAtMs: 1_780_001_800_000,
 } as const;
 
 const pluginPresentation = {
@@ -42,14 +54,6 @@ const systemAgentPresentation = {
   allowedDecisions: ["allow-once", "deny"],
 } as const;
 
-const execRecord = {
-  id: "approval:01JZ4K6M2X8YQW9N7R3T5V1C0B",
-  urlPath: "/approve/approval%3A01JZ4K6M2X8YQW9N7R3T5V1C0B",
-  presentation: execPresentation,
-  createdAtMs: 1_780_000_000_000,
-  expiresAtMs: 1_780_001_800_000,
-} as const;
-
 const pluginRecord = {
   ...execRecord,
   id: "plugin:01JZ4K6M2X8YQW9N7R3T5V1C0B",
@@ -58,14 +62,18 @@ const pluginRecord = {
   expiresAtMs: 1_780_000_120_000,
 } as const;
 
-const presentation = (value: unknown) => expect(validateApprovalPresentation(value)).toBe(true);
-const rejectPresentation = (value: unknown) =>
-  expect(validateApprovalPresentation(value)).toBe(false);
-const result = (approval: unknown) => expect(validateApprovalGetResult({ approval })).toBe(true);
-const rejectResult = (approval: unknown) =>
-  expect(validateApprovalGetResult({ approval })).toBe(false);
-const resolve = (value: unknown) => expect(validateApprovalResolveParams(value)).toBe(true);
-const rejectResolve = (value: unknown) => expect(validateApprovalResolveParams(value)).toBe(false);
+const settled = (record: typeof execRecord | typeof pluginRecord, fields: object) => ({
+  ...record,
+  resolvedAtMs: record.createdAtMs + 1_000,
+  ...fields,
+});
+
+const presentation = (value: unknown) => check(validatePresentation, [value]);
+const rejectPresentation = (value: unknown) => check(validatePresentation, [], [value]);
+const result = (approval: unknown) => check(validateResult, [{ approval }]);
+const rejectResult = (approval: unknown) => check(validateResult, [], [{ approval }]);
+const resolve = (value: unknown) => check(validateResolve, [value]);
+const rejectResolve = (value: unknown) => check(validateResolve, [], [value]);
 
 describe("unified approval protocol validators", () => {
   it("accepts only reviewer-safe approval presentations", () => {
@@ -135,12 +143,8 @@ describe("unified approval protocol validators", () => {
   it("accepts only complete channel reviewer facts on every resolve surface", () => {
     const reviewer = { channel: "telegram", accountId: "ops", senderId: "owner" };
     resolve({ id: execRecord.id, kind: "exec", decision: "deny", reviewer });
-    expect(
-      validateExecApprovalResolveParams({ id: execRecord.id, decision: "deny", reviewer }),
-    ).toBe(true);
-    expect(
-      validatePluginApprovalResolveParams({ id: pluginRecord.id, decision: "deny", reviewer }),
-    ).toBe(true);
+    check(validateExecResolve, [{ id: execRecord.id, decision: "deny", reviewer }]);
+    check(validatePluginResolve, [{ id: pluginRecord.id, decision: "deny", reviewer }]);
     rejectResolve({
       id: execRecord.id,
       kind: "exec",
@@ -151,32 +155,22 @@ describe("unified approval protocol validators", () => {
 
   it("validates pending and every fail-closed terminal state", () => {
     const pending = { ...execRecord, status: "pending" } as const;
-    const allowed = {
-      ...execRecord,
+    const allowed = settled(execRecord, {
       status: "allowed",
       decision: "allow-once",
-      resolvedAtMs: execRecord.createdAtMs + 1_000,
       reason: "user",
-    } as const;
-    const denied = {
-      ...pluginRecord,
-      status: "denied",
-      decision: "deny",
-      resolvedAtMs: pluginRecord.createdAtMs + 1_000,
-      reason: "user",
-    } as const;
-    const expired = {
-      ...execRecord,
+    });
+    const denied = settled(pluginRecord, { status: "denied", decision: "deny", reason: "user" });
+    const expired = settled(execRecord, {
       status: "expired",
       resolvedAtMs: execRecord.expiresAtMs,
       reason: "timeout",
-    } as const;
-    const cancelled = {
-      ...pluginRecord,
+    });
+    const cancelled = settled(pluginRecord, {
       status: "cancelled",
       resolvedAtMs: pluginRecord.createdAtMs + 500,
       reason: "run-aborted",
-    } as const;
+    });
 
     for (const snapshot of [pending, allowed, denied, expired, cancelled]) {
       result(snapshot);
@@ -194,26 +188,15 @@ describe("unified approval protocol validators", () => {
   });
 
   it("uses one full-id field and rejects internal routing state", () => {
-    expect(validateApprovalGetParams({ id: pluginRecord.id })).toBe(true);
-    expect(validateApprovalGetParams({ id: "" })).toBe(false);
-    expect(validateApprovalGetParams({ id: pluginRecord.id, kind: "plugin" })).toBe(false);
-    rejectResolve({
-      id: "plugin",
-      kind: "plugin",
-      decision: "deny",
-      prefix: true,
-    });
-    rejectResolve({
-      id: "plugin",
-      kind: "plugin",
-      decision: "deny",
-      resolvedBy: "public-actor",
-    });
+    check(validateGet, [{ id: pluginRecord.id }]);
+    check(validateGet, [], [{ id: "" }, { id: pluginRecord.id, kind: "plugin" }]);
+    rejectResolve({ id: "plugin", kind: "plugin", decision: "deny", prefix: true });
+    rejectResolve({ id: "plugin", kind: "plugin", decision: "deny", resolvedBy: "public-actor" });
     for (const id of ["\ud800", "\udc00", ".", ".."]) {
-      expect(validateApprovalGetParams({ id })).toBe(false);
+      check(validateGet, [], [{ id }]);
       rejectResolve({ id, kind: "exec", decision: "deny" });
     }
-    expect(validateApprovalGetParams({ id: "approval:🦞/percent%" })).toBe(true);
+    check(validateGet, [{ id: "approval:🦞/percent%" }]);
 
     result({
       ...execRecord,
@@ -271,5 +254,67 @@ describe("unified approval protocol validators", () => {
       }),
     ).toBe(false);
     expect(validateApprovalResolveResult({ applied: false })).toBe(false);
+  });
+});
+
+const pending = {
+  ...execRecord,
+  status: "pending",
+  sourceSessionKey: "agent:worker:subagent:child",
+} as const;
+const terminal = settled(execRecord, { status: "denied", decision: "deny", reason: "user" });
+const event = (phase: string, snapshot: unknown) =>
+  Value.Check(SessionApprovalEventSchema, {
+    sessionKey: "agent:main:main",
+    sourceSessionKey: "agent:worker:subagent:child",
+    updatedAtMs: terminal.resolvedAtMs,
+    phase,
+    approval: snapshot,
+  });
+
+describe("session approval protocol validators", () => {
+  it("keeps approval subscription opt-in additive and literal", () => {
+    check(validateSessionsMessagesSubscribeParams, [{ key: "agent:main:main" }]);
+    const subscribe = (includeApprovals: boolean) =>
+      validateSessionsMessagesSubscribeParams({ key: "agent:main:main", includeApprovals });
+    expect(subscribe(true)).toBe(true);
+    expect(subscribe(false)).toBe(false);
+  });
+
+  it("requires event phase to match the approval snapshot state", () => {
+    expect(event("pending", pending)).toBe(true);
+    expect(event("terminal", terminal)).toBe(true);
+    expect(event("pending", terminal)).toBe(false);
+    expect(event("terminal", pending)).toBe(false);
+  });
+
+  it("rejects terminal reasons that contradict the terminal status", () => {
+    const terminalCommon = {
+      ...execRecord,
+      resolvedAtMs: terminal.resolvedAtMs,
+    } as const;
+
+    for (const snapshot of [
+      { ...terminal, reason: "timeout" },
+      { ...terminalCommon, status: "allowed", decision: "allow-once", reason: "timeout" },
+      { ...terminalCommon, status: "expired", reason: "user" },
+      { ...terminalCommon, status: "cancelled", reason: "timeout" },
+    ]) {
+      expect(event("terminal", snapshot)).toBe(false);
+    }
+  });
+
+  it("keeps pending replay authoritative", () => {
+    const replay = {
+      sessionKey: "agent:main:main",
+      updatedAtMs: execRecord.createdAtMs,
+      approvals: [pending],
+      truncated: false,
+    } as const;
+
+    expect(Value.Check(SessionApprovalReplaySchema, replay)).toBe(true);
+    expect(Value.Check(SessionApprovalReplaySchema, { ...replay, approvals: [terminal] })).toBe(
+      false,
+    );
   });
 });

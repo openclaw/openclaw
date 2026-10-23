@@ -1,5 +1,5 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { sendDiscordComponentMessage } from "../send.components.js";
+import type { sendDiscordComponentMessage } from "../send.components.js";
 import { buildDiscordPresentationComponents } from "../shared-interactive.js";
 import { resolveDiscordChannelId as resolveDiscordTargetChannelId } from "../target-parsing.js";
 import type { DiscordActivitiesRuntime } from "./runtime.js";
@@ -121,6 +121,7 @@ export function createDiscordWidgetPresenter(runtime: DiscordActivitiesRuntime):
         if (!components) {
           throw new Error("Discord widget launch button could not be rendered");
         }
+        const { sendDiscordComponentMessage } = await import("../send.components.js");
         result = await sendDiscordComponentMessage(
           `channel:${route.channelId}`,
           { ...components, text: title },

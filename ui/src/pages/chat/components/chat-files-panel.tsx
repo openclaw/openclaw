@@ -1,5 +1,14 @@
 import { dynamic, type JSX } from "@solidjs/web";
-import { For, Show, createMemo, createSignal, onSettled, refresh, untrack } from "solid-js";
+import {
+  Errored,
+  For,
+  Loading,
+  Show,
+  createMemo,
+  createSignal,
+  onSettled,
+  refresh,
+} from "solid-js";
 import { createMcpAppUnmountGate } from "../../../components/mcp-app-unmount.ts";
 import {
   notifyPanelHostedTabsChanged,
@@ -12,6 +21,7 @@ import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import { i18n } from "../../../i18n/index.ts";
+import { formatUiError } from "../../../lib/format-error.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { projectI18n, t } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
@@ -55,6 +65,11 @@ defineSolidBridge<Props, Methods>(
     const contentId = `chat-files-content-${++filesPanelSequence}`;
     const tabFocus = createTabFocus();
     const pages = new Map<string, HTMLElement>();
+    const pageRef = (id: string) =>
+      elementRef((element: HTMLDivElement) => {
+        pages.set(id, element);
+        return () => pages.delete(id);
+      });
     let contentElement!: HTMLDivElement;
     let catalog!: HTMLDivElement;
     // Local geometry survives file navigation, but not a change of session.
@@ -292,26 +307,32 @@ defineSolidBridge<Props, Methods>(
           </Show>
           <For each={rendered().previews} keyed={(preview) => preview.id}>
             {(preview) => {
-              // Registration and cleanup follow the keyed row's lifetime, not its current data.
-              const initialPreviewId = untrack(() => preview().id);
               const entry = () => {
                 rendered();
                 return preview();
               };
-              const detail = () => {
-                const content = entry().content;
-                return content.kind === "loading" || content.kind === "unavailable"
-                  ? undefined
-                  : content;
-              };
+              const readResult = createMemo(() => ({ pending: entry().readResult }), {
+                equals: (previous, next) => previous.pending === next.pending,
+              });
+              const source = createMemo(() => entry());
+              const currentContent = createMemo(() => entry().content);
+              const detail = createMemo(() => {
+                const current = source();
+                const pending = readResult().pending;
+                currentContent();
+                const resolved = () => {
+                  const value = current.content;
+                  if (value.kind === "unavailable") {
+                    throw new Error(value.message);
+                  }
+                  return value.kind === "loading" ? undefined : value;
+                };
+                // App views and other tabs without an admitted read mount synchronously.
+                return pending ? pending.then(resolved) : resolved();
+              });
               return (
                 <div
-                  ref={[
-                    elementRef((element) => {
-                      pages.set(initialPreviewId, element);
-                      return () => pages.delete(initialPreviewId);
-                    }),
-                  ]}
+                  ref={[pageRef(preview().id)]}
                   class="chat-files-panel__page"
                   data-app-tab-id={entry().content.kind === "mcp-app" ? entry().id : undefined}
                   hidden={rendered().activeId !== entry().id || entry().catalogVisible === true}
@@ -340,51 +361,51 @@ defineSolidBridge<Props, Methods>(
                     </div>
                   </Show>
                   <div class="chat-files-panel__reader">
-                    {entry().content.kind === "loading" ? (
-                      <PanelLoadingSkeleton variant="files" label={t("common.loading")} />
-                    ) : entry().content.kind === "unavailable" ? (
-                      <Show
-                        when={rendered().presentation === "desktop"}
+                    <Errored
+                      fallback={(error) => (
+                        <Show
+                          when={rendered().presentation === "desktop"}
+                          fallback={
+                            <div class="callout danger" role="alert">
+                              {formatUiError(error())}
+                            </div>
+                          }
+                        >
+                          <section class="sidebar-file-view sidebar-file-view--desktop">
+                            <div
+                              class="sidebar-file-view__path-bar session-panel-rail"
+                              data-presentation="desktop"
+                            >
+                              <span
+                                ref={createTextOverflow(() => entry().label)}
+                                class="sidebar-file-view__path"
+                                title={entry().label}
+                              >
+                                {entry().label}
+                              </span>
+                            </div>
+                            <div class="sidebar-file-view__workspace-body">
+                              <PanelEmptyState
+                                presentation="desktop"
+                                icon={<Icon name="fileText" />}
+                                heading={t("chat.detailPanel.unavailable")}
+                                description={formatUiError(error())}
+                              />
+                            </div>
+                          </section>
+                        </Show>
+                      )}
+                    >
+                      <Loading
                         fallback={
-                          <div class="callout danger" role="alert">
-                            {(() => {
-                              const content = entry().content;
-                              return content.kind === "unavailable" ? content.message : "";
-                            })()}
-                          </div>
+                          <PanelLoadingSkeleton variant="files" label={t("common.loading")} />
                         }
                       >
-                        <section class="sidebar-file-view sidebar-file-view--desktop">
-                          <div
-                            class="sidebar-file-view__path-bar session-panel-rail"
-                            data-presentation="desktop"
-                          >
-                            <span
-                              ref={createTextOverflow(() => entry().label)}
-                              class="sidebar-file-view__path"
-                              title={entry().label}
-                            >
-                              {entry().label}
-                            </span>
-                          </div>
-                          <div class="sidebar-file-view__workspace-body">
-                            <PanelEmptyState
-                              presentation="desktop"
-                              icon={<Icon name="fileText" />}
-                              heading={t("chat.detailPanel.unavailable")}
-                              description={(() => {
-                                const content = entry().content;
-                                return content.kind === "unavailable" ? content.message : "";
-                              })()}
-                            />
-                          </div>
-                        </section>
-                      </Show>
-                    ) : (
-                      <Show when={detail()}>
-                        {(content) => <Detail content={content()} previewId={entry().id} />}
-                      </Show>
-                    )}
+                        <Show when={detail()}>
+                          {(content) => <Detail content={content()} previewId={entry().id} />}
+                        </Show>
+                      </Loading>
+                    </Errored>
                   </div>
                 </div>
               );

@@ -263,7 +263,7 @@ observers. Tool execution and result middleware receive separate mutable inputs;
 terminal formatters retain their own post-execution capture so they can observe
 changes made by the tool without aliasing later middleware.
 `recordAgentHarnessToolResultTelemetry` collects host-tool delivery, media, TTS,
-cron, and heartbeat facts using the caller's prepared source-reply projection.
+and cron facts using the caller's prepared source-reply projection.
 The invocation preserves execution failures when presentation middleware
 rewrites a result. `recordAgentHarnessMessagingDelivery`
 records an already-confirmed messaging delivery, and

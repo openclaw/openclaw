@@ -102,7 +102,6 @@ describe("isolated automation actual-start policy", () => {
         defaultAgentId: "default",
         log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
         enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: vi.fn(),
         isExecutionIdle: (job, ownSessionKey, ownReplyOperation) => {
           const idle = isCronExecutionIdle(

@@ -29,6 +29,7 @@
 .chat-subagents-mobile__row {
   position: relative;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
   padding: 10px 12px;
@@ -208,6 +209,7 @@
 
 .chat-subagents-mobile__header {
   display: flex;
+  flex-wrap: wrap;
   flex: none;
   align-items: center;
   gap: 8px;
@@ -250,6 +252,13 @@
 .chat-subagents-mobile__header .chat-subagents-mobile__stop {
   border-radius: 8px;
   background: transparent;
+}
+
+.chat-subagents-mobile__error {
+  order: 1;
+  flex-basis: 100%;
+  color: var(--danger);
+  font-size: var(--control-ui-text-sm);
 }
 
 .chat-subagents-mobile__open:focus-visible,

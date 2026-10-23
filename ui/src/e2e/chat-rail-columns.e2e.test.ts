@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
-import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import { openChatPanels, selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiBundledSettingsStorageKey,
@@ -740,10 +740,7 @@ suite.define(() => {
         await page.keyboard.press("Escape");
         await clear.waitFor({ state: "hidden" });
         await gateway.resolveDeferred("sessions.companion.ask");
-        await page
-          .locator(".agent-chat__header--mobile")
-          .getByRole("button", { name: "Panels", exact: true })
-          .click();
+        await openChatPanels(page);
         await companion
           .getByText("The mobile side chat stayed inside its panel.", { exact: true })
           .waitFor();
@@ -760,10 +757,7 @@ suite.define(() => {
         await captureRichPanel(page, "rails-side-chat-mobile-light");
         await page.keyboard.press("Escape");
         await clear.waitFor({ state: "hidden" });
-        await page
-          .locator(".agent-chat__header--mobile")
-          .getByRole("button", { name: "Panels", exact: true })
-          .click();
+        await openChatPanels(page);
         await companion.waitFor();
         expect(await gateway.getRequests("sessions.companion.reset")).toHaveLength(resets);
         await companion
@@ -783,10 +777,7 @@ suite.define(() => {
         expect(reset.params).toEqual({ sessionKey, agentId: "main" });
         expect(await gateway.getRequests("sessions.companion.reset")).toHaveLength(resets + 1);
         await clear.waitFor({ state: "hidden" });
-        await page
-          .locator(".agent-chat__header--mobile")
-          .getByRole("button", { name: "Panels", exact: true })
-          .click();
+        await openChatPanels(page);
         await companion
           .getByText("Answers come from this session's transcript and its project files.", {
             exact: true,

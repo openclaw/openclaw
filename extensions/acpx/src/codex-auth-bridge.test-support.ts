@@ -1,17 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import * as jsonReader from "@openclaw/fs-safe/json";
 import {
   resolvePreferredOpenClawTmpDir,
   tempWorkspace,
   type TempWorkspace,
 } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, beforeEach, vi } from "vitest";
-import { CODEX_ACP_PACKAGE } from "./codex-adapter.js";
 import { prepareAcpxCodexAuthConfig } from "./codex-auth-bridge.js";
 import { resolveAcpxPluginConfig } from "./config.js";
 
-export function useAuthBridgeFixture() {
+type RestorableMock = { mockRestore(): void };
+
+export function useAuthBridgeFixture(mockCodexPackageBin: (codexBin: string) => RestorableMock) {
   let workspace: TempWorkspace;
   const previousEnv = {
     CODEX_HOME: process.env.CODEX_HOME,
@@ -64,11 +64,7 @@ export function useAuthBridgeFixture() {
         options: Partial<Parameters<typeof prepareAcpxCodexAuthConfig>[0]> = {},
         codexBin?: string,
       ) => {
-        const readJson = codexBin
-          ? vi
-              .spyOn(jsonReader, "tryReadJson")
-              .mockResolvedValueOnce({ name: CODEX_ACP_PACKAGE, bin: codexBin })
-          : undefined;
+        const packageBinMock = codexBin ? mockCodexPackageBin(codexBin) : undefined;
         try {
           return await prepareAcpxCodexAuthConfig({
             pluginConfig: options.pluginConfig ?? config(),
@@ -76,7 +72,7 @@ export function useAuthBridgeFixture() {
             ...options,
           });
         } finally {
-          readJson?.mockRestore();
+          packageBinMock?.mockRestore();
         }
       },
     };

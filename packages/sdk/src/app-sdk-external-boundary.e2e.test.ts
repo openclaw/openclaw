@@ -76,26 +76,21 @@ it("packs an external consumer that uses only the exported entrypoint and a cust
         assert.equal(event.type, "run.started");
 
         const calls = [];
+        const responses = {
+          "agents.list": { agents: [{ id: "external" }] },
+          "agent.wait": { status: "ok", runId: "packed-run", sessionKey: "agent:main:external" },
+          "artifacts.list": { artifacts: [{ id: "artifact-packed", type: "file", title: "packed.txt" }] },
+          "environments.list": { environments: [{ id: "gateway", type: "local", status: "available" }] },
+        };
         let closed = false;
         const transport = {
           async request(method, params, options) {
             calls.push({ method, params, options });
-            if (method === "agents.list") return { agents: [{ id: "external" }] };
-            if (method === "agent.wait") {
-              return { status: "ok", runId: "packed-run", sessionKey: "agent:main:external" };
-            }
-            if (method === "artifacts.list") {
-              return { artifacts: [{ id: "artifact-packed", type: "file", title: "packed.txt" }] };
-            }
-            if (method === "environments.list") {
-              return { environments: [{ id: "gateway", type: "local", status: "available" }] };
-            }
+            if (Object.hasOwn(responses, method)) return responses[method];
             throw new Error(\`unexpected method: \${method}\`);
           },
           async *events() {},
-          async close() {
-            closed = true;
-          },
+          async close() { closed = true; },
         };
 
         const client = new OpenClaw({ transport });

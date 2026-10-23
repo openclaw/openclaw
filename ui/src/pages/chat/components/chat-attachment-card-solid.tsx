@@ -172,8 +172,7 @@ export function AttachmentCardHeader(
             title={view().downloadTitle}
             onClick={() => props.onDownload?.()}
           >
-            <Icon name="download" />
-            {view().downloadLabel ? <span>{view().downloadLabel}</span> : null}
+            {view().downloadLabel ? <span>{view().downloadLabel}</span> : <Icon name="download" />}
           </button>
         ) : props.downloadHref || props.downloadPending ? (
           <a
@@ -188,8 +187,7 @@ export function AttachmentCardHeader(
             aria-label={view().downloadTitle}
             title={view().downloadTitle}
           >
-            <Icon name="download" />
-            {view().downloadLabel ? <span>{view().downloadLabel}</span> : null}
+            {view().downloadLabel ? <span>{view().downloadLabel}</span> : <Icon name="download" />}
           </a>
         ) : null}
         {props.onExpand !== undefined ? (

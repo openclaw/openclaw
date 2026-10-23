@@ -341,7 +341,8 @@ the snapshot.
 
 Plugin snapshots verify inventoried bytes with SHA-256. Native companion captures
 may add or remove hard links while the old Gateway serves; link-only metadata
-changes do not invalidate unchanged files on Windows or POSIX. Content, file
+changes do not invalidate unchanged files on Windows or POSIX, including
+Android/Termux when libuv derives birthtime from ctime without statx. Content, file
 identity, type, permissions, ownership, size, and modification-time changes still
 refuse the snapshot.
 

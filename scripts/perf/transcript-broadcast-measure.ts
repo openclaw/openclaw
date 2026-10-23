@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
-import type { Profiler } from "node:inspector";
+import type { HeapProfiler, Profiler } from "node:inspector";
 import path from "node:path";
 import { finished } from "node:stream/promises";
 import { setTimeout as delay } from "node:timers/promises";
@@ -18,6 +18,7 @@ import { parseArgs } from "node:util";
 import { Value } from "typebox/value";
 import { rawDataToString } from "../../packages/gateway-client/src/websocket-data.ts";
 import { HelloOkSchema } from "../../packages/gateway-protocol/src/schema/frames.ts";
+import type { SessionsPatchParams } from "../../packages/gateway-protocol/src/schema/sessions-patch.ts";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.ts";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import { stripInboundMetadata } from "../../src/auto-reply/reply/strip-inbound-meta.js";
@@ -58,6 +59,8 @@ const { values } = parseArgs({
     allocations: { type: "boolean", default: false },
     "worker-allocations": { type: "boolean", default: false },
     diagnostics: { type: "boolean", default: false },
+    "broadcast-timing": { type: "boolean", default: false },
+    "session-projection-source": { type: "string" },
     "transport-counts": { type: "boolean", default: false },
     compressed: { type: "boolean", default: false },
     "distinct-viewers": { type: "boolean", default: false },
@@ -72,6 +75,9 @@ const { values } = parseArgs({
     "stress-session-store": { type: "boolean", default: false },
     "transcript-hydration-counts": { type: "boolean", default: false },
     "operator-access-policy": { type: "boolean", default: false },
+    "session-event-wake": { type: "boolean", default: false },
+    "authority-counts": { type: "boolean", default: false },
+    "authority-source-preload": { type: "string" },
     "stress-subagents": { type: "boolean", default: false },
     "mixed-rpc": { type: "boolean", default: false },
     "dashboard-rpc": { type: "boolean", default: false },
@@ -161,6 +167,7 @@ if (
   ![
     "sessions.list",
     "sessions.describe",
+    "sessions.patch",
     "connect",
     "reconnect",
     "subscribe",
@@ -173,7 +180,7 @@ if (
   ].includes(scenario)
 ) {
   throw new Error(
-    "--scenario must be sessions.list, sessions.describe, connect, reconnect, subscribe, chat.send, transcript-broadcast, attempt-retention, session-idle-retention, memory-soak, or plugins.reload",
+    "--scenario must be sessions.list, sessions.describe, sessions.patch, connect, reconnect, subscribe, chat.send, transcript-broadcast, attempt-retention, session-idle-retention, memory-soak, or plugins.reload",
   );
 }
 const retentionScenario = scenario === "attempt-retention";
@@ -236,14 +243,14 @@ if (
   !values["stream-start-allocations"] &&
   !values["workload-cpu-profile"] &&
   !values["operator-access-policy"] &&
-  !(scenario === "sessions.list" && values["capture-responses"]) &&
+  !(["sessions.list", "sessions.patch"].includes(scenario) && values["capture-responses"]) &&
   scenario !== "transcript-broadcast" &&
   !retentionScenario &&
   !idleScenario &&
   !soakScenario
 ) {
   throw new Error(
-    "--scenario requires --allocations, --workload-cpu-profile, or --capture-responses for sessions.list",
+    "--scenario requires --allocations, --workload-cpu-profile, or --capture-responses for sessions.list/sessions.patch",
   );
 }
 const operations = integer(
@@ -366,6 +373,44 @@ if (
     "--operator-access-policy requires --scenario chat.send --stress-tools and no polling",
   );
 }
+if (values["session-event-wake"] && !values["operator-access-policy"]) {
+  throw new Error("--session-event-wake requires --operator-access-policy");
+}
+if (
+  values["authority-counts"] &&
+  (!values["operator-access-policy"] ||
+    path.resolve(values.entry) !== path.resolve("src/entry.ts") ||
+    values.allocations ||
+    values.diagnostics ||
+    values["trace-gc"] ||
+    values["cpu-profile"] ||
+    values["workload-cpu-profile"] ||
+    values["stream-start-allocations"])
+) {
+  throw new Error(
+    "--authority-counts requires --operator-access-policy --entry src/entry.ts in a separate pass without allocation, CPU, GC, or diagnostics profiling",
+  );
+}
+if (
+  values["authority-source-preload"] &&
+  (!values["operator-access-policy"] || path.resolve(values.entry) !== path.resolve("src/entry.ts"))
+) {
+  throw new Error(
+    "--authority-source-preload requires --operator-access-policy --entry src/entry.ts",
+  );
+}
+let authoritySourcePreload: { path: string; sha256: string } | undefined;
+if (values["authority-source-preload"]) {
+  const preloadPath = path.resolve(values["authority-source-preload"]);
+  try {
+    authoritySourcePreload = {
+      path: preloadPath,
+      sha256: createHash("sha256").update(readFileSync(preloadPath)).digest("hex"),
+    };
+  } catch (cause) {
+    throw new Error(`Cannot read --authority-source-preload: ${preloadPath}`, { cause });
+  }
+}
 if (values["stress-subagents"] && (!soakScenario || !values["stress-tools"])) {
   throw new Error("--stress-subagents requires memory-soak and --stress-tools");
 }
@@ -417,6 +462,31 @@ if (
 if (values["stream-start-allocations"] && (!turnScenario || values.allocations)) {
   throw new Error("--stream-start-allocations requires a turn scenario without --allocations");
 }
+if (
+  values["broadcast-timing"] &&
+  (!values.diagnostics || path.resolve(values.entry) !== path.resolve("src/entry.ts"))
+) {
+  throw new Error("--broadcast-timing requires --diagnostics --entry src/entry.ts");
+}
+if (
+  values["broadcast-timing"] &&
+  (values.allocations ||
+    values["stream-start-allocations"] ||
+    (soakScenario && retainedProfileMs > 0))
+) {
+  throw new Error(
+    "--broadcast-timing needs a separate pass without --allocations, --stream-start-allocations, or memory-soak retained heap capture (--retained-profile-ms 0)",
+  );
+}
+if (
+  values["session-projection-source"] &&
+  path.resolve(values.entry) !== path.resolve("src/entry.ts")
+) {
+  throw new Error("--session-projection-source requires --entry src/entry.ts");
+}
+const sessionProjectionSource = values["session-projection-source"]
+  ? realpathSync(path.resolve(values["session-projection-source"]))
+  : undefined;
 if (values["poll-seed"] !== undefined && !listIntervalMs) {
   throw new Error("--poll-seed requires --list-interval-ms");
 }
@@ -464,6 +534,17 @@ const output = path.join(root, `broadcast-measure-${Date.now()}`);
 mkdirSync(output);
 const project = Array.isArray(fixture.projectWorktrees) ? fixture.projectWorktrees[0] : undefined;
 const fixtureSessionCount = typeof fixture.sessionCount === "number" ? fixture.sessionCount : 0;
+const patchKeys =
+  scenario === "sessions.patch"
+    ? Array.from({ length: fixtureSessionCount }, (_, index) => index)
+        .filter((index) => index % 5 !== 0)
+        .slice(0, clientCount)
+        .map((index) => `agent:main:team-shape-session-${index}`)
+    : [];
+if (scenario === "sessions.patch" && patchKeys.length !== clientCount) {
+  throw new Error("sessions.patch requires one unarchived fixture session per client");
+}
+const patchSequences = patchKeys.map(() => 0);
 if (values["mixed-rpc"] && fixtureSessionCount < 1) {
   throw new Error("--mixed-rpc requires retained fixture sessions for chat.history");
 }
@@ -489,7 +570,11 @@ const viewerIdentity = (index: number) =>
   `broadcast-viewer-${values["distinct-viewers"] ? index : 0}@example.invalid`;
 const viewerProfiles = new Set<string>();
 const cfg = JSON.parse(readFileSync(path.join(root, "openclaw.json"), "utf8"));
-applyMockOpenAiModelConfig(cfg, { mockPort, modelRef: "openai/gpt-4.1" });
+applyMockOpenAiModelConfig(cfg, {
+  mockPort,
+  modelRef: "openai/gpt-4.1",
+  ...(scenario === "sessions.patch" ? { utilityModelRef: "openai/gpt-4.1-mini" } : {}),
+});
 if (verifyHistoryReplay) {
   for (const model of cfg.models.providers.openai.models) {
     // The synthetic provider must fit the seed plus turns accumulated across restarts.
@@ -678,6 +763,84 @@ if (scenario === "plugins.reload") {
     load: { paths: [plugin.pluginsDir] },
   };
 }
+const authorityPreload = path.join(output, "authority-counts-preload.mjs");
+if (values["authority-counts"]) {
+  // Source observation belongs to the rig; the production owners expose no benchmark hooks.
+  writeFileSync(
+    authorityPreload,
+    String.raw`
+import fs from "node:fs";
+import { registerHooks, syncBuiltinESMExports } from "node:module";
+import { isMainThread } from "node:worker_threads";
+if (isMainThread) {
+  const state = { active: false, counts: {}, installed: {}, firstAuthPolicyStacks: [],
+    count(key) {
+      if (!this.active) return;
+      this.counts[key] = (this.counts[key] ?? 0) + 1;
+      if (key === "auth-policy.stableStringify" && this.firstAuthPolicyStacks.length < 8)
+        this.firstAuthPolicyStacks.push(new Error("auth-policy stringify caller").stack);
+    } };
+  globalThis[Symbol.for("openclaw.benchmark.authorityCounts")] = state;
+  const statSync = fs.statSync;
+  fs.statSync = function (...args) { state.count("filesystem.statSync"); return statSync.apply(this, args); };
+  syncBuiltinESMExports();
+  const owners = new Set([
+    "session-source-authority", "admitted-run-context", "operator-run-authority",
+    "session-delivery-generation", "session-entry-source-authority", "session-event-handoff",
+    "session-tool-overrides", "auth-policy", "sqlite-worker-identity"
+  ]);
+  registerHooks({ load(url, context, nextLoad) {
+    const loaded = nextLoad(url, context);
+    const owner = url.match(/\/([^/]+)\.ts$/)?.[1];
+    if (!owners.has(owner)) return loaded;
+    // A matched baseline/candidate source overlay runs before this observer.
+    const raw = loaded.format === "module-typescript" ? loaded.source : fs.readFileSync(new URL(url));
+    if (raw == null) throw new Error("Authority overlay omitted source: " + owner);
+    let source = typeof raw === "string" ? raw : new TextDecoder().decode(raw);
+    const installed = {};
+    const count = (kind) => {
+      const key = owner + "." + kind;
+      installed[key] = (installed[key] ?? 0) + 1;
+      return "__authorityCounts.count(" + JSON.stringify(key) + ");";
+    };
+    source = source.replace(/const (assert\w*) = \((?:[^()]|\([^()]*\))*\) => \{/g,
+      (match, name) => match + count(name));
+    source = source.replace(/function (assert\w+)\([^{}]*\)(?::[^{}]+)? \{/g,
+      (match, name) => match + count(name));
+    if (owner === "session-source-authority") {
+      source = source.replace(/\(\) => \{\s*const scoped = sessionSourceScopes/g,
+        (match) => match.replace("{", "{" + count("composedAssertion")));
+    }
+    if (owner === "session-entry-source-authority") {
+      source = source.replace(/async prepareSessionSource\(\): Promise<PreparedSessionSourceAuthority> \{/g,
+        (match) => match + count("prepareSessionSource"));
+    }
+    if (owner === "operator-run-authority" || owner === "admitted-run-context") {
+      source = source.replace(/\(assertSource(?:s)?\) => \{/g,
+        (match) => match + count("composedGuard"));
+    }
+    if (owner === "sqlite-worker-identity" || owner === "auth-policy" || owner === "session-tool-overrides") {
+      const callee = owner === "sqlite-worker-identity" ? "statSync" : "stableStringify";
+      source = source.replace(new RegExp("\\b" + callee + "\\(", "g"), () =>
+        "(" + count(callee).slice(0, -1) + ", " + callee + ")(");
+    }
+    if (owner === "sqlite-worker-identity") {
+      source = source.replace(/realpathSync\.native\(/g, () =>
+        "(" + count("realpathSync.native").slice(0, -1) + ", realpathSync.native)(");
+    }
+    if (owner === "session-tool-overrides") {
+      if (!source.includes("  const intersectMap =")) throw new Error("Tool intersection observation source changed");
+      source = source.replace("  const intersectMap =", () => "  " + count("intersectSessionToolOverrides") + "const intersectMap =");
+    }
+    if (!Object.keys(installed).length) throw new Error("Authority observation source changed: " + owner);
+    state.installed[owner] = installed;
+    return { ...loaded, format: "module-typescript",
+      source: 'const __authorityCounts = globalThis[Symbol.for("openclaw.benchmark.authorityCounts")];\n' + source };
+  } });
+}
+`,
+  );
+}
 const authorityChannel = "openclaw-operator-authority-bench";
 const authorityEmail = "operator@authority.example.test";
 const authorityOrigin = "https://authority.example.test";
@@ -739,7 +902,11 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         !["start", "stop"].includes(message.action)) return;
     active = message.action === "start";
     if (active) { for (const key of Object.keys(counts)) counts[key] = 0; messages.clear(); }
-    process.send?.({ channel, id: message.id, counts: { ...counts }, profileId });
+    const host = globalThis[Symbol.for("openclaw.benchmark.authorityCounts")];
+    if (host) { host.active = active; if (active) { host.counts = {}; host.firstAuthPolicyStacks = []; } }
+    process.send?.({ channel, id: message.id, counts: { ...counts }, profileId,
+      sourceOverlay: globalThis[Symbol.for("openclaw.benchmark.sourceOverlay")],
+      ...(host ? { hostCounts: host.counts, installed: host.installed, firstAuthPolicyStacks: host.firstAuthPolicyStacks } : {}) });
   }
   api.registerService({ id: "synthetic-authority-counters",
     start() {
@@ -1078,6 +1245,7 @@ function createPollRandom(round: number, client: number) {
     return state / 0x1_0000_0000;
   };
 }
+const sessionEventRuns = new Map<string, { resolve: (runId: string) => void }>();
 let cohort:
   | {
       id: string;
@@ -1172,8 +1340,12 @@ const mock = createServer((req, res) => {
       index >= 1 &&
       index <= runCount &&
       lastUser !== undefined &&
-      stripInboundMetadata(lastUser).trim().split("\n")[0] ===
-        `Reply with benchmark stream ${index}. Transcript-broadcast cohort ${cohort.id}.`;
+      (values["session-event-wake"]
+        ? lastUser.includes(
+            `Reply with benchmark stream ${index}. Transcript-broadcast cohort ${cohort.id}.`,
+          )
+        : stripInboundMetadata(lastUser).trim().split("\n")[0] ===
+          `Reply with benchmark stream ${index}. Transcript-broadcast cohort ${cohort.id}.`);
     const requestPhase = primary
       ? `primary:${index}`
       : continuation
@@ -1595,6 +1767,10 @@ const env = {
   OPENCLAW_SYSTEMD_UNIT: `openclaw-gateway-team-shape-${port}`,
   ...(values["prep-trace"] ? { OPENCLAW_LOG_LEVEL: "trace" } : {}),
   ...(idleScenario ? { OPENCLAW_BENCH_FIRST_TEXT: "1" } : {}),
+  ...(values["broadcast-timing"] ? { OPENCLAW_BENCH_BROADCAST_TIMING: "1" } : {}),
+  ...(sessionProjectionSource
+    ? { OPENCLAW_BENCH_SESSION_PROJECTION_SOURCE: sessionProjectionSource }
+    : {}),
   ...(values["worker-memory"] ? { OPENCLAW_BENCH_WORKER_MEMORY_DIR: output } : {}),
   ...(values["baseline-owners"] ? { OPENCLAW_BENCH_TRANSCRIPT_BASELINE_OWNERS: "1" } : {}),
   ...(values["github-observation-owner"]
@@ -2091,6 +2267,25 @@ async function controlAuthorityCounters(child: ChildProcess, action: "start" | "
       return value;
     };
     return {
+      ...(values["authority-counts"]
+        ? {
+            host: (() => {
+              if (!isRecord(message.hostCounts) || !isRecord(message.installed)) {
+                throw new Error("Authority source counters were not installed");
+              }
+              const entries = Object.entries(message.hostCounts);
+              if (entries.some(([, value]) => !Number.isSafeInteger(value) || Number(value) < 0)) {
+                throw new Error("Invalid authority source counts");
+              }
+              return {
+                counts: message.hostCounts,
+                installed: message.installed,
+                firstAuthPolicyStacks: message.firstAuthPolicyStacks,
+              };
+            })(),
+          }
+        : {}),
+      sourceOverlay: isRecord(message.sourceOverlay) ? message.sourceOverlay : undefined,
       profileId: message.profileId,
       authorize: count("authorize"),
       resume: count("resume"),
@@ -2259,6 +2454,95 @@ function latencySummary(latenciesMs: number[]) {
 function readPromotion(profilePath: string, operationCount: number) {
   const gcTrace = readGatewayGcTrace(path.join(output, "gateway.stdout.log"), profilePath);
   return { gcTrace, promotedBytesPerOperation: gcTrace.promotedBytes / operationCount };
+}
+function readAuthorityAllocation(profilePath: string, operationCount: number) {
+  // Node's inspector declarations omit the CDP sample IDs emitted by heap sampling.
+  type AllocationNode = {
+    id: number;
+    callFrame: HeapProfiler.SamplingHeapProfileNode["callFrame"];
+    selfSize: number;
+    children: AllocationNode[];
+  };
+  const profile: { head: AllocationNode; samples: { nodeId: number }[] } = JSON.parse(
+    readFileSync(profilePath, "utf8"),
+  );
+  const owners = new Set([
+    "session-source-authority",
+    "admitted-run-context",
+    "operator-run-authority",
+    "session-event-handoff",
+  ]);
+  const families: Record<string, { sampledBytes: number; sampleCount: number }> = {};
+  const sampleCounts = new Map<number, number>();
+  for (const sample of profile.samples) {
+    sampleCounts.set(sample.nodeId, (sampleCounts.get(sample.nodeId) ?? 0) + 1);
+  }
+  const visit = (node: AllocationNode, parents: string[]) => {
+    const owner = node.callFrame.url.match(/\/([^/]+)\.(?:ts|js)$/)?.[1] ?? "";
+    const stack = [...parents, owner].slice(-8);
+    const family = stack.find((name) => owners.has(name));
+    if (family) {
+      const bucket = (families[family] ??= { sampledBytes: 0, sampleCount: 0 });
+      bucket.sampledBytes += node.selfSize;
+      bucket.sampleCount += sampleCounts.get(node.id) ?? 0;
+    }
+    for (const child of node.children) {
+      visit(child, stack);
+    }
+  };
+  visit(profile.head, []);
+  const sampledBytes = Object.values(families).reduce(
+    (sum, family) => sum + family.sampledBytes,
+    0,
+  );
+  return {
+    scope:
+      "outermost authority owner in each eight-frame allocation stack; main isolate, including collected objects",
+    operationCount,
+    sampledBytes,
+    estimatedBytesPerTurn: sampledBytes / operationCount,
+    sampleCount: Object.values(families).reduce((sum, family) => sum + family.sampleCount, 0),
+    families,
+  };
+}
+function sessionPatchParams(index: number, sequence: number): SessionsPatchParams {
+  const changes: Omit<SessionsPatchParams, "key">[] = [
+    { label: `Synthetic patch ${index} ${sequence}` },
+    { statusNote: `Synthetic progress ${sequence}`, ttlMinutes: 5 },
+    { model: "openai/gpt-4.1-mini" },
+    { label: null },
+    { statusNote: null },
+    { model: null },
+  ];
+  return { key: patchKeys[index]!, ...changes[sequence % changes.length] };
+}
+function assertSessionPatch(params: SessionsPatchParams, result: unknown) {
+  if (
+    !isRecord(result) ||
+    result.ok !== true ||
+    result.key !== params.key ||
+    !isRecord(result.entry)
+  ) {
+    throw new Error("sessions.patch did not return the committed fixture session");
+  }
+  const entry = result.entry;
+  if ("label" in params && entry.label !== (params.label ?? undefined)) {
+    throw new Error("sessions.patch did not apply the requested label");
+  }
+  if ("statusNote" in params) {
+    const note = isRecord(entry.agentStatus) ? entry.agentStatus.note : undefined;
+    if (note !== (params.statusNote ?? undefined)) {
+      throw new Error("sessions.patch did not apply the requested status note");
+    }
+  }
+  if (
+    "model" in params &&
+    (!isRecord(result.resolved) ||
+      result.resolved.modelProvider !== "openai" ||
+      result.resolved.model !== (params.model ? "gpt-4.1-mini" : "gpt-4.1"))
+  ) {
+    throw new Error("sessions.patch did not apply the requested model selection");
+  }
 }
 function assertListPage(
   page: unknown,
@@ -2575,7 +2859,7 @@ async function runRound(
     const turns = Promise.all(
       roundKeys.map(async (sessionKey, index) => {
         const turnStarted = performance.now();
-        const runId = randomUUID();
+        let runId: string = randomUUID();
         current.turns.set(index + 1, { runId, startedAt: turnStarted });
         const image = retentionScenario
           ? promptContent.update(Buffer.alloc(256 * 128 * 4))
@@ -2585,28 +2869,46 @@ async function runRound(
             image[alpha] = 255;
           }
         }
-        await rpc(client, scenario === "chat.send" ? "chat.send" : "agent", {
-          sessionKey,
-          message:
-            `Reply with benchmark stream ${index + 1}. Transcript-broadcast cohort ${current.id}.` +
-            (retentionScenario || idleScenario
-              ? `\nSynthetic prompt payload: ${promptContent.update(Buffer.alloc(promptBytes / 2)).toString("hex")}`
-              : ""),
-          deliver: false,
-          idempotencyKey: runId,
-          ...(image
-            ? {
-                attachments: [
-                  {
-                    type: "file",
-                    mimeType: "image/png",
-                    fileName: "synthetic-noise.png",
-                    content: encodePngRgba(image, 256, 128).toString("base64"),
-                  },
-                ],
-              }
-            : {}),
-        });
+        const message =
+          `Reply with benchmark stream ${index + 1}. Transcript-broadcast cohort ${current.id}.` +
+          (retentionScenario || idleScenario
+            ? `\nSynthetic prompt payload: ${promptContent.update(Buffer.alloc(promptBytes / 2)).toString("hex")}`
+            : "");
+        if (values["session-event-wake"]) {
+          const started = Promise.withResolvers<string>();
+          const timer = setTimeout(
+            () => started.reject(new Error("Session event did not start a run")),
+            45_000,
+          );
+          sessionEventRuns.set(sessionKey, started);
+          try {
+            await rpc(client, "system-event", { sessionKey, text: message, wake: true });
+            runId = await started.promise;
+            current.turns.get(index + 1)!.runId = runId;
+          } finally {
+            clearTimeout(timer);
+            sessionEventRuns.delete(sessionKey);
+          }
+        } else {
+          await rpc(client, scenario === "chat.send" ? "chat.send" : "agent", {
+            sessionKey,
+            message,
+            deliver: false,
+            idempotencyKey: runId,
+            ...(image
+              ? {
+                  attachments: [
+                    {
+                      type: "file",
+                      mimeType: "image/png",
+                      fileName: "synthetic-noise.png",
+                      content: encodePngRgba(image, 256, 128).toString("base64"),
+                    },
+                  ],
+                }
+              : {}),
+          });
+        }
         const result = await rpc(client, "agent.wait", { runId, timeoutMs: 170_000 });
         if (
           !result ||
@@ -2881,6 +3183,16 @@ async function connectClient(index: number) {
         previousSeq = event.seq;
       }
       const payload = isRecord(event.payload) ? event.payload : undefined;
+      if (
+        event.event === "agent" &&
+        payload?.stream === "lifecycle" &&
+        isRecord(payload.data) &&
+        payload.data.phase === "start" &&
+        typeof payload.sessionKey === "string" &&
+        typeof payload.runId === "string"
+      ) {
+        sessionEventRuns.get(payload.sessionKey)?.resolve(payload.runId);
+      }
       if (values["activity-summaries"]) {
         const decoded = rowEvents.project(event);
         if (decoded.missingBaseline) {
@@ -3068,6 +3380,8 @@ try {
         : []),
       "--import",
       "./scripts/tsx.mjs",
+      ...(authoritySourcePreload ? ["--import", authoritySourcePreload.path] : []),
+      ...(values["authority-counts"] ? ["--import", authorityPreload] : []),
       "--import",
       "./scripts/lib/gateway-bench-profile-preload.ts",
       ...(values["transport-counts"]
@@ -3406,6 +3720,9 @@ try {
               ) {
                 throw new Error("sessions.describe did not return the parent with seeded children");
               }
+            } else if (scenario === "sessions.patch") {
+              const params = sessionPatchParams(index, patchSequences[index]!++);
+              assertSessionPatch(params, await rpc(workerClient, "sessions.patch", params));
             } else {
               const result = await rpc(workerClient, "plugins.reload", {
                 plugins: [{ pluginId: reloadPluginId }],
@@ -3911,6 +4228,13 @@ try {
         "Authority probe must observe policy assertions, real tools, and committed message updates",
       );
     }
+    if (
+      values["session-event-wake"] &&
+      values["authority-counts"] &&
+      !authorityCounts?.host?.counts["session-event-handoff.assertEffectCurrent"]
+    ) {
+      throw new Error("Session-event probe did not exercise its handoff effect authority");
+    }
     if (values["mixed-rpc"] && Object.values(rpcLatencies).some((latencies) => !latencies.length)) {
       throw new Error("mixed RPC workload must observe every method; increase cohort duration");
     }
@@ -3920,6 +4244,12 @@ try {
     const diagnostics = finishGatewayDiagnostics
       ? { gateway: await finishGatewayDiagnostics(), controller: finishControllerDiagnostics?.() }
       : undefined;
+    const broadcastTimings = (allocation?.diagnostics ?? diagnostics?.gateway)?.groups.filter(
+      (group) => group.channel === "openclaw.benchmark.broadcast",
+    );
+    if (values["broadcast-timing"] && !broadcastTimings?.length) {
+      throw new Error("Broadcast timing observed no calls in the measured window");
+    }
     assertGatewayAlive();
     if (clients.some((client) => client.ws.readyState !== client.ws.OPEN)) {
       throw new Error("a subscriber was lost during the measured round");
@@ -4060,6 +4390,13 @@ try {
         ? { allocatedMbPerTurn: allocation.estimatedAllocatedBytesPerOperation / 1_000_000 }
         : {}),
       diagnostics,
+      ...(values["broadcast-timing"]
+        ? {
+            broadcastLatencyMs: Object.fromEntries(
+              (broadcastTimings ?? []).map((group) => [group.operation, group.metrics.durationMs]),
+            ),
+          }
+        : {}),
       streamStart,
       ...(values["mixed-rpc"]
         ? {
@@ -4143,6 +4480,14 @@ try {
         : null,
       estimatedAllocatedBytesPerSessionEvent:
         allocation && sourceEvents ? allocation.sampledAllocatedBytes / sourceEvents : null,
+      broadcastAllocatedBytesPerSessionEvent:
+        allocation && sourceEvents
+          ? allocation.broadcastAllocation.sampledBytes / sourceEvents
+          : null,
+      broadcastAllocatedBytesPerTurn:
+        allocation && turnScenario
+          ? allocation.broadcastAllocation.sampledBytes / sessionCount
+          : null,
       mainThreadMsPerSecond: (cpu.mainThread.totalMs / cpu.wallMs) * 1000,
       sessionEventsPerSecond: (sourceEvents / cpu.wallMs) * 1000,
     };
@@ -4331,6 +4676,16 @@ try {
   }
   // Capture filter/paging equivalence after the measured window, without warming its caches.
   const listResponses: Array<{ params: unknown; payload: unknown }> = [];
+  if (values["capture-responses"] && scenario === "sessions.patch") {
+    const responses: Array<{ params: SessionsPatchParams; payload: unknown }> = [];
+    for (let sequence = 0; sequence < 6; sequence++) {
+      const params = sessionPatchParams(0, sequence);
+      const payload = await rpc(sender, "sessions.patch", params);
+      assertSessionPatch(params, payload);
+      responses.push({ params, payload });
+    }
+    writeFileSync(path.join(output, "patch-responses.json"), JSON.stringify(responses));
+  }
   if (values["capture-responses"] && (scenario === "sessions.list" || soakScenario)) {
     // Fresh harness sessions contain random IDs and current clocks; compare the seeded roster.
     if (!historyTurns) {
@@ -4401,6 +4756,8 @@ try {
     verifyHistoryReplay,
     revision: values.revision ?? null,
     operationsPerRound: turnScenario ? sessionCount : operations,
+    completedRounds: samples.length,
+    sessionResets,
     warmupOperations: turnScenario ? undefined : warmupOperations,
     rpcConcurrency,
     reconnectStaggerMs,
@@ -4408,6 +4765,9 @@ try {
       "client request-to-response; handler and queue timings are in Gateway diagnostics",
     perEventResourceScope:
       "whole measured workload main-isolate CPU and sampled allocations divided by session publications or deliveries; not encode/send-only cost",
+    broadcastLatencyScope: values["broadcast-timing"]
+      ? "broadcastLatencyMs times synchronous broadcastInternal calls by event, including targeted and retained sends; chatDeltaDeliveryMs times Gateway chat timestamp to subscriber receipt"
+      : "chatDeltaDeliveryMs measures Gateway chat timestamp to subscriber receipt; no broadcastInternal duration timer is installed",
     connectionMeasurementScope: connectionScenario
       ? "owned socket replacement; handshake includes WebSocket open and connect; reconnect adds subscribe and list; events during intentional disconnection are not replayed"
       : undefined,
@@ -4481,11 +4841,17 @@ try {
     stressSessionStore: values["stress-session-store"],
     transcriptHydrationCounts: values["transcript-hydration-counts"],
     operatorAccessPolicy: values["operator-access-policy"],
+    sessionEventWake: values["session-event-wake"],
+    authorityCounts: values["authority-counts"],
+    authoritySourcePreload,
+    node: process.version,
     stressSubagents: values["stress-subagents"],
     cronRuns,
     ...(values["mixed-rpc"] ? { diffEditControlVerified: true, diffEditVisibilityMs } : {}),
     pollSeed: values["poll-seed"] ?? null,
     diagnostics: values.diagnostics,
+    broadcastTiming: values["broadcast-timing"],
+    sessionProjectionSource,
     transportCounts: values["transport-counts"],
     compressed: proxyViewers,
     distinctViewers: values["distinct-viewers"],
@@ -4552,7 +4918,6 @@ try {
           historyTurns,
           historyLastTurns,
           historyPayloadBytes,
-          sessionResets,
           completedSoakRounds,
           initialRetainedResources,
           initialMemoryCollected: !values.allocations,
@@ -4570,6 +4935,14 @@ try {
               allocation: {
                 ...sample.allocation,
                 ...readPromotion(sample.allocation.profilePath, sample.allocation.operationCount),
+                ...(values["operator-access-policy"]
+                  ? {
+                      authority: readAuthorityAllocation(
+                        sample.allocation.profilePath,
+                        sample.allocation.operationCount,
+                      ),
+                    }
+                  : {}),
               },
             }
           : {}),

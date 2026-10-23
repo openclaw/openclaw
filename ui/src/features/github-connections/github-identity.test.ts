@@ -244,7 +244,7 @@ it("keeps UUID generation failures inside configure handling", async () => {
 
   expect(requests).toEqual([]);
   expect(identity.read().busy).toBe(false);
-  expect(identity.read().error).toContain("Web Crypto is required");
+  await expect(identity.read().mutationCompletion).rejects.toThrow("Web Crypto is required");
 });
 
 it("does not dispatch without the required operator scopes", async () => {
@@ -320,10 +320,11 @@ it("invalidates an in-flight status on effective identity change and verifies on
   expect(request).toHaveBeenCalledTimes(2);
   expect(identity.read().draft.name).toBe("dirty author");
 
+  await initial;
+  expect(identity.read().status).toBeNull();
   first.resolve(availableStatus("system"));
   second.resolve(availableStatus("system"));
-  await initial;
-  await Promise.resolve();
+  await identity.read().statusCompletion;
   expect(identity.read().status).toEqual(availableStatus("system"));
   expect(request).toHaveBeenCalledTimes(2);
 });
@@ -344,7 +345,8 @@ it.each(["unused", "pending", "loaded", "failed"])(
         await initial;
       } else if (initialState === "failed") {
         first.reject(new Error("Status unavailable"));
-        await initial;
+        await expect(initial).rejects.toThrow("Status unavailable");
+        initial = undefined;
       }
     }
     identity.setDraft("name", "Unsaved author");
@@ -391,9 +393,8 @@ it("rejects status returned for a different agent", async () => {
     ...availableStatus("system"),
     agentId: "reviewer",
   }));
-  await identity.verify();
+  await expect(identity.verify()).rejects.toThrow("different target");
   expect(identity.read().status).toBeNull();
-  expect(identity.read().error).toContain("different target");
 });
 
 it("waits for each authoritative poll deadline and adopts successful OAuth status", async () => {

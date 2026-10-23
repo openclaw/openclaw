@@ -3,6 +3,7 @@ import type { SpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import { getSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
+import { throwSettledAggregate } from "./error-graph-internal.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 import {
   readOnlyWorkerScope,
@@ -315,12 +316,7 @@ export function createSqliteReadOnlyWorkerPool(
           )
           .map(retireIdleSlot),
       );
-      const failures = outcomes.flatMap((outcome) =>
-        outcome.status === "rejected" ? [outcome.reason] : [],
-      );
-      if (failures.length) {
-        throw new AggregateError(failures, "SQLite read-only broker worker cleanup failed");
-      }
+      throwSettledAggregate(outcomes, "SQLite read-only broker worker cleanup failed");
     },
   };
 }
