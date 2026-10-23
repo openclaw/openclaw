@@ -36,7 +36,7 @@ type RecoveryHost = Parameters<typeof captureChatOutboxRecoveryDestination>[0] &
     sessionsResult?: SessionsListResult | null;
   };
 
-const draftStore = import("../../lib/chat/composer-draft-store.runtime.ts");
+type DraftStore = typeof import("../../lib/chat/composer-draft-store.runtime.ts");
 
 type RecoveryProps = {
   host: RecoveryHost | undefined;
@@ -131,7 +131,9 @@ function createChatOutboxRecovery(props: RecoveryProps, element: () => HTMLEleme
       }
       setEntries(recovery?.entries ?? []);
       setError(retirementError || (recovery?.blocked ? t("chat.outboxRecoveryFull") : ""));
-      const result = await (await draftStore).prepareDurableComposerRecovery(owner);
+      const { prepareDurableComposerRecovery } =
+        await import("../../lib/chat/composer-draft-store.runtime.ts");
+      const result = await prepareDurableComposerRecovery(owner);
       if (request !== generation || !isConnected()) {
         return;
       }
@@ -195,9 +197,10 @@ function createChatOutboxRecovery(props: RecoveryProps, element: () => HTMLEleme
         if ("id" in entry) {
           result = discardChatOutboxRecovery(host, entry, isCurrent);
         } else {
-          const store: Awaited<typeof draftStore> = yield draftStore;
-          const discarded: Awaited<ReturnType<typeof store.discardDurableComposerRecovery>> =
-            yield store.discardDurableComposerRecovery(owner, entry, isCurrent);
+          const { discardDurableComposerRecovery }: DraftStore =
+            yield import("../../lib/chat/composer-draft-store.runtime.ts");
+          const discarded: Awaited<ReturnType<typeof discardDurableComposerRecovery>> =
+            yield discardDurableComposerRecovery(owner, entry, isCurrent);
           result = discarded.status;
         }
         if (!isCurrent()) {
@@ -222,9 +225,10 @@ function createChatOutboxRecovery(props: RecoveryProps, element: () => HTMLEleme
       const scope = resolveUiConversationIdentity(host, host.sessionKey);
       const destination = captureChatOutboxRecoveryDestination(host, scope);
       const durableScope = { ...owner, scopeKey: `chat:v3:${storedChatOutboxScopeKey(scope)}` };
-      const store: Awaited<typeof draftStore> = yield draftStore;
-      const before: Awaited<ReturnType<typeof store.readDurableComposerDraft>> =
-        yield store.readDurableComposerDraft(durableScope);
+      const { readDurableComposerDraft, restoreDurableComposerRecovery }: DraftStore =
+        yield import("../../lib/chat/composer-draft-store.runtime.ts");
+      const before: Awaited<ReturnType<typeof readDurableComposerDraft>> =
+        yield readDurableComposerDraft(durableScope);
       if (before.status === "storage-failed") {
         setError(t("chat.outboxRecoveryStorageFailed"));
         return undefined;
@@ -246,20 +250,20 @@ function createChatOutboxRecovery(props: RecoveryProps, element: () => HTMLEleme
       if (!confirmed || !isCurrent()) {
         return undefined;
       }
-      const currentDraft: Awaited<ReturnType<typeof store.readDurableComposerDraft>> =
-        yield store.readDurableComposerDraft(durableScope);
+      const currentDraft: Awaited<ReturnType<typeof readDurableComposerDraft>> =
+        yield readDurableComposerDraft(durableScope);
       if (!isCurrent() || JSON.stringify(currentDraft) !== JSON.stringify(before)) {
         setError(t("chat.outboxRecoveryConflict"));
         return undefined;
       }
       let result:
         | ReturnType<typeof restoreChatOutboxRecovery>
-        | Awaited<ReturnType<typeof store.restoreDurableComposerRecovery>>["status"];
+        | Awaited<ReturnType<typeof restoreDurableComposerRecovery>>["status"];
       if ("id" in entry) {
         result = restoreChatOutboxRecovery(host, entry, destination, before.revision ?? 0);
       } else {
-        const restored: Awaited<ReturnType<typeof store.restoreDurableComposerRecovery>> =
-          yield store.restoreDurableComposerRecovery(
+        const restored: Awaited<ReturnType<typeof restoreDurableComposerRecovery>> =
+          yield restoreDurableComposerRecovery(
             durableScope,
             entry,
             before.revision ?? 0,
