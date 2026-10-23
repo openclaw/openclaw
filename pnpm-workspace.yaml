@@ -154,6 +154,10 @@ packageExtensions:
     peerDependenciesMeta:
       sharp:
         optional: true
+  # node-pty's Linux fallback invokes node-gyp but only declares it as a development dependency.
+  "node-pty@1.1.0":
+    dependencies:
+      node-gyp: 11.4.2
 
 patchedDependencies:
   "baileys@7.0.0-rc14": patches/baileys@7.0.0-rc14.patch

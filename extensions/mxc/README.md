@@ -50,11 +50,11 @@ and out-of-range values fail plugin activation with an actionable error
 
 | Field            | Type                              | Default                                | Notes                                                                                                                                                         |
 | ---------------- | --------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `mxcBinaryPath`  | `string`                          | unset                                  | Non-empty override for a compatible `wxc-exec.exe` supporting `--probe`; see [Host readiness](#host-readiness).                                               |
+| `mxcBinaryPath`  | `string`                          | unset                                  | Non-empty override for an MXC 1.0 native layout: `<dir>\<x64\|arm64>\wxc-exec.exe` with `mxc_ffi.dll` beside it; see [Host readiness](#host-readiness).      |
 | `containment`    | `"process" \| "processcontainer"` | `"process"`                            | Both currently resolve to Windows ProcessContainer.                                                                                                           |
 | `network`        | `"none" \| "default"`             | `"none"`                               | `"default"` allows outbound network via the `internetClient` capability.                                                                                      |
 | `timeoutSeconds` | `number`                          | unset (baseline default `300` applies) | Must be `>= 1` and `<= 2147000` (the largest Node-safe `setTimeout` delay in whole seconds). Capped to the sandbox policy baseline timeout when both are set. |
-| `debug`          | `boolean`                         | `false`                                | Forwards debug output from the MXC SDK launcher.                                                                                                              |
+| `debug`          | `boolean`                         | `false`                                | Writes the resolved MXC native component paths and MXC SDK warnings to stderr.                                                                                |
 | `mxcPolicyPaths` | `string[]`                        | unset (built-in baseline only)         | Every entry must be a non-empty absolute path. See [Sandbox policy files](#sandbox-policy-files).                                                             |
 
 Any other key is rejected. `openclaw.plugin.json` publishes the same schema
@@ -64,6 +64,9 @@ help stay in sync with plugin runtime validation.
 ## Supported
 
 - Windows hosts with the MXC executor installed through `@microsoft/mxc-sdk`.
+- A Gateway running Node.js 24.21.0 or newer within Node.js 24, or 26.8.0 or
+  newer. `@microsoft/mxc-sdk@1.0.0` refuses to run commands on Windows with
+  older Node.js releases, so the plugin blocks activation there.
 - Explicit opt-in after plugin install with `sandbox.backend: "mxc"`.
 - MXC `process` containment, which resolves to Windows ProcessContainer.
 - `workspaceAccess`:
@@ -83,17 +86,24 @@ help stay in sync with plugin runtime validation.
 - `scope` workspace selection:
   - `session`, `agent`, and `shared` choose the OpenClaw workspace directory
     passed to MXC.
-- SDK-only executor discovery from `@microsoft/mxc-sdk/bin/<arch>` or
-  `@microsoft/mxc-sdk/bin`; use `mxcBinaryPath` only for an explicit override.
+- SDK-only native discovery from `@microsoft/mxc-sdk/bin/<arch>`, which must
+  contain both `wxc-exec.exe` and `mxc_ffi.dll`; use `mxcBinaryPath` only for
+  an explicit override.
 - OpenClaw passes per-run command, environment, and filesystem config to the
   plugin's Node launcher through a short-lived local payload file, and deletes
   that file and its temp directory when the launcher or run finishes.
-- `@microsoft/mxc-sdk@0.8.0` then carries the full base64 request envelope on
-  the native `wxc-exec` process argv. A host user with process-inspection rights
-  can observe that command, environment, and policy data while the process is
-  running. Do not put secrets in MXC command arguments or environment values
-  until the SDK provides a non-argv transport
+- Non-PTY commands run through the in-process `mxc_ffi` library. PTY commands
+  run through `wxc-exec`, and `@microsoft/mxc-sdk@1.0.0` carries the full
+  base64 request envelope on that process's argv. A host user with
+  process-inspection rights can observe that command, environment, and policy
+  data while a PTY command is running. Do not put secrets in MXC command
+  arguments or environment values until the SDK provides a non-argv transport
   ([microsoft/mxc#626](https://github.com/microsoft/mxc/issues/626)).
+- A command stopped by the configured timeout exits with status `124` and
+  writes `MXC sandbox command timed out and was terminated.` to stderr.
+- On AppContainer isolation tiers, MXC SDK 1.0 runs commands in a regular
+  AppContainer rather than LPAC; see
+  [Isolation tiers under SDK 1.0](#isolation-tiers-under-sdk-10).
 
 ## Not supported yet
 
@@ -259,33 +269,52 @@ agents may still use them.
 
 ## Host readiness
 
-Before registering the sandbox backend, the plugin runs the MXC executor's own
-host check (`wxc-exec --probe`) and requires it to select an isolation tier
-(`base-container`, `appcontainer-bfs`, or `appcontainer-dacl`). It checks the
-same executor it launches, including an `mxcBinaryPath` override. MXC's tier
-degradation warnings are logged but do not block activation. To inspect a host,
-run the executor directly:
+Before registering the sandbox backend, the plugin checks that the Gateway's
+Node.js meets MXC SDK 1.0's Windows requirement, then runs MXC SDK 1.0's host
+check (`probe()` from `@microsoft/mxc-sdk/v1`) through its Node launcher, with
+the same pinned native components it launches commands with, including an
+`mxcBinaryPath` override. The check must select an isolation tier. MXC's tier
+degradation warnings are logged but do not block activation.
 
-```powershell
-& node_modules\@microsoft\mxc-sdk\bin\x64\wxc-exec.exe --probe
+### Isolation tiers under SDK 1.0
+
+MXC picks the isolation tier for the host; the plugin does not choose it.
+MXC SDK 1.0 cannot request a least-privilege AppContainer (LPAC), which the
+SDK 0.8 integration always requested, so this plugin accepts the weaker
+isolation MXC SDK 1.0 provides on the AppContainer tiers:
+
+| Tier | Hosts where it was observed | Change from SDK 0.8 |
+| --- | --- | --- |
+| `appcontainer-dacl`, `appcontainer-bfs` | Windows builds 22631, 26100, and 26200 selected `appcontainer-dacl` | Commands run in a regular AppContainer instead of LPAC. They can reach files, registry keys, and other resources granted to `ALL APPLICATION PACKAGES` that an LPAC process could not. |
+| `base-container` | Windows builds 26600 and later with the process security environment API | None. `base-container` is a different isolation model without an LPAC token in either SDK version. |
+
+On an AppContainer tier the plugin logs a notice naming the tier when it
+activates. It does not block activation.
+
+### Native component overrides
+
+MXC SDK 1.0 loads `mxc_ffi.dll` for non-PTY commands and runs `wxc-exec.exe`
+for PTY commands, so an override must provide both from the same release:
+
+```text
+<dir>\x64\wxc-exec.exe
+<dir>\x64\mxc_ffi.dll
 ```
 
-Use `bin\arm64` on Arm64 hosts.
-
-An existing `mxcBinaryPath` override must point to an MXC 0.8.0-compatible
-executor that supports `--probe`. An older executor stops plugin activation;
-the plugin cannot safely infer readiness from a Windows service name or check a
-different binary. If the override fails, run that exact executable with
-`--probe` to see its error. Update the override to a compatible executor, or
-remove it to use the `@microsoft/mxc-sdk@0.8.0` executor installed with the
-plugin:
+Use `arm64` instead of `x64` on Arm64 hosts; the directory must match the host
+architecture. A bare `wxc-exec.exe` path from an SDK 0.8 setup, a mismatched
+architecture directory, or a missing `mxc_ffi.dll` stops plugin activation
+instead of falling back to the bundled components. To use the
+`@microsoft/mxc-sdk@1.0.0` components installed with the plugin, remove the
+override:
 
 ```powershell
 openclaw config unset plugins.entries.mxc.config.mxcBinaryPath
 ```
 
-Restart the Gateway after changing the override. If the SDK executor also
-fails `--probe`, address the reported host-readiness error before retrying.
+Restart the Gateway after changing the override. If the bundled components
+also fail the check, address the reported host-readiness error before
+retrying.
 
 Host preparation is advisory. If directory listing inside the sandbox fails with
 `Access is denied`, run this once from an elevated prompt:

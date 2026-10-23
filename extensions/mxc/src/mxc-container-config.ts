@@ -1,6 +1,6 @@
 import { statSync } from "node:fs";
 import path from "node:path";
-import type { ContainerConfig } from "@microsoft/mxc-sdk";
+import type { ContainerRequest, FilesystemPolicy } from "@microsoft/mxc-sdk/v1";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   resolveReadOnlyWorkspaceSkillMounts,
@@ -15,9 +15,6 @@ import type {
 } from "./sandbox-policy-loader.js";
 import { buildCommandLine } from "./windows-command.js";
 import { normalizeWindowsProcessEnvRecord } from "./windows-env.js";
-
-const MXC_SCHEMA_VERSION = "0.7.0-alpha";
-
 type FilesystemPathSpec = {
   path: string;
   required: boolean;
@@ -86,18 +83,18 @@ export function resolveMxcRuntimeWorkdir(
     : path.join(workspace.activeWorkspaceDir, relativePath);
 }
 
-export function buildMxcContainerConfig(params: {
+export function buildMxcContainerRequest(params: {
   config: MxcConfig;
   baseline: LoadedSandboxBaselinePolicy;
   baselineContext: BaselineApplicationContext;
-  containerId: string;
+  containerName: string;
   command: string;
   args?: readonly string[];
   sandboxTempDir: string;
   workdir: string;
   workspace: MxcWorkspaceContext;
   env: Record<string, string>;
-}): ContainerConfig {
+}): ContainerRequest {
   const networkAllowed = params.config.network === "default";
   const readwritePathSpecs: FilesystemPathSpec[] = [];
   const readonlyPathSpecs: FilesystemPathSpec[] = [];
@@ -137,53 +134,53 @@ export function buildMxcContainerConfig(params: {
   const readonlyPaths = resolveExistingFilesystemPaths(readonlyPathSpecs, "read-only");
   assertNoMxcReadwriteReadonlyOverlap({ readwritePaths, readonlyPaths });
 
-  const filesystem = {
+  const filesystem: FilesystemPolicy = {
     readonlyPaths,
-    deniedPaths: undefined,
     readwritePaths,
+    clearPolicyOnExit: true,
   };
-  const processEnv = normalizeWindowsProcessEnvRecord({
+  const environment = normalizeWindowsProcessEnvRecord({
     ...params.env,
     TEMP: params.sandboxTempDir,
     TMP: params.sandboxTempDir,
   });
 
   return {
-    version: MXC_SCHEMA_VERSION,
-    containerId: params.containerId,
-    containment: params.config.containment,
-    // The raw config goes straight to wxc-exec, which only understands the wire
-    // `lifecycle.preservePolicy`; the SDK's `filesystem.clearPolicyOnExit` alias is
-    // mapped only by `createConfigFromPolicy`.
-    lifecycle: { destroyOnExit: true, preservePolicy: false },
-    process: {
-      commandLine: buildCommandLine(params.command, params.args ?? []),
-      cwd: params.workdir,
-      env: processEnv,
-      timeout:
-        (params.config.timeoutSecondsConfigured === true
-          ? Math.min(params.config.timeoutSeconds, params.baseline.process.timeoutSeconds)
-          : params.baseline.process.timeoutSeconds) * 1000,
+    command: buildCommandLine(params.command, params.args ?? []),
+    workingDirectory: params.workdir,
+    // A supplied environment replaces the OS default block, so host
+    // variables outside the minimal Windows defaults never reach the child.
+    environment,
+    inheritDefaultEnvironment: false,
+    timeoutMs:
+      (params.config.timeoutSecondsConfigured === true
+        ? Math.min(params.config.timeoutSeconds, params.baseline.process.timeoutSeconds)
+        : params.baseline.process.timeoutSeconds) * 1000,
+    containerName: params.containerName,
+    // Both configured containments have always meant the Windows
+    // ProcessContainer backend; only the explicit form accepts its UI block.
+    containment: {
+      type: "processcontainer",
+      config: {
+        ui: {
+          isolation: "container",
+          desktopSystemControl: false,
+          systemSettings: "none",
+          ime: false,
+        },
+      },
     },
     filesystem,
     ui: {
       disable: true,
       clipboard: "none",
-      injection: false,
+      allowInputInjection: false,
     },
+    // MXC derives the internetClient capability from egress; ingress and
+    // host loopback stay denied in both modes.
     network: {
-      defaultPolicy: networkAllowed ? "allow" : "block",
-      enforcementMode: "capabilities",
-    },
-    processContainer: {
-      leastPrivilege: true,
-      capabilities: networkAllowed ? ["internetClient"] : [],
-      ui: {
-        isolation: "container",
-        desktopSystemControl: false,
-        systemSettings: "none",
-        ime: false,
-      },
+      egress: { default: networkAllowed ? "allow" : "deny" },
+      ingress: { default: "deny", hostLoopback: "deny" },
     },
   };
 }

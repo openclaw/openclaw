@@ -763,7 +763,6 @@
 ["extensions/msteams/src/send.threaded-attachments.test.ts","openclaw/plugin-sdk/outbound-media","91d58aa978a1d14b74bb7139099abdcd6079fa245139a7b089644614e80e88b2",1]
 ["extensions/msteams/src/token.test.ts","./oauth.token.js","10187173b8c0b73ec5a77d9c5f35f3495fa0b7366ee07d960647e87cf85888d6",1]
 ["extensions/msteams/src/user-agent.test.ts","./runtime.js","ab1c47857471297cd8b84c2757a6f726e5d53ea95158f90125e6a4e88b8ccd56",1]
-["extensions/mxc/test/mxc-backend.test.ts","../src/binary-resolver.js","671ebc181839e3105372e5c6f7a76eb93779cbec21bca6b3390ce82e001873bb",1]
 ["extensions/nextcloud-talk/src/doctor.test.ts","./bot-preflight.js","49e240e6b28c063bac15d29ceba4736ae00064667f081776aa89ccb7f8292d25",1]
 ["extensions/nextcloud-talk/src/guarded-response.test.ts","../runtime-api.js","df2a79dc27600d99a64424a1c456e30042ea2fd39c30c6be9d20455de8f1d0f7",1]
 ["extensions/nextcloud-talk/src/message-actions.test.ts","./accounts.js","dd8080be185e188599d4a6464067d2e430f0fc4a865b09e5c2703b6c3f5b3830",1]
