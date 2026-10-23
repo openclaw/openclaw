@@ -1,5 +1,5 @@
 import type { InputDialogOptions } from "./input-dialog-types.ts";
-import { InputDialogView } from "./input-dialog-view.tsx";
+import { renderInputDialog } from "./input-dialog-view.tsx";
 import { withPromiseModalHost } from "./promise-modal-host.ts";
 
 export type { InputDialogOptions } from "./input-dialog-types.ts";
@@ -13,9 +13,7 @@ export function showInputDialog(options: InputDialogOptions): Promise<string | n
   }
   inputActive = true;
   return withPromiseModalHost<string | null>({ signal: options.signal, value: null }, (modal) =>
-    modal.render(() => (
-      <InputDialogView options={options} finish={modal.finish} settled={() => modal.settled} />
-    )),
+    modal.render(() => renderInputDialog(options, modal.finish, () => modal.settled)),
   ).finally(() => {
     inputActive = false;
   });

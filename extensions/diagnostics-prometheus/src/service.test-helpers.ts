@@ -47,6 +47,7 @@ export function baseEvent(): Pick<DiagnosticEventPayload, "seq" | "ts"> {
 
 export function scrapeMetrics(handler: OpenClawPluginHttpRouteHandler): string {
   const response = createMockServerResponse();
+  response.flushHeaders = () => {};
   response.req.method = "GET";
   response.req.url = "/api/diagnostics/prometheus";
   expect(handler(response.req, response)).toBe(true);

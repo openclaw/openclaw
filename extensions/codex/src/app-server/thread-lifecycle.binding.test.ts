@@ -1152,7 +1152,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
         }
         const before = await readCodexAppServerBinding(fixture.sessionFile);
         await expect(fixture.start()).rejects.toThrow(
-          owner === "claimed" ? "claimed by active work" : "owned by another",
+          owner === "claimed" ? AgentHarnessPreflightError : /owned by another/,
         );
         expect(await readCodexAppServerBinding(fixture.sessionFile)).toEqual(before);
         expect(

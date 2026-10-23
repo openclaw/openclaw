@@ -340,7 +340,7 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
         owner: modelOwner,
         agentConfigOverride,
         sessionEntry: cronSession.sessionEntry,
-        payload: input.job.payload,
+        payloadModel: input.job.payload.kind === "agentTurn" ? input.job.payload.model : undefined,
         isGmailHook,
         agentId,
         agentDir,

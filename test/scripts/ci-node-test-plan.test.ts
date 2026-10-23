@@ -1949,6 +1949,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     for (const changedPath of [
       "src/auto-reply/reply/new.test.tsx",
       "src/infra/outbound/new.test.ts",
+      "src/media/new.test.ts",
       "test/tsconfig/tsconfig.core.test.messaging.json",
       "test/tsconfig/tsconfig.core.test.ui-e2e-chat.json",
     ]) {

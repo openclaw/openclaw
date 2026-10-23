@@ -518,6 +518,7 @@ describe("Solid menu branch lifetime", () => {
       await finishHover();
       vi.useRealTimers();
       await phase(surface("people-move"), "open");
+      await phase(surface("people-assign"), "hidden");
       expect(surface("people-assign").matches(":popover-open")).toBe(false);
       expect(document.activeElement).toBe(item("Engineering", "people-move"));
       await keyFocus(dir === "ltr" ? "{ArrowLeft}" : "{ArrowRight}", trigger("people-move"));

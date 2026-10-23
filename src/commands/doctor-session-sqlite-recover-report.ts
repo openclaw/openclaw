@@ -35,7 +35,7 @@ import {
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabaseOptions,
 } from "../state/openclaw-agent-db.js";
-import { OPENCLAW_AGENT_FTS_SCHEMAS } from "../state/openclaw-agent-fts-schema.js";
+import { AGENT_FTS_SCHEMAS } from "../state/openclaw-agent-fts-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
@@ -418,7 +418,7 @@ function inspectSqliteForRecovery(
     if (database && error instanceof SqliteIntegrityError && error.findings) {
       try {
         ftsOnly = Boolean(
-          classifySqliteFtsIntegrityFindings(database, error.findings, OPENCLAW_AGENT_FTS_SCHEMAS),
+          classifySqliteFtsIntegrityFindings(database, error.findings, AGENT_FTS_SCHEMAS),
         );
       } catch {
         // An unreadable file is never eligible for derived-index repair.

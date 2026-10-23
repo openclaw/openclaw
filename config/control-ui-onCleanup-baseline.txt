@@ -7,7 +7,6 @@ ui/src/components/app-sidebar.tsx	1
 ui/src/components/board/board-mcp-app-lifecycle.ts	1
 ui/src/components/board/board-widget-cell.solid.tsx	2
 ui/src/components/canvas-widget-view.tsx	2
-ui/src/components/command-palette-view.tsx	1
 ui/src/components/file-preview-modal.tsx	1
 ui/src/components/image-lightbox-content.tsx	1
 ui/src/components/image-lightbox-gallery.ts	1
@@ -15,7 +14,6 @@ ui/src/components/markdown-dom-ref.ts	1
 ui/src/components/markdown-element-refs-solid.ts	2
 ui/src/components/mcp-app-view.tsx	1
 ui/src/components/option-card.tsx	1
-ui/src/components/panel-tab-strip-solid.tsx	1
 ui/src/components/person-activity-card.tsx	1
 ui/src/components/portaled-hovercard-focus.ts	1
 ui/src/components/session-background-layout-context.tsx	1
@@ -43,7 +41,6 @@ ui/src/pages/chat/chat-viewer-presence.ts	1
 ui/src/pages/chat/components/chat-attachment-download.ts	1
 ui/src/pages/chat/components/chat-attachment-viewport.ts	1
 ui/src/pages/chat/components/chat-composer-prediction.ts	1
-ui/src/pages/chat/components/chat-effort-picker.tsx	2
 ui/src/pages/chat/components/chat-file-copy.ts	1
 ui/src/pages/chat/components/chat-message-attachment-admission-solid.tsx	1
 ui/src/pages/chat/components/chat-message-attachments-solid.tsx	3

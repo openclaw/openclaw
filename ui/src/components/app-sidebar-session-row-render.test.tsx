@@ -240,6 +240,7 @@ it("keeps cached agent rows while the live roster settles", async () => {
     }),
   );
   const sessions = createTestSessionCapability(gateway.gateway);
+  await sessions.refresh({ agentId: "main" });
   const context = createContext(gateway.gateway, sessions, {
     defaultId: "main",
     mainKey: "main",
