@@ -33,7 +33,8 @@ async function expectRadiosDisabled(page: Page) {
       .getByRole("radio")
       .evaluateAll(
         (radios) =>
-          radios.length > 0 && radios.every((radio) => (radio as HTMLInputElement).disabled),
+          radios.length > 0 &&
+          radios.every((radio) => radio.getAttribute("aria-disabled") === "true"),
       ),
   ).toBe(true);
 }

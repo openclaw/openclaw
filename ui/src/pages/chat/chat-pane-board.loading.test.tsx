@@ -8,6 +8,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { BoardProvider } from "../../lib/board/provider.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { chatHistoryRequests } from "./chat-history-state.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import { ChatBoardPanel } from "./chat-pane-surfaces.tsx";
@@ -277,6 +278,9 @@ describe("chat pane board loading states", () => {
     const provider = pane.resolveBoardProvider();
     try {
       draw();
+      await waitForSolid(() =>
+        expect(container.querySelector("openclaw-board-view")).not.toBeNull(),
+      );
       const view = container.querySelector("openclaw-board-view")!;
       await view.updateComplete;
       const skeleton = container.querySelector("openclaw-panel-loading-skeleton");

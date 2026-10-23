@@ -1,9 +1,11 @@
 /* @vitest-environment jsdom */
 
+import { createComponent, createSignal, flush, lazy, Loading } from "solid-js";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { i18n } from "../../i18n/index.ts";
 import { prepareCatalogTerminal } from "../../lib/sessions/catalog-terminal-start.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
@@ -16,6 +18,7 @@ import {
   type CreateOptions,
 } from "./terminal-panel.test-support.ts";
 import type { OpenClawTerminalPanel } from "./terminal-panel.ts";
+import { terminalIntentQueue } from "./terminal-pending-actions.ts";
 
 const createGhosttyTerminalMock: CreateGhosttyTerminalMock = vi.fn();
 
@@ -107,6 +110,108 @@ describe("OpenClawTerminalPanel", () => {
     const panel = element as unknown as OpenClawTerminalPanel;
     await panel.updateComplete;
     await waitForFast(() => expect(panel.terminalPanelOpen).toBe(true));
+  });
+
+  it("activates a Solid terminal when its detached container connects later", async () => {
+    const { TerminalPanelHost } = await import("./terminal-panel-registration.tsx");
+    createGhosttyTerminalMock.mockImplementation(async () => createTerminalController());
+    const request = vi.fn(async (method: string) =>
+      method === "terminal.open"
+        ? terminalOpenResult("late-connected-terminal")
+        : method === "terminal.list"
+          ? { sessions: [] }
+          : { ok: true },
+    );
+    const client: TerminalGatewayClient = {
+      forceReconnect() {},
+      // SAFETY: This fixture supplies the response shape for each terminal method it serves.
+      request: <T>(method: string) => request(method) as Promise<T>,
+      addEventListener: () => () => {},
+    };
+    const container = document.createElement("div");
+    const mounted = mountSolid(
+      () => TerminalPanelHost({ client, available: true, embedded: true }),
+      { container },
+    );
+    try {
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(request).not.toHaveBeenCalled();
+      await terminalIntentQueue.queue(
+        { kind: "open", agentId: null },
+        { deferUntilHostChange: true },
+      );
+      document.body.append(container);
+      await waitForFast(() => expect(request).toHaveBeenCalledWith("terminal.open"));
+      await waitForFast(() => expect(container.querySelector(".tp-composer input")).not.toBeNull());
+      expect(createGhosttyTerminalMock).toHaveBeenCalledOnce();
+      expect(createGhosttyTerminalMock.mock.calls[0]?.[0].parent.isConnected).toBe(true);
+      document.body.append(container);
+      await Promise.resolve();
+      expect(request.mock.calls.filter(([method]) => method === "terminal.open")).toHaveLength(1);
+      await waitForFast(() => expect(terminalIntentQueue.hasActions).toBe(false));
+    } finally {
+      container.querySelector("openclaw-terminal-panel")?.closeTerminalPanel();
+      mounted.unmount();
+      container.remove();
+    }
+  });
+
+  it("shows the embedded desktop session picker initially and preserves its dismissal", async () => {
+    const Terminal = lazy(() => import("./terminal-panel-registration.tsx"), {
+      export: "TerminalPanelHost",
+    });
+    createGhosttyTerminalMock.mockResolvedValue(createTerminalController());
+    const currentSession = terminalOpenResult("embedded-current-session");
+    const client: TerminalGatewayClient = {
+      forceReconnect() {},
+      // SAFETY: The fixture returns the declared response for each terminal method.
+      request: async <T>(method: string) =>
+        (method === "terminal.open"
+          ? currentSession
+          : method === "terminal.list"
+            ? { sessions: [{ ...currentSession, attached: true, createdAtMs: 1 }] }
+            : { ok: true }) as T,
+      addEventListener: () => () => {},
+    };
+    const container = document.body.appendChild(document.createElement("div"));
+    const [themeMode, setThemeMode] = createSignal<"dark" | "light">("dark");
+    const mounted = mountSolid(
+      () =>
+        createComponent(Loading, {
+          get children() {
+            return createComponent(Terminal, {
+              client,
+              available: true,
+              embedded: true,
+              mobile: false,
+              get themeMode() {
+                return themeMode();
+              },
+            });
+          },
+        }),
+      { container },
+    );
+    try {
+      await vi.dynamicImportSettled();
+      await waitForFast(() =>
+        expect(container.querySelector(".tp-session.is-current")).not.toBeNull(),
+      );
+      container.querySelector<HTMLButtonElement>(".tp-session.is-current")!.click();
+      await waitForFast(() => expect(container.querySelector(".tp-session-menu")).toBeNull());
+      expect(container.querySelector(".tp-composer input")).not.toBeNull();
+      setThemeMode("light");
+      flush();
+      await container.querySelector("openclaw-terminal-panel")!.updateComplete;
+      expect(container.querySelector(".tp-session-menu")).toBeNull();
+      expect(container.querySelector(".tp-composer input")).not.toBeNull();
+      await waitForFast(() => expect(terminalIntentQueue.hasActions).toBe(false));
+    } finally {
+      container.querySelector("openclaw-terminal-panel")?.closeTerminalPanel();
+      mounted.unmount();
+      container.remove();
+    }
   });
 
   it.each([{ dock: "right", label: "Dock to right" }] as const)(

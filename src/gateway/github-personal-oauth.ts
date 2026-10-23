@@ -36,6 +36,7 @@ import {
   prepareUserGitHubConnection,
   readCanonicalUserGitHubConnectionAsync,
   readUserGitHubConnectionAsync,
+  requirePendingUserGitHubConnection as requirePending,
   updateUserGitHubRefreshAsync as updateRefresh,
   type UserGitHubConnection,
   type UserGitHubConnected,
@@ -66,22 +67,6 @@ const withProfileLease = <T>(profileId: string, run: (assertOwned: () => void) =
     },
     async (lease) => await run(() => lease.assertOwned()),
   );
-
-function requirePending(
-  record: UserGitHubConnection | undefined,
-  generation: string,
-  requestId: string,
-): UserGitHubConnection & { pending: NonNullable<UserGitHubConnection["pending"]> } {
-  if (
-    !record?.pending ||
-    record.generation !== generation ||
-    record.pending.requestId !== requestId ||
-    record.pending.expiresAtMs <= Date.now()
-  ) {
-    throw new Error("My GitHub authorization changed or expired; start again.");
-  }
-  return { ...record, pending: record.pending };
-}
 
 function needsRefresh(selection: UserGitHubConnected): boolean {
   return (

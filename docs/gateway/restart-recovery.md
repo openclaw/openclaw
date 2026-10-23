@@ -50,6 +50,8 @@ An accepted child continuation, including a child created with `sessions_spawn`
 or an interrupted child resumed with `sessions_send`,
 keeps the restored operator's current identity and permission checks independently
 of the parent's recovery claim. Completing the parent does not cancel that child.
+Provider retries reuse the child's retained authority, including when session tools
+are prepared again after a transient provider error.
 Explicitly stopping the parent still cancels its children. Revoking the operator,
 replacing the source session, or stopping the Gateway still invalidates the child's
 authority.
@@ -68,11 +70,15 @@ During startup, a new reply waits for its agent's model and plugin runtime to
 finish loading. Agents that are already ready can serve replies while other
 agents continue loading. Startup preparation failures still report an error.
 
-After the HTTP listener binds, interrupted main-session marking overlaps session
-projection preparation. Both settle before channels start and the Gateway reports
-ready. Post-ready recovery reuses the completed store checks instead of repeating
-that scan. Both main-session recovery and queued session deliveries wait for
-subagent source restoration before attempting to resume interrupted work.
+Startup orphan marking runs after plugin loading and startup completion. It uses
+the existing active-session index to exclude archived rows before inspecting
+recovery metadata, without reading full transcripts. Client connections, channels,
+startup-gated RPCs, startup hooks, and saved-input replay still wait for marking; chat readiness stays
+gated until saved-input recovery finishes. Marking failures produce a warning
+without aborting startup,
+and the existing recovery sweep retries failed stores. Main-session recovery and
+queued deliveries still wait for subagent source restoration before resuming
+interrupted work.
 
 ## What survives a restart
 
@@ -109,8 +115,8 @@ backoff run outside the subagent recovery span, so registry activation does not
 wait for saved-input delivery. Gateway shutdown still joins that delivery work.
 The existing chat-send startup gate and main-session recovery sweep wait until
 replay and registry recovery settle. This prevents new input from overtaking
-saved input and the sweep from racing saved-input predecessor admission; HTTP
-readiness does not wait for replay.
+saved input and the sweep from racing saved-input predecessor admission; startup
+completion does not wait for replay.
 Before replaying queued inter-session updates, the Gateway resumes any interrupted
 main turn through its existing recovery owner, preserving the predecessor's order.
 The updates remain queued when that owner defers recovery.
@@ -966,10 +972,11 @@ Three complementary mechanisms mark sessions whose turn did not finish:
   clears the prior interruption and is not replayed. Stale transcript lock files
   are cleaned up at the same time.
 
-Startup selects these candidates in the session database worker, so unrelated
-session summaries do not cross into the Gateway process. Pending canonical
-validation still runs when no recovery candidate exists, and marking rechecks
-the current row and live ownership before committing.
+Startup selects these candidates from the active-session index in the session
+database worker without reading transcripts. Candidate discovery skips archived
+rows, and unrelated session summaries do not cross into the Gateway process.
+Pending canonical validation still runs when no recovery candidate exists, and
+marking rechecks the current row and live ownership before committing.
 
 Agents still undergoing database startup inspection retain their recovery work.
 When admission finishes, the same startup recovery owner scans their stores with
@@ -1297,21 +1304,30 @@ Startup restores completed runs directly from the registry. Any retained deliver
 keeps its normal session and ownership checks. Unfinished runs still reconcile
 the current child session before resuming.
 Human follow-ups in retained child sessions take native custody under the actual
-executing run ID and follow-up prompt, including browser chat. The completed
-original run keeps its own outcome. Human ownership and dashboard nesting do not
+executing run ID and follow-up prompt, including browser chat. Native child
+follow-ups sent with `sessions_send` retain registry custody whether the caller
+waits for the result or requests an asynchronous completion. An inline result
+settles that same completion obligation; it does not send a second parent notice.
+The completed original run keeps its own outcome. Human ownership and dashboard nesting do not
 turn a child into a main-session replay candidate. The subagent registry owns
 continuation in the same child session, using fresh agent admission and the
 original requester's current permissions. Operator recovery restores the exact
 session binding, including for session-scoped operators and collector tasks.
 Channel-origin children, including collectors, use the private requester claim saved with the interrupted child;
 this claim identifies the original sender and does not grant operator authority.
-Dashboard session keys do not change this ownership. Its final result follows the normal
-completion path even when the parent has already ended its own turn.
+Dashboard session keys and cron parents do not change this ownership. Internal child turns retain
+their admitted requester claim even when they have no outward delivery route.
+Its final result follows the normal completion path even when the parent has
+already ended its own turn.
 If the retained child transcript is empty or missing, automatic recovery stays
 pending and logs a warning; restore that transcript before resuming recovery.
 Explicit Stop, cancellation, and replaced child sessions do not resume.
 Runs without verifiable session ownership or a restorable requester source settle
-through their normal interruption path for the parent to inspect.
+through their normal interruption path. When the original child still owns its
+interrupted turn but requester authority cannot be restored, recovery also records
+a visible interruption in that child’s history. It does not execute work or send
+a parent message using the missing authority; a new authenticated message can
+continue the retained conversation.
 For native children with completion notifications disabled, recovery sends a
 private continuation to the original parent when its saved session identity still
 matches. Normal successful completion stays quiet. A reset or cancellation does
@@ -1381,9 +1397,11 @@ This requires the retained session and registry interruption record with current
 session-effects ownership; it does not require a main-session restart tombstone.
 It cannot recover a deleted session, an expired registry record, or revoked
 custody. For those cases, send a fresh request to the retained parent to reconcile
-the recorded results and finish or reassign the unfinished work. A fresh
-`chat.send` to a retained child can continue its history under the current caller's
-authority. Check for an already-running follow-up before sending either request.
+the recorded results and finish or reassign the unfinished work.
+A fresh authenticated `sessions.send {"key":"<child-session-key>","message":"<continuation>","idempotencyKey":"<unique-request-id>"}`
+can continue the retained child history under the current caller's authority,
+including when the old run's registry record or requester source is missing.
+Check for an already-running follow-up before sending either request.
 Historical failed runs without
 that ownership evidence remain failed: their error text alone cannot distinguish
 a restart from a genuine failure. Inspect those retained sessions before

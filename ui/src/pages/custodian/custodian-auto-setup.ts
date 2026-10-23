@@ -52,7 +52,7 @@ export class CustodianAutoSetup {
     },
     onBackgroundCompletion: (completion) => this.finishSignIn(completion),
     requestFailedMessage: () => t("custodian.autoSetup.failed"),
-    cancelledMessage: () => t("custodian.cancel"),
+    cancelledMessage: () => t("modelSetup.wizard.cancelled"),
     sessionExpiredMessage: () => t("modelSetup.wizard.sessionExpired"),
     gatewayNotRespondingMessage: () => t("modelSetup.wizard.gatewayNotResponding"),
   });
