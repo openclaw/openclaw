@@ -41,7 +41,7 @@ import {
 } from "./doctor-health-contribution.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contributions.js";
 import * as startup from "./doctor-health-startup.js";
-import { finishDoctorMaintenance } from "./doctor-health-update-result.js";
+import { publishDoctorUpdateResult } from "./doctor-health-update-result.js";
 
 /** Runs the full interactive doctor flow against the provided or default runtime. */
 export async function runDoctorHealthFlow(
@@ -678,14 +678,17 @@ async function runDoctorHealthFlowWithResult(
     }
     throw error;
   } finally {
-    await finishDoctorMaintenance({
-      release: () => measure("doctor.maintenance.release", () => resources.disposeAsync()),
-      updateResult,
-      doctorResult,
-      healthContext,
-      maintenance,
-      startupWarnings: startupFindings.updateWarnings,
-    });
+    const startupWarnings = startupFindings.updateWarnings;
+    await measure("doctor.maintenance.release", () => resources.disposeAsync());
+    if (updateResult) {
+      await publishDoctorUpdateResult({
+        updateResult,
+        doctorResult,
+        healthContext,
+        maintenance,
+        startupWarnings,
+      });
+    }
     // The default runtime exits synchronously; finish native recovery and release
     // maintenance leases before handing it an exit code.
     if (exitCode !== undefined) {

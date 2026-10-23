@@ -35,6 +35,7 @@ import {
   withUpdateStateRead,
 } from "./update-command-result.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
+import { GatewayRestartHealthError } from "./update-command-service-command.js";
 import type { UpdateServiceDefinitionRecovery } from "./update-command-service-context-types.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
@@ -46,15 +47,7 @@ import {
   maybeRestartService,
   maybeRestartServiceAfterFailedMutableUpdate,
 } from "./update-command-service.js";
-import {
-  completeUpdateCommandResult,
-  captureUpdateFinalization,
-  createPostUpdateFailureResult,
-  publishSettledUpdateCommandResult,
-  prepareSettledUpdateCommandResult,
-  bindUpdateFinalizationFailure,
-  withUpdateProgressSettlement,
-} from "./update-command-terminal-publication.js";
+import * as terminal from "./update-command-terminal-publication.js";
 import {
   captureUpdateCommandTerminalRecord,
   type UpdateCommandTerminalRecord,
@@ -69,9 +62,11 @@ export async function finishUpdate(
   params: FinishUpdateParams,
   { beforeFinalization, ...options }: FinishUpdateOptions = {},
 ): Promise<UpdateRunResult> {
-  const captured = captureUpdateFinalization(params);
-  return await withUpdateProgressSettlement(params, beforeFinalization, (settled, failure) =>
-    finishSettledUpdate(settled, options, captured, failure),
+  const captured = terminal.captureUpdateFinalization(params);
+  return await terminal.withUpdateProgressSettlement(
+    params,
+    beforeFinalization,
+    (settled, failure) => finishSettledUpdate(settled, options, captured, failure),
   );
 }
 
@@ -82,19 +77,11 @@ async function finishSettledUpdate(
     adoptedFinalization,
     onGatewayStartAttempted: observeGatewayStartAttempted,
   }: FinishUpdateOptions,
-  captured: ReturnType<typeof captureUpdateFinalization>,
+  captured: ReturnType<typeof terminal.captureUpdateFinalization>,
   progressFailure?: { cause: unknown },
 ): Promise<UpdateRunResult> {
-  const {
-    beganSuccessfully,
-    fence,
-    assertCurrent,
-    originalRun,
-    compensate,
-    forward,
-    recordPhase,
-    sentinelOptions,
-  } = captured;
+  const { fence, assertCurrent, originalRun, compensate, forward, recordPhase, sentinelOptions } =
+    captured;
   let gatewayStartAttempted: "install" | "restart" | undefined;
   const onGatewayStartAttempted = (action: "install" | "restart" = "restart") => {
     gatewayStartAttempted = gatewayStartAttempted === "restart" ? gatewayStartAttempted : action;
@@ -108,7 +95,7 @@ async function finishSettledUpdate(
     ? false
     : await preparePostUpdateService(params, assertCurrent);
   assertCurrent();
-  const { createFailure, settleResult } = bindUpdateFinalizationFailure(progressFailure);
+  const { createFailure, settleResult } = terminal.bindUpdateFinalizationFailure(progressFailure);
   let rollbackAttempted = false;
   let latestServiceStop = params.preManagedServiceStop;
   // Doctor parking and rollback replace this run's earlier service observation.
@@ -133,6 +120,8 @@ async function finishSettledUpdate(
   recordUpdateResultNextAction(params, params.result);
 
   let pendingResult = params.result;
+  let resultWithPostUpdate = params.result;
+  let activationVerified = false;
   let settledResult: UpdateRunResult | undefined;
   let terminalRecord: UpdateCommandTerminalRecord | undefined;
   let pendingNotify = true;
@@ -152,12 +141,13 @@ async function finishSettledUpdate(
   const publishFinalResult = (
     failure?: unknown,
     onTerminalRecord?: (record: UpdateCommandTerminalRecord["record"]) => void,
-  ) => publishSettledUpdateCommandResult(params, reportingState(failure), onTerminalRecord);
+  ) =>
+    terminal.publishSettledUpdateCommandResult(params, reportingState(failure), onTerminalRecord);
   const deferredTerminal =
     deferUpdateCommandTerminalPreparation(
       params.opts.run,
       (failure) =>
-        prepareSettledUpdateCommandResult(params, reportingState(failure), assertCurrent),
+        terminal.prepareSettledUpdateCommandResult(params, reportingState(failure), assertCurrent),
       () => pendingResult,
     ) || deferUpdateCommandTerminalResult(params.opts.run, publishFinalResult);
   const recoverFailedResult = async (
@@ -189,7 +179,9 @@ async function finishSettledUpdate(
             result,
             previousRoot: params.root,
             databaseBackup:
-              beganSuccessfully && !gatewayStartAttempted ? params.databaseBackup : undefined,
+              captured.beganSuccessfully && !gatewayStartAttempted
+                ? params.databaseBackup
+                : undefined,
             allowGatewayRestart: params.shouldRestart,
             onGatewayStartAttempted,
             preManagedServiceStop: currentServiceStop(),
@@ -216,7 +208,7 @@ async function finishSettledUpdate(
       recoverService = false;
     }
     if (result.status === "error" && params.rollbackBlockedReason) {
-      result = completeUpdateCommandResult(params, result);
+      result = terminal.completeUpdateCommandResult(params, result);
     } else if (
       result.status === "error" &&
       params.result.status === "ok" &&
@@ -257,7 +249,7 @@ async function finishSettledUpdate(
     const { result, recoverService } = await recoverFailedResult(input, initialRecoverService);
     assertCurrent();
     let restoreFailure = initialRestoreFailure;
-    let finalResult = completeUpdateCommandResult(params, result, currentServiceStop());
+    let finalResult = terminal.completeUpdateCommandResult(params, result, currentServiceStop());
     const serviceVerdict = currentServiceStop()?.serviceUpdateVerdict;
     let root =
       finalResult.recovery?.packageRollbackVerified && serviceVerdict?.kind === "owned"
@@ -375,7 +367,10 @@ async function finishSettledUpdate(
       assertCurrent();
       rolledBack &&= isVerifiedUpdateRollback(finalResult);
     }
-    pendingResult = completeUpdateCommandResult(params, captured.interruptedResult(finalResult));
+    pendingResult = terminal.completeUpdateCommandResult(
+      params,
+      captured.interruptedResult(finalResult),
+    );
     terminalRecord = deferredTerminal
       ? await captureUpdateCommandTerminalRecord(params, pendingResult, assertCurrent)
       : undefined;
@@ -468,7 +463,6 @@ async function finishSettledUpdate(
         }
         return convergence;
       };
-      let resultWithPostUpdate = params.result;
       let postUpdateConfigSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>> | undefined;
       if (!deferPluginConvergence) {
         ({ resultWithPostUpdate, postUpdateConfigSnapshot } = await convergePlugins());
@@ -535,7 +529,6 @@ async function finishSettledUpdate(
         await restoreWindowsAutoStart(resultWithPostUpdate);
       }
       let verificationFailure = "restart-unhealthy";
-      let activationVerified = false;
       const restart = async () => {
         const restarted = await forward(() =>
           maybeRestartService({
@@ -574,6 +567,9 @@ async function finishSettledUpdate(
         );
         if (restarted !== "failed" && restarted !== "restart-health-failed") {
           return restarted === "ok";
+        }
+        if (activationVerified && restarted === "restart-health-failed") {
+          throw new GatewayRestartHealthError(`Restart finalization: ${verificationFailure}.`);
         }
         const failure: UpdateRunResult = {
           ...resultWithPostUpdate,
@@ -688,7 +684,7 @@ async function finishSettledUpdate(
         params,
         resultWithPostUpdate,
         assertCurrent,
-        { root: postUpdateRoot, sentinel: sentinelOptions },
+        { root: postUpdateRoot, sentinel: sentinelOptions, activationVerified },
       );
       if (maintenanceFailure) {
         const reported = await reportResult(maintenanceFailure.result, false, undefined, false);
@@ -705,11 +701,24 @@ async function finishSettledUpdate(
           cause: error,
         });
       }
-      if (error instanceof UpdateCommandFailure || hasCommandProcessCleanupError(error)) {
+      if (
+        (error instanceof UpdateCommandFailure &&
+          (!activationVerified || error.result.reason !== "wrapper-retirement-failed")) ||
+        hasCommandProcessCleanupError(error)
+      ) {
         // Unsettled commands may still change files. Keep intent/material for fenced reconciliation.
         throw error;
       }
-      const { result, message } = createPostUpdateFailureResult(params, error);
+      const { result, message } = terminal.createPostUpdateExceptionResult(
+        { ...params, result: resultWithPostUpdate },
+        error,
+        activationVerified,
+      );
+      if (result.status === "ok") {
+        assertCurrent();
+        defaultRuntime.error(message);
+        return result;
+      }
       defaultRuntime.error(`Post-update verification failed: ${message}`);
       const reported = await reportResult(result);
       throw createFailure(reported, message, { cause: error });

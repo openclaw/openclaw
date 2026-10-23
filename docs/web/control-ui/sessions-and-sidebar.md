@@ -661,8 +661,8 @@ works while that menu is open.
 
 In the macOS app, these additional shortcuts apply while the Dashboard web view
 has keyboard focus. A separate native reading pane does not forward Archive to
-the Dashboard or another window. The existing native **⌘N** New Gateway Window
-and **⌘⇧N** New Thread commands are unchanged.
+the Dashboard or another window. **⌘N** opens **New Thread** in the selected
+experience. **File → New Gateway Window…** has no keyboard shortcut.
 
 These direct shortcuts do not change the command palette's **⌘K / Ctrl+K**, then
 **⌘Enter / Ctrl+Enter** workflow for starting a task in the background.
