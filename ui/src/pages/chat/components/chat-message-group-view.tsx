@@ -120,6 +120,7 @@ function PreparedMessage(props: {
           ? props.options.firstBubbleKey
           : (props.group.messages.find((message) => message.hasVisibleContent)?.key ?? null),
       isStreaming: isStreaming(),
+      ownsTerminalStatus: props.item.presentationOwnsTerminalStatus,
       entryId,
       // Tool-row file links carry their message like rendered markdown links, so earlier
       // messages keep reading their original source; sender-owned links stay session-scoped.

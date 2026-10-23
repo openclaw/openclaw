@@ -205,35 +205,42 @@ describe("completed reply frame ownership", () => {
     const original = structuredClone(messages);
     const options = { sessionKey: key };
     const chain = projectHistory(messages, options);
-    const [frame] = frames(chain);
+    const frame = frames(chain).at(-1);
+    const workFrame = frames(chain)[0]!;
     expect(chain.transcriptItems).toEqual([
       ...(prompt ? [expect.objectContaining({ role: "user" })] : []),
+      ...(failed ? [workFrame, expect.objectContaining({ outcome: { kind: "failed" } })] : []),
       frame,
     ]);
     expect(frame).toMatchObject({
-      key: 'agent-run:["run-1","send:run-1"]',
+      key: failed
+        ? 'agent-run:["run-1","send:run-1","group:assistant:msg:id:failed-attempt:0"]'
+        : 'agent-run:["run-1","send:run-1"]',
       ...replyFrameShape(
         completedOutcome(messages.at(-1)),
-        { kind: key === sessionKey ? "work-group" : "group" },
+        ...(failed ? [] : [{ kind: key === sessionKey ? "work-group" : "group" }]),
         { kind: "group", role: "assistant" },
       ),
     });
-    const work = frame!.parts[0]!;
+    const work = workFrame.parts[0]!;
     if (key === sessionKey) {
       if (work.kind !== "work-group") {
         throw new Error("expected work inside the reply frame");
       }
-      if (failed) {
-        expect(messagesIn([work])).toContain(failure);
-      } else {
-        expect(work.groups.map((group) => group.runId)).toEqual(workRunIds);
-      }
+      expect(work.groups.map((group) => group.runId)).toEqual(workRunIds);
+      expect(work.durationMs).toBeNull();
+      expect(messagesIn([work])).not.toContain(failure);
     }
-    expect(messagesIn([frame!])).toEqual(messages.slice(prompt ? 1 : 0));
+    expect(messagesIn(frames(chain))).toEqual(messages.slice(prompt ? 1 : 0));
+    if (failed) {
+      const failedFrame = frames(chain)[1]!;
+      expect(frameShows(failedFrame, failure)).toBe(true);
+      expect(indexFor(chain).messageRowKeysById.get("failed-attempt")).toBe(failedFrame.key);
+    }
     expect(messages).toEqual(original);
     const index = indexFor(chain);
     expect(index.transcriptMessageKeys.get(chatItemGroups(work)[0]!.messages[0]!.key)).toBe(
-      frame?.key,
+      workFrame.key,
     );
     expect(index.messageRowKeysById.get("final")).toBe(frame?.key);
     if (!prompt) {
@@ -268,15 +275,14 @@ describe("completed reply frame ownership", () => {
     messages.splice(prompt ? 2 : 1, 0, inserted);
     const chain = projectHistory(messages);
     expect(frames(chain).at(-1)?.outcome).toMatchObject(completedOutcome(messages.at(-1)));
-    const work = (forwarded ? chain.transcriptItems : transcriptParts(chain)).find(
-      (item) => item.kind === "work-group",
-    );
-    expect(work).toBeDefined();
+    const work = kind(transcriptParts(chain), "work-group")[0];
     if (forwarded) {
       expect(messagesIn(frames(chain))).not.toContain(inserted);
-      const standalone = phase ? kind(chain.transcriptItems, "group") : [work!];
-      expect(messagesIn(standalone)).toContain(inserted);
+      expect(messagesIn(kind(chain.transcriptItems, "group"))).toContain(inserted);
+      expect(messagesIn(kind(transcriptParts(chain), "work-group"))).not.toContain(inserted);
+      expect(messagesIn(chain.transcriptItems)).toEqual(messages);
     } else {
+      expect(work).toBeDefined();
       expect(
         messagesIn(
           kind(transcriptParts(chain), "group").filter((item) => item.role === "assistant"),
@@ -285,7 +291,8 @@ describe("completed reply frame ownership", () => {
       expect(frames(chain).map((frame) => frame.runId)).toEqual(
         runId === "run-1" ? ["run-1"] : ["run-other", "run-1"],
       );
-      expect(runId === "run-1" ? frames(chain)[0]?.parts[0] : chain.transcriptItems[1]).toBe(work);
+      expect(frames(chain)[0]?.parts[0]).toBe(work);
+      expect(work?.replyRunId).toBe(runId);
     }
   });
 
@@ -719,7 +726,7 @@ describe("subagent handoff", () => {
     expect(logsOf([...waiting, spoke, resumedRow, answer])).toEqual([]);
   });
 
-  it("moves successful late work before the answer but preserves failure and channel ordering", () => {
+  it("keeps successful and failed late work after the answer without crossing channel boundaries", () => {
     const wrapper = readRow("wrapper", "announce:resume", 9);
     const stopped = makeMessage("stopped", 9, {
       content: [{ type: "toolCall", id: "late", name: "read", arguments: {} }],
@@ -728,7 +735,7 @@ describe("subagent handoff", () => {
       runId: "announce:resume",
     });
     for (const [trailing, answerLast, logSizes, key] of [
-      [wrapper, true, [3], sessionKey],
+      [wrapper, false, [2], sessionKey],
       [{ ...wrapper, isError: true }, false, [2], sessionKey],
       [stopped, false, undefined, sessionKey],
       [wrapper, false, [2], "agent:main:main"],
@@ -822,3 +829,30 @@ describe("system event presentation", () => {
     expect(chain.transcriptItems[1]).toBe(pending);
   });
 });
+
+it.each([false, true])(
+  "indexes the original split envelope with a visible reply anchor (trailing work=%s)",
+  (trailingWork) => {
+    const message = finalAnswer("mixed-source", 1, {
+      content: [
+        { type: "text", text: "First finding" },
+        { type: "thinking", thinking: "Private work" },
+        { type: "text", text: "Second finding" },
+        ...(trailingWork ? [{ type: "toolCall", id: "call", name: "read", arguments: {} }] : []),
+      ],
+    });
+    const chain = projectHistory([message]);
+    const index = indexFor(chain);
+    const source = index.loadedReplySources.get("mixed-source");
+    expect(source?.message).toBe(message);
+    expect(source?.messageId).toBe(
+      chatItems({ messages: [message] }).flatMap(chatItemGroups)[0]?.messages[0]?.key,
+    );
+    const rowKey = index.messageRowKeysById.get("mixed-source");
+    const row = index.rows.find((candidate) => candidate.key === rowKey);
+    expect(
+      row?.kind === "item" &&
+        chatItemGroups(row.item).some((group) => group.visibleContent === "text"),
+    ).toBe(true);
+  },
+);

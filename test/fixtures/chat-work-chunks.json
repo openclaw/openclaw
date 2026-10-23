@@ -1,0 +1,488 @@
+{
+  "cases": [
+    {
+      "name": "unphased text tool text tool final",
+      "parts": [
+        {
+          "id": "text",
+          "kind": "visible"
+        },
+        {
+          "id": "call",
+          "kind": "work"
+        },
+        {
+          "id": "result",
+          "kind": "work"
+        },
+        {
+          "id": "prose",
+          "kind": "visible"
+        },
+        {
+          "id": "call2",
+          "kind": "work"
+        },
+        {
+          "id": "final",
+          "kind": "visible"
+        }
+      ],
+      "expected": [
+        {
+          "kind": "visible",
+          "ids": [
+            "text"
+          ]
+        },
+        {
+          "kind": "work-chunk",
+          "ids": [
+            "call",
+            "result"
+          ]
+        },
+        {
+          "kind": "visible",
+          "ids": [
+            "prose"
+          ]
+        },
+        {
+          "kind": "work-chunk",
+          "ids": [
+            "call2"
+          ]
+        },
+        {
+          "kind": "visible",
+          "ids": [
+            "final"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "mixed envelope",
+      "parts": [
+        {
+          "id": "message:0",
+          "kind": "visible"
+        },
+        {
+          "id": "message:1",
+          "kind": "work"
+        },
+        {
+          "id": "message:2",
+          "kind": "work"
+        },
+        {
+          "id": "message:3",
+          "kind": "visible"
+        }
+      ],
+      "expected": [
+        {
+          "kind": "visible",
+          "ids": [
+            "message:0"
+          ]
+        },
+        {
+          "kind": "work-chunk",
+          "ids": [
+            "message:1",
+            "message:2"
+          ]
+        },
+        {
+          "kind": "visible",
+          "ids": [
+            "message:3"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "commentary multiple finals",
+      "parts": [
+        {
+          "id": "commentary",
+          "kind": "visible"
+        },
+        {
+          "id": "final1",
+          "kind": "visible"
+        },
+        {
+          "id": "tool",
+          "kind": "work"
+        },
+        {
+          "id": "final2",
+          "kind": "visible"
+        }
+      ],
+      "expected": [
+        {
+          "kind": "visible",
+          "ids": [
+            "commentary"
+          ]
+        },
+        {
+          "kind": "visible",
+          "ids": [
+            "final1"
+          ]
+        },
+        {
+          "kind": "work-chunk",
+          "ids": [
+            "tool"
+          ]
+        },
+        {
+          "kind": "visible",
+          "ids": [
+            "final2"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "reasoning commentary tool answer",
+      "parts": [
+        {
+          "id": "reasoning",
+          "kind": "work"
+        },
+        {
+          "id": "commentary",
+          "kind": "visible"
+        },
+        {
+          "id": "tool",
+          "kind": "work"
+        },
+        {
+          "id": "answer",
+          "kind": "visible"
+        }
+      ],
+      "expected": [
+        {
+          "kind": "work-chunk",
+          "ids": [
+            "reasoning"
+          ]
+        },
+        {
+          "kind": "visible",
+          "ids": [
+            "commentary"
+          ]
+        },
+        {
+          "kind": "work-chunk",
+          "ids": [
+            "tool"
+          ]
+        },
+        {
+          "kind": "visible",
+          "ids": [
+            "answer"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "thinking only work",
+      "parts": [
+        {
+          "id": "thinking1",
+          "kind": "work"
+        },
+        {
+          "id": "thinking2",
+          "kind": "work"
+        }
+      ],
+      "expected": [
+        {
+          "kind": "work-chunk",
+          "ids": [
+            "thinking1",
+            "thinking2"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "live turn stays expanded",
+      "live": true,
+      "parts": [
+        {
+          "id": "prose",
+          "kind": "visible"
+        },
+        {
+          "id": "tool",
+          "kind": "work"
+        },
+        {
+          "id": "thinking",
+          "kind": "work"
+        }
+      ],
+      "expected": [
+        {
+          "kind": "visible",
+          "ids": [
+            "prose"
+          ]
+        },
+        {
+          "kind": "visible",
+          "ids": [
+            "tool"
+          ]
+        },
+        {
+          "kind": "visible",
+          "ids": [
+            "thinking"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "failed aborted no-final ineligible output",
+      "live": true,
+      "parts": [
+        {
+          "id": "thinking",
+          "kind": "work"
+        },
+        {
+          "id": "failed-tool",
+          "kind": "work"
+        },
+        {
+          "id": "aborted",
+          "kind": "boundary"
+        }
+      ],
+      "expected": [
+        {
+          "kind": "visible",
+          "ids": [
+            "thinking"
+          ]
+        },
+        {
+          "kind": "visible",
+          "ids": [
+            "failed-tool"
+          ]
+        },
+        {
+          "kind": "visible",
+          "ids": [
+            "aborted"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "steer forwarded boundary",
+      "parts": [
+        {
+          "id": "tool1",
+          "kind": "work"
+        },
+        {
+          "id": "steer",
+          "kind": "boundary"
+        },
+        {
+          "id": "tool2",
+          "kind": "work"
+        },
+        {
+          "id": "forwarded",
+          "kind": "boundary"
+        },
+        {
+          "id": "tool3",
+          "kind": "work"
+        }
+      ],
+      "expected": [
+        {
+          "kind": "work-chunk",
+          "ids": [
+            "tool1"
+          ]
+        },
+        {
+          "kind": "visible",
+          "ids": [
+            "steer"
+          ]
+        },
+        {
+          "kind": "work-chunk",
+          "ids": [
+            "tool2"
+          ]
+        },
+        {
+          "kind": "visible",
+          "ids": [
+            "forwarded"
+          ]
+        },
+        {
+          "kind": "work-chunk",
+          "ids": [
+            "tool3"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "media outcome preserved",
+      "parts": [
+        {
+          "id": "tool1",
+          "kind": "work"
+        },
+        {
+          "id": "image",
+          "kind": "visible"
+        },
+        {
+          "id": "tool2",
+          "kind": "work"
+        },
+        {
+          "id": "voice",
+          "kind": "visible"
+        }
+      ],
+      "expected": [
+        {
+          "kind": "work-chunk",
+          "ids": [
+            "tool1"
+          ]
+        },
+        {
+          "kind": "visible",
+          "ids": [
+            "image"
+          ]
+        },
+        {
+          "kind": "work-chunk",
+          "ids": [
+            "tool2"
+          ]
+        },
+        {
+          "kind": "visible",
+          "ids": [
+            "voice"
+          ]
+        }
+      ]
+    }
+  ],
+  "markdownEnvelopes": [
+    {
+      "name": "adjacent fenced code",
+      "text": [
+        "```js\nconst a = 1;",
+        "const b = 2;\n```"
+      ],
+      "workBetweenText": false,
+      "expectedParts": 2
+    },
+    {
+      "name": "fence across folded work",
+      "text": [
+        "```js\nconst a = 1;",
+        "const b = 2;\n```"
+      ],
+      "workBetweenText": true,
+      "expectedParts": 1
+    },
+    {
+      "name": "emphasis across folded work",
+      "text": [
+        "**First",
+        "second**"
+      ],
+      "workBetweenText": true,
+      "expectedParts": 1
+    },
+    {
+      "name": "reference across folded work",
+      "text": [
+        "[source][ref]",
+        "[ref]: https://example.com"
+      ],
+      "workBetweenText": true,
+      "expectedParts": 1
+    },
+    {
+      "name": "list across folded work",
+      "text": [
+        "- First",
+        "- Second"
+      ],
+      "workBetweenText": true,
+      "expectedParts": 1
+    },
+    {
+      "name": "table across folded work",
+      "text": [
+        "| a | b |\n| --- | --- |",
+        "| 1 | 2 |"
+      ],
+      "workBetweenText": true,
+      "expectedParts": 1
+    },
+    {
+      "name": "adjacent plain narration",
+      "text": [
+        "First finding",
+        "Second finding"
+      ],
+      "workBetweenText": false,
+      "expectedParts": 2
+    },
+    {
+      "name": "plain narration bounds work",
+      "text": [
+        "First finding",
+        "Second finding"
+      ],
+      "workBetweenText": true,
+      "expectedParts": 3
+    },
+    {
+      "name": "adjacent provider output text",
+      "text": [
+        "First finding",
+        "Second finding"
+      ],
+      "textType": "output_text",
+      "workBetweenText": false,
+      "expectedParts": 2
+    }
+  ]
+}

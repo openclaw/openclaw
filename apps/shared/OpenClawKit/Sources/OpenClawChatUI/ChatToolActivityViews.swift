@@ -97,6 +97,7 @@ enum ChatToolActivity {
     static func items(
         calls: [OpenClawChatMessageContent],
         results: [OpenClawChatMessageContent],
+        recordedResults: [OpenClawChatMessageContent] = [],
         activity: [OpenClawAgentActivityItem]? = nil,
         liveTools: [OpenClawChatPendingToolCall] = []) -> [ChatToolActivityItem]
     {
@@ -107,9 +108,12 @@ enum ChatToolActivity {
                 remainingResults.firstIndex { _, result in result.id == callID }
             }
             let result = resultIndex.map { remainingResults.remove(at: $0).element }
+            // Resolve status against the whole source envelope, but show a result's
+            // details only at its own content position (possibly after narration).
+            let outcome = result ?? recordedResults.first { $0.id != nil && $0.id == call.id }
             // History owns recorded inputs; live activity supplies status until
             // the result arrives, never replacing already-recorded arguments.
-            let live = result == nil
+            let live = outcome == nil
                 ? liveTools.first(where: { $0.id == call.id }).map(ChatToolActivityItem.init(live:)) : nil
 
             return ChatToolActivityItem(
@@ -118,7 +122,7 @@ enum ChatToolActivity {
                 arguments: call.arguments ?? live?.arguments,
                 details: result?.details,
                 resultText: result?.text,
-                state: result
+                state: outcome
                     .map { Self.resultIsError($0.isError, text: $0.text) ? .failed : .finished } ??
                     live?.state ?? .unavailable,
                 liveDiffStat: live?.liveDiffStat,

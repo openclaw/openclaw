@@ -100,7 +100,12 @@ function readToolExitCode(...values: unknown[]): number | undefined {
   return undefined;
 }
 
-export function isToolCardSkipped(card: ToolCard): boolean {
+// Symbol metadata follows display spreads without exposing result payloads in serialization.
+const recordedToolCardOutcome = Symbol("recordedToolCardOutcome");
+type RecordedToolCard = ToolCard & { [recordedToolCardOutcome]?: ToolCard };
+
+export function isToolCardSkipped(input: RecordedToolCard): boolean {
+  const card = input[recordedToolCardOutcome] ?? input;
   if (card.activity) {
     return card.activity.status === "skipped";
   }
@@ -112,7 +117,8 @@ export function isToolCardSkipped(card: ToolCard): boolean {
   );
 }
 
-export function isToolCardError(card: ToolCard): boolean {
+export function isToolCardError(input: RecordedToolCard): boolean {
+  const card = input[recordedToolCardOutcome] ?? input;
   if (isToolCardSkipped(card)) {
     return false;
   }
@@ -125,9 +131,10 @@ export function isToolCardError(card: ToolCard): boolean {
 }
 
 export function resolveToolCardOutcome(
-  card: ToolCard,
+  input: RecordedToolCard,
   runActive: boolean | undefined,
 ): ToolCardOutcome {
+  const card = input[recordedToolCardOutcome] ?? input;
   if (isToolCardSkipped(card)) {
     return "skipped";
   }
@@ -489,18 +496,59 @@ function extractToolCards(message: unknown): ToolCard[] {
   return cards;
 }
 
-const toolCardsByMessage = new WeakMap<object, ToolCard[]>();
+const toolCardsByMessage = new WeakMap<object, { content: unknown; cards: ToolCard[] }>();
+const toolCardEnvelopes = new WeakMap<object, object>();
+
+/** Immutable presentation fragments retain pairing context without copying output blocks. */
+export function rememberToolCardEnvelope(fragment: object, envelope: unknown): void {
+  if (envelope && typeof envelope === "object") {
+    toolCardEnvelopes.set(fragment, toolCardEnvelopes.get(envelope) ?? envelope);
+  }
+}
+
+function projectEnvelopeCards(message: object, cards: ToolCard[]): ToolCard[] {
+  const envelope = toolCardEnvelopes.get(message);
+  if (!envelope) {
+    return cards;
+  }
+  const recorded = extractToolCardsCached(envelope);
+  const content = normalizeContent(asNullableRecord(message)?.content);
+  return cards.map((card) => {
+    const paired = card.callId ? recorded.find((item) => item.callId === card.callId) : undefined;
+    if (!paired) {
+      return card;
+    }
+    const hasResult = content.some(
+      (block) => isToolResultContentType(block.type) && resolveToolUseId(block) === card.callId,
+    );
+    if (hasResult) {
+      return { ...card, ...paired };
+    }
+    // The call carries its recorded outcome, but output/preview stays at the
+    // result's original position rather than appearing twice.
+    const projected = {
+      ...card,
+      [recordedToolCardOutcome]: paired,
+      completed: paired.completed,
+      isError: isToolCardError(paired),
+      exitCode: paired.exitCode,
+      toolOutput: paired.toolOutput,
+    };
+    return projected;
+  });
+}
 
 export function extractToolCardsCached(message: unknown): ToolCard[] {
   if (!message || typeof message !== "object") {
     return extractToolCards(message);
   }
+  const content = asNullableRecord(message)?.content;
   const cached = toolCardsByMessage.get(message);
-  if (cached) {
-    return cached;
+  if (cached && cached.content === content) {
+    return cached.cards;
   }
-  const cards = extractToolCards(message);
-  toolCardsByMessage.set(message, cards);
+  const cards = projectEnvelopeCards(message, extractToolCards(message));
+  toolCardsByMessage.set(message, { content, cards });
   return cards;
 }
 
@@ -517,7 +565,16 @@ export function extractToolBlockCardsCached(
   if (cached) {
     return cached;
   }
-  const cards = extractToolCards({ ...message, content: [block] });
+  const fragment = { ...message, content: [block] };
+  rememberToolCardEnvelope(fragment, message);
+  // A result projection uses the recorded card unchanged. Re-extracting its
+  // payload would repeat preview preparation (including browser preview I/O).
+  const callId = resolveToolUseId(block);
+  const recorded =
+    isToolResultContentType(block.type) && callId
+      ? extractToolCardsCached(message).find((card) => card.callId === callId)
+      : undefined;
+  const cards = recorded ? [recorded] : projectEnvelopeCards(fragment, extractToolCards(fragment));
   if (!byBlock) {
     byBlock = new WeakMap();
     toolCardsByBlock.set(message, byBlock);

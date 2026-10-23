@@ -378,12 +378,17 @@ function buildTranscriptIndex(
           transcriptMessageKeys.set(source.key, rowKey);
           const sourceMessageId = persistedMessageEntryId(source.message);
           if (sourceMessageId) {
-            messageRowKeysById.set(sourceMessageId, rowKey);
-            loadedReplySources.set(sourceMessageId, {
-              message: source.message,
-              messageId: source.key,
-              senderLabel,
-            });
+            // Split fragments share a persisted ID. Prefer a visible anchor and
+            // always resolve reply/actions against the original recorded envelope.
+            const previous = loadedReplySources.get(sourceMessageId);
+            if (!previous || source.hasVisibleContent) {
+              messageRowKeysById.set(sourceMessageId, rowKey);
+              loadedReplySources.set(sourceMessageId, {
+                message: source.actionMessage ?? source.message,
+                messageId: source.actionKey ?? source.key,
+                senderLabel,
+              });
+            }
           }
         }
       }

@@ -65,7 +65,7 @@ const reply = (runId: string, timestamp: number, content = "Finished " + runId) 
 
 describe("completed-work duration", () => {
   it.each(["done", "failed", "timeout", "killed"] as const)(
-    "uses matching %s lifecycle duration, not final-message creation time",
+    "does not borrow whole-run %s lifecycle duration for a work chunk",
     async (status) => {
       const sessionKey = "agent:main:dashboard:duration";
       const runId = "duration-run";
@@ -88,15 +88,15 @@ describe("completed-work duration", () => {
       // A fresh pane has never watched this run: restored lifecycle facts suffice.
       await flushDeferredRowPrune();
       const duration = () => container.querySelector(".chat-activity-group__label");
-      expect(duration()?.textContent).toBe("Worked for 27 minutes, 35 seconds");
+      expect(duration()?.textContent).toBe("Worked");
       props.transcriptMetadata = undefined;
       props.selectedSession = liveSession;
       props.selectedSession.runtimeMs = 1_660_000;
       rerender();
-      expect(duration()?.textContent).toBe("Worked for 27 minutes, 40 seconds");
+      expect(duration()?.textContent).toBe("Worked");
       props.messages = messages.slice(1);
       rerender();
-      expect(duration()?.textContent).toBe("Worked for 27 minutes, 40 seconds");
+      expect(duration()?.textContent).toBe("Worked");
       props.messages = messages;
       props.selectedSession.lastRunId = "unrelated-run";
       rerender();
@@ -177,7 +177,7 @@ describe("completed-work duration", () => {
         summaries.map(
           (summary) => summary.querySelector(".chat-activity-group__label")?.textContent ?? null,
         ),
-      ).toEqual(steer ? ["Worked for 20 seconds"] : ["Worked", "Worked for 20 seconds"]);
+      ).toEqual(steer ? ["Worked"] : ["Worked", "Worked"]);
     },
   );
 });

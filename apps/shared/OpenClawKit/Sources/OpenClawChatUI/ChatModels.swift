@@ -497,6 +497,11 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
     var senderSession: AnyCodable?
     public let model: String?
 
+    // Transient projection fields; deliberately absent from CodingKeys.
+    var presentationBlockIndex: Int?
+    var presentationOwnsFooter = true
+    var presentationCompletedReply: Bool?
+    var presentationRecordedToolResults: [OpenClawChatMessageContent] = []
     public var id: UUID = .init()
     public var transcriptMessageID: String?
     public var activity: [OpenClawAgentActivityItem]?

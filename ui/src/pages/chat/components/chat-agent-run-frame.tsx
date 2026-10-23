@@ -220,7 +220,7 @@ function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions
   const sourcePreviews = actionOwner
     ? extractChatSourcePreviews({
         groups,
-        answer: actionOwner.message,
+        answer: actionOwner.actionMessage ?? actionOwner.message,
         runId: frame.runId,
         basePath: opts.basePath,
         sessionPublicOrigin: opts.sessionPublicOrigin,

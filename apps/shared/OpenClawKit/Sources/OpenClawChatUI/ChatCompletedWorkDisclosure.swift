@@ -9,7 +9,7 @@ struct ChatCompletedWorkDisclosure<Content: View>: View {
     var body: some View {
         DisclosureGroup(isExpanded: self.$isExpanded) {
             VStack(alignment: .leading, spacing: 12) {
-                ForEach(self.work.messages) { message in
+                ForEach(self.work.messages, id: \.presentationID) { message in
                     self.messageContent(message)
                 }
             }
