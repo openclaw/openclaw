@@ -126,7 +126,7 @@ function resolveGatewayOwnerStatusSync(
     return Math.max(1, Math.min(CMDLINE_EXEC_TIMEOUT_MS, Math.ceil(remaining)));
   };
   remainingTimeoutMs();
-  const namespace = classifyGatewayLockProcessNamespace(payload?.processNamespace, opts.lockPath);
+  const namespace = classifyGatewayLockProcessNamespace(payload, opts.lockPath);
   if (namespace !== "same") {
     return namespace;
   }
@@ -221,10 +221,7 @@ function shouldReclaimGatewayLock(params: {
   payload: LockPayload | null;
   platform: NodeJS.Platform;
 }): boolean {
-  if (
-    classifyGatewayLockProcessNamespace(params.payload?.processNamespace, params.lockPath) ===
-    "unknown"
-  ) {
+  if (classifyGatewayLockProcessNamespace(params.payload, params.lockPath) === "unknown") {
     throw new GatewayLockNamespaceError(params.payload ?? {}, params.lockPath);
   }
   const ownerPid = params.payload?.pid;
@@ -319,7 +316,7 @@ async function readVerifiedGatewayLockIdentity(
   }
   if (
     opts.requireInspection &&
-    classifyGatewayLockProcessNamespace(payload.processNamespace, lockPath) === "unknown"
+    classifyGatewayLockProcessNamespace(payload, lockPath) === "unknown"
   ) {
     const error = new GatewayLockNamespaceError(payload, lockPath);
     throw new GatewayLockError(error.message, error);
@@ -362,7 +359,7 @@ async function assertHistoricalGatewayOwnerStopped(
     if (!payload) {
       continue;
     }
-    if (classifyGatewayLockProcessNamespace(payload.processNamespace, lockPath) === "unknown") {
+    if (classifyGatewayLockProcessNamespace(payload, lockPath) === "unknown") {
       throw new GatewayLockNamespaceError(payload, lockPath);
     }
     const owner = await resolveGatewayOwnerStatus(

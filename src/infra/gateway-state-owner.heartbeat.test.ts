@@ -524,7 +524,7 @@ it("renews retained custody during synchronous work and never touches a successo
       if (namespace && "pidNsInode" in namespace) {
         expect(
           classifyGatewayLockProcessNamespace(
-            { ...namespace, pidNsInode: "foreign-observer" },
+            { processNamespace: { ...namespace, pidNsInode: "foreign-observer" } },
             file.lockPath,
           ),
         ).toBe("unknown");
