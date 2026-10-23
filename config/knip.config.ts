@@ -89,6 +89,10 @@ const repositoryScriptEntries = [
   "scripts/bench-channel-turn.mts!",
   // The guide's async-context census wrapper imports this preload before the channel-turn entry.
   "scripts/perf/async-context-probe.cjs!",
+  // The transcript-broadcast benchmark loads this fsync probe through --entry.
+  "scripts/perf/fsync-gateway-entry.ts!",
+  // scripts/perf/README.md invokes this fsync scratch measurement through Node.
+  "scripts/perf/fsync-scratch-measure.ts!",
   // docs/reference/test/performance.md invokes the Decision transport comparison driver.
   "scripts/bench-decision-transport.mts!",
   // docs/reference/test/performance.md invokes the frozen-revision benchmark builder.
