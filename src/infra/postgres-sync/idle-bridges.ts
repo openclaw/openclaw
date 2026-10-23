@@ -2,8 +2,12 @@ import { receiveMessageOnPort } from "node:worker_threads";
 import type { BridgeReply, PostgresBridge } from "./protocol.js";
 
 // Each isolate owns its idle transports; taking one removes it before another caller can open.
-const idleBridges = new Map<string, PostgresBridge>();
+const idleBridges = new Map<
+  string,
+  { bridge: PostgresBridge; timeout: ReturnType<typeof setTimeout> }
+>();
 const maxIdleBridges = 4;
+const idleBridgeTimeoutMs = 3 * 60_000;
 
 function closeBridge(bridge: PostgresBridge): void {
   try {
@@ -34,7 +38,8 @@ function closeIdleBridges(): void {
   const bridges = [...idleBridges.values()];
   idleBridges.clear();
   unwatch();
-  for (const bridge of bridges) {
+  for (const { bridge, timeout } of bridges) {
+    clearTimeout(timeout);
     closeBridge(bridge);
   }
 }
@@ -47,14 +52,22 @@ function unwatch(): void {
 }
 
 export function hasIdlePostgresBridge(key: string): boolean {
-  const bridge = idleBridges.get(key);
+  const bridge = idleBridges.get(key)?.bridge;
   return bridge !== undefined && !Atomics.load(bridge.control, 1);
 }
 
-export function takeIdlePostgresBridge(key: string): PostgresBridge | undefined {
-  const bridge = idleBridges.get(key);
+function removeIdleBridge(key: string): PostgresBridge | undefined {
+  const idle = idleBridges.get(key);
   idleBridges.delete(key);
+  if (idle) {
+    clearTimeout(idle.timeout);
+  }
   unwatch();
+  return idle?.bridge;
+}
+
+export function takeIdlePostgresBridge(key: string): PostgresBridge | undefined {
+  const bridge = removeIdleBridge(key);
   if (bridge) {
     if (Atomics.load(bridge.control, 1)) {
       closeBridge(bridge);
@@ -66,16 +79,13 @@ export function takeIdlePostgresBridge(key: string): PostgresBridge | undefined 
 }
 
 export function retainIdlePostgresBridge(key: string, bridge: PostgresBridge): void {
-  const previous = idleBridges.get(key);
-  idleBridges.delete(key);
-  unwatch();
+  const previous = removeIdleBridge(key);
   if (previous) {
     closeBridge(previous);
   }
   if (idleBridges.size === maxIdleBridges) {
-    const oldest = idleBridges.entries().next().value!;
-    idleBridges.delete(oldest[0]);
-    closeBridge(oldest[1]);
+    const oldest = idleBridges.keys().next().value!;
+    closeBridge(removeIdleBridge(oldest)!);
   }
   if (!idleBridges.size) {
     process.once("beforeExit", closeIdleBridges);
@@ -83,5 +93,12 @@ export function retainIdlePostgresBridge(key: string, bridge: PostgresBridge): v
   }
   // An idle worker error must not reach a closed logical connection or crash its parent.
   bridge.worker.on("error", ignoreWorkerError);
-  idleBridges.set(key, bridge);
+  const timeout = setTimeout(() => {
+    const expired = removeIdleBridge(key);
+    if (expired) {
+      closeBridge(expired);
+    }
+  }, idleBridgeTimeoutMs);
+  timeout.unref();
+  idleBridges.set(key, { bridge, timeout });
 }
