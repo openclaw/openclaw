@@ -2849,19 +2849,48 @@ in-place mutation coverage live in `prompt-cache-observability.history.test.ts`.
 `ws-event-diagnostics-measure.ts` exercises the real recording and diagnostic
 dispatch owners with 250 batches of 1,000 synthetic accepted frames, plus wire-byte
 observations. It includes plain, presence, subscribed/roster session, and unknown
-event labels. Run on the approved benchmark host:
+event labels. `--batches` and `--frames` control the workload. Run on the approved
+benchmark host:
 
 ```sh
 node --expose-gc --import ./scripts/tsx.mjs scripts/perf/ws-event-diagnostics-measure.ts
+# For paired runs, schedule both passes independently:
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/ws-event-diagnostics-measure.ts \
+  --start-at <future-allocation-epoch-ms> --cpu-start-at <later-cpu-epoch-ms>
 ```
 
-The JSON result separates cold and warmed sampled allocation bytes per frame,
-including collected objects, for the entire process and the recording/flush owner.
-CPU is measured in a separate unprofiled pass; the inactive-interest pass verifies
-recording is skipped. Delivered frame and histogram counts are checked. Compare
-at least five interleaved baseline/candidate samples, then confirm real transport
-behavior with `transcript-broadcast-measure.ts --scenario transcript-broadcast
---clients 30 --allocations --diagnostics --active-work-diagnostics --trace-gc`
-and the memory-soak scenario. Compare promotion per turn, minor and major GC
-time, and event-loop and turn latency tails as well as sampled allocation;
-allocation reduction alone is insufficient.
+Add `--transport --port 41587 --frames 72` to open 72 real loopback WebSockets
+and send a shared 1,024-byte synthetic JSON event to every socket in each batch
+through `createGatewayWebSocketTransport`. This mode rotates one event kind per
+broadcast; the default recorder mode mixes all five kinds within every batch.
+Transport mode verifies received payloads and per-socket delivery counts as well
+as diagnostic bytes and every cumulative histogram bucket. Compression is disabled;
+received wire payload bytes are reported separately from codec diagnostics.
+Only loopback ports from 40000 through 65535 are accepted. Setup and warmup finish
+before `--start-at <future-epoch-ms>` synchronizes the warmed measurement start.
+`--cpu-start-at <later-epoch-ms>` independently synchronizes the unprofiled CPU
+pass after allocation sampling. Each phase completes forced GC and instrument
+preparation before waiting for its deadline; missed preparation deadlines fail
+the run. Sampling is armed before the allocation wait, so allocation totals also
+include the small idle-timer setup. `cold.startedAtEpochMs`, `warm.startedAtEpochMs`,
+and `cpuStartedAtEpochMs` report actual workload starts for pair alignment checks.
+
+The JSON result separates cold and warmed sampled allocation totals, bytes per
+frame, and bytes per broadcast (one batch), including collected objects, for the
+entire process and the recording/flush owner. Transport mode also reports bytes
+per socket-second using the profiled pass's elapsed time. CPU is measured in a
+separate unprofiled pass with batch latency, GC collection counts and total time,
+per-kind GC p95/p99/max pauses, and event-loop p99/max delay. Every tail includes
+its sample count; insufficient samples remain context. The inactive-interest
+pass verifies recording is skipped. `WS_DIAGNOSTICS_CPU_START` and
+`WS_DIAGNOSTICS_CPU_END` delimit the unprofiled pass for an external
+`--trace-gc-nvp` promotion parser.
+
+Compare concurrent locked baseline/candidate pairs with swapped interleaved CPU
+placements under the campaign's guard and decision rules. Report absolute and
+relative deltas, GC maxima, and tail sample counts. This isolates WebSocket
+transport and diagnostics, rather than a complete agent run; use
+`transcript-broadcast-measure.ts --scenario transcript-broadcast --clients 30
+--allocations --diagnostics --active-work-diagnostics --trace-gc` and the memory-soak
+scenario when whole-Gateway behavior is the question. Allocation reduction alone
+is insufficient.
