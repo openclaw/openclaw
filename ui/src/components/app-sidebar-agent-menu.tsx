@@ -19,27 +19,24 @@ import {
   type MenuItem,
 } from "./solid/menu.tsx";
 
-type SidebarAgentMenuParams = Omit<
-  SidebarAgentMenuSwitcherParams,
-  "allAgentsScope" | "onAgentSettings"
-> & {
-  position: { x: number; top: number; placement?: "right-start" };
-  anchor?: HTMLElement;
-  basePath: string;
-  rosterMode: boolean;
-  creationDisabledReason: string | null;
-  onShowAllAgents: () => void;
-  onCreateAgent: () => void;
-  onPointerEnter: () => void;
-  onPointerLeave: () => void;
-  onAfterShow: () => void;
-  onSwitchAgent: (agentId: string) => void;
-  onClose: (restoreFocus?: boolean) => void;
-  onNavigate: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
-  ref?: (handle: MenuHandle) => void;
-};
-
-export function renderSidebarAgentMenu(params: SidebarAgentMenuParams): JSX.Element {
+export function renderSidebarAgentMenu(
+  params: Omit<SidebarAgentMenuSwitcherParams, "allAgentsScope" | "onAgentSettings"> & {
+    position: { x: number; top: number; placement?: "right-start" };
+    anchor?: HTMLElement;
+    basePath: string;
+    rosterMode: boolean;
+    creationDisabledReason: string | null;
+    onShowAllAgents: () => void;
+    onCreateAgent: () => void;
+    onPointerEnter: () => void;
+    onPointerLeave: () => void;
+    onAfterShow: () => void;
+    onSwitchAgent: (agentId: string) => void;
+    onClose: (restoreFocus?: boolean) => void;
+    onNavigate: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
+    ref?: (handle: MenuHandle) => void;
+  },
+): JSX.Element {
   const controls = createMenuControls();
   const creationReasonId = createUniqueId();
   const hasMultipleAgents = () =>

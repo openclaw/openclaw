@@ -4,9 +4,10 @@ import { getLocale, t } from "../lib/reactive/i18n.ts";
 import { resolveStructuredDraftInitialValue } from "./config-form-structured-draft.ts";
 import { ConfigStructuredDraft } from "./config-form-structured-draft.tsx";
 import { ConfigArray, ConfigObject } from "./config-form.node.collection.tsx";
-import { JsonTextarea } from "./config-form.node.json.tsx";
 import { NumberInput, SelectInput, TextInput } from "./config-form.node.scalar.tsx";
 import {
+  getSensitiveRenderState,
+  jsonValue,
   isAnySchema,
   isSecretRefObject,
   resolveConfigFieldPresentation,
@@ -15,6 +16,7 @@ import {
 } from "./config-form.node.shared.ts";
 import {
   FieldRow,
+  JsonTextareaControl,
   SegmentedControl,
   renderSchemaDefaultDescription,
 } from "./config-form.node.shared.tsx";
@@ -241,6 +243,44 @@ function ResolvedNode(props: {
         <JsonTextarea params={props.params} />
       </Match>
     </Switch>
+  );
+}
+
+function JsonTextarea(props: { params: ConfigNodeRenderParams }): JSX.Element {
+  const field = createMemo(() => {
+    getLocale();
+    return resolveConfigFieldPresentation(props.params);
+  });
+  const sensitiveState = createMemo(() => getSensitiveRenderState(props.params));
+  return (
+    <FieldRow
+      {...field()}
+      defaultDescription={
+        sensitiveState().isRedacted
+          ? undefined
+          : renderSchemaDefaultDescription(props.params.schema, props.params.value)
+      }
+      stacked
+      control={
+        <JsonTextareaControl
+          schema={props.params.schema}
+          path={props.params.path}
+          ariaLabel={field().label}
+          descriptionId={field().helpId}
+          sourceValue={props.params.sourceIdentity ?? props.params.value}
+          fallback={jsonValue(
+            props.params.value !== undefined ? props.params.value : props.params.schema.default,
+          )}
+          rows={3}
+          sensitiveState={sensitiveState()}
+          disabled={props.params.disabled}
+          isRequired={props.params.isRequired}
+          showRequiredCue={false}
+          onToggleSensitivePath={props.params.onToggleSensitivePath}
+          onPatch={props.params.onPatch}
+        />
+      }
+    />
   );
 }
 

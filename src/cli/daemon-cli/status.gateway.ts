@@ -4,8 +4,7 @@ import type { GatewayBindMode, OpenClawConfig } from "../../config/types.js";
 import { projectGatewayUrlForDiagnostics } from "../../gateway/connection-details.js";
 import { resolveAdvertisedControlUiLinks } from "../../gateway/control-ui-links.js";
 import { trimToUndefined } from "../../gateway/credentials.js";
-import { resolveGatewayRequiredListenHosts } from "../../gateway/net.js";
-import { resolveBestEffortGatewayBindHostForDisplay } from "../../infra/network-discovery-display.js";
+import { resolveGatewayBindHost, resolveGatewayRequiredListenHosts } from "../../gateway/net.js";
 import { inspectPortUsage, inspectPortUsages } from "../../infra/ports-inspect.js";
 import type { PortUsage } from "../../infra/ports-types.js";
 import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
@@ -72,11 +71,20 @@ export async function resolveGatewayStatusSummary(params: {
     params.localPortOverride !== undefined ? "cli" : portFromArgs ? "service args" : "env/config";
   const bindMode: GatewayBindMode = params.daemonCfg.gateway?.bind ?? "loopback";
   const customBindHost = params.daemonCfg.gateway?.customBindHost;
-  const { bindHost, warning: bindHostWarning } = await resolveBestEffortGatewayBindHostForDisplay({
-    bindMode,
-    customBindHost,
-    warningPrefix: "Status is using fallback network details because interface discovery failed",
-  });
+  let bindHost: string;
+  let bindHostWarning: string | undefined;
+  try {
+    bindHost = await resolveGatewayBindHost(bindMode, customBindHost);
+  } catch (error) {
+    bindHost =
+      bindMode === "lan"
+        ? "0.0.0.0"
+        : bindMode === "custom"
+          ? customBindHost?.trim() || "0.0.0.0"
+          : "127.0.0.1";
+    const message = error instanceof Error ? error.message.trim() : "";
+    bindHostWarning = `Status is using fallback network details because interface discovery failed: ${message || "network interface discovery failed"}.`;
+  }
   // The local CLI uses loopback; custom and Tailnet binds also require that listener.
   const probeHost = "127.0.0.1";
   const probeUrlOverride = trimToUndefined(params.rpcUrlOverride) ?? null;
