@@ -16,7 +16,7 @@ export type GatewayModelCatalogContext = Pick<
   logGateway: Pick<GatewayRequestContext["logGateway"], "debug">;
 };
 
-export type ModelsListCatalogSource =
+type ModelsListCatalogSource =
   | { kind: "gateway"; context: GatewayModelCatalogContext }
   | {
       kind: "published";
