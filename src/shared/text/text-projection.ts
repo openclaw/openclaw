@@ -82,16 +82,13 @@ function findTextCheckpoint(
       (!inFence && !state.fenceChar && /\[|^ {0,3}=+[ \t]*\r?\n$/.test(line))
     ) {
       const ownership = resolveOwnership(text);
-      const openTableStart = findOpenGfmTableStart(text);
-      if (openTableStart !== undefined) {
-        return { offset: openTableStart, context: "", definitions: ownership.definitions };
-      }
       // Normalization can expand a label beyond CommonMark's 999-character source limit.
       // Such definitions stay in source instead of being serialized as carried context.
       const retain = ownership.definitions.reduce(
         (offset, { identifier, start }) =>
           identifier.length > 999 ? Math.min(offset, start) : offset,
-        ownership.retainStart,
+        // A table can retain its header, but never settle earlier mutable images or titles.
+        Math.min(ownership.retainStart, findOpenGfmTableStart(text) ?? text.length),
       );
       const start = retain === 0 ? 0 : text.lastIndexOf("\n", retain - 1) + 1;
       const completeEnd = text.lastIndexOf("\n") + 1;

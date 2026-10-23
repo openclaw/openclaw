@@ -172,6 +172,43 @@ it("refreshes ownership when streamed link and container syntax changes Markdown
   }
 });
 
+it.each([
+  "![example `x\n[tool:read] {}\nx`][id]\n\nA | B\n--- | ---\n\n[id]: /url\n",
+  "![example ``x\n[tool:read] {}\nx``][a\\]b]\n\nA | B\n--- | ---\n\n[a\\]b]: </url>\n",
+  "![example `x\r\n[tool:read] {}\r\nx`][id]\r\n\r\nA | B\r\n--- | ---\r\n\r\n[id]: /url\r\n",
+  ...['"', "'", "("].map(
+    (quote) =>
+      `[label](/url ${quote}title\n\`x\n[tool:read] {}\nx\` trailing${quote === "(" ? ")" : quote}${" ".repeat(80)})\n`,
+  ),
+  "[tool:read] {}\n\n[a\\]b]: /url\n\n![example `x\n[tool:read] {}\nx`][a\\]b]\n",
+  "````text\n```\n[tool:read] {}\n<tool_call>literal</tool_call>\n<|assistant|>\n```\n````\n",
+])("matches canonical Markdown at every streamed prefix %#", (source) => {
+  const expected = Array.from({ length: source.length + 1 }, (_, end) =>
+    sanitizeAssistantVisibleStreamText(source.slice(0, end), "final_answer"),
+  );
+  const partitions = [
+    ...Array.from({ length: source.length + 1 }, (_, split) => [
+      source.slice(0, split),
+      source.slice(split),
+    ]),
+    source.split(""),
+    Array.from({ length: Math.ceil(source.length / 4) }, (_, i) => source.slice(i * 4, i * 4 + 4)),
+  ];
+  for (const chunks of partitions) {
+    const stream = createAssistantVisibleStreamText("final_answer");
+    let length = 0;
+    let delivered = "";
+    for (const chunk of chunks) {
+      length += chunk.length;
+      const result = stream.append(chunk);
+      delivered = result.delta === null ? result.text : delivered + result.delta;
+      expect(result.text).toBe(expected[length]);
+      expect(delivered).toBe(expected[length]);
+    }
+  }
+  expect(expected.at(-1)?.includes("[tool:read] {}")).toBe(source.startsWith("````"));
+});
+
 it("rechecks ownership when a GFM table delimiter changes a paragraph", () => {
   const scenarios = [
     ["Intro `x\n[tool:read] {}\nx` | y\n", "--- ", "| ", "---", "\n"],
