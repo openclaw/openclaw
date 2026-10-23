@@ -1,6 +1,10 @@
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
+  GATEWAY_CLIENT_CAPS,
+  hasGatewayClientCap,
+} from "../../../packages/gateway-protocol/src/client-info.js";
+import {
   ErrorCodes,
   errorShape,
   validateSessionsListParams,
@@ -299,8 +303,11 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         respond: respondToCaller,
         assertCurrent,
         beforeRespond: () => {
-          // An event delivered before roster admission may not have established its ancestor rows.
-          if (client?.connId) {
+          // Legacy receipts belong to admitted roster rows; delta clients retain socket baselines.
+          if (
+            client?.connId &&
+            !hasGatewayClientCap(client.connect.caps, GATEWAY_CLIENT_CAPS.SESSION_ROW_DELTAS)
+          ) {
             context.forgetConnectionAncestors(client.connId);
           }
         },
