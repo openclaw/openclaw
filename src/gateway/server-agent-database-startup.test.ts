@@ -868,7 +868,7 @@ it("admits an unsealed fleet including reserved system agents while skipping an 
             openingEntered[openings.length - 1]!.resolve();
             try {
               await withinTest(openingReleases.get(input.agentId)!.promise, signal);
-              await activation.openAgent(input);
+              return await activation.openAgent(input);
             } finally {
               activeOpenings -= 1;
             }
