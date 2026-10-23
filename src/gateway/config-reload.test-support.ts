@@ -260,7 +260,6 @@ export function makeZeroDebounceHookWrite(persistedHash: string): ConfigWriteNot
     revision: 1,
     fingerprint: `runtime-${persistedHash}`,
     sourceFingerprint: `source-${persistedHash}`,
-    writtenAtMs: Date.now(),
   };
 }
 

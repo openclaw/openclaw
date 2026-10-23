@@ -3,6 +3,7 @@ import {
   readSessionMessageSequence,
   reduceSessionProjection,
 } from "@openclaw/gateway-client/browser";
+import type { ProgressCard } from "@openclaw/gateway-protocol";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { readPairingQrContent } from "../../lib/chat/pairing-qr.ts";
 import type { ChatHistoryCursor, ChatHistoryPagination } from "./chat-history-pagination.ts";
@@ -11,7 +12,6 @@ import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./h
 import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 import type { SessionSnapshotInvalidationReason } from "./session-snapshot-invalidation-events.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
-import type { ChatSessionSnapshot } from "./session-snapshot-types.ts";
 
 export { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 
@@ -62,6 +62,20 @@ export function projectChatTranscriptMetadata(row: GatewaySessionRow): ChatTrans
   transcriptMetadata.set(row, metadata);
   return metadata;
 }
+
+export type ChatSessionSnapshot = {
+  // The board provider validates cached payloads before they can reach a view.
+  board?: { snapshot: unknown; receivedAtMs: number } | null;
+  widgetHeights?: Record<string, number>;
+  transcriptMetadata?: ChatTranscriptMetadata;
+  progressCard?: ProgressCard | null;
+  deltaCursor?: string;
+  historyState?: ChatHistoryState;
+  displayedLeafEntryId?: string | null;
+  messages: unknown[];
+  pagination: ChatHistoryPagination;
+  sessionId: string | null;
+};
 
 export type ChatWidgetLayout = {
   read: (key: string) => number | undefined;
@@ -306,10 +320,15 @@ export function cacheChatSessionSnapshot(
     existing.snapshot.sessionId === incoming.sessionId
       ? { ...incoming, progressCard: existing.snapshot.progressCard }
       : incoming;
-  const snapshot =
+  const withWidgetHeights =
     withProgress.widgetHeights === undefined && existing?.snapshot.sessionId === incoming.sessionId
       ? { ...withProgress, widgetHeights: existing.snapshot.widgetHeights }
       : withProgress;
+  // Boards belong to the scoped conversation key, independently of transcript resets.
+  const snapshot =
+    withWidgetHeights.board === undefined && existing?.snapshot.board !== undefined
+      ? { ...withWidgetHeights, board: existing.snapshot.board }
+      : withWidgetHeights;
   if (
     existing?.snapshot.messages === snapshot.messages &&
     existing.snapshot.deltaCursor === snapshot.deltaCursor &&
@@ -319,6 +338,7 @@ export function cacheChatSessionSnapshot(
     existing.snapshot.transcriptMetadata === snapshot.transcriptMetadata &&
     existing.snapshot.progressCard === snapshot.progressCard &&
     existing.snapshot.widgetHeights === snapshot.widgetHeights &&
+    existing.snapshot.board === snapshot.board &&
     samePagination(existing.snapshot.pagination, snapshot.pagination)
   ) {
     return;
@@ -326,6 +346,7 @@ export function cacheChatSessionSnapshot(
   if (
     snapshot.messages.length === 0 &&
     snapshot.sessionId === null &&
+    snapshot.board === undefined &&
     !snapshot.pagination.hasMore &&
     (snapshot.pagination.totalMessages ?? 0) === 0 &&
     snapshot.pagination.completeSnapshot !== true

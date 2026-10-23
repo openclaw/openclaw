@@ -41,6 +41,7 @@ import {
 import {
   bindCollectorSpawnTool,
   captureCollectorSpawnGuard,
+  captureCollectorPluginOwner as capturePluginOwner,
 } from "../subagents/swarm/swarm-collector-capability.js";
 import { resolveSwarmConfig } from "../subagents/swarm/swarm-config.js";
 import {
@@ -237,7 +238,7 @@ function buildSessionsSpawnToolSchema(params: {
           collect: Type.Optional(
             Type.Boolean({
               description:
-                "Swarm collector child for large parallel fan-out, not one or a few children; no completion notification.",
+                "Swarm collector child for large parallel fan-out or required in-turn result collection; collect with agents_wait, no completion notification.",
             }),
           ),
           outputSchema: Type.Optional(
@@ -687,6 +688,7 @@ export function createSessionsSpawnTool(
               {
                 ...inheritedSpawnContext(),
                 requesterThinkingLevel: opts?.requesterThinkingLevel,
+                nativePluginOwner: collect ? capturePluginOwner(tool, _toolCallId) : undefined,
                 requesterThinkingExplicit,
                 requesterModel: opts?.requesterModel,
                 currentMessagingTarget: opts?.currentMessagingTarget ?? opts?.currentChannelId,

@@ -43,22 +43,20 @@ function oauth(provider: string, expires = Date.now() + 60_000): AuthProfileCred
   return { type: "oauth", provider, access: "test-access", refresh: "test-refresh", expires };
 }
 
+const createBackend = (id: string, modelProvider: string, command: string) => ({
+  id,
+  modelProvider,
+  pluginId: id === "claude-cli" ? "anthropic" : id,
+  config: { command },
+});
+const claude = () => createBackend("claude-cli", "anthropic", "claude");
+
 describe("resolveCliExecutionAuthProfileId", () => {
   beforeEach(() => {
     cliBackendsTesting.setDepsForTest({
       resolveRuntimeCliBackends: () => [
-        {
-          id: "claude-cli",
-          modelProvider: "anthropic",
-          pluginId: "anthropic",
-          config: { command: "claude" },
-        },
-        {
-          id: "google-gemini-cli",
-          modelProvider: "google",
-          pluginId: "google-gemini-cli",
-          config: { command: "gemini" },
-        },
+        claude(),
+        createBackend("google-gemini-cli", "google", "gemini"),
       ],
       resolvePluginSetupCliBackend: () => undefined,
     });
@@ -108,16 +106,7 @@ describe("resolveCliExecutionAuthProfileId", () => {
         cliBackendsTesting.setDepsForTest({
           resolveRuntimeCliBackends: () => [],
           resolvePluginSetupCliBackend: ({ backend }) =>
-            backend === "claude-cli"
-              ? {
-                  pluginId: "anthropic",
-                  backend: {
-                    id: "claude-cli",
-                    modelProvider: "anthropic",
-                    config: { command: "claude" },
-                  },
-                }
-              : undefined,
+            backend === "claude-cli" ? { pluginId: "anthropic", backend: claude() } : undefined,
         });
       }
       const authProfileId = `anthropic:managed-${type}`;

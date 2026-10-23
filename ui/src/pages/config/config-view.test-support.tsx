@@ -16,6 +16,7 @@ import { createConfigViewState } from "./view-state.ts";
 import { Config, type ConfigProps } from "./view.tsx";
 
 const views = new WeakMap<HTMLElement, (props: ConfigProps) => void>();
+const activePresentation = Promise.withResolvers<void>().promise;
 
 function createViewContext() {
   const { gateway } = createApplicationGateway();
@@ -25,7 +26,6 @@ function createViewContext() {
     settings: loadSettings(),
     mode: "system",
     resolvedMode: "light",
-    serverSelection: null,
     appliedPalette: null,
     recordServerSelection: () => undefined,
     setMode: () => undefined,
@@ -73,6 +73,10 @@ export const baseProps = () => ({
   valid: true,
   issues: [],
   loading: false,
+  configLoaded: true,
+  configRecoveryError: null,
+  configRead: null,
+  onRetryConfig: vi.fn(),
   saving: false,
   applying: false,
   updating: false,
@@ -96,6 +100,7 @@ export const baseProps = () => ({
   onFormRemove: vi.fn(),
   onSectionChange: vi.fn(),
   onSave: vi.fn(),
+  presentationRetired: () => activePresentation,
   onRawDiscard: vi.fn(),
   onSubsectionChange: vi.fn(),
   theme: "claw" as ThemeName,
@@ -128,11 +133,11 @@ export const baseProps = () => ({
   customThemeLabel: null,
   customThemeSourceUrl: null,
   customThemeImportUrl: "",
-  customThemeImportBusy: false,
+  customThemeImportCompletion: undefined,
   customThemeImportMessage: null,
   customThemeImportExpanded: false,
   onCustomThemeImportUrlChange: vi.fn(),
-  onImportCustomTheme: vi.fn(),
+  onImportCustomTheme: vi.fn(() => undefined),
   onClearCustomTheme: vi.fn(),
   onOpenCustomThemeImport: vi.fn(),
   tabIcon: undefined,
@@ -142,7 +147,7 @@ export const baseProps = () => ({
   setTextScale: vi.fn(),
   sidebarLiveActivity: true,
   hiddenSessionCatalogIds: new Set<string>(),
-  hiddenSessionCatalogLabels: new Map<string, string>(),
+  hiddenSessionCatalogLabels: { read: () => new Map<string, string>(), scope: null },
   setSessionCatalogHidden: vi.fn(),
   openLinksExternally: false,
   composerHoldToRecord: true,

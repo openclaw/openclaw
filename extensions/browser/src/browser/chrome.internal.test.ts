@@ -5,6 +5,7 @@ import fsp from "node:fs/promises";
 import { Agent } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import type { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
@@ -133,30 +134,12 @@ function requireSpawnCall(index = 0): unknown[] {
   return call;
 }
 
-function requireSpawnOptions(index = 0): { env?: NodeJS.ProcessEnv } {
-  const options = requireSpawnCall(index)[2];
-  if (!options || typeof options !== "object") {
-    throw new Error(`expected spawn options for call #${index + 1}`);
-  }
-  return options as { env?: NodeJS.ProcessEnv };
-}
-
 function mockExpiredLaunchPollingClock(): void {
   let now = 1_000_000;
   vi.spyOn(Date, "now").mockImplementation(() => {
     now += 1_000;
     return now;
   });
-}
-
-function deferred<T = void>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, reject, resolve };
 }
 
 function startLinuxZombieProcess(): { ready: Promise<number>; reap: () => Promise<void> } {
@@ -243,6 +226,9 @@ function mockLinuxManagedChromeOwnership(params: {
 
   const readdirSync = fs.readdirSync.bind(fs);
   vi.spyOn(fs, "readdirSync").mockImplementation(((dirPath, options) => {
+    if (String(dirPath) === "/proc") {
+      return [String(params.pid)];
+    }
     if (String(dirPath) === `/proc/${params.pid}/fd`) {
       return ownsPort ? (["7"] as never) : ([] as never);
     }
@@ -619,7 +605,7 @@ describe("chrome.ts internal", () => {
       stubBrowserExecutableAndPrefs("present");
       const proc = makeFakeProc({ pid: 51114 });
       spawnMock.mockReturnValue(proc);
-      const probeEntered = deferred();
+      const probeEntered = createDeferred<void>();
       vi.stubGlobal(
         "fetch",
         vi.fn(async () => {
@@ -644,7 +630,7 @@ describe("chrome.ts internal", () => {
     it("aborts bootstrap immediately and never reaches the runtime launch", async () => {
       stubBrowserExecutableAndPrefs("missing");
       const bootstrap = makeFakeProc({ pid: 51115 });
-      const spawned = deferred();
+      const spawned = createDeferred<void>();
       spawnMock.mockImplementation(() => {
         spawned.resolve();
         return bootstrap;
@@ -670,7 +656,7 @@ describe("chrome.ts internal", () => {
         kill: vi.fn(() => true),
       });
       spawnMock.mockReturnValue(proc);
-      const probeEntered = deferred();
+      const probeEntered = createDeferred<void>();
       vi.stubGlobal(
         "fetch",
         vi.fn(async () => {
@@ -737,7 +723,11 @@ describe("chrome.ts internal", () => {
           const running = await launchOpenClawChrome(makeResolved(), profile);
           expect(running.pid).toBe(4242);
           expect(spawnCalls).toBeGreaterThanOrEqual(1);
-          const spawnOptions = requireSpawnOptions();
+          const options = requireSpawnCall()[2];
+          if (!options || typeof options !== "object") {
+            throw new Error("expected spawn options for call #1");
+          }
+          const spawnOptions = options as { env?: NodeJS.ProcessEnv };
           expect(spawnOptions.env?.HTTP_PROXY).toBeUndefined();
           expect(spawnOptions.env?.HTTPS_PROXY).toBeUndefined();
           expect(spawnOptions.env?.NO_PROXY).toBeUndefined();
@@ -1301,6 +1291,12 @@ describe("chrome.ts internal", () => {
       vi.spyOn(process, "platform", "get").mockReturnValue("linux");
       const executablePath = path.join(tmpDir, "chrome");
       await fsp.writeFile(executablePath, "");
+      const procDir = path.join(tmpDir, "proc");
+      await fsp.mkdir(procDir);
+      const readdirSync = fs.readdirSync.bind(fs);
+      vi.spyOn(fs, "readdirSync").mockImplementation((candidate, options) =>
+        readdirSync(String(candidate) === "/proc" ? procDir : candidate, options),
+      );
       const { error, proc, stderrHint } = await captureFailedLaunchStderr({
         port: 55558,
         executablePath,

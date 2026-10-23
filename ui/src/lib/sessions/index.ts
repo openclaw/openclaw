@@ -2,8 +2,6 @@ import type { SessionCatalogPullRequestSummary } from "../../../../packages/gate
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../../src/gateway/control-ui-contract.js";
 import { registerListener } from "../../../../src/shared/listeners.js";
 import type { SessionsListResult } from "../../api/types.ts";
-import type { BootRecord } from "../../app/boot-record.ts";
-import type { ConnectionBootstrapCoordinator } from "../../app/connection-bootstrap.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { type SelectedAgentSource, watchSelectedAgent } from "../agents/watch-selected-agent.ts";
 import { formatUiError } from "../format-error.ts";
@@ -14,6 +12,7 @@ import { captureBootRoster } from "./session-boot-roster.ts";
 import { createSessionBootSnapshot } from "./session-boot-snapshot.ts";
 import {
   createSessionState,
+  type SessionCacheOptions,
   type SessionCapability,
   type SessionGateway,
   type SessionState,
@@ -71,10 +70,7 @@ export type {
 export function createSessionCapability(
   gateway: SessionGateway,
   agentSelection: SelectedAgentSource,
-  cacheOptions: {
-    bootRecord?: BootRecord | null;
-    connectionBootstrap?: ConnectionBootstrapCoordinator;
-  } = {},
+  cacheOptions: SessionCacheOptions = {},
 ): SessionCapability {
   let state = createSessionState(cacheOptions.bootRecord);
   let presentation: SessionCapability["presentation"] = { result: null, agentId: null };
@@ -577,8 +573,8 @@ export function createSessionCapability(
     if (eventObservation.scope && !connection.isCurrent(eventObservation.scope)) {
       return;
     }
-    const hasActiveRun = reconciled.hasActiveRun ?? eventInfo?.hasActiveRun;
-    const status = reconciled.status ?? eventInfo?.status;
+    const hasActiveRun = eventInfo?.hasActiveRun;
+    const status = eventInfo?.status;
     const runEnded =
       hasActiveRun === false || (status !== null && status !== undefined && status !== "running");
     const isTerminalMessage = event.event === "session.message" && runEnded;
@@ -640,6 +636,9 @@ export function createSessionCapability(
     },
     get canonicalListRevision() {
       return canonicalListRevision;
+    },
+    get canonicalListReady() {
+      return canonicalListRevision > 0 && reconnectListRevision === null;
     },
     githubPublication,
     get cachedRoutingDefaults() {

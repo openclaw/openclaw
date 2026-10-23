@@ -1,18 +1,12 @@
-/**
- * Gateway startup web fetch bind tests.
- */
-import http from "node:http";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { installGatewayTestHooks, startTestGatewayServer } from "./test-helpers.js";
-import { readClientResponseBody } from "./test-http-response.js";
 
 const webFetchProviderDiscovery = vi.hoisted(() => ({
-  resolveBundledWebFetchProvidersFromPublicArtifactsMock: vi.fn(() => {
+  bundled: vi.fn(() => {
     throw new Error("gateway startup must not discover bundled web fetch providers before bind");
   }),
-  resolvePluginWebFetchProvidersMock: vi.fn(() => {
+  plugin: vi.fn(() => {
     throw new Error("gateway startup must not discover plugin web fetch providers before bind");
   }),
 }));
@@ -47,7 +41,7 @@ vi.mock("../secrets/runtime-web-tools-fallback.runtime.js", async () => {
     ...actual,
     runtimeWebToolsFallbackProviders: {
       ...actual.runtimeWebToolsFallbackProviders,
-      resolvePluginWebFetchProviders: webFetchProviderDiscovery.resolvePluginWebFetchProvidersMock,
+      resolvePluginWebFetchProviders: webFetchProviderDiscovery.plugin,
     },
   };
 });
@@ -58,40 +52,16 @@ vi.mock("../plugins/web-provider-public-artifacts.js", async () => {
   >("../plugins/web-provider-public-artifacts.js");
   return {
     ...actual,
-    resolveBundledWebFetchProvidersFromPublicArtifacts:
-      webFetchProviderDiscovery.resolveBundledWebFetchProvidersFromPublicArtifactsMock,
+    resolveBundledWebFetchProvidersFromPublicArtifacts: webFetchProviderDiscovery.bundled,
   };
 });
 
 installGatewayTestHooks({ scope: "suite" });
 
 afterEach(() => {
-  webFetchProviderDiscovery.resolveBundledWebFetchProvidersFromPublicArtifactsMock.mockClear();
-  webFetchProviderDiscovery.resolvePluginWebFetchProvidersMock.mockClear();
+  webFetchProviderDiscovery.bundled.mockClear();
+  webFetchProviderDiscovery.plugin.mockClear();
 });
-
-async function requestHealthz(port: number): Promise<{ status: number; body: string }> {
-  return await new Promise((resolve, reject) => {
-    const req = http.request(
-      {
-        host: "127.0.0.1",
-        port,
-        path: "/healthz",
-      },
-      (res) => void readClientResponseBody(res).then(resolve, reject),
-    );
-    req.once("error", reject);
-    req.setTimeout(5_000, () => {
-      req.destroy(new Error("timeout waiting for /healthz"));
-    });
-    req.end();
-  });
-}
-
-async function writeConfig(config: OpenClawConfig): Promise<void> {
-  const { writeConfigFile } = await import("../config/config.js");
-  await writeConfigFile(config);
-}
 
 describe("gateway startup web fetch config", () => {
   let port: number;
@@ -101,39 +71,20 @@ describe("gateway startup web fetch config", () => {
   beforeAll(async () => {
     previousMinimal = process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
     process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "0";
-    await writeConfig({
-      gateway: {
-        mode: "local",
-        bind: "loopback",
-        auth: { mode: "none" },
-      },
-      plugins: {
-        enabled: true,
-        allow: [],
-        entries: {},
-      },
-      tools: {
-        web: {
-          fetch: {
-            enabled: true,
-            maxChars: 200_000,
-            maxCharsCap: 2_000_000,
-          },
-        },
-      },
-    } as OpenClawConfig);
+    const { writeConfigFile } = await import("../config/config.js");
+    await writeConfigFile({
+      gateway: { mode: "local", bind: "loopback", auth: { mode: "none" } },
+      plugins: { enabled: true, allow: [], entries: {} },
+      tools: { web: { fetch: { enabled: true, maxChars: 200_000, maxCharsCap: 2_000_000 } } },
+    });
 
     const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
     port = portClaim.port;
-    server = await startTestGatewayServer(portClaim, {
-      auth: { mode: "none" },
-    });
+    server = await startTestGatewayServer(portClaim, { auth: { mode: "none" } });
   });
 
   afterAll(async () => {
-    if (server) {
-      await server.close();
-    }
+    await server?.close();
     if (previousMinimal === undefined) {
       delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
     } else {
@@ -142,11 +93,14 @@ describe("gateway startup web fetch config", () => {
   });
 
   it("binds HTTP with credential-free tools.web.fetch config without fetch provider discovery", async () => {
-    const response = await requestHealthz(port);
+    const response = await fetch(`http://127.0.0.1:${port}/healthz`, {
+      signal: AbortSignal.timeout(5_000),
+    });
+    await response.text();
     expect(response.status).toBe(200);
-    expect(
-      webFetchProviderDiscovery.resolveBundledWebFetchProvidersFromPublicArtifactsMock,
-    ).not.toHaveBeenCalled();
-    expect(webFetchProviderDiscovery.resolvePluginWebFetchProvidersMock).not.toHaveBeenCalled();
+    expect([
+      webFetchProviderDiscovery.bundled.mock.calls,
+      webFetchProviderDiscovery.plugin.mock.calls,
+    ]).toEqual([[], []]);
   });
 });

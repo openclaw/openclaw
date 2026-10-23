@@ -7,7 +7,10 @@ import { tryReadJson } from "../../infra/json-files.js";
 import { readPackageName } from "../../infra/package-json.js";
 import { checkGlobalPackageUpdateAdmission } from "../../infra/package-update-manager-preflight.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
-import { resolveUpdateStateContentVersion } from "../../infra/update-candidate-state.versions.js";
+import {
+  resolveUpdateStateContentVersion,
+  resolveUpdateStateTargetVersion,
+} from "../../infra/update-candidate-state.versions.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import type { DevUpdateTarget } from "../../infra/update-dev-target.js";
 import type { UpdateFailureFact } from "../../infra/update-failure-facts.js";
@@ -305,7 +308,7 @@ export async function preflightUpdateCommandSchemas(params: {
       ? (params.candidateAdmissionChecks ?? run?.candidateAdmissionChecks)
       : undefined;
   if (run) {
-    recordUpdateRunPhase(run.runId, "validating", undefined, { env: run.env });
+    recordUpdateRunPhase(run.runId, "validating", undefined, run);
   }
   let packageSchemaPreflight: OpenClawDatabaseSchemaPreflight = {
     incompatible: [],
@@ -372,8 +375,13 @@ export async function preflightUpdateCommandSchemas(params: {
         installedContexts,
       );
       if (opts.dryRun && updateInstallKind === "package") {
+        const engineOnly =
+          !params.packageAlreadyCurrent &&
+          Boolean(params.packageRuntimeTarget?.nodeEngine) &&
+          canResolveRegistryVersionForPackageTarget(params.packageInstallSpec ?? "");
         const runtime = await resolvePackageRuntimePreflight({
           ...params,
+          engineOnly,
           target: params.packageRuntimeTarget,
           nodeRunner: params.managedServiceNodeRunner,
           timeoutMs: updateStepTimeoutMs,
@@ -384,7 +392,7 @@ export async function preflightUpdateCommandSchemas(params: {
         if (!runtime.ok) {
           preflightNotes.push(`Would refuse update: ${runtime.error}`);
           preflightFailures.push({
-            reason: "node-runtime-preflight",
+            reason: engineOnly ? "preflight-node-runtime-incompatible" : "node-runtime-preflight",
             message: runtime.error,
             failureFacts: runtime.failureFacts,
             recoverySteps: runtime.recoverySteps,
@@ -489,7 +497,11 @@ export async function captureUpdateActivationSchemas(params: {
         const version = resolveUpdateStateContentVersion(entry);
         return (
           version !== null &&
-          version !== candidateSchemaVersions[entry.path === sharedPath ? "state" : "agent"]
+          version !==
+            resolveUpdateStateTargetVersion(entry.path, {
+              sharedPath,
+              candidateSchemaVersions,
+            })
         );
       })
     ) {

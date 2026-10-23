@@ -51,7 +51,6 @@ type ReusableSkillSnapshotParams = {
 type ReusableSkillSnapshotResult = {
   snapshot: SkillSnapshot;
   shouldRefresh: boolean;
-  snapshotVersion: number;
 };
 
 export async function resolveReusableWorkspaceSkillSnapshot(
@@ -135,7 +134,6 @@ export async function resolveReusableWorkspaceSkillSnapshot(
     return {
       snapshot: params.existingSnapshot,
       shouldRefresh,
-      snapshotVersion,
     };
   }
   const retainedSnapshot = shouldRefresh ? undefined : params.existingSnapshot;
@@ -280,6 +278,5 @@ export async function resolveReusableWorkspaceSkillSnapshot(
   return {
     snapshot,
     shouldRefresh,
-    snapshotVersion,
   };
 }

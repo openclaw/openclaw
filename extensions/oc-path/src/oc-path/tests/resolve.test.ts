@@ -22,7 +22,7 @@ Preamble.
 `;
 
 describe("resolveOcPath", () => {
-  const { ast } = parseMd(SAMPLE);
+  const ast = parseMd(SAMPLE);
 
   it("resolves frontmatter via [frontmatter] sentinel section", () => {
     const m = resolveOcPath(ast, {

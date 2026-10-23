@@ -87,11 +87,10 @@ suite.define(() => {
       await openChatSidePanelType(page, "Browser");
 
       const panel = page.locator("section.bp");
-      const alert = panel.getByRole("alert");
-      await alert.waitFor();
-      expect(await alert.textContent()).toBe(
-        "Browser request failed: Screenshot fetch failed (404).",
-      );
+      await panel
+        .getByRole("status")
+        .getByText("Browser request failed: Screenshot fetch failed (404).", { exact: true })
+        .waitFor();
       const readStream = () =>
         page.evaluate(
           () =>

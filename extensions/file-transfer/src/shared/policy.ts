@@ -7,7 +7,11 @@ import { minimatch } from "minimatch";
 import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { asNullableRecord, asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNullableRecord,
+  asOptionalRecord,
+  normalizeTrimmedStringList,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   FILE_TRANSFER_NODE_INVOKE_COMMANDS,
   type FileTransferNodeInvokeCommand,
@@ -185,15 +189,6 @@ function expandTilde(p: string): string {
   return p;
 }
 
-function normalizeGlobs(patterns: string[] | undefined): string[] {
-  if (!Array.isArray(patterns)) {
-    return [];
-  }
-  return patterns
-    .filter((p): p is string => typeof p === "string" && p.trim().length > 0)
-    .map((p) => expandTilde(p.trim()));
-}
-
 function matchesAny(target: string, patterns: string[]): boolean {
   const normalizedTarget = target.replace(/\\/gu, "/");
   for (const pattern of patterns) {
@@ -311,7 +306,7 @@ function evaluateFilePolicyInternal(
   const followSymlinks = nodeConfig.followSymlinks === true;
 
   // Deny patterns also constrain standing grants and interactive approvals.
-  const denyPatterns = normalizeGlobs(nodeConfig.denyPaths);
+  const denyPatterns = normalizeTrimmedStringList(nodeConfig.denyPaths).map(expandTilde);
   if (matchesAnyDeny(input.path, denyPatterns)) {
     return {
       ok: false,
@@ -348,8 +343,8 @@ function evaluateFilePolicyInternal(
 
   const allowPatterns =
     input.kind === "read"
-      ? normalizeGlobs(nodeConfig.allowReadPaths)
-      : normalizeGlobs(nodeConfig.allowWritePaths);
+      ? normalizeTrimmedStringList(nodeConfig.allowReadPaths).map(expandTilde)
+      : normalizeTrimmedStringList(nodeConfig.allowWritePaths).map(expandTilde);
 
   if (allowPatterns.length > 0 && matchesAny(input.path, allowPatterns)) {
     return { ok: true, reason: "matched-allow", maxBytes, followSymlinks };
@@ -426,8 +421,8 @@ export function snapshotNodeFileReadPolicy(input: {
       nodes: {
         [input.nodeId]: {
           ask,
-          allowReadPaths: normalizeGlobs(allowReadPaths),
-          denyPaths: normalizeGlobs(denyPaths),
+          allowReadPaths: normalizeTrimmedStringList(allowReadPaths).map(expandTilde),
+          denyPaths: normalizeTrimmedStringList(denyPaths).map(expandTilde),
           maxBytes,
           followSymlinks,
         },

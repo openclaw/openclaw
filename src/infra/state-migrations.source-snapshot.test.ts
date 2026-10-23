@@ -270,18 +270,11 @@ describe("doctor legacy migration source contract", () => {
     const publish = vi.spyOn(durability, "publishFileExclusive");
     await expect(claim.claim(claimOptions(snapshot))).rejects.toBe(refusal);
     expect(publish).not.toHaveBeenCalled();
-    expect(stat(sourcePath)).toMatchObject({
-      ino: snapshot.ino,
-      nlink: 2n,
-    });
+    expect(stat(sourcePath)).toMatchObject({ ino: snapshot.ino, nlink: 2n });
     expect(stat(claim.claimPath).ino).toBe(snapshot.ino);
     await claim.recoverLinkedMove();
-    expect(stat(sourcePath)).toMatchObject({
-      ino: snapshot.ino,
-      nlink: 1n,
-    });
-    expect(fs.readFileSync(sourcePath)).toEqual(snapshot.buffer);
-    expect(fs.existsSync(claim.claimPath)).toBe(false);
+    expect(stat(sourcePath).nlink).toBe(1n);
+    expectUnclaimed(claim, snapshot);
   });
 
   it.each(["claim", "recovery"] as const)(
@@ -414,10 +407,8 @@ describe("doctor legacy migration source contract", () => {
     ).rejects.toThrow("source inode changed before claim");
     expect(await claim.restore()).toBeNull();
 
-    expect(stat(sourcePath).ino).toBe(replacementInode);
-    expect(stat(sourcePath).ino).not.toBe(snapshot.ino);
-    expect(fs.readFileSync(sourcePath)).toEqual(snapshot.buffer);
-    expect(fs.existsSync(claim.claimPath)).toBe(false);
+    expect(replacementInode).not.toBe(snapshot.ino);
+    expectUnclaimed(claim, { ...snapshot, ino: replacementInode });
   });
 
   it("restores every claimed source when a later multi-file claim changes", async () => {

@@ -1,5 +1,5 @@
 import { ChildProcess } from "node:child_process";
-import { lstatSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { lstatSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
@@ -13,26 +13,15 @@ vi.mock("../../scripts/lib/managed-child-process.mts", async (importOriginal) =>
   runManagedCommand: command,
 }));
 const temporary = useAutoCleanupTempDirTracker(afterAll);
-let stage: string;
-let slot: string;
-let lock: string;
-beforeAll(() => {
-  const root = realpathSync(temporary.make("openclaw-staging-users-"));
-  stage = join(root, "stage");
-  slot = join(root, "slôt");
-  lock = join(slot, "lock");
-  mkdirSync(stage);
-  mkdirSync(slot);
-  writeFileSync(lock, "held lock fixture");
-});
+const stage = temporary.make("openclaw-staging-users-");
+const slot = temporary.make("slôt-");
+const lock = join(slot, "lock");
+beforeAll(() => writeFileSync(lock, "held lock fixture"));
 beforeEach(() => {
-  const original = process;
   vi.stubGlobal(
     "process",
-    new Proxy(original, {
-      get(target, key) {
-        return key === "platform" ? "darwin" : Reflect.get(target, key);
-      },
+    new Proxy(process, {
+      get: (target, key) => (key === "platform" ? "darwin" : Reflect.get(target, key)),
     }),
   );
 });
@@ -42,42 +31,39 @@ afterEach(() => {
 });
 
 function response(
-  options: {
-    stdout?: string | Buffer;
-    stderr?: string | Buffer;
+  options: Partial<Record<"stdout" | "stderr", string | Buffer>> & {
     code?: number;
     error?: Error;
   } = {},
 ) {
   command.mockImplementationOnce(async (invocation: RunManagedCommandOptions) => {
     const child = new ChildProcess();
-    const stdout = new PassThrough();
-    const stderr = new PassThrough();
-    child.stdout = stdout;
-    child.stderr = stderr;
+    const streams = { stdout: new PassThrough(), stderr: new PassThrough() };
+    Object.assign(child, streams);
     try {
       invocation.onReady?.(child);
-      if (options.stdout) {
-        stdout.emit("data", Buffer.from(options.stdout));
-      }
-      if (options.stderr) {
-        stderr.emit("data", Buffer.from(options.stderr));
+      for (const stream of ["stdout", "stderr"] as const) {
+        const data = options[stream];
+        if (data) {
+          streams[stream].emit("data", Buffer.from(data));
+        }
       }
       if (options.error) {
         throw options.error;
       }
       return options.code ?? 1;
     } finally {
-      stdout.destroy();
-      stderr.destroy();
+      Object.values(streams).forEach((stream) => stream.destroy());
     }
   });
 }
+const verify = (roots = [stage], ignoredFiles?: string[], signal?: AbortSignal) =>
+  verifyNoStagingUsers({ roots, ignoredFiles, signal });
 
 it("requires an empty successful-absence result for every staging root", async () => {
   response();
   response();
-  await expect(verifyNoStagingUsers({ roots: [stage, slot] })).resolves.toEqual({ ok: true });
+  await expect(verify([stage, slot])).resolves.toEqual({ ok: true });
   expect(command.mock.calls.map(([options]) => options.args)).toEqual([
     ["-nP", "-FpfDi", "+D", stage],
     ["-nP", "-FpfDi", "+D", slot],
@@ -94,30 +80,17 @@ function fileRecord(path: string) {
   return `f11\nD0x${stat.dev.toString(16)}\ni${stat.ino}\n`;
 }
 
-it.each([0, 1])(
-  "exempts only its own exact held lock while preserving other current-process users (exit %s)",
-  async (code) => {
-    response({ stdout: `p${process.pid}\n${fileRecord(lock)}`, code });
-    await expect(verifyNoStagingUsers({ roots: [slot], ignoredFiles: [lock] })).resolves.toEqual({
-      ok: true,
-    });
-    response({ stdout: `p${process.pid}\n${fileRecord(lock)}${fileRecord(stage)}`, code });
-    await expect(
-      verifyNoStagingUsers({ roots: [stage, slot], ignoredFiles: [lock] }),
-    ).resolves.toMatchObject({
-      ok: false,
-      reason: `Live staging users remain (PIDs ${process.pid}).`,
-    });
-  },
-);
-
-it.each([0, 1])(
-  "refuses another process using the exempted lock without disclosing file paths (exit %s)",
-  async (code) => {
-    const otherPid = process.pid + 1;
-    response({ stdout: `p${otherPid}\n${fileRecord(lock)}`, code });
-    const outcome = await verifyNoStagingUsers({ roots: [slot], ignoredFiles: [lock] });
-    expect(outcome).toEqual({ ok: false, reason: `Live staging users remain (PIDs ${otherPid}).` });
+it.each([0, 1].flatMap((code) => ["own", "extra", "foreign"].map((user) => [code, user] as const)))(
+  "exempts only its own exact lock without disclosing paths (%i, %s)",
+  async (code, user) => {
+    const extra = user === "extra";
+    const pid = process.pid + Number(user === "foreign");
+    response({ stdout: `p${pid}\n${fileRecord(lock)}${extra ? fileRecord(stage) : ""}`, code });
+    await expect(verify(extra ? [stage, slot] : [slot], [lock])).resolves.toEqual(
+      user !== "own"
+        ? { ok: false, reason: `Live staging users remain (PIDs ${pid}).` }
+        : { ok: true },
+    );
   },
 );
 
@@ -135,19 +108,28 @@ it.each([
   { reason: "invalid pid", stdout: "p9007199254740999\nf3\nD0x1\ni2\n", code: 0 },
   { reason: "orphan pid", stdout: "p123\np124\nf3\nD0x1\ni2\n", code: 0 },
   { reason: "nul output", stdout: "p123\0f3\0D0x1\0i2\0\n", code: 0 },
+  {
+    reason: "missing executable",
+    error: Object.assign(new Error("missing lsof"), { code: "ENOENT" }),
+  },
+  { reason: "timeout", error: new Error("managed command timed out") },
 ])("refuses $reason", async (options) => {
   response(options);
-  await expect(verifyNoStagingUsers({ roots: [stage] })).resolves.toMatchObject({ ok: false });
+  await expect(verify()).resolves.toEqual(
+    "error" in options
+      ? { ok: false, reason: "lsof could not verify the absence of staging users." }
+      : expect.objectContaining({ ok: false }),
+  );
 });
 
 it.each(["stdout", "stderr"] as const)(
-  "bounds %s while retaining unjoined cleanup evidence",
+  "bounds %s and preserves unjoined cleanup",
   async (stream) => {
     response({
       [stream]: Buffer.alloc(stream === "stdout" ? 1024 * 1024 + 1 : 64 * 1024 + 1, 120),
       error: Object.assign(new Error("fixture cleanup incomplete"), { processTreeState: "live" }),
     });
-    await expect(verifyNoStagingUsers({ roots: [stage] })).resolves.toEqual({
+    await expect(verify()).resolves.toEqual({
       ok: false,
       reason: "lsof staging-user output exceeded its limit.",
       unjoined: true,
@@ -156,23 +138,9 @@ it.each(["stdout", "stderr"] as const)(
   },
 );
 
-it.each([
-  {
-    reason: "missing executable",
-    error: Object.assign(new Error("missing lsof"), { code: "ENOENT" }),
-  },
-  { reason: "timeout", error: new Error("managed command timed out") },
-])("refuses $reason instead of inferring no users", async ({ error }) => {
-  response({ error });
-  await expect(verifyNoStagingUsers({ roots: [stage] })).resolves.toEqual({
-    ok: false,
-    reason: "lsof could not verify the absence of staging users.",
-  });
-});
-
 it("refuses an already aborted request without spawning a scan", async () => {
-  await expect(
-    verifyNoStagingUsers({ roots: [stage], signal: AbortSignal.abort() }),
-  ).resolves.toMatchObject({ ok: false });
+  await expect(verify([stage], undefined, AbortSignal.abort())).resolves.toMatchObject({
+    ok: false,
+  });
   expect(command).not.toHaveBeenCalled();
 });

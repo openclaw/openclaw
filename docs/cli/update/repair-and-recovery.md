@@ -107,6 +107,10 @@ the current run's latest stop and restarts the installed package after Doctor's
 writers settle. It records the observed recovery outcome while preserving the
 failed update result. Earlier runs' stop receipts never authorize that restart;
 operator-stopped services and explicit data-risk refusals remain stopped.
+Normal Doctor exits do not require a separate process-settlement receipt. On
+Windows, recovery restores the suspended Scheduled Task before restarting the
+Gateway, while preserving the failed Doctor check IDs in the update report.
+This recovery behavior requires the installed updater to contain the fix.
 
 After activation succeeds, a failure to read or publish update reporting leaves
 the updated installation in place. Reporting failures do not trigger package
@@ -184,14 +188,14 @@ capture as incomplete evidence. A remaining `manifest.json.partial` prevents
 reuse or automatic retirement even when `manifest.json` contains complete JSON.
 Keep both names for manual inspection; their presence does not authorize restoration.
 
-These captures are evidence for manual recovery. Active writers can change state
-during capture; an observed change leaves the capture incomplete and produces a
-warning. For databases, the warning names each database that changed after its
-snapshot or had no stable generation during it, followed by the backup's
-database warnings. A running Gateway that writes during capture is enough to
-cause this. Capture is best effort: when it fails, the update warns that it
-continues without the original-state capture, names the step and source paths
-that failed (for example, database generation verification), and proceeds.
+These captures are evidence for manual recovery. A verified database image may be
+older than its live source by the time the capture is sealed; later writes do not
+invalidate those chosen bytes or authorize restoring them over current data.
+The backup's existing database warnings remain available when a stable source
+generation could not be recorded. Unsafe source acquisition or file changes during
+copying can still leave a capture incomplete. Capture is best effort: when it fails,
+the update warns that it continues without the original-state capture, names the
+step and source paths that failed, and proceeds.
 Database rollback uses the pre-migration snapshots the update takes after the
 Gateway stops, described in
 [Recovery limits](/cli/update/how-updates-run#recovery-limits).
@@ -482,7 +486,10 @@ handoff when both recorded PID/start identities are provably dead, a complete
 host census finds no remaining references to its run or retained paths, and at
 least 45 minutes have passed since the lease's last recorded activity. A
 recoverable larger recorded timeout extends that grace period. Gateway startup
-and borrowed update processes do not reclaim these leases.
+and borrowed update processes do not reclaim these leases. The census matches
+process arguments and working directories. On macOS it does not read process
+environments, which some macOS releases report without a bounded end; a process
+whose arguments cannot be read still leaves the census incomplete.
 
 Repair also checks legacy update child-lineage leases left after a manual
 installation hop, even when the installation-root lease is absent. Dead PIDs
@@ -497,6 +504,42 @@ authorize reclaiming another child's lease.
 Live or uninspectable owners remain protected. On Linux with restricted `/proc`
 visibility, retry from the original OS account with process-inspection permissions;
 permission errors never prove that an owner died.
+
+An updater that is cancelled, for example by its activation deadline, and then
+exits before releasing the installation leaves cancelled update custody (lease
+version 4). `openclaw update` refuses with `Another update executor owns this
+installation` and names the custody owner, lease version, and last activity.
+Gateway startup and normal update admission never reclaim this custody.
+Explicit `openclaw update repair` settles the whole cancelled family: the
+installation root, a retained service root cancelled by the same updater, the
+occupied-slot and candidate roots bound to that generation, and every child
+lease beneath them. Repair requires the evidence it uses for triage handoffs:
+every recorded updater, child, and command process and process group has exited;
+the update run is identifiable in the selected state and has no unverified
+rollback or restoration; the 45-minute grace, or a longer recorded timeout, has
+passed since the family's latest recorded activity; and the host census finds no
+process referencing the run, its retained paths, or any family key, including the
+installation and service roots. Repair then replaces the custody with
+its own claim in one transaction, records the settled keys in the
+`finalize:handoff-settlement` step, and releases its claim after finalization.
+A failed or deferred repair keeps the original custody record in its claim and
+reports it as retained custody. A later repair resumes that claim once the
+interrupted repair process has exited; the grace still counts from the cancelled
+custody's activity, not from the claim.
+
+When any condition fails, or the family contains custody repair cannot inspect,
+repair leaves every row unchanged and still finishes its other maintenance.
+JSON output reports `status: "warning"`, a `nextAction`, and
+`retainedUpdateCustody` with `key`, `owner`, `leaseVersion`, `lastActivityAt`,
+and `reason`. Standalone repair exits with code **2**. Act on the reason: wait
+for or stop the named processes through their owning terminal or service, retry
+after the stated grace period, or complete the recorded restoration. A census
+match can name any OpenClaw process on the host, such as a Gateway launched from
+the installation; stop it through its service owner before retrying. An installed CLI without this repair cannot
+settle cancelled custody, and its update refuses before staging a candidate.
+Install a version containing this repair manually (the package hop above, or
+[updating a source checkout](/install/updating/update-methods#source-checkout-servers-reference-script)),
+then run `openclaw update repair` from the updated CLI.
 
 An ordinary installation-root update lease is not legacy custody just because it
 has no mutation-protocol marker. Repair leaves that lease to its current owner;
@@ -564,6 +607,10 @@ the installation repair command. These maintenance warnings also appear in
 | `--yes`                                          | Skip confirmation prompts.                                                                                                                                                                                                                                                                       |
 | `--accept-capabilities`                          | Accept each plugin's reviewed capability changes while repairing plugin state.                                                                                                                                                                                                                   |
 | `--no-restart`                                   | Accepted for parity; repair does not request update activation. The repair parent restores a Gateway it stopped for maintenance.                                                                                                                                                                 |
+
+An invalid `--channel` exits with status 1 without changing the configured channel.
+With `--json`, stdout contains a JSON error object (`ok: false`, `error.type: "cli_error"`)
+and stderr retains the diagnostic. You can place `--json` before or after `repair`.
 
 Untouched, identityless 2026.9.2-era update admissions heal automatically after
 more than 24 hours. Gateway startup, `openclaw update status`, and `openclaw status`
@@ -684,6 +731,16 @@ parent restores a service it stopped for maintenance, as described above.
 Human output ends with a finalization result that distinguishes completion,
 completion with warnings, and failure.
 
+Repair JSON reports `coreUpdate: "completed"` only after required finalization,
+service restoration, and recovery reconciliation finish. Nonfatal advisories
+can still produce `status: "warning"` with completed core work. Deferred
+maintenance or retained recovery reports `coreUpdate: "pending"`, including
+when an inherited update driver requires a successful process exit.
+The Mac app uses this completion fact to settle its repair receipt before
+reconnecting, so advisories or a failed reconnect do not repeat completed repair
+on the next launch. Failed processes and results without completion proof leave
+the repair pending.
+
 When repair finds a configured npm plugin payload but cannot recover its install
 record, it reinstalls from the selected registry source, using the active channel
 or exact version pin. This requires registry access; if verification fails, repair
@@ -710,7 +767,8 @@ availability, installation, or load failures appear in
 successfully when required checks pass. Doctor maintenance admission refusals
 also report a warning when no data is at risk. Repair restores any service
 it stopped and leaves migrations pending. A standalone `update repair` exits
-with code **2** when Doctor maintenance is deferred; delegated finalization for
+with code **2** when Doctor maintenance is deferred or cancelled update custody
+remains (see above); delegated finalization for
 an existing update keeps exit code **0**, so an older updater can finish with
 warnings. When Doctor could not run, the saved standalone run is `skipped` with
 reason `doctor-maintenance-pending`, and the report leads with the next action:
@@ -987,9 +1045,12 @@ captures through their sealed manifests; it never reads the captured payload:
   is always retained.
 - `protected` / `retained-doctor-capture`: a standalone Doctor copy kept by that
   retention rule. Active recovery references remain `pending-update-recovery`.
-- `protected` / `unmanifested-update-capture`: an incomplete or unreadable Doctor
-  capture, a directory without the capture marker or without a matching update run
-  or standalone manifest, and any other file in the capture directory. `unreadable-update-history` also
+- `protected` / `orphan-update-capture`: a sealed update capture with no matching
+  update run, outside the Doctor namespace. Its creation time appears in the
+  detail. No supported command retires these unattributed captures.
+- `protected` / `unmanifested-update-capture`: an incomplete or unreadable capture,
+  a directory without the capture marker or a matching manifest, and any other
+  file in the capture directory. `unreadable-update-history` also
   keeps every capture protected.
 
 Older `doctor-*` directories classified as `candidate` are also safe to delete by

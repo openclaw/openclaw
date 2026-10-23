@@ -38,7 +38,7 @@ import {
   resolveUiSessionNavigationParentKey,
 } from "../lib/sessions/session-key.ts";
 import { reconcileSidebarZone } from "../lib/sidebar-zone.ts";
-import { pluginTabKey } from "../pages/plugin/route.ts";
+import { pluginTabKey } from "../pages/plugin/route.tsx";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
 import { sidebarPluginTabs } from "./app-sidebar-nav-menus.tsx";
 import {
@@ -120,16 +120,6 @@ function compareSidebarSessionRowsByCreatedAt(
     (createdOrder.get(a.key) ?? Number.MAX_SAFE_INTEGER) -
     (createdOrder.get(b.key) ?? Number.MAX_SAFE_INTEGER);
   return byObservedOrder || a.key.localeCompare(b.key);
-}
-
-function isSidebarDraftOwnedBySelf(
-  row: Pick<SessionRow, "createdActor" | "sharingRole" | "visibility">,
-  selfUserId: string | undefined,
-): boolean {
-  return (
-    row.visibility === "draft" &&
-    (row.sharingRole === "owner" || Boolean(selfUserId && row.createdActor?.id === selfUserId))
-  );
 }
 
 export type SidebarSessionNavigationState = {
@@ -258,7 +248,10 @@ export function buildSidebarSessionNavigationState(input: {
           sharingRole: row.sharingRole,
           communication: row.communication,
           effectiveCommunication: row.effectiveCommunication,
-          draftOwnedBySelf: isSidebarDraftOwnedBySelf(row, selfUserId),
+          draftOwnedBySelf:
+            row.visibility === "draft" &&
+            (row.sharingRole === "owner" ||
+              Boolean(selfUserId && row.createdActor?.id === selfUserId)),
           category: normalizeOptionalString(row.category),
           icon: normalizeOptionalString(row.icon),
           color: normalizeOptionalString(row.color),

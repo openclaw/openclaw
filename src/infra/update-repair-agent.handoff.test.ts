@@ -48,7 +48,7 @@ afterEach(() => {
   fixture.stream.mockReset();
 });
 
-it("settles the real repair handoff without closing a parent lease before Doctor admission", async () => {
+it("settles the real repair turn without closing a parent lease before Doctor admission", async () => {
   await withState({ layout: "home" }, async (state) => {
     fixture.handoff = createManagedHandoffTestBinding(state.root);
     vi.stubEnv(
@@ -94,27 +94,19 @@ it("settles the real repair handoff without closing a parent lease before Doctor
     };
     await state.writeConfig(config);
     setRuntimeConfigSnapshot(config);
-    fixture.stream.mockImplementation((model, context) => {
-      expect(context.tools?.map((tool) => tool.name)).toContain("request_update_maintenance");
+    fixture.stream.mockImplementation((model) => {
       const stream = createAssistantMessageEventStream();
       queueMicrotask(() => {
         stream.push({
           type: "done",
-          reason: "toolUse",
+          reason: "stop",
           message: buildEmbeddedRunnerAssistant({
-            content: [
-              {
-                type: "toolCall",
-                id: "maintenance-request",
-                name: "request_update_maintenance",
-                arguments: { operation: "doctor-fix" },
-              },
-            ],
+            content: [{ type: "text", text: "Repair completed." }],
             api: model.api,
             provider: model.provider,
             model: model.id,
             usage: createMockUsage(1, 1),
-            stopReason: "toolUse",
+            stopReason: "stop",
           }),
         });
         stream.end();
@@ -134,16 +126,14 @@ it("settles the real repair handoff without closing a parent lease before Doctor
           turnInput(state, {
             config,
             authProfileId: "fixture:repair",
-            prompt: "Request Doctor repair using the maintenance tool.",
+            prompt: "Diagnose the failed update.",
             timeoutMs: 30000,
-            maintenanceHandoff: true,
           }),
         ),
       );
       expect(result, JSON.stringify(result)).toMatchObject({
         status: "completed",
-        envelope: { status: "ok" },
-        maintenance: { operation: "doctor-fix" },
+        envelope: { status: "ok", final: "Repair completed." },
       });
       expect(fixture.stream).toHaveBeenCalledTimes(1);
       // These checks must precede fixture teardown: cleanup must not hide a leaked lease.

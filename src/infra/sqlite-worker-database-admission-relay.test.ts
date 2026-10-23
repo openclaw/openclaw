@@ -1,10 +1,78 @@
 import { once } from "node:events";
 import { MessageChannel, type MessagePort, Worker } from "node:worker_threads";
-import { expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
+import { renderAssistantRequestFailureCopy } from "../agents/failover/assistant-request-failure-copy.js";
+import { classifyGatewayStorageFailure } from "./sqlite-error-diagnostics.js";
 import {
+  exchangeSqliteDatabaseAdmissions,
   readSqliteDatabaseAdmissionDeadline,
   withSqliteDatabaseAdmissionWait,
 } from "./sqlite-worker-database-admission-relay.js";
+
+const channels = new Set<MessageChannel>();
+const workers = new Set<Worker>();
+afterEach(async () => {
+  for (const channel of channels) {
+    channel.port1.close();
+    channel.port2.close();
+  }
+  channels.clear();
+  await Promise.all([...workers].map((worker) => worker.terminate()));
+  workers.clear();
+});
+
+function createChannel() {
+  const channel = new MessageChannel();
+  channels.add(channel);
+  return channel;
+}
+
+function startWorker(channel: MessageChannel, source: string, budgetMs?: number) {
+  const worker = new Worker(
+    `const { parentPort, workerData } = require("node:worker_threads");
+     (async () => {
+       const { register } = await import(workerData.loader);
+       register();
+       const { exchangeSqliteDatabaseAdmissions, withSqliteDatabaseAdmissionWait } = await import(workerData.relay);
+       ${source}
+     })().catch((error) => { throw error; });`,
+    {
+      eval: true,
+      execArgv: [],
+      workerData: {
+        port: channel.port2,
+        budgetMs,
+        loader: import.meta.resolve("tsx/esm/api"),
+        relay: new URL("./sqlite-worker-database-admission-relay.ts", import.meta.url).href,
+      },
+      transferList: [channel.port2],
+    },
+  );
+  workers.add(worker);
+  return worker;
+}
+
+it("retains storage failure guidance when the caller cancels admission", () => {
+  const channel = createChannel();
+  const cause = Object.assign(new Error("database or disk is full"), { code: "SQLITE_FULL" });
+  let failure: unknown;
+  try {
+    withSqliteDatabaseAdmissionWait(
+      {
+        assertActive: () => {
+          throw cause;
+        },
+      },
+      () => exchangeSqliteDatabaseAdmissions(channel.port1, []),
+    );
+  } catch (error) {
+    failure = error;
+  }
+  expect(failure).toMatchObject({ code: "unavailable", cause });
+  expect(
+    renderAssistantRequestFailureCopy({ storageFailure: classifyGatewayStorageFailure(failure) }),
+  ).toContain("disk is full. Free up space");
+});
 
 it("retains the caller deadline until asynchronous work settles", async () => {
   const resume = Promise.withResolvers<void>();
@@ -18,20 +86,16 @@ it("retains the caller deadline until asynchronous work settles", async () => {
 });
 
 it("does not carry a completed operation's deadline into the next operation on a retained worker", async () => {
-  const channel = new MessageChannel();
+  const channel = createChannel();
   channel.port1.on("message", (request: { port: MessagePort; decision: SharedArrayBuffer }) => {
     request.port.postMessage([], []);
     Atomics.store(new Int32Array(request.decision), 0, 1);
     Atomics.notify(new Int32Array(request.decision), 0);
     request.port.close();
   });
-  const worker = new Worker(
-    `const { parentPort, workerData } = require("node:worker_threads");
-     const { AsyncResource } = require("node:async_hooks");
-     (async () => {
-       const { register } = await import(workerData.loader);
-       register();
-       const { exchangeSqliteDatabaseAdmissions, withSqliteDatabaseAdmissionWait } = await import(workerData.relay);
+  const worker = startWorker(
+    channel,
+    `const { AsyncResource } = require("node:async_hooks");
        let retained;
        parentPort.on("message", (operation) => {
          try {
@@ -47,51 +111,30 @@ it("does not carry a completed operation's deadline into the next operation on a
            parentPort.postMessage({ operation, message: error.message, code: error.code });
          }
        });
-       parentPort.postMessage({ ready: true });
-     })().catch((error) => { throw error; });`,
-    {
-      eval: true,
-      execArgv: [],
-      workerData: {
-        port: channel.port2,
-        loader: import.meta.resolve("tsx/esm/api"),
-        relay: new URL("./sqlite-worker-database-admission-relay.ts", import.meta.url).href,
-      },
-      transferList: [channel.port2],
-    },
+       parentPort.postMessage({ ready: true });`,
   );
-  try {
-    await once(worker, "message");
-    const expired = once(worker, "message");
-    worker.postMessage("expired", []);
-    expect((await expired)[0]).toMatchObject({ operation: "expired", code: "unavailable" });
-    const next = once(worker, "message");
-    worker.postMessage("next", []);
-    expect((await next)[0]).toEqual({ operation: "next", value: [] });
-  } finally {
-    channel.port1.close();
-    channel.port2.close();
-    await worker.terminate();
-  }
+  await once(worker, "message");
+  const expired = once(worker, "message");
+  worker.postMessage("expired", []);
+  expect((await expired)[0]).toMatchObject({ operation: "expired", code: "unavailable" });
+  const next = once(worker, "message");
+  worker.postMessage("next", []);
+  expect((await next)[0]).toEqual({ operation: "next", value: [] });
 });
 
 it.each([
   { name: "the caller's remaining deadline", budgetMs: 1_000 },
   { name: "the ten-minute safety bound without a caller deadline", budgetMs: undefined },
 ])("bounds a vanished admission peer by $name", async ({ budgetMs }) => {
-  const channel = new MessageChannel();
+  const channel = createChannel();
   let waitedPastThirtySeconds = false;
   channel.port1.once("message", (request: { port: MessagePort }) => {
     request.port.close();
     channel.port1.close();
   });
-  const worker = new Worker(
-    `const { parentPort, workerData } = require("node:worker_threads");
-     (async () => {
-       const { register } = await import(workerData.loader);
-       register();
-       const { exchangeSqliteDatabaseAdmissions, withSqliteDatabaseAdmissionWait } = await import(workerData.relay);
-       const monotonic = process.hrtime.bigint.bind(process.hrtime);
+  const worker = startWorker(
+    channel,
+    `const monotonic = process.hrtime.bigint.bind(process.hrtime);
        let elapsed = 0;
        process.hrtime.bigint = () => monotonic() + BigInt(elapsed) * 1_000_000n;
        // Advance at the wait boundary so fake time cannot race a native park.
@@ -107,7 +150,6 @@ it.each([
          }
          return "timed-out";
        };
-       parentPort.postMessage({ ready: true });
        try {
          const exchange = () => exchangeSqliteDatabaseAdmissions(workerData.port, []);
          if (workerData.budgetMs === undefined) exchange();
@@ -118,44 +160,27 @@ it.each([
        } finally {
          workerData.port.close();
          parentPort.close();
-       }
-     })().catch((error) => { throw error; });`,
-    {
-      eval: true,
-      execArgv: [],
-      workerData: {
-        port: channel.port2,
-        budgetMs,
-        loader: import.meta.resolve("tsx/esm/api"),
-        relay: new URL("./sqlite-worker-database-admission-relay.ts", import.meta.url).href,
-      },
-      transferList: [channel.port2],
-    },
+       }`,
+    budgetMs,
   );
-  try {
-    const result = await new Promise((resolve, reject) => {
-      let reply: unknown;
-      worker.on("error", reject);
-      // Exit can drain the result message and fire before an await continuation.
-      worker.once("exit", () => resolve(reply));
-      worker.on("message", (message) => {
-        if ("waiting" in message) {
-          waitedPastThirtySeconds = true;
-          expect(message.waiting).toBeGreaterThan(480_000);
-          expect(message.waiting).toBeLessThanOrEqual(488_000);
-        } else if (!("ready" in message)) {
-          reply = message;
-        }
-      });
+  const result = await new Promise((resolve, reject) => {
+    let reply: unknown;
+    worker.on("error", reject);
+    // Exit can drain the result message and fire before an await continuation.
+    worker.once("exit", () => resolve(reply));
+    worker.on("message", (message) => {
+      if ("waiting" in message) {
+        waitedPastThirtySeconds = true;
+        expect(message.waiting).toBeGreaterThan(480_000);
+        expect(message.waiting).toBeLessThanOrEqual(488_000);
+      } else {
+        reply = message;
+      }
     });
-    expect(waitedPastThirtySeconds).toBe(budgetMs === undefined);
-    expect(result).toEqual({
-      message: "SQLite admission facts exchange timed out; the host did not reply",
-      code: "unavailable",
-    });
-  } finally {
-    channel.port1.close();
-    channel.port2.close();
-    await worker.terminate();
-  }
+  });
+  expect(waitedPastThirtySeconds).toBe(budgetMs === undefined);
+  expect(result).toEqual({
+    message: "SQLite admission facts exchange timed out; the host did not reply",
+    code: "unavailable",
+  });
 });

@@ -601,6 +601,11 @@ extension SettingsProTab {
 
             Section {
                 self.aboutLinkRow(
+                    title: "Support",
+                    icon: "questionmark.circle",
+                    color: .blue,
+                    url: URL(string: "https://community.openclaw.ai/")!)
+                self.aboutLinkRow(
                     title: "Website",
                     icon: "globe",
                     color: .blue,

@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { copyWithPathPatch } from "./config-form-copy-on-write.ts";
+import { copyWithPathPatch } from "../lib/config-form-utils.ts";
 import {
   arrayInputConstraints,
   canApplyArrayCandidate,
@@ -265,9 +265,9 @@ describe("config form schema constraints", () => {
       const: ["a"],
     } satisfies JsonSchema;
 
-    expect(canApplyArrayCandidate(schema, ["a", "x", "y"], ["a", "x"], false, false)).toBe(true);
-    expect(canApplyArrayCandidate(schema, ["a", "x"], ["a"], false, false)).toBe(true);
-    expect(canApplyArrayCandidate(schema, ["a", "x", "y"], ["x", "y"], false, false)).toBe(false);
+    expect(canApplyArrayCandidate(schema, ["a", "x", "y"], ["a", "x"], false)).toBe(true);
+    expect(canApplyArrayCandidate(schema, ["a", "x"], ["a"], false)).toBe(true);
+    expect(canApplyArrayCandidate(schema, ["a", "x", "y"], ["x", "y"], false)).toBe(false);
   });
 
   it("validates and compares deeply nested config values without depth cutoffs", () => {

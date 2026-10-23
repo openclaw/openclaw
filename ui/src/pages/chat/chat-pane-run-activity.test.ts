@@ -119,7 +119,7 @@ describe("composer run status", () => {
   it.each(["editable", "view-only subagent", "read-only shared"] as const)(
     "keeps %s child activity in the transcript through roster hydration and settlement",
     async (access) => {
-      vi.spyOn(Date, "now").mockReturnValue(66_000);
+      vi.spyOn(Date, "now").mockReturnValue(66_500);
       const parent: GatewaySessionRow = {
         key: access === "view-only subagent" ? "agent:main:subagent:parent" : "agent:main:parent",
         kind: "direct",
@@ -203,7 +203,7 @@ describe("composer run status", () => {
       const timer = container.querySelector(
         ".chat-subagent-activity__elapsed openclaw-elapsed-time",
       );
-      expect(timer).toHaveProperty("startMs", 1_500);
+      expect(timer?.textContent).toBe("1m 5s");
 
       await draw([
         child,

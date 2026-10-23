@@ -43,6 +43,9 @@ export async function requestChatSend(
     assertUploadsEnabled(state.uploadConfig);
   }
   const sessionKey = params.sessionKey ?? state.sessionKey;
+  if (sessionKey === state.sessionKey && state.isRouteSessionPending?.()) {
+    throw new Error(t("chat.thread.loading"));
+  }
   const selectedAgentId = params.agentId
     ? normalizeAgentId(params.agentId)
     : resolveUiSelectedSessionAgentId(state);
@@ -62,6 +65,10 @@ export async function requestChatSend(
   const sessionId = params.sessionId ?? (params.intent ? undefined : routingSessionId);
   const controlUiReconnectResume = Boolean(
     !params.intent && sessionId && state.reconnectResumeSessionId === sessionId,
+  );
+  const attachments = buildChatApiAttachments(params.attachments);
+  const hasAudio = attachments?.some((attachment) =>
+    attachment.mimeType.toLowerCase().startsWith("audio/"),
   );
   const request = chatOutboxOwner(state).admissions.beginRequest(
     state,
@@ -90,11 +97,12 @@ export async function requestChatSend(
           ? { expectedLeafEntryId: params.expectedLeafEntryId }
           : {}),
         idempotencyKey: params.runId,
-        attachments: buildChatApiAttachments(params.attachments),
+        attachments,
       },
-      // This bounds receipt of the admission ACK, not execution of the admitted turn.
+      // Audio transcription precedes admission; cancellation and connection lifetime
+      // still own that wait. Text retains the bounded startup admission deadline.
       {
-        timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
+        timeoutMs: hasAudio ? null : GATEWAY_STARTUP_ADMISSION_WAIT_MS,
         signal: request.signal,
         retainSentResultOnAbort: true,
       },

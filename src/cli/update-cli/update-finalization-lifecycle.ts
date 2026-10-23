@@ -84,7 +84,7 @@ export class UpdateFinalizationLifecycle {
   handoff?: ManagedHandoffRepair;
   private runId?: string;
   private driver?: UpdateRunDriver;
-  private ledgerOptions?: { env: NodeJS.ProcessEnv };
+  private ledgerOptions?: { env: NodeJS.ProcessEnv; busyTimeoutMs: number };
   private ownsRun = false;
   private ownsRepairRun = false;
   private warnedHeartbeat = false;
@@ -110,24 +110,23 @@ export class UpdateFinalizationLifecycle {
   attachLedger(repair = false): string {
     this.driver = readUpdateRunDriver();
     const inherited = process.env[UPDATE_RUN_ID_ENV]?.trim();
-    this.ledgerOptions = { env: { ...process.env } };
-    const admissionOptions = { ...this.ledgerOptions, busyTimeoutMs: this.budget("preflight") };
+    this.ledgerOptions = { env: { ...process.env }, busyTimeoutMs: this.budget("preflight") };
     this.runId = createUpdateRun(
       { runId: inherited || undefined, trigger: "cli" },
-      admissionOptions,
+      this.ledgerOptions,
     ).runId;
     this.ownsRun = !inherited;
-    adoptUpdateRun(this.runId, admissionOptions);
+    adoptUpdateRun(this.runId, this.ledgerOptions);
     this.handoff?.bindRun(this.runId);
     this.ownsRepairRun = repair && this.ownsRun;
     if (this.ownsRepairRun) {
-      recordUpdateRunRepairContinuation(this.runId, this.runId, admissionOptions);
+      recordUpdateRunRepairContinuation(this.runId, this.runId, this.ledgerOptions);
     }
     if (this.active) {
       recordUpdateRunStep(
         this.runId,
         { step: this.active.step, status: "in_progress", startedAtMs: this.active.startedAtMs },
-        admissionOptions,
+        this.ledgerOptions,
       );
     }
     return this.runId;
@@ -137,7 +136,7 @@ export class UpdateFinalizationLifecycle {
     if (this.runId && this.ownsRun && installKind !== "unknown") {
       recordUpdateRunPhase(
         this.runId,
-        "requested",
+        this.ownsRepairRun ? "repairing" : "requested",
         {
           target: { kind: installKind, ...(version ? { version } : {}) },
           ...(version ? { after: { version } } : {}),
@@ -490,7 +489,7 @@ export class UpdateFinalizationLifecycle {
       this.failureObservation = await verifyUpdateFailureRecovery({
         result,
         root: this.root,
-        opts: { json: this.json, run: { runId: this.runId, env } },
+        opts: { json: this.json, run: { runId: this.runId, ...this.ledgerOptions } },
         env,
         timeoutMs: this.timeoutMs,
         serviceUpdateVerdict: this.serviceUpdateVerdict,

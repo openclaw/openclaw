@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createHotSqliteRollbackJournal } from "../../test/helpers/sqlite-hot-journal.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { withDatabase } from "./package-update-activation-fixtures.test-support.js";
 import {
   resolvePackageActivationAnchor,
   resolvePackageActivationControl,
@@ -48,26 +48,34 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-it("reuses native executor storage beside control across later update and recovery invocations", async () => {
+async function acquireAuthority() {
   await withImmutableUpdateOwner(root, async () => undefined);
-  const first = mocks.executor.mock.calls[0]?.[2]?.existingAuthority;
+  const authority = mocks.executor.mock.calls[0]?.[2]?.existingAuthority;
+  if (!authority) {
+    throw new Error("Missing native executor binding");
+  }
+  return authority;
+}
+
+function journalBytes(databasePath: string) {
+  return [databasePath, `${databasePath}-journal`].map((file) => fs.readFileSync(file));
+}
+
+it("reuses native executor storage beside control across later update and recovery invocations", async () => {
+  const first = await acquireAuthority();
   expect(first).toMatchObject({
     databasePath: path.join(control, "executor", "lease.sqlite"),
     installKey: root,
   });
-  if (!first) {
-    throw new Error("Missing native executor binding");
-  }
   const stat = fs.lstatSync(first.databasePath, { bigint: true });
   expect(first.databaseIdentity).toBe(`${stat.dev}:${stat.ino}`);
-  const db = new DatabaseSync(first.databasePath, { readOnly: true });
-  try {
-    expect(
-      db.prepare("SELECT name FROM sqlite_schema WHERE name = 'managed_update_handoffs'").get(),
-    ).toMatchObject({ name: "managed_update_handoffs" });
-  } finally {
-    db.close();
-  }
+  const schemaQuery = "SELECT name FROM sqlite_schema WHERE name = 'managed_update_handoffs'";
+  withDatabase(
+    first.databasePath,
+    (db) =>
+      expect(db.prepare(schemaQuery).get()).toMatchObject({ name: "managed_update_handoffs" }),
+    true,
+  );
 
   await withImmutableUpdateOwner(root, async () => undefined);
   expect(mocks.executor.mock.calls[1]?.[2]?.existingAuthority).toEqual(first);
@@ -78,11 +86,7 @@ it("reuses native executor storage beside control across later update and recove
 });
 
 it("refuses a retained executor locator outside the installation control before admission", async () => {
-  await withImmutableUpdateOwner(root, async () => undefined);
-  const first = mocks.executor.mock.calls[0]?.[2]?.existingAuthority;
-  if (!first) {
-    throw new Error("Missing native executor binding");
-  }
+  const first = await acquireAuthority();
   await expect(
     withImmutableUpdateOwner(root, async () => undefined, {
       ...first,
@@ -95,16 +99,9 @@ it("refuses a retained executor locator outside the installation control before 
 });
 
 it("requires explicit recovery before an existing executor journal can be replayed", async () => {
-  await withImmutableUpdateOwner(root, async () => undefined);
-  const authority = mocks.executor.mock.calls[0]?.[2]?.existingAuthority;
-  if (!authority) {
-    throw new Error("Missing native executor binding");
-  }
+  const authority = await acquireAuthority();
   createHotSqliteRollbackJournal({ path: authority.databasePath, mutationSql: "SELECT 1" });
-  const before = [
-    fs.readFileSync(authority.databasePath),
-    fs.readFileSync(`${authority.databasePath}-journal`),
-  ];
+  const before = journalBytes(authority.databasePath);
   mocks.executor.mockImplementation(async (_runId, operation, options) => {
     const binding = options?.existingAuthority;
     if (!binding) {
@@ -122,10 +119,7 @@ it("requires explicit recovery before an existing executor journal can be replay
     errcode: 776,
   });
   expect(continuation).not.toHaveBeenCalled();
-  expect([
-    fs.readFileSync(authority.databasePath),
-    fs.readFileSync(`${authority.databasePath}-journal`),
-  ]).toEqual(before);
+  expect(journalBytes(authority.databasePath)).toEqual(before);
   await expect(
     withImmutableUpdateOwner(root, continuation, undefined, { recover: true }),
   ).resolves.toBe("recovered");

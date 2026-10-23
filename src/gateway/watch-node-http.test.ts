@@ -1,5 +1,4 @@
 import { request as httpRequest, type ServerResponse } from "node:http";
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
@@ -74,11 +73,11 @@ afterEach(async () => {
   await tempDirs.cleanup();
   cleanups.length = 0;
   databasePaths.clear();
+  vi.unstubAllEnvs();
 });
 
 async function makeWatchNodeDir(prefix: string): Promise<string> {
   const baseDir = await tempDirs.make(prefix);
-  databasePaths.add(path.join(baseDir, "watch-identity.sqlite"));
   databasePaths.add(
     resolveOpenClawStateSqlitePath({ ...process.env, OPENCLAW_STATE_DIR: baseDir }),
   );
@@ -93,7 +92,7 @@ async function createWatchNodeFixture(
 ) {
   const baseDir = await makeWatchNodeDir(prefix);
   const identity = loadOrCreateDeviceIdentity({
-    path: path.join(baseDir, "watch-identity.sqlite"),
+    env: { ...process.env, OPENCLAW_STATE_DIR: baseDir },
   });
   const issued = await issueDevicePairSetupBootstrapToken({
     baseDir,
@@ -562,7 +561,7 @@ describe("watch node HTTP transport", () => {
 
     const abortedBaseDir = await makeWatchNodeDir("openclaw-watch-node-aborted-connect-");
     const abortedIdentity = loadOrCreateDeviceIdentity({
-      path: path.join(abortedBaseDir, "watch-identity.sqlite"),
+      env: { ...process.env, OPENCLAW_STATE_DIR: abortedBaseDir },
     });
     const abortedBootstrap = await issueDevicePairSetupBootstrapToken({
       baseDir: abortedBaseDir,
@@ -626,7 +625,7 @@ describe("watch node HTTP transport", () => {
 
     const completedBaseDir = await makeWatchNodeDir("openclaw-watch-node-completed-connect-");
     const completedIdentity = loadOrCreateDeviceIdentity({
-      path: path.join(completedBaseDir, "watch-identity.sqlite"),
+      env: { ...process.env, OPENCLAW_STATE_DIR: completedBaseDir },
     });
     const completedBootstrap = await issueDevicePairSetupBootstrapToken({
       baseDir: completedBaseDir,
@@ -659,7 +658,7 @@ describe("watch node HTTP transport", () => {
   it("restores an uncorrelated bootstrap token when the connect response aborts", async () => {
     const baseDir = await makeWatchNodeDir("openclaw-watch-node-generic-abort-");
     const identity = loadOrCreateDeviceIdentity({
-      path: path.join(baseDir, "watch-identity.sqlite"),
+      env: { ...process.env, OPENCLAW_STATE_DIR: baseDir },
     });
     const issued = await issueDeviceBootstrapToken({
       baseDir,
@@ -770,6 +769,7 @@ describe("watch node HTTP transport", () => {
       const approved = await approveBootstrapDevicePairing(
         pairing.request.requestId,
         existingProfile,
+        {},
         baseDir,
       );
       expect(approved?.status).toBe("approved");

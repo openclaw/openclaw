@@ -115,9 +115,8 @@ describe("Code Mode output provenance", () => {
         jsonResult({ ok: true }),
       );
       const result = await runCodeModeScriptHeadless({
-        ctx: createHeadlessCodeModeHarness([tool]),
+        ctx: createHeadlessCodeModeHarness([tool], { codeMode: { maxOutputBytes: cap } }),
         code: `text(${JSON.stringify(first)}); await output_boundary({}); ${last ? `text(${JSON.stringify(last)});` : ""} ${fail ? 'throw new Error("DIAGNOSTIC" + "é".repeat(4000));' : "return true;"}`,
-        ...(cap ? { overrides: { maxOutputBytes: cap } } : {}),
       });
       expect(result.status).toBe(fail ? "failed" : "completed");
       expectCodeModeSharedBudget(result, cap ?? 65536);

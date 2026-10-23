@@ -25,16 +25,9 @@ type ReplyTimingTracker<TLogParams extends object = ReplyTimingLogParams> = {
   logIfSlow: (params: TLogParams, options?: { repeat?: boolean }) => void;
 };
 
-export function isReplyProfilerEnabled(params?: {
-  config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-}): boolean {
+export function isReplyProfilerEnabled(params?: { config?: OpenClawConfig }): boolean {
   const cfg = params?.config;
-  const env = params?.env ?? process.env;
-  return (
-    isDiagnosticFlagEnabled("profiler", cfg, env) ||
-    isDiagnosticFlagEnabled("reply.profiler", cfg, env)
-  );
+  return isDiagnosticFlagEnabled("profiler", cfg) || isDiagnosticFlagEnabled("reply.profiler", cfg);
 }
 
 /** Keeps slow replies diagnosable; profiling lowers the warning thresholds. */

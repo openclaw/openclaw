@@ -111,10 +111,8 @@ export function createDownloadCaptureForPage(
   };
 
   const retireDeadline = () => {
-    if (timer) {
-      clearTimeout(timer);
-      timer = undefined;
-    }
+    clearTimeout(timer);
+    timer = undefined;
   };
 
   const cleanup = () => {

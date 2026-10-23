@@ -7,6 +7,21 @@ import type { UsageProps, UsageSessionEntry, UsageTotals, UsageAggregates } from
 
 const noop = vi.fn();
 
+export function usageTotals(
+  input: number,
+  cost: number,
+  overrides: Partial<UsageTotals> = {},
+): UsageTotals {
+  return {
+    ...createEmptyCostUsageTotals(),
+    input,
+    totalTokens: input,
+    totalCost: cost,
+    inputCost: cost,
+    ...overrides,
+  };
+}
+
 export function usageSession(
   key: string,
   agentId: string,
@@ -42,8 +57,10 @@ export function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProp
   const props: UsageProps = {
     data: {
       loading: false,
+      read: null,
       exporting: false,
       error: null,
+      partialNotice: null,
       sessions: [],
       creatorOptions: [],
       totals: null,
@@ -79,18 +96,18 @@ export function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProp
     detail: {
       context: {
         weight: undefined,
-        loading: false,
+        read: null,
         status: { error: null, hasLoaded: false, stale: false, awaitingGateway: false },
       },
       timeSeriesMode: "cumulative",
       timeSeriesBreakdownMode: "total",
       timeSeries: null,
-      timeSeriesLoading: false,
+      timeSeriesRead: null,
       timeSeriesStatus: { error: null, hasLoaded: false, stale: false, awaitingGateway: false },
       timeSeriesCursorStart: null,
       timeSeriesCursorEnd: null,
       sessionLogs: null,
-      sessionLogsLoading: false,
+      sessionLogsRead: null,
       sessionLogsStatus: { error: null, hasLoaded: false, stale: false, awaitingGateway: false },
       sessionLogsExpanded: false,
       logFilters: { roles: [], tools: [], hasTools: false, query: "" },
@@ -128,6 +145,19 @@ export function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProp
     props.data.overview = projectUsageData(props.data.sessions, props.filters).overview;
   }
   return props;
+}
+
+export function usageFixture(
+  data: Partial<UsageProps["data"]> = {},
+  filters: Partial<UsageProps["filters"]> = {},
+  display: Partial<UsageProps["display"]> = {},
+): UsageProps {
+  const base = createUsageProps();
+  return createUsageProps({
+    data: { ...base.data, ...data },
+    filters: { ...base.filters, ...filters },
+    display: { ...base.display, ...display },
+  });
 }
 
 export function createUsageOverview(

@@ -10,6 +10,7 @@ import {
   PluginInstallRuntimeBatch,
   type PluginInstallBatchReload,
 } from "../plugins/install-runtime-batch.js";
+import * as index from "../plugins/installed-plugin-index-records.js";
 import type { uninstallPluginWithPolicy } from "../plugins/management-uninstall.js";
 import { preflightPluginInstall } from "../plugins/plugin-install-preflight.js";
 import {
@@ -24,6 +25,9 @@ import {
   installClawPackages,
   rollbackStatelessClawPackages,
   withPackageBoundaries,
+  testPackageLease,
+  testPluginProbe,
+  withStagedInspection,
 } from "./packages.boundary.test-support.js";
 import { preflightClawPackage } from "./packages.js";
 import { emptyPluginCapabilityEvidence, packageInstallPlan } from "./packages.test-support.js";
@@ -43,24 +47,23 @@ const integrity = `sha256:${"a".repeat(64)}`;
 type InstallOptions = NonNullable<Parameters<typeof installClawPackages>[1]>;
 const realPreflightPluginInstall = preflightPluginInstall;
 
-function testPackageLease(onRelease: () => void = () => {}) {
-  return {
-    identity: {
-      scope: "claw-package-lifecycle" as const,
-      key: "test-package",
-      owner: "test-owner",
-    },
-    heartbeat: () => {},
-    release: onRelease,
+async function runtimeEnv(prefix: string, extra: NodeJS.ProcessEnv = {}) {
+  const root = dirs.make(prefix);
+  const env = {
+    OPENCLAW_STATE_DIR: root,
+    OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+    ...extra,
   };
+  await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}");
+  return { root, env };
 }
 
-function packageDeps(
-  root: string,
-  loadInstallRecords: () => Promise<Record<string, PluginInstallRecord>>,
-) {
+function packageDeps(root: string, load: () => Promise<Record<string, PluginInstallRecord>>) {
   return {
-    preflightPlugin: (params) => realPreflightPluginInstall({ ...params, loadInstallRecords }),
+    preflightPlugin: async (params) => {
+      using _ = vi.spyOn(index, "loadInstalledPluginIndexInstallRecords").mockImplementation(load);
+      return await realPreflightPluginInstall(params);
+    },
     probePlugin: async (request) => {
       const { spec } = request;
       const pluginId = spec.slice(spec.lastIndexOf("/") + 1).split("@")[0]!;
@@ -93,12 +96,7 @@ function packageDeps(
 
 describe("Claw committed plugin requirement handoff", () => {
   it("rolls back an unpublished plugin after runtime batch preparation fails", async () => {
-    const root = dirs.make("openclaw-claw-batch-rollback-");
-    const env = {
-      OPENCLAW_STATE_DIR: root,
-      OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
-    };
-    await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}");
+    const { root, env } = await runtimeEnv("openclaw-claw-batch-rollback-");
     await withEnvAsync(env, async () => {
       const batch = new PluginInstallRuntimeBatch({ env }, vi.fn());
       const uninstallPlugin = vi.fn(
@@ -169,12 +167,7 @@ describe("Claw committed plugin requirement handoff", () => {
   });
 
   it("rechecks reviewed access at a managed plugin's persistent install boundary", async () => {
-    const root = dirs.make("openclaw-claw-access-guard-");
-    const env = {
-      OPENCLAW_STATE_DIR: root,
-      OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
-    };
-    await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}");
+    const { root, env } = await runtimeEnv("openclaw-claw-access-guard-");
     let accessCurrent = true;
     const persistentMutation = vi.fn();
     const installPlugin = vi.fn(async (params: { beforePersistentApply?: () => void }) => {
@@ -216,12 +209,7 @@ describe("Claw committed plugin requirement handoff", () => {
   });
 
   it("preserves the install owner's failure instead of a nested CLI exit", async () => {
-    const root = dirs.make("openclaw-claw-install-error-");
-    const env = {
-      OPENCLAW_STATE_DIR: root,
-      OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
-    };
-    await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}");
+    const { root, env } = await runtimeEnv("openclaw-claw-install-error-");
     installOwner.install.mockReset().mockRejectedValue(installOwner.failure);
     await withEnvAsync(env, async () => {
       const result = await installClawPackages(
@@ -391,27 +379,7 @@ describe("stateless Claw plugin rollback", () => {
       uninstallPlugin,
       installPlugin: vi.fn().mockResolvedValue(undefined),
       preflightPlugin: vi.fn().mockResolvedValue({ ok: true, action: "install" }),
-      probePlugin: vi.fn(async (request: Parameters<typeof installPluginFromClawHub>[0]) => {
-        await request.onPluginArtifactInspect?.({
-          pluginId: "audit",
-          stagedArtifactDir: "/tmp/staged-audit",
-          mode: "install",
-        });
-        return {
-          ok: true as const,
-          pluginId: "audit",
-          packageName: "@owner/audit",
-          targetDir: "/tmp/plugin",
-          extensions: [],
-          clawhub: {
-            source: "clawhub" as const,
-            clawhubUrl: "https://clawhub.ai",
-            clawhubPackage: "@owner/audit",
-            clawhubFamily: "code-plugin" as const,
-            integrity,
-          },
-        };
-      }),
+      probePlugin: vi.fn(withStagedInspection(async () => testPluginProbe())),
       inspectPluginCapabilities: vi.fn((_rootDir: string, pluginId: string) => ({
         ...emptyPluginCapabilityEvidence,
         grantsByPluginId: { [pluginId]: emptyPluginCapabilityEvidence.grants },
@@ -487,7 +455,6 @@ describe("Claw source-host plugin collision", () => {
   const preflightPlugin = vi.fn(async () => ({
     ok: true as const,
     action: "install" as const,
-    request: {} as never,
   }));
   const probePlugin = vi.fn(async (request: Parameters<typeof installPluginFromClawHub>[0]) => {
     await request.onPluginArtifactInspect?.({
@@ -512,18 +479,10 @@ describe("Claw source-host plugin collision", () => {
     };
   });
 
-  function sourceHostEnv(root: string): NodeJS.ProcessEnv {
-    return {
-      OPENCLAW_DEV_SOURCE_ROOT: process.cwd(),
-      OPENCLAW_STATE_DIR: root,
-      OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
-    };
-  }
-
   it("blocks the pinned ClawHub plugin before installation", async () => {
-    const root = dirs.make("claw-source-plugin-conflict-");
-    const env = sourceHostEnv(root);
-    await fs.writeFile(env.OPENCLAW_CONFIG_PATH!, "{}");
+    const { root, env } = await runtimeEnv("claw-source-plugin-conflict-", {
+      OPENCLAW_DEV_SOURCE_ROOT: process.cwd(),
+    });
     await withEnvAsync(env, async () => {
       const sql = observeMainThreadSql();
       try {
@@ -553,11 +512,11 @@ describe("Claw source-host plugin collision", () => {
   });
 
   it("allows an explicit load path to select the pending installed plugin", async () => {
-    const root = dirs.make("claw-configured-plugin-override-");
-    const env = sourceHostEnv(root);
+    const { root, env } = await runtimeEnv("claw-configured-plugin-override-", {
+      OPENCLAW_DEV_SOURCE_ROOT: process.cwd(),
+    });
     const extensionsDir = path.join(root, "extensions");
     await fs.mkdir(extensionsDir);
-    await fs.writeFile(env.OPENCLAW_CONFIG_PATH!, "{}");
     await withEnvAsync(env, async () => {
       await expect(
         preflightClawPackage(pinnedBundledPlugin, path.join(root, "workspace"), {
@@ -577,9 +536,9 @@ describe("Claw source-host plugin collision", () => {
   });
 
   it("blocks a shadowed plugin upgrade during preview", async () => {
-    const root = dirs.make("claw-source-plugin-upgrade-");
-    const env = sourceHostEnv(root);
-    await fs.writeFile(env.OPENCLAW_CONFIG_PATH!, "{}");
+    const { root, env } = await runtimeEnv("claw-source-plugin-upgrade-", {
+      OPENCLAW_DEV_SOURCE_ROOT: process.cwd(),
+    });
     await withEnvAsync(env, async () => {
       await expect(
         preflightClawPackage(pinnedBundledPlugin, path.join(root, "workspace"), {
@@ -589,9 +548,7 @@ describe("Claw source-host plugin collision", () => {
             preflightPlugin: async () => ({
               ok: false,
               code: "plugin_version_conflict",
-              request: {} as never,
               installedVersion: "2026.6.1",
-              expectedVersion: pinnedBundledPlugin.version,
             }),
             probePlugin,
             inspectPluginCapabilities: (_rootDir, pluginId) => ({
@@ -605,9 +562,9 @@ describe("Claw source-host plugin collision", () => {
   });
 
   it("rejects a stale plan before writing provenance or invoking the installer", async () => {
-    const root = dirs.make("claw-apply-plugin-conflict-");
-    const env = sourceHostEnv(root);
-    await fs.writeFile(env.OPENCLAW_CONFIG_PATH!, "{}");
+    const { root, env } = await runtimeEnv("claw-apply-plugin-conflict-", {
+      OPENCLAW_DEV_SOURCE_ROOT: process.cwd(),
+    });
     await withEnvAsync(env, async () => {
       const deps = packageDeps(root, async () => ({}));
       const installPlugin = vi.fn(async () => {});

@@ -13,6 +13,10 @@ import {
   prepareOpenClawStateDatabaseSchema,
 } from "./openclaw-state-db.js";
 import { removePreparedWorkerOwnershipColumns } from "./openclaw-state-schema-v17.test-support.js";
+import {
+  addPreCutoverClientCredentialTablesForTest,
+  withStateMigrationBackupForTest,
+} from "./openclaw-state-schema.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {
@@ -58,6 +62,7 @@ describe("Doctor historical row repair", () => {
     const stateDir = tempDirs.make("openclaw-automatic-upgrade-integrity-");
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
     const { db: initial, path: pathname } = openOpenClawStateDatabase(options);
+    addPreCutoverClientCredentialTablesForTest(requireNativeSqliteDatabase(initial));
     initial.exec("PRAGMA foreign_keys = OFF;");
     initial
       .prepare("INSERT INTO task_delivery_state (task_id, requester_origin_json) VALUES (?, ?)")
@@ -66,7 +71,11 @@ describe("Doctor historical row repair", () => {
     initial.exec("PRAGMA user_version = 16; UPDATE schema_meta SET schema_version = 16;");
     closeOpenClawStateDatabaseForTest();
 
-    expect(await prepareOpenClawStateDatabaseSchema(options)).toEqual({
+    expect(
+      await withStateMigrationBackupForTest(options, () =>
+        prepareOpenClawStateDatabaseSchema(options),
+      ),
+    ).toEqual({
       changes: [],
       warnings: [expect.stringMatching(/foreign_key_check failed.*task_delivery_state/iu)],
     });

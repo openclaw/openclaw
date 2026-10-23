@@ -9,13 +9,6 @@ import {
 import { createSessionEventRefreshCoordinator } from "./event-refresh-coordinator.ts";
 import { appendSessionResults } from "./reconcile.ts";
 import type {
-  SessionConnectionOwner,
-  SessionGateway,
-  SessionListScope,
-  SessionListSnapshot,
-  SessionState,
-} from "./session-capability.ts";
-import type {
   ManagedSessionList,
   ManagedSessionListRefresh,
   ObservedSessionList,
@@ -27,6 +20,13 @@ import {
   sessionListQueryKey,
 } from "./session-requests.ts";
 import type { createSessionRosterObservations } from "./session-roster-observations.ts";
+import type {
+  SessionConnectionOwner,
+  SessionGateway,
+  SessionListScope,
+  SessionListSnapshot,
+  SessionState,
+} from "./session-types.ts";
 
 export function getManagedSessionList(
   lists: Map<string, ManagedSessionList>,

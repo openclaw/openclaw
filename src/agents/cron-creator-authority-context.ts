@@ -1,11 +1,13 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CronScheduledToolCallerOrigin } from "../cron/scheduled-tool-policy.js";
 import {
   CRON_MANAGEMENT_METHODS,
   createCronCreatorAuthorityRunScope,
   hasCronChannelRequester,
+  isCronModelManagementAllowed,
   mintCronCreatorAuthorityGrant,
   revokeCronCreatorAuthorityRunScope,
   type CronCreatorAuthorityRunScope,
@@ -17,6 +19,7 @@ import {
   validateAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
+import { requesterCreatorProfileId } from "./requester-origin.js";
 import type {
   CronCreatorToolAuthorityMaterialization,
   CronToolOptions,
@@ -230,7 +233,10 @@ export function bindRequesterOwnerIdentity(params: {
 }
 
 /** Bind at tool construction, never rediscover authority from model arguments or routes. */
-export function bindCronManagementGrant(runId: string | undefined) {
+export function bindCronManagementGrant(runId: string | undefined, config?: OpenClawConfig) {
+  if (!isCronModelManagementAllowed(config)) {
+    return undefined;
+  }
   const scope = activeCronCreatorAuthority.getStore();
   const authority = getGatewayToolCallerIdentity()?.approvalAuthority;
   if (
@@ -266,6 +272,9 @@ export function bindCronManagementGrant(runId: string | undefined) {
 
 /** Retains authenticated provenance before late CLI admission without execution authority. */
 export function captureCronRequesterGrantIssuer(runId: string | undefined) {
+  const creatorProfileId = requesterCreatorProfileId(
+    getGatewayToolCallerIdentity()?.requesterOrigin,
+  );
   const scope = activeCronCreatorAuthority.getStore();
   if (
     !scope ||
@@ -292,6 +301,7 @@ export function captureCronRequesterGrantIssuer(runId: string | undefined) {
       undefined,
       "requester",
       isCurrent,
+      creatorProfileId,
     );
   };
 }
@@ -311,7 +321,7 @@ export function bindCronRequesterGrant(runId: string | undefined) {
 export function isFreshChannelCronAuthorityTurn(params: {
   messageProvider?: string;
   senderId?: string;
-  isHeartbeat: boolean;
+  scheduledAutomation?: boolean;
   isRoomEvent: boolean;
   inputProvenance?: unknown;
   spawnedBy?: string;
@@ -320,7 +330,7 @@ export function isFreshChannelCronAuthorityTurn(params: {
   return (
     Boolean(params.messageProvider) &&
     Boolean(normalizeOptionalString(params.senderId)) &&
-    !params.isHeartbeat &&
+    !params.scheduledAutomation &&
     !params.isRoomEvent &&
     params.inputProvenance === undefined &&
     params.spawnedBy === undefined &&
@@ -405,6 +415,9 @@ export function bindActiveCronCreatorAuthorityResolver(
     return undefined;
   }
   const resolve = resolver.resolve;
+  const creatorProfileId = requesterCreatorProfileId(
+    getGatewayToolCallerIdentity()?.requesterOrigin,
+  );
   return async (options) => {
     // Tool callbacks can run after construction; retain the exact scope object
     // and let its owner revoke it when the admitted run settles.
@@ -426,7 +439,15 @@ export function bindActiveCronCreatorAuthorityResolver(
     return Object.freeze({
       tools: snapshot.tools,
       provenance: snapshot.provenance,
-      grant: mintCronCreatorAuthorityGrant(authority, operationSignal, snapshot.runtimeAuthority),
+      grant: mintCronCreatorAuthorityGrant(
+        authority,
+        operationSignal,
+        snapshot.runtimeAuthority,
+        undefined,
+        "runtime",
+        undefined,
+        creatorProfileId,
+      ),
       ...(snapshot.runtimeAuthority ? { holdsRuntimeAuthority: true as const } : {}),
     });
   };

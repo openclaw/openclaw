@@ -24,6 +24,7 @@ import {
 } from "./server.chat-goal.test-support.js";
 import { prepareGatewayReplyRuntimeForTest } from "./test-helpers.js";
 import { getTestPluginRegistry } from "./test-helpers.plugin-registry.js";
+import { result as workerCommandResult } from "./worker-environments/bootstrap.test-support.js";
 import { createDispatchEnvironmentFixtures } from "./worker-environments/placement-dispatch-test-fixtures.js";
 import {
   projectPlacementTurnClaim,
@@ -39,7 +40,7 @@ import { createWorkerWorkspaceOperationCoordinator } from "./worker-environments
 
 type Scope = { agentId: string; sessionKey: string; sessionId: string; storePath: string };
 
-/** Provider/model transport is simulated; RPC, queue, sharing and SQLite writers are real. */
+/** RPC, queue, sharing and SQLite are real; only provider/node transport is simulated. */
 export function registerWorkerGoalChatCases(
   scope: () => Scope,
   runEmbeddedAgent: MockInstance<typeof executeEmbeddedAgent>,
@@ -53,6 +54,18 @@ export function registerWorkerGoalChatCases(
   client: GatewayClient,
 ) {
   const userMessages = () => readGoalChatUserMessages(scope());
+  const expectNoGoalInput = () => {
+    expect(loadSessionEntry(scope())?.goal).toBeUndefined();
+    expect(userMessages()).toEqual([]);
+  };
+  const expectAccepted = (response: Mock<RespondFn>, payload: Record<string, unknown>) => {
+    expect(response.mock.calls[0]).toEqual([
+      true,
+      expect.objectContaining(payload),
+      undefined,
+      expect.anything(),
+    ]);
+  };
   it.each([
     "continue",
     "preparation-failed",
@@ -93,6 +106,9 @@ export function registerWorkerGoalChatCases(
       const loadNative = vi
         .spyOn(runtimePlugins, "loadAgentRuntimePluginRegistryHandle")
         .mockReturnValue(getTestPluginRegistry());
+      const loadNativeAsync = vi
+        .spyOn(runtimePlugins, "loadAgentRuntimePluginRegistryHandleAsync")
+        .mockResolvedValue(getTestPluginRegistry());
       const baseline = getRuntimeConfig();
       const config: OpenClawConfig = {
         ...baseline,
@@ -124,13 +140,16 @@ export function registerWorkerGoalChatCases(
         sshEndpoint: null,
         attachedSessionIds: [sessionId],
       };
+      const placementOwner = {
+        environmentId: environment.environmentId,
+        ownerEpoch: environment.ownerEpoch,
+      };
       await advancePlacementFixtureToActive(
         placements,
         openOpenClawStateDatabase(),
         { agentId: "main", sessionKey, sessionId, executionMode: "remote-exec" },
         {
-          environmentId: environment.environmentId,
-          ownerEpoch: environment.ownerEpoch,
+          ...placementOwner,
           workerBundleHash: environment.bootstrapReceipt.bundleHash,
           remoteWorkspaceDir: "/worker/goal-workspace",
         },
@@ -138,7 +157,6 @@ export function registerWorkerGoalChatCases(
       const unexpectedTransport = async () => {
         throw new Error("Unexpected external worker operation");
       };
-      // Only node/model I/O is synthetic; the launcher owns real SQLite placement claims.
       const provider = createWorkerSessionTurnPlacementProvider({
         placements,
         environments: {
@@ -148,19 +166,11 @@ export function registerWorkerGoalChatCases(
           destroy: unexpectedTransport,
           stopTunnel: async () => {},
           startTunnel: async () => ({
-            environmentId: environment.environmentId,
-            ownerEpoch: environment.ownerEpoch,
+            ...placementOwner,
             runWorkspaceCommand: async (command) => {
               command.assertCurrent?.();
               expect(JSON.parse(command.input ?? "null")).toEqual({ op: "discover" });
-              return {
-                stdout: "",
-                stderr: "",
-                code: 0,
-                signal: null,
-                killed: false,
-                termination: "exit",
-              };
+              return workerCommandResult();
             },
             quiesceWorkspace: unexpectedTransport,
             reconcileWorkspace: unexpectedTransport,
@@ -222,8 +232,11 @@ export function registerWorkerGoalChatCases(
       );
       const prepared = createDeferred();
       const promote = createDeferred();
-      const objective = "Finish a native worker checklist";
-      const request = createGoalChatStartRequest(scope(), objective, randomUUID());
+      const request = createGoalChatStartRequest(
+        scope(),
+        "Finish a native worker checklist",
+        randomUUID(),
+      );
       const profile = ensureProfileForEmail("worker-goal@example.test");
       const operator = {
         ...client,
@@ -239,6 +252,7 @@ export function registerWorkerGoalChatCases(
           isLocalClient: true,
         },
       } satisfies GatewayClient;
+      const send = (input = request) => rpc("chat.send", input, undefined, operator);
       runEmbeddedAgent.mockImplementation(async (params) => {
         prepared.resolve();
         await promote.promise;
@@ -300,17 +314,16 @@ export function registerWorkerGoalChatCases(
           params.preparedRunAdmission?.assertSourceCurrent,
         );
       });
-      const starting = rpc("chat.send", request, undefined, operator);
+      const starting = send();
       try {
         await awaitGateBeforeSettlement(
           prepared.promise,
           starting,
           "Worker Goal returned before runtime admission",
         );
-        expect(loadSessionEntry(scope())?.goal).toBeUndefined();
-        expect(userMessages()).toEqual([]);
+        expectNoGoalInput();
         if (mode === "continue") {
-          const duplicate = await rpc("chat.send", request, undefined, operator);
+          const duplicate = await send();
           expect(duplicate.mock.calls[0]?.[0]).toBe(false);
           expect(duplicate.mock.calls[0]?.[2]).toMatchObject({
             code: "UNAVAILABLE",
@@ -323,8 +336,7 @@ export function registerWorkerGoalChatCases(
         if (mode !== "continue") {
           expect(started.mock.calls[0]?.[0]).toBe(false);
           await waitForDispatchEnd();
-          expect(loadSessionEntry(scope())?.goal).toBeUndefined();
-          expect(userMessages()).toEqual([]);
+          expectNoGoalInput();
           if (mode === "claim-revoked" || mode === "claim-reassigned") {
             expect(claimChangedAtCommit).toBe(true);
             expect(revokedClaim).toBeDefined();
@@ -335,25 +347,15 @@ export function registerWorkerGoalChatCases(
             }
           }
           if (mode === "preparation-failed") {
-            const changed = await rpc(
-              "chat.send",
-              { ...request, message: "A different objective" },
-              undefined,
-              operator,
-            );
+            const changed = await send({ ...request, message: "A different objective" });
             expect(changed.mock.calls[0]?.[0]).toBe(false);
             expect(changed.mock.calls[0]?.[2]).toMatchObject({
               code: "INVALID_REQUEST",
               details: { reason: "goal-operation-conflict" },
             });
             expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-            const retried = await rpc("chat.send", request, undefined, operator);
-            expect(retried.mock.calls[0]).toEqual([
-              true,
-              expect.objectContaining({ status: "started", action: "start" }),
-              undefined,
-              expect.anything(),
-            ]);
+            const retried = await send();
+            expectAccepted(retried, { status: "started", action: "start" });
             await waitForDispatchEnd();
             expect(loadSessionEntry(scope())?.goal).toMatchObject({
               status: "complete",
@@ -364,20 +366,14 @@ export function registerWorkerGoalChatCases(
           }
           return;
         }
-        expect(started.mock.calls[0]).toEqual([
-          true,
-          expect.objectContaining({
-            status: "started",
-            action: "start",
-            goalId: expect.any(String),
-          }),
-          undefined,
-          expect.anything(),
-        ]);
+        expectAccepted(started, {
+          status: "started",
+          action: "start",
+          goalId: expect.any(String),
+        });
         await waitForDispatchEnd();
         const first = loadSessionEntry(scope())!.goal!;
-        expect(first.status).toBe("paused");
-        expect(first.continuationTurns).toBe(0);
+        expect(first).toMatchObject({ status: "paused", continuationTurns: 0 });
         expect(userMessages()).toHaveLength(1);
         const resumed = await rpc(
           "sessions.goal.update",
@@ -392,12 +388,7 @@ export function registerWorkerGoalChatCases(
           undefined,
           operator,
         );
-        expect(resumed.mock.calls[0]).toEqual([
-          true,
-          expect.objectContaining({ action: "resume", goalId: first.id }),
-          undefined,
-          expect.anything(),
-        ]);
+        expectAccepted(resumed, { action: "resume", goalId: first.id });
         expect((await waitForGatewayActiveWork(30_000)).drained).toBe(true);
         expect(loadSessionEntry(scope())?.goal).toMatchObject({
           id: first.id,
@@ -413,7 +404,7 @@ export function registerWorkerGoalChatCases(
         expect(modelExecuted).toHaveBeenCalledTimes(4);
         expect(userMessages()).toHaveLength(2);
         context.dedupe.clear();
-        const replay = await rpc("chat.send", request, undefined, operator);
+        const replay = await send();
         expect(replay.mock.calls[0]?.[1]).toMatchObject({ replayed: true, goalId: first.id });
         expect(runEmbeddedAgent).toHaveBeenCalledTimes(4);
       } finally {
@@ -423,6 +414,7 @@ export function registerWorkerGoalChatCases(
         commitAdmission.mockRestore();
         releasePlacement();
         loadNative.mockRestore();
+        loadNativeAsync.mockRestore();
         if (replacementClaim && placements.validateTurnClaim(replacementClaim)) {
           await placements.releaseTurn(replacementClaim);
         }
@@ -431,14 +423,12 @@ export function registerWorkerGoalChatCases(
         if (active?.state === "active") {
           const draining = await placements.startDrain({
             sessionId,
-            environmentId: environment.environmentId,
-            ownerEpoch: environment.ownerEpoch,
+            ...placementOwner,
             expectedGeneration: active.generation,
           });
           const reconciling = await placements.startReconcile({
             sessionId,
-            environmentId: environment.environmentId,
-            ownerEpoch: environment.ownerEpoch,
+            ...placementOwner,
             expectedGeneration: draining.generation,
           });
           const reclaimed = await placements.transition({
@@ -488,8 +478,7 @@ export function registerWorkerGoalChatCases(
             "Error: Goal start or resume requires an idle built-in local session with recoverable history or a supported Codex cloud-worker session.",
         }),
       );
-      expect(loadSessionEntry(scope())?.goal).toBeUndefined();
-      expect(userMessages()).toEqual([]);
+      expectNoGoalInput();
       expect(runEmbeddedAgent).not.toHaveBeenCalled();
     } finally {
       clearAgentRunContext(runId);

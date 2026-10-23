@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -8,6 +8,7 @@ import { registerContextEngineForOwner } from "../../context-engine/registry.js"
 import { captureContextEngineRegistryStateForTests } from "../../context-engine/registry.test-support.js";
 import { createAgentCleanupScope } from "../run-cleanup-timeout.js";
 import { runEmbeddedAgentEntry } from "./run-entry.js";
+import { createDirectHarness, makeResult } from "./run-entry.test-support.js";
 
 afterEach(() => clearRuntimeConfigSnapshot());
 
@@ -45,7 +46,7 @@ it.each(cleanupCases)(
       "test:cleanup-probe",
     );
     const cleanupScope = createAgentCleanupScope();
-    let returned = false;
+    let completed: Awaited<ReturnType<typeof runEmbeddedAgentEntry>> | undefined;
     const entry = cleanupScope
       .run(() =>
         runEmbeddedAgentEntry({
@@ -56,11 +57,7 @@ it.each(cleanupCases)(
             fallbacksOverride: [],
           },
           identity: { runId: "cleanup-run", agentId: "main", sessionId: "cleanup-session" },
-          harness: {
-            workspaceDir: process.cwd(),
-            preparation: { kind: "direct" },
-            resolveRuntimeOverride: () => "openclaw",
-          },
+          harness: createDirectHarness(process.cwd(), "openclaw"),
           behavior:
             kind === "command-rpc"
               ? { kind, hasCommittedSideEffect: () => false }
@@ -73,37 +70,30 @@ it.each(cleanupCases)(
                   }),
                 },
           sessionOverride: { kind: "preserve" },
-          runCandidate: async (provider, model) => ({
-            payloads: [{ text: "Completed answer" }],
-            meta: {
-              durationMs: 1,
-              aborted: false,
-              providerStarted: true,
-              stopReason: "completed",
-              agentMeta: { sessionId: "cleanup-session", provider, model },
-            },
-          }),
+          runCandidate: async (provider, model) =>
+            makeResult({
+              provider,
+              model,
+              sessionId: "cleanup-session",
+              text: "Completed answer",
+              meta: { durationMs: 1 },
+            }),
         }),
       )
-      .then((result) => {
-        returned = true;
-        return result;
-      });
+      .then((result) => (completed = result));
     try {
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         disposalStarted.promise,
-        entry.then(() => {
-          throw new Error("Agent entry settled before context engine disposal started");
-        }),
-      ]);
+        entry,
+        "Agent entry settled before context engine disposal started",
+      );
       if (settlement === "success") {
         disposal.resolve();
       } else if (settlement === "failure") {
         disposal.reject(new Error("Context engine disposal failed"));
       }
       await vi.advanceTimersByTimeAsync(25);
-      expect(returned).toBe(true);
-      expect((await entry).result.payloads).toEqual([{ text: "Completed answer" }]);
+      expect(completed?.result.payloads).toEqual([{ text: "Completed answer" }]);
       expect(dispose).toHaveBeenCalledOnce();
       expect(cleanupScope.outcome).toBe(settlement === "success" ? "closed" : "uncertain");
       if (settlement.startsWith("late-")) {

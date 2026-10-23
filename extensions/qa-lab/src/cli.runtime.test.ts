@@ -300,6 +300,12 @@ describe("qa cli", () => {
   let telegramArtifactsDir: string;
   let priorExitCode: typeof process.exitCode;
 
+  const runSuite = (options: Parameters<typeof runQaSuiteCommand>[0]) =>
+    runQaSuiteCommand({ repoRoot: "/tmp/openclaw-repo", ...options });
+  const runProfile = (options: Parameters<typeof runQaProfileCommand>[0]) =>
+    runQaProfileCommand({ repoRoot: "/tmp/openclaw-repo", ...options });
+  const readArtifact = (file: string) => fs.readFile(file, "utf8");
+
   async function writeSuiteSummary(summary: unknown, summaryPath = suiteSummaryPath) {
     await writeJson(summaryPath, summary);
   }
@@ -597,7 +603,7 @@ describe("qa cli", () => {
           mockSuiteRuntimeResult("suite", { scenarios: data?.scenarios }),
         );
       }
-      const run = runQaSuiteCommand({ repoRoot: "/tmp/openclaw-repo", runner, allowFailures });
+      const run = runSuite({ runner, allowFailures });
       if (typeof expected === "string") {
         await expect(run).rejects.toThrow(expected);
       } else {
@@ -675,9 +681,7 @@ describe("qa cli", () => {
       expect(suiteArgs.channelId).toBe("telegram");
       expect(suiteArgs.scenarioIds).toEqual(["telegram-commands-command"]);
       expect(process.env.OPENCLAW_QA_PROFILE).toBe("release");
-      const evidence = JSON.parse(
-        await fs.readFile(suiteEvidencePath, "utf8"),
-      ) as QaEvidenceSummaryJson;
+      const evidence = JSON.parse(await readArtifact(suiteEvidencePath)) as QaEvidenceSummaryJson;
       expect(evidence.profile).toBe("smoke-ci");
       expect(evidence.profilePlan?.counts).toMatchObject({
         membership: 1,
@@ -711,8 +715,7 @@ describe("qa cli", () => {
   );
 
   it("keeps portable channel scenarios in driver-selected profile runs", async () => {
-    await runQaProfileCommand({
-      repoRoot: "/tmp/openclaw-repo",
+    await runProfile({
       profile: "release",
       surface: "channels",
       providerMode: "mock-openai",
@@ -747,8 +750,7 @@ describe("qa cli", () => {
       });
     });
 
-    await runQaProfileCommand({
-      repoRoot: "/tmp/openclaw-repo",
+    await runProfile({
       profile: "all",
       surface: "media",
       category: "media.media-generation",
@@ -769,8 +771,7 @@ describe("qa cli", () => {
       });
     });
 
-    await runQaProfileCommand({
-      repoRoot: "/tmp/openclaw-repo",
+    await runProfile({
       profile: "smoke-ci",
     });
 
@@ -872,8 +873,7 @@ describe("qa cli", () => {
           create: vi.fn(),
         },
       ]);
-      await runQaSuiteCommand({
-        repoRoot: "/tmp/openclaw-repo",
+      await runSuite({
         outputDir: ".artifacts/qa/telegram-live",
         channelDriver: "live",
         channel: "telegram",
@@ -1113,10 +1113,7 @@ describe("qa cli", () => {
       )
       .mockResolvedValueOnce(mockSuiteRuntimeResult("flow", { scenarios: [] }).result);
 
-    await runQaSuiteCommand({
-      repoRoot: "/tmp/openclaw-repo",
-      preflight: true,
-    });
+    await runSuite({ preflight: true });
 
     expect(runQaFlowSuiteFromRuntime).toHaveBeenCalledTimes(2);
     expectWriteContains(
@@ -1137,11 +1134,7 @@ describe("qa cli", () => {
       runQaFlowSuiteFromRuntime.mockResolvedValueOnce(
         mockSuiteRuntimeResult("flow", { scenarios: [scenario] }).result,
       );
-      const run = runQaSuiteCommand({
-        repoRoot: "/tmp/openclaw-repo",
-        preflight: true,
-        allowFailures,
-      });
+      const run = runSuite({ preflight: true, allowFailures });
       if (allowFailures) {
         await run;
         expect(process.exitCode).toBe(0);
@@ -1154,10 +1147,7 @@ describe("qa cli", () => {
   );
 
   it("accepts comma-separated runtime-pair lane filters", async () => {
-    await runQaSuiteCommand({
-      repoRoot: "/tmp/openclaw-repo",
-      runtimePairLane: ["extended,soak"],
-    });
+    await runSuite({ runtimePairLane: ["extended,soak"] });
 
     expectFields(mockFirstObjectArg(runQaSuite), {
       scenarioIds: [
@@ -1180,8 +1170,7 @@ describe("qa cli", () => {
   });
 
   it("keeps runtime-pair lane selection on flow scenarios and reports exclusions", async () => {
-    await runQaSuiteCommand({
-      repoRoot: "/tmp/openclaw-repo",
+    await runSuite({
       runtimePair: "openclaw,codex",
       runtimePairLane: ["core"],
       parityPack: "agentic",
@@ -1276,12 +1265,12 @@ describe("qa cli", () => {
 
     const reportDir = path.join(repoRoot, "report");
     const report = JSON.parse(
-      await fs.readFile(path.join(reportDir, "qa-runtime-parity-summary.json"), "utf8"),
+      await readArtifact(path.join(reportDir, "qa-runtime-parity-summary.json")),
     );
     expect(report.scenarios[0].codexStatus).toBe(cellOutcome.status);
-    expect(
-      await fs.readFile(path.join(reportDir, "qa-runtime-parity-report.md"), "utf8"),
-    ).toContain(`- codex: ${cellOutcome.status} (`);
+    expect(await readArtifact(path.join(reportDir, "qa-runtime-parity-report.md"))).toContain(
+      `- codex: ${cellOutcome.status} (`,
+    );
     expect(process.exitCode).toBe(0);
     expectWriteContains(stdoutWrite, "QA runtime parity report:");
     expectWriteContains(stdoutWrite, "QA runtime parity verdict: pass");
@@ -1322,14 +1311,13 @@ describe("qa cli", () => {
     expectWriteContains(stdoutWrite, "QA runtime token efficiency verdict: fail");
     const [artifactDir] = await fs.readdir(path.join(repoRoot, ".artifacts", "qa-e2e"));
     const tokenSummary = JSON.parse(
-      await fs.readFile(
+      await readArtifact(
         path.join(
           repoRoot,
           ".artifacts/qa-e2e",
           artifactDir ?? "",
           "qa-runtime-token-efficiency-summary.json",
         ),
-        "utf8",
       ),
     ) as { aggregate?: { flaggedScenarios?: string[] } };
     expect(tokenSummary.aggregate?.flaggedScenarios).toEqual(["runtime-tool-fs-read"]);
@@ -1354,15 +1342,11 @@ describe("qa cli", () => {
       "provider-mode": "mock-openai",
     });
 
-    const report = await fs.readFile(
+    const report = await readArtifact(
       path.join(repoRoot, "jsonl-output", "qa-jsonl-replay-report.md"),
-      "utf8",
     );
     const summary = JSON.parse(
-      await fs.readFile(
-        path.join(repoRoot, "jsonl-output", "qa-jsonl-replay-summary.json"),
-        "utf8",
-      ),
+      await readArtifact(path.join(repoRoot, "jsonl-output", "qa-jsonl-replay-summary.json")),
     ) as { transcripts?: Array<{ userTurnCount?: number }> };
 
     expect(report).toContain("# OpenClaw JSONL Replay Report - openclaw vs codex");
@@ -1522,11 +1506,7 @@ describe("qa cli", () => {
       run: { status: "completed" },
       counts: { total: 2, passed: 1, failed: 0, skipped: 1 },
     });
-    await runQaSuiteCommand({
-      repoRoot: "/tmp/openclaw-repo",
-      runner: "multipass",
-      allowFailures: false,
-    });
+    await runSuite({ runner: "multipass", allowFailures: false });
     expect(process.exitCode).toBe(1);
   });
 

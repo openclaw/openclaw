@@ -12,6 +12,7 @@ import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import { buildCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
+import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { renderHoverMarquee } from "../lib/solid/hover-marquee.tsx";
 import {
@@ -22,6 +23,7 @@ import {
   type CatalogRowControls,
 } from "./app-sidebar-session-catalogs.ts";
 import type { SessionCatalogGroupsParams } from "./app-sidebar-session-render-types.ts";
+import { renderRecentSession as RecentSession } from "./app-sidebar-session-row-render.tsx";
 import { Icon } from "./solid/icon.tsx";
 import {
   SessionGlyph,
@@ -67,7 +69,8 @@ export function renderCatalogSessionRow(
   const identityKey = createMemo(() => buildCatalogSessionKey(catalogKey()));
   const key = createMemo(
     () =>
-      readSession().sessionKey ?? buildCatalogSessionKey(catalogKey(), params.newSessionAgentId),
+      readSession().sessionKey ??
+      buildCatalogSessionKey(catalogKey(), params.snapshot.newSessionAgentId),
   );
   const label = createMemo(() => readSession().name || readSession().threadId);
   const meta = createMemo(() => formatSidebarTimestamp(timestamp()));
@@ -76,14 +79,14 @@ export function renderCatalogSessionRow(
     sessionNavigationTarget({
       face: routeId,
       sessionKey: key(),
-      fallbackAgentId: params.newSessionAgentId,
-      basePath: params.basePath,
-      mainKey: params.mainKey,
+      fallbackAgentId: params.snapshot.newSessionAgentId,
+      basePath: params.snapshot.basePath,
+      mainKey: params.snapshot.mainKey,
     }),
   );
   const catalogMenu = createMemo<CatalogSessionMenuRequest>(() => ({
     key: catalogKey(),
-    agentId: params.newSessionAgentId,
+    agentId: params.snapshot.newSessionAgentId,
     routeId,
     navigation: target().options,
     canOpenTerminal: readSession().canOpenTerminal === true,
@@ -92,7 +95,9 @@ export function renderCatalogSessionRow(
     displayName: readSession().name,
     meta: meta(),
   }));
-  const menuOpen = createMemo(() => params.isMenuOpen(catalogKey()));
+  const menuOpen = createMemo(() =>
+    params.host.sidebarMenus.catalogMenuView.isOpenFor(catalogKey()),
+  );
   const adoptedRow = createMemo(() => {
     const readSessionValue = readSession();
     const readLiveRowsByKeyValue = readLiveRowsByKey();
@@ -105,7 +110,7 @@ export function renderCatalogSessionRow(
     controls,
     previousFocus,
   ) => {
-    const stop = params.onMountRow(key());
+    const stop = params.host.sessionProjection.mountCatalogRow(key());
     const active = previousFocus instanceof HTMLElement ? previousFocus : null;
     const activeRow = active?.closest<HTMLElement>("[data-session-key]");
     const control = CATALOG_CONTROLS.find(([, selector]) => active?.matches(selector))?.[0];
@@ -115,7 +120,10 @@ export function renderCatalogSessionRow(
         activeRow?.dataset.sessionKey === identityKey() ||
         activeRow?.dataset.sessionKey === key());
     if (menuOpen()) {
-      params.onCatalogMenuTriggerRendered(catalogKey(), controls.catalogMenu ?? controls.link);
+      params.host.sidebarMenus.catalogMenu.retargetTrigger(
+        catalogKey(),
+        controls.catalogMenu ?? controls.link,
+      );
     }
     if (restoreFocus && control) {
       queueMicrotask(() => {
@@ -130,11 +138,12 @@ export function renderCatalogSessionRow(
     return stop;
   };
   const color = createMemo(() => normalizeSessionColorValue(readSession().color ?? ""));
-  const active = createMemo(() => key() === params.routeSessionKey);
+  const active = createMemo(() => key() === params.snapshot.routeSessionKey);
   const running = () => readSession().status === "active" || readSession().status === "running";
-  const canOpenTerminal = () => readSession().canOpenTerminal === true && params.terminalAvailable;
+  const canOpenTerminal = () =>
+    readSession().canOpenTerminal === true && params.snapshot.terminalAvailable;
   const openMenu = (x: number, y: number, trigger?: HTMLElement) =>
-    params.onOpenMenu(catalogMenu(), x, y, trigger);
+    params.host.sidebarMenus.catalogMenu.open(catalogMenu(), x, y, trigger);
   const CatalogRow = () => {
     const controls: CatalogRowControls = {};
     const openMenuFromEvent: JSX.EventHandler<HTMLDivElement, MouseEvent | KeyboardEvent> = (
@@ -186,10 +195,14 @@ export function renderCatalogSessionRow(
               return;
             }
             event.preventDefault();
-            if (params.catalogOpenTarget === "terminal" && canOpenTerminal()) {
-              params.onOpenTerminal(catalogKey(), params.newSessionAgentId);
+            if (params.snapshot.catalogOpenTarget === "terminal" && canOpenTerminal()) {
+              openCatalogSessionInTerminal(
+                params.host,
+                catalogKey(),
+                params.snapshot.newSessionAgentId,
+              );
             } else {
-              params.onNavigate?.(routeId, target().options);
+              params.host.onNavigate?.(routeId, target().options);
             }
           }}
         >
@@ -219,7 +232,7 @@ export function renderCatalogSessionRow(
               data-catalog-session-menu="true"
               type="button"
               title={t("chat.sidebar.openSessionMenu")}
-              aria-label={t("chat.sidebar.openSessionMenu")}
+              aria-label={`${t("chat.sidebar.openSessionMenu")}: ${label()}`}
               aria-haspopup="menu"
               aria-expanded={menuOpen() ? "true" : "false"}
               onClick={(event) => {
@@ -238,20 +251,18 @@ export function renderCatalogSessionRow(
   };
   return (
     <Show when={adoptedRow()} fallback={<CatalogRow />}>
-      {(liveRow) =>
-        params.renderLiveRow(liveRow, {
-          get catalogIdentityKey() {
-            return identityKey();
-          },
-          get catalogMenu() {
-            return catalogMenu();
-          },
-          rowRef,
-          get pullRequest() {
-            return readSession().pullRequest;
-          },
-        })
-      }
+      {(liveRow) => (
+        <RecentSession
+          host={params.host}
+          session={params.snapshot.toSidebarSession(liveRow())}
+          display={{
+            catalogIdentityKey: identityKey(),
+            catalogMenu: catalogMenu(),
+            rowRef,
+            pullRequest: readSession().pullRequest,
+          }}
+        />
+      )}
     </Show>
   );
 }

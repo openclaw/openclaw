@@ -19,9 +19,9 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { CronSessionLifecycleClaimError } from "../run-authority.js";
 import {
   adoptCronRunSessionMetadata,
-  CronSessionLifecycleClaimError,
   createCronRunContinuationSession,
   createPersistCronSessionEntry,
   syncCronSessionLiveSelection,

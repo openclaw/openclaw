@@ -375,6 +375,10 @@ const supportsCurrentMacosSwiftCi =
   existsSync("scripts/install-swift-tools.sh") &&
   existsSync("scripts/lint-swift.sh") &&
   existsSync("scripts/format-swift.sh");
+const runMacosSwift =
+  runMacos &&
+  !npmQualification &&
+  (!frozenTarget || compatibilityTarget || supportsCurrentMacosSwiftCi);
 const supportsIosBuild = hasPackageScript("ios:build");
 const supportsCurrentIosCi = supportsIosBuild && supportsCurrentMacosSwiftCi;
 const iosBuildScope =
@@ -721,6 +725,7 @@ const uiWebkitOwners = [
   "ui/src/pages/chat/components/chat-{composer*,picker-overlay*,model-picker*,effort-picker*}.{ts,tsx}",
   "ui/src/pages/chat/{chat-pane-header,components/chat-pane-header*,components/chat-pane-versions-menu*}.{ts,tsx}",
   "ui/src/lib/solid-bridge.ts",
+  "ui/src/lib/solid-bridge-view.tsx",
   "ui/src/lib/presentation.ts",
   "ui/src/pages/new-session/{composer*,draft-composer*}.{ts,tsx}",
   "ui/src/lib/native-overlay-occlusion.{ts,tsx}",
@@ -983,6 +988,7 @@ const runSqliteSessionLifecycle =
   (changedScopeHasSqliteSessionLifecycleImpact ||
     selectedOwnerTest("test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts"));
 const postgresConformancePaths = [
+  ".github/actions/postgres-conformance/**",
   "**/*.postgres.test.ts",
   "src/state/openclaw-agent-*",
   "src/config/sessions/**",
@@ -1080,6 +1086,7 @@ const runPostgresConformance =
         ))));
 const runBuildArtifacts =
   publishedDriverUpdate ||
+  (runMacosSwift && existsSync("apps/macos/Sources/OpenClaw/NativeExecPolicyOwner.swift")) ||
   (runNodeFull &&
     (changedScopeHasBuildImpact ||
       runSqliteSessionLifecycle ||
@@ -1751,10 +1758,7 @@ const manifest = {
           [{ check_name: "macos-node", runtime: "node", task: "test" }]
       : [],
   ),
-  run_macos_swift:
-    runMacos &&
-    !npmQualification &&
-    (!frozenTarget || compatibilityTarget || supportsCurrentMacosSwiftCi),
+  run_macos_swift: runMacosSwift,
   run_openclawkit_tests: runMacos && !npmQualification && supportsOpenClawKitTests,
   run_ios_build: runIosBuild,
   run_ios_voice_cleanup_tests: iosSimulatorSelection.voice.selected,

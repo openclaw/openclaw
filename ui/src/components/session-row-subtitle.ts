@@ -23,6 +23,12 @@ export function resolveSidebarSessionRowSubtitle(
   session: SidebarRecentSession,
   display?: CatalogBackingSessionDisplay,
 ) {
+  // The default sidebar stays one line per session until the operator turns
+  // previews on. Only the agent-first roster keeps preview-independent status
+  // lines; attention details stay on the leading icon tooltip and hovercard.
+  if (host.sidebarAgentsMode !== "roster" && !host.sessionsShowPreview) {
+    return { subtitle: undefined, narration: undefined };
+  }
   const toolActivity =
     host.sidebarAgentsMode !== "roster" &&
     host.sessionsShowPreview &&

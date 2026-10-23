@@ -92,3 +92,36 @@ export type SessionSystemPromptReport = {
     };
   };
 };
+
+const pathTail = (filePath: string, segments: number) =>
+  filePath
+    .split(/[\\/]+/u)
+    .slice(-segments)
+    .join("/");
+
+/**
+ * Layered workspaces can inject one basename from two directories; label those by source path.
+ * `compact` keeps only the trailing segments that tell them apart, for labels that get clipped.
+ */
+export function formatInjectedWorkspaceFileLabel(
+  file: { name: string; path: string },
+  shownFiles: ReadonlyArray<{ name: string; path: string }>,
+  options: { compact?: boolean } = {},
+): string {
+  const others = shownFiles.filter((other) => other.name === file.name && other.path !== file.path);
+  if (others.length === 0) {
+    return file.name;
+  }
+  if (!options.compact) {
+    return `${file.name} (${file.path})`;
+  }
+  for (let segments = 2; ; segments += 1) {
+    const label = pathTail(file.path, segments);
+    if (
+      label === pathTail(file.path, segments + 1) ||
+      others.every((other) => pathTail(other.path, segments) !== label)
+    ) {
+      return label;
+    }
+  }
+}

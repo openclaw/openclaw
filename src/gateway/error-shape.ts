@@ -42,6 +42,11 @@ export function errorShapeFromError(
               details: { code: "SQLITE_FULL" },
             })
           : errorShape(code, message ?? formatErrorMessageWithCode(error), metadata);
+  // Native in-process callers need the original typed failure; it must never
+  // become part of the wire response or serialized dedupe payload.
+  if (error instanceof Error) {
+    Object.defineProperty(shape, "cause", { value: error });
+  }
   copyErrorDiagnostic(error, shape);
   return shape;
 }

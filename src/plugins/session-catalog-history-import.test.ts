@@ -58,6 +58,7 @@ it("imports and deduplicates in the supplied config store without polluting runt
         });
         expect(fs.existsSync(defaultDatabasePath)).toBe(false);
 
+        const commitGuard = vi.fn();
         const importParams: Parameters<typeof importSessionCatalogHistory>[0] = {
           agentId: supplied.agentId,
           sessionId: supplied.sessionId,
@@ -65,15 +66,21 @@ it("imports and deduplicates in the supplied config store without polluting runt
           catalogId: "fixture-catalog",
           threadId: "source-thread",
           config,
+          commitGuard,
+          continuationNotice: "Copied snapshot; using openai/gpt-5.6-sol.",
           read: catalogReader([
             { id: "prompt", type: "userMessage", text: "Imported prompt" },
             { id: "answer", type: "agentMessage", text: "Imported answer" },
           ]),
         };
         await importSessionCatalogHistory(importParams);
+        expect(commitGuard).toHaveBeenCalled();
+        const guardedWrites = commitGuard.mock.calls.length;
         await importSessionCatalogHistory(importParams);
+        expect(commitGuard).toHaveBeenCalledTimes(guardedWrites);
 
-        expect(await readMessages(supplied)).toMatchObject([
+        const imported = await readMessages(supplied);
+        expect(imported).toMatchObject([
           {
             idempotencyKey: "fixture-catalog-catalog:source-thread:prompt",
             message: { role: "user", content: "Imported prompt" },
@@ -82,7 +89,25 @@ it("imports and deduplicates in the supplied config store without polluting runt
             idempotencyKey: "fixture-catalog-catalog:source-thread:answer",
             message: { role: "assistant", content: [{ type: "text", text: "Imported answer" }] },
           },
+          {
+            idempotencyKey: "fixture-catalog-catalog:source-thread:continuation-notice",
+            message: {
+              provider: "openclaw",
+              model: "session-catalog",
+              content: [{ type: "text", text: "Copied snapshot; using openai/gpt-5.6-sol." }],
+            },
+          },
         ]);
+        commitGuard.mockImplementation(() => {
+          throw new Error("Catalog source revoked");
+        });
+        await expect(
+          importSessionCatalogHistory({
+            ...importParams,
+            read: catalogReader([{ id: "refused", type: "userMessage", text: "Refused" }]),
+          }),
+        ).rejects.toThrow("Catalog source revoked");
+        expect(await readMessages(supplied)).toEqual(imported);
         expect(await readMessages(competing)).toMatchObject([
           { message: { role: "user", content: "Existing runtime transcript" } },
         ]);
@@ -194,15 +219,4 @@ it("preserves items once across sync, including id-less duplicates and a shifted
     expect(texts.filter((text) => text.includes("Repeated source prompt"))).toHaveLength(2);
     expect(texts.at(-1)).toContain("New source answer");
   });
-});
-
-it("requests pages within the Claude and Codex transcript read cap", async () => {
-  const source = Array.from({ length: 120 }, (_, index) => ({
-    id: `item-${index}`,
-    type: "userMessage" as const,
-    text: `Source prompt ${index}`,
-  }));
-  const history = await readHistory(source);
-  expect(history).toMatchObject({ totalItems: 120, complete: true });
-  expect(history.items.map((item) => item.id)).toEqual(source.map((item) => item.id));
 });

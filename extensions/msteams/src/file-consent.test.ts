@@ -201,6 +201,7 @@ describe("uploadToConsentUrl", () => {
       return { address: "13.107.136.10" };
     });
     const mockFetch = vi.fn<typeof fetch>(async (_url, init) => {
+      expect(init?.body).toBeInstanceOf(Uint8Array);
       backing.fill(0);
       expect(Buffer.from(await new Response(init?.body).arrayBuffer())).toEqual(expectedBytes);
       return response;

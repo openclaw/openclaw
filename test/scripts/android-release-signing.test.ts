@@ -74,47 +74,34 @@ function createSigningRepo(tempRoot: string): string {
   return remote;
 }
 
-function writeManifest(tempRoot: string, signingRepo: string): string {
-  const manifestPath = path.join(tempRoot, "ReleaseSigning.json");
-  fs.writeFileSync(
-    manifestPath,
+function signingFixture(remote = false) {
+  const root = tempRoots.make("openclaw-android-signing-");
+  const repo = remote ? createSigningRepo(root) : path.join(root, "apps-signing.git");
+  const write = (name: string, content: string) => {
+    const file = path.join(root, name);
+    fs.writeFileSync(file, content);
+    return file;
+  };
+  const manifest = write(
+    "ReleaseSigning.json",
     JSON.stringify({
-      signingRepo,
+      signingRepo: repo,
       signingBranch: "main",
       assetPath: "android/openclaw",
       uploadKeystoreEncryptedFile: "upload-keystore.jks.enc",
       gradlePropertiesEncryptedFile: "gradle.properties.enc",
       apkCertificateSha256: APK_CERTIFICATE_SHA256,
       materializedRoot: "unused-by-test",
-      gradlePropertyNames: [
-        "OPENCLAW_ANDROID_STORE_FILE",
-        "OPENCLAW_ANDROID_STORE_PASSWORD",
-        "OPENCLAW_ANDROID_KEY_ALIAS",
-        "OPENCLAW_ANDROID_KEY_PASSWORD",
-      ],
+      gradlePropertyNames: ["OPENCLAW_ANDROID_STORE_FILE", ...Object.keys(sourceProperties)],
     }),
   );
-  return manifestPath;
-}
-
-function writeSigningSources(tempRoot: string) {
-  const keystorePath = path.join(tempRoot, "upload-keystore.jks");
-  const propertiesPath = path.join(tempRoot, "source.properties");
-  fs.writeFileSync(keystorePath, "fake keystore bytes\n");
-  fs.writeFileSync(
-    propertiesPath,
+  const keystorePath = write("upload-keystore.jks", "fake keystore bytes\n");
+  const propertiesPath = write(
+    "source.properties",
     Object.entries(sourceProperties)
       .map(([key, value]) => `${key}=${value}\n`)
       .join(""),
   );
-  return { keystorePath, propertiesPath };
-}
-
-function signingFixture(remote = false) {
-  const root = tempRoots.make("openclaw-android-signing-");
-  const repo = remote ? createSigningRepo(root) : path.join(root, "apps-signing.git");
-  const manifest = writeManifest(root, repo);
-  const { keystorePath, propertiesPath } = writeSigningSources(root);
   const materializedDir = path.join(root, "materialized");
   const run = (mode: string, extra: string[] = [], env: NodeJS.ProcessEnv = {}) =>
     runNode(

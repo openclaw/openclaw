@@ -1,4 +1,5 @@
 import { receiveMessageOnPort, type MessagePort } from "node:worker_threads";
+import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import { serveOwnedWorkerTasks } from "../infra/worker-task-server.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { withPluginInstallRoots } from "./install-root-context.js";
@@ -141,6 +142,11 @@ function requestHost(
     } satisfies GenerationWorkerCallback,
     [],
   );
+  const progressSignal = context?.progressSignal;
+  if (progressSignal) {
+    Atomics.add(progressSignal, 0, 1);
+    Atomics.notify(progressSignal, 0);
+  }
   const deadline = performance.now() + 15_000;
   for (;;) {
     // SAFETY: This private port is transferred only to the matching host callback protocol.
@@ -211,13 +217,8 @@ async function close(): Promise<void> {
   const outcomes = await Promise.allSettled(
     [...resources].map((resource) => resource.disposeAsync()),
   );
-  const errors = outcomes.flatMap((outcome) =>
-    outcome.status === "rejected" ? [outcome.reason] : [],
-  );
   await getPluginCache().sourceAdmissions?.dispose();
-  if (errors.length) {
-    throw new AggregateError(errors, "Plugin preparation resources failed to close");
-  }
+  throwSettledAggregate(outcomes, "Plugin preparation resources failed to close");
 }
 serveOwnedWorkerTasks<GenerationWorkerReply>(
   async (input) => {
@@ -263,6 +264,9 @@ serveOwnedWorkerTasks<GenerationWorkerReply>(
               command.entryFile,
               (run) => run(),
               (filename) => mapSource(command.captureId, filename),
+              undefined,
+              undefined,
+              command.bundledReloadSource,
             ),
           );
           const captureRecovery = artifact.captureRecoverySource.bind(artifact);

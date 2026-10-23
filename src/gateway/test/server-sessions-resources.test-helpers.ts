@@ -117,7 +117,8 @@ export async function releaseGatewaySessionStoreFixture(dir: string) {
   await projection?.ensureMaterialized();
   await closeOpenClawAgentDatabasesAsync(root);
 
-  // Client identity fixtures use shared-state SQLite, even with legacy .json names.
+  // Retain shared-state cleanup for every recorded fixture path. Local credential
+  // operations close their bounded owner before returning and retain no handle here.
   // The lifecycle subscription replays the owner's recorded open paths synchronously.
   const sharedDatabasePaths = new Set<string>();
   registerOpenClawStateDatabaseLifecycleListener((event) => {

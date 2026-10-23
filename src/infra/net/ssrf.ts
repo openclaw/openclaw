@@ -17,8 +17,7 @@ import {
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { Dispatcher } from "undici";
-import { raceWithTimeout } from "../../../packages/retry/src/index.js";
-import { createDeferredCore } from "../../shared/deferred.js";
+import { racePromiseWithAbortSignal, raceWithTimeout } from "../../../packages/retry/src/index.js";
 import { normalizeHostname } from "./hostname.js";
 import { hasTrustedHostPodmanGatewayLinkLocalExemption } from "./ssrf-trusted-host-linklocal-exemptions.js";
 import {
@@ -570,7 +569,11 @@ export async function resolvePinnedHostnameWithPolicy(
 
   const lookupFn: LookupFn = params.lookupFn ?? dnsLookup;
   const results = normalizeLookupResults(
-    await runAbortablePreflight(() => lookupFn(normalized, { all: true }), params.signal),
+    await racePromiseWithAbortSignal(
+      () => lookupFn(normalized, { all: true }),
+      params.signal,
+      (signal) => signal.reason,
+    ),
   );
   params.signal?.throwIfAborted();
   if (results.length === 0) {
@@ -595,23 +598,6 @@ export async function resolvePinnedHostnameWithPolicy(
     addresses,
     lookup: createPinnedLookup({ hostname: normalized, addresses }),
   };
-}
-
-async function runAbortablePreflight<T>(run: () => Promise<T>, signal?: AbortSignal): Promise<T> {
-  if (!signal) {
-    return await run();
-  }
-  signal.throwIfAborted();
-  const aborted = createDeferredCore<never>();
-  const onAbort = () => aborted.reject(signal.reason);
-  signal.addEventListener("abort", onAbort, { once: true });
-  try {
-    // Node lookup cannot cancel getaddrinfo. Stop waiting, observe late failures,
-    // and remove the listener whether DNS or cancellation settles first.
-    return await Promise.race([aborted.promise, run()]);
-  } finally {
-    signal.removeEventListener("abort", onAbort);
-  }
 }
 
 export function assertHostnameAllowedWithPolicy(hostname: string, policy?: SsrFPolicy): string {

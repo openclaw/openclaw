@@ -26,6 +26,10 @@ import {
   withOpenClawStateLease as withLease,
   type OpenClawStateLeaseContext,
 } from "./openclaw-state-lease.js";
+import {
+  addPreCutoverClientCredentialTablesForTest,
+  withStateMigrationBackupForTest,
+} from "./openclaw-state-schema.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -50,6 +54,7 @@ function source(holdAgent = false, provenance = true) {
   const agent = holdAgent ? openOpenClawAgentDatabase({ agentId: "worker", env }) : undefined;
   closeOpenClawStateDatabaseForTest();
   using db = openNodeSqliteDatabase(pathname);
+  addPreCutoverClientCredentialTablesForTest(db);
   db.exec(`PRAGMA foreign_keys=OFF;
       PRAGMA user_version=15;
       UPDATE schema_meta SET schema_version=15 WHERE meta_key='primary';`);
@@ -145,7 +150,10 @@ it("keeps the maintenance lease live across an explicitly owned migration", asyn
   await withLease(f.lease, async (lease) => {
     expect(inspect(f.pathname).version).toEqual({ user_version: 15 });
     lease.assertOwned();
-    openOpenClawStateDatabase(f.options);
+    await withStateMigrationBackupForTest(f.options, () => {
+      openOpenClawStateDatabase(f.options);
+      lease.assertOwned();
+    });
     lease.assertOwned();
   });
   expect(inspect(f.pathname)).toMatchObject({

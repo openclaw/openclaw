@@ -157,9 +157,7 @@ it.each([
   await withOpenClawTestState({ prefix: "notice-http-" }, async ({ stateDir }) => {
     const preDispatch = createDeferredCore();
     const productionPredicate = !["allowed", "gateway closed", "policy revoked"].includes(mode);
-    const noticeText = productionPredicate
-      ? "I'm continuing your interrupted request now (the gateway has just restarted).  Don't be concerned with the lack of typing; I am working behind the scenes and I'll send a message when I'm done!"
-      : "Recovery resumed";
+    const noticeText = "Recovery resumed";
     const api = await startApi(stateDir, "notice");
     const { cfg, blocked, blockerText } = api;
     const { scope, runtime, settings, restore, writeEntry } = await createRecovery(
@@ -242,7 +240,14 @@ it.each([
       } else if (!allowed && !productionPredicate) {
         expect(outcome.error).toBeDefined();
       }
-      const expected = allowed ? [blockerText, noticeText] : [blockerText];
+      const expected = allowed
+        ? [
+            blockerText,
+            productionPredicate
+              ? expect.stringContaining("OpenClaw admitted a continuation")
+              : noticeText,
+          ]
+        : [blockerText];
       expect([api.visible, api.texts()]).toEqual([expected, expected]);
     } finally {
       if (held && !held.writableEnded) {

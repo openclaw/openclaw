@@ -19,7 +19,6 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { sha256Base64Url } from "./crypto-digest.js";
-import { clearDeviceAuthTokenFromDatabase } from "./device-auth-store.kernel.js";
 import { resolveDeviceBootstrapTokenExpiresAtMs } from "./device-bootstrap.worker-types.js";
 import { bindCloudWorkerSetupCompletion } from "./device-pairing-cloud-worker.js";
 import type { PairedDeviceMetadataPatch } from "./device-pairing-core.types.js";
@@ -116,31 +115,34 @@ function runDevicePairingStoreMutation<T>(
   baseDir: string | undefined,
   mutate: (database: OpenClawStateDatabase) => DevicePairingStoreMutation<T>,
 ): T {
+  const bound = boundDatabase.getStore();
+  const apply = (transactionDatabase: OpenClawStateDatabase) => {
+    const result = mutate(transactionDatabase);
+    if (result.pairedChanged) {
+      const revision = bumpDevicePairingStoreRevision(transactionDatabase.db);
+      if (bound?.revision) {
+        bound.revision.value = revision;
+      }
+    }
+    if (result.mutated) {
+      // Transaction-local reads bypass the cache; only real commits invalidate it.
+      stageSqliteTransactionState(transactionDatabase.db, {
+        commit: () => {
+          invalidateDevicePairingStoreCache(transactionDatabase);
+          invalidateDevicePairingNodeSnapshot(transactionDatabase.path);
+        },
+      });
+    }
+    return result.value;
+  };
+  if (bound) {
+    // Bound failures abort the outer transaction; callers that catch and continue
+    // need their own savepoint to keep PostgreSQL usable.
+    return apply(bound.database);
+  }
   const databaseOptions = resolveDevicePairingStateDbOptions(baseDir);
   const database = openOpenClawStateDatabase(databaseOptions);
-  return runOpenClawStateWriteTransaction(
-    (transactionDatabase) => {
-      const result = mutate(transactionDatabase);
-      if (result.pairedChanged) {
-        const revision = bumpDevicePairingStoreRevision(transactionDatabase.db);
-        const bound = boundDatabase.getStore();
-        if (bound?.database.db === transactionDatabase.db && bound.revision) {
-          bound.revision.value = revision;
-        }
-      }
-      if (result.mutated) {
-        // Transaction-local reads bypass the cache; only real commits invalidate it.
-        stageSqliteTransactionState(transactionDatabase.db, {
-          commit: () => {
-            invalidateDevicePairingStoreCache(transactionDatabase);
-            invalidateDevicePairingNodeSnapshot(transactionDatabase.path);
-          },
-        });
-      }
-      return result.value;
-    },
-    { ...databaseOptions, database },
-  );
+  return runOpenClawStateWriteTransaction(apply, { ...databaseOptions, database });
 }
 
 export function readDevicePairingStoreStateFromDatabase(
@@ -347,7 +349,6 @@ export function persistDevicePairingStoreState(
   target: "pending" | "paired" | "both",
   options?: {
     clearApnsNodeIds?: readonly string[];
-    retiredNodeToken?: { deviceId: string; expectedToken: string };
   },
 ): void {
   runDevicePairingStoreMutation(baseDir, ({ db }) => {
@@ -369,9 +370,6 @@ export function persistDevicePairingStoreState(
     }
     for (const nodeId of new Set(options?.clearApnsNodeIds ?? [])) {
       clearApnsRegistrationFromDatabase(db, nodeId);
-    }
-    if (options?.retiredNodeToken) {
-      clearDeviceAuthTokenFromDatabase(db, { ...options.retiredNodeToken, role: "node" });
     }
     const paired = transactionPairedRecords(db);
     if (paired && pairedRows) {

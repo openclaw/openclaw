@@ -1,5 +1,5 @@
 // Loads hosted official catalogs while preserving feed authority and snapshot freshness.
-import { createHash } from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
@@ -53,10 +53,6 @@ class HostedCatalogSnapshotWriteError extends Error {
     this.name = "HostedCatalogSnapshotWriteError";
     this.originalError = originalError;
   }
-}
-
-function sha256Hex(value: string): string {
-  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
 }
 
 function parseHostedCatalogContentLength(raw: string | null): void {
@@ -243,7 +239,7 @@ async function loadHostedCatalogSnapshotResult(params: {
   verification?: OfficialExternalPluginCatalogFeedVerification;
   now: Date;
 }): Promise<HostedOfficialExternalPluginCatalogLoadResult> {
-  const checksum = sha256Hex(params.snapshot.body);
+  const checksum = `sha256:${sha256Hex(params.snapshot.body)}`;
   if (checksum !== params.snapshot.metadata.checksum) {
     throw new Error("hosted catalog snapshot checksum mismatch");
   }
@@ -459,7 +455,7 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
       );
     }
     const body = await readHostedCatalogResponseText(response);
-    const checksum = sha256Hex(body);
+    const checksum = `sha256:${sha256Hex(body)}`;
     const metadata = { ...base, checksum };
     if (expectedSha256 && expectedSha256 !== checksum) {
       return await loadFallback(

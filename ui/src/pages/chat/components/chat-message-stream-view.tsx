@@ -1,18 +1,19 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { createMemo, For, Show } from "solid-js";
 import type { ThemeBranding } from "../../../../../packages/gateway-protocol/src/theme.ts";
+import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display-call.js";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { ChatReplyTarget, MessageGroup, ChatItem } from "../../../lib/chat/chat-types.ts";
 import { describeToolGroup, readPreparedActivity } from "../../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached, resolveToolCardOutcome } from "../../../lib/chat/tool-cards.ts";
-import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
+import { resolveToolDisplayIdentity } from "../../../lib/chat/tool-display-identity.ts";
 import { formatDurationLong } from "../../../lib/format-duration.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import "../../../components/tooltip.ts";
 import { ChatAvatar, type ChatAvatarProps } from "../chat-avatar-view.tsx";
 import type { ChatSubagentWait } from "../chat-subagent-wait.ts";
-import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
+import type { MessageRenderOptions } from "./chat-message-bubble-options.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
 import {
   prepareChatMessageRender,
@@ -26,7 +27,8 @@ import type { ReplyConnectorElements } from "./chat-reply-connector.ts";
 import type { ReplyPreviewLookup } from "./chat-reply-preview.types.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import type { SubagentActivityProps } from "./chat-subagent-activity.ts";
-import { BrowserTabPreviews, syncToolDisclosureOverflow } from "./chat-tool-cards.solid.tsx";
+import { syncToolDisclosureOverflow } from "./chat-tool-card-chrome.tsx";
+import { BrowserTabPreviews } from "./chat-tool-cards.solid.tsx";
 import type { BrowserTabPreview } from "./chat-tool-cards.ts";
 import { ToolOutcomeSummary } from "./chat-tool-outcome-summary.solid.tsx";
 import { summarizeToolCardOutcomes } from "./chat-tool-render-model.ts";
@@ -38,39 +40,7 @@ export type StreamGroupPart = Extract<
   { kind: "stream" } | { kind: "reading-indicator" } | { kind: "question" }
 >;
 
-type StreamMessageOptions = Pick<
-  GroupedMessageOptions,
-  | "onOpenReply"
-  | "replyNavigationId"
-  | "sessionKey"
-  | "presented"
-  | "boardProvider"
-  | "widgetLayout"
-  | "agentId"
-  | "runActive"
-  | "asyncQuestions"
-  | "mediaOwner"
-  | "canvasPluginSurfaceUrl"
-  | "resourceBasePath"
-  | "mediaPolicyKey"
-  | "connectionEpoch"
-  | "assistantAttachmentAuthToken"
-  | "resolveArtifactDownload"
-  | "getTurnVideoMessages"
-  | "onRequestOpenImage"
-  | "onOpenImage"
-  | "onAssistantAttachmentLoaded"
-  | "embedSandboxMode"
-  | "allowExternalEmbedUrls"
-  | "fetchLinkFavicon"
-  | "pluginToolIcons"
-  | "githubRepo"
-  | "githubRepositories"
-  | "onOpenWorkspaceFile"
-  | "onPermissionRetry"
->;
-
-export type StreamGroupOptions = StreamMessageOptions & {
+export type StreamGroupOptions = MessageRenderOptions & {
   resolveReplyPreview?: ReplyPreviewLookup;
   branding?: ThemeBranding;
   bubbleMode?: boolean;
@@ -342,7 +312,7 @@ function prepareWorkGroupSummary(item: WorkGroupSummaryItem) {
   const activity = prepared.flatMap((entry) => entry.activity);
   for (const [index, card] of fallback.entries()) {
     const outcome = resolveToolCardOutcome(card, false);
-    const display = resolveToolDisplay(card);
+    const display = resolveToolDisplayIdentity(unwrapToolCallForDisplay(card).name);
     activity.push({
       itemId: `work-summary-raw:${index}`,
       toolCallId: card.callId,

@@ -72,10 +72,8 @@ export function placeChatInputs(
   for (const input of pendingInputs) {
     const inputItems = buildPendingInputItems(
       [input],
-      undefined,
       props.workspaceSyncPendingRunIds,
       props.workerSetupPending,
-      props.messageRecovery,
     );
     const first = inputItems[0];
     if (!first) {

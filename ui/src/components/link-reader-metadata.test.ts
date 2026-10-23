@@ -70,9 +70,14 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it.each(["same", "other-client", "other-agent", "other-session"])(
-  "reconciles detail metadata only in the matching %s scope",
-  async (scope) => {
+it.each([
+  ...["same", "other-client", "other-agent", "other-session"].flatMap((scope) =>
+    [false, true].map((late) => ({ scope, late })),
+  ),
+  { scope: "replaced-client", late: true },
+])(
+  "reconciles detail metadata only in the matching $scope scope (late provider: $late)",
+  async ({ scope, late }) => {
     const request = vi.fn((method: string) =>
       Promise.resolve(method === "github.detail" ? merged : open),
     );
@@ -81,8 +86,12 @@ it.each(["same", "other-client", "other-agent", "other-session"])(
     host.client = client;
     host.agentId = "main";
     host.sessionKey = "agent:main:pane-one";
-    await hover(anchor);
-    expect(badge()).toBe("Open");
+    if (late) {
+      host.remove();
+    } else {
+      await hover(anchor);
+      expect(badge()).toBe("Open");
+    }
     const panel = document.createElement("openclaw-link-reader-panel");
     panel.client = scope === "other-client" ? createTestGatewayClient(request) : client;
     panel.agentId = scope === "other-agent" ? "other" : "main";
@@ -100,7 +109,18 @@ it.each(["same", "other-client", "other-agent", "other-session"])(
     await waitForSolid(() =>
       expect(panel.querySelector(".lr-state")?.textContent).toContain("Merged"),
     );
-    expect(badge()).toBe(scope === "same" ? "Merged" : "Open");
+    if (late) {
+      if (scope === "replaced-client") {
+        const replacement = createTestGatewayClient((method) =>
+          method === "github.detail" ? new Promise(() => {}) : Promise.resolve(open),
+        );
+        panel.client = replacement;
+        host.client = replacement;
+      }
+      document.body.append(host);
+    } else {
+      expect(badge()).toBe(scope === "same" ? "Merged" : "Open");
+    }
     anchor.dispatchEvent(
       new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body }),
     );
@@ -108,12 +128,14 @@ it.each(["same", "other-client", "other-agent", "other-session"])(
     await hover(anchor);
     expect(badge()).toBe(scope === "same" ? "Merged" : "Open");
     expect(document.querySelector(".link-reader-hovercard__metadata")?.textContent).toBe("+42");
-    expect(request.mock.calls.filter(([method]) => method === "github.preview")).toHaveLength(1);
+    expect(request.mock.calls.filter(([method]) => method === "github.preview")).toHaveLength(
+      scope === "replaced-client" ? 0 : 1,
+    );
   },
 );
 
 it.each([false, true])(
-  "refreshes an explicitly stale response once (session scoped: %s)",
+  "shows stale metadata immediately and reads fresh facts after backoff (session scoped: %s)",
   async (sessionScoped) => {
     const request = vi
       .fn()
@@ -124,11 +146,29 @@ it.each([false, true])(
     host.sessionKey = "agent:main:pane-one";
     host.readers = [{ ...reader, linkReader: { ...reader.linkReader, sessionScoped } }];
     await hover(anchor);
+    expect(badge()).toBe("Open");
+    expect(document.querySelector<HTMLElement>(".link-reader-hovercard")?.dataset.cached).toBe(
+      "true",
+    );
+    expect(request).toHaveBeenCalledTimes(1);
+    anchor.dispatchEvent(
+      new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body }),
+    );
+    await vi.advanceTimersByTimeAsync(120);
+    await hover(anchor);
+    expect(request).toHaveBeenCalledTimes(1);
+    anchor.dispatchEvent(
+      new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body }),
+    );
+    await vi.advanceTimersByTimeAsync(30_000);
+    await hover(anchor);
     expect(badge()).toBe("Merged");
+    expect(document.querySelector<HTMLElement>(".link-reader-hovercard")?.dataset.cached).toBe(
+      "false",
+    );
     expect(request).toHaveBeenCalledTimes(2);
     expect(request.mock.calls[1]?.[1]).toEqual({
       url,
-      refresh: true,
       ...(sessionScoped ? { sessionKey: "agent:main:pane-one" } : {}),
     });
   },
@@ -143,19 +183,19 @@ it("labels still-stale metadata and retries only after short backoff", async () 
   expect(document.querySelector<HTMLElement>(".link-reader-hovercard")?.dataset.cached).toBe(
     "true",
   );
-  expect(request).toHaveBeenCalledTimes(2);
+  expect(request).toHaveBeenCalledTimes(1);
   anchor.dispatchEvent(
     new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body }),
   );
   await vi.advanceTimersByTimeAsync(120);
   await hover(anchor);
-  expect(request).toHaveBeenCalledTimes(2);
+  expect(request).toHaveBeenCalledTimes(1);
   anchor.dispatchEvent(
     new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body }),
   );
   await vi.advanceTimersByTimeAsync(30_000);
   await hover(anchor);
-  expect(request).toHaveBeenCalledTimes(4);
+  expect(request).toHaveBeenCalledTimes(2);
 });
 
 it("does not let an older pending preview overwrite committed reader details", async () => {

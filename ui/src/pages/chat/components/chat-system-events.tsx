@@ -6,16 +6,13 @@ import { ChatDivider, ChatNotice } from "./chat-divider.tsx";
 
 function SystemEvent(props: { item: SystemEventItem }) {
   return (
-    <Show
-      when={props.item.kind === "notice" ? props.item : undefined}
-      fallback={
-        <Show when={props.item.kind === "divider" ? props.item : undefined}>
-          {(divider) => <ChatDivider item={divider()} />}
-        </Show>
-      }
-    >
-      {(notice) => <ChatNotice item={notice()} />}
-    </Show>
+    <>
+      {props.item.kind === "notice" ? (
+        <ChatNotice item={props.item} />
+      ) : (
+        <ChatDivider item={props.item} />
+      )}
+    </>
   );
 }
 

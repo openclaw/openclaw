@@ -1,6 +1,7 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { isChatControlCommand, isModelIndependentChatCommand } from "../../lib/chat/commands.ts";
 import {
   resolveControlUiFollowUpMode,
@@ -12,6 +13,8 @@ import { chatSendPendingReason } from "./chat-send-support.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import type { ChatProps } from "./chat-view.tsx";
+
+registerChatSessionEnglish();
 
 export function createChatPaneRunRecoveryActions(
   state: Pick<
@@ -194,35 +197,4 @@ export function resolveChatPaneFollowUpMode(
       sessionMode: state.chatQueueModeOverride,
     }),
   );
-}
-
-// Catalog panes have no live run; stable empty inputs preserve their transcript cache.
-const emptyTranscriptItems: [] = [];
-
-export function projectChatPaneTranscript(
-  state: Pick<
-    ChatPageHost,
-    | "chatMessages"
-    | "chatToolMessages"
-    | "guardianNotices"
-    | "chatStreamSegments"
-    | "chatStream"
-    | "chatReasoning"
-    | "chatStreamStartedAt"
-    | "chatRunUsageById"
-  >,
-  catalogMessages: unknown[] | null,
-  runId: string | null,
-) {
-  return {
-    messages: catalogMessages ?? state.chatMessages,
-    toolMessages: catalogMessages ? emptyTranscriptItems : state.chatToolMessages,
-    guardianNotices: catalogMessages ? emptyTranscriptItems : state.guardianNotices,
-    streamSegments: catalogMessages ? emptyTranscriptItems : state.chatStreamSegments,
-    stream: catalogMessages ? null : state.chatStream,
-    reasoning: catalogMessages ? null : state.chatReasoning,
-    streamStartedAt: catalogMessages ? null : state.chatStreamStartedAt,
-    runId: catalogMessages ? null : runId,
-    runUsageById: catalogMessages ? undefined : state.chatRunUsageById,
-  };
 }

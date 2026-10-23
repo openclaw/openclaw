@@ -281,6 +281,7 @@ suite.define(() => {
       },
     );
 
+    await main.locator(".agent-chat__composer-combobox textarea").click();
     await control(main, "model-select").click();
     const menu = main.locator(".chat-controls__model-menu");
     await expect.poll(() => menu.isVisible()).toBe(true);

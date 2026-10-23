@@ -1,8 +1,10 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { constants, type DatabaseSync, type SQLInputValue } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
-import { sha256File } from "./directory-durability.js";
+import { requireDirectorySync, sha256File, syncDirectorySync } from "./directory-durability.js";
 import {
   openNodeSqliteDatabase,
   resolveExistingSqliteFileUri,
@@ -73,6 +75,19 @@ export function inspectScopedMigrationTables(
   sourcePath: string,
   tables: readonly string[],
 ): ScopedMigrationInspection {
+  const source = openNodeSqliteDatabase(sourcePath, { readOnly: true });
+  try {
+    return inspectSourceTables(source, sourcePath, tables);
+  } finally {
+    source.close();
+  }
+}
+
+function inspectSourceTables(
+  source: DatabaseSync,
+  sourcePath: string,
+  tables: readonly string[],
+): ScopedMigrationInspection {
   const names = [...new Set(tables)];
   if (!names.length || new Set(names.map(foldSqliteIdentifierCase)).size !== names.length) {
     throw new ScopedMigrationSnapshotUnsupportedError("the scope must name distinct tables");
@@ -85,89 +100,84 @@ export function inspectScopedMigrationTables(
       "declare sqlite_stat1 and sqlite_stat4 together",
     );
   }
-  const source = openNodeSqliteDatabase(sourcePath, { readOnly: true });
-  try {
-    requireAuthorizer(source);
-    const catalog = source
-      .prepare("SELECT type, name, tbl_name, sql FROM sqlite_master")
-      // SAFETY: SQLite owns these catalog columns and their fixed string/null types.
-      .all() as Array<{
-      type: string;
-      name: string;
-      tbl_name: string;
-      sql: string | null;
-    }>;
-    // SAFETY: SQLite table_list returns string names/types and an integer WITHOUT ROWID flag.
-    const tableKinds = source.prepare("PRAGMA table_list").all() as Array<{
-      name: string;
-      type: string;
-      wr: number;
-    }>;
-    if (
-      names.some(isStatisticTable) &&
-      catalog.some((entry) => entry.name === "sqlite_stat4") &&
-      !source.prepare("SELECT sqlite_compileoption_used('ENABLE_STAT4') AS enabled").get()!.enabled
-    ) {
-      throw new ScopedMigrationSnapshotUnsupportedError(
-        "this SQLite runtime cannot recreate sqlite_stat4",
-      );
-    }
-    return inspectionSchema.parse({
-      format: 1,
-      sourcePath: fs.realpathSync(sourcePath),
-      userVersion: readSqliteUserVersion(source),
-      tables: names.map((name) => {
-        if (
-          !identifier.safeParse(name).success ||
-          (foldSqliteIdentifierCase(name).startsWith("sqlite_") && !isStatisticTable(name))
-        ) {
-          throw new ScopedMigrationSnapshotUnsupportedError(`reserved or invalid table ${name}`);
-        }
-        const object = catalog.find(
-          (entry) => foldSqliteIdentifierCase(entry.name) === foldSqliteIdentifierCase(name),
-        );
-        if (!object) {
-          return { name, sql: null, columns: [], rowid: null, objects: [] };
-        }
-        const kind = tableKinds.find((entry) => entry.name === object.name);
-        if (object.type !== "table" || kind?.type !== "table" || !object.sql) {
-          throw new ScopedMigrationSnapshotUnsupportedError(`${name} is not an ordinary table`);
-        }
-        if (/\bAUTOINCREMENT\b/iu.test(object.sql)) {
-          throw new ScopedMigrationSnapshotUnsupportedError(
-            `${name} uses shared sqlite_sequence metadata`,
-          );
-        }
-        // SAFETY: SQLite table_xinfo returns string column names and integer hidden flags.
-        const columns = source.prepare(`PRAGMA table_xinfo(${quote(object.name)})`).all() as Array<{
-          name: string;
-          hidden: number;
-        }>;
-        const rowid = kind.wr
-          ? null
-          : ["rowid", "_rowid_", "oid"].find(
-              (alias) => !columns.some((column) => foldSqliteIdentifierCase(column.name) === alias),
-            );
-        if (rowid === undefined) {
-          throw new ScopedMigrationSnapshotUnsupportedError(`${name} hides every rowid alias`);
-        }
-        return {
-          name: object.name,
-          sql: object.sql,
-          columns: columns.filter((column) => column.hidden === 0).map((column) => column.name),
-          rowid,
-          objects: catalog.filter(
-            (entry) =>
-              foldSqliteIdentifierCase(entry.tbl_name) === foldSqliteIdentifierCase(object.name) &&
-              entry.sql &&
-              (entry.type === "index" || entry.type === "trigger"),
-          ),
-        };
-      }),
-    });
-  } finally {
-    source.close();
+  requireAuthorizer(source);
+  const catalog = source
+    .prepare("SELECT type, name, tbl_name, sql FROM sqlite_master")
+    // SAFETY: SQLite owns these catalog columns and their fixed string/null types.
+    .all() as Array<{
+    type: string;
+    name: string;
+    tbl_name: string;
+    sql: string | null;
+  }>;
+  // SAFETY: SQLite table_list returns string names/types and an integer WITHOUT ROWID flag.
+  const tableKinds = source.prepare("PRAGMA table_list").all() as Array<{
+    name: string;
+    type: string;
+    wr: number;
+  }>;
+  if (
+    names.some(isStatisticTable) &&
+    catalog.some((entry) => entry.name === "sqlite_stat4") &&
+    !source.prepare("SELECT sqlite_compileoption_used('ENABLE_STAT4') AS enabled").get()!.enabled
+  ) {
+    throw new ScopedMigrationSnapshotUnsupportedError(
+      "this SQLite runtime cannot recreate sqlite_stat4",
+    );
   }
+  return inspectionSchema.parse({
+    format: 1,
+    sourcePath: fs.realpathSync(sourcePath),
+    userVersion: readSqliteUserVersion(source),
+    tables: names.map((name) => {
+      if (
+        !identifier.safeParse(name).success ||
+        (foldSqliteIdentifierCase(name).startsWith("sqlite_") && !isStatisticTable(name))
+      ) {
+        throw new ScopedMigrationSnapshotUnsupportedError(`reserved or invalid table ${name}`);
+      }
+      const object = catalog.find(
+        (entry) => foldSqliteIdentifierCase(entry.name) === foldSqliteIdentifierCase(name),
+      );
+      if (!object) {
+        return { name, sql: null, columns: [], rowid: null, objects: [] };
+      }
+      const kind = tableKinds.find((entry) => entry.name === object.name);
+      if (object.type !== "table" || kind?.type !== "table" || !object.sql) {
+        throw new ScopedMigrationSnapshotUnsupportedError(`${name} is not an ordinary table`);
+      }
+      if (/\bAUTOINCREMENT\b/iu.test(object.sql)) {
+        throw new ScopedMigrationSnapshotUnsupportedError(
+          `${name} uses shared sqlite_sequence metadata`,
+        );
+      }
+      // SAFETY: SQLite table_xinfo returns string column names and integer hidden flags.
+      const columns = source.prepare(`PRAGMA table_xinfo(${quote(object.name)})`).all() as Array<{
+        name: string;
+        hidden: number;
+      }>;
+      const rowid = kind.wr
+        ? null
+        : ["rowid", "_rowid_", "oid"].find(
+            (alias) => !columns.some((column) => foldSqliteIdentifierCase(column.name) === alias),
+          );
+      if (rowid === undefined) {
+        throw new ScopedMigrationSnapshotUnsupportedError(`${name} hides every rowid alias`);
+      }
+      return {
+        name: object.name,
+        sql: object.sql,
+        columns: columns.filter((column) => column.hidden === 0).map((column) => column.name),
+        rowid,
+        objects: catalog.filter(
+          (entry) =>
+            foldSqliteIdentifierCase(entry.tbl_name) === foldSqliteIdentifierCase(object.name) &&
+            entry.sql &&
+            (entry.type === "index" || entry.type === "trigger"),
+        ),
+      };
+    }),
+  });
 }
 
 function* readRows(
@@ -205,6 +215,46 @@ function writeRows(
   }
 }
 
+/** A retry's full image must still contain every row the current transaction will retire. */
+export function scopedMigrationTablesMatchFullBackup(
+  source: DatabaseSync,
+  sourcePath: string,
+  backupPath: string,
+  tables: readonly string[],
+): boolean {
+  const names = tables.filter((name) => !isStatisticTable(name));
+  const inspection = inspectSourceTables(source, sourcePath, names);
+  using saved = openNodeSqliteDatabase(resolveImmutableSqliteFileUri(backupPath), {
+    readOnly: true,
+  });
+  if (!isDeepStrictEqual(inspection.tables, inspectSourceTables(saved, backupPath, names).tables)) {
+    return false;
+  }
+  for (const table of inspection.tables) {
+    if (!table.sql) {
+      continue;
+    }
+    const columns = [...(table.rowid ? [table.rowid] : []), ...table.columns];
+    const selected = columns.map(quote).join(", ");
+    const query = `SELECT ${selected} FROM ${quote(table.name)} ORDER BY ${selected}`;
+    const current = readRows(source, query, columns);
+    const original = readRows(saved, query, columns);
+    try {
+      for (const row of current) {
+        if (!isDeepStrictEqual(row, original.next().value)) {
+          return false;
+        }
+      }
+      if (!original.next().done) {
+        return false;
+      }
+    } finally {
+      original.return(undefined);
+    }
+  }
+  return true;
+}
+
 function copyRows(
   source: DatabaseSync,
   query: string,
@@ -217,6 +267,121 @@ function copyRows(
 
 function storedColumns(table: ScopedMigrationInspection["tables"][number]): string[] {
   return [...(table.rowid ? ["saved_rowid"] : []), ...table.columns.map((_, index) => `c${index}`)];
+}
+
+function writeScopedArchive(
+  source: DatabaseSync,
+  archive: DatabaseSync,
+  inspection: ScopedMigrationInspection,
+  verify: boolean,
+): string {
+  // CAST(BLOB AS TEXT) interprets bytes in the database's encoding.
+  const encoding = String(source.prepare("PRAGMA encoding").get()!.encoding);
+  archive.exec(
+    `PRAGMA encoding = ${quote(encoding)}; PRAGMA application_id = ${SCOPED_MIGRATION_APPLICATION_ID}; PRAGMA trusted_schema = OFF;`,
+  );
+  const sourceHash = createHash("sha256").update(JSON.stringify(inspection));
+  const archiveHash = createHash("sha256").update(JSON.stringify(inspection));
+  const hashRow = (hash: ReturnType<typeof createHash>, row: SQLInputValue[]) => {
+    hash.update(
+      JSON.stringify(
+        row.map((value) =>
+          value === null
+            ? null
+            : [
+                typeof value,
+                typeof value === "object"
+                  ? Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString("hex")
+                  : String(value),
+              ],
+        ),
+      ) + "\n",
+    );
+  };
+  runSqliteImmediateTransactionSync(archive, () => {
+    archive.exec("CREATE TABLE migration_scope (metadata TEXT NOT NULL) STRICT;");
+    archive.prepare("INSERT INTO migration_scope VALUES (?)").run(JSON.stringify(inspection));
+    for (const [index, table] of inspection.tables.entries()) {
+      if (!table.sql) {
+        continue;
+      }
+      sourceHash.update(JSON.stringify(table.name));
+      archiveHash.update(JSON.stringify(table.name));
+      const columns = storedColumns(table);
+      const dataTable = quote(`data_${index}`);
+      archive.exec(
+        `CREATE TABLE ${dataTable} (${columns.map((column) => `${quote(column)} ANY`).join(", ")}) STRICT`,
+      );
+      const selected = [...(table.rowid ? [table.rowid] : []), ...table.columns];
+      const rows = readRows(
+        source,
+        `SELECT ${selected.map((column, position) => `${quote(column)} AS ${quote(columns[position]!)}`).join(", ")} FROM ${quote(table.name)}`,
+        columns,
+      );
+      function* observedRows() {
+        for (const row of rows) {
+          if (verify) {
+            hashRow(sourceHash, row);
+          }
+          yield row;
+        }
+      }
+      writeRows(archive, `INSERT INTO ${dataTable}`, columns, observedRows());
+      if (verify) {
+        for (const row of readRows(archive, `SELECT * FROM ${dataTable} ORDER BY rowid`, columns)) {
+          hashRow(archiveHash, row);
+        }
+      }
+    }
+  });
+  const generation = sourceHash.digest("hex");
+  if (verify && generation !== archiveHash.digest("hex")) {
+    throw new Error("Table-scoped migration backup row verification failed.");
+  }
+  return generation;
+}
+
+/** Capture the caller's live transaction without opening another source descriptor. */
+export function createScopedMigrationSnapshotSync(
+  source: DatabaseSync,
+  params: {
+    sourcePath: string;
+    targetPath: string;
+    tables: readonly string[];
+    assertCurrent(): void;
+  },
+): { path: string; generation: string } {
+  if (!source.isTransaction) {
+    throw new Error("Fresh migration backup requires the source transaction.");
+  }
+  params.assertCurrent();
+  const inspection = inspectSourceTables(source, params.sourcePath, params.tables);
+  fs.closeSync(fs.openSync(params.targetPath, "wx", 0o600));
+  try {
+    const archive = openNodeSqliteDatabase(params.targetPath);
+    let generation: string;
+    try {
+      generation = writeScopedArchive(source, archive, inspection, true);
+      assertSqliteIntegrity(archive, params.targetPath);
+    } finally {
+      archive.close();
+    }
+    const descriptor = fs.openSync(params.targetPath, "r+");
+    try {
+      fs.fsyncSync(descriptor);
+    } finally {
+      fs.closeSync(descriptor);
+    }
+    requireDirectorySync(
+      syncDirectorySync(path.dirname(params.targetPath)),
+      "Migration backup directory",
+    );
+    params.assertCurrent();
+    return { path: params.targetPath, generation };
+  } catch (error) {
+    fs.unlinkSync(params.targetPath);
+    throw error;
+  }
 }
 
 function restoreRows(
@@ -257,36 +422,8 @@ export async function createScopedMigrationSnapshot(params: {
     try {
       const archive = openNodeSqliteDatabase(stagedPath);
       try {
-        // CAST(BLOB AS TEXT) interprets bytes in the database's encoding.
-        const encoding = String(source.prepare("PRAGMA encoding").get()!.encoding);
-        archive.exec(
-          `PRAGMA encoding = ${quote(encoding)}; PRAGMA application_id = ${SCOPED_MIGRATION_APPLICATION_ID}; PRAGMA trusted_schema = OFF;`,
-        );
         runSqliteReadSnapshotSync(source, () =>
-          runSqliteImmediateTransactionSync(archive, () => {
-            archive.exec("CREATE TABLE migration_scope (metadata TEXT NOT NULL) STRICT;");
-            archive
-              .prepare("INSERT INTO migration_scope VALUES (?)")
-              .run(JSON.stringify(inspection));
-            for (const [index, table] of inspection.tables.entries()) {
-              if (!table.sql) {
-                continue;
-              }
-              const columns = storedColumns(table);
-              const dataTable = quote(`data_${index}`);
-              archive.exec(
-                `CREATE TABLE ${dataTable} (${columns.map((column) => `${quote(column)} ANY`).join(", ")}) STRICT`,
-              );
-              const selected = [...(table.rowid ? [table.rowid] : []), ...table.columns];
-              copyRows(
-                source,
-                `SELECT ${selected.map((column, position) => `${quote(column)} AS ${quote(columns[position]!)}`).join(", ")} FROM ${quote(table.name)}`,
-                columns,
-                archive,
-                `INSERT INTO ${dataTable}`,
-              );
-            }
-          }),
+          writeScopedArchive(source, archive, inspection, false),
         );
         assertSqliteIntegrity(archive, stagedPath);
       } finally {

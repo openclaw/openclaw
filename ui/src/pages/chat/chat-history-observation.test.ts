@@ -49,11 +49,11 @@ import {
   cacheChatSessionSnapshot,
   observeChatCache,
   resolveChatSnapshotKey,
+  type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
 import type { ChatRouteData } from "./session-route-data.ts";
 import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
-import type { ChatSessionSnapshot } from "./session-snapshot-types.ts";
 
 const key = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
 const initial = {
@@ -513,6 +513,9 @@ it.each([false, true])(
     expect(getChatHistoryLoadState(state).phase).toBe("failed");
     const older = h.holdManaged();
     renderCurrent();
+    expect(container.querySelector(".chat-history-error__stage p")?.textContent).toContain(
+      "Temporary history failure",
+    );
     const retry = expectDefined(
       container.querySelector<HTMLButtonElement>(".chat-history-error button"),
       "Retry button",

@@ -8,8 +8,10 @@ import {
   openSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
   writeSync,
@@ -68,6 +70,28 @@ function recoverFixtureLock(f: ReturnType<typeof fixture>, oid: string) {
       "refs/openclaw/pr-operation-locks/42",
     ),
   ).toBe("");
+}
+
+function expectWorkflowBinding(f: ReturnType<typeof fixture>, source: string) {
+  const ref = "refs/openclaw/pr-workflow-bindings/42";
+  const binding = f.git(f.canonical, "rev-parse", ref);
+  expect(JSON.parse(f.git(f.canonical, "show", `${ref}:binding.json`))).toEqual({
+    version: 1,
+    repository: realpathSync(f.origin),
+    owner: realpathSync(join(f.canonical, ".git")),
+    pr: "42",
+    source,
+  });
+  expect(f.git(f.canonical, "rev-parse", `${binding}^`)).toBe(source);
+  expect(
+    f.git(
+      f.canonical,
+      "for-each-ref",
+      "--format=%(refname)",
+      "refs/openclaw/pr-workflow-qualification",
+    ),
+  ).toBe("");
+  return binding;
 }
 
 describePosix("native PR main refresh boundaries", () => {
@@ -648,6 +672,27 @@ ${readFileSync(gitShim, "utf8")}
     expect(
       f.git(f.canonical, "for-each-ref", "--format=%(refname)", "refs/openclaw/pr-operation-locks"),
     ).toBe("");
+    const outcome = f.git(f.canonical, "rev-parse", "refs/openclaw/pr-merge-outcomes/42");
+    f.git(f.canonical, "update-ref", "-d", "refs/remotes/origin/main");
+    for (const command of [
+      ["merge-run", "42"],
+      ["merge-complete", "42", outcome, "--confirmed-operator-completion"],
+    ]) {
+      const resumed = f.run(command);
+      expect(resumed.status, resumed.stdout + resumed.stderr).toBe(0);
+      expect(resumed.stdout).toContain("already complete for PR #42; no side effects.");
+      expect(f.git(f.canonical, "rev-parse", "refs/openclaw/pr-merge-outcomes/42")).toBe(outcome);
+      expect(existsSync(f.worktree)).toBe(false);
+      for (const ref of [
+        "pr-workflow-bindings",
+        "pr-workflow-qualification",
+        "pr-operation-locks",
+      ]) {
+        expect(f.git(f.canonical, "for-each-ref", `refs/openclaw/${ref}`)).toBe("");
+      }
+    }
+    expect(f.events().filter((e) => e.kind === "leased-cleanup")).toHaveLength(1);
+    expect(f.events().filter((e) => e.kind === "unexpected-push")).toEqual([]);
   });
 
   it.each([2, 3])(
@@ -1142,7 +1187,7 @@ echo UNEXPECTED_SUCCESS
         .events()
         .filter((e) => e.kind === "fetched")
         .map((e) => e.sha),
-    ).toEqual([f.main, f.movedMain]);
+    ).toEqual([f.main, f.movedMain, f.movedMain]);
     expect(f.git(f.worktree, "rev-parse", "HEAD")).toBe(f.movedMain);
     expect(f.git(f.worktree, "status", "--porcelain")).toBe("");
     expect(f.git(f.canonical, "rev-parse", "HEAD")).toBe(f.head);
@@ -1150,11 +1195,17 @@ echo UNEXPECTED_SUCCESS
     const mode = readFileSync(join(f.local, "review-mode.env"), "utf8");
     expect(mode).toContain("REVIEW_PR_NUMBER=42\n");
     expect(mode).toContain(`REVIEW_BASELINE_SHA=${f.movedMain}\n`);
+    expectWorkflowBinding(f, f.main);
+    expect(f.git(f.canonical, "for-each-ref", "refs/remotes/origin/main")).toBe("");
   });
 
-  it.each([1, 2])(
-    "provisions without a local main anchor and retries cold fetch %s failure",
-    (fetchNumber) => {
+  it.each([
+    { phase: "qualification", fetchNumber: 1 },
+    { phase: "bootstrap", fetchNumber: 2 },
+    { phase: "private", fetchNumber: 3 },
+  ])(
+    "provisions without a local main anchor and retries cold $phase fetch failure",
+    ({ fetchNumber }) => {
       const f = fixture();
       f.git(f.canonical, "worktree", "remove", "--force", f.worktree);
       f.git(f.canonical, "update-ref", "-d", "refs/remotes/origin/main");
@@ -1163,8 +1214,9 @@ echo UNEXPECTED_SUCCESS
       const diagnostic = `stdout:\n${failed.stdout.slice(-4000)}\nstderr:\n${failed.stderr.slice(-4000)}`;
       expect(failed.status, diagnostic).not.toBe(0);
       expect(failed.stderr, diagnostic).toContain("fatal: injected main fetch failure");
-      expect(existsSync(f.worktree), diagnostic).toBe(fetchNumber === 2);
-      if (fetchNumber === 2) {
+      expect(existsSync(f.worktree), diagnostic).toBe(fetchNumber === 3);
+      const admitted = fetchNumber > 1 ? expectWorkflowBinding(f, f.main) : undefined;
+      if (fetchNumber === 3) {
         f.assertPrivateHandoffVerified();
         expect(f.git(f.worktree, "symbolic-ref", "HEAD")).toBe("refs/heads/temp/pr-42");
         expect(f.git(f.canonical, "rev-parse", "refs/heads/temp/pr-42")).toBe(f.main);
@@ -1181,8 +1233,71 @@ echo UNEXPECTED_SUCCESS
       f.assertPrivateHandoffVerified();
       expect(f.git(f.worktree, "rev-parse", "HEAD")).toBe(f.main);
       expect(f.git(f.canonical, "rev-parse", "HEAD")).toBe(f.main);
+      const binding = expectWorkflowBinding(f, f.main);
+      if (admitted) {
+        expect(binding).toBe(admitted);
+      }
     },
   );
+
+  it("qualifies an existing cold worktree without replacing it and reuses its binding", () => {
+    const f = fixture();
+    const gitDir = f.git(f.worktree, "rev-parse", "--absolute-git-dir");
+    const identities = () =>
+      [f.worktree, gitDir].map((path) => {
+        const { dev, ino } = statSync(path);
+        return { dev, ino };
+      });
+    const original = identities();
+    const before = f.git(f.worktree, "write-tree");
+    f.git(f.canonical, "update-ref", "-d", "refs/remotes/origin/main");
+    f.configure({ failFetchAt: 1 });
+    const failed = f.run("review-checkout-main");
+    expect(failed.status, failed.stdout + failed.stderr).not.toBe(0);
+    expect(failed.stderr).toContain("fatal: injected main fetch failure");
+    expect(identities()).toEqual(original);
+    expect(f.git(f.worktree, "write-tree")).toBe(before);
+    expect(f.git(f.worktree, "rev-parse", "HEAD")).toBe(f.head);
+    expect(f.git(f.canonical, "for-each-ref", "refs/openclaw/pr-workflow-bindings")).toBe("");
+    f.configure({ failFetchAt: 0 });
+    const first = f.run("review-checkout-main");
+    expect(first.status, first.stdout + first.stderr).toBe(0);
+    const binding = expectWorkflowBinding(f, f.main);
+    const second = f.run("review-checkout-main");
+    expect(second.status, second.stdout + second.stderr).toBe(0);
+    expect(expectWorkflowBinding(f, f.main)).toBe(binding);
+    expect(f.git(f.worktree, "rev-parse", "--absolute-git-dir")).toBe(gitDir);
+    expect(identities()).toEqual(original);
+    expect(f.git(f.worktree, "rev-parse", "HEAD")).toBe(f.main);
+    expect(f.git(f.worktree, "status", "--porcelain")).toBe("");
+  });
+
+  it("refuses cold admission when the canonical wrapper differs from fetched main", () => {
+    const f = fixture();
+    const review = join(f.canonical, "scripts/pr-lib/review.sh");
+    writeFileSync(review, `${readFileSync(review, "utf8")}\n# Unadmitted canonical change.\n`);
+    f.git(f.canonical, "add", "scripts/pr-lib/review.sh");
+    f.git(f.canonical, "commit", "-m", "test: unadmitted workflow change");
+    f.git(f.canonical, "update-ref", "-d", "refs/remotes/origin/main");
+    const before = f.git(f.worktree, "write-tree");
+    const result = f.run("review-checkout-main");
+    expect(result.status, result.stdout + result.stderr).not.toBe(0);
+    expect(result.stderr).toContain(
+      "Cold workflow source differs from the running canonical wrapper",
+    );
+    expect(f.events().filter((e) => e.kind === "main-fetch")).toHaveLength(1);
+    expect(f.git(f.worktree, "write-tree")).toBe(before);
+    expect(f.git(f.worktree, "rev-parse", "HEAD")).toBe(f.head);
+    expect(f.git(f.canonical, "for-each-ref", "refs/openclaw/pr-workflow-bindings")).toBe("");
+    expect(
+      f.git(
+        f.canonical,
+        "for-each-ref",
+        "--format=%(objectname)",
+        "refs/openclaw/pr-workflow-qualification/42",
+      ),
+    ).toBe(f.main);
+  });
 
   it("rejects a later uninjected provisioner despite an earlier valid receipt", () => {
     const f = fixture();
@@ -1239,8 +1354,9 @@ printf 'replacement=%s\\n' "$PR_MAIN_SHA"
   });
 
   it.each([
-    { phase: "bootstrap", fetchNumber: 1 },
-    { phase: "private", fetchNumber: 2 },
+    { phase: "qualification", fetchNumber: 1 },
+    { phase: "bootstrap", fetchNumber: 2 },
+    { phase: "private", fetchNumber: 3 },
   ])(
     "recovers cold $phase fetch interruption through the native exact owner",
     async ({ fetchNumber }) => {
@@ -1338,9 +1454,9 @@ read -r release < "$OPENCLAW_TEST_FETCH_HOLD"
         }
         expect(retry.status, retry.stdout + retry.stderr).toBe(0);
         expect(initializedTree).toBe(
-          fetchNumber === 1 ? undefined : f.git(f.canonical, "rev-parse", `${f.main}^{tree}`),
+          fetchNumber < 3 ? undefined : f.git(f.canonical, "rev-parse", `${f.main}^{tree}`),
         );
-        expect(indexExists).toBe(fetchNumber === 2);
+        expect(indexExists).toBe(fetchNumber === 3);
         expect(f.git(f.worktree, "rev-parse", "HEAD")).toBe(f.movedMain);
         expect(f.git(f.worktree, "status", "--porcelain")).toBe("");
         expect(f.git(f.canonical, "rev-parse", "HEAD")).toBe(f.head);

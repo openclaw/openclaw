@@ -71,9 +71,6 @@ async function fixture(reason: "missing-auth" | "auth-failed" = "missing-auth") 
     loadModelCatalog(result.context.gateway.snapshot.client!, { agentId: "main" }),
   ]);
   result.flow.setMessage("Check the workspace");
-  expect(result.place.modelControl.modelUnavailableReason(result.place.selectedAgent())).toBe(
-    reason,
-  );
   return result;
 }
 

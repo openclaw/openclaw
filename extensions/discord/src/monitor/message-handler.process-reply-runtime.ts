@@ -83,7 +83,7 @@ export function createDiscordBeforePayloadDelivery(params: {
 export function createDiscordMessageReplyRuntime(params: {
   ctx: DiscordMessagePreflightContext;
   processContext: DiscordMessageProcessContext;
-  replyReference: DiscordMessageProcessContext["replyPlan"]["replyReference"];
+  replyReference: Pick<DiscordMessageProcessContext["replyPlan"]["replyReference"], "peek">;
   sourceRepliesAreToolOnly: boolean;
   shouldDisableCoreTypingKeepalive: boolean;
   isRoomEvent: boolean;

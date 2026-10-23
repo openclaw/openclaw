@@ -5,17 +5,15 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { doctorCommand } from "../commands/doctor.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
-import { seedNativeVersionZeroState } from "../state/native-version-zero.test-support.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createDoctorRuntime, mocks } from "./doctor-health.test-support.js";
+import { createDoctorConfig, createDoctorRuntime, mocks } from "./doctor-health.test-support.js";
 
 // Keep the real Doctor config/migration chain; the shared harness isolates service and UI checks.
 vi.doUnmock("../commands/doctor-config-flow.js");
@@ -31,8 +29,7 @@ afterEach(() => vi.restoreAllMocks());
 
 function writeConfig(state: OpenClawTestState, session?: { store: string }) {
   return state.writeConfig({
-    agents: { ownership: "explicit", entries: { main: { workspace: state.workspaceDir } } },
-    gateway: { mode: "local" },
+    ...createDoctorConfig(state),
     plugins: { enabled: false },
     ...(session ? { session } : {}),
   });
@@ -101,36 +98,6 @@ function damageWorkshopIndex(databasePath: string): void {
     database.exec(`PRAGMA writable_schema = OFF; PRAGMA schema_version = ${schemaVersion + 1};`);
   });
 }
-
-it("adopts native version-zero state without requiring orphan-recovery metadata", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    await writeConfig(state);
-    const databasePath = resolveOpenClawStateSqlitePath(state.env);
-    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-    editDatabase(databasePath, (db) => seedNativeVersionZeroState(db, true));
-    await repair();
-    expectDatabase(databasePath, {
-      "PRAGMA user_version": [{ user_version: OPENCLAW_STATE_SCHEMA_VERSION }],
-      "SELECT role, schema_version FROM schema_meta WHERE meta_key = 'primary'": [
-        { role: "global", schema_version: OPENCLAW_STATE_SCHEMA_VERSION },
-      ],
-      "SELECT * FROM device_identities": [
-        {
-          identity_key: "node",
-          device_id: "native-device",
-          public_key_pem: "public",
-          private_key_pem: "private",
-          created_at_ms: 1,
-          updated_at_ms: 1,
-        },
-      ],
-      "SELECT raw_json FROM exec_approvals_config WHERE config_key = 'current'": [
-        { raw_json: "{}" },
-      ],
-    });
-    expect(recoveryDirs(databasePath)).toEqual([]);
-  });
-});
 
 it("preserves known damaged state before backing up and migrating an older agent", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

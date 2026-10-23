@@ -74,6 +74,15 @@ function mockResponse(body: BodyInit | null, init?: ResponseInit) {
   return release;
 }
 
+async function expectResponse(response: Response, status: number, body: string) {
+  expect(response.status).toBe(status);
+  expect(await response.text()).toBe(body);
+}
+
+function expectUpstream(url: string, headers: Record<string, unknown>, init = {}) {
+  expect(upstreamRequest()).toMatchObject({ requireHttps: true, url, init: { ...init, headers } });
+}
+
 describe("createCopilotByokProxy", () => {
   afterEach(async () => {
     for (const proxy of proxies.splice(0)) {
@@ -101,25 +110,20 @@ describe("createCopilotByokProxy", () => {
       `${proxy.baseUrl}/responses?trace=request`,
       jsonPost("proxy-model", { authorization: "Bearer secret-key" }),
     );
-    expect(response.status).toBe(201);
+    await expectResponse(response, 201, "ok");
     expect(response.headers.get("content-encoding")).toBeNull();
     expect(response.headers.get("content-length")).toBeNull();
     expect(response.headers.get("x-upstream")).toBe("yes");
-    expect(await response.text()).toBe("ok");
-    expect(upstreamRequest()).toMatchObject({
-      auditContext: "copilot-byok-provider",
-      requireHttps: true,
-      url: "https://proxy.example/v1/responses?routing=blue&trace=request",
-      init: {
-        method: "POST",
-        signal: expect.any(AbortSignal),
-        headers: {
-          "accept-encoding": "identity",
-          authorization: "Bearer secret-key",
-          "content-type": "application/json",
-        },
+    expect(upstreamRequest().auditContext).toBe("copilot-byok-provider");
+    expectUpstream(
+      "https://proxy.example/v1/responses?routing=blue&trace=request",
+      {
+        "accept-encoding": "identity",
+        authorization: "Bearer secret-key",
+        "content-type": "application/json",
       },
-    });
+      { method: "POST", signal: expect.any(AbortSignal) },
+    );
     expect(release).toHaveBeenCalledTimes(1);
   });
 
@@ -142,8 +146,7 @@ describe("createCopilotByokProxy", () => {
     // Keep invalid UTF-8 and a nonzero offset: forwarding the backing pool would leak other bytes.
     const body = Buffer.from([42, 0, 255, 128, 192, 10, 42]).subarray(1, -1);
     const response = await clientFetch(`${proxy.baseUrl}/responses`, { method: "POST", body });
-    expect(response.status).toBe(200);
-    expect(await response.text()).toBe("ok");
+    await expectResponse(response, 200, "ok");
     expect(received).toEqual([body, body]);
   });
 
@@ -159,18 +162,12 @@ describe("createCopilotByokProxy", () => {
   it("injects resolved bearer auth when the SDK request omits Authorization", async () => {
     mockResponse("ok");
     const proxy = await startProxy(
-      {
-        provider: "tencent-tokenplan",
-        api: "openai-completions",
-        id: "hy3",
-        baseUrl: "https://tokenplan.example/v1",
-        authHeader: true,
-      },
+      { api: "openai-completions", authHeader: true },
       "tokenplan-secret",
     );
-    const response = await fetch(`${proxy.baseUrl}/chat/completions`, jsonPost("hy3"));
+    const response = await fetch(`${proxy.baseUrl}/chat/completions`, jsonPost("proxy-model"));
     expect(response.status).toBe(200);
-    expect(upstreamRequest().url).toBe("https://tokenplan.example/v1/chat/completions");
+    expect(upstreamRequest().url).toBe("https://proxy.example/v1/chat/completions");
     expect(upstreamRequest().init.headers).toMatchObject({
       authorization: "Bearer tokenplan-secret",
       "content-type": "application/json",
@@ -282,19 +279,12 @@ describe("createCopilotByokProxy", () => {
           ...(authHeader ? {} : { "api-key": "azure-key" }),
         }),
       );
-      expect(response.status).toBe(200);
-      expect(await response.text()).toBe("azure-ok");
-      expect(upstreamRequest()).toMatchObject({
-        requireHttps: true,
-        url: "https://example.openai.azure.com/openai/v1/responses?trace=request",
-        init: {
-          headers: {
-            "accept-encoding": "identity",
-            ...(authHeader ? {} : { "api-key": "azure-key" }),
-            "x-openclaw-copilot-byok-proxy-token": "configured-value",
-            "x-trace": "test",
-          },
-        },
+      await expectResponse(response, 200, "azure-ok");
+      expectUpstream("https://example.openai.azure.com/openai/v1/responses?trace=request", {
+        "accept-encoding": "identity",
+        ...(authHeader ? {} : { "api-key": "azure-key" }),
+        "x-openclaw-copilot-byok-proxy-token": "configured-value",
+        "x-trace": "test",
       });
       expect(upstreamRequest().init.headers).not.toHaveProperty(proxyCredentialHeader);
       expect(upstreamRequest().init.headers).not.toHaveProperty("authorization");

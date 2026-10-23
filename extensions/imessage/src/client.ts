@@ -6,7 +6,10 @@ import {
   captureEffectAuthority,
 } from "openclaw/plugin-sdk/fetch-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { recoverIMessageBridge } from "./bridge-recovery.js";
@@ -59,9 +62,22 @@ export class IMessageRpcRequestError extends Error {
   }
 }
 
-// Only imsg's helper wait error proves a bridge stall; our client timeout can
+// Only imsg's helper wait errors prove a bridge stall; our client timeout can
 // also mean a slow wrapper and must not evict a healthy capability cache.
+// imsg reports legacy waits as "Timed out waiting for response to '<action>'",
+// but bridge_v2 mutations (send-message) return structured delivery data whose
+// detail starts with the deadline sentence below.
 function isIMessageBridgeStall(error: unknown): boolean {
+  if (error instanceof IMessageRpcRequestError && isRecord(error.data)) {
+    const { transport, detail } = error.data;
+    if (
+      transport === "bridge_v2" &&
+      typeof detail === "string" &&
+      detail.startsWith("The bridge response deadline expired.")
+    ) {
+      return true;
+    }
+  }
   return error instanceof Error && error.message.includes("Timed out waiting for response");
 }
 

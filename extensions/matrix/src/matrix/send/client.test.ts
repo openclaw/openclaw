@@ -11,18 +11,14 @@ import {
 import { createMatrixMonitorTaskRunner } from "../monitor/task-runner.js";
 import { captureMatrixSendCurrentness } from "../sdk/send-currentness.js";
 
-const {
-  getMatrixRuntimeMock,
-  acquireSharedMatrixClientMock,
-  sharedLeaseReleaseMock,
-  resolveMatrixAuthContextMock,
-} = matrixClientResolverMocks;
+const { getMatrixRuntimeMock, acquireSharedMatrixClientMock, sharedLeaseReleaseMock } =
+  matrixClientResolverMocks;
 
 const TEST_CFG = {};
 
+// mock-isolation: Lease fixtures replace shared network/crypto client ownership.
 vi.mock("../client.js", () => ({
   acquireSharedMatrixClient: (...args: unknown[]) => acquireSharedMatrixClientMock(...args),
-  resolveMatrixAuthContext: resolveMatrixAuthContextMock,
 }));
 
 vi.mock("../../runtime.js", () => ({

@@ -12,6 +12,7 @@ These lessons came from the completed Lit → Solid 2 migration (October 2026). 
 - **Event names are case-sensitive.** Dashed custom events need the exact dash in their JSX handler name, or a `listen(...)` subscription.
 - **Async memos aren't cancellable.** They drop superseded results but get no `AbortSignal`. Transport cancellation needs an owned async-iterable adapter.
 - **Ref callbacks are unowned.** `onCleanup` inside one never runs. Set up behavior in the component body or an owned ref factory.
+- **Capture native ref keys in the factory, not its callback.** rc.16 resolves `ref={[rowRef(item().id)]}` under `untrack` with the owner intact, then invokes the returned callback unowned. That callback still inherits strict-read diagnostics, so reading `item()` there warns. Let `rowRef(id)` register cleanup and return a callback over the plain key; registration remains synchronous. A replaceable child branch can attach its successor before disposing the old ref: delete a keyed registration only if it still belongs to that element. Component ref props are ordinary props and do not have this native-element resolver contract.
 - **Equality doesn't skip computing.** A memo's `equals` runs after computing. When expensive rendering must be skipped entirely, compare an explicit dependency vector in a memo and read it from an untracked render computation.
 - **Strict JSX types catch real bugs.** `aria-pressed` accepts `"true" | "false" | "mixed"`, not a boolean; a generic `onChange: (value: T) => …` doesn't narrow to `string` across the bridge. Fix the types, don't cast.
 - **Optional contexts need a real default.** Solid 2 treats `undefined` as unset even when passed to `createContext`; use `null` for an optional owner and keep standalone component tests in the proof.
@@ -30,6 +31,18 @@ The [rc.14 changelog](https://github.com/solidjs/solid/blob/8d23a5a13b23f8bfd5f0
 - **Teardown releases resources without publishing state.** Keep signal updates in live error/visibility handlers; cleanup only aborts work and releases resources. A video-poster cleanup write failed when its rendered parent was disposed.
 - **RPC fixtures must return fresh snapshots.** Reusing and mutating objects already passed into a store bypasses reactive updates. Clone mock responses when simulating later JSON replies, as the snapshot polling test does.
 - **Binding slots were renamed.** `BindingSlot` replaces `AttributeSlot` without an alias and restricts fill output types. OpenClaw currently uses neither API.
+
+### rc.16 upgrade
+
+The [rc.16 changelogs](https://github.com/solidjs/solid/tree/b0ad1df505b835058a4b3750ab37d6576bb18c01/packages) and shipped `CHEATSHEET.md` refine these contracts:
+
+- **Teardown writes are supported.** rc.16 exempts cleanup callbacks from the dev owned-write restriction and fixes cleanup writes stranding later transactions. The rc.14 failure above is historical; keep teardown focused on releasing resources rather than republishing disposed view state.
+- **Object derivations may omit a seed.** `createStore(fn)`, `createProjection(fn)`, and `createOptimisticStore(fn)` accept complete object answers without an invented `{}` seed. A provided seed must be a complete value; arrays still need `[]`.
+- **Deferred reads declare lag.** `createDeferred` suspends for its first answer, then keeps the previous answer during refetch without holding unrelated rendering. `isPending` still reports the refetch. Adopt only where stale presentation is intended.
+- **Held errors land with held values.** Until that commit, ordinary readers and `Errored` retain the previous frame; `latest` can expose the proposed error. `untrack` does not turn an unresolved read into a fallback.
+- **Loading resets consume values.** Use `on={identity()}`; an accessor passed as `on` never reads its dependency. Refresh a derived store at its root, then read the nested value after settlement.
+- **Providers own subtree state.** The cheatsheet now recommends provider-created state for portable request isolation; module scope is shared by server requests. OpenClaw's plain TypeScript domain owners retain their existing authority and lifetime.
+- **Binding slots are removed.** `BindingSlot`, `SlotOutput`, `SlotError`, and the frames `bind` entry are gone. OpenClaw uses none of them; ordinary slots remain.
 
 ## DOM ownership
 

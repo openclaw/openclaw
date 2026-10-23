@@ -114,11 +114,12 @@ describe("iMessage durable ingress", () => {
     const cursorGate = deferred();
     const cursorStarted = deferred();
     let currentTime = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => currentTime);
     const onDurableEnqueue = vi.fn(async () => {
       cursorStarted.resolve();
       await cursorGate.promise;
     });
-    const ingress = createIngress({ onDurableEnqueue, now: () => currentTime });
+    const ingress = createIngress({ onDurableEnqueue });
 
     try {
       const first = ingress.receive(rawRow());

@@ -57,10 +57,21 @@ function directChildren(session: GatewaySessionRow, roster: SubagentRoster) {
   });
 }
 
-function unfinishedChildren(session: GatewaySessionRow, roster: SubagentRoster) {
-  return directChildren(session, roster).filter(
+type SubagentSession = SubagentRoster & { selectedSession: GatewaySessionRow | undefined };
+
+function unfinishedChildren(input: SubagentSession) {
+  const session = input.selectedSession;
+  if (!session || session.archived || session.hasActiveSubagentRun !== true) {
+    return [];
+  }
+  return directChildren(session, input).filter(
     (row) => row.status === "queued" || isUnfinishedSubagent(row),
   );
+}
+
+/** Header counts need child membership, not transcript handoffs or activity presentation. */
+export function countRunningSubagents(input: SubagentSession): number {
+  return unfinishedChildren(input).filter((row) => !isDashboardSessionKey(row.key)).length;
 }
 
 // Launch order stays stable as activity updates reorder the source roster.
@@ -98,9 +109,7 @@ function unfinishedStatus(row: GatewaySessionRow): ChatSubagentActivity["status"
  * Every direct subagent the pane's own child query returned, finished ones
  * included. Dashboard children are sessions in their own right and are left out.
  */
-export function listSubagents(
-  input: SubagentRoster & { selectedSession: GatewaySessionRow | undefined },
-): ChatSubagentActivity[] {
+export function listSubagents(input: SubagentSession): ChatSubagentActivity[] {
   const session = input.selectedSession;
   if (!session || session.archived) {
     return [];
@@ -124,8 +133,7 @@ export function listSubagents(
  * memoized rows when any of it changed.
  */
 export function projectSubagentStatus(
-  input: SubagentRoster & {
-    selectedSession: GatewaySessionRow | undefined;
+  input: SubagentSession & {
     runActive?: boolean;
     runWorking?: boolean;
     messages: readonly unknown[];
@@ -158,7 +166,7 @@ export function projectSubagentStatus(
     yieldedAt <= waitStartedAt
       ? pending?.runId
       : undefined;
-  const unfinished = eligible ? unfinishedChildren(session, input) : [];
+  const unfinished = unfinishedChildren(input);
   // Dashboard children count as sessions, never named subagents.
   const children = unfinished.filter((row) => !isDashboardSessionKey(row.key));
   const running = children.length;

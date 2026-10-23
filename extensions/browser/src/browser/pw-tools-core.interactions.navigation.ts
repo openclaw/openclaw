@@ -2,10 +2,7 @@ import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
 import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import type { Frame, Page } from "playwright-core";
-import {
-  BROWSER_ACTION_NAVIGATION_GRACE_MS,
-  normalizeActBoundedNonNegativeMs,
-} from "./act-policy.js";
+import { BROWSER_ACTION_NAVIGATION_GRACE_MS } from "./act-policy.js";
 import {
   assertBrowserNavigationResultAllowed,
   type BrowserNavigationPolicyOptions,
@@ -87,14 +84,6 @@ type NavigationObservablePage = Pick<Page, "url" | "mainFrame" | "on" | "off">;
 
 const pendingInteractionNavigationGuardCleanup = new WeakMap<Page, () => void>();
 
-export function resolveBoundedDelayMs(
-  value: number | undefined,
-  label: string,
-  maxMs: number,
-): number {
-  return normalizeActBoundedNonNegativeMs(Math.floor(value ?? 0), label, maxMs) ?? 0;
-}
-
 export async function getRestoredPageForTarget(opts: InteractionTargetOptions) {
   const page = await getPageForTargetId(opts);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
@@ -117,6 +106,28 @@ export function throwIfInteractionAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw toErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection");
   }
+}
+
+export async function runGuardedPageInteraction<T>(
+  page: Page,
+  opts: GuardedInteractionOptions,
+  action: () => Promise<T>,
+): Promise<T> {
+  // Keep the navigation guard alive after foreground interruption until the
+  // underlying native operation settles.
+  return await awaitNavigationGuardedInteraction(
+    {
+      action,
+      cdpUrl: opts.cdpUrl,
+      page,
+      ...interactionNavigationPolicy(opts),
+      targetId: opts.targetId,
+      assertCurrent: opts.assertCurrent,
+    },
+    opts.signal,
+    opts.signal,
+    () => reconcileRemoteDialogAfterActionSettled(page, opts.signal),
+  );
 }
 
 export async function runCancellablePageInteraction<T>(
@@ -395,7 +406,7 @@ export async function awaitActionWithAbort<T>(
   }
 }
 
-export async function awaitNavigationGuardedInteraction<T>(
+async function awaitNavigationGuardedInteraction<T>(
   opts: {
     action: () => Promise<T>;
     cdpUrl: string;

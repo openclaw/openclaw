@@ -1,13 +1,11 @@
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { prepareHostedStopExecutor } from "./hosted-stop-executor.js";
 import { prepareHostedGatewayStop, type GatewayProcessOwner } from "./hosted-stop.js";
 import { probeLaunchAgentState } from "./launchd-runtime.js";
 import { execSystemctl } from "./systemd-exec.js";
 
 vi.mock("node:fs/promises", () => ({ default: { readFile: vi.fn() } }));
-vi.mock("../shared/pid-alive.js", () => ({ getFileLockProcessStartTime: vi.fn() }));
 vi.mock("./systemd-exec.js", () => ({ execSystemctl: vi.fn() }));
 vi.mock("./hosted-stop-executor.js", () => ({ prepareHostedStopExecutor: vi.fn() }));
 vi.mock("./launchd-runtime.js", () => ({
@@ -61,7 +59,6 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", undefined);
   vi.stubEnv("OPENCLAW_LAUNCHD_LABEL", "ai.openclaw.test");
   Object.defineProperty(process, "platform", { ...platform, value: "linux" });
-  vi.mocked(getFileLockProcessStartTime).mockReturnValue(10);
   systemctl.mockImplementation(async () => identityResult());
   readFile.mockImplementation(async () => `0::${cgroup}\n`);
   executor.mockImplementation(async (params) => {
@@ -98,7 +95,6 @@ it.each([
     abort.abort();
     await expect(stop.execute(noop)).rejects.toThrow();
     await stop.dispose();
-    expect(getFileLockProcessStartTime).not.toHaveBeenCalled();
     expect(fs.readFile).not.toHaveBeenCalled();
     expect(probeLaunchAgentState).not.toHaveBeenCalled();
     expect(execSystemctl).not.toHaveBeenCalled();

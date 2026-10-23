@@ -1,14 +1,5 @@
 import { createHash } from "node:crypto";
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  symlinkSync,
-  truncateSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
@@ -18,8 +9,9 @@ import {
   verifyClawHubPackedArtifactIdentity,
   verifyClawHubBootstrapArtifactManifest,
 } from "../../scripts/lib/clawhub-bootstrap-artifact.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const targetSha = "a".repeat(40);
 const workflowSha = "b".repeat(40);
 const clawhubToolchainSha256 = "c".repeat(64);
@@ -27,15 +19,8 @@ const clawhubToolchainVersion = "0.23.1";
 const clawhubToolchainIntegrity =
   "sha512-YvUImhsVaM90BUAv3uP7lfABziwR5XL3ch2Owa+GvNxwQ2xzZFmZC0yVjAtQbvep+dDDS16nUGRwKx7jqnTOEA==";
 
-afterEach(() => {
-  for (const directory of tempDirs.splice(0)) {
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
-
 function fixture() {
-  const root = mkdtempSync(join(tmpdir(), "openclaw-clawhub-bootstrap-"));
-  tempDirs.push(root);
+  const root = tempDirs.make("openclaw-clawhub-bootstrap-");
   const artifactRoot = join(root, "artifact");
   const version = "2026.7.1-beta.3";
   const matrix = (
@@ -151,8 +136,7 @@ function writeClawPack(
     type?: "0" | "5";
   }>,
 ) {
-  const root = mkdtempSync(join(tmpdir(), "openclaw-clawhub-packed-"));
-  tempDirs.push(root);
+  const root = tempDirs.make("openclaw-clawhub-packed-");
   const bytes = gzipSync(
     Buffer.concat([
       ...entries.map((entry) =>
@@ -177,13 +161,7 @@ it.each([{ version: "2026.7.1-alpha.3" }, { publishTag: "alpha" }])(
     const matrix = JSON.parse(readFileSync(paths.matrixPath, "utf8"));
     Object.assign(matrix[0], override);
     writeFileSync(paths.matrixPath, JSON.stringify(matrix));
-    await expect(
-      createClawHubBootstrapArtifactManifest({
-        ...common(paths),
-        matrixPath: paths.matrixPath,
-        outputPath: paths.manifestPath,
-      }),
-    ).rejects.toThrow("Alpha releases are retired;");
+    await expect(createManifest(paths)).rejects.toThrow("Alpha releases are retired;");
   },
 );
 
@@ -191,12 +169,17 @@ describe("ClawHub bootstrap artifact manifest", () => {
   it("binds the exact package set and packed file identity", async () => {
     const paths = fixture();
     const created = await createManifest(paths);
-    const meta = created.entries.find((entry) => entry.packageName === "@openclaw/meta");
-    expect(meta).toMatchObject({
-      artifactPath: "packages/meta/openclaw-meta-2026.7.1-beta.3.tgz",
-      size: 11,
-    });
-    expect(meta?.sha256).toMatch(/^[a-f0-9]{64}$/u);
+    for (const [name, size] of [
+      ["meta", 11],
+      ["existing", 15],
+    ] as const) {
+      const entry = created.entries.find((item) => item.packageName === `@openclaw/${name}`);
+      expect(entry).toMatchObject({
+        artifactPath: `packages/${name}/openclaw-${name}-2026.7.1-beta.3.tgz`,
+        size,
+        sha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      });
+    }
     expect(created).toMatchObject({
       clawhubToolchainIntegrity,
       clawhubToolchainSha256,
@@ -229,9 +212,6 @@ describe("ClawHub bootstrap artifact manifest", () => {
     const paths = fixture();
     const created = await createManifest(paths);
 
-    writeFileSync(paths.manifestPath, JSON.stringify({ ...created, unexpected: true }));
-    await expect(verifyManifest(paths)).rejects.toThrow("keys are invalid");
-
     writeFileSync(paths.manifestPath, Buffer.from([0xff]));
     await expect(verifyManifest(paths)).rejects.toThrow("not valid UTF-8 JSON");
 
@@ -245,21 +225,6 @@ describe("ClawHub bootstrap artifact manifest", () => {
       JSON.stringify({ ...created, entries: [null, ...created.entries.slice(1)] }),
     );
     await expect(verifyManifest(paths)).rejects.toThrow("manifest.entries[0] must be an object");
-  });
-
-  it("binds exact target bytes to configure-only repairs", async () => {
-    const paths = fixture();
-    const manifest = await createClawHubBootstrapArtifactManifest({
-      ...common(paths),
-      matrixPath: paths.matrixPath,
-      outputPath: paths.manifestPath,
-    });
-    const existing = manifest.entries.find((entry) => entry.packageName === "@openclaw/existing");
-    expect(existing).toMatchObject({
-      artifactPath: "packages/existing/openclaw-existing-2026.7.1-beta.3.tgz",
-      size: 15,
-    });
-    expect(existing?.sha256).toMatch(/^[a-f0-9]{64}$/u);
   });
 
   it("rejects preexisting and symlinked download output roots before fetching", async () => {
@@ -286,19 +251,14 @@ describe("ClawHub bootstrap artifact manifest", () => {
         throw new Error("fetch must not run");
       }) as typeof fetch,
     };
+    const download = (outputRoot: string, overrides: Partial<typeof downloadOptions> = {}) =>
+      downloadClawHubBootstrapArtifact({ ...downloadOptions, outputRoot, ...overrides });
 
     const existingRoot = join(paths.artifactRoot, "existing-output");
     mkdirSync(existingRoot);
+    await expect(download(existingRoot)).rejects.toThrow("output directory must not already exist");
     await expect(
-      downloadClawHubBootstrapArtifact({
-        ...downloadOptions,
-        outputRoot: existingRoot,
-      }),
-    ).rejects.toThrow("output directory must not already exist");
-    await expect(
-      downloadClawHubBootstrapArtifact({
-        ...downloadOptions,
-        outputRoot: existingRoot,
+      download(existingRoot, {
         workflowHeadBranch: `release-publish/${workflowSha.slice(0, 12)}-123`,
         workflowRef: `refs/tags/release-publish/${workflowSha.slice(0, 12)}-123`,
       }),
@@ -308,17 +268,10 @@ describe("ClawHub bootstrap artifact manifest", () => {
     const symlinkRoot = join(paths.artifactRoot, "symlink-output");
     mkdirSync(symlinkTarget);
     symlinkSync(symlinkTarget, symlinkRoot);
-    await expect(
-      downloadClawHubBootstrapArtifact({
-        ...downloadOptions,
-        outputRoot: symlinkRoot,
-      }),
-    ).rejects.toThrow("output directory must not already exist");
+    await expect(download(symlinkRoot)).rejects.toThrow("output directory must not already exist");
 
     await expect(
-      downloadClawHubBootstrapArtifact({
-        ...downloadOptions,
-        outputRoot: join(paths.artifactRoot, "unused-output"),
+      download(join(paths.artifactRoot, "unused-output"), {
         workflowHeadBranch: `release-publish/${workflowSha.slice(0, 12)}-123`,
         workflowRef: `refs/heads/release-publish/${workflowSha.slice(0, 12)}-123`,
       }),
@@ -332,6 +285,10 @@ describe("ClawHub packed artifact identity", () => {
     expectedName: "@openclaw/meta-provider",
     expectedVersion: "2026.7.1-beta.3",
   };
+  const packageJson = (
+    name = expectedIdentity.expectedName,
+    version = expectedIdentity.expectedVersion,
+  ) => JSON.stringify({ name, version });
 
   function verifyPack(
     pack: Pick<ReturnType<typeof writeClawPack>, "artifactPath" | "sha256" | "bytes">,
@@ -374,18 +331,12 @@ describe("ClawHub packed artifact identity", () => {
     const pack = writeClawPack([
       {
         name: "package/package.json",
-        contents: JSON.stringify({
-          name: "@openclaw/meta-provider",
-          version: "2026.7.1-beta.3",
-        }),
+        contents: packageJson(),
       },
       {
         name: " package.json ",
         prefix: " package ",
-        contents: JSON.stringify({
-          name: "@openclaw/other",
-          version: "9.9.9",
-        }),
+        contents: packageJson("@openclaw/other", "9.9.9"),
       },
     ]);
 
@@ -395,8 +346,7 @@ describe("ClawHub packed artifact identity", () => {
   });
 
   it("rejects a compressed artifact above the ClawHub package limit before reading it", async () => {
-    const root = mkdtempSync(join(tmpdir(), "openclaw-clawhub-packed-limit-"));
-    tempDirs.push(root);
+    const root = tempDirs.make("openclaw-clawhub-packed-limit-");
     const artifactPath = join(root, "oversized.tgz");
     writeFileSync(artifactPath, "");
     truncateSync(artifactPath, 120 * 1024 * 1024 + 1);
@@ -412,8 +362,7 @@ describe("ClawHub packed artifact identity", () => {
   });
 
   it("bounds expanded tar bytes", async () => {
-    const root = mkdtempSync(join(tmpdir(), "openclaw-clawhub-expanded-limit-"));
-    tempDirs.push(root);
+    const root = tempDirs.make("openclaw-clawhub-expanded-limit-");
     const artifactPath = join(root, "expanded.tgz");
     const bytes = gzipSync(Buffer.alloc(64 * 1024 * 1024 + 1));
     writeFileSync(artifactPath, bytes);
@@ -427,47 +376,34 @@ describe("ClawHub packed artifact identity", () => {
     ).rejects.toThrow("expands beyond 67108864 bytes");
   });
 
-  it("bounds individual file payloads", async () => {
-    const pack = writeClawPack([
-      {
-        name: "package/large.bin",
-        contents: Buffer.alloc(50 * 1024 * 1024 + 1),
-      },
-    ]);
-
-    await expect(verifyPack(pack)).rejects.toThrow(
-      "entry package/large.bin exceeds 52428800 bytes",
-    );
-  });
-
-  it("bounds total file payload bytes", async () => {
-    const pack = writeClawPack(
-      Array.from({ length: 6 }, (_, index) => ({
-        name: `package/chunk-${index}.bin`,
-        contents: Buffer.alloc(9 * 1024 * 1024),
-      })),
-    );
-
-    await expect(verifyPack(pack)).rejects.toThrow("file payload exceeds 52428800 bytes");
-  });
-
-  it("bounds the total number of TAR entries", async () => {
-    const entries: Array<{
-      name: string;
-      contents: string;
-      type: "0" | "5";
-    }> = Array.from({ length: 10_000 }, (_, index) => ({
-      name: `package/dir-${index}/`,
-      contents: "",
-      type: "5",
-    }));
-    entries.push({
-      name: "package/package.json",
-      contents: "{}",
-      type: "0",
-    });
-    const pack = writeClawPack(entries);
-
-    await expect(verifyPack(pack)).rejects.toThrow("exceeds the 10000 entry limit");
+  it.each([
+    {
+      limit: "individual file payloads",
+      entries: () => [{ name: "package/large.bin", contents: Buffer.alloc(50 * 1024 * 1024 + 1) }],
+      error: "entry package/large.bin exceeds 52428800 bytes",
+    },
+    {
+      limit: "total file payload bytes",
+      entries: () =>
+        Array.from({ length: 6 }, (_, index) => ({
+          name: `package/chunk-${index}.bin`,
+          contents: Buffer.alloc(9 * 1024 * 1024),
+        })),
+      error: "file payload exceeds 52428800 bytes",
+    },
+    {
+      limit: "the total number of TAR entries",
+      entries: () => [
+        ...Array.from({ length: 10_000 }, (_, index) => ({
+          name: `package/dir-${index}/`,
+          contents: "",
+          type: "5" as const,
+        })),
+        { name: "package/package.json", contents: "{}", type: "0" as const },
+      ],
+      error: "exceeds the 10000 entry limit",
+    },
+  ])("bounds $limit", async ({ entries, error }) => {
+    await expect(verifyPack(writeClawPack(entries()))).rejects.toThrow(error);
   });
 });

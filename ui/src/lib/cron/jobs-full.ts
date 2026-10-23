@@ -5,11 +5,9 @@ import {
   type CronJobsPageOptions,
   type CronJobsProjection,
 } from "./jobs.ts";
-import { getCronJobPayload } from "./payload.ts";
 import type { CronJobsState } from "./types.ts";
 
 const fullCronJobsProjection: CronJobsProjection<CronJob> = {
-  readRows: (rows) => rows.filter((job) => getCronJobPayload(job) !== null),
   applyRuntime: (state, index, { updatedAtMs, runtime }) => {
     const previous = state.cronJobs[index]!;
     state.cronJobs = sortCronJobs(

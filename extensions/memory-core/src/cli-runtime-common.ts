@@ -139,7 +139,11 @@ export function resolveMemoryAgentIds(cfg: OpenClawConfig, agent?: string): stri
 export function formatExtraPaths(workspaceDir: string, extraPaths: MemoryExtraPath[]): string[] {
   return normalizeExtraMemoryPathEntries(workspaceDir, extraPaths).map((entry) => {
     const root = shortenHomePath(entry.path);
-    return entry.pattern ? `${root} (pattern: ${entry.pattern})` : root;
+    const details = [
+      ...(entry.pattern ? [`pattern: ${entry.pattern}`] : []),
+      ...(entry.evergreen ? ["evergreen"] : []),
+    ];
+    return details.length > 0 ? `${root} (${details.join(", ")})` : root;
   });
 }
 export async function withMemoryCommand(params: {

@@ -99,17 +99,18 @@ async function expectCompleted(rpc: ReturnType<typeof sendAgentRpc>) {
   await expectStatus(rpc.final, "ok");
 }
 
-async function mockPublication(
-  agentDir: string,
-  result: () => Promise<{ agentDir: string; wrote: false }>,
-) {
+async function mockPublication(agentDir: string, result: () => Promise<void>) {
   const models = await import("../agents/models-config.js");
   const ensure = models.ensureOpenClawModelsJson;
   return vi
     .spyOn(models, "ensureOpenClawModelsJson")
-    .mockImplementation(async (config, dir, options) =>
-      dir === agentDir ? await result() : await ensure(config, dir, options),
-    );
+    .mockImplementation(async (config, dir, options) => {
+      if (dir !== agentDir) {
+        return await ensure(config, dir, options);
+      }
+      await result();
+      return {};
+    });
 }
 
 function expectRuntime(
@@ -216,9 +217,7 @@ test("keeps an accepted run on its admitted runtime generation", async () => {
 
     refreshAuth(before.agentDir, "next-generation-key");
     await expect(Promise.race([published.promise, admitted.final])).resolves.toBeUndefined();
-    const after = await loadPublishedGatewayReplyDispatchRuntime({
-      agentId: affectedAgentId,
-    });
+    const after = await loadPublishedGatewayReplyDispatchRuntime({ agentId: affectedAgentId });
     expect(after).not.toBe(before.runtime);
     expect(agentCommandCallsFor(admittedRunId)).toHaveLength(0);
     releaseDispatch.resolve();
@@ -262,7 +261,7 @@ test("aborts one affected waiter without cancelling shared auth publication", as
       }
       return pending;
     });
-  const publicationGate = createDeferred<{ agentDir: string; wrote: false }>();
+  const publicationGate = createDeferred();
   const ensureSpy = await mockPublication(before.agentDir, () => publicationGate.promise);
   const published = observePublication("published");
   let participantRecorded = false;
@@ -297,10 +296,7 @@ test("aborts one affected waiter without cancelling shared auth publication", as
       sessionKey: `agent:${affectedAgentId}:main`,
       runId: abortedRunId,
     });
-    expect(abort).toMatchObject({
-      ok: true,
-      payload: { aborted: true, runIds: [abortedRunId] },
-    });
+    expect(abort).toMatchObject({ ok: true, payload: { aborted: true, runIds: [abortedRunId] } });
     await expect(aborted.response).resolves.toMatchObject({
       ok: true,
       payload: {
@@ -316,7 +312,7 @@ test("aborts one affected waiter without cancelling shared auth publication", as
     );
     expect(waiting.hasResponse()).toBe(false);
 
-    publicationGate.resolve({ agentDir: before.agentDir, wrote: false });
+    publicationGate.resolve();
     await published.promise;
     const after = await loadPublishedGatewayReplyDispatchRuntime({ agentId: affectedAgentId });
     expect(after).not.toBe(before.runtime);
@@ -327,7 +323,7 @@ test("aborts one affected waiter without cancelling shared auth publication", as
     await expectCompleted(subsequent);
     expect(agentCommandCallsFor(subsequentRunId)).toHaveLength(1);
   } finally {
-    publicationGate.resolve({ agentDir: before.agentDir, wrote: false });
+    publicationGate.resolve();
     published.unregister();
     ensureSpy.mockRestore();
     try {

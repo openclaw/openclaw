@@ -385,16 +385,16 @@ describe("GatewayBrowserClient", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(ws.lastClose).toEqual({ code: 4000, reason: "response observer closed" });
     expect(onHello).not.toHaveBeenCalled();
-    expect(onClose).not.toHaveBeenCalled();
-    expect(loadDeviceAuthToken()?.token).toBe(STORED_CRED);
-    ws.emitClose(4000, "response observer closed");
-    expect(onClose).toHaveBeenCalledWith(
+    expect(onClose).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         code: 4000,
         reason: "response observer closed",
         willRetry: true,
       }),
     );
+    expect(loadDeviceAuthToken()?.token).toBe(STORED_CRED);
+    ws.emitClose(4000, "response observer closed");
+    expect(onClose).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(800);
     expect(getLatestWebSocket()).not.toBe(ws);
   });
@@ -712,7 +712,7 @@ describe("GatewayBrowserClient", () => {
         });
       }
       await vi.advanceTimersByTimeAsync(10_000);
-      expect(ws.sent).toHaveLength(3);
+      expect(ws.sent.filter((raw) => JSON.parse(raw).method !== "health")).toHaveLength(3);
     },
   );
 

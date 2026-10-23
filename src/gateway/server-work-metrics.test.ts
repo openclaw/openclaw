@@ -54,7 +54,7 @@ it("bounds live projection over idle history through admission, progress, drain,
     const sessionKeys = names.map((name) => `agent:main:${name}`);
     await applySessionEntryCanonicalReplacements({
       agentId: "main",
-      storePath: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
+      storePath,
       sessionKeys,
       skipMaintenance: true,
       update: () => ({
@@ -95,9 +95,7 @@ it("bounds live projection over idle history through admission, progress, drain,
     const chat = registerRpcSourceForTest({
       storeScope: storePath,
       runId: "chat-run",
-      sessionId: "chat",
-      sessionKey: "agent:main:chat",
-      agentId: "main",
+      ...session("chat"),
     });
     chat.initializeTiming();
     const releaseChat = await claimRpcSourceForTest(chat.entry);
@@ -106,9 +104,7 @@ it("bounds live projection over idle history through admission, progress, drain,
       {},
       {
         storeScope: storePath,
-        sessionKey: "agent:main:reply",
-        sessionId: "reply",
-        agentId: "main",
+        ...session("reply"),
       },
     );
     const releaseReply = await claimRpcSourceForTest(replySource, { executionStarted: false });
@@ -118,9 +114,7 @@ it("bounds live projection over idle history through admission, progress, drain,
       {
         storeScope: storePath,
         runId: "queued-turn",
-        sessionId: "reply",
-        sessionKey: "agent:main:reply",
-        agentId: "main",
+        ...session("reply"),
         phase: "waiting",
       },
     );

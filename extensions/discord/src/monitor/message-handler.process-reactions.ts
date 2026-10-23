@@ -11,7 +11,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { createDiscordRestClient, createDiscordRuntimeAccountContext } from "../client.js";
 import { reactMessageDiscord, removeReactionDiscord } from "../send.js";
 import { resolveDiscordTargetChannelId } from "../send.shared.js";
-import { resolveDiscordChannelId } from "../targets.js";
+import { resolveDiscordChannelId } from "../target-parsing.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
 
 type ToolStartPayload = {

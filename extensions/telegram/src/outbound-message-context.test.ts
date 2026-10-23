@@ -126,28 +126,22 @@ describe("recordOutboundMessageForPromptContext", () => {
 
   it("records the successful channel Direct Messages spec ahead of raw message_thread_id", async () => {
     const cached = await recordAndRead({
-      account: { accountId: "default", name: "Configured Agent" },
       chatId: -1002,
       messageId: 704,
       messageThreadId: 999,
       successfulSendThread: { id: 77, scope: "direct-messages" },
-      message: {
-        chat: {
-          id: -1002,
-          type: "supergroup",
-          title: "Channel replies",
-        },
-        date: 1_736_380_704,
-        from: { id: 999, is_bot: true, first_name: "OpenClaw" },
-        message_id: 704,
+      message: providerMessage(704, {
+        chat: { id: -1002, type: "supergroup", title: "Channel replies" },
         message_thread_id: 999,
         direct_messages_topic: { topic_id: 77 },
         text: "Bot replied in channel Direct Messages",
-      },
+      }),
     });
 
-    expect(cached?.threadId).toBe("77");
-    expect(cached?.threadBinding?.threadSpec).toEqual({ scope: "direct-messages", id: 77 });
+    expect([cached?.threadId, cached?.threadBinding?.threadSpec]).toEqual([
+      "77",
+      { scope: "direct-messages", id: 77 },
+    ]);
   });
 
   it("retains forum and channel Direct Messages thread provenance without exposing topicless history", async () => {
@@ -163,15 +157,13 @@ describe("recordOutboundMessageForPromptContext", () => {
         messageId,
         messageThreadId: 77,
         successfulSendThread: { scope, id: 77 },
-        message: {
+        message: providerMessage(messageId, {
           chat: { id: chatId, type: "supergroup" },
-          date: 1_736_380_700,
-          message_id: messageId,
           ...(scope === "forum"
             ? { message_thread_id: 77 }
             : { direct_messages_topic: { topic_id: 77 } }),
           text: body,
-        },
+        }),
       });
     }
 
@@ -217,31 +209,19 @@ describe("recordOutboundMessageForPromptContext", () => {
     expect(hasProviderObservedTelegramThreadBinding(cached, 1)).toBe(false);
   });
 
-  it("falls back to the Telegram bot name when no configured name exists", async () => {
-    const cached = await recordAndRead({
-      account: { accountId: "default", name: "" },
+  it.each([
+    {
+      name: "Telegram bot name when unconfigured",
+      accountName: "",
       message: providerMessage(701, {
-        chat: { id: 42, type: "private" },
         from: { id: 999, is_bot: true, first_name: "Atlas", username: "atlas_bot" },
       }),
-      messageId: 701,
-      text: "Bot just replied",
-    });
-
-    expect(cached).toMatchObject({
-      sender: "Atlas (you)",
-      senderId: "999",
-      senderUsername: "atlas_bot",
-    });
-  });
-
-  it("preserves the sending bot identity for Telegram Business messages", async () => {
-    const cached = await recordAndRead({
-      account: { accountId: "default", name: "Configured Agent" },
-      chatId: 42,
-      message: {
-        chat: { id: 42, type: "private" },
-        date: 1_736_380_700,
+      expected: { sender: "Atlas (you)", senderId: "999", senderUsername: "atlas_bot" },
+    },
+    {
+      name: "Telegram Business sender",
+      accountName: "Configured Agent",
+      message: providerMessage(702, {
         from: {
           id: 777,
           is_bot: false,
@@ -254,35 +234,33 @@ describe("recordOutboundMessageForPromptContext", () => {
           first_name: "Telegram Bot Name",
           username: "openclaw_bot",
         },
-        message_id: 702,
-        text: "Business reply",
+      }),
+      expected: {
+        sender: "Configured Agent (you)",
+        senderId: "777",
+        senderUsername: "business_account",
+        sourceMessage: { sender_business_bot: { id: 999, is_bot: true, username: "openclaw_bot" } },
       },
-      messageId: 702,
-      text: "Business reply",
-    });
-
-    expect(cached).toMatchObject({
-      sender: "Configured Agent (you)",
-      senderId: "777",
-      senderUsername: "business_account",
-      sourceMessage: {
-        sender_business_bot: { id: 999, is_bot: true, username: "openclaw_bot" },
+    },
+    {
+      name: "synthetic sender for a finalized stream without from",
+      accountName: "StreamBot",
+      message: { message_id: 1497 },
+      expected: {
+        sender: "StreamBot (you)",
+        senderId: "0",
+        sourceMessage: { from: { id: 0, is_bot: true, first_name: "StreamBot (you)" } },
       },
-    });
-  });
-
-  it("uses the synthetic sender identity for a finalized streamed message without from", async () => {
-    const initial = await recordAndRead({
-      account: { accountId: "default", name: "StreamBot" },
-      messageId: 1497,
-      text: "Final streamed reply",
-    });
-
-    expect(initial).toMatchObject({
-      sender: "StreamBot (you)",
-      senderId: "0",
-      sourceMessage: { from: { id: 0, is_bot: true, first_name: "StreamBot (you)" } },
-    });
+    },
+  ])("preserves the $name identity", async ({ accountName, message, expected }) => {
+    expect(
+      await recordAndRead({
+        account: { accountId: "default", name: accountName },
+        message: { ...message, chat: { id: 42, type: "private" } },
+        messageId: message.message_id,
+        text: "Bot just replied",
+      }),
+    ).toMatchObject(expected);
   });
 
   it("ignores Telegram's fake sender identity across channel post echoes", async () => {

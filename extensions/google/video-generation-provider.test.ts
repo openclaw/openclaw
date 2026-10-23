@@ -1,10 +1,10 @@
 // Google tests cover video generation provider plugin behavior.
-import type { Video } from "@google/genai";
-import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
+import { ApiError, type Video } from "@google/genai";
+import { formatErrorMessage, toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { oversizedJsonResponse } from "openclaw/plugin-sdk/test-fixtures";
 import type { VideoGenerationRequest } from "openclaw/plugin-sdk/video-generation";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { createGoogleGenAIMock, downloadMock, generateVideosMock, getVideosOperationMock } =
   vi.hoisted(() => {
@@ -38,18 +38,19 @@ vi.mock("./google-genai-runtime.js", () => ({
 
 import * as providerAuthRuntime from "openclaw/plugin-sdk/provider-auth-runtime";
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
-import { buildGoogleVideoGenerationProvider } from "./video-generation-provider.js";
+import * as googleBase64 from "./base64.js";
+import { googleVideoGenerationProvider } from "./video-generation-provider.js";
 
-function mockGoogleApiKeyAuth() {
+function mockGoogleApiKeyAuth(apiKey = "google-key") {
   vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
-    apiKey: "google-key",
+    apiKey,
     source: "env",
     mode: "api-key",
   });
 }
 
 function generateVideo(overrides: Partial<VideoGenerationRequest> = {}) {
-  return buildGoogleVideoGenerationProvider().generateVideo({
+  return googleVideoGenerationProvider.generateVideo({
     provider: "google",
     model: "veo-3.1-fast-generate-preview",
     prompt: "A tiny robot watering a windowsill garden",
@@ -154,11 +155,73 @@ describe("google video generation provider", () => {
   });
 
   it("declares explicit mode capabilities", () => {
-    const provider = buildGoogleVideoGenerationProvider();
+    const provider = googleVideoGenerationProvider;
     expectExplicitVideoGenerationCapabilities(provider);
     expect(provider.capabilities.generate?.supportsAudio).toBe(false);
     expect(provider.capabilities.imageToVideo?.supportsAudio).toBe(false);
     expect(provider.capabilities.videoToVideo?.supportsAudio).toBe(false);
+  });
+
+  it.each([
+    "sdk-create",
+    "sdk-poll",
+    "sdk-operation",
+    "rest-body",
+    "rest-status",
+    "rest-operation",
+    "download-status",
+  ] as const)("redacts the active credential from %s diagnostics", async (path) => {
+    const credential = "opaque-video-key42";
+    const diagnostic = `provider diagnostic ${credential}`;
+    mockGoogleApiKeyAuth(path === "download-status" ? "google-key" : credential);
+    if (path === "sdk-create") {
+      generateVideosMock.mockRejectedValue(new ApiError({ status: 403, message: diagnostic }));
+    } else if (path === "sdk-poll") {
+      vi.useFakeTimers();
+      generateVideosMock.mockResolvedValue({ done: false, name: "operations/pending" });
+      getVideosOperationMock.mockRejectedValue(new ApiError({ status: 403, message: diagnostic }));
+    } else if (path === "sdk-operation") {
+      generateVideosMock.mockResolvedValue({ done: true, error: { message: diagnostic } });
+    } else if (path === "download-status") {
+      generateVideosMock.mockResolvedValue(
+        completedVideo({
+          uri: `https://generativelanguage.googleapis.com/v1beta/files/video:download?key=${credential}`,
+          mimeType: "video/mp4",
+        }),
+      );
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response(null, { status: 403, statusText: diagnostic })),
+      );
+    } else {
+      generateVideosMock.mockRejectedValue(new ApiError({ status: 404, message: "sdk 404" }));
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => {
+          if (path === "rest-body") {
+            return Response.json({ error: { message: diagnostic } }, { status: 403 });
+          }
+          if (path === "rest-status") {
+            return new Response(null, { status: 403, statusText: diagnostic });
+          }
+          return Response.json({ done: true, error: { message: diagnostic } });
+        }),
+      );
+    }
+
+    const result = generateVideo().catch((error: unknown) => error);
+    if (path === "sdk-poll") {
+      await vi.advanceTimersByTimeAsync(10_000);
+    }
+    const error = await result;
+    assert(error instanceof Error);
+    expect(formatErrorMessage(error)).not.toContain(credential);
+    expect(error.message).toContain("provider diagnostic");
+    if (path === "sdk-create" || path === "sdk-poll") {
+      expect(error).toMatchObject({ name: "ApiError", status: 403 });
+    } else if (path === "rest-body" || path === "rest-status") {
+      expect(error).toMatchObject({ status: 403, statusCode: 403 });
+    }
   });
 
   it("submits generation and returns inline video bytes", async () => {
@@ -201,6 +264,49 @@ describe("google video generation provider", () => {
   });
 
   it.each([
+    {
+      name: "image default MIME",
+      input: { inputImages: [{ buffer: Buffer.from([0, 255, 128]) }] },
+      image: { imageBytes: "AP+A", mimeType: "image/png" },
+      video: undefined,
+    },
+    {
+      name: "video default MIME",
+      input: { inputVideos: [{ buffer: Buffer.from([0, 255, 128]), mimeType: " " }] },
+      image: undefined,
+      video: { videoBytes: "AP+A", mimeType: "video/mp4" },
+    },
+    {
+      name: "image explicit MIME",
+      input: { inputImages: [{ buffer: Buffer.from([0, 255, 128]), mimeType: " image/WebP " }] },
+      image: { imageBytes: "AP+A", mimeType: "image/WebP" },
+      video: undefined,
+    },
+    {
+      name: "video empty buffer",
+      input: { inputVideos: [{ buffer: Buffer.alloc(0), mimeType: " video/WebM " }] },
+      image: undefined,
+      video: { videoBytes: "", mimeType: "video/WebM" },
+    },
+    {
+      name: "URL-only image",
+      input: { inputImages: [{ url: "https://example.com/reference.png" }] },
+      image: undefined,
+      video: undefined,
+    },
+  ])("encodes $name at the SDK boundary", async ({ input, image, video }) => {
+    mockGoogleApiKeyAuth();
+    generateVideosMock.mockResolvedValue(completedVideo({ videoBytes: "b3V0" }));
+
+    const result = await generateVideo(input);
+
+    expect(generateVideosMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ image, video }),
+    );
+    expect(result.videos[0]?.buffer).toEqual(Buffer.from("out"));
+  });
+
+  it.each([
     ["non-canonical pad bits", "ZE=="],
     ["mixed alphabet", "aGVsbG8+_"],
   ])("rejects %s in inline video bytes", async (_scenario, videoBytes) => {
@@ -214,20 +320,39 @@ describe("google video generation provider", () => {
     ).rejects.toThrow("Google video generation returned malformed base64 video data");
   });
 
-  it("rejects inline video bytes that exceed the configured media cap", async () => {
+  it("rejects oversized inline video before canonicalization or decoding", async () => {
     mockGoogleApiKeyAuth();
+    const videoBytes = " -_9tcDQ\n";
     generateVideosMock.mockResolvedValue(
       completedVideo({
-        videoBytes: Buffer.from("too-large").toString("base64"),
+        videoBytes,
         mimeType: "video/mp4",
       }),
     );
+    const canonicalize = vi.spyOn(googleBase64, "canonicalizeGoogleProviderBase64");
+    const decode = vi.spyOn(Buffer, "from");
     await expect(
       generateVideo({
         cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
         durationSeconds: 3,
       }),
     ).rejects.toThrow("Google generated video download exceeds 1 bytes");
+    expect(canonicalize).not.toHaveBeenCalled();
+    expect(decode).not.toHaveBeenCalledWith(expect.any(String), "base64");
+  });
+
+  it.each([
+    { videoBytes: "YQ==", expected: [0x61], maxBytes: 1 },
+    { videoBytes: " -_8\n", expected: [0xfb, 0xff], maxBytes: 2 },
+  ])("accepts inline video exactly at the $maxBytes-byte cap", async (fixture) => {
+    mockGoogleApiKeyAuth();
+    generateVideosMock.mockResolvedValue(completedVideo({ videoBytes: fixture.videoBytes }));
+
+    const result = await generateVideo({
+      cfg: { agents: { defaults: { mediaMaxMb: fixture.maxBytes / (1024 * 1024) } } },
+    });
+
+    expect(result.videos[0]?.buffer).toEqual(Buffer.from(fixture.expected));
   });
 
   it.each([
@@ -649,15 +774,18 @@ describe("google video generation provider", () => {
   });
 
   it("reports malformed Google REST operation JSON with a stable provider error", async () => {
-    mockGoogleApiKeyAuth();
+    const credential = "opaque-video-key42";
+    mockGoogleApiKeyAuth(credential);
     generateVideosMock.mockRejectedValue(Object.assign(new Error("sdk 404"), { status: 404 }));
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("{ nope", { status: 200 })));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(credential, { status: 200 })));
 
-    await expect(
-      generateVideo({
-        durationSeconds: 3,
-      }),
-    ).rejects.toThrow("Google video operation response: malformed JSON response");
+    const error: unknown = await generateVideo({ durationSeconds: 3 }).catch(
+      (cause: unknown) => cause,
+    );
+    assert(error instanceof Error);
+    expect(error.message).toBe("Google video operation response: malformed JSON response");
+    expect(formatErrorMessage(error)).not.toContain(credential);
+    expect(error.cause).toBeUndefined();
   });
 
   it("rejects invalid UTF-8 in Google REST operation JSON before parsing", async () => {

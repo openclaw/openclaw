@@ -235,9 +235,7 @@ const clickClackSetupAdapter: ChannelSetupAdapter<ClickClackSetupInput> = {
       token: claim.token,
       workspace: claim.workspace.id,
       ...(claim.defaults.defaultTo !== undefined ? { defaultTo: claim.defaults.defaultTo } : {}),
-      ...(claim.defaults.allowFrom !== undefined
-        ? { allowFrom: [...claim.defaults.allowFrom] }
-        : {}),
+      ...(claim.defaults.allowFrom !== undefined ? { allowFrom: claim.defaults.allowFrom } : {}),
       ...(claim.defaults.agentActivity !== undefined
         ? { agentActivity: claim.defaults.agentActivity }
         : {}),
@@ -295,7 +293,7 @@ const clickClackSetupAdapter: ChannelSetupAdapter<ClickClackSetupInput> = {
         ...(baseUrl ? { baseUrl } : {}),
         ...(workspace ? { workspace } : {}),
         ...(setupInput.defaultTo?.trim() ? { defaultTo: setupInput.defaultTo.trim() } : {}),
-        ...(setupInput.allowFrom ? { allowFrom: [...setupInput.allowFrom] } : {}),
+        ...(setupInput.allowFrom ? { allowFrom: setupInput.allowFrom } : {}),
         ...(setupInput.agentActivity !== undefined
           ? { agentActivity: setupInput.agentActivity }
           : {}),

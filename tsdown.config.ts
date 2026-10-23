@@ -549,7 +549,6 @@ function buildCoreDistEntries(): Record<string, string> {
     "telegram/token": bundledPluginFile("telegram", "src/token.ts"),
     "plugins/build-smoke-entry": "src/plugins/build-smoke-entry.ts",
     "plugins/runtime/index": "src/plugins/runtime/index.ts",
-    "llm-slug-generator": "src/hooks/llm-slug-generator.ts",
     "mcp/plugin-tools-serve": "src/mcp/plugin-tools-serve.ts",
     "mcp/openclaw-tools-serve": "src/mcp/openclaw-tools-serve.ts",
   };
@@ -1008,6 +1007,9 @@ const configs: UserConfig[] = [
   ),
   workerDeployBuildConfig({
     "worker/code-mode-node.worker": "src/agents/code-mode-node.worker.ts",
+  }),
+  workerDeployBuildConfig({
+    "worker/client-credential.worker": "src/worker/worker-deploy-client-credentials.ts",
   }),
   workerDeployBuildConfig({
     "worker/file-tool-planning.worker": "src/worker/worker-deploy-file-tool-planning.ts",

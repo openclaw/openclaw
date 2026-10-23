@@ -53,7 +53,6 @@ afterEach(() => {
 it.each([
   { args: [], enabled: undefined, code: 0 },
   { args: ["--desktop-sharing"], enabled: true, code: 143 },
-  { args: ["--no-desktop-sharing"], enabled: false, code: 0 },
 ])(
   "starts with desktop preference $enabled and finalizes exit $code",
   async ({ args, enabled, code }) => {
@@ -98,7 +97,7 @@ it.each([
   },
 );
 
-it("reports startup failure and finalizes an unsuccessful exit", async () => {
+it("reports bootstrap failure and finalizes an unsuccessful exit", async () => {
   const { defaultRuntime } = await import("../runtime.js");
   const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {});
   const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);

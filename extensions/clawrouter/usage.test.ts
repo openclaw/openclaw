@@ -1,9 +1,14 @@
 import { createServer, type RequestListener, type Server } from "node:http";
 import { connect, type AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
-import { afterEach, beforeEach, describe, expect, it, vi, type MockedFunction } from "vitest";
+import { setImmediate } from "node:timers/promises";
+import * as ssrf from "openclaw/plugin-sdk/ssrf-runtime";
+import { withServer } from "openclaw/plugin-sdk/test-env";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchClawRouterUsage } from "./usage.js";
 
+const fetchWithSsrFGuard = ssrf.fetchWithSsrFGuard;
 const runningServers: Server[] = [];
 const runningSockets = new Set<Duplex>();
 const PROXY_ENV_KEYS = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"].flatMap((key) => [
@@ -75,6 +80,7 @@ afterEach(async () => {
   runningSockets.clear();
   await Promise.all(runningServers.splice(0).map(closeServer));
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
 });
 
 function closeServer(server: Server) {
@@ -83,15 +89,10 @@ function closeServer(server: Server) {
   });
 }
 
-type ClawRouterUsageFetchGuard = NonNullable<
-  Parameters<typeof fetchClawRouterUsage>[0]["fetchGuard"]
->;
-
-function mockFetchGuard(
-  response: Response,
-  release: () => Promise<void> = async () => undefined,
-): MockedFunction<ClawRouterUsageFetchGuard> {
-  return vi.fn(async ({ url }) => ({ response, finalUrl: url, release }));
+function mockFetchGuard(response: Response, release: () => Promise<void> = async () => undefined) {
+  return vi
+    .spyOn(ssrf, "fetchWithSsrFGuard")
+    .mockImplementation(async ({ url }) => ({ response, finalUrl: url, release }));
 }
 
 function fetchUsage(
@@ -101,7 +102,8 @@ function fetchUsage(
 }
 
 function fetchResponse(response: Response) {
-  return fetchUsage({ fetchGuard: mockFetchGuard(response) });
+  mockFetchGuard(response);
+  return fetchUsage({});
 }
 
 describe("ClawRouter usage", () => {
@@ -125,7 +127,6 @@ describe("ClawRouter usage", () => {
     const snapshot = await fetchUsage({
       baseUrl: "https://clawrouter.example/v1",
       signal,
-      fetchGuard,
     });
 
     expect(snapshot).toEqual({
@@ -179,8 +180,8 @@ describe("ClawRouter usage", () => {
     const release = vi.fn(async () => {
       await capture.body?.cancel();
     });
-    const fetchGuard = mockFetchGuard(response, release);
-    const outcome = fetchUsage({ fetchGuard }).catch((error: unknown) => error);
+    mockFetchGuard(response, release);
+    const outcome = fetchUsage({}).catch((error: unknown) => error);
 
     try {
       await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
@@ -223,6 +224,58 @@ describe("ClawRouter usage", () => {
       headers: { "content-type": "application/json" },
     });
     await expect(fetchResponse(response)).rejects.toThrow("ClawRouter usage response exceeds");
+  });
+
+  it("bounds a native stalled body after headers and releases its request", async ({ signal }) => {
+    const closed = Promise.withResolvers<void>();
+    await withServer(
+      (_request, response) => {
+        response.once("close", closed.resolve);
+        response.writeHead(200, { "content-type": "application/json" });
+        response.write('{"budget":');
+      },
+      async (baseUrl) => {
+        const headersReady = Promise.withResolvers<void>();
+        const released = vi.fn();
+        vi.spyOn(ssrf, "fetchWithSsrFGuard").mockImplementation(async (params) => {
+          const guarded = await fetchWithSsrFGuard(params).catch((error: unknown) => {
+            headersReady.reject(error);
+            throw error;
+          });
+          headersReady.resolve();
+          return {
+            ...guarded,
+            release: async () => {
+              await guarded.release();
+              released();
+            },
+          };
+        });
+        const controller = new AbortController();
+        // Keep HTTP/body reads native and advance only the request deadline clock.
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        const outcome = fetchClawRouterUsage({
+          token: "synthetic-proxy-key",
+          baseUrl,
+          timeoutMs: 1,
+          signal: controller.signal,
+        }).catch((error: unknown) => error);
+        try {
+          await withinTest(headersReady.promise, signal);
+          await setImmediate();
+          await vi.advanceTimersByTimeAsync(1);
+          expect(await withinTest(outcome, signal)).toMatchObject({
+            message: expect.stringMatching(/abort|timed out/i),
+          });
+          expect(released).toHaveBeenCalledOnce();
+          await withinTest(closed.promise, signal);
+        } finally {
+          controller.abort();
+          vi.useRealTimers();
+          await outcome;
+        }
+      },
+    );
   });
 
   it("preserves provider usage routing through the env proxy", async () => {

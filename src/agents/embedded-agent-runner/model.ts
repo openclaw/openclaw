@@ -18,7 +18,6 @@ import {
 import { AuthStorage } from "../sessions/auth-storage.js";
 import { ModelRegistry } from "../sessions/model-registry.js";
 import { mergeModelMediaInput } from "./model.compat.js";
-import { buildConfiguredFallbackModel } from "./model.configured-fallback.js";
 import { resolveConfiguredProviderConfig } from "./model.configured-overrides.js";
 import { type ProviderRuntimeHooks, resolveRuntimeHooks } from "./model.provider-hooks.js";
 import {
@@ -293,7 +292,7 @@ export async function resolveModelAsync(
     if (!model && !explicitModel && options?.allowBundledStaticCatalogFallback) {
       model = await resolveStaticCatalogFallbackModel();
       options?.assertCurrent?.();
-      model ??= buildConfiguredFallbackModel({
+      model ??= normalizeConfiguredProviderModel({
         ...registryParams,
         providerMetadataOwners: preparedMetadataSnapshot?.owners,
       });

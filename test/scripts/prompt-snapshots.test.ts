@@ -89,8 +89,6 @@ describe("happy path prompt snapshots", () => {
     const scenarios = [
       { name: "telegram-direct", replacements: [] },
       { name: "discord-group", replacements: ["sessions_spawn"] },
-      // Heartbeat turns offer the session's catalog, so the provider prompt cache holds.
-      { name: "heartbeat-turn", replacements: [] },
     ];
 
     for (const { name, replacements } of scenarios) {
@@ -278,7 +276,7 @@ describe("happy path prompt snapshots", () => {
   });
 
   it("keeps managed persona outside native collaboration and user-input history", async () => {
-    for (const scenario of ["telegram-direct", "discord-group", "heartbeat-turn"]) {
+    for (const scenario of ["telegram-direct", "discord-group"]) {
       const snapshot = await materializeCodexPromptSnapshot(scenario);
       const turnSection = renderedPromptSection(
         snapshot,

@@ -25,11 +25,23 @@ export async function generateThreadTitle(params: {
   }
 
   try {
-    const userMessage = buildThreadTitleCompletionUserMessage({
-      sourceText,
-      channelName: params.channelName,
-      channelDescription: params.channelDescription,
-    });
+    const { channelName: rawChannelName, channelDescription: rawChannelDescription } = params;
+    const titleSourceText = truncateThreadTitleText(sourceText, MAX_THREAD_TITLE_SOURCE_CHARS);
+    const channelName = normalizeTitleContextField(
+      rawChannelName,
+      MAX_THREAD_TITLE_CHANNEL_NAME_CHARS,
+    );
+    const channelDescription = normalizeTitleContextField(
+      rawChannelDescription,
+      MAX_THREAD_TITLE_CHANNEL_DESCRIPTION_CHARS,
+    );
+    const userMessage = [
+      channelName ? `Channel: ${channelName}` : undefined,
+      channelDescription ? `Channel description: ${channelDescription}` : undefined,
+      `Message:\n${titleSourceText}`,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
     const generated = await generateConversationLabel({
       cfg: params.cfg,
       agentId: params.agentId,
@@ -44,29 +56,6 @@ export async function generateThreadTitle(params: {
     logVerbose(`thread-title: title generation failed for agent ${params.agentId}: ${String(err)}`);
     return null;
   }
-}
-
-function buildThreadTitleCompletionUserMessage(params: {
-  sourceText: string;
-  channelName?: string;
-  channelDescription?: string;
-}): string {
-  const sourceText = truncateThreadTitleText(params.sourceText, MAX_THREAD_TITLE_SOURCE_CHARS);
-  const channelName = normalizeTitleContextField(
-    params.channelName,
-    MAX_THREAD_TITLE_CHANNEL_NAME_CHARS,
-  );
-  const channelDescription = normalizeTitleContextField(
-    params.channelDescription,
-    MAX_THREAD_TITLE_CHANNEL_DESCRIPTION_CHARS,
-  );
-  return [
-    channelName ? `Channel: ${channelName}` : undefined,
-    channelDescription ? `Channel description: ${channelDescription}` : undefined,
-    `Message:\n${sourceText}`,
-  ]
-    .filter(Boolean)
-    .join("\n\n");
 }
 
 function truncateThreadTitleText(text: string, maxChars: number): string {

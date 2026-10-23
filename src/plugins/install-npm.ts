@@ -245,7 +245,6 @@ export async function installPluginFromNpmSpec(
       onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
       beforePersistentApply: params.beforePersistentApply,
       npmResolution,
-      ...(driftResult.integrityDrift ? { integrityDrift: driftResult.integrityDrift } : {}),
     }),
   );
   emitSuccessfulPluginInstallSecurityEvent(result, {

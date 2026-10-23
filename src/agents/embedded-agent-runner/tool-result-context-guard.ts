@@ -5,6 +5,7 @@ import type {
   ContextEngineSessionTarget,
 } from "../../context-engine/types.js";
 import { projectRecordedModelPrompt } from "../../sessions/user-turn-transcript.message.js";
+import { mapArrayIfChanged } from "../../shared/map-array-if-changed.js";
 import { estimateTokens, type Agent, type AgentMessage } from "../runtime/index.js";
 import { resolveToolResultContextMaxChars } from "../tool-result-limits.js";
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
@@ -20,19 +21,6 @@ import {
 } from "./tool-result-char-estimator.js";
 import { isToolResultTextBlock } from "./tool-result-text-budget.js";
 import { truncateToolResultMessage, truncateToolResultText } from "./tool-result-truncation.js";
-
-function projectMessages(
-  messages: AgentMessage[],
-  project: (message: AgentMessage) => AgentMessage,
-): AgentMessage[] {
-  let changed = false;
-  const projected = messages.map((message) => {
-    const next = project(message);
-    changed ||= next !== message;
-    return next;
-  });
-  return changed ? projected : messages;
-}
 
 function replaceToolResultContent(
   msg: AgentMessage,
@@ -168,8 +156,6 @@ export function installContextEngineLoopHook(params: {
     prePromptMessageCount: number;
   }) => ContextEngineRuntimeContext | undefined;
   runtimeSettings?: ContextEngineRuntimeSettings;
-  /** True when this turn belongs to a heartbeat run. */
-  isHeartbeat?: boolean;
 }): () => void {
   const { contextEngine, sessionId, sessionKey, sessionFile, tokenBudget, modelId } = params;
   const sessionIdentity = { sessionId, sessionKey };
@@ -231,7 +217,6 @@ export function installContextEngineLoopHook(params: {
               prePromptMessageCount,
             }),
             runtimeSettings: params.runtimeSettings,
-            isHeartbeat: params.isHeartbeat,
           });
         } else {
           const newMessages = transcriptMessages.slice(prePromptMessageCount);
@@ -239,14 +224,12 @@ export function installContextEngineLoopHook(params: {
             await contextEngine.ingestBatch({
               ...sessionIdentity,
               messages: newMessages,
-              isHeartbeat: params.isHeartbeat,
             });
           } else {
             for (const message of newMessages) {
               await contextEngine.ingest({
                 ...sessionIdentity,
                 message,
-                isHeartbeat: params.isHeartbeat,
               });
               signal?.throwIfAborted();
             }
@@ -328,7 +311,7 @@ export function installToolResultContextGuard(params: {
 
     const sourceMessages = Array.isArray(transformed) ? transformed : messages;
     const estimateCache = new WeakMap<AgentMessage, number>();
-    return projectMessages(sourceMessages, (message) =>
+    return mapArrayIfChanged(sourceMessages, (message) =>
       truncateToolResultToChars(message, maxSingleToolResultChars, estimateCache),
     );
   };

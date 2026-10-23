@@ -34,7 +34,7 @@ import { tryRunGatewayServiceUpdateCapabilityProbe } from "./daemon-cli/update-c
 import { shouldStartLocalOnboarding } from "./fresh-install-config.js";
 import {
   isGatewayRunInvocationArgv,
-  resolveGatewayCatalogCommandPath,
+  resolveGatewayCommandPath,
   resolveGatewayRunPreBootstrapOptions,
 } from "./gateway-run-argv.js";
 import {
@@ -43,7 +43,6 @@ import {
   withConsoleLogsRoutedToStderr,
   withConsoleLogsRoutedToStderrForJson,
 } from "./json-output-mode.js";
-import { isMachineOutputStdoutTTY } from "./machine-output-argv.js";
 import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
 import { tryOutputPrecomputedCommandHelp } from "./precomputed-help.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
@@ -123,7 +122,7 @@ async function tryRunGatewayRunFastPath(
       import("../runtime.js"),
     ]),
   );
-  const commandPath = resolveGatewayCatalogCommandPath(argv) ?? ["gateway"];
+  const commandPath = resolveGatewayCommandPath(argv) ?? ["gateway"];
   const startupPolicy = resolveCliStartupPolicyForArgv({
     argv,
     commandPath,
@@ -257,14 +256,14 @@ async function resolveReachableGateway(
         ? { preauthHandshakeTimeoutMs: target.preauthHandshakeTimeoutMs }
         : {}),
     });
-    if (probe.kind === "configured") {
+    if (probe === "configured") {
       return { kind: "configured", gateway };
     }
-    if (probe.kind === "missing-configured-model") {
+    if (probe === "missing-configured-model") {
       missingModelGateway ??= gateway;
       continue;
     }
-    if (probe.kind === "reachable-unverified" && !reachableUnverifiedGateway) {
+    if (probe === "reachable-unverified" && !reachableUnverifiedGateway) {
       reachableUnverifiedGateway = gateway;
     }
   }
@@ -458,7 +457,7 @@ function resolvesMachineOutput(
   },
   argv: readonly string[],
 ): boolean {
-  return descriptor.machineOutput?.({ argv, stdoutIsTTY: isMachineOutputStdoutTTY() }) ?? false;
+  return descriptor.machineOutput?.({ argv, stdoutIsTTY: process.stdout.isTTY || false }) ?? false;
 }
 
 function resolveBuiltInMachineOutput({
@@ -531,7 +530,6 @@ async function resolveCliCommandSurfaceOwner(params: {
   const manifestOwner = resolveManifestCliCommandSurfaceOwner({
     command: params.primary,
     config: params.config,
-    env: process.env,
   });
   if (manifestOwner) {
     return manifestOwner;

@@ -54,6 +54,7 @@ export async function drainNativeHookRelayWork(params: {
   policyReady: Promise<void>;
   bridge: NativeHookRelayBridgeRegistration;
   readRenewal: () => Promise<void>;
+  postToolUseWork: Set<Promise<void>>;
 }): Promise<void> {
   let renewal: Promise<void>;
   let failure: { error: unknown } | undefined;
@@ -67,12 +68,20 @@ export async function drainNativeHookRelayWork(params: {
     } catch (error) {
       failure ??= { error };
     }
+    const observations = [...params.postToolUseWork];
+    const results = await Promise.allSettled(observations);
+    for (const [index, result] of results.entries()) {
+      params.postToolUseWork.delete(observations[index]!);
+      if (result.status === "rejected") {
+        failure ??= { error: result.reason };
+      }
+    }
     try {
       await drainNativeHookRelayBridge(params.bridge);
     } catch (error) {
       failure ??= { error };
     }
-  } while (renewal !== params.readRenewal());
+  } while (renewal !== params.readRenewal() || params.postToolUseWork.size > 0);
   if (failure) {
     throw failure.error;
   }

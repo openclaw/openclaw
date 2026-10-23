@@ -3,10 +3,15 @@ import type { ProcessSnapshot } from "@openclaw/proc-safe/inspect";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 
-const { list, identity, spawn } = vi.hoisted(() => ({
+const { list, identity, spawn, pin } = vi.hoisted(() => ({
   list: vi.fn(),
   identity: vi.fn(),
   spawn: vi.fn(),
+  pin: vi.fn(),
+}));
+vi.mock("@openclaw/proc-safe/windows-job", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/proc-safe/windows-job")>()),
+  PinnedProcess: { open: pin },
 }));
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
@@ -27,40 +32,64 @@ beforeEach(() => {
   list.mockReset();
   identity.mockReset().mockReturnValue(null);
   spawn.mockReset();
+  pin.mockReset().mockReturnValue(null);
 });
 afterEach(() => vi.restoreAllMocks());
 
+function processIdentity(startTimeMicros: number, exited = false) {
+  return { pid: 12, parentPid: 100, startTimeMicros, startTimeResolutionMicros: 1, exited };
+}
+
 it("preserves command facts and the existing millisecond start identity", () => {
+  const command = {
+    executable: "C:\\node.exe",
+    argv: ["node", "worker.js"],
+    commandLine: 'node "C:\\retained runtime\\worker.js" --run=run-123',
+    cwd: "C:\\retained runtime\\工作",
+    environment: {},
+  };
   list.mockReturnValue([
-    {
-      pid: 12,
-      owner: "same",
-      identity: {
-        pid: 12,
-        parentPid: 100,
-        startTimeMicros: 1_725_526_400_000_999,
-        startTimeResolutionMicros: 1,
-        exited: false,
-      },
-      command: {
-        executable: "C:\\node.exe",
-        argv: ["node", "worker.js"],
-        commandLine: 'node "C:\\retained runtime\\worker.js" --run=run-123',
-        cwd: "C:\\retained runtime\\工作",
-        environment: {},
-      },
-    },
+    { pid: 12, owner: "same", identity: processIdentity(1_725_526_400_000_999), command },
   ] satisfies ProcessSnapshot[]);
   expect(readWindowsProcessCensus(15_000)).toEqual([
     {
       pid: 12,
       parentPid: 100,
       startIdentity: "1725526400000",
-      commandLine: 'node "C:\\retained runtime\\worker.js" --run=run-123',
-      cwd: "C:\\retained runtime\\工作",
+      executable: command.executable,
+      commandLine: command.commandLine,
+      cwd: command.cwd,
     },
   ]);
   expect(list).toHaveBeenCalledExactlyOnceWith({ timeoutMs: 15_000, includeCommand: true });
+});
+
+it("reads an opaque process image from an identity-matched limited-query handle", () => {
+  const dispose = vi.fn();
+  list.mockReturnValue([{ pid: 12, owner: "same", identity: processIdentity(300_000) }]);
+  pin.mockReturnValue({
+    imagePath: "C:\\Windows\\DefenderSessionHelper.exe",
+    [Symbol.dispose]: dispose,
+  });
+  expect(readWindowsProcessCensus(1_000)).toEqual([
+    {
+      pid: 12,
+      parentPid: 100,
+      startIdentity: "300",
+      executable: "C:\\Windows\\DefenderSessionHelper.exe",
+    },
+  ]);
+  expect(pin).toHaveBeenCalledWith(12, {
+    access: "observe",
+    expect: { startTimeMicros: 300_000 },
+  });
+  expect(dispose).toHaveBeenCalledOnce();
+  pin.mockImplementation(() => {
+    throw new ProcSafeError("access-denied", "denied");
+  });
+  expect(readWindowsProcessCensus(1_000)).toEqual([
+    { pid: 12, parentPid: 100, startIdentity: "300" },
+  ]);
 });
 
 it.each(["same", "different", "unknown"] as const)(
@@ -100,17 +129,7 @@ it("omits only kernel processes and proven exited identities", () => {
   list.mockReturnValue([
     { pid: 0, owner: "unknown" },
     { pid: 4, owner: "unknown" },
-    {
-      pid: 12,
-      owner: "unknown",
-      identity: {
-        pid: 12,
-        parentPid: 100,
-        startTimeMicros: 1_725_526_400_000_999,
-        startTimeResolutionMicros: 1,
-        exited: true,
-      },
-    },
+    { pid: 12, owner: "unknown", identity: processIdentity(1_725_526_400_000_999, true) },
     { pid: 13, owner: "unknown" },
   ] satisfies ProcessSnapshot[]);
   expect(readWindowsProcessCensus(1_000)).toEqual([{ pid: 13 }]);

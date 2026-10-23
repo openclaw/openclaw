@@ -345,7 +345,6 @@ function startPendingDrain(writer: ServerUiPrefsWriter): void {
     return;
   }
   if (
-    writer.state.connected &&
     writer.canPatch === false &&
     !(sync.pushProfileId && sync.pushCanWrite && Object.keys(sync.pendingPrefs).some(isProfilePref))
   ) {

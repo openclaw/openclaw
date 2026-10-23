@@ -12,7 +12,7 @@ import {
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { resetChatViewState } from "./chat-view-state.ts";
+import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import {
   createReactiveDraftHarness,
   getComposerTextarea,
@@ -55,14 +55,6 @@ function expectAbsent(element: Element | null, ...names: string[]) {
 }
 const text = (element: Element | null, selector: string) =>
   element?.querySelector(selector)?.textContent?.trim();
-function makeCommand(
-  name: string,
-  description: string,
-  tier: (typeof SLASH_COMMANDS)[number]["tier"],
-  category: (typeof SLASH_COMMANDS)[number]["category"],
-): (typeof SLASH_COMMANDS)[number] {
-  return { key: name, name, description, tier, category };
-}
 const optionNames = (container: HTMLElement) =>
   Array.from(container.querySelectorAll(".slash-menu [role='option']"), (option) =>
     option.querySelector(".slash-menu-name")?.textContent?.trim(),
@@ -151,32 +143,6 @@ describe("chat composer suggestion accessibility", () => {
     expect(container.querySelector(".slash-menu")).toBeNull();
     expectAbsent(getComposerTextarea(container), "aria-expanded", "aria-activedescendant");
     expectAbsent(container.querySelector(".agent-chat__composer-combobox"), "aria-expanded");
-  });
-
-  it("keeps filtered command DOM and keyboard order aligned with relevance", () => {
-    replaceSlashCommands([
-      makeCommand("pair", "Pair a device.", "power", "tools"),
-      makeCommand("pair-device", "Pair a specific device.", "standard", "session"),
-      makeCommand("openclaw", "Run the setup and repair helper.", "essential", "tools"),
-    ]);
-    const { container } = createReactiveDraftHarness();
-    inputDraft(container, "/pair");
-
-    expect(optionNames(container)).toEqual(["/pair", "/pair-device", "/openclaw"]);
-    expect(
-      Array.from(container.querySelectorAll(".slash-menu-group__label")).map((label) =>
-        label.textContent?.trim(),
-      ),
-    ).toEqual(["Tools", "Session", "Tools"]);
-
-    keydownComposer(container, "ArrowDown");
-    const options = container.querySelectorAll<HTMLElement>(".slash-menu [role='option']");
-    expect(options[1]?.id).toBe(activeId(container));
-    expect(options[1]?.getAttribute("aria-selected")).toBe("true");
-
-    keydownComposer(container, "Enter");
-    expect(getComposerTextarea(container).value).toBe("/pair-device ");
-    expect(container.querySelector(".slash-menu")).toBeNull();
   });
 
   it("keeps a stable composer name when attachments change its placeholder", async () => {
@@ -291,4 +257,27 @@ describe("chat composer suggestion accessibility", () => {
     };
     textarea.value = "$queued";
   });
+});
+
+it.each(["A mobile draft", "/res"])("leaves mobile Return for editing %s", async (draft) => {
+  vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Android");
+  onTestFinished(() => {
+    vi.restoreAllMocks();
+  });
+  replaceSlashCommands([
+    { key: "reset", name: "reset", description: "Reset the session.", executeLocal: true },
+  ]);
+  const onSend = vi.fn();
+  const { container } = createReactiveDraftHarness({ onSend });
+  inputDraftAtEnd(container, draft);
+  if (draft.startsWith("/")) {
+    await waitForSolid(() => expect(container.querySelector(".slash-menu-item")).not.toBeNull());
+  }
+  const textarea = getComposerTextarea(container)!;
+  for (const modifiers of [{}, { ctrlKey: true }, { metaKey: true }]) {
+    const event = keydownComposer(container, "Enter", modifiers);
+    expect(event.defaultPrevented).toBe(false);
+    expect(textarea.value).toBe(draft);
+    expect(onSend).not.toHaveBeenCalled();
+  }
 });

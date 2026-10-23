@@ -367,7 +367,7 @@ describe("worker turn execution", () => {
           ownerEpoch: request.plan.admission.ownerEpoch,
           turnClaim: request.turnClaim,
         });
-        expect(runtime?.getInheritedPublicationToolName()).toBeUndefined();
+        expect(runtime?.getAdditionalInheritedToolNames()).toEqual([]);
         throw new WorkerRunnerCapacityError();
       });
       const tunnel = createWorkerTurnTunnel({

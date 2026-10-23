@@ -555,7 +555,6 @@ export class NodeWorkerBundleInstaller {
   async retain(params: {
     gatewayNamespace: string;
     bundleHashes: readonly string[];
-    acknowledgedGeneration?: number;
   }): Promise<{ deleted: number; hasMore: boolean; generation: number }> {
     this.#pendingValidations.delete(params.gatewayNamespace);
     return await this.#operations.enqueue(params.gatewayNamespace, async () => {
