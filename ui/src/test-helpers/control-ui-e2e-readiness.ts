@@ -91,10 +91,13 @@ export async function waitForControlUiTerminalReady(page: Page): Promise<void> {
 }
 
 /** In-app confirms must reach full opacity before accepting clicks. */
-export async function waitForConfirmModal(page: Page): Promise<Locator> {
+export async function waitForConfirmModal(
+  page: Page,
+  contentSelector = ".exec-approval-card",
+): Promise<Locator> {
   const modal = page
     .locator("openclaw-modal-dialog")
-    .filter({ has: page.locator(".exec-approval-card") })
+    .filter({ has: page.locator(contentSelector) })
     .last();
   const dialog = modal.locator("dialog[open]");
   await dialog.waitFor({ state: "visible", timeout: controlUiE2eWaitTimeoutMs });
