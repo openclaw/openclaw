@@ -2668,7 +2668,6 @@ src/infra/sqlite-readonly-native-resource.ts
 src/infra/sqlite-snapshot-staging-runtime.ts
 src/infra/sqlite-snapshot-staging.worker.ts
 src/process/spawn-broker/execa-worker.ts
-src/process/spawn-broker/resource-port.ts
 src/process/spawn-broker/resource-server.ts
 src/process/spawn-broker/worker-sender.ts
 src/process/spawn-broker/worker.ts
