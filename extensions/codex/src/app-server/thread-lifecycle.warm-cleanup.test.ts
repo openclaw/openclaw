@@ -1,5 +1,7 @@
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { describe, expect, it, vi } from "vitest";
+import { runWithModelFallback } from "../../../../src/agents/model-fallback-runner.js";
 import {
   claimCodexAppServerLiveThread,
   isCodexAppServerLiveThreadClaimed,
@@ -153,7 +155,19 @@ describe("Codex warm subscription cleanup", () => {
     fixture.request.mockClear();
     try {
       pluginFingerprint = "changed-plugin-policy";
-      await expect(startOrResumeThread(common)).rejects.toThrow(
+      const run = vi.fn(() => startOrResumeThread(common));
+      const failure = await runWithModelFallback({
+        cfg: undefined,
+        provider: "fixture-primary",
+        model: "fixture-model",
+        manifestPlugins: [],
+        fallbacksOverride: ["fixture-next/fixture-model"],
+        run,
+      }).catch((error: unknown) => error);
+      expect(run).toHaveBeenCalledOnce();
+      expect(failure).toBeInstanceOf(AgentHarnessPreflightError);
+      expect(failure).toHaveProperty(
+        "message",
         `Codex thread ${threadId} is claimed by active work; stop it first.`,
       );
       await expect(readCodexAppServerBinding(sessionFile)).resolves.toEqual(bindingBefore);
