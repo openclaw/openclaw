@@ -5,6 +5,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { captureAmbientGatewayOperatorAuthority } from "../../gateway/operator-invocation-authority.js";
+import { withGuardedFetchRequestAuthority } from "../../infra/net/fetch-request-authority.js";
 import { providerSupportsNativePdfDocument } from "../../media-understanding/defaults.js";
 import { renderDocumentTruncationNotice } from "../../media/document-extraction-metadata.js";
 import {
@@ -13,6 +14,7 @@ import {
 } from "../../media/media-reference.js";
 import { extractPdfContent, type PdfExtractedContent } from "../../media/pdf-extract.js";
 import { loadWebMediaRaw } from "../../media/web-media.js";
+import { assertProviderAuthAuthority } from "../../plugins/provider-auth-authority.js";
 import { runWithAsyncWorkResources } from "../../shared/async-work-resources.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import {
@@ -477,21 +479,29 @@ export function createPdfTool(options?: {
                 "PDF provider request handoff",
               );
               const result = await providers.run(() =>
-                analyze({
-                  pdfs: loadedPdfs.map(({ buffer }) => buffer),
-                  model: modelId,
-                  api: model.api,
-                  apiKey: unwrapSecretSentinelsForProviderEgress(
-                    apiKey,
-                    "PDF provider auth handoff",
-                  ),
-                  prompt: promptRaw,
-                  maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
-                  baseUrl: model.baseUrl,
-                  headers: requestModel.headers,
-                  request: getModelProviderRequestTransport(requestModel),
-                  signal: modelSignal,
-                }),
+                withGuardedFetchRequestAuthority(
+                  () => {
+                    assertModelCurrent();
+                    assertProviderAuthAuthority(model);
+                    providers.assertOpen();
+                  },
+                  () =>
+                    analyze({
+                      pdfs: loadedPdfs.map(({ buffer }) => buffer),
+                      model: modelId,
+                      api: model.api,
+                      apiKey: unwrapSecretSentinelsForProviderEgress(
+                        apiKey,
+                        "PDF provider auth handoff",
+                      ),
+                      prompt: promptRaw,
+                      maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
+                      baseUrl: model.baseUrl,
+                      headers: requestModel.headers,
+                      request: getModelProviderRequestTransport(requestModel),
+                      signal: modelSignal,
+                    }),
+                ),
               );
               assertModelCurrent();
               providers.assertOpen();
