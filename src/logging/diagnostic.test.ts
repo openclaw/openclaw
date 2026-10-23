@@ -286,7 +286,9 @@ describe("stuck session diagnostics threshold", () => {
       reason: "stale_session_state",
       queueDepth: 0,
     });
-    expect(recoverStuckSession).not.toHaveBeenCalled();
+    expect(recoverStuckSession).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ operation: undefined, allowActiveAbort: false, queueDepth: 0 }),
+    );
   });
 
   it.each([
@@ -331,17 +333,20 @@ describe("stuck session diagnostics threshold", () => {
     logSessionStateChange({ ...session, state: "processing" });
     vi.advanceTimersByTime(91_000);
     expect(stuckEvents()).toHaveLength(1);
-    expect(recoverStuckSession).not.toHaveBeenCalled();
+    expect(recoverStuckSession).toHaveBeenCalledTimes(2);
 
     vi.advanceTimersByTime(31_000);
 
     expect(stuckEvents().map((event) => event.ageMs)).toEqual([60_000, 120_000]);
-    expect(recoverStuckSession).not.toHaveBeenCalled();
+    expect(recoverStuckSession).toHaveBeenCalledTimes(3);
+    expect(recoverStuckSession.mock.calls.every(([request]) => !request.allowActiveAbort)).toBe(
+      true,
+    );
     expect(
       events
         .filter((event) => event.type === "session.recovery.requested")
         .map((event) => event.ageMs),
-    ).toEqual([]);
+    ).toEqual([60_000, 90_000, 120_000]);
   });
 
   it("reports the default no-progress stall without granting ownerless stop authority", () => {
@@ -648,14 +653,8 @@ describe("stuck session diagnostics threshold", () => {
     expect(getDiagnosticSessionState(session).queueDepth).toBe(1);
   });
 
-  it("reports stale model activity without adopting idle queued work", async () => {
-    const recoverStuckSession = vi.fn().mockResolvedValue({
-      status: "released",
-      action: "release_lane",
-      reason: "no_active_work",
-      ...session,
-      released: 0,
-    });
+  it("reconciles stale model activity while retaining idle queued work", async () => {
+    const recoverStuckSession = vi.fn(recoverStuckDiagnosticSession);
     startEnabledDiagnosticHeartbeat({ recoverStuckSession });
     logSessionStateChange({ ...session, state: "processing" });
     markDiagnosticModelStartedForTest({
@@ -679,8 +678,10 @@ describe("stuck session diagnostics threshold", () => {
       queueDepth: 1,
       lastProgressReason: "model_call:started",
     });
-    expect(recoverStuckSession).not.toHaveBeenCalled();
-    expect(getDiagnosticSessionState(session)).toMatchObject({ state: "idle", queueDepth: 1 });
+    expect(recoverStuckSession).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ operation: undefined, allowActiveAbort: false }),
+    );
+    expect(getDiagnosticSessionState(session)).toMatchObject({ state: "waiting", queueDepth: 1 });
   });
 
   it("throttles repeated long-running active-work warnings", async () => {
