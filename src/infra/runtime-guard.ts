@@ -193,9 +193,7 @@ export async function assertSupportedRuntime(
       log: (...args) => console.log(...args),
       error: (...args) => {
         const message = format(...args);
-        process.stderr.write(
-          formatConsoleDiagnosticBlock({ level: "error", message: `${message}\n` }),
-        );
+        process.stderr.write(formatConsoleDiagnosticBlock({ message: `${message}\n` }));
       },
       exit: (code) => {
         throw new ExitError(code);
