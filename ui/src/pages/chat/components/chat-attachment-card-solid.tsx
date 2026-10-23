@@ -182,7 +182,7 @@ export function AttachmentCardHeader(
         ) : props.downloadHref || props.downloadPending ? (
           <a
             class={view().downloadClass}
-            ref={props.downloadRef}
+            ref={(element) => props.downloadRef?.(element)}
             href={props.downloadPending ? undefined : props.downloadHref}
             aria-disabled={props.downloadPending ? "true" : undefined}
             tabindex={props.downloadPending && props.downloadPendingFocusable ? 0 : undefined}

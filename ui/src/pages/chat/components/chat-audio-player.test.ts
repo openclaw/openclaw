@@ -378,6 +378,20 @@ describe("ChatAudioPlayer", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps header Download focused when the parent Expand callback changes", async () => {
+    const player = await createPlayer("callback-focus", { onExpand: vi.fn() });
+    const download = player.querySelector<HTMLAnchorElement>(
+      ".chat-assistant-attachment-card__download",
+    )!;
+    download.focus();
+    expect(document.activeElement).toBe(download);
+
+    player.onExpand = vi.fn();
+    await player.updateComplete;
+
+    expect(document.activeElement).toBe(download);
+  });
+
   it.each(["download", "expand", "outside"])(
     "preserves %s focus when playback preparation fails",
     async (target) => {
