@@ -152,6 +152,21 @@ Native clients can invoke the same operation with
 prepares the selected root's client credentials and required source schema. It does not
 run health checks or control services. Add `--json` for a completion report.
 
+If a replacement host retains PostgreSQL state but loses `client/credentials.sqlite`,
+restore the matching credential backup when available. Without a backup, explicitly
+create a fresh local store with:
+
+```bash
+openclaw doctor --client-credentials --repair --non-interactive --rebind-missing-credentials
+```
+
+Clients on this host get new identities and must pair again. Paired remote devices
+that retain their own credentials stay paired; their pairing records remain in
+PostgreSQL. Retained legacy identity and token JSON files remain retired. Ordinary
+startup never rebinds automatically. This option does not replace a present store
+or change SQLite recovery; mismatched, incomplete, unsafe, and corrupt local stores
+keep their existing refusals.
+
 Migration checks default to whole-database `quick_check`, full integrity checks
 for tables the migration rewrites or re-indexes, and foreign-key checks. Add
 `--full-integrity-check` to check every table and index during migration:
@@ -301,6 +316,7 @@ openclaw channels status --probe
 | `--force`                       | Allow aggressive repair choices. Alone, remains guided; with `--fix`, `--repair`, or `--yes`, uses the same policy-refresh and installation-drift rules.                                                                                              |
 | `--non-interactive`             | Run without prompts; safe automatic migrations still apply. Combine with `--fix`, `--repair`, or `--yes` to enter repair maintenance.                                                                                                                 |
 | `--client-credentials`          | Prepare only client credentials and their required source schema. Requires `--repair` or `--fix` with `--non-interactive`; optionally accepts `--json`.                                                                                               |
+| `--rebind-missing-credentials`  | With `--client-credentials`, recreate an absent local credential store for existing PostgreSQL state. Clients on this host must pair again.                                                                                                           |
 | `--generate-gateway-token`      | Generate and configure a gateway token.                                                                                                                                                                                                               |
 | `--allow-exec`                  | Allow doctor to execute configured `exec` SecretRefs while verifying secrets.                                                                                                                                                                         |
 | `--deep`                        | Scan system services for extra gateway installs; report recent Gateway supervisor restart handoffs.                                                                                                                                                   |
