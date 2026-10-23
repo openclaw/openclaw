@@ -329,8 +329,13 @@ export async function launchParallelToolCalls(
       finish();
       return;
     }
-    const preparation = Promise.withResolvers<void>();
-    preparations.push(preparation.promise);
+    // Package declarations target ES2023, which lacks Promise.withResolvers.
+    let resolvePreparation = () => {};
+    preparations.push(
+      new Promise<void>((resolve) => {
+        resolvePreparation = resolve;
+      }),
+    );
     const launchState: { outcome?: Promise<ExecutedToolCallOutcome> } = {};
     let started = false;
     let rejected = false;
@@ -346,7 +351,7 @@ export async function launchParallelToolCalls(
         throw error;
       }
       started = true;
-      preparation.resolve();
+      resolvePreparation();
       toolPlan.executionStarted = true;
       if (launchState.outcome) {
         result.started.push({ ...current, outcome: launchState.outcome });
@@ -362,14 +367,14 @@ export async function launchParallelToolCalls(
     }
     void outcome.then(
       (completed) => {
-        preparation.resolve();
+        resolvePreparation();
         if (!started && !rejected) {
           result.completed.push({ ...current, outcome: completed });
           queueMicrotask(launchNext);
         }
       },
       (error: unknown) => {
-        preparation.resolve();
+        resolvePreparation();
         reject(current.index, error);
         finish();
       },
