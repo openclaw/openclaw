@@ -1,6 +1,9 @@
 import { statSync } from "node:fs";
 import fs from "node:fs/promises";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalString,
+  readNonBlankString,
+} from "@openclaw/normalization-core/string-coerce";
 import { applyAgentBindings, parseBindingSpecs } from "../commands/agents.bindings.js";
 import {
   applyAgentConfig,
@@ -21,6 +24,7 @@ import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/target
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { FsSafeError, root } from "../infra/fs-safe.js";
+import { resolveUserPathPreservingWhitespace } from "../infra/home-dir.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 import { runWithAgentCreationClaim } from "../state/agent-creation-claim.js";
 import { assertAgentDeletionRecoveryHoldPredicate } from "../state/agent-deletion-journal-recovery.kernel.js";
@@ -337,8 +341,10 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
       avatar: params.avatar,
     }) ?? { name: safeName };
   const requestedWorkspace = params.entry?.workspace ?? params.workspace;
-  const explicitWorkspace = requestedWorkspace?.trim()
-    ? resolveUserPath(requestedWorkspace.trim())
+  // Keep literal workspace paths (including edge whitespace); only blank keeps the fallback.
+  const explicitWorkspaceInput = readNonBlankString(requestedWorkspace);
+  const explicitWorkspace = explicitWorkspaceInput
+    ? resolveUserPathPreservingWhitespace(explicitWorkspaceInput)
     : undefined;
   const requestedAgentDir = params.entry?.agentDir ?? params.agentDir;
   const explicitAgentDir = requestedAgentDir?.trim()

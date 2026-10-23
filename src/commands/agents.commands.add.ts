@@ -2,6 +2,7 @@ import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
+  readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
 import {
   checkAgentCreationGate,
@@ -118,7 +119,8 @@ export async function agentsAddCommand(
     );
   }
 
-  const workspaceFlag = opts.workspace?.trim();
+  // Keep literal workspace paths (including edge whitespace); only blank is rejected downstream.
+  const workspaceFlag = readNonBlankString(opts.workspace);
   const nameInput = opts.name?.trim();
 
   if (nonInteractive) {

@@ -283,6 +283,21 @@ describe("createAgent", () => {
     expect(mocks.persisted).not.toHaveProperty("agents.entries.main");
   });
 
+  it("preserves literal edge whitespace in an explicit workspace path", async () => {
+    await createAgent({
+      entry: { id: "robby", name: "robby", workspace: "/tmp/robby-edge " },
+      bootstrapFirstAgent: true,
+    });
+
+    expect(mocks.persisted).toHaveProperty(
+      "agents.entries.robby.workspace",
+      "/tmp/robby-edge ",
+    );
+    expect(mocks.ensureAgentWorkspace).toHaveBeenCalledWith(
+      expect.objectContaining({ dir: "/tmp/robby-edge " }),
+    );
+  });
+
   it("preserves the staged model over the explicit parameter when workspace setup normalizes the path", async () => {
     workspace("/normalized/work", true);
 

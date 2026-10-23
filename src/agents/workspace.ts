@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Minimatch } from "minimatch";
 import { extractFrontmatterBlock } from "../../packages/markdown-core/src/frontmatter.js";
@@ -8,6 +9,7 @@ import type { ChatType } from "../channels/chat-type.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import { isRootFileMissingFailure } from "../infra/boundary-file-read.js";
 import { pathExists } from "../infra/fs-safe.js";
+import { resolveUserPathPreservingWhitespace } from "../infra/home-dir.js";
 import { retainMutationAuthority } from "../infra/mutation-authority.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { retryAsync } from "../infra/retry.js";
@@ -533,8 +535,9 @@ function captureWorkspacePreparationGuard(guard?: WorkspaceStateGuard) {
 export async function ensureAgentWorkspace(
   params?: EnsureAgentWorkspaceParams,
 ): Promise<EnsuredAgentWorkspace> {
-  const rawDir = params?.dir?.trim() ? params.dir.trim() : DEFAULT_AGENT_WORKSPACE_DIR;
-  const dir = resolveUserPath(rawDir);
+  // Keep literal workspace dirs (including edge whitespace); only blank keeps the default.
+  const rawDir = readNonBlankString(params?.dir) ?? DEFAULT_AGENT_WORKSPACE_DIR;
+  const dir = resolveUserPathPreservingWhitespace(rawDir);
   const captured = {
     ...params,
     dir,

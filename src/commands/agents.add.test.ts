@@ -264,6 +264,10 @@ describe("agents add command", () => {
       `Non-interactive agent creation requires --workspace. Re-run ${formatCliCommand("openclaw agents add <id> --workspace <path>")} or omit flags to use the wizard.`,
     ],
     [
+      { name: "Work", workspace: "   " },
+      `Non-interactive agent creation requires --workspace. Re-run ${formatCliCommand("openclaw agents add <id> --workspace <path>")} or omit flags to use the wizard.`,
+    ],
+    [
       { workspace: "/tmp/work" },
       `Agent name is required in non-interactive mode. Run ${formatCliCommand("openclaw agents add <id> --workspace <path>")}.`,
     ],
@@ -630,6 +634,23 @@ describe("agents add command", () => {
       }
     },
   );
+
+  it("preserves literal whitespace in an explicit non-interactive workspace path", async () => {
+    hasTerminal.mockReturnValue(false);
+    const literalWorkspace = " /tmp/oc ws proof ";
+
+    await add({ name: "Work", workspace: literalWorkspace, nonInteractive: true });
+
+    expect(createAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "Work",
+        workspace: literalWorkspace,
+        transformConfig,
+      }),
+    );
+    expectUnused(transformConfig, runtime.error, hasTerminal);
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
 
   it("reports a duplicate agent through the root failure owner", async () => {
     createAgent.mockResolvedValueOnce({

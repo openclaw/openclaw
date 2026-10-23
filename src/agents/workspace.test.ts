@@ -399,6 +399,19 @@ it("creates only the directory for runtime-managed-implicit provisioning (#92015
   expect((await workspaceState.readWorkspaceStateSnapshot(targetDir)).setupExists).toBe(false);
 });
 
+it("preserves literal edge whitespace in an explicit workspace dir", async () => {
+  const literalDir = testState!.path("literal-edge ");
+  const result = await ensureAgentWorkspace({
+    dir: literalDir,
+    ensureBootstrapFiles: true,
+    provisioning: "runtime-managed-implicit",
+  });
+
+  expect(result).toMatchObject({ dir: literalDir, bootstrapPending: false });
+  await fs.access(literalDir);
+  await expectPathMissing(testState!.path("literal-edge"));
+});
+
 it.each(["committed", "failed", "retired-before-commit", "retired-after-commit"] as const)(
   "waits for the completion write before bootstrap cleanup: %s",
   async (outcome) => {

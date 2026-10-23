@@ -70,6 +70,7 @@ credential, and config settlement. Stop the Gateway through its service owner,
 wait for it to exit, and rerun the same command.
 
 - The automation flags `--workspace`, `--model`, `--agent-dir`, `--bind`, and `--non-interactive` select the non-interactive path. Non-interactive mode requires an agent name and, unless `--role` is supplied, `--workspace`.
+- Nonblank `--workspace` values preserve leading and trailing whitespace.
 - `--json` alone keeps the guided wizard interactive. Prompts and status are written to stderr, and stdout contains one JSON summary after setup completes.
 - Non-interactive `--json` reports normalized agent IDs in the summary without extra stdout status messages.
 - If a requested binding belongs to another agent, non-interactive creation keeps the new agent and any non-conflicting bindings but exits with status 1. The summary names the conflicts; resolve them with `agents bind` and `agents unbind` instead of recreating the agent.
