@@ -399,6 +399,17 @@ describeNonWin("exec live OpenClaw state SQLite guard", () => {
         path.join(stateDir, "workspace"),
       );
     });
+
+    it("keeps malformed URI fallbacks and decodes native file URLs only once", async () => {
+      await check([
+        'sqlite3 "file:$OPENCLAW_STATE_DIR/state/%ZZ.sqlite"',
+        `sqlite3 ${quote(`file:${encodeURI(databasePath)}`)}`,
+      ]);
+      await check(
+        ['sqlite3 "file:"', `sqlite3 ${quote(`file:${encodeURI(encodeURI(databasePath))}`)}`],
+        null,
+      );
+    });
   });
 
   it.each([false, true])("rejects live SQLite before spawn (URI=%s)", async (uri) => {

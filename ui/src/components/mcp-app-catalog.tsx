@@ -3,7 +3,6 @@ import {
   createMemo,
   createOptimistic,
   createSignal,
-  Errored,
   For,
   lazy,
   Loading,
@@ -17,7 +16,7 @@ import type {
 } from "../../../src/shared/mcp-app-extensions.js";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { registerMcpAppEnglish } from "../i18n/locales/en-mcp-app.ts";
-import { formatUiError, UserFacingError } from "../lib/format-error.ts";
+import { UserFacingError } from "../lib/format-error.ts";
 import { createMcpAppCatalog } from "../lib/mcp-app-catalog.ts";
 import { mcpAppRouteSearch } from "../lib/mcp-app-route.ts";
 import { useApplication } from "../lib/reactive/context.ts";
@@ -26,6 +25,7 @@ import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import { requestMcpAppOpen } from "./mcp-app-launch.ts";
 import { Icon } from "./solid/icon.tsx";
+import { McpAppOperationError } from "./solid/mcp-app-operation-error.tsx";
 import "../styles/mcp-app-extensions.css";
 
 registerMcpAppEnglish();
@@ -345,14 +345,7 @@ export function McpAppCatalog(props: McpAppCatalogProps) {
                 </div>
               </Show>
               <Show when={currentOperation()} keyed>
-                {(admitted) => {
-                  const outcome = createMemo(() => admitted.result, { loadingValue: null });
-                  return (
-                    <Errored fallback={(error) => <p role="alert">{formatUiError(error())}</p>}>
-                      {outcome()}
-                    </Errored>
-                  );
-                }}
+                {(admitted) => <McpAppOperationError result={admitted.result} />}
               </Show>
             </section>
           }

@@ -99,6 +99,12 @@ export type ChatSessionAccessMobileProps = {
   onApplied: () => void;
 };
 
+const renderSharingError = (error: string) => (
+  <p class="chat-sharing-mobile__error" role="alert">
+    {error}
+  </p>
+);
+
 function sharingVisibilityLabel(visibility: SessionVisibility) {
   return t(`chat.sessionSharing.${visibility === "read-only" ? "readOnly" : visibility}`);
 }
@@ -190,11 +196,7 @@ export function ChatSessionSharingMobile(props: ChatSessionSharingMobileProps) {
         completion={props.completion}
         pending={props.pending}
       >
-        {(error) => (
-          <p class="chat-sharing-mobile__error" role="alert">
-            {error}
-          </p>
-        )}
+        {renderSharingError}
       </ChatSessionSharingError>
       <Show when={props.permissions}>
         {(permissions) => <SharingPermissions data={permissions()} labels={props.labels} />}
@@ -413,11 +415,7 @@ export function ChatSessionAccessMobile(props: ChatSessionAccessMobileProps) {
         completion={props.completion}
         pending={props.pending}
       >
-        {(error) => (
-          <p class="chat-sharing-mobile__error" role="alert">
-            {error}
-          </p>
-        )}
+        {renderSharingError}
       </ChatSessionSharingError>
     </div>
   );
