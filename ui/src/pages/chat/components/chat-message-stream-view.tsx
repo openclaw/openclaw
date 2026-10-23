@@ -16,7 +16,7 @@ import type { ChatSubagentWait } from "../chat-subagent-wait.ts";
 import type { MessageRenderOptions } from "./chat-message-bubble-options.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
 import {
-  prepareChatMessageRender,
+  prepareChatStreamRender,
   resolveMessageActionDetails,
 } from "./chat-message-markdown-view.tsx";
 import { ChatTimestamp } from "./chat-message-timestamp-view.tsx";
@@ -162,16 +162,7 @@ function StreamingMessage(props: {
   options: StreamGroupOptions;
 }) {
   const part = () => props.part()!;
-  const prepared = createMemo(() =>
-    prepareChatMessageRender({
-      role: "assistant",
-      content: [
-        ...(part().thinking ? [{ type: "thinking", thinking: part().thinking }] : []),
-        { type: "text", text: part().text },
-      ],
-      timestamp: part().startedAt,
-    }),
-  );
+  const prepared = createMemo(() => prepareChatStreamRender(part()));
   const actions = createMemo(() =>
     resolveMessageActionDetails(prepared(), {
       messageId: part().key,
