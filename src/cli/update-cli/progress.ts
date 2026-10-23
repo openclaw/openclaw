@@ -310,6 +310,7 @@ export async function prepareResult(
   const reportPath = await writeUpdateRunReportArtifact({
     result,
     report: renderReport,
+    record: reportHints.record,
     readRun,
     env: opts.run?.env,
     detached: reportHints.readHistory === false,
