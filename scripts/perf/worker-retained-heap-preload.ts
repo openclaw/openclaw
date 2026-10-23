@@ -88,16 +88,21 @@ function readCommand(file: string): Command {
       value.operation !== "stop" &&
       value.operation !== "sample" &&
       value.operation !== "collect" &&
-      value.operation !== "snapshot") ||
-    ("atEpochMs" in value &&
-      (typeof value.atEpochMs !== "number" || !Number.isSafeInteger(value.atEpochMs)))
+      value.operation !== "snapshot")
   ) {
     throw new Error("Invalid worker heap command");
+  }
+  const atEpochMs = "atEpochMs" in value ? value.atEpochMs : undefined;
+  if (
+    atEpochMs !== undefined &&
+    (typeof atEpochMs !== "number" || !Number.isSafeInteger(atEpochMs))
+  ) {
+    throw new Error("Invalid worker heap command deadline");
   }
   return {
     id: value.id,
     operation: value.operation,
-    ...("atEpochMs" in value ? { atEpochMs: value.atEpochMs } : {}),
+    ...(atEpochMs !== undefined ? { atEpochMs } : {}),
   };
 }
 
