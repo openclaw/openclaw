@@ -109,7 +109,7 @@ it("reports an opening timeout before retrying even when the HTTP probe cannot f
 
   expect(onClose).toHaveBeenCalledExactlyOnceWith({
     code: 1006,
-    reason: "gateway websocket opening timed out after 30000ms",
+    reason: `gateway websocket opening timed out after ${DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS}ms`,
     error: undefined,
     willRetry: true,
   });

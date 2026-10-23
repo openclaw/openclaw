@@ -163,7 +163,7 @@ class LogsPage extends OpenClawLightDomElement {
     // must not supersede an in-flight tail or reload a successfully empty log.
     ensureInitialData: () => {
       const quiet = this.logsStatus.hasLoaded;
-      void this.loadLogs({ reset: true, quiet }).then((current) => {
+      void this.loadLogs({ reset: !quiet, quiet }).then((current) => {
         if (current && !quiet) {
           this.streamFollow.schedule(true);
         }
