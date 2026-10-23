@@ -26,8 +26,8 @@ it.each(["idle", "online"] as const)(
       .fn<() => Promise<typeof imported>>()
       .mockRejectedValueOnce(new Error("offline chunk"))
       .mockResolvedValue(imported);
-    const loader = createSidebarRendererLoader(importModule);
-    const Renderer = lazy(loader.load, { export: "Renderer" });
+    const Renderer = lazy(importModule, { export: "Renderer" });
+    const loader = createSidebarRendererLoader(Renderer.preload);
     const Boundary = loader.Boundary;
     const view = mountSolid(() => {
       const [open, setOpen] = createSignal(true);

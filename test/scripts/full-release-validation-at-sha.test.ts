@@ -13,6 +13,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   assertTrustedWorkflowHarness,
   dispatchInputsDigest,
+  fullReleaseConcurrencyBranchPrefix,
   parseArgs,
   releaseProfileForVersion,
   releaseDecisionStopsForeground,
@@ -93,6 +94,72 @@ describe("full-release-validation-at-sha", () => {
     );
     expect(dispatchInputsDigest({ flag: true })).not.toBe(dispatchInputsDigest({ flag: false }));
     expect(dispatchInputsDigest({ flag: "" })).toBe(dispatchInputsDigest({}));
+  });
+
+  it("derives a shared branch prefix without reusing the per-request transport ref", () => {
+    const workflowSha = "a".repeat(40);
+    const stable = fullReleaseConcurrencyBranchPrefix(workflowSha, {
+      inputs: {
+        expected_sha: "b".repeat(40),
+        ref: "ignored",
+        rerun_group: "all",
+        release_profile: "stable",
+      },
+      effectiveSoak: true,
+    });
+    expect(stable).toMatch(/^release-ci\/a{12}-[1-9][0-9]{18}$/u);
+    expect(
+      fullReleaseConcurrencyBranchPrefix("49f695b5bc5bb753f34da0e64683f39c499c8e2c", {
+        inputs: {
+          expected_sha: "49f695b5bc5bb753f34da0e64683f39c499c8e2c",
+          rerun_group: "qa-live",
+          release_profile: "stable",
+        },
+        effectiveSoak: true,
+      }),
+    ).toMatch(/^release-ci\/49f695b5bc5b-[1-9][0-9]*$/u);
+    expect(
+      fullReleaseConcurrencyBranchPrefix(workflowSha, {
+        inputs: {
+          expected_sha: "b".repeat(40),
+          rerun_group: "all",
+          release_profile: "stable",
+          run_release_soak: true,
+        },
+        effectiveSoak: true,
+      }),
+    ).toBe(stable);
+    expect(
+      fullReleaseConcurrencyBranchPrefix(workflowSha, {
+        inputs: {
+          expected_sha: "b".repeat(40),
+          rerun_group: "ci",
+          release_profile: "stable",
+        },
+        effectiveSoak: true,
+      }),
+    ).not.toBe(stable);
+  });
+
+  it("refuses a replacement in the same active concurrency group before mutation", () => {
+    const fixture = createDispatchFixture({ activeConcurrencyRun: true });
+    const result = fixture.run();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "Same-concurrency-group Full Release Validation is already active",
+    );
+    expect(result.stderr).toContain("/actions/runs/777 (in_progress)");
+    expect(result.stderr).toContain("cancel that exact run explicitly");
+    expect(fixture.calls("POST")).toEqual([]);
+    expect(fixture.gitCalls().some((args) => args.includes("update-ref"))).toBe(false);
+  });
+
+  it("ignores completed workflow history when checking active concurrency", () => {
+    const fixture = createDispatchFixture({ completedConcurrencyHistory: 2500 });
+    const result = fixture.run();
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(fixture.dispatches()).toHaveLength(1);
   });
 
   it("parses release validation dispatch args", () => {
@@ -354,7 +421,12 @@ describe("full-release-validation-at-sha", () => {
     expect(fixture.readWaits()).toEqual([30_000, 60_000, 120_000]);
     const calls = fixture.calls();
     expect(
-      calls.filter((args) => ghApiEndpoint(args).endsWith("/actions/workflows/17/runs")),
+      calls.filter(
+        (args) =>
+          ghApiEndpoint(args).endsWith("/actions/workflows/17/runs") &&
+          args.includes("per_page=20") &&
+          args.some((arg) => arg.startsWith("branch=")),
+      ),
     ).toHaveLength(4);
   });
 

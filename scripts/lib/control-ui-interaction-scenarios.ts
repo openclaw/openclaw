@@ -282,7 +282,7 @@ async function prepareModelPicker(page: Page) {
   const trigger = page.locator(`${activePane} [data-chat-model-select]`);
   await trigger.waitFor({ state: "visible" });
   await trigger.click();
-  await page.locator('[data-chat-model-option="example/model-999"]').waitFor({ state: "attached" });
+  await page.locator("[data-chat-model-search]").waitFor();
   await trigger.click();
 }
 

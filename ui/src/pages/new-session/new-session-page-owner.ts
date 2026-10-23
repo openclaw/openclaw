@@ -356,7 +356,7 @@ export class NewSessionPageOwner {
     }
     this.draft.synchronizeSelections();
     activateDraft(this.submission, openKey);
-    this.submission.resumeInterruptedSubmission();
+    this.submission.synchronizeSubmission();
   }
 
   resetDraft() {
@@ -410,7 +410,7 @@ export class NewSessionPageOwner {
       draftSource: submission.composerDraft,
       canSubmit: !submission.submitting && !dictationLocked && submission.canSubmit(),
       submitDisabledReason: submission.submitDisabledReason(),
-      blockedSubmitNotice: submission.blockedSubmitNotice(),
+      onBlockedSubmit: () => submission.noteBlockedSubmitAttempt(),
       get dictationActive() {
         return dictation.active;
       },

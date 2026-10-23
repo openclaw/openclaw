@@ -97,6 +97,7 @@ export type CodexSteeringQueueOptions = Pick<
   | "imageOrder"
   | "media"
   | "isInboundUserMessage"
+  | "isInboundUserReply"
   | "allowPendingUserInputAnswer"
   | "onQueueAccepted"
   | "onQueueSettled"
@@ -106,7 +107,7 @@ export type CodexSteeringQueueOptions = Pick<
 
 type CodexSteeringCommitItem = Pick<
   CodexSteeringQueueOptions,
-  "isInboundUserMessage" | "userTurnTranscriptRecorder"
+  "isInboundUserMessage" | "isInboundUserReply" | "userTurnTranscriptRecorder"
 >;
 
 /**

@@ -572,7 +572,7 @@ describe("memory index", () => {
     }
   });
 
-  it("keeps transient CLI search off the serving manager write path", async () => {
+  it("publishes transient CLI search maintenance before close, off the serving write path", async () => {
     const cfg = keywordConfig();
     const initialManager = await getFreshManager(cfg, "cli");
     await initialManager.sync({ reason: "test", force: true });
@@ -587,6 +587,16 @@ describe("memory index", () => {
     const servingSync = vi.spyOn(servingFields, "syncMemoryFiles");
     let closePromise: Promise<void> | undefined;
     const maintenance = pauseMaintenance();
+    const idleEntered = createDeferred<void>();
+    const awaitIdle = serving(manager).awaitManagerIdle.bind(manager);
+    const idleSettled = vi.fn();
+    using idle = vi.spyOn(serving(manager), "awaitManagerIdle");
+    idle.mockImplementation(() => {
+      const pending = awaitIdle();
+      void pending.then(idleSettled, idleSettled);
+      idleEntered.resolve();
+      return pending;
+    });
 
     try {
       const search = manager.search("zebra", {
@@ -598,17 +608,33 @@ describe("memory index", () => {
       expectFixtureHit(await search);
       expect(servingSync).not.toHaveBeenCalled();
       closePromise = manager.close();
-      let closeSettled = false;
-      void closePromise.then(() => {
-        closeSettled = true;
-      });
-      await vi.waitFor(() => expect(closeSettled).toBe(true));
+      // Teardown must not release the connection the paused maintenance writes through.
+      await idleEntered.promise;
+      expect(idleSettled).not.toHaveBeenCalled();
       expect(maintenance.state.closed).toBe(false);
+      maintenance.release();
+      await closePromise;
+      expect(maintenance.state.closed).toBe(true);
     } finally {
       maintenance.release();
       await closePromise;
       maintenance.spy.mockRestore();
       await manager.close?.();
+    }
+
+    // A standalone CLI process exits after close; the refresh it started is published.
+    const next = await getFreshManager(cfg, "cli");
+    try {
+      expect(
+        await next.search("transient", {
+          maxResults: 5,
+          minScore: 0,
+          sessionKey: "agent:main:cli:memory-search",
+        }),
+      ).toEqual(matchingHit({ path: "memory/cli-refresh.md" }));
+      expect(next.status().lastSyncError).toBeUndefined();
+    } finally {
+      await next.close?.();
     }
   });
 

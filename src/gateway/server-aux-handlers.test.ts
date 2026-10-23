@@ -45,6 +45,7 @@ import {
 import * as reloadPlans from "./config-reload-plan.js";
 import type { GatewayReloadPlan } from "./config-reload.js";
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
+import { createHotTailPlan } from "./server-reload-handlers.config.test-support.js";
 import * as modelRuntimeReload from "./server-reload-model-runtime-scope.js";
 import {
   registerGatewaySecretCredentialReloadCases,
@@ -79,20 +80,11 @@ function asConfig(value: unknown): OpenClawConfig {
 }
 
 function createReloadPlan(overrides?: Partial<GatewayReloadPlan>): GatewayReloadPlan {
-  return {
+  return createHotTailPlan({
     changedPaths: [],
-    restartGateway: false,
-    restartReasons: [],
     hotReasons: [],
-    reloadHooks: false,
-    restartGmailWatcher: false,
-    restartCron: false,
-    reloadPlugins: false,
-    restartChannels: new Set(),
-    disposeMcpRuntimes: false,
-    noopPaths: [],
     ...overrides,
-  };
+  });
 }
 
 function createSnapshot(config: OpenClawConfig): PreparedSecretsRuntimeSnapshot {

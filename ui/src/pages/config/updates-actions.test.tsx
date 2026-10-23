@@ -107,7 +107,7 @@ it("keeps native automatic-update intent until acknowledgement and permits retry
   input.dispatchEvent(new Event("change"));
   await waitForSolid(() => {
     expect(input.checked).toBe(false);
-    expect(input.disabled).toBe(true);
+    expect(input.getAttribute("aria-disabled")).toBe("true");
   });
   first.reject(new Error("Automatic updates could not be saved"));
   await waitForSolid(() =>
@@ -119,7 +119,7 @@ it("keeps native automatic-update intent until acknowledgement and permits retry
   second.resolve({ ...snapshot, updates: { ...snapshot.updates, automatic: false } });
   await waitForSolid(() => {
     const confirmed = toggle("Check for updates automatically");
-    expect(confirmed.disabled).toBe(false);
+    expect(confirmed.getAttribute("aria-disabled")).toBeNull();
     expect(confirmed.checked).toBe(false);
   });
   expect(post.mock.calls.slice(1)).toEqual([

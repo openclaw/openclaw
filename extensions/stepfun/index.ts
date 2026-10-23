@@ -1,16 +1,11 @@
 import { definePluginEntry, type ProviderCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { buildOpenAICompatibleLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { createProviderConnectionPresetAppliers } from "openclaw/plugin-sdk/provider-onboard";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  applyStepFunPlanConfig,
-  applyStepFunPlanConfigCn,
-  applyStepFunStandardConfig,
-  applyStepFunStandardConfigCn,
-} from "./onboard.js";
 import {
   buildStepFunPlanProvider,
   buildStepFunProvider,
@@ -25,7 +20,6 @@ import {
 } from "./provider-catalog.js";
 
 type StepFunRegion = "cn" | "intl";
-type StepFunSurface = "standard" | "plan";
 
 const STEPFUN_SURFACES = {
   standard: {
@@ -35,7 +29,7 @@ const STEPFUN_SURFACES = {
     defaultModel: STEPFUN_DEFAULT_MODEL_REF,
     baseUrls: { cn: STEPFUN_STANDARD_CN_BASE_URL, intl: STEPFUN_STANDARD_INTL_BASE_URL },
     buildProvider: buildStepFunProvider,
-    applyConfig: { cn: applyStepFunStandardConfigCn, intl: applyStepFunStandardConfig },
+    modelAlias: "StepFun",
   },
   plan: {
     providerId: STEPFUN_PLAN_PROVIDER_ID,
@@ -44,7 +38,7 @@ const STEPFUN_SURFACES = {
     defaultModel: STEPFUN_PLAN_DEFAULT_MODEL_REF,
     baseUrls: { cn: STEPFUN_PLAN_CN_BASE_URL, intl: STEPFUN_PLAN_INTL_BASE_URL },
     buildProvider: buildStepFunPlanProvider,
-    applyConfig: { cn: applyStepFunPlanConfigCn, intl: applyStepFunPlanConfig },
+    modelAlias: "StepFun Plan",
   },
 };
 
@@ -79,66 +73,6 @@ function inferRegionFromProfileId(profileId: string | undefined): StepFunRegion 
   return undefined;
 }
 
-async function resolveStepFunCatalog(ctx: ProviderCatalogContext, surface: StepFunSurface) {
-  const provider = STEPFUN_SURFACES[surface];
-  const profileAuth = ctx.resolveProviderAuth(provider.providerId);
-  const auth = profileAuth.apiKey ? profileAuth : ctx.resolveProviderApiKey(provider.providerId);
-  const apiKey = auth.apiKey;
-  if (!apiKey) {
-    return null;
-  }
-
-  const explicitBaseUrl = trimExplicitBaseUrl(ctx, provider.providerId);
-  const region =
-    inferRegionFromBaseUrl(explicitBaseUrl) ??
-    inferRegionFromBaseUrl(trimExplicitBaseUrl(ctx, STEPFUN_PROVIDER_ID)) ??
-    inferRegionFromBaseUrl(trimExplicitBaseUrl(ctx, STEPFUN_PLAN_PROVIDER_ID)) ??
-    inferRegionFromProfileId(auth.profileId);
-  // Keep discovery working for legacy/manual auth profiles that resolved a
-  // key but do not encode region in the profile id.
-  const baseUrl = explicitBaseUrl ?? provider.baseUrls[region ?? "intl"];
-  const providerConfig = provider.buildProvider(baseUrl);
-  return await buildOpenAICompatibleLiveProviderCatalog({
-    discoveryMode: "strict",
-    providerId: provider.providerId,
-    providerConfig,
-    apiKey,
-    discoveryApiKey: auth.discoveryApiKey,
-    profileId: auth.profileId,
-  });
-}
-
-function createStepFunApiKeyMethod(surface: StepFunSurface, region: StepFunRegion) {
-  const provider = STEPFUN_SURFACES[surface];
-  const methodId = `${surface}-api-key-${region}`;
-  const label = `${provider.authLabel} API key (${region === "cn" ? "China" : "Global/Intl"})`;
-  const hint = `Endpoint: ${provider.baseUrls[region].replace(/^https:\/\//u, "")}`;
-  return createProviderApiKeyAuthMethod({
-    providerId: provider.providerId,
-    methodId,
-    label,
-    hint,
-    optionKey: "stepfunApiKey",
-    flagName: "--stepfun-api-key",
-    envVar: "STEPFUN_API_KEY",
-    promptMessage: `Enter StepFun API key for ${region === "cn" ? "China" : "global"} endpoints`,
-    profileIds: [`stepfun:${region}`, `stepfun-plan:${region}`],
-    allowProfile: false,
-    defaultModel: provider.defaultModel,
-    preserveExistingPrimary: true,
-    expectedProviders: [STEPFUN_PROVIDER_ID, STEPFUN_PLAN_PROVIDER_ID],
-    applyConfig: provider.applyConfig[region],
-    wizard: {
-      choiceId: `stepfun-${methodId}`,
-      choiceLabel: label,
-      choiceHint: hint,
-      groupId: "stepfun",
-      groupLabel: "StepFun",
-      groupHint: "Standard / Step Plan (China / Global)",
-    },
-  });
-}
-
 export default definePluginEntry({
   id: STEPFUN_PROVIDER_ID,
   name: "StepFun",
@@ -146,15 +80,87 @@ export default definePluginEntry({
   register(api) {
     for (const surface of ["standard", "plan"] as const) {
       const provider = STEPFUN_SURFACES[surface];
+      const presetAppliers = createProviderConnectionPresetAppliers<[string]>({
+        primaryModelRef: provider.defaultModel,
+        resolveParams: (_cfg, baseUrl) => {
+          const catalog = provider.buildProvider(baseUrl);
+          return {
+            providerId: provider.providerId,
+            api: catalog.api ?? "openai-completions",
+            baseUrl,
+            catalogModels: catalog.models,
+            aliases: [
+              ...catalog.models.map((model) => `${provider.providerId}/${model.id}`),
+              { modelRef: provider.defaultModel, alias: provider.modelAlias },
+            ],
+          };
+        },
+      });
       api.registerProvider({
         id: provider.providerId,
         label: provider.label,
         docsPath: "/providers/stepfun",
         envVars: ["STEPFUN_API_KEY"],
-        auth: (["cn", "intl"] as const).map((region) => createStepFunApiKeyMethod(surface, region)),
+        auth: (["cn", "intl"] as const).map((region) => {
+          const methodId = `${surface}-api-key-${region}`;
+          const label = `${provider.authLabel} API key (${region === "cn" ? "China" : "Global/Intl"})`;
+          const hint = `Endpoint: ${provider.baseUrls[region].replace(/^https:\/\//u, "")}`;
+          return createProviderApiKeyAuthMethod({
+            providerId: provider.providerId,
+            methodId,
+            label,
+            hint,
+            optionKey: "stepfunApiKey",
+            flagName: "--stepfun-api-key",
+            envVar: "STEPFUN_API_KEY",
+            promptMessage: `Enter StepFun API key for ${region === "cn" ? "China" : "global"} endpoints`,
+            profileIds: [`stepfun:${region}`, `stepfun-plan:${region}`],
+            allowProfile: false,
+            defaultModel: provider.defaultModel,
+            preserveExistingPrimary: true,
+            expectedProviders: [STEPFUN_PROVIDER_ID, STEPFUN_PLAN_PROVIDER_ID],
+            applyConfig: (cfg) => presetAppliers.applyConfig(cfg, provider.baseUrls[region]),
+            wizard: {
+              choiceId: `stepfun-${methodId}`,
+              choiceLabel: label,
+              choiceHint: hint,
+              groupId: "stepfun",
+              groupLabel: "StepFun",
+              groupHint: "Standard / Step Plan (China / Global)",
+            },
+          });
+        }),
         catalog: {
           order: "paired",
-          run: async (ctx) => resolveStepFunCatalog(ctx, surface),
+          run: async (ctx) => {
+            const profileAuth = ctx.resolveProviderAuth(provider.providerId);
+            const auth = profileAuth.apiKey
+              ? profileAuth
+              : ctx.resolveProviderApiKey(provider.providerId);
+            const apiKey = auth.apiKey;
+            if (!apiKey) {
+              return null;
+            }
+
+            const explicitBaseUrl = trimExplicitBaseUrl(ctx, provider.providerId);
+            const region =
+              inferRegionFromBaseUrl(explicitBaseUrl) ??
+              inferRegionFromBaseUrl(trimExplicitBaseUrl(ctx, STEPFUN_PROVIDER_ID)) ??
+              inferRegionFromBaseUrl(trimExplicitBaseUrl(ctx, STEPFUN_PLAN_PROVIDER_ID)) ??
+              inferRegionFromProfileId(auth.profileId);
+            // Keep discovery working for legacy/manual auth profiles that resolved a
+            // key but do not encode region in the profile id.
+            const baseUrl = explicitBaseUrl ?? provider.baseUrls[region ?? "intl"];
+            const providerConfig = provider.buildProvider(baseUrl);
+            return await buildOpenAICompatibleLiveProviderCatalog({
+              discoveryMode: "strict",
+              providerId: provider.providerId,
+              providerConfig,
+              apiKey,
+              discoveryApiKey: auth.discoveryApiKey,
+              profileId: auth.profileId,
+            });
+          },
         },
         staticCatalog: {
           order: "paired",

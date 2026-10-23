@@ -118,6 +118,8 @@ async function mountRecovery(kind: "draft" | "queue" = "draft") {
       preview,
     ),
   );
+  // Wait for initial durable preparation before measuring later run-owner refreshes.
+  await waitForSolid(() => expect(recoveryIo.prepare).toHaveBeenCalled());
   const button = (action: "restore" | "discard") => {
     const label = t(
       action === "restore" ? "chat.outboxRecoveryRestore" : "chat.outboxRecoveryDelete",

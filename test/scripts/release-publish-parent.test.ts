@@ -286,6 +286,63 @@ cleanup_clawhub_children() { echo cleanup >> "$GITHUB_OUTPUT"; }`,
   };
 }
 
+describe("optional Gateway publication notification", () => {
+  const notificationName = "Notify Windows of published Gateway packages";
+  const publisher = job("publish_openclaw_npm", "success");
+
+  it.each(["failure", "timed_out", "cancelled"])(
+    "preserves publisher start and background completion after notification %s",
+    (conclusion) => {
+      const jobs = [publisher, job(notificationName, conclusion)];
+      const states: RunState[] = [{ status: "in_progress", jobs }, terminal("success", ...jobs)];
+      const started = childFixture({ 91: states }).run(
+        source +
+          'wait_for_run openclaw-npm-release.yml 91 "$PARENT_WORKFLOW_SHA" publish_openclaw_npm false',
+      );
+      expect(started.status, started.stderr).toBe(0);
+      expect(started.stdout).toContain("publish_openclaw_npm started");
+      const completed = childFixture({ 91: states }).run(
+        source +
+          'wait_for_run_background openclaw-npm-release.yml 91 "$PARENT_WORKFLOW_SHA" "$RUNNER_TEMP/result" false; wait "$wait_run_pid"; cat "$RUNNER_TEMP/result"',
+      );
+      expect(completed.status, completed.stderr).toBe(0);
+      expect(completed.stdout.trim().endsWith("success")).toBe(true);
+      expect(completed.summary).toContain("openclaw-npm-release.yml: success");
+      expect(completed.calls.some(isCancel)).toBe(false);
+    },
+  );
+
+  it.each([
+    { workflow: coreNpm, failed: "validate_publish_request", conclusion: "failure" },
+    { workflow: coreNpm, failed: "publish_openclaw_npm", conclusion: "failure" },
+    { workflow: coreNpm, failed: "unknown_job", conclusion: "failure" },
+    { workflow: "plugin-npm-release.yml", failed: notificationName, conclusion: "failure" },
+    { workflow: coreNpm, failed: notificationName, conclusion: "action_required" },
+  ])(
+    "still rejects $workflow / $failed / $conclusion",
+    ({ workflow: workflowName, failed, conclusion }) => {
+      const result = childFixture({
+        91: [
+          {
+            status: "in_progress",
+            jobs: [job(notificationName, "failure"), job(failed, conclusion)],
+          },
+        ],
+      }).run(source + `wait_for_run ${workflowName} 91 "$PARENT_WORKFLOW_SHA" "" false`);
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain("has failed jobs");
+    },
+  );
+
+  it("does not accept a cancelled overall npm run", () => {
+    const result = childFixture({
+      91: [terminal("cancelled", publisher, job(notificationName, "cancelled"))],
+    }).run(source + 'wait_for_run openclaw-npm-release.yml 91 "$PARENT_WORKFLOW_SHA" "" false');
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.summary).toContain("openclaw-npm-release.yml: cancelled");
+  });
+});
+
 describe("plugin npm child lifecycle", () => {
   it.each<[string, RunState[]]>([
     ["a pre-publish failure while the child is still running", failedBeforePublish],

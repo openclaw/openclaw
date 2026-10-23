@@ -495,6 +495,19 @@ describe("session workspace state", () => {
 });
 
 describe("openSessionWorkspaceFile", () => {
+  it("admits a preview synchronously but does not start its read after reconnect", async () => {
+    const state = createFileHost(textFile("old.md", "old"));
+    state.connectionEpoch = 1;
+    const opening = openSessionWorkspaceFile(state, { path: "old.md" });
+    expect(state.sessionWorkspaceState?.activePreviewId).toBe("file:old.md");
+    expect(state.sessionWorkspaceState?.previews[0]?.content.kind).toBe("loading");
+    state.connectionEpoch += 1;
+    const current = getSessionWorkspace(state);
+    await opening;
+    expect(state.sessions.getFile).not.toHaveBeenCalled();
+    expect(current.previews).toEqual([]);
+  });
+
   it("keeps same-path sender files distinct and sends every file operation to its owner", async () => {
     const path = "index.html";
     const owner = "agent:research:report";

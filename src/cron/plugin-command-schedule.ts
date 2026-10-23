@@ -10,7 +10,7 @@ import {
 } from "./plugin-command-schedule.types.js";
 import type { CronStoredJob } from "./types.js";
 
-export const MAX_PLUGIN_COMMAND_SCHEDULE_BYTES = 65_536;
+const MAX_PLUGIN_COMMAND_SCHEDULE_BYTES = 65_536;
 export const MAX_PLUGIN_COMMAND_SCHEDULE_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
 export const MAX_PLUGIN_COMMAND_SCHEDULES_PER_INVOCATION = 4;
 export const MAX_ACTIVE_PLUGIN_COMMAND_SCHEDULES_PER_PARENT = 8;

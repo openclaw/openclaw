@@ -450,14 +450,15 @@ it.each(["chat.history", "chat.startup"] as const)(
         null,
         respond,
       );
-      // Count synchronous history preparation before optional startup icon work resumes.
+      await pending;
       const preparationCopies = cloneSpy.mock.calls.filter(
-        ([value]) => asOptionalRecord(value)?.sessionId === scope.sessionId,
+        ([value]) =>
+          asOptionalRecord(value)?.sessionId === scope.sessionId &&
+          asOptionalRecord(value)?.toolOverrides !== undefined,
       ).length;
       expect(parseSpy.mock.calls.some(([value]) => value.includes(skillsSnapshot.prompt))).toBe(
         false,
       );
-      await pending;
       expect(
         parseSpy.mock.calls.filter(([value]) => value.includes('"sessionId":"history-child"'))
           .length,

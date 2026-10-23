@@ -424,6 +424,7 @@ export type PluginRegistry = {
   services: PluginServiceRegistration[];
   gatewayDiscoveryServices: PluginGatewayDiscoveryServiceRegistration[];
   commands: PluginCommandRegistration[];
+  subagentProfiles: import("./subagent-profile.types.js").RegisteredSubagentProfile[];
   interactiveHandlers: PluginInteractiveHandlerRegistryRegistration[];
   sessionExtensions: Array<
     PluginRegistrationOwner & { extension: PluginSessionExtensionRegistration }
