@@ -57,6 +57,7 @@ describe("createHeartbeatResponseTool", () => {
     });
 
     expect(tool.name).toBe(HEARTBEAT_RESPONSE_TOOL_NAME);
+    expect(result.terminate).toBe(true);
     const details = result.details as HeartbeatResponseDetails;
     expect(details.status).toBe("accepted");
     expect(details.outcome).toBe("no_change");
@@ -67,24 +68,45 @@ describe("createHeartbeatResponseTool", () => {
     ]);
   });
 
-  it("rejects repeated heartbeat responses from the same tool instance", async () => {
+  it("ends repeated heartbeat responses without replacing the first decision", async () => {
     // A heartbeat turn has one final outcome; accepting multiple writes would
     // make notification delivery ambiguous.
     const tool = createHeartbeatResponseTool();
 
-    await tool.execute("call-1", {
+    const first = await tool.execute("call-1", {
       outcome: "no_change",
       notify: false,
       summary: "Nothing needs attention.",
+      scratch: "Keep the original monitor notes.",
     });
 
-    await expect(
-      tool.execute("call-2", {
-        outcome: "no_change",
-        notify: false,
-        summary: "Nothing needs attention.",
-      }),
-    ).rejects.toThrow("heartbeat_respond already accepted");
+    for (const args of [
+      {
+        outcome: "needs_attention",
+        notify: true,
+        summary: "A reworded and contradictory response.",
+        scratch: "Replace the original notes.",
+      },
+      { summary: "Even an invalid duplicate must end the turn." },
+    ]) {
+      const duplicate = await tool.execute("duplicate", args);
+      expect(duplicate.terminate).toBe(true);
+      expect(duplicate.details).toEqual({
+        status: "already_accepted",
+        tool: HEARTBEAT_RESPONSE_TOOL_NAME,
+        message:
+          "The heartbeat response for this turn was already accepted. Do not call heartbeat_respond again; end the turn.",
+      });
+      expect(duplicate.details).not.toHaveProperty("scratch");
+      expect(JSON.stringify(duplicate.content)).toContain("already_accepted");
+    }
+    expect(first.details).toMatchObject({
+      status: "accepted",
+      outcome: "no_change",
+      notify: false,
+      summary: "Nothing needs attention.",
+      scratch: "Keep the original monitor notes.",
+    });
   });
 
   it("captures scratch without echoing future prompt content to the model", async () => {
@@ -120,6 +142,7 @@ describe("createHeartbeatResponseTool", () => {
     });
 
     const details = result.details as HeartbeatResponseDetails;
+    expect(result.terminate).toBe(true);
     expect(details.status).toBe("accepted");
     expect(details.outcome).toBe("needs_attention");
     expect(details.notify).toBe(true);

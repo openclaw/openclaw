@@ -130,6 +130,7 @@ export function handleAgentEnd(
     ctx.state.hadDeterministicSideEffect === true ||
     hasCommittedMessagingToolDeliveryEvidence(ctx.state) ||
     hasAcceptedSessionSpawn(ctx.state.acceptedSessionSpawns) ||
+    ctx.state.heartbeatToolResponse !== undefined ||
     (ctx.state.successfulCronAdds ?? 0) > 0;
   const deferredMediaUrls = ctx.state.deferredBlockReplies.flatMap(
     (payload) => payload.mediaUrls ?? [],

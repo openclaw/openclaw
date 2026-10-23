@@ -9,6 +9,7 @@ import {
   normalizeOptionalString as normalizeRunId,
 } from "@openclaw/normalization-core/string-coerce";
 import { REPEATED_TOOL_ERROR_MESSAGE } from "../../packages/agent-core/src/errors.js";
+import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../auto-reply/heartbeat-tool-response.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
 import type { SessionState, ToolCallRecord } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -432,7 +433,12 @@ export function observeRepeatedToolError(
     return undefined;
   }
   const actionKey = hashToolCall(toolCall.name, args);
-  const signature = `${actionKey}\0${outcome.resultHash}`;
+  // A heartbeat response is one decision, even when retries reword arguments or
+  // fail different validation checks before the tool can execute.
+  const signature =
+    toolCall.name === HEARTBEAT_RESPONSE_TOOL_NAME
+      ? HEARTBEAT_RESPONSE_TOOL_NAME
+      : `${actionKey}\0${outcome.resultHash}`;
   const count =
     state.repeatedToolError?.signature === signature ? state.repeatedToolError.count + 1 : 1;
   state.repeatedToolError = { signature, count };
