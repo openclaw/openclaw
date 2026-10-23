@@ -184,9 +184,13 @@ function projectSessionTranscriptCorpusEntries(
   // Current metadata can lose a captured owner, but cannot establish ownership of
   // transcript bytes that predate provenance capture. Use each window's recorded facts.
   const pluginOwnersBySessionId = new Map<string, string>();
+  const previousSessionIdsBySessionId = new Map<string, string>();
   for (const instance of ownershipInstances) {
     if (instance.provenanceKnown && instance.entry.pluginOwnerId) {
       pluginOwnersBySessionId.set(instance.sessionId, instance.entry.pluginOwnerId);
+    }
+    if (instance.entry.previousSessionId) {
+      previousSessionIdsBySessionId.set(instance.sessionId, instance.entry.previousSessionId);
     }
   }
   const archivedIdentitiesByName = new Map(
@@ -212,6 +216,7 @@ function projectSessionTranscriptCorpusEntries(
     const classification = classifySessionEntry(sessionKey, entry, cronGeneratedSessionKeys);
     const transcriptKey = artifactKind === "active-session" ? sessionKey.trim() : sessionKey;
     const pluginOwnerId = pluginOwnersBySessionId.get(sessionId);
+    const previousSessionId = previousSessionIdsBySessionId.get(sessionId);
     const contentRevision = includeContentRevision
       ? sqliteContentRevision({
           agentId,
@@ -232,6 +237,7 @@ function projectSessionTranscriptCorpusEntries(
       storePath,
       ...(updatedAtMs !== undefined ? { updatedAtMs } : {}),
       ...(transcriptKey ? { sessionKey: transcriptKey } : {}),
+      ...(previousSessionId ? { previousSessionId } : {}),
       ...(pluginOwnerId ? { pluginOwnerId } : {}),
       ...(classification.generatedByDreamingNarrative
         ? { generatedByDreamingNarrative: true }

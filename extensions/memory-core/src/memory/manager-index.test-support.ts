@@ -69,6 +69,8 @@ type SessionTranscript = {
   }>;
   sessionId: string;
   sessionKey?: string;
+  /** Session id this transcript rolled over from under the same key. */
+  previousSessionId?: string;
 };
 
 const { providerState, resetProviderState } = vi.hoisted(() => {
@@ -424,7 +426,11 @@ export function createManagerIndexFixture(deps: {
     await fs.mkdir(sessionsDir, { recursive: true });
     await upsertSessionEntry({
       ...target,
-      entry: { sessionId: params.sessionId, updatedAt },
+      entry: {
+        sessionId: params.sessionId,
+        updatedAt,
+        ...(params.previousSessionId ? { previousSessionId: params.previousSessionId } : {}),
+      },
     });
     for (const message of params.messages) {
       await appendSessionTranscriptMessageByIdentity({

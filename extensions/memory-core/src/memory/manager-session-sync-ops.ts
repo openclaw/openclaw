@@ -84,11 +84,15 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
   protected async listSessionCorpusEntries(
     targets?: Pick<MemorySyncParams, "sessions" | "archiveFiles">,
   ): Promise<SessionTranscriptCorpusEntry[]> {
-    let entries = await listSessionTranscriptCorpusEntriesForAgent(this.agentId, {
+    const corpusEntries = await listSessionTranscriptCorpusEntriesForAgent(this.agentId, {
       config: this.cfg,
       includeContentRevision: false,
+      // Daily/idle resets rotate the session id behind a key; the previous
+      // transcript stays retained in SQLite and must remain searchable.
+      includeRetainedSqlite: true,
       readOnly: this.database.readOnly,
     });
+    let entries = selectRetainedSessionLineage(corpusEntries);
     entries = entries.filter((entry) => {
       const archivedSessionKey =
         entry.artifactKind === "archive-artifact" ? entry.sessionKey : undefined;
@@ -649,4 +653,35 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     }
     return params?.reason !== "session-start" && params?.reason !== "watch" && this.sessionsDirty;
   }
+}
+
+// SQLite retains transcripts both for rolled-over sessions and for deleted
+// sessions awaiting cleanup. Only the predecessors of a live session belong to
+// the search corpus; a deleted session must still drop out of the index.
+// A retained transcript shares its session key, and therefore `sessionFile`,
+// with the current one, and the sync pipeline addresses SQLite transcripts by
+// that string, so each retained transcript gets its own address. Transcript
+// reads still use the entry's sessionKey, sessionId, and storePath.
+function selectRetainedSessionLineage(
+  entries: readonly SessionTranscriptCorpusEntry[],
+): SessionTranscriptCorpusEntry[] {
+  const previousBySessionId = new Map(
+    entries.map((entry) => [entry.sessionId, entry.previousSessionId] as const),
+  );
+  const lineage = new Set<string>();
+  for (const entry of entries) {
+    let previous = entry.artifactKind === "active-session" ? entry.previousSessionId : undefined;
+    while (previous && !lineage.has(previous)) {
+      lineage.add(previous);
+      previous = previousBySessionId.get(previous);
+    }
+  }
+  return entries.flatMap((entry) => {
+    if (entry.artifactKind !== "retained-session") {
+      return [entry];
+    }
+    return lineage.has(entry.sessionId)
+      ? [{ ...entry, sessionFile: `${entry.sessionFile}#${entry.sessionId}` }]
+      : [];
+  });
 }
