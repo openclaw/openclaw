@@ -571,16 +571,17 @@ export const scenes: Scene[] = [
       const picker = page.locator(".chat-controls__model-picker");
       await picker.waitFor();
       await picker.locator("[data-chat-model-more-toggle]").click();
-      await picker.locator("[data-chat-model-window]").evaluate((list) => {
-        list.scrollTop = 0;
-      });
+      const list = picker.locator("[data-chat-model-window]");
       await expect
-        .poll(() =>
-          picker
-            .locator('[data-chat-model-option][aria-selected="true"]')
-            .getAttribute("aria-setsize"),
-        )
-        .toBe("41");
+        .poll(() => list.evaluate((element) => element.scrollHeight > element.clientHeight))
+        .toBe(true);
+      await list.evaluate((element) => {
+        element.scrollTop = 0;
+      });
+      await picker
+        .locator('[data-chat-model-option][aria-selected="true"]')
+        .first()
+        .waitFor({ state: "visible" });
     },
   },
   {
