@@ -202,7 +202,9 @@ Thinking, speed, and context-window changes stay synchronized across panes showi
 While an agent works, completed commentary or preambles appear inline in the
 conversation when the model and runtime provide them. Narration keeps its
 formatting and position alongside tool activity; the working indicator remains
-a separate status for execution, startup, or approval. **Keep commentary** in
+a separate status for execution, startup, or approval. After a session is idle,
+a new run starts its own Working timer, including when it starts outside the
+Dashboard; earlier tool activity remains in the conversation. **Keep commentary** in
 the chat view menu controls whether commentary stays visible after the run,
 not whether the active run’s narration survives a history refresh. Completed
 dashboard turns collapse their narration and tool activity under **Worked for …**

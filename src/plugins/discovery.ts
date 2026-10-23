@@ -80,10 +80,7 @@ const SCANNED_DIRECTORY_IGNORE_NAMES = new Set([
 ]);
 type PluginDiscoveryRootScope = "all" | "bundled";
 
-function currentUid(overrideUid?: number | null): number | null {
-  if (overrideUid !== undefined) {
-    return overrideUid;
-  }
+function currentUid(): number | null {
   if (process.platform === "win32" || typeof process.getuid !== "function") {
     return null;
   }
@@ -479,7 +476,7 @@ type PluginDirectoryDiscoveryParams = {
   managedPluginDirs?: Set<string>;
 };
 
-function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | null) {
+function createPluginScanner(env: NodeJS.ProcessEnv) {
   const result: PluginDiscoveryResult = { candidates: [], diagnostics: [] };
   const { candidates, diagnostics } = result;
   // Physical aliases merge only after each acquisition phase independently admits them.
@@ -524,7 +521,7 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
         source: resolved,
         rootDir: resolvedRoot,
         origin: params.origin,
-        uid: currentUid(ownershipUid),
+        uid: currentUid(),
       });
     if (issue) {
       diagnostics.push({
@@ -943,13 +940,9 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
   };
 }
 
-function discoveryPolicy(
-  env: NodeJS.ProcessEnv,
-  ownershipUid: number | null | undefined,
-  bundledRoot?: string,
-) {
+function discoveryPolicy(env: NodeJS.ProcessEnv, bundledRoot?: string) {
   return {
-    ownershipUid: currentUid(ownershipUid),
+    ownershipUid: currentUid(),
     compatibilityHostVersion: resolveCompatibilityHostVersion(env),
     // Configured-path classification depends on the host's bundled tree.
     bundledRoot: bundledRoot ?? resolveBundledPluginsDir(env) ?? "",
@@ -967,7 +960,6 @@ export function discoverConfiguredPluginLoadPaths(params: {
   loadPaths: readonly string[];
   deduplicate?: boolean;
   workspaceDir?: string;
-  ownershipUid?: number | null;
   env?: NodeJS.ProcessEnv;
 }): PluginDiscoveryResult {
   const env = params.env ?? process.env;
@@ -976,13 +968,13 @@ export function discoverConfiguredPluginLoadPaths(params: {
     phase: params.deduplicate ? "configured-published" : "configured-raw",
     loadPaths: params.loadPaths,
     workspaceDir: params.workspaceDir,
-    policy: discoveryPolicy(env, params.ownershipUid),
+    policy: discoveryPolicy(env),
   });
   const cached = cache.get(key);
   if (cached) {
     return cached;
   }
-  const scanner = createPluginScanner(env, params.ownershipUid);
+  const scanner = createPluginScanner(env);
   scanner.discoverConfiguredPaths(params.loadPaths, normalizeOptionalString(params.workspaceDir));
   // Doctor needs raw alias counts and diagnostics, not the full scan's publication pass.
   const result = params.deduplicate ? scanner.finish() : scanner.result;
@@ -993,7 +985,6 @@ export function discoverConfiguredPluginLoadPaths(params: {
 function discoverSharedPluginRoots(params: {
   roots: Pick<PluginSourceRoots, "stock" | "global">;
   installRecords?: Record<string, PluginInstallRecord>;
-  ownershipUid?: number | null;
   env: NodeJS.ProcessEnv;
   rootScope?: PluginDiscoveryRootScope;
 }) {
@@ -1003,13 +994,13 @@ function discoverSharedPluginRoots(params: {
     roots,
     installRecords: Object.entries(params.installRecords ?? {}),
     rootScope: params.rootScope ?? "all",
-    policy: discoveryPolicy(env, params.ownershipUid, roots.stock),
+    policy: discoveryPolicy(env, roots.stock),
   });
   const cached = cache.get(key);
   if (cached) {
     return cached;
   }
-  const scanner = createPluginScanner(env, params.ownershipUid);
+  const scanner = createPluginScanner(env);
   const { result, discoverInDirectory } = scanner;
   const workspaceCandidates = new Set<PluginCandidate>();
   const discoverWorkspacePath = (options: Parameters<typeof scanner.discoverFromPath>[0]) => {
@@ -1117,7 +1108,6 @@ export function discoverOpenClawPlugins(params: {
   workspaceDir?: string;
   extraPaths?: string[];
   installRecords?: Record<string, PluginInstallRecord>;
-  ownershipUid?: number | null;
   env?: NodeJS.ProcessEnv;
   rootScope?: PluginDiscoveryRootScope;
   bundledRoot?: string;
@@ -1138,13 +1128,13 @@ export function discoverOpenClawPlugins(params: {
     // Install order determines which physical alias is retained during discovery.
     installRecords: Object.entries(params.installRecords ?? {}),
     rootScope: params.rootScope ?? "all",
-    policy: discoveryPolicy(env, params.ownershipUid, roots.stock),
+    policy: discoveryPolicy(env, roots.stock),
   });
   const cached = cache.get(key);
   if (cached) {
     return cached;
   }
-  const scanner = createPluginScanner(env, params.ownershipUid);
+  const scanner = createPluginScanner(env);
   const { result, discoverInDirectory } = scanner;
   if (params.rootScope !== "bundled") {
     tracePluginLifecyclePhase(
@@ -1169,7 +1159,6 @@ export function discoverOpenClawPlugins(params: {
   const shared = discoverSharedPluginRoots({
     roots: { stock: roots.stock, global: roots.global },
     installRecords: params.installRecords,
-    ownershipUid: params.ownershipUid,
     env,
     rootScope: params.rootScope,
   });

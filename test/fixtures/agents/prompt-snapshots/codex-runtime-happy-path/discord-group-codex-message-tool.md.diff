@@ -1,5 +1,5 @@
---- telegram-direct-codex-message-tool.md	sha256=09b2fc2d19ea3402e5a5b35502ccc005a0d1a17492258e8c39f875b1721265cb
-+++ discord-group-codex-message-tool.md	sha256=d75091966108645c00a82e63d01fd962947fa7ced37244dc3d513d464b84ff07
+--- telegram-direct-codex-message-tool.md	sha256=3cdb8d4a1c92a6f08eeb7b4de0d8c715bb8507783c5100e41101cea0c46eac28
++++ discord-group-codex-message-tool.md	sha256=a9fcfd1b2ec9615d65642a30d53e41323a8520601fa75183ca07d0e098f8c98d
 @@ -1,1 +1,1 @@
 -# Telegram Direct Codex Message Tool Turn
 +# Discord Group Codex Message Tool Turn
@@ -34,10 +34,10 @@
 +    "chars": 972,
 +    "roughTokens": 243
 @@ -256,2 +256,2 @@
--    "chars": 79668,
--    "roughTokens": 19917
-+    "chars": 80266,
-+    "roughTokens": 20067
+-    "chars": 80968,
+-    "roughTokens": 20242
++    "chars": 81602,
++    "roughTokens": 20401
 @@ -260,2 +260,2 @@
 -    "chars": 3490,
 -    "roughTokens": 873
@@ -49,10 +49,10 @@
 +    "chars": 29106,
 +    "roughTokens": 7277
 @@ -272,2 +272,2 @@
--    "chars": 107171,
--    "roughTokens": 26793
-+    "chars": 109374,
-+    "roughTokens": 27344
+-    "chars": 108471,
+-    "roughTokens": 27118
++    "chars": 110710,
++    "roughTokens": 27678
 @@ -276,2 +276,2 @@
 -    "chars": 879,
 -    "roughTokens": 220
@@ -91,3 +91,9 @@
 @@ -581,1 +587,1 @@
 -Full JSON: `codex-dynamic-tools.telegram-direct.json`
 +Full tool overrides: `codex-dynamic-tools.discord-group.json` (base: `codex-dynamic-tools.telegram-direct.json`)
+@@ -611,1 +617,1 @@
+-    "description": "Send/manage channel messages. Supports actions: react, send. When the current WebChat prompt permits reactions, react with emoji (and optional remove:true) as the agent. Omit channel, target, and messageId. This stays local; use an explicit external channel and messageId for external reactions.",
++    "description": "Send/manage channel messages. Supports actions: broadcast, react, send. When the current WebChat prompt permits reactions, react with emoji (and optional remove:true) as the agent. Omit channel, target, and messageId. This stays local; use an explicit external channel and messageId for external reactions.",
+@@ -619,1 +625,1 @@
+-          "enum": ["react", "send"],
++          "enum": ["broadcast", "react", "send"],

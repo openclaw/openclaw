@@ -45,7 +45,6 @@ import { withAdmittedCliCandidate } from "../embedded-agent-runner/run-entry-cli
 import { resolveRunEntryCliRuntime } from "../embedded-agent-runner/run-entry-runtime.js";
 import { mergeForcedEmbeddedAttemptToolsAllow } from "../embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import type { RunEmbeddedAgentInternalParams } from "../embedded-agent-runner/run/internal-params.js";
-import { resolveWebchatPromptCacheKey } from "../embedded-agent-runner/run/session-boundary-prompt-cache-key.js";
 import { runEmbeddedAgent, type EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
 import { buildAgentInternalEventContext as buildEventContext } from "../internal-events.js";
@@ -79,6 +78,7 @@ import {
   rebaseExecApprovalContinuationPromptRange,
 } from "./attempt-execution.helpers.js";
 import type { AgentAttemptParams } from "./attempt-execution.types.js";
+import { assertSandboxedDelegatedChildNotCli } from "./attempt-sandbox-cli-admission.js";
 import { buildCommandAttemptToolContext } from "./attempt-tool-context.js";
 
 const log = createSubsystemLogger("agents/agent-command");
@@ -210,6 +210,18 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
         sessionRuntimeOverride,
         pinnedHarnessId: resolveSessionPinnedHarnessId(params.sessionEntry),
       });
+  // Sandboxed delegated children never dispatch to host-executed CLI backends;
+  // spawn admission checks once the child model is resolved, and this run-seam
+  // guard owns the invariant for fallback candidates and post-spawn runtime
+  // overrides (the CLI runs on the host while the session is reported sandboxed).
+  assertSandboxedDelegatedChildNotCli({
+    useCliExecution: isCliExecutionProvider,
+    cliExecutionProvider,
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+    sessionAgentId: params.sessionAgentId,
+    sessionEntry: params.sessionEntry,
+  });
   const { completionRetainsRequesterTools, runtimeToolsAllow, disableTools } =
     resolveCompletionToolPolicy({
       run: params,
@@ -308,16 +320,6 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       sessionTarget: params.sessionTarget,
-      // Internal continuations keep the affinity of the persisted webchat conversation.
-      promptCacheKey:
-        params.sessionEntry?.delivery?.kind === "internal" && params.sessionKey
-          ? resolveWebchatPromptCacheKey({
-              agentId: params.sessionAgentId,
-              provider: params.providerOverride,
-              model: params.modelOverride,
-              sessionKey: params.sessionKey,
-            })
-          : undefined,
       chatType: params.sessionEntry?.chatType,
       contextWindow: params.sessionEntry?.contextWindow,
       agentId: params.sessionAgentId,

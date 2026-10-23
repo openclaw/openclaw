@@ -1768,6 +1768,9 @@ const env = {
   ...(values["prep-trace"] ? { OPENCLAW_LOG_LEVEL: "trace" } : {}),
   ...(idleScenario ? { OPENCLAW_BENCH_FIRST_TEXT: "1" } : {}),
   ...(values["broadcast-timing"] ? { OPENCLAW_BENCH_BROADCAST_TIMING: "1" } : {}),
+  ...(process.env.OPENCLAW_BENCH_WORKER_ATTRIBUTION === "1"
+    ? { OPENCLAW_BENCH_WORKER_ATTRIBUTION: "1" }
+    : {}),
   ...(sessionProjectionSource
     ? { OPENCLAW_BENCH_SESSION_PROJECTION_SOURCE: sessionProjectionSource }
     : {}),
@@ -4657,8 +4660,9 @@ try {
   }
   let cronRuns;
   if (stressCronJobId) {
-    await rpc(sender, "cron.update", { id: stressCronJobId, patch: { enabled: false } });
+    // Snapshot completed runs before disabling can cancel an in-flight scheduled turn.
     const history = await rpc(sender, "cron.runs", { id: stressCronJobId, limit: 200 });
+    await rpc(sender, "cron.update", { id: stressCronJobId, patch: { enabled: false } });
     if (
       !isRecord(history) ||
       !Array.isArray(history.entries) ||
@@ -4851,6 +4855,7 @@ try {
     pollSeed: values["poll-seed"] ?? null,
     diagnostics: values.diagnostics,
     broadcastTiming: values["broadcast-timing"],
+    workerAttribution: process.env.OPENCLAW_BENCH_WORKER_ATTRIBUTION === "1",
     sessionProjectionSource,
     transportCounts: values["transport-counts"],
     compressed: proxyViewers,

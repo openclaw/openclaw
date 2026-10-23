@@ -5,6 +5,7 @@ import type {
   PortalListResult,
   PortalSummary,
 } from "@openclaw/gateway-protocol";
+import { createComponent, lazy, Loading } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -14,7 +15,10 @@ import { createApplicationContextProvider } from "../../test-helpers/application
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { createApplicationGateway } from "../../test-helpers/solid-application-context.tsx";
+import {
+  createApplicationGateway,
+  createSolidApplicationContextProvider,
+} from "../../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { PortalReachability } from "./portal-reachability.ts";
 
@@ -353,6 +357,35 @@ it.each([undefined, "pending-machine"])(
     expect(page.textContent).not.toContain("Starting your machine");
   },
 );
+
+it("admits the initial pending environment for a lazy Solid portal", async () => {
+  const environment = machine("pending-machine");
+  const source = createContext(["environments.status", "portal.list"], async (method) =>
+    method === "environments.status" ? environment : portalResponse(),
+  );
+  const application = createSolidApplicationContextProvider(source.context);
+  const LazyPortals = lazy(() => import("./portals-page.tsx"), { export: "PortalsPage" });
+  const mounted = mountSolid(
+    () =>
+      createComponent(Loading, {
+        get children() {
+          return createComponent(LazyPortals, {
+            embedded: true,
+            presented: true,
+            requestedEnvironmentId: environment.id,
+          });
+        },
+      }),
+    { wrapper: application.wrapper },
+  );
+  try {
+    await waitForRequest(source, "environments.status", { environmentId: environment.id });
+    expect(mounted.container.textContent).toContain("Starting your machine");
+    expect(callsTo(source, "portal.list")).toHaveLength(0);
+  } finally {
+    mounted.unmount();
+  }
+});
 
 it("waits for machine startup and an explicitly opened app", async () => {
   usePollingTimers();

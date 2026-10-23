@@ -129,9 +129,7 @@ export async function prepareChatHistorySessionRead({
   if (!selectedSession) {
     return undefined;
   }
-  const { agentId: sessionAgentId, storePath, canonicalKey } = selectedSession;
-  // Capture the selected physical session before transcript ownership crosses a worker boundary.
-  const entry = selectedSession.entry ? structuredClone(selectedSession.entry) : undefined;
+  const { agentId: sessionAgentId, storePath, canonicalKey, entry } = selectedSession;
   const readTranscriptOwner = async () => {
     if (!requestedSessionId) {
       return true;

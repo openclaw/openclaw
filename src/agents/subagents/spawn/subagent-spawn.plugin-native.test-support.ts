@@ -34,6 +34,7 @@ import {
   nativeRequestSource,
   registerNativePluginRewriteCases,
 } from "./subagent-spawn.plugin-native-rewrite.test-support.js";
+import { registerNativePluginProfileCases } from "./subagent-spawn.plugin-profiles.test-support.js";
 import {
   createSpawnOperatorSource,
   recordSpawnBoundaryFinal,
@@ -52,6 +53,7 @@ export function registerNativePluginSpawnCases(options: NativePluginSpawnTestOpt
   } = options;
   registerNativePluginListCases();
   registerNativePluginPolicyCases(options);
+  registerNativePluginProfileCases(options);
   registerNativePluginCommandCases(options);
   registerNativePluginRewriteCases(options);
   it("native plugin facade keeps native IDs, exact overrides, parent custody and requester policy", async () => {

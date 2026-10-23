@@ -1,10 +1,13 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { findFenceSpanAt, scanFenceSpans } from "../../../packages/markdown-core/src/fences.js";
 import {
   consumeLineBreak,
   skipHorizontalWhitespace,
   skipWhitespace,
 } from "../../../packages/tool-call-repair/src/grammar.js";
+import {
+  advanceProtectionScanState,
+  createProtectionScanState,
+} from "../../../packages/tool-call-repair/src/protection-fast-path.js";
 import { findCodeRegions, isInsideCode, isInsideSettledBlockCode } from "./code-regions.js";
 import { isGlmArgPayload } from "./glm-arg-key-payload.js";
 import { createConditionalTextProjector, type TextFilter } from "./text-projection.js";
@@ -451,27 +454,15 @@ export function toolCallXmlTextFilter(
       let scannedThrough = 0;
       let active = false;
       let codeRegions: ReturnType<typeof findCodeRegions> | undefined;
-      let fenceSpans: ReturnType<typeof scanFenceSpans>["spans"] | undefined;
-      // A settled top-level fence is block code without a Markdown parse; container
-      // fences and indented code stay with the canonical ownership resolver.
-      const isInsideSettledFence = (text: string, pos: number) => {
-        fenceSpans ??= scanFenceSpans(text).spans;
-        const span = findFenceSpanAt(fenceSpans, pos);
-        if (!span) {
-          return false;
-        }
-        // CommonMark forbids backticks in a backtick fence's info string, so such a
-        // line is not code for the canonical resolver and must not short-circuit here.
-        const info = span.openLine.slice(span.indent.length + span.marker.length);
-        if (span.marker.startsWith("`") && info.includes("`")) {
-          return false;
-        }
-        return /[\r\n]/.test(text.slice(span.start, pos));
-      };
+      const protectionScan = createProtectionScanState();
+      let heldPrefix: number | undefined;
       return createConditionalTextProjector(
         (text) => {
           const regions = codeRegions;
           codeRegions = undefined;
+          if (heldPrefix !== undefined) {
+            return text.slice(0, heldPrefix);
+          }
           return stripToolCallXmlTagsInternal(
             text,
             options,
@@ -480,15 +471,16 @@ export function toolCallXmlTextFilter(
           );
         },
         ({ text, delta }) => {
+          heldPrefix = undefined;
           if (active) {
             return true;
           }
           const appended = delta ?? text;
+          advanceProtectionScanState(protectionScan, appended);
           if (scannedThrough === text.length - appended.length && !appended.includes("<")) {
             scannedThrough = text.length;
             return false;
           }
-          fenceSpans = undefined;
           let deferredStart: number | undefined;
           for (let start = text.indexOf("<", scannedThrough); start !== -1;) {
             const next = text.indexOf("<", start + 1);
@@ -498,15 +490,23 @@ export function toolCallXmlTextFilter(
             const quickCandidate = TOOL_CALL_QUICK_RE.test(candidate);
             const prefixCandidate = isToolCallTagPrefix(candidate, 0);
             if (quickCandidate || prefixCandidate) {
-              // A complete tag keeps the canonical ownership resolver; only a partial
-              // candidate that cannot be a recognized tag start uses the fence proof,
-              // where container or HTML-block ownership falls back to that resolver.
-              if (prefixCandidate && !quickCandidate && isInsideSettledFence(text, start)) {
-                // Keep the partial candidate in the unscanned tail so a later delta
-                // that completes it still reaches the canonical resolver.
-                deferredStart ??= start;
-                start = next;
-                continue;
+              const onCurrentLine = candidate.length <= protectionScan.partialLine.length;
+              if (next === -1 && onCurrentLine && prefixCandidate && !quickCandidate) {
+                // Only the unfinished candidate line can be classified from the carried tail.
+                const completed = { ...protectionScan };
+                advanceProtectionScanState(completed, "\n");
+                if (!completed.paragraphAmbiguous && !completed.structuralUnknown) {
+                  if (completed.fenceChar) {
+                    deferredStart = start;
+                    start = next;
+                    continue;
+                  }
+                  if (streaming) {
+                    heldPrefix = start;
+                    scannedThrough = start;
+                    return true;
+                  }
+                }
               }
               codeRegions ??= findCodeRegions(text);
               const protectedBlock = isInsideSettledBlockCode(start, text, codeRegions);

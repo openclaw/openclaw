@@ -185,6 +185,10 @@ type OpenClawPluginAgentEventsApi = {
 };
 
 type OpenClawPluginAgentApi = {
+  /** Optional; requires contracts.subagentProfiles and native-subagent-profiles-v1. */
+  registerSubagentProfile?: (
+    profile: import("./subagent-profile.types.js").PluginSubagentProfile,
+  ) => void;
   events: OpenClawPluginAgentEventsApi;
 };
 

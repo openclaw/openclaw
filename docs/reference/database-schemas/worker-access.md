@@ -113,6 +113,9 @@ without inspecting the pathname again. Observer reads rely on that same admitted
 reader instead of capturing and rechecking every candidate file independently.
 Committed writes still invalidate retained entries; config routing, native-open
 replacement detection, and live disclosure authority remain with their owners.
+Session row projections borrow the replica's immutable nested entry facts while
+owning their mutable outer rows. Commit receipts carry pending final delivery in
+the canonical entry postimage, without a second copy.
 
 Session file reads retain workspace authority independently of evictable display
 rows. Committed writers carry their existing full postimages to predicates that
@@ -506,6 +509,12 @@ drain still owns the complete backfill, and a failed or cancelled refresh reject
 its pending exact reads instead of returning stale totals.
 
 ## Transactions and query shape
+
+Personal account mutations, approval operations, auth authorization enrollment,
+and auth usage writes obtain their initial host grant before `BEGIN IMMEDIATE`.
+They reread authoritative rows inside the transaction and retain final commit
+authorization. A busy host therefore cannot hold the writer during initial
+admission; commit admission still retains transaction custody.
 
 Use Kysely for ordinary queries. Raw SQL belongs to schema, migrations,
 bootstrap, or a justified engine-owned primitive. Prepare asynchronous inputs
