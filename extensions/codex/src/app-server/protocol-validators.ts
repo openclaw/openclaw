@@ -59,10 +59,25 @@ type CodexValidator<T> = {
 const schemaBaseUrl = "https://openclaw.invalid/codex/";
 const sharedDefinitionsId = new URL("v2/CodexAppServerProtocolDefinitions.json", schemaBaseUrl)
   .href;
+const codexErrorInfoSchema = sharedDefinitionsSchema.definitions.CodexErrorInfo;
+// The upstream open-enum fallback admits future errors, but must not let a
+// malformed known variant bypass its own constraints through that fallback.
+const knownErrorVariantConstraints = codexErrorInfoSchema.anyOf.flatMap((variant) =>
+  "required" in variant
+    ? [{ anyOf: [{ not: { type: "object", required: variant.required } }, variant] }]
+    : [],
+);
 const schemaContext = {
   [sharedDefinitionsId]: normalizeJsonSchemaForTypeBox({
     ...sharedDefinitionsSchema,
     $id: sharedDefinitionsId,
+    definitions: {
+      ...sharedDefinitionsSchema.definitions,
+      CodexErrorInfo: {
+        ...codexErrorInfoSchema,
+        allOf: knownErrorVariantConstraints,
+      },
+    },
   }),
 };
 
