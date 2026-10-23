@@ -210,7 +210,7 @@ await writeFile(
             : {}),
         },
       },
-      tools: { profile: "minimal", deny: ["*"], codeMode: false },
+      tools: { profile: "minimal", deny: ["*"], codeMode: false, toolSearch: false },
       plugins: { allow: [], slots: { memory: "none" } },
     },
     null,
