@@ -48,7 +48,6 @@ import {
   readTranscriptContextFacts,
   retainTranscriptContextFacts,
 } from "./session-transcript-context-facts.js";
-import type { TranscriptWindowUpdate } from "./session-transcript-index-postgres.js";
 import { resolveDeliveryProvenCanonicalSessionKey } from "./store-entry.js";
 
 const transcriptContextVersionQuery = createSqliteQueryCache((database: EngineConnection) => {
@@ -456,7 +455,9 @@ export function advanceTranscriptMutationAtInTransaction(
     windowUpdatedAt?: number;
     rowTranscript?: SessionRowTranscriptProjection;
     persistActorMutation?: boolean;
-    writeActorMutation?: (update: TranscriptWindowUpdate) => void;
+    writeActorMutation?: (
+      update: import("./session-transcript-index-postgres.js").TranscriptWindowUpdate,
+    ) => void;
   } = {},
 ): void {
   return withSqliteDatabaseWriteScope(database.db, [sqliteSessionIdWriteScope(sessionId)], () => {
@@ -616,7 +617,9 @@ export function touchTranscriptMutationInTransaction(
   windowUpdatedAt?: number,
   rowTranscript?: SessionRowTranscriptProjection,
   persistActorMutation = true,
-  writeActorMutation?: (update: TranscriptWindowUpdate) => void,
+  writeActorMutation?: (
+    update: import("./session-transcript-index-postgres.js").TranscriptWindowUpdate,
+  ) => void,
 ): void {
   advanceTranscriptMutationAtInTransaction(database, sessionId, Date.now(), {
     strictly: true,
