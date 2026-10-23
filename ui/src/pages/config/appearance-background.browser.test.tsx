@@ -17,7 +17,7 @@ import {
   resetProfileAppearancePrefs,
 } from "../../app/server-prefs-profile.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
-import type { SessionBackground } from "../../components/session-background.tsx";
+import type { SessionBackground } from "../../components/session-background-host.tsx";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
