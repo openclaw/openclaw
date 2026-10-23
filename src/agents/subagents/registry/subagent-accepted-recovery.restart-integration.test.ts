@@ -34,6 +34,7 @@ describe("accepted subagent restart recovery", () => {
     await fixture.settle();
     vi.mocked(runSubagentAnnounceFlow).mockResolvedValue("delivered");
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const recoveryStartedAt = Date.now();
     try {
       await restartRegistry(fixture);
       await vi.advanceTimersByTimeAsync(1_000);
@@ -58,7 +59,7 @@ describe("accepted subagent restart recovery", () => {
           }),
         }),
       );
-      expect(Date.now() - startedAt).toBeLessThan(2_000);
+      expect(Date.now() - recoveryStartedAt).toBeLessThan(2_000);
       expect(fixture.dispatchAgent).not.toHaveBeenCalled();
       await testing.sweepOnceForTests();
       await fixture.settle();
