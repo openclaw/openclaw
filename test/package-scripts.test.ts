@@ -290,6 +290,7 @@ describe("package scripts", () => {
   it("keeps required native coverage in Windows CI", () => {
     const requiredTargets = [
       "src/node-host/node-worker-transfer-client.test.ts",
+      "test/scripts/check-deadcode-unused-files.test.ts",
       "test/scripts/format-generated-module.test.ts",
       "test/scripts/direct-run-entrypoints.test.ts",
       "test/scripts/vitest-worker-artifacts.test.ts",
