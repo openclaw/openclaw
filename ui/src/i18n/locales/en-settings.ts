@@ -1602,43 +1602,43 @@ const enSettings = {
     themes: {
       claw: {
         label: "Claw",
-        description: "Chroma family",
+        description: "Coral & teal",
       },
       knot: {
         label: "Knot",
-        description: "Black & red",
+        description: "Monochrome & red",
       },
       dash: {
         label: "Dash",
-        description: "Chocolate blueprint",
+        description: "Cocoa & caramel",
       },
       absolutely: {
         label: "Absolutely",
-        description: "Clay on graphite",
+        description: "Terracotta & warm neutrals",
       },
       tide: {
         label: "Tide",
-        description: "Slate & steel",
+        description: "Steel blue & slate",
       },
       beacon: {
         label: "Beacon",
-        description: "Maximum contrast",
+        description: "High contrast · dark & light",
       },
       phosphor: {
         label: "Phosphor",
-        description: "Green on glass",
+        description: "Green terminal",
       },
       crt: {
         label: "CRT",
-        description: "Console mono",
+        description: "Phosphor white & amber",
       },
       manuscript: {
         label: "Manuscript",
-        description: "Ink on paper",
+        description: "Lapis & parchment",
       },
       rose: {
         label: "Rosé",
-        description: "Plum & rose",
+        description: "Rose & gold",
       },
       miami: {
         label: "Miami",
@@ -1810,6 +1810,12 @@ const enSettings = {
       importedTheme: "Imported theme",
       import: "Import",
       importedFrom: "Imported from tweakcn: {name}",
+      themePicker: "Theme preview",
+      currentTheme: "Current: {name}",
+      previewingTheme: "Previewing {name} — not saved",
+      applyTheme: "Apply theme",
+      themeKeyboardHint:
+        "Arrow keys browse · Home / End first / last · Enter applies · Esc cancels. Preview stays in this window until you apply it.",
       importHint: "Import a tweakcn theme into this browser-local slot",
       importFromTweakcn: "Import from tweakcn",
       tweakcnInstructions:

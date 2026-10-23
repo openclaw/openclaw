@@ -79,6 +79,8 @@ export function createConfigPagePreferences(context: ApplicationContext, invalid
       return {
         onAppearanceChange: apply,
         theme: settings().theme,
+        themePreview: context.theme.previewTheme,
+        setThemePreview: (theme: ThemeName | null) => context.theme.setPreview(theme),
         themeOverridden: themePref.overridden,
         themeProvenance: themePref.provenance,
         themeResetValue: themePref.resetValue ?? UI_APPEARANCE_DEFAULTS.theme,

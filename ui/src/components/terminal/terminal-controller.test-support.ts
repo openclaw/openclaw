@@ -3,7 +3,7 @@ import { vi } from "vitest";
 import { terminalFontFamily } from "../../app/terminal-font.ts";
 
 export function createTerminalController(dispose: () => void = vi.fn()) {
-  const wasmTerm = {};
+  const wasmTerm = { setThemeColors: vi.fn() };
   const renderer = {
     setTheme: vi.fn(),
     remeasureFont: vi.fn(),

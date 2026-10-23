@@ -337,13 +337,12 @@ it("resets the fontUi profile override when its picker sentinel is selected", as
 
 it("uses the committed snapshot for both display and reset while the form draft differs", async () => {
   const committedConfig = { ui: { prefs: { theme: "claw" } } };
-  const draftConfig = { ui: { prefs: { theme: "knot" } } };
   const runtimeConfig = {
     state: {
       connected: true,
       configSnapshot: { config: committedConfig },
       configSchema: { type: "object", properties: {} },
-      configForm: draftConfig,
+      configForm: { ui: { prefs: { theme: "knot" } } },
       configFormOriginal: committedConfig,
       configFormDirty: true,
     },
@@ -372,7 +371,8 @@ it("uses the committed snapshot for both display and reset while the form draft 
   expect(themeSection?.textContent).not.toContain("Default: Knot");
   expect(themeSection?.textContent).not.toContain("Stored in this browser only");
 
-  themeSection?.querySelector<HTMLButtonElement>(".settings-theme-card--claw")?.click();
+  themeSection.querySelector<HTMLInputElement>('[value="claw"]')?.click();
+  themeSection.querySelector<HTMLButtonElement>(".settings-theme-preview .primary")?.click();
 
   expect(changedServerUiPrefs(beforeReset, loadSettings())).toEqual({ theme: null });
 });

@@ -1,6 +1,10 @@
 import { asNullableRecord as readThemeRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import {
+  THEME_TERMINAL_COLOR_TOKENS,
+  type ThemeTerminalColorToken,
+} from "../../../packages/gateway-protocol/src/theme.ts";
 
 export const THEME_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const CUSTOM_THEME_STYLE_ID = "openclaw-custom-theme";
@@ -77,7 +81,8 @@ const MODE_TOKEN_ORDER = [
 ] as const;
 
 type ModeTokenName = (typeof MODE_TOKEN_ORDER)[number];
-type ThemeTokenMap = Record<ModeTokenName, string>;
+type ThemeTokenMap = Record<ModeTokenName, string> &
+  Partial<Record<ThemeTerminalColorToken, string>>;
 
 export type ImportedCustomTheme = {
   sourceUrl: string;
@@ -124,13 +129,18 @@ function normalizeStoredTokenMap(value: Record<string, unknown> | undefined): Th
   if (!value) {
     return null;
   }
-  const entries: Array<[ModeTokenName, string]> = [];
+  const entries: Array<[ModeTokenName | ThemeTerminalColorToken, string]> = [];
   for (const key of MODE_TOKEN_ORDER) {
     const normalized =
       key === "font-body" || key === "font-display" || key === "mono"
         ? requireSafeFontFamilyValue(value[key], key)
         : requireSafeCssValue(value[key], key);
     entries.push([key, normalized]);
+  }
+  for (const [, key] of THEME_TERMINAL_COLOR_TOKENS) {
+    if (value[key] !== undefined) {
+      entries.push([key, requireSafeCssValue(value[key], key)]);
+    }
   }
   // The ordered token list visits every required key above.
   return Object.fromEntries(entries) as ThemeTokenMap;
@@ -182,7 +192,9 @@ function buildCustomThemeStyles(theme: Pick<ImportedCustomTheme, "light" | "dark
     throw new Error("Stored custom theme is missing required tokens.");
   }
   const renderDeclarations = (modeTokens: ThemeTokenMap) =>
-    MODE_TOKEN_ORDER.map((key) => `  --${key}: ${modeTokens[key]};`).join("\n");
+    Object.entries(modeTokens)
+      .map(([key, value]) => `  --${key}: ${value};`)
+      .join("\n");
   return [
     `:root[data-theme="custom"] {`,
     renderDeclarations(dark),

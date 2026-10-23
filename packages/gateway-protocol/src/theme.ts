@@ -39,6 +39,26 @@ export const THEME_COLOR_KEYS = [
   "ring",
 ] as const;
 export const THEME_FONT_KEYS = ["font-sans", "font-mono"] as const;
+/** Optional ANSI ink colors; missing tokens retain the terminal's mode-specific defaults. */
+export const THEME_TERMINAL_COLOR_TOKENS = [
+  ["black", "terminal-black"],
+  ["red", "terminal-red"],
+  ["green", "terminal-green"],
+  ["yellow", "terminal-yellow"],
+  ["blue", "terminal-blue"],
+  ["magenta", "terminal-magenta"],
+  ["cyan", "terminal-cyan"],
+  ["white", "terminal-white"],
+  ["brightBlack", "terminal-bright-black"],
+  ["brightRed", "terminal-bright-red"],
+  ["brightGreen", "terminal-bright-green"],
+  ["brightYellow", "terminal-bright-yellow"],
+  ["brightBlue", "terminal-bright-blue"],
+  ["brightMagenta", "terminal-bright-magenta"],
+  ["brightCyan", "terminal-bright-cyan"],
+  ["brightWhite", "terminal-bright-white"],
+] as const;
+export type ThemeTerminalColorToken = (typeof THEME_TERMINAL_COLOR_TOKENS)[number][1];
 export const THEME_MASCOT_VALUES = ["claw", "none"] as const;
 export type ThemeMascot = (typeof THEME_MASCOT_VALUES)[number];
 export const THEME_BRAND_ICON_IDS = ["claw", "mark"] as const;
@@ -64,7 +84,7 @@ export const THEME_DESCRIPTION_MAX_LENGTH = 320;
 export const THEME_TOKEN_MAX_LENGTH = 120;
 
 export type ThemePalette = Record<(typeof THEME_COLOR_KEYS)[number], string> &
-  Partial<Record<(typeof THEME_FONT_KEYS)[number], string>>;
+  Partial<Record<(typeof THEME_FONT_KEYS)[number] | ThemeTerminalColorToken, string>>;
 export type ThemeDefinition = SchemaContract<Static<typeof ThemeDefinitionSchema>>;
 export type ThemeArtwork = {
   icons?: Record<string, { url: string }>;
@@ -330,13 +350,22 @@ function requireColor(value: unknown, label: string): string {
 
 function normalizePalette(value: unknown, mode: ThemeColorMode): ThemePalette {
   const palette = requireRecord(value, `theme.${mode}`);
-  requireKeys(palette, [...THEME_COLOR_KEYS, ...THEME_FONT_KEYS], `theme.${mode}`);
+  requireKeys(
+    palette,
+    [...THEME_COLOR_KEYS, ...THEME_FONT_KEYS, ...THEME_TERMINAL_COLOR_TOKENS.map(([, key]) => key)],
+    `theme.${mode}`,
+  );
   const entries = THEME_COLOR_KEYS.map((key) => [
     key,
     requireColor(palette[key], `theme.${mode}.${key}`),
   ]);
   // SAFETY: every required color key is emitted exactly once, after validating its value.
   const result = Object.fromEntries(entries) as ThemePalette;
+  for (const [, key] of THEME_TERMINAL_COLOR_TOKENS) {
+    if (palette[key] !== undefined) {
+      result[key] = requireColor(palette[key], `theme.${mode}.${key}`);
+    }
+  }
   for (const key of THEME_FONT_KEYS) {
     if (palette[key] === undefined) {
       continue;

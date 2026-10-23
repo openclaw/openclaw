@@ -54,7 +54,7 @@ describe("ConfigPage model catalog lifecycle", () => {
       publishCatalog(first.promise);
       const grid = expectDefined(view.page.querySelector(".settings-theme-grid"), "theme grid");
       const builtin = expectDefined(
-        grid.querySelector<HTMLButtonElement>('[data-theme-id="claw"]'),
+        grid.querySelector<HTMLInputElement>('input[value="claw"]'),
         "built-in theme control",
       );
       await waitForSolid(() => expect(builtin.disabled).toBe(false));
@@ -89,10 +89,10 @@ describe("ConfigPage model catalog lifecycle", () => {
       publishConfigSource(context.theme);
       second.resolve(recovered);
       await waitForSolid(() =>
-        expect(grid.querySelector('[data-theme-id="synthetic/nebula"]')).not.toBeNull(),
+        expect(grid.querySelector('input[value="synthetic/nebula"]')).not.toBeNull(),
       );
       expect(view.page.querySelector(".settings-theme-grid")).toBe(grid);
-      expect(grid.querySelector('[data-theme-id="claw"]')).toBe(builtin);
+      expect(grid.querySelector('input[value="claw"]')).toBe(builtin);
       await waitForSolid(() =>
         expect(view.page.textContent).not.toContain("Theme catalog unavailable"),
       );
@@ -135,7 +135,7 @@ describe("ConfigPage model catalog lifecycle", () => {
       publishConfigSource(context.theme);
       second.resolve(current);
       await waitForSolid(() =>
-        expect(view.page.querySelector('[data-theme-id="synthetic/current"]')).not.toBeNull(),
+        expect(view.page.querySelector('input[value="synthetic/current"]')).not.toBeNull(),
       );
       first.resolve({
         themes: [
@@ -152,8 +152,8 @@ describe("ConfigPage model catalog lifecycle", () => {
       });
       await first.promise;
       flush();
-      expect(view.page.querySelector('[data-theme-id="synthetic/retired"]')).toBeNull();
-      expect(view.page.querySelector('[data-theme-id="synthetic/current"]')).not.toBeNull();
+      expect(view.page.querySelector('input[value="synthetic/retired"]')).toBeNull();
+      expect(view.page.querySelector('input[value="synthetic/current"]')).not.toBeNull();
     });
 
     it("recovers plugin discovery without replacing the section or its manage link", async () => {

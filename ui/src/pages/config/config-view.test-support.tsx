@@ -24,6 +24,8 @@ function createViewContext() {
   const theme: ApplicationTheme = {
     branding: resolveThemeBranding(undefined),
     settings: loadSettings(),
+    previewTheme: null,
+    setPreview: () => undefined,
     mode: "system",
     resolvedMode: "light",
     appliedPalette: null,
@@ -104,6 +106,8 @@ export const baseProps = () => ({
   onRawDiscard: vi.fn(),
   onSubsectionChange: vi.fn(),
   theme: "claw" as ThemeName,
+  themePreview: null as ThemeName | null,
+  setThemePreview: vi.fn(),
   themeOverridden: false,
   themeProvenance: "default" as const,
   themeResetValue: "claw" as ThemeName,

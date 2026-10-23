@@ -214,7 +214,7 @@ patchedDependencies:
   '@novnc/novnc@1.7.0': bfde0e1bda172da3525f9f5014d85ad28073325b74f09609084598a65d2f412d
   baileys@7.0.0-rc14: c3c4601486630c689ffd1a0e7a34f4b8cf8e7231e41c312ad33afdf4487d8ded
   chrome-devtools-mcp@1.10.1: d31d6e7e187ea9fd4dad87ed3ad08073c77ffcfddd52bc4761b39a2dfce0ac1e
-  ghostty-web@0.4.0: d4c6598b6840564dac4a469f3aa9b8df24fe6eab48a6744302707017e095a524
+  ghostty-web@0.4.0: 2bfa7ab0ec4948f4300a9360b04f34a98d9eda0acf61f164069a3a2648656bda
   matrix-js-sdk@43.0.0: c3ad7f3afbd9ded4643fbfa31f5862d48d4e05d198cb438efbb4fcdaa845b0cc
   vitest@5.0.3: b9cf06b8bd5da1ffe896837133366083382a1bbe0fb5b39274ebde46d060d53d
 
@@ -3112,7 +3112,7 @@ importers:
         version: 3.4.17
       ghostty-web:
         specifier: 0.4.0
-        version: 0.4.0(patch_hash=d4c6598b6840564dac4a469f3aa9b8df24fe6eab48a6744302707017e095a524)
+        version: 0.4.0(patch_hash=2bfa7ab0ec4948f4300a9360b04f34a98d9eda0acf61f164069a3a2648656bda)
       highlight.js:
         specifier: 11.12.0
         version: 11.12.0
@@ -13430,7 +13430,7 @@ snapshots:
 
   '@openclaw/libterminal@0.3.9':
     dependencies:
-      ghostty-web: 0.4.0(patch_hash=d4c6598b6840564dac4a469f3aa9b8df24fe6eab48a6744302707017e095a524)
+      ghostty-web: 0.4.0(patch_hash=2bfa7ab0ec4948f4300a9360b04f34a98d9eda0acf61f164069a3a2648656bda)
 
   '@openclaw/proc-safe-darwin-arm64@0.4.2':
     optional: true
@@ -16634,7 +16634,7 @@ snapshots:
     dependencies:
       resolve-pkg-maps: 1.0.0
 
-  ghostty-web@0.4.0(patch_hash=d4c6598b6840564dac4a469f3aa9b8df24fe6eab48a6744302707017e095a524): {}
+  ghostty-web@0.4.0(patch_hash=2bfa7ab0ec4948f4300a9360b04f34a98d9eda0acf61f164069a3a2648656bda): {}
 
   glob-parent@5.1.2:
     dependencies:

@@ -63,6 +63,8 @@ it("samples the inherited palette when a Solid-mounted photo first joins the doc
       background: selectBackgroundSource({ kind: "custom", assetId: "asset-a" }),
     },
     branding: resolveThemeBranding(undefined),
+    previewTheme: null,
+    setPreview: () => undefined,
     mode: "dark",
     resolvedMode: "dark",
     appliedPalette: null,

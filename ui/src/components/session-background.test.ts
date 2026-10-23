@@ -56,6 +56,8 @@ function fixture(resourceBasePath = "/control") {
   const theme: ApplicationTheme = {
     settings,
     branding: resolveThemeBranding(undefined),
+    previewTheme: null,
+    setPreview: () => undefined,
     mode: "dark",
     resolvedMode: "dark",
     appliedPalette: null,

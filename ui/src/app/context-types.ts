@@ -44,6 +44,8 @@ export type ApplicationTheme = {
   readonly catalog?: ThemeCatalogSnapshot;
   retryCatalog?: () => void;
   readonly settings: UiPreferences;
+  readonly previewTheme: ThemeName | null;
+  setPreview: (theme: ThemeName | null) => void;
   readonly mode: ThemeMode;
   readonly resolvedMode: "dark" | "light";
   readonly appliedPalette: ApplicationThemePalette | null;

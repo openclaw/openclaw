@@ -120,3 +120,49 @@ The plugin package owner bundles patched runtime dependencies so installed
 WhatsApp plugins retain the adapter. Remove this patch and its registration
 when an upstream Baileys version accepts the current decoder and passes the
 same voice-note regression.
+
+## ghostty-web native theme updates
+
+`ghostty-web@0.4.0` retains the existing successful-copy notification and
+listener-disposal repairs and adds an approved native theme-color setter.
+The UI updates Ghostty's color owner directly instead of injecting local OSC
+commands into the PTY parser. Indexed cells and scrollback follow new defaults;
+fragmented output, explicit RGB colors, cursor position, terminal identity,
+and application overrides on unrelated preference publications are preserved.
+OSC 104/110/111 reset to the active theme rather than creation-time defaults.
+The canvas paints resolved RGB backgrounds, including literal black instead of
+treating zero RGB as an unpainted default.
+
+The source is `coder/ghostty-web` tag `v0.4.0` at
+`9e4e126d89ac3537d2b2ebec075849851566de9f`, with Ghostty submodule
+`5714ed07a1012573261b7b7e3ed2add9c1504496` and Zig 0.15.2. The generated package
+includes `dist/OPENCLAW_WASM_PALETTE.md`, the native source patch, and the
+TypeScript/build-config source patch with exact rebuild instructions. Both
+runtime formats embed the rebuilt WASM. The original standalone WASM exports
+remain unchanged; OpenClaw uses the default embedded loader. Original upstream
+license notices remain intact.
+
+The declaration generator emits modular declarations with explicit relative
+`.js` specifiers for NodeNext. The pinned upstream declaration-rollup tool fails
+to follow `Promise`; declarations are generated rather than handwritten. pnpm
+preserves 18 existing CRLF context lines in `index.d.ts` and adds one final LF
+to `types.d.ts.map`. Normalized declaration contents match generated outputs;
+runtime and native bytes match exactly.
+
+The patch SHA-256 is
+`2bfa7ab0ec4948f4300a9360b04f34a98d9eda0acf61f164069a3a2648656bda`.
+
+| Target | Patched SHA-256 |
+| --- | --- |
+| `dist/ghostty-web.js` | `972aebd1ffcad646fe4fd35177fb73aa284ddf67952f55638f6b059a6f2cc8e9` |
+| `dist/ghostty-web.umd.cjs` | `85c85fde01f1be226ff8d3136abd077876363a969608b5c2c6c5b8512f4cdcb9` |
+| Embedded WASM, both formats | `c4fe68c8a89b044500985210122b09ee42b5dcd2130b090ae69378d7553250dc` |
+
+A fresh-store `pnpm install --frozen-lockfile` must reproduce both runtime
+hashes and the bundled rebuild sources. Remove this repair and its registration
+when an upstream release provides equivalent native default-color mutation and
+passes `terminal-native-palette.node.test.ts` and the full
+`terminal-runtime.e2e.test.ts` suite, including first-open and live theme reload,
+fragmented CSI/OSC, reset baselines, all indexed colors, scrollback, true-color
+preservation, clipboard success/failure, and listener cleanup. Retain any older
+clipboard/disposal hunks until those upstream contracts pass too.

@@ -27,7 +27,7 @@ import {
 import { serverUiPrefsOutbox as outbox } from "./server-prefs.ts";
 import type { UiSettings } from "./settings-contract.ts";
 import { loadSettings, patchSettings } from "./settings.ts";
-import type { ThemeName } from "./theme.ts";
+import { themeSelectionDesignDefaults, type ThemeName } from "./theme.ts";
 import { invalidateUserPreferences } from "./user-prefs-cache.ts";
 
 /** Transport failures stay attached to the exact pending intent, never a newer edit. */
@@ -225,7 +225,8 @@ export function selectThemeSettings(
   theme: ThemeName,
   patch: Pick<Partial<UiSettings>, "customTheme"> = {},
 ): UiSettings {
-  if (theme === loadSettings().theme) {
+  const currentTheme = loadSettings().theme;
+  if (theme === currentTheme) {
     return patchSettings({ ...patch, theme });
   }
   // Clear even unresolved profile values: a missing boot mirror is not evidence
@@ -238,8 +239,6 @@ export function selectThemeSettings(
   return patchSettings({
     ...patch,
     theme,
-    fontUi: undefined,
-    fontChat: undefined,
-    accent: "theme",
+    ...themeSelectionDesignDefaults(currentTheme, theme),
   });
 }

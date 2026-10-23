@@ -19,7 +19,13 @@ import {
 import { syncThemeBackgroundArtwork } from "./theme-background-artwork.ts";
 import { currentThemeBranding, setCurrentThemeBranding } from "./theme-branding.ts";
 import type { CatalogTheme, createThemeCatalog, ThemeCatalogSnapshot } from "./theme-catalog.ts";
-import { resolveTheme, syncThemePaletteStylesheet, type ThemeMode } from "./theme.ts";
+import {
+  resolveTheme,
+  syncThemePaletteStylesheet,
+  themeSelectionDesignDefaults,
+  type ThemeMode,
+  type ThemeName,
+} from "./theme.ts";
 import {
   applyChatFontSmoothing,
   applyTypefaceOverrides,
@@ -96,6 +102,18 @@ export function createApplicationTheme(
   const { token: _token, ...initialPreferences } = initialSettings;
   let settings: UiPreferences = initialPreferences;
   let appliedPalette: ApplicationThemePalette | null = null;
+  let previewTheme: ThemeName | null = null;
+  let previewScope:
+    | { url: string; client: ApplicationGateway["snapshot"]["client"]; profile?: string }
+    | undefined;
+  const presentationSettings = (): UiPreferences =>
+    previewTheme === null
+      ? settings
+      : {
+          ...settings,
+          theme: previewTheme,
+          ...themeSelectionDesignDefaults(settings.theme, previewTheme),
+        };
   let systemThemeCleanup: (() => void) | undefined;
   const listeners = createChangeListeners();
 
@@ -106,22 +124,33 @@ export function createApplicationTheme(
   let catalogLoadError: ThemeCatalogSnapshot | undefined;
   let disposed = false;
   const publish = () => {
+    // A plugin can disappear while its palette is being tried. Restore the
+    // actual preference rather than rendering an unavailable preview as Claw.
+    if (
+      previewTheme?.includes("/") &&
+      catalog &&
+      !catalog.snapshot(previewTheme).themes.some((theme) => theme.id === previewTheme)
+    ) {
+      previewTheme = null;
+      previewScope = undefined;
+    }
     const generation = ++presentationGeneration;
     let preferencesPublished = false;
     const previousBranding = currentThemeBranding();
-    const branding = themeBranding(settings, catalog?.theme(settings.theme));
+    const presentation = presentationSettings();
+    const branding = themeBranding(presentation, catalog?.theme(presentation.theme));
     setCurrentThemeBranding(branding);
-    syncThemePaletteStylesheet(settings.theme, () => {
+    syncThemePaletteStylesheet(presentation.theme, () => {
       // A slower palette cannot overwrite a newer selection or a disposed app.
       if (generation !== presentationGeneration) {
         return;
       }
-      applyThemePresentation(settings, catalog?.theme(settings.theme));
-      const mode = catalog?.theme(settings.theme)?.mode ?? settings.themeMode;
+      applyThemePresentation(presentation, catalog?.theme(presentation.theme));
+      const mode = catalog?.theme(presentation.theme)?.mode ?? presentation.themeMode;
       appliedPalette = {
         revision: generation,
-        theme: settings.theme,
-        resolvedMode: resolveTheme(settings.theme, mode).endsWith("light") ? "light" : "dark",
+        theme: presentation.theme,
+        resolvedMode: resolveTheme(presentation.theme, mode).endsWith("light") ? "light" : "dark",
       };
       // Computed-style consumers need the applied palette, not just the new
       // preference. Synchronous application shares the publication below.
@@ -156,7 +185,7 @@ export function createApplicationTheme(
       catalog ||
       catalogLoading ||
       gateway.snapshot.phase !== "connected" ||
-      (!catalogRequested && !settings.theme.includes("/"))
+      (!catalogRequested && !(previewTheme ?? settings.theme).includes("/"))
     ) {
       return;
     }
@@ -205,6 +234,10 @@ export function createApplicationTheme(
   const refresh = (options?: { notify?: boolean }) => {
     const next = loadUiPreferences(gateway.connection.gatewayUrl);
     const changed = livePreferencesKey(next) !== livePreferencesKey(settings);
+    if (next.theme !== settings.theme) {
+      previewTheme = null;
+      previewScope = undefined;
+    }
     settings = next;
     if (!changed) {
       // Readiness can change without changing the stored preference values.
@@ -236,6 +269,16 @@ export function createApplicationTheme(
       : undefined;
   // Connection changes refresh scoped preferences and the document's theme owner.
   const stopGateway = gateway.subscribe(() => {
+    if (
+      previewScope &&
+      (gateway.connection.gatewayUrl !== previewScope.url ||
+        gateway.snapshot.client !== previewScope.client ||
+        gateway.snapshot.selfUser?.id !== previewScope.profile)
+    ) {
+      previewTheme = null;
+      previewScope = undefined;
+      publish();
+    }
     void loadCatalog();
     if (settings.gatewayUrl !== gateway.connection.gatewayUrl) {
       refresh();
@@ -247,24 +290,45 @@ export function createApplicationTheme(
 
   return {
     get branding() {
-      return themeBranding(settings, catalog?.theme(settings.theme));
+      const presentation = presentationSettings();
+      return themeBranding(presentation, catalog?.theme(presentation.theme));
     },
     get catalog() {
       if (!catalogRequested) {
         catalogRequested = true;
         void loadCatalog();
       }
-      return catalog?.snapshot(settings.theme) ?? catalogLoadError;
+      return catalog?.snapshot(previewTheme ?? settings.theme) ?? catalogLoadError;
     },
     get settings() {
       return settings;
+    },
+    get previewTheme() {
+      return previewTheme;
+    },
+    setPreview(theme) {
+      if (disposed || previewTheme === theme) {
+        return;
+      }
+      previewTheme = theme;
+      void loadCatalog();
+      previewScope =
+        theme === null
+          ? undefined
+          : {
+              url: gateway.connection.gatewayUrl,
+              client: gateway.snapshot.client,
+              profile: gateway.snapshot.selfUser?.id,
+            };
+      publish();
     },
     get mode() {
       return settings.themeMode;
     },
     get resolvedMode() {
-      const mode = catalog?.theme(settings.theme)?.mode ?? settings.themeMode;
-      return resolveTheme(settings.theme, mode).endsWith("light") ? "light" : "dark";
+      const presentation = presentationSettings();
+      const mode = catalog?.theme(presentation.theme)?.mode ?? presentation.themeMode;
+      return resolveTheme(presentation.theme, mode).endsWith("light") ? "light" : "dark";
     },
     get appliedPalette() {
       return appliedPalette;

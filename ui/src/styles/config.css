@@ -189,7 +189,7 @@
 
 .settings-theme-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr));
   gap: 12px;
   width: 100%;
 }
@@ -199,11 +199,13 @@
   display: grid;
   /* minmax(0, 1fr): a plain 1fr floors at the label's min-content width, so a
      long theme name (imported tweakcn labels) overflowed the card's border. */
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: 10px;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  align-content: center;
+  gap: 8px;
+  min-width: 0;
   min-height: 64px;
-  padding: 14px 16px;
+  padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--bg);
@@ -219,12 +221,116 @@
   background: var(--bg-hover);
 }
 
-/* Selection is carried by this skin alone (aria-pressed owns the semantics),
-   so it stays stronger than the hover state at every accent. */
-.settings-theme-card--active {
+.settings-theme-card:focus-within {
+  outline: 3px solid var(--ring);
+  outline-offset: 3px;
+}
+
+/* The existing radio group owns navigation; the window is the preview surface. */
+.settings-theme-grid.settings-segmented {
+  display: grid;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+.settings-theme-grid > .settings-theme-card {
+  display: grid;
+  gap: 8px;
+  min-height: 64px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg);
+  text-align: start;
+}
+
+.settings-theme-grid > .settings-segmented__btn--active {
   border-color: color-mix(in srgb, var(--accent) 60%, transparent);
   background: color-mix(in srgb, var(--accent) 12%, var(--bg-elevated));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.settings-theme-picker {
+  width: 100%;
+}
+
+.settings-theme-preview {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  min-height: 76px;
+  margin-top: 16px;
+}
+
+.settings-theme-preview__copy {
+  display: grid;
+  flex: 1 1 200px;
+  gap: 4px;
+  min-width: 0;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.settings-theme-preview__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.settings-theme-keyboard-hint {
+  margin: 8px 0 0;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.settings-theme-card__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.settings-theme-card__selected {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--accent);
+}
+.settings-theme-card__selected svg {
+  width: 16px;
+  height: 16px;
+}
+
+.settings-theme-card__description {
+  display: block;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: start;
+  overflow-wrap: anywhere;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-theme-card {
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .settings-theme-grid > .settings-theme-card {
+    border: 1px solid CanvasText;
+  }
+  .settings-theme-grid > .settings-segmented__btn--active {
+    outline: 2px solid Highlight;
+    outline-offset: -3px;
+  }
+  .settings-theme-card:focus-within {
+    outline: 3px solid Highlight;
+    outline-offset: 3px;
+  }
 }
 
 .settings-theme-card__icon {
@@ -251,7 +357,7 @@
   white-space: nowrap;
 }
 
-.settings-theme-card--active .settings-theme-card__label {
+.settings-theme-grid > .settings-segmented__btn--active .settings-theme-card__label {
   color: var(--text-strong);
 }
 
@@ -266,9 +372,9 @@
 }
 
 .settings-theme-card__chip {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
+  width: 22px;
+  height: 8px;
+  border-radius: var(--radius-full);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 18%, transparent);
 }
 

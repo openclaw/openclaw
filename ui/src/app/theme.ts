@@ -8,6 +8,7 @@ import {
 } from "../../../packages/gateway-protocol/src/theme-ids.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { inferControlUiPublicAssetPath } from "./public-assets.ts";
+import type { UiPreferences } from "./settings-contract.ts";
 export type ThemeName = ThemeId | "custom";
 export type { ThemeMode };
 type ThemeFamily = Exclude<BuiltinThemeId, "claw" | "knot"> | "openknot" | "custom";
@@ -37,6 +38,14 @@ export function resolveTheme(theme: ThemeName, mode: ThemeMode): ResolvedTheme {
   }
   const family = !isBuiltinThemeId(theme) ? "custom" : theme === "knot" ? "openknot" : theme;
   return resolvedMode === "light" ? `${family}-light` : family;
+}
+
+/** Preview and explicit selection share the same design-reset contract. */
+export function themeSelectionDesignDefaults(
+  current: ThemeName,
+  selected: ThemeName,
+): Partial<Pick<UiPreferences, "fontUi" | "fontChat" | "accent">> {
+  return current === selected ? {} : { fontUi: undefined, fontChat: undefined, accent: "theme" };
 }
 
 /** Publish theme colors only after their stylesheet is available. */

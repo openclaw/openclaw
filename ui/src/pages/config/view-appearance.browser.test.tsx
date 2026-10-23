@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
+import { userEvent } from "vitest/browser";
 import type { SelectPicker } from "../../components/select-picker.ts";
 import { warmJson5 } from "../../lib/json5-runtime.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
@@ -25,9 +26,19 @@ describe("config appearance preferences", () => {
     return container.textContent?.replace(/\s+/g, " ").trim() ?? "";
   }
 
-  function findButtonByText(container: HTMLElement, text: string, exact = true): HTMLButtonElement {
-    const button = Array.from(container.querySelectorAll("button")).find((btn) =>
-      exact ? btn.textContent?.trim() === text : btn.textContent?.includes(text),
+  function findButtonByText(
+    container: HTMLElement,
+    text: string,
+    exact = true,
+  ): HTMLButtonElement | HTMLInputElement {
+    const button = Array.from(
+      container.querySelectorAll<HTMLButtonElement | HTMLInputElement>(
+        'button, input[type="radio"]',
+      ),
+    ).find((btn) =>
+      exact
+        ? (btn.getAttribute("aria-label") ?? btn.textContent?.trim()) === text
+        : btn.textContent?.includes(text),
     );
     if (!button) {
       throw new Error(`Expected button with text "${text}"`);
@@ -36,7 +47,7 @@ describe("config appearance preferences", () => {
   }
 
   function required<T extends Element>(
-    container: HTMLElement,
+    container: Element,
     selector: string,
     constructor: new () => T,
   ): T {
@@ -53,7 +64,10 @@ describe("config appearance preferences", () => {
   }
 
   function pressed(container: HTMLElement, label: string) {
-    return findButtonByText(container, label).getAttribute("aria-pressed");
+    const control = findButtonByText(container, label);
+    return control instanceof HTMLInputElement
+      ? String(control.checked)
+      : control.getAttribute("aria-pressed");
   }
 
   function mediaDevice(deviceId: string, label: string) {
@@ -65,6 +79,34 @@ describe("config appearance preferences", () => {
       selection: null,
     };
   }
+
+  it("previews through the page owner on hover and keyboard navigation, and applies only on Enter", async () => {
+    const { container, props } = renderAppearance();
+    document.body.append(container);
+    onTestFinished(() => {
+      cleanupSolid(container);
+      container.remove();
+    });
+    const tide = findButtonByText(container, "Tide");
+    await userEvent.hover(tide);
+    expect(props.setThemePreview).toHaveBeenCalledWith("tide");
+    expect(props.setTheme).not.toHaveBeenCalled();
+    tide.focus();
+    await userEvent.keyboard("{ArrowRight}");
+    expect(props.setThemePreview).toHaveBeenCalledWith("beacon");
+    await userEvent.keyboard("{Home}");
+    expect(document.activeElement).toBe(findButtonByText(container, "Claw"));
+    await userEvent.keyboard("{End}");
+    expect(document.activeElement).toBe(findButtonByText(container, "Miami"));
+    await userEvent.keyboard("{Enter}");
+    expect(props.setTheme).toHaveBeenCalledExactlyOnceWith("miami");
+    props.themePreview = "tide";
+    renderConfigInto(props, container);
+    tide.focus();
+    await userEvent.keyboard("{Escape}");
+    expect(props.setThemePreview).toHaveBeenLastCalledWith(null);
+    expect(document.activeElement).toBe(tide);
+  });
 
   it("lets config pages grow with their content instead of creating an inner viewport", async () => {
     const { container } = renderAppearance({
@@ -222,6 +264,9 @@ describe("config appearance preferences", () => {
     const importedButton = findButtonByText(container, "Light Green");
     expect(importedButton.disabled).toBe(false);
     importedButton.click();
+    props.themePreview = "custom";
+    renderConfigInto(props, container);
+    findButtonByText(container, "Apply theme").click();
     expect(props.setTheme).toHaveBeenCalledWith("custom");
 
     const replaceButton = findButtonByText(container, "Replace Light Green", false);
@@ -332,6 +377,9 @@ describe("config appearance preferences", () => {
     ).toBe("false");
 
     findButtonByText(container, "Claw").click();
+    props.themePreview = "claw";
+    renderConfigInto(props, container);
+    findButtonByText(container, "Apply theme").click();
     const colorMode = row("Color mode")?.querySelector<HTMLInputElement>(
       '.settings-segmented__input[value="system"]',
     );
@@ -383,6 +431,9 @@ describe("config appearance preferences", () => {
       chatSendShortcut: "modifier-enter",
     });
     findButtonByText(themeSection, "Claw").click();
+    props.themePreview = "claw";
+    renderConfigInto(props, container);
+    findButtonByText(container, "Apply theme").click();
     themeSection
       .querySelector<HTMLInputElement>('.settings-segmented__input[value="system"]')
       ?.click();
@@ -420,10 +471,13 @@ describe("config appearance preferences", () => {
     expect(themeDescription.textContent).toContain("Stored in this browser only");
     expect(themeDescription.textContent).not.toContain("Synced across your devices");
     expect(
-      themeSection.querySelector(".settings-theme-card--knot")?.getAttribute("aria-pressed"),
-    ).toBe("true");
+      themeSection.querySelector<HTMLInputElement>(".settings-theme-card--knot input")?.checked,
+    ).toBe(true);
 
     findButtonByText(themeSection, "Claw").click();
+    props.themePreview = "claw";
+    renderConfigInto(props, container);
+    findButtonByText(container, "Apply theme").click();
 
     expect(props.setTheme).toHaveBeenCalledWith("claw");
   });

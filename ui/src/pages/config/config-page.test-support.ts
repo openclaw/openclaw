@@ -151,6 +151,18 @@ export function completeConfigContext(context: ApplicationContext): ApplicationC
   if (!context.theme.branding) {
     Object.assign(context.theme, { branding: resolveThemeBranding(undefined) });
   }
+  if (!context.theme.setPreview) {
+    Object.assign(context.theme, {
+      previewTheme: null,
+      setPreview: (theme: ApplicationContext["theme"]["previewTheme"]) => {
+        if (context.theme.previewTheme === theme) {
+          return;
+        }
+        Object.assign(context.theme, { previewTheme: theme });
+        publishConfigSource(context.theme);
+      },
+    });
+  }
   if (!context.theme.settings) {
     Object.defineProperty(context.theme, "settings", { configurable: true, get: loadSettings });
   }

@@ -33,6 +33,21 @@ not delete the browser's collection or saved favicon preference.
 
 ## Select a theme
 
+In **Settings → Appearance**, compact theme choices show names and palette
+swatches. Hover, keyboard focus, or a tap previews the theme throughout the
+current browser window, including its typography and embedded terminal colors.
+The preview does not change saved preferences or other windows. Choose **Apply
+theme** or press **Enter** to commit through the same catalog used by the agent.
+**Cancel**, **Escape**, or leaving Appearance restores the current selection.
+
+With focus in the theme chooser, arrow keys cycle through themes; **Home** and
+**End** jump to the first and last choice. **Space** previews a choice without
+saving it. These bindings do not intercept text fields elsewhere on the page.
+**Color mode** retains its existing light, dark, and system preference behavior.
+Plugin and personal palettes load through the shared catalog; removing a plugin
+while it is being previewed restores the current selection. Keyboard focus and
+selection remain visible in system forced-colors mode.
+
 Ask the agent to list available themes or choose one for you. `list` includes
 the current selection, so selecting a theme usually takes two calls:
 
@@ -93,7 +108,8 @@ personal theme. `apply` defaults to `false`.
 
 A definition requires a name, a short description, and at least one complete
 `light` or `dark` palette. Each palette uses the semantic colors shown below
-and may include `font-sans` and `font-mono`. Use CSS color values such as hex,
+and may include `font-sans` and `font-mono`. Optional terminal colors are described
+in [Embedded terminal colors](#embedded-terminal-colors). Use CSS color values such as hex,
 `rgb()`, `hsl()`, or `oklch()`. Font families describe locally available fonts;
 definitions cannot load external stylesheets or resources.
 
@@ -167,6 +183,26 @@ Names are limited to 80 characters, descriptions to 320 characters, and the
 normalized definition to 4096 UTF-8 bytes. The Gateway validates definitions
 before saving them. A personal theme does not require installing a plugin or
 publishing the definition elsewhere.
+
+## Embedded terminal colors
+
+Personal, plugin, and imported custom palettes can optionally override the
+embedded terminal’s 16 ANSI colors. Inside each `light` or `dark` palette, use
+`terminal-black`, `terminal-red`, `terminal-green`, `terminal-yellow`,
+`terminal-blue`, `terminal-magenta`, `terminal-cyan`, and `terminal-white`, plus
+the corresponding `terminal-bright-black` through `terminal-bright-white` tokens.
+They accept the same color syntax as other palette colors. For example, add
+`"terminal-red": "#f38ba8"` and `"terminal-bright-blue": "#b4befe"` to a dark palette.
+
+Every token is optional. Omitted colors keep OpenClaw’s readable light- or
+dark-mode terminal defaults; removing an override restores that default. Supply
+all 16 to reproduce an upstream terminal palette. Choose light-mode colors
+separately so ANSI output remains legible against a light background. Terminal
+background, foreground, cursor, and selection continue to follow the UI’s
+semantic palette and accent. Existing terminal views repaint indexed output and
+scrollback after theme changes and plugin reloads without restarting their shell.
+Explicit true-color output is not remapped, and cursor position is preserved. This does not recolor external
+terminals, the OpenClaw CLI, or applications that emit explicit true-color values.
 
 ## Plugin themes and hot reload
 

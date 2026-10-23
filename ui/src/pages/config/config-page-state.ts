@@ -193,6 +193,7 @@ export function createConfigPage(
     routeInitialized = true;
     retireCommands();
     if (pageId === "appearance" && nextPageId !== "appearance") {
+      context.theme.setPreview(null);
       customThemeImportOwner.retireImport();
       mediaDeviceOwner.retire();
     }
@@ -634,6 +635,7 @@ export function createConfigPage(
     synchronize();
     return () => {
       commandLifetime.resolve();
+      context.theme.setPreview(null);
       subscriptions.forEach((stop) => stop());
       connected = false;
       customThemeImportOwner.retireImport();

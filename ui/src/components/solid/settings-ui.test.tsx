@@ -124,3 +124,27 @@ it("registers keyed radio refs without untracked reads and retains focused input
   expect(inputRef).toHaveBeenCalledTimes(3);
   expect(warnings).not.toHaveBeenCalledWith(expect.stringContaining("STRICT_READ_UNTRACKED"));
 });
+
+it("supports Home and End in the existing radio navigation without consuming modified keys", () => {
+  const [selected, setSelected] = createSignal("first");
+  const view = render(() => (
+    <SettingsSegmented
+      value={selected()}
+      options={options}
+      onChange={(value) => void setSelected(value)}
+    />
+  ));
+  const first = view.getByRole("radio", { name: "First" });
+  const last = view.getByRole("radio", { name: "Last" });
+  first.focus();
+  fireEvent.keyDown(first, { key: "End", ctrlKey: true });
+  expect(document.activeElement).toBe(first);
+  fireEvent.keyDown(first, { key: "End" });
+  flush();
+  expect(document.activeElement).toBe(last);
+  expect(last).toHaveProperty("checked", true);
+  fireEvent.keyDown(last, { key: "Home" });
+  flush();
+  expect(document.activeElement).toBe(first);
+  expect(first).toHaveProperty("checked", true);
+});

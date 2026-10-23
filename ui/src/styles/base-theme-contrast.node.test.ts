@@ -333,6 +333,16 @@ describe("Control UI theme contrast", () => {
     return { foregroundToken, tint };
   });
   const confirmation = readConfirmButtonPaint(groupedRules);
+  const galleryRules = cssRules(readStyle("config.css"));
+  const galleryInk = readPaint(
+    readRule(galleryRules, ".settings-theme-card__description"),
+    "color",
+  );
+  const galleryFills = [
+    ".settings-theme-card",
+    ".settings-theme-card:hover",
+    ".settings-theme-grid > .settings-segmented__btn--active",
+  ].map((selector) => readPaint(readRule(galleryRules, selector), "background"));
   const bubbles = readBubbleBackgrounds(groupedRules);
   const bubblePaints = (theme: string, tokens: TokenMap) => {
     const light = theme === "light" || theme.endsWith("-light");
@@ -358,6 +368,10 @@ describe("Control UI theme contrast", () => {
       ),
     ),
     "selected controls and session labels: AA": paletteCases(() => controls),
+    "theme choices and preview descriptions: AA; Beacon AAA": paletteCases(
+      (_theme, _tokens, floor) =>
+        [...galleryFills, "var(--bg-elevated)"].map((fill) => [galleryInk, fill, floor] as const),
+    ),
     "filled actions and accent glyphs": paletteCases(() => [
       ["var(--primary-foreground)", "var(--primary)", AA_NORMAL_TEXT_MIN],
       ["var(--primary-foreground)", "var(--primary-hover)", AA_NORMAL_TEXT_MIN],

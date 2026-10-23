@@ -29,6 +29,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { AppearanceBackground } from "./appearance-background.tsx";
+import { AppearanceThemePicker } from "./appearance-theme-picker.tsx";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./route-data.ts";
 import { SessionSources } from "./session-sources.tsx";
 import { SettingsSectionHeader } from "./settings-section-header.tsx";
@@ -92,26 +93,6 @@ const ACCENT_PRESETS = [
   },
 ] as const;
 
-/* Builtin cards preview their real palette (chip colors live in config.css,
-   mirrored from the base.css theme blocks). The custom card only has real
-   colors while active — its chips read the live CSS variables — so it falls
-   back to the download icon otherwise. */
-function renderThemeCardVisual(id: ThemeName, activeTheme: ThemeName) {
-  if ((id === "custom" || id.includes("/")) && activeTheme !== id) {
-    return (
-      <span class="settings-theme-card__icon" aria-hidden="true">
-        <Icon name="download" />
-      </span>
-    );
-  }
-  return (
-    <span class="settings-theme-card__palette" aria-hidden="true">
-      <span class="settings-theme-card__chip settings-theme-card__chip--accent" />
-      <span class="settings-theme-card__chip settings-theme-card__chip--accent-2" />
-      <span class="settings-theme-card__chip settings-theme-card__chip--bg" />
-    </span>
-  );
-}
 export function AppearanceSection(props: ConfigProps) {
   let customThemeImportInput: HTMLInputElement | undefined;
   const [importing, setImporting] = createOptimistic(false, { equals: false });
@@ -176,15 +157,15 @@ export function AppearanceSection(props: ConfigProps) {
               : theme.description,
         }),
       ),
-      {
-        id: "custom",
-        label: props.hasCustomTheme ? importedName() : t("configView.appearance.import"),
-        description: props.hasCustomTheme
-          ? t("configView.appearance.importedFrom", {
-              name: importedName(),
-            })
-          : t("configView.appearance.importHint"),
-      },
+      ...(props.hasCustomTheme
+        ? [
+            {
+              id: "custom" as const,
+              label: importedName(),
+              description: t("configView.appearance.importedFrom", { name: importedName() }),
+            },
+          ]
+        : []),
     ],
   );
   const selectedTheme = createMemo(() =>
@@ -302,46 +283,6 @@ export function AppearanceSection(props: ConfigProps) {
           }}
         </Show>
         <div class="settings-group">
-          <div class="settings-row settings-row--stacked">
-            <div class="settings-theme-grid">
-              <For each={themeOptions()} keyed={(entry) => entry.id}>
-                {(opt) => (
-                  <button
-                    class={[
-                      "settings-theme-card",
-                      `settings-theme-card--${opt().id.includes("/") ? "custom" : opt().id}`,
-                      { "settings-theme-card--active": opt().id === presentedTheme().id },
-                    ]}
-                    aria-pressed={
-                      opt().id === "custom" && !props.hasCustomTheme
-                        ? undefined
-                        : opt().id === presentedTheme().id
-                          ? "true"
-                          : "false"
-                    }
-                    title={opt().description}
-                    data-theme-id={opt().id}
-                    onClick={() => {
-                      if (opt().id === "custom" && !props.hasCustomTheme) {
-                        props.onOpenCustomThemeImport?.();
-                        onSettled(focusImporter);
-                        return;
-                      }
-                      if (
-                        opt().id !== props.theme ||
-                        (opt().id === props.themeResetValue && props.themeOverridden)
-                      ) {
-                        props.setTheme(opt().id);
-                      }
-                    }}
-                  >
-                    {renderThemeCardVisual(opt().id, presentedTheme().id)}
-                    <span class="settings-theme-card__label">{opt().label}</span>
-                  </button>
-                )}
-              </For>
-            </div>
-          </div>
           <SettingsRow
             title={t("common.colorMode")}
             description={
@@ -381,6 +322,20 @@ export function AppearanceSection(props: ConfigProps) {
               />
             }
           />
+          <div class="settings-row settings-row--stacked">
+            <AppearanceThemePicker
+              options={themeOptions()}
+              theme={presentedTheme().id}
+              currentLabel={presentedTheme().label}
+              preview={props.themePreview}
+              onPreview={(theme) => props.setThemePreview(theme)}
+              onApply={(theme) => props.setTheme(theme)}
+              onImport={() => {
+                props.onOpenCustomThemeImport?.();
+                onSettled(focusImporter);
+              }}
+            />
+          </div>
           <div class="settings-row settings-row--stacked">
             {showCustomThemeImport() ? (
               <div class="settings-theme-import">

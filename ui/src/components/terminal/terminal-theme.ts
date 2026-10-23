@@ -2,11 +2,14 @@ import type {
   CreateGhosttyTerminalOptions,
   TerminalDefaultColors,
 } from "@openclaw/libterminal/browser";
+import { THEME_TERMINAL_COLOR_TOKENS } from "../../../../packages/gateway-protocol/src/theme.ts";
 import { resolveThemeColor } from "../../lib/theme-color.ts";
 
 type TerminalTheme = NonNullable<
   NonNullable<CreateGhosttyTerminalOptions["terminalOptions"]>["theme"]
->;
+> &
+  Record<(typeof THEME_TERMINAL_COLOR_TOKENS)[number][0], string> &
+  TerminalDefaultColors;
 
 // ANSI palettes tuned per mode: colors that read on the near-black surface sit
 // at 1.4-2.6:1 on the light surface, so light gets its own darkened set
@@ -64,8 +67,15 @@ export function terminalDynamicColors(): TerminalDefaultColors {
 
 export function terminalTheme(mode: "dark" | "light"): TerminalTheme {
   const colors = terminalDynamicColors();
-  return {
+  const styles = getComputedStyle(document.documentElement);
+  const ansi: Record<(typeof THEME_TERMINAL_COLOR_TOKENS)[number][0], string> = {
     ...(mode === "light" ? LIGHT_ANSI : DARK_ANSI),
+  };
+  for (const [key, token] of THEME_TERMINAL_COLOR_TOKENS) {
+    ansi[key] = resolveThemeColor(styles, `--${token}`) || ansi[key];
+  }
+  return {
+    ...ansi,
     ...colors,
     cursorAccent: colors.background,
     selectionBackground: `${colors.cursor}${mode === "light" ? "4d" : "52"}`,

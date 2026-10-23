@@ -28,6 +28,21 @@ function acceptsImport(definition: unknown) {
 }
 
 describe("portable theme definition", () => {
+  it("accepts optional terminal ANSI colors through the import contract", () => {
+    const definition = createDarkTheme({
+      "terminal-red": "#f38ba8",
+      "terminal-bright-blue": "rgb(137 180 250)",
+    });
+    expect(acceptsImport(definition)).toBe(true);
+    expect(normalizeThemeDefinition(definition).dark).toMatchObject({
+      "terminal-red": "#f38ba8",
+      "terminal-bright-blue": "rgb(137 180 250)",
+    });
+    expect(
+      parseThemeDefinition(createDarkTheme({ "terminal-red": "url(https://example.com/a)" })),
+    ).toBeNull();
+  });
+
   it("accepts authored mascot, critters and hat, and normalizes custom working phrases", () => {
     const fields = { mascot: "none", critters: ["fedora", "penguin"], avatarHat: "fedora" };
     expect(

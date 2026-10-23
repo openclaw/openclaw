@@ -72,7 +72,8 @@ suite.define(() => {
         await expect
           .poll(read)
           .toMatchObject({ theme: "dash", accent: "#5b9cf6", ...fonts("JetBrains Mono") });
-        await page.locator(".settings-theme-card--absolutely").click();
+        await page.getByRole("radio", { name: "Absolutely", exact: true }).click();
+        await page.getByRole("button", { name: "Apply theme", exact: true }).click();
         await expect.poll(read).toMatchObject(defaults);
         await expect
           .poll(async () => (await gateway.getRequests("themes.set")).map((r) => r.params))
@@ -122,7 +123,8 @@ suite.define(() => {
           );
         }
         await page.locator('[data-accent-preset="blue"]').click();
-        await page.locator(".settings-theme-card--absolutely").click();
+        await page.getByRole("radio", { name: "Absolutely", exact: true }).click();
+        await page.getByRole("button", { name: "Apply theme", exact: true }).click();
         await page.getByRole("radio", { name: "Dark", exact: true }).click();
         await expect.poll(read).toMatchObject(customized);
         const custom = {

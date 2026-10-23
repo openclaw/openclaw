@@ -10,12 +10,14 @@ import { loadSettings, patchSettings, saveSettings } from "./settings.ts";
 
 const disposals: Array<() => void> = [];
 let theme: ReturnType<typeof createApplicationTheme>;
+let fixtureGateway: ReturnType<typeof createGatewayStoreTestStore>["gateway"];
 let snapshots: Mock<() => (string | undefined)[]>;
 beforeEach(({ onTestFinished }) => {
   const existingFontLinks = new Set(document.querySelectorAll('link[id^="openclaw-typeface-"]'));
   const previous = loadSettings();
   saveSettings({ ...previous, theme: "claw", themeMode: "light" });
   const { gateway } = createGatewayStoreTestStore({ settings: loadSettings() });
+  fixtureGateway = gateway;
   theme = createApplicationTheme(loadSettings(), gateway);
   snapshots = vi.fn(() => [
     theme.settings.theme,
@@ -110,4 +112,41 @@ it.each(["superseded", "disposed"])("ignores a %s palette completion", (state) =
   link.dispatchEvent(new Event("load"));
   expect(snapshots).not.toHaveBeenCalled();
   expect(document.documentElement.dataset.themeMode).toBe("light");
+});
+
+it("previews only this document and restores current preferences before a late palette finishes", () => {
+  const saved = loadSettings();
+  theme.setPreview("tide");
+  expect(theme.previewTheme).toBe("tide");
+  expect(theme.settings.theme).toBe("claw");
+  expect(loadSettings()).toEqual(saved);
+  pendingPalette().dispatchEvent(new Event("load"));
+  expect(document.documentElement.dataset.themeId).toBe("tide");
+  expect(theme.appliedPalette?.theme).toBe("tide");
+  expect(loadSettings()).toEqual(saved);
+  theme.setPreview("dash");
+  const late = document.getElementById("openclaw-theme-palette-dash")!;
+  theme.setPreview(null);
+  late.dispatchEvent(new Event("load"));
+  expect(document.documentElement.dataset.themeId).toBe("claw");
+  expect(theme.appliedPalette?.theme).toBe("claw");
+  expect(theme.previewTheme).toBeNull();
+});
+
+it("retires a preview when the actual selection changes", () => {
+  theme.setPreview("tide");
+  patchSettings({ theme: "dash" });
+  expect(theme.previewTheme).toBeNull();
+  document.getElementById("openclaw-theme-palette-dash")!.dispatchEvent(new Event("load"));
+  pendingPalette().dispatchEvent(new Event("load"));
+  expect(document.documentElement.dataset.themeId).toBe("dash");
+});
+
+it("retires a window preview when the Gateway client scope changes", () => {
+  theme.setPreview("tide");
+  const late = pendingPalette();
+  fixtureGateway.connect();
+  expect(theme.previewTheme).toBeNull();
+  late.dispatchEvent(new Event("load"));
+  expect(document.documentElement.dataset.themeId).toBe("claw");
 });

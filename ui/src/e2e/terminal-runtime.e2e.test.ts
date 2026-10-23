@@ -1,9 +1,14 @@
+import { writeFile } from "node:fs/promises";
 import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import type { ThemeDefinition } from "../../../packages/gateway-protocol/src/theme.ts";
+import { createThemePaletteFixture } from "../../../test/helpers/theme-fixture.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   defaultControlUiFeatureMethods,
+  controlUiBundledGatewayUrl,
   installMockGateway,
   pauseVirtualClock,
   startControlUiE2eServer,
@@ -13,6 +18,7 @@ import {
   observeTerminalControllers,
   readTerminalCanvasState,
 } from "./terminal-controller.test-support.ts";
+import { themeConfigResponse } from "./theme-typography.test-support.ts";
 import { terminalSession } from "./workspace-terminal.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -72,6 +78,165 @@ async function loadRuntime(page: Page): Promise<void> {
 }
 
 suite.define(() => {
+  it.each([false, true])("opens with authored ANSI colors; live reload=%s", async (reload) => {
+    await suite.withPage(
+      { serviceWorkers: "block", viewport: { width: 1280, height: 900 }, colorScheme: "dark" },
+      async ({ page }) => {
+        const id = "theme-lab/pastel";
+        const definition: ThemeDefinition = {
+          name: "Pastel terminal",
+          description: "Synthetic palette fixture",
+          dark: createThemePaletteFixture({
+            background: "#1e1e2e",
+            foreground: "#cdd6f4",
+            ...(reload ? {} : { "terminal-red": "#f38ba8", "terminal-black": "#000000" }),
+          }),
+        };
+        const catalog = (value: ThemeDefinition) => {
+          const theme = {
+            id,
+            name: value.name,
+            description: value.description,
+            source: "plugin",
+            modes: ["dark"],
+          };
+          return {
+            current: { id, mode: "dark", scope: "gateway", overrides: {} },
+            theme,
+            definition: value,
+            themes: [theme],
+          };
+        };
+        const gatewayUrl = controlUiBundledGatewayUrl(suite.server.baseUrl);
+        await page.addInitScript(
+          ({ url, theme }) => {
+            localStorage.setItem(
+              `openclaw.control.settings.v1:${url}`,
+              JSON.stringify({ gatewayUrl: url, theme, themeMode: "dark" }),
+            );
+          },
+          { url: gatewayUrl, theme: id },
+        );
+        const gateway = await installMockGateway(page, {
+          terminalEnabled: true,
+          featureMethods: [...defaultControlUiFeatureMethods, "terminal.open"],
+          methodResponses: {
+            "config.get": themeConfigResponse(id, "dark"),
+            "themes.list": catalog(definition),
+            "themes.get": catalog(definition),
+            "terminal.list": {
+              sessions: [
+                {
+                  ...terminalSession("palette-proof"),
+                  attached: true,
+                  owner: "agent:main:main",
+                  createdAtMs: 1,
+                },
+              ],
+            },
+            "terminal.open": terminalSession("palette-proof"),
+          },
+        });
+        await page.goto(suite.server.baseUrl + "chat");
+        await waitForControlUiGatewayReady(page);
+        await expect.poll(() => page.locator("html").getAttribute("data-theme-id")).toBe(id);
+        await page.keyboard.press("Control+Backquote");
+        const panel = page
+          .locator("openclaw-terminal-panel")
+          .filter({ has: page.locator(".tp-host") });
+        await panel.locator(".tp-session.is-current").click();
+        await gateway.waitForRequest("terminal.open");
+        const canvas = panel.locator(".tp-host canvas");
+        await canvas.waitFor();
+        await canvas.evaluate((element) => {
+          element.dataset.paletteIdentity = "original";
+        });
+        const output =
+          "\x1b[?25l\x1b[2J\x1b[H\x1b[41m                \x1b[0m ANSI red\r\n\x1b[42m                \x1b[0m ANSI green\r\n\x1b[44m                \x1b[0m ANSI blue\r\n\x1b[104m                \x1b[0m ANSI bright blue\r\n";
+        await gateway.emitGatewayEvent("terminal.data", {
+          sessionId: "palette-proof",
+          seq: output.length,
+          data: output,
+        });
+        const redPixel = () =>
+          canvas.evaluate((element) => {
+            if (!(element instanceof HTMLCanvasElement)) {
+              throw new Error("Expected a terminal canvas");
+            }
+            const context = element.getContext("2d");
+            if (!context) {
+              throw new Error("Expected the real terminal's 2D canvas");
+            }
+            return Array.from(context.getImageData(5, 5, 1, 1).data).slice(0, 3);
+          });
+        await expect.poll(redPixel).toEqual(reload ? [255, 107, 107] : [243, 139, 168]);
+        if (!reload) {
+          const black = "\x1b[H\x1b[40m                \x1b[0m";
+          await gateway.emitGatewayEvent("terminal.data", {
+            sessionId: "palette-proof",
+            seq: output.length + black.length,
+            data: black,
+          });
+          await expect.poll(redPixel).toEqual([0, 0, 0]);
+          const defaultPixel = await canvas.evaluate((element) => {
+            if (!(element instanceof HTMLCanvasElement)) {
+              throw new Error("Expected a terminal canvas");
+            }
+            const context = element.getContext("2d");
+            if (!context) {
+              throw new Error("Expected the real terminal's 2D canvas");
+            }
+            return Array.from(context.getImageData(5, element.height - 5, 1, 1).data).slice(0, 3);
+          });
+          expect(defaultPixel).toEqual([30, 30, 46]);
+          return;
+        }
+        const capture = async (name: string) => {
+          if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
+            return;
+          }
+          const frame = await takeControlUiScreenshotFrame(page, panel, [canvas], {
+            elements: [panel],
+            animations: "disabled",
+          });
+          await writeFile(`${suite.artifactDir}/${name}.png`, frame.elements[0]!.png);
+        };
+        await capture("terminal-ansi-before");
+        const authored: ThemeDefinition = {
+          ...definition,
+          dark: {
+            ...definition.dark!,
+            "terminal-red": "#f38ba8",
+            "terminal-green": "#a6e3a1",
+            "terminal-blue": "#89b4fa",
+            "terminal-bright-blue": "#b4befe",
+          },
+        };
+        for (const method of ["themes.list", "themes.get"]) {
+          await gateway.setMethodResponse(method, catalog(authored));
+        }
+        await gateway.emitGatewayEvent("plugins.changed", { generation: 1 });
+        await expect
+          .poll(() =>
+            page.evaluate(() =>
+              getComputedStyle(document.documentElement).getPropertyValue("--terminal-red").trim(),
+            ),
+          )
+          .toBe("#f38ba8");
+        await expect.poll(redPixel).toEqual([243, 139, 168]);
+        expect(await canvas.getAttribute("data-palette-identity")).toBe("original");
+        expect(await gateway.getRequests("terminal.open")).toHaveLength(1);
+        await capture("terminal-ansi-after");
+        for (const method of ["themes.list", "themes.get"]) {
+          await gateway.setMethodResponse(method, catalog(definition));
+        }
+        await gateway.emitGatewayEvent("plugins.changed", { generation: 2 });
+        await expect.poll(redPixel).toEqual([255, 107, 107]);
+        expect(await gateway.getRequests("terminal.input")).toEqual([]);
+      },
+    );
+  });
+
   it("confirms successful terminal selection copies without claiming failed or pending copies", async () => {
     await suite.withPage(
       {

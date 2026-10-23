@@ -98,6 +98,7 @@ const webkitTestFiles = [
   "src/components/agent-emoji-picker.browser.test.ts",
   "src/components/appearance-picker.browser.test.ts",
   "src/components/confirm-dialog.browser.test.ts",
+  "src/pages/config/view-appearance.browser.test.tsx",
   "src/pages/channels/view.detail.browser.test.tsx",
   "src/pages/plugins/settings-lifecycle.browser.test.tsx",
   "src/pages/new-session/project-chip.registration.browser.test.tsx",

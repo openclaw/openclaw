@@ -1,8 +1,39 @@
+import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
+import { THEME_TERMINAL_COLOR_TOKENS } from "../../../../packages/gateway-protocol/src/theme.ts";
 import {
   forceTerminalRender,
   type TerminalPanelSessionTab,
 } from "./terminal-panel-session-types.ts";
 import { terminalTheme } from "./terminal-theme.ts";
+
+const appliedTerminalColors = new WeakMap<GhosttyTerminalController, string>();
+
+export function applyTerminalTheme(
+  controller: GhosttyTerminalController,
+  theme: ReturnType<typeof terminalTheme>,
+): void {
+  const term = controller.terminal;
+  if (!term.renderer || !term.wasmTerm) {
+    return;
+  }
+  // The parser owns indexed colors, including scrollback. Updating its native
+  // defaults leaves partially received PTY escape sequences untouched.
+  const rgb = (value: string) => Number.parseInt(value.slice(1), 16);
+  const colors = {
+    foreground: rgb(theme.foreground),
+    background: rgb(theme.background),
+    cursor: rgb(theme.cursor),
+    palette: THEME_TERMINAL_COLOR_TOKENS.map(([key]) => rgb(theme[key])),
+  };
+  const identity = JSON.stringify(colors);
+  // Unrelated preference publications must not reset an application's OSC colors.
+  if (appliedTerminalColors.get(controller) !== identity) {
+    term.wasmTerm.setThemeColors(colors);
+    appliedTerminalColors.set(controller, identity);
+  }
+  term.renderer.setTheme(theme);
+  forceTerminalRender(controller);
+}
 
 export async function focusTerminalSession(
   tab: TerminalPanelSessionTab | undefined,
@@ -25,14 +56,9 @@ export function updateTerminalSessionTheme(
   // Unopened panels still observe theme changes; resolve colors only for live renderers.
   let theme: ReturnType<typeof terminalTheme> | undefined;
   for (const tab of tabs) {
-    // ghostty-web 0.4.0 ignores options.theme after open() (its option
-    // handler only warns), so update the renderer directly and force one
-    // full render — the frame loop repaints only dirty rows, which would
-    // leave a static screen on the old palette.
     const term = tab.controller.terminal;
     if (term.renderer && term.wasmTerm) {
-      term.renderer.setTheme((theme ??= terminalTheme(themeMode)));
-      forceTerminalRender(tab.controller);
+      applyTerminalTheme(tab.controller, (theme ??= terminalTheme(themeMode)));
     }
   }
 }

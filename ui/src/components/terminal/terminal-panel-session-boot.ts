@@ -19,6 +19,7 @@ import {
 } from "./terminal-controller-lifecycle.ts";
 import { updateTerminalFont } from "./terminal-fonts.ts";
 import { terminalOpenErrorText } from "./terminal-panel-chrome.ts";
+import { applyTerminalTheme } from "./terminal-panel-session-rendering.ts";
 import {
   TERMINAL_OUTPUT_ENCODER,
   resolveTerminalPanelOwnerSessionKey,
@@ -184,7 +185,12 @@ export async function bootTerminalPanelSession(params: {
       },
       params.shouldFocusOnOpen &&
         (() => params.isCurrent() && params.shouldFocusOnOpen?.() !== false),
-    );
+    ).then((controller) => {
+      // Initialize through the parser before output/replay; the legacy
+      // constructor treats literal black as an omitted color.
+      applyTerminalTheme(controller, terminalTheme(panel.inputs.themeMode));
+      return controller;
+    });
   let controller: GhosttyTerminalController;
   try {
     controller = await createController(host);

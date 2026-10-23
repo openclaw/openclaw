@@ -265,7 +265,8 @@ The JSON file contains `name`, `description`, and at least one of `light` or
 `dark`; its name and description must match the manifest. Names are limited to
 80 characters and descriptions to 320. Each present mode supplies all semantic
 colors from the [theme definition example](/tools/theme#create-and-apply-a-personal-theme),
-plus optional `font-sans` and `font-mono` font-family lists. Individual values are
+plus optional `font-sans` and `font-mono` font-family lists and
+[embedded terminal ANSI color tokens](/tools/theme#embedded-terminal-colors). Individual values are
 limited to 120 characters. Supported colors are hex, `rgb()`, `rgba()`, `hsl()`,
 `hsla()`, `lab()`, `lch()`, `oklab()`, `oklch()`, `color()`, `black`, `white`, and
 `transparent`. CSS declarations, URLs, and references to other CSS variables are

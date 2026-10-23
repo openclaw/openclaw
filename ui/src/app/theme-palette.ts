@@ -1,5 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
+  THEME_TERMINAL_COLOR_TOKENS,
+  type ThemeTerminalColorToken,
+} from "../../../packages/gateway-protocol/src/theme.ts";
+import {
   requireSafeCssValue,
   requireSafeFontFamilyValue,
   type ImportedCustomTheme,
@@ -75,6 +79,12 @@ export function normalizeThemePalette(
   const ring = resolveModeVar(theme, shared, "ring");
   const fontBody = resolveModeVar(theme, shared, "font-sans", DEFAULT_FONT_BODY);
   const mono = resolveModeVar(theme, shared, "font-mono", DEFAULT_MONO);
+  const terminalColors: Partial<Record<ThemeTerminalColorToken, string>> = {};
+  for (const [, key] of THEME_TERMINAL_COLOR_TOKENS) {
+    if (theme[key] !== undefined || shared?.[key] !== undefined) {
+      terminalColors[key] = resolveModeVar(theme, shared, key);
+    }
+  }
 
   return {
     bg: background,
@@ -128,6 +138,7 @@ export function normalizeThemePalette(
     "font-body": fontBody,
     "font-display": fontBody,
     mono,
+    ...terminalColors,
     "grid-line": `color-mix(in srgb, var(--text) ${isLight ? "4" : "3"}%, transparent)`,
   };
 }
