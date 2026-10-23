@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { createComponent, createSignal, flush, lazy, Loading } from "solid-js";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { i18n } from "../../i18n/index.ts";
@@ -148,6 +149,63 @@ describe("OpenClawTerminalPanel", () => {
       document.body.append(container);
       await Promise.resolve();
       expect(request.mock.calls.filter(([method]) => method === "terminal.open")).toHaveLength(1);
+      await waitForFast(() => expect(terminalIntentQueue.hasActions).toBe(false));
+    } finally {
+      container.querySelector("openclaw-terminal-panel")?.closeTerminalPanel();
+      mounted.unmount();
+      container.remove();
+    }
+  });
+
+  it("shows the embedded desktop session picker initially and preserves its dismissal", async () => {
+    const Terminal = lazy(() => import("./terminal-panel-registration.tsx"), {
+      export: "TerminalPanelHost",
+    });
+    createGhosttyTerminalMock.mockResolvedValue(createTerminalController());
+    const currentSession = terminalOpenResult("embedded-current-session");
+    const client: TerminalGatewayClient = {
+      forceReconnect() {},
+      // SAFETY: The fixture returns the declared response for each terminal method.
+      request: async <T>(method: string) =>
+        (method === "terminal.open"
+          ? currentSession
+          : method === "terminal.list"
+            ? { sessions: [{ ...currentSession, attached: true, createdAtMs: 1 }] }
+            : { ok: true }) as T,
+      addEventListener: () => () => {},
+    };
+    const container = document.body.appendChild(document.createElement("div"));
+    const [themeMode, setThemeMode] = createSignal<"dark" | "light">("dark");
+    const mounted = mountSolid(
+      () =>
+        createComponent(Loading, {
+          get children() {
+            return createComponent(Terminal, {
+              client,
+              available: true,
+              embedded: true,
+              mobile: false,
+              get themeMode() {
+                return themeMode();
+              },
+            });
+          },
+        }),
+      { container },
+    );
+    try {
+      await vi.dynamicImportSettled();
+      await waitForFast(() =>
+        expect(container.querySelector(".tp-session.is-current")).not.toBeNull(),
+      );
+      container.querySelector<HTMLButtonElement>(".tp-session.is-current")!.click();
+      await waitForFast(() => expect(container.querySelector(".tp-session-menu")).toBeNull());
+      expect(container.querySelector(".tp-composer input")).not.toBeNull();
+      setThemeMode("light");
+      flush();
+      await container.querySelector("openclaw-terminal-panel")!.updateComplete;
+      expect(container.querySelector(".tp-session-menu")).toBeNull();
+      expect(container.querySelector(".tp-composer input")).not.toBeNull();
       await waitForFast(() => expect(terminalIntentQueue.hasActions).toBe(false));
     } finally {
       container.querySelector("openclaw-terminal-panel")?.closeTerminalPanel();
