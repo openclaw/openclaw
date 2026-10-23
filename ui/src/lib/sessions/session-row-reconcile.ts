@@ -385,6 +385,11 @@ export type SessionRowObservation = {
   project?: (row: GatewaySessionRow, donor?: GatewaySessionRow) => GatewaySessionRow;
 };
 
+type SessionRowReconcileOptions = SessionReconcileOptions & {
+  preserveExisting?: boolean;
+  clearedFields?: readonly string[];
+};
+
 type RejectedRowDisposition =
   | "invalid"
   | "outside-scope"
@@ -420,10 +425,7 @@ export function isSessionRowOutsideResultScope(
 export function reconcileSessionRow(
   incoming: GatewaySessionRow | undefined,
   previous: GatewaySessionRow | undefined,
-  options: SessionReconcileOptions & {
-    preserveExisting?: boolean;
-    clearedFields?: readonly string[];
-  } = {},
+  options: SessionRowReconcileOptions = {},
   observation?: SessionRowObservation,
 ): SessionRowReconcileResult {
   const reject = (disposition: RejectedRowDisposition): SessionRowReconcileResult => ({

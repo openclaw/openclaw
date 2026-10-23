@@ -29,7 +29,9 @@ import "../../styles/mcp-app-extensions.css";
 
 registerMcpAppEnglish();
 
-export function McpAppContextStrip(props: { sessionKey: string; agentId: string }) {
+type McpAppContextStripProps = { sessionKey: string; agentId: string };
+
+export function McpAppContextStrip(props: McpAppContextStripProps) {
   const context = useApplication();
   const gateway = projectGateway(context.gateway);
   const [removal, setRemoval] = createSignal<{

@@ -31,7 +31,9 @@ import "../styles/mcp-app-extensions.css";
 
 registerMcpAppEnglish();
 
-export function McpAppResources(props: { sessionKey: string; agentId: string }) {
+type McpAppResourcesProps = { sessionKey: string; agentId: string };
+
+export function McpAppResources(props: McpAppResourcesProps) {
   let host!: HTMLElement;
   const context = useApplication();
   const gateway = projectGateway(context.gateway);
