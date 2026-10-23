@@ -593,6 +593,12 @@ export async function loadSessionPage(
   face: BoardFace,
   { location, signal, cause, deps }: RouteLoaderOptions,
 ) {
+  const gateway = context.gateway.snapshot;
+  if (gateway.client && gateway.phase !== "connected") {
+    // Literal and cached routes share the network window for their first pane mount.
+    await gateway.client.initialConnectSent;
+    signal.throwIfAborted();
+  }
   const current =
     cause === "revalidate"
       ? context.router

@@ -56,13 +56,16 @@ export abstract class ChatPaneSnapshotHydration extends ChatPaneReplyNavigation 
       connected: this.context.gateway.snapshot.phase === "connected",
       promise: reading
         .then(async (storedSnapshot) => {
-          if (this.routeResolutionPending) {
-            if (this.context.gateway.snapshot.phase !== "connected") {
+          if (!hydration.connected || this.routeResolutionPending) {
+            if (
+              this.routeResolutionPending &&
+              this.context.gateway.snapshot.phase !== "connected"
+            ) {
               const wait = new AbortController();
               this.chatState.addCleanup(() => wait.abort());
               await waitForGatewayClient(this.context.gateway, wait.signal);
             }
-            // Let hello and its subscribers finish before committing cached rows.
+            // Split cached rows from pane mounting and any already-delivered hello subscribers.
             await new Promise<void>((resolve) => {
               window.setTimeout(resolve, 0);
             });
