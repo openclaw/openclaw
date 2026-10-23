@@ -195,9 +195,9 @@ export function createChatSendMessageInjectionStarter(params: {
       join = await prepareReplyMessageContinuation({
         target,
         assertCurrent,
+        delivery,
         input: {
           kind: "continuation",
-          delivery,
           caller,
           config: cfg,
           executionSelection: captureReplySessionExecutionSelection({
@@ -224,6 +224,7 @@ export function createChatSendMessageInjectionStarter(params: {
       if (join.kind === "deferred") {
         params.logGateway.warn("chat steering rejected; falling back to follow-up dispatch", {
           reason: join.reason,
+          error: join.errorMessage,
           runId: clientRunId,
           activeRunId: target.runId,
           sessionKey,
