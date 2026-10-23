@@ -826,6 +826,75 @@ See Anthropic's [refusals and fallback
 guide](https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback)
 for the underlying behavior.
 
+## Streaming Claude 5 replies before the stop reason
+
+Claude 5 classifiers can refuse partway through a reply. By default OpenClaw
+holds each Claude 5 call's text, thinking, and tool-input deltas until
+Anthropic reports the stop reason, so a refused or interrupted call never
+shows partial output, and chat clients see a reply only once it is complete.
+
+A custom route can stream those deltas as they arrive instead, when every
+consumer of its output can take output back. Set it on a custom provider
+entry: catalog-known routes, such as `anthropic/*` on Anthropic's endpoint,
+take `compat` from the provider catalog.
+
+```json5
+{
+  models: {
+    providers: {
+      "claude-proxy": {
+        baseUrl: "https://llm-proxy.example.com/anthropic",
+        apiKey: "CLAUDE_PROXY_KEY",
+        api: "anthropic-messages",
+        models: [
+          {
+            id: "claude-sonnet-5-5",
+            name: "Claude Sonnet 5.5",
+            reasoning: true,
+            input: ["text", "image"],
+            contextWindow: 1000000,
+            maxTokens: 128000,
+            compat: { streamBeforeRefusal: true },
+          },
+        ],
+      },
+    },
+  },
+}
+```
+
+With `compat.streamBeforeRefusal: true`:
+
+- Text, thinking, and tool-input deltas reach clients while the model writes.
+- A call that ends without a successful stop reason (a refusal, a stream
+  error, or a stream that ends early) still ends with empty content and the
+  same error as before. Its output never reaches the transcript or the final
+  reply, and its tool calls never run: a tool call becomes executable only
+  after its call's successful stop reason.
+- The Gateway withdraws only that call's streamed text: an `agent` assistant
+  event for the call's item and a `chat` delta carry `replace: true` with
+  empty text, and the Control UI removes the text and retires the live
+  thinking preview. Text and tool results from earlier, successful calls in
+  the same run stay.
+- Requests that send `fallbacks` (direct API-key requests, see
+  [safety refusal fallback](/providers/anthropic#safety-refusal-fallback-claude-opus-5-and-fable-5))
+  still hold output, because a fallback boundary rewrites blocks that were
+  already delivered.
+
+Opt in only when every consumer of that model honors this contract:
+
+- A Gateway client must withdraw a failed call's rendered text and live
+  thinking, scoped to that call, never to the whole run, and must not act on
+  output streamed before the call settled. Thinking events carry no
+  replacement of their own: drop the call's live thinking when its text is
+  replaced with empty text or its run ends with an error.
+- Channel block streaming sends finished blocks as messages that cannot be
+  withdrawn. Keep `agents.defaults.blockStreamingDefault` at `"off"` (the
+  default) for agents that use the model, and do not set
+  `streaming.block.enabled` on their channels.
+- OpenAI-compatible HTTP streams deliver the deltas and then end with an error,
+  so those clients must discard the partial reply themselves.
+
 ## Prompt caching
 
 OpenClaw supports Anthropic's prompt caching feature for API-key auth.

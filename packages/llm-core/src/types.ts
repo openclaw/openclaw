@@ -756,6 +756,13 @@ export interface AnthropicMessagesCompat {
   supportsCacheControlOnTools?: boolean;
   /** Whether empty thinking signatures can be replayed as native thinking blocks. Default: false. */
   allowEmptySignature?: boolean;
+  /**
+   * Whether Claude 5.x deltas stream before the terminal stop reason instead of
+   * waiting for `message_stop`. A refused or interrupted call still ends with empty
+   * content, so the consumer must withdraw that call's streamed output. Requests
+   * that send `fallbacks` still defer. Default: false.
+   */
+  streamBeforeRefusal?: boolean;
 }
 
 /**

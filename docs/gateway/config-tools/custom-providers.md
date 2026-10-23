@@ -131,6 +131,7 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
     | `unsupportedToolSchemaKeywords` | Removes named JSON Schema keywords rejected by the endpoint before tool schemas are sent. Use this for endpoint-specific gaps beyond a profile's targeted transformations. |
     | `toolCallArgumentsEncoding` | Selects the endpoint's tool-call argument encoding. |
     | `requiresOpenAiAnthropicToolPayload` | Converts OpenAI-shaped tool calls to Anthropic-family payloads. |
+    | `streamBeforeRefusal` | Anthropic Messages only: streams Claude 5 deltas before the stop reason. Every consumer must withdraw a refused call's output; see [streaming before the stop reason](/providers/anthropic#streaming-claude-5-replies-before-the-stop-reason). |
 
     After upgrading, existing custom `openai-completions` models with `reasoning: true` start sending `reasoning_effort` for enabled thinking unless explicitly opted out. If the server rejects the field, the request error names the remedy: set `compat.supportsReasoningEffort: false` on that entry in `models.providers.<provider>.models`. See [custom endpoint thinking](/tools/thinking#custom-openai-compatible-endpoints) for effort mapping and `/think off` behavior.
 

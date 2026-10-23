@@ -156,6 +156,12 @@ export const ModelCompatSchema = z
      */
     supportsEagerToolInputStreaming: z.boolean().optional(),
     /**
+     * Whether Claude 5.x replies on `anthropic-messages` stream before the terminal stop reason
+     * instead of waiting for `message_stop`. A refused or interrupted call still ends with empty
+     * content; the consumer must withdraw that call's streamed output. Default: false.
+     */
+    streamBeforeRefusal: z.boolean().optional(),
+    /**
      * Whether the provider supports long prompt cache retention (`prompt_cache_retention: "24h"`
      * or Anthropic-style `cache_control.ttl: "1h"`, depending on format). Default: true.
      */
