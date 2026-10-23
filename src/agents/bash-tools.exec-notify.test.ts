@@ -38,6 +38,7 @@ import {
   prepareExecExitNotification,
   recoverExecExitNotifications,
 } from "./bash-tools.exec-notify.js";
+import { EXEC_TIMEOUT_RETRY_GUIDANCE } from "./bash-tools.exec-output.js";
 import { createProcessTool } from "./bash-tools.process.js";
 import { isRuntimeToolAllowed } from "./tool-policy-match.js";
 import { attachToolAllowlistIntersection } from "./tool-policy-shared.js";
@@ -172,6 +173,26 @@ function lastNotification() {
 }
 
 describe("background exec completion obligations", () => {
+  it("routes a silent saved-output timeout as an exec completion", async () => {
+    await withFixture(async ({ background }) => {
+      const process = await background();
+      process.exitCode = 1;
+      process.exitReason = "overall-timeout";
+      process.outputLog = {
+        path: "C:/synthetic-workspace/.openclaw-exec-timeout/output.log",
+        chars: 0,
+        truncated: false,
+        failed: false,
+      };
+      await maybeNotifyOnExit(process, "failed", false);
+      const { text, options } = lastNotification();
+      expect(text).toContain(process.outputLog.path);
+      expect(text).toContain(EXEC_TIMEOUT_RETRY_GUIDANCE);
+      expect(options.source).toBe("exec");
+      expect(options.contextKey).toBe(`exec:${process.id}`);
+    });
+  });
+
   it("rescans pending stores after their admission owner completes", async () => {
     await withFixture(async ({ background, recover, read }) => {
       await background();

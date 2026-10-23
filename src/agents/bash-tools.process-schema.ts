@@ -5,6 +5,10 @@ import { defineToolOutputSchema } from "./schema/tool-output-schema.js";
 const sessionProperties = {
   sessionId: Type.String(),
   name: Type.Optional(Type.String()),
+  fullOutputPath: Type.Optional(Type.String()),
+  spilledChars: Type.Optional(Type.Number()),
+  spillTruncated: Type.Optional(Type.Boolean()),
+  outputLogError: Type.Optional(Type.String()),
 };
 const inputProperties = {
   followUp: Type.Optional(Type.String()),

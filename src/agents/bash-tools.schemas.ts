@@ -24,6 +24,12 @@ const PROCESS_TOOL_ACTIONS = [
 export const execSchema = Type.Object({
   title: executionTitleSchema(),
   command: Type.String({ description: "Shell command." }),
+  saveOutput: Type.Optional(
+    Type.Boolean({
+      description:
+        "Save up to 2 MiB of output as a private workspace file; gateway only. User removes it.",
+    }),
+  ),
   workdir: Type.Optional(
     Type.String({
       description: "Omit/empty string: default; whitespace-only invalid.",

@@ -25,6 +25,11 @@ import {
 } from "./bash-process-registry.js";
 import { describeProcessTool } from "./bash-tools.descriptions.js";
 import {
+  canRecoverExecOutput,
+  execOutputLogDetails,
+  execOutputLogNote,
+} from "./bash-tools.exec-output-log.js";
+import {
   EXEC_MANUAL_COLLECTION_FOLLOW_UP,
   EXEC_RETENTION_CAP_NOTE,
   appendExecTimeoutRetryGuidance,
@@ -98,8 +103,13 @@ function defaultTailNote(totalLines: number, usingDefaultTail: boolean) {
   return `\n\n[showing last ${DEFAULT_LOG_TAIL_LINES} of ${totalLines} lines; pass offset/limit to page]`;
 }
 
-function retentionCapNote(session: Pick<ProcessSession, "totalOutputChars" | "aggregated">) {
-  return session.totalOutputChars > session.aggregated.length ? EXEC_RETENTION_CAP_NOTE : "";
+function retentionCapNote(
+  session: Pick<ProcessSession, "totalOutputChars" | "aggregated" | "outputLog">,
+) {
+  const discardedChars = session.totalOutputChars - session.aggregated.length;
+  return discardedChars > 0 && !canRecoverExecOutput(session.outputLog, discardedChars)
+    ? EXEC_RETENTION_CAP_NOTE
+    : "";
 }
 
 const MAX_POLL_WAIT_MS = 30_000;
@@ -160,6 +170,7 @@ function resetPollRetrySuggestion(sessionId: string): void {
 
 function finishedSessionDetails(sessionId: string, finished: ProcessSession) {
   return {
+    ...execOutputLogDetails(finished.outputLog),
     status:
       finished.terminalStatus === "completed" || isConfirmedRequestedStop(finished)
         ? "completed"
@@ -211,6 +222,7 @@ function finishedPollResult(
     : "";
   const text = appendExecTimeoutRetryGuidance(
     retentionCapNote(finished) +
+      execOutputLogNote(finished.outputLog) +
       retainedOutputNote +
       (output || "(no new output)") +
       `\n\n${finishedSessionText(finished)}`,
@@ -268,6 +280,7 @@ export function createProcessTool(
     const idleMs = Math.max(0, Date.now() - lastOutputAt);
     const stdinWritable = isWritableStdin(session.stdin);
     return {
+      ...execOutputLogDetails(session.outputLog),
       ...(session.notifyOnExit === false ? { followUp: EXEC_MANUAL_COLLECTION_FOLLOW_UP } : {}),
       stdinWritable,
       waitingForInput: stdinWritable && idleMs >= inputWaitIdleMs,
@@ -465,6 +478,7 @@ export function createProcessTool(
             const runtime = describeRunningSession(scopedSession);
             const text =
               aggregateOutputNote +
+              execOutputLogNote(scopedSession.outputLog) +
               retainedOutputNote +
               (output || "(no new output)") +
               (buildInputWaitHint(runtime.waitingForInput) || "\n\nProcess still running.") +
@@ -502,6 +516,7 @@ export function createProcessTool(
             const runtime = scopedSession ? describeRunningSession(scopedSession) : undefined;
             const text =
               retentionCapNote(record) +
+              execOutputLogNote(record.outputLog) +
               (slice || (scopedSession ? "(no output yet)" : "(no output recorded)")) +
               defaultTailNote(totalLines, window.usingDefaultTail) +
               (isConfirmedRequestedStop(record)

@@ -30,6 +30,12 @@ Working directory for the command. For local execution, relative paths resolve a
 Key/value environment overrides merged on top of the inherited environment.
 </ParamField>
 
+<ParamField path="saveOutput" type="boolean" default="false">
+Save up to the first 2 MiB of sanitized stdout and stderr to a private file while a Gateway-hosted command runs. Sandbox and remote node execution reject this option. Results include `fullOutputPath`, `spilledChars`, and `spillTruncated`; capture failures report `outputLogError` without blocking the command or changing its exit status. If file creation fails, no `fullOutputPath` is returned. Saved output can contain secrets; terminal sanitization does not redact them.
+
+The file is `<workdir>/.openclaw-exec-<sessionId>-<random>/output.log`. It remains after failure, timeout, process-result expiry, and Gateway restart. This explicitly requested workspace artifact is also saved in incognito sessions. Files are user-managed: remove them when no longer needed; there is no automatic expiry or aggregate disk quota. Saved output does not recover the process or guarantee its outcome after a restart.
+</ParamField>
+
 <ParamField path="yieldMs" type="number" default="10000">
 Return a running process handle after this delay (ms). On the Gateway and in its sandbox, an ordinary yielded command remains owned by its request: the browser's Stop button and typed `/stop` cancel it. Normal model completion leaves it running.
 </ParamField>

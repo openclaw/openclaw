@@ -1,6 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { tail } from "./bash-process-registry.js";
 import { formatExecApprovalContinuationSourceOutput } from "./bash-tools.exec-approval-output.js";
+import { execOutputLogNote, type ExecOutputLog } from "./bash-tools.exec-output-log.js";
 import { appendExecTimeoutRetryGuidance, normalizeNotifyOutput } from "./bash-tools.exec-output.js";
 import type {
   ExecApprovalFollowupFactory,
@@ -92,8 +94,11 @@ export function buildGatewayExecApprovalFollowupSummary(params: {
   outcome: ExecApprovalFollowupOutcome;
   trigger?: string;
   approvalFollowupText?: string;
+  dynamicFollowupText?: string;
+  outputLog?: ExecOutputLog;
 }): string {
   const exitLabel = params.outcome.timedOut ? "timeout" : `code ${params.outcome.exitCode ?? "?"}`;
+  const outputLogNote = execOutputLogNote(params.outputLog);
   let summary: string;
   if (params.trigger === "diagnostics") {
     let diagnosticsText: string;
@@ -110,13 +115,18 @@ export function buildGatewayExecApprovalFollowupSummary(params: {
       }
       diagnosticsText = lines.join("\n");
     }
-    const followupText = params.approvalFollowupText?.trim();
-    const body = [diagnosticsText, followupText].filter(Boolean).join("\n\n");
+    const followupText = normalizeStringEntries([
+      params.approvalFollowupText ?? "",
+      params.dynamicFollowupText ?? "",
+    ]).join("\n\n");
+    const body = outputLogNote + [diagnosticsText, followupText].filter(Boolean).join("\n\n");
     summary = `Exec finished (gateway id=${params.approvalId}, session=${params.sessionId}, ${exitLabel})\n${body}`;
   } else {
-    const output = formatExecApprovalContinuationSourceOutput([
-      { label: "output", value: params.outcome.aggregated },
-    ]);
+    const output =
+      outputLogNote +
+      formatExecApprovalContinuationSourceOutput([
+        { label: "output", value: params.outcome.aggregated },
+      ]);
     summary = output
       ? `Exec finished (gateway id=${params.approvalId}, session=${params.sessionId}, ${exitLabel})\n${output}`
       : `Exec finished (gateway id=${params.approvalId}, session=${params.sessionId}, ${exitLabel})`;

@@ -9,17 +9,22 @@ import type {
   ExecSecurity,
 } from "../infra/exec-approvals.js";
 import type { ExecAutoReviewer, ExecAutoReviewTranscript } from "../infra/exec-auto-review.js";
+import type { ExecRequestOwner } from "../infra/exec-request-context.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
+import type { SpawnInitiation } from "../process/spawn-initiation.js";
 import type { TerminationReason } from "../process/supervisor/types.js";
+import type { SecretEgressSentinelBinding } from "../secrets/egress-proxy/proxy-server.js";
 import type { SecretStoreExecEnvironment } from "../secrets/store/secret-store.js";
 import type { ToolApprovalReview } from "../shared/tool-approval-reviews.js";
+import type { DeliveryContext } from "../utils/delivery-context.shared.js";
 import type { OperationalRunInstanceRef } from "./admitted-run-context.js";
 import type { ExecToolRoutingDefaults } from "./bash-tools.exec-routing.types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import type { EmbeddedFullAccessBlockedReason } from "./embedded-agent-runner/types.js";
 import type { ExecReviewerConfig } from "./exec-auto-reviewer.js";
 import type { PreparedGitHubToolEnvironment } from "./github-tool-identity.types.js";
+import type { AgentToolResult } from "./runtime/index.js";
 
 type ExecProcessFailureKind =
   | "shell-command-not-found"
@@ -224,6 +229,10 @@ export type ExecToolApprovalReview = Omit<ToolApprovalReview, "userAuthorization
 
 /** Structured details returned by exec tool calls. */
 export type ExecToolDetails = {
+  fullOutputPath?: string;
+  spilledChars?: number;
+  spillTruncated?: boolean;
+  outputLogError?: string;
   permissionMissing?: NodePermissionRequest;
   approvalReviews?: readonly ExecToolApprovalReview[];
   approvalReviewOutcome?: "approved" | "denied" | "reviewing";
@@ -287,3 +296,52 @@ export type ExecToolDetails = {
       warningText?: string;
     }
 );
+
+/** Admission and lifetime options for a supervised host or sandbox command. */
+export type ExecProcessOptions = {
+  command: string;
+  saveOutput?: boolean;
+  // Execute this instead of `command` (which is kept for display/session/logging).
+  // Used to sanitize safeBins execution while preserving the original user input.
+  execCommand?: string;
+  workdir: string;
+  env: Record<string, string>;
+  secretEgressBindings?: readonly SecretEgressSentinelBinding[];
+  /** Host-selected managed profile; never inferred from the requested environment. */
+  githubProfileDir?: string;
+  pathPrepend?: string[];
+  sandbox?: BashSandboxConfig;
+  containerWorkdir?: string | null;
+  usePty: boolean;
+  warnings: string[];
+  maxOutput: number;
+  pendingMaxOutput: number;
+  cleanupMs?: number;
+  notifyOnExit: boolean;
+  /** Start-time subagent identity resolved from the persisted spawn envelope. */
+  subagentSession?: boolean;
+  notifyOnExitEmptySuccess?: boolean;
+  requestOwners?: readonly ExecRequestOwner[];
+  scopeKey?: string;
+  sessionKey?: string;
+  agentId?: string;
+  /** Start-time routing policy for detached exec system events. */
+  eventRouting?: EventSessionRoutingPolicy;
+  notifyDeliveryContext?: DeliveryContext;
+  /** The command was started by a conversation turn, not heartbeat or automation work. */
+  notifyFromConversationTurn?: boolean;
+  timeoutSec: number | null;
+  /** Whether exec may return a supervised session for later continuation. */
+  processContinuationAvailable?: boolean;
+  /** Cancels startup only; background process lifetime belongs to the supervisor. */
+  startupSignal?: AbortSignal;
+  onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
+  /** Runs after process finalization and before the exit wake is queued. */
+  onSettledBeforeNotify?: (outcome: ExecProcessOutcome) => void | Promise<void>;
+  /** Revalidates authorization after async preparation, immediately before each spawn attempt. */
+  beforeSpawn?: () => Promise<AgentToolResult<ExecToolDetails> | undefined>;
+  /** Rechecks host policy at the supervisor's final synchronous spawn boundary. */
+  assertCurrent?: () => void;
+  initiateSpawn?: SpawnInitiation;
+  releaseSpawn?: (reason?: "retry") => void;
+};

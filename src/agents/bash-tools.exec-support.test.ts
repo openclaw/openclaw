@@ -13,7 +13,7 @@ describe("exec foreground retention", () => {
         timedOut: false,
       },
       warningText: "w".repeat(80_000),
-      aggregateOutputDropped: true,
+      discardedOutputChars: 1,
     });
 
     const content = result.content[0];

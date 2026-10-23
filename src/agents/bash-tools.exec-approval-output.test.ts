@@ -5,8 +5,10 @@ import {
   formatExecApprovalContinuationSourceOutput as formatOutput,
   resizeExecApprovalContinuationPrompt as resizePrompt,
 } from "./bash-tools.exec-approval-output.js";
+import { buildGatewayExecApprovalFollowupSummary } from "./bash-tools.exec-host-gateway.output.js";
 import { appendExecTimeoutRetryGuidance } from "./bash-tools.exec-output.js";
 import { runExecProcess } from "./bash-tools.exec-runtime.js";
+import { capToolResultForPersistence } from "./session-tool-result-guard.payload.js";
 
 const MARKER =
   "[... truncated to fit the continuation budget; more output may have been dropped when it was captured ...]";
@@ -15,6 +17,52 @@ const OUTPUT_END = "<<<END_UNTRUSTED_EXEC_OUTPUT>>>";
 
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 const unicodeStream = (units: number) => "😀".repeat(Math.floor(units / 2)) + "a".repeat(units % 2);
+
+describe("approved exec saved output", () => {
+  it.each(["command", "diagnostics"])(
+    "keeps the completion header and saved path through session capping (%s)",
+    (trigger) => {
+      const filePath = "/workspace/.openclaw-exec-approved/output.log";
+      const summary = buildGatewayExecApprovalFollowupSummary({
+        approvalId: "approval",
+        sessionId: "session",
+        trigger,
+        approvalFollowupText: " static follow-up ",
+        dynamicFollowupText: " dynamic follow-up ",
+        outcome: {
+          status: "completed",
+          exitCode: 0,
+          aggregated: "x".repeat(80_000),
+          timedOut: false,
+        },
+        outputLog: { path: filePath, chars: 80_000, truncated: false, failed: false },
+      });
+      if (trigger === "diagnostics") {
+        expect(summary).toContain("static follow-up\n\ndynamic follow-up");
+      }
+      const persisted = capToolResultForPersistence(
+        {
+          role: "toolResult",
+          toolCallId: "approved",
+          toolName: "exec",
+          content: [{ type: "text", text: summary }],
+          isError: false,
+          timestamp: 0,
+        },
+        8_000,
+      );
+      if (persisted.role !== "toolResult") {
+        throw new Error("expected persisted exec result");
+      }
+      const visible = persisted.content
+        .flatMap((block) => (block.type === "text" ? block.text : []))
+        .join("\n");
+      expect(visible).toMatch(/^Exec finished \(/);
+      expect(visible).toContain(filePath);
+      expect(visible.length).toBeLessThan(80_000);
+    },
+  );
+});
 
 it("returns empty output when no stream carries content", () => {
   expect(formatOutput([])).toBe("");

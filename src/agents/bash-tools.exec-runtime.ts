@@ -4,7 +4,6 @@ import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion"
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { recordDiagnosticToolExecutionDeadline } from "../infra/diagnostic-tool-execution-liveness.js";
-import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
   resolveExecApprovalAllowedDecisions,
@@ -14,29 +13,21 @@ import {
   execRequestAbortSignal,
   retainExecRequestProcess,
   withExecRequestOwners,
-  type ExecRequestOwner,
 } from "../infra/exec-request-context.js";
 import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
 import { logWarn } from "../logger.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { withChildProcessOperation } from "../process/spawn-diagnostics.js";
-import type { SpawnInitiation } from "../process/spawn-initiation.js";
 import { getProcessSupervisor, type ManagedRun } from "../process/supervisor/index.js";
 import type { RunExit, SpawnInput } from "../process/supervisor/types.js";
-import type {
-  SecretEgressProcessGrant,
-  SecretEgressSentinelBinding,
-} from "../secrets/egress-proxy/proxy-server.js";
+import type { SecretEgressProcessGrant } from "../secrets/egress-proxy/proxy-server.js";
 import { registerSecretEgressProxyProcess } from "../secrets/egress-proxy/registry.js";
 /**
  * Spawns host/sandbox processes, manages session updates/backgrounding,
  * approval messaging constants, environment safety, and exit outcome shaping.
  */
 import { formatFencedCodeBlock } from "../shared/markdown-code.js";
-import {
-  normalizeDeliveryContext,
-  type DeliveryContext,
-} from "../utils/delivery-context.shared.js";
+import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import {
   captureAgentToolSourceExecutionGuard,
@@ -56,6 +47,7 @@ import { emitExecProcessCompleted } from "./bash-tools.exec-diagnostics.js";
 import { prepareHostExecSpawn, resolveExecLaunchEnv } from "./bash-tools.exec-host-spawn.js";
 import { createExecLaunchLifecycle } from "./bash-tools.exec-launch.js";
 import { maybeNotifyOnExit, prepareExecExitNotification } from "./bash-tools.exec-notify.js";
+import { createExecOutputLog } from "./bash-tools.exec-output-log.js";
 import {
   appendExecTimeoutRetryGuidance,
   renderExecOutputText,
@@ -65,12 +57,10 @@ import { settleExecProcessExit } from "./bash-tools.exec-settlement.js";
 import type {
   ExecExitFailureKind,
   ExecProcessOutcome,
-  ExecToolDetails,
+  ExecProcessOptions,
 } from "./bash-tools.exec-types.js";
-import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { chunkString, clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
-import type { AgentToolResult } from "./runtime/index.js";
 import { createSessionSlug } from "./session-slug.js";
 import { createStreamingBinaryOutputSanitizer } from "./shell-utils.js";
 import {
@@ -308,50 +298,7 @@ export async function runExecProcess({
   releaseSpawn: initialReleaseSpawn,
   onSettledBeforeNotify: initialOnSettledBeforeNotify,
   ...opts
-}: {
-  command: string;
-  // Execute this instead of `command` (which is kept for display/session/logging).
-  // Used to sanitize safeBins execution while preserving the original user input.
-  execCommand?: string;
-  workdir: string;
-  env: Record<string, string>;
-  secretEgressBindings?: readonly SecretEgressSentinelBinding[];
-  /** Host-selected managed profile; never inferred from the requested environment. */
-  githubProfileDir?: string;
-  pathPrepend?: string[];
-  sandbox?: BashSandboxConfig;
-  containerWorkdir?: string | null;
-  usePty: boolean;
-  warnings: string[];
-  maxOutput: number;
-  pendingMaxOutput: number;
-  cleanupMs?: number;
-  notifyOnExit: boolean;
-  /** Start-time subagent identity resolved from the persisted spawn envelope. */
-  subagentSession?: boolean;
-  notifyOnExitEmptySuccess?: boolean;
-  requestOwners?: readonly ExecRequestOwner[];
-  scopeKey?: string;
-  sessionKey?: string;
-  agentId?: string;
-  /** Start-time routing policy for detached exec system events. */
-  eventRouting?: EventSessionRoutingPolicy;
-  notifyDeliveryContext?: DeliveryContext;
-  timeoutSec: number | null;
-  /** Whether exec may return a supervised session for later continuation. */
-  processContinuationAvailable?: boolean;
-  /** Cancels startup only; background process lifetime belongs to the supervisor. */
-  startupSignal?: AbortSignal;
-  onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
-  /** Runs after process finalization and before the exit wake is queued. */
-  onSettledBeforeNotify?: (outcome: ExecProcessOutcome) => void | Promise<void>;
-  /** Revalidates authorization after async preparation, immediately before each spawn attempt. */
-  beforeSpawn?: () => Promise<AgentToolResult<ExecToolDetails> | undefined>;
-  /** Rechecks host policy at the supervisor's final synchronous spawn boundary. */
-  assertCurrent?: () => void;
-  initiateSpawn?: SpawnInitiation;
-  releaseSpawn?: (reason?: "retry") => void;
-}): Promise<ExecProcessHandle> {
+}: ExecProcessOptions): Promise<ExecProcessHandle> {
   const requestSignal = execRequestAbortSignal(opts.requestOwners);
   const startupSignal =
     requestSignal && initialStartupSignal
@@ -418,6 +365,7 @@ export async function runExecProcess({
   let beforeSpawn = initialBeforeSpawn;
   let assertPolicyCurrent = initialAssertCurrent;
   let onSettledBeforeNotify = initialOnSettledBeforeNotify;
+  let outputLog: Awaited<ReturnType<typeof createExecOutputLog>> | undefined;
 
   const emitUpdate = () => {
     if (!onUpdate || session.backgrounded || session.exited) {
@@ -458,6 +406,7 @@ export async function runExecProcess({
   const handleOutput =
     (stream: "stdout" | "stderr", sanitize: (data: string) => string) => (data: string) => {
       for (const chunk of chunkString(sanitize(data))) {
+        outputLog?.append(chunk);
         appendOutput(session, stream, chunk);
         emitUpdate();
       }
@@ -555,6 +504,7 @@ export async function runExecProcess({
       appendOutput(session, "stderr", `\n${detail}\n`);
       finalOutcome.aggregated = session.aggregated.trim();
     } finally {
+      await outputLog?.close();
       finalOutcome = await settleExecProcessExit({
         session,
         outcome: finalOutcome,
@@ -690,6 +640,10 @@ export async function runExecProcess({
       onStderr: handleOutput("stderr", sanitizeStderr),
     };
     await assertPreSpawnAuthorized();
+    if (opts.saveOutput) {
+      outputLog = await createExecOutputLog(opts.workdir, sessionId);
+      session.outputLog = outputLog.log;
+    }
     if (spawnSpec.mode === "pty") {
       try {
         managedRun = await spawn({
@@ -787,4 +741,3 @@ export async function runExecProcess({
     },
   };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

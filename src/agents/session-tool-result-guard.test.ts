@@ -156,7 +156,7 @@ describe("installSessionToolResultGuard", () => {
         aggregated: "x".repeat(80_000),
         timedOut: false,
       },
-      aggregateOutputDropped: true,
+      discardedOutputChars: 1,
     });
     const content = output.content[0];
     if (!content || content.type !== "text") {

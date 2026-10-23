@@ -31,6 +31,7 @@ import {
   tail,
   type ProcessSession,
 } from "./bash-process-registry.js";
+import { execOutputLogNote } from "./bash-tools.exec-output-log.js";
 import {
   appendExecTimeoutRetryGuidance,
   compactNotifyOutput,
@@ -375,8 +376,11 @@ export async function maybeNotifyOnExit(
     await session.clearExitNotification?.();
     return;
   }
-  const summary = output
-    ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
+  const completionOutput = [output, execOutputLogNote(session.outputLog).trim()]
+    .filter(Boolean)
+    .join("\n\n");
+  const summary = completionOutput
+    ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${completionOutput}`
     : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
   const eventText = appendExecTimeoutRetryGuidance(summary, session.exitReason);
   const eventSessionKey =

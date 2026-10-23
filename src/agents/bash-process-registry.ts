@@ -17,6 +17,7 @@ import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { notifyListeners } from "../shared/listeners.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import type { ExecOutputLog } from "./bash-tools.exec-output-log.js";
 import { clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
 
 const DEFAULT_JOB_TTL_MS = 30 * 60 * 1000; // 30 minutes
@@ -146,6 +147,7 @@ type PendingPollDelivery = {
 /** One process record from execution through completed retention. */
 export interface ProcessSession {
   id: string;
+  outputLog?: ExecOutputLog;
   command: string;
   scopeKey?: string;
   sessionKey?: string;
