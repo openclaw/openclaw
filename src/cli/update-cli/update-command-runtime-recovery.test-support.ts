@@ -114,11 +114,11 @@ export function expectedManagedRuntimeRecoverySteps(
         "unset OPENCLAW_HOME OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_PROFILE OPENCLAW_GATEWAY_PORT OPENCLAW_LAUNCHD_LABEL OPENCLAW_SYSTEMD_UNIT OPENCLAW_WINDOWS_TASK_NAME OPENCLAW_WORKSPACE_DIR",
     },
     manager === "nvm"
-      ? { kind: "select-runtime", command: expectedRuntimeSelectionCommand("nvm", "24.16.0") }
+      ? { kind: "select-runtime", command: expectedRuntimeSelectionCommand("nvm", "24.22.1") }
       : {
           kind: "select-runtime",
           instruction:
-            "Install and select Node 24.16.0 using your system package manager or https://nodejs.org/en/download.",
+            "Install and select Node 24.22.1 using your system package manager or https://nodejs.org/en/download.",
         },
     {
       kind: "continue-update",
@@ -169,7 +169,7 @@ export function currentGitCoreFixture(root: string, version: string) {
     {
       kind: "select-runtime",
       instruction:
-        "Install and select Node 24.16.0 using your system package manager or https://nodejs.org/en/download.",
+        "Install and select Node 24.22.1 using your system package manager or https://nodejs.org/en/download.",
     },
     { kind: "continue-update", command: `${launcher} update` },
   ];

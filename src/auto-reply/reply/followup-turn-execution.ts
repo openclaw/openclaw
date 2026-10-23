@@ -198,6 +198,9 @@ export async function executeFollowupTurn(params: {
     ...sourceOpts,
     isHeartbeat,
     sourceReplyDeliveryMode: turn.queued.run.sourceReplyDeliveryMode,
+    bootstrapContextMode: turn.queued.run.bootstrapContextMode,
+    cleanupBundleMcpOnRunEnd: undefined,
+    scheduledAutomation: turn.queued.run.scheduledAutomation,
     internalEventExecution: turn.queued.run.internalEventExecution,
     userTurnTranscriptRecorder: turn.queued.userTurnTranscriptRecorder,
     // A refreshed runner owns presentation defaults, never another source's authority or callbacks.

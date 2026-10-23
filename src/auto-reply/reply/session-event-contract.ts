@@ -1,7 +1,30 @@
 /** Host-owned event admission and settlement contracts; no live reply/Gateway imports. */
+import type {
+  AdmittedRunContext,
+  AdmittedRunOperatorAuthority,
+} from "../../agents/admitted-run-context.js";
+import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
+import type {
+  EmbeddedAgentRunMeta,
+  EmbeddedAgentRunPayload,
+} from "../../agents/embedded-agent-runner/result.types.js";
+import type { ResolvedToolPromptFinalizer } from "../../agents/resolved-tool-prompt.types.js";
 import type { SessionEntryCreationOperation } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type {
+  CronAgentExecutionPhaseUpdate,
+  CronRunOutcome,
+  CronRunTelemetry,
+  CronStoredJob,
+} from "../../cron/types.js";
 import type { ExecRequestOwner } from "../../infra/exec-request-context.js";
+import type {
+  SourceDeliveryOutcome,
+  SourceDeliveryPlan,
+} from "../../infra/outbound/source-delivery-plan.types.js";
+import type { SystemEvent } from "../../infra/system-events.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { NormalizeReplySkipReason } from "./normalize-reply-skip-reason.js";
 
@@ -20,11 +43,20 @@ export type SessionEventOutcome = {
   executionStarted: boolean;
   delivered: boolean;
   summary?: string;
+  nextCheckMs?: number;
+  sourceDeliveryOutcome?: SourceDeliveryOutcome;
+  automationResult?: CronRunTelemetry &
+    Pick<CronRunOutcome, "diagnostics"> & {
+      replyDisposition?: NonNullable<EmbeddedAgentRunMeta["terminalReply"]>["disposition"];
+    };
+  /** Recorded controller restart outcome, before the error is flattened. */
+  interruptedByRestart?: boolean;
   error?: string;
   /** Admission policy decides whether a durable producer may retry this refusal. */
   retryable?: boolean;
   deliveryAttempted?: boolean;
   deliveryAmbiguous?: boolean;
+  deliveryError?: string;
   deliverySuppressionReason?: NormalizeReplySkipReason;
   admissionDeferred?: boolean;
 };
@@ -53,12 +85,66 @@ export type SessionEventTarget = {
   sessionKey?: string;
 };
 
+export type SessionEventOptions = {
+  agentId: string;
+  sessionKey: string;
+  source: SessionEventSource;
+  contextKey?: string;
+  sourceTurnId?: string;
+  deliveryContext?: DeliveryContext;
+  abortSignal?: AbortSignal;
+  expectedTarget?: SessionEventTarget;
+  createIfMissing?: true;
+  assertAcceptanceCurrent?: () => void;
+  onAdopted?: () => void | Promise<void>;
+  occurrences?: readonly SystemEvent[];
+  scheduledAutomation?: ScheduledSessionAutomation;
+  preserveOccurrenceOnRejection?: true;
+  readmissionAttempt?: number;
+  deliver?: boolean;
+  assertCurrent?: () => void;
+};
+
 export type SessionEventSourcePolicy = Readonly<
   Pick<SessionEventTarget, "toolsAllow" | "settings">
 >;
 
+/** Cron-owned snapshot and live occurrence fence shared with ordinary reply admission. */
+export type ScheduledSessionAutomation = {
+  job: CronStoredJob;
+  modelFallbackPolicy?: {
+    useSubagentFallbacks: boolean;
+    inheritDefaultFallbacksForAgentStringModel: boolean;
+  };
+  operatorAuthority?: AdmittedRunOperatorAuthority;
+  controlUiAdmin?: true;
+  admissionSource: NonNullable<AdmittedRunContext["admissionSource"]>;
+  executionIdentity?: import("../../cron/service/state.js").CronExecutionIdentityAdmission;
+  deliveryAttemptFence?:
+    | import("../../cron/delivery-attempt-fence.js").CronCompletionDeliveryFence
+    | null;
+  assertCurrent: () => void;
+  prepare?: () => Promise<void>;
+  preparePrompt?: (cfg: OpenClawConfig) => Promise<string>;
+  onLaneWait?: (info: { waiting: boolean }) => void;
+  onExecutionStarted?: (info: {
+    runId: string;
+    sessionId?: string;
+    sessionKey: string;
+    provider?: string;
+    model?: string;
+    isFallback?: boolean;
+  }) => void;
+  onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
+  beforeDeliver?: () => Promise<void>;
+  sourceDelivery?: SourceDeliveryPlan;
+  finalizePromptForResolvedTools?: ResolvedToolPromptFinalizer;
+};
+
 /** Producer callbacks stay bound to the queued occurrence, not a later dispatcher. */
 export type SessionEventExecution = {
+  /** Admit the prepared input to the occurrence's durable custody before queueing. */
+  prepareInput?: (recorder: UserTurnTranscriptRecorder) => Promise<void>;
   /** Original command custody survives process eviction and deferred reply execution. */
   execRequestOwners?: readonly ExecRequestOwner[];
   /** Background producers inherit this turn's automatic-delivery restriction. */
@@ -68,10 +154,21 @@ export type SessionEventExecution = {
   /** Bind the original absent target to the normal session writer before its first commit. */
   bindSessionCreation?: (operation: SessionEntryCreationOperation) => () => void;
   beforeStart?: () => Promise<void>;
+  beforeScheduledStart?: (runId: string) => Promise<void>;
   onFailed?: (error: unknown) => void;
   onSuppressed?: (
     reason: "send-policy" | "room-event" | "silent" | "message-tool-only" | "aborted",
   ) => void;
   onStarted: (runId: string) => void;
-  onTerminal: (runId: string, outcome: "completed" | "failed" | "aborted") => void | Promise<void>;
+  onTerminal: (
+    runId: string,
+    outcome: "completed" | "failed" | "aborted",
+    deliveryEvidence?: {
+      didSendViaMessagingTool?: boolean;
+      messagingToolSentTargets?: MessagingToolSend[];
+      meta?: EmbeddedAgentRunMeta;
+      payloads?: EmbeddedAgentRunPayload[];
+      resolved?: { provider: string; model: string };
+    },
+  ) => void | Promise<void>;
 };

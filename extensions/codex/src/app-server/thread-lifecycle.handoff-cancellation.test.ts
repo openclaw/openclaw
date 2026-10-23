@@ -1,5 +1,9 @@
 import { setImmediate } from "node:timers/promises";
 import { expect, it } from "vitest";
+import {
+  ensureCodexAppServerClientRuntime,
+  retainCodexAppServerLiveThread,
+} from "./client-runtime.js";
 import { bindingStoreKey, createCodexAppServerBindingStore } from "./session-binding.js";
 import { createCodexTestBindingStateStore } from "./session-binding.test-helpers.js";
 import {
@@ -13,7 +17,7 @@ import { createCodexThreadLifecycleTimingTracker } from "./thread-lifecycle-timi
 import { releaseCodexBoundLiveThread } from "./thread-lifecycle-warm.js";
 import { withCodexAppServerThreadMutation } from "./thread-ownership-queue.js";
 
-function createHandoffFixture(label: string) {
+async function createHandoffFixture(label: string) {
   const old = createClientHarness({ autoEmitExit: false });
   const successor = createClientHarness({
     onWrite: (line, send) => {
@@ -31,6 +35,8 @@ function createHandoffFixture(label: string) {
   const bindings = createCodexAppServerBindingStore(rawBindings);
   const identity = { kind: "session" as const, agentId: "main", sessionId: label };
   const threadId = `handoff-cancellation:${label}`;
+  ensureCodexAppServerClientRuntime(old.client, { agentDir: "" });
+  expect(await retainCodexAppServerLiveThread(old.client, threadId)).toBe(true);
   const handoff = (signal?: AbortSignal) =>
     releaseCodexBoundLiveThread({
       client: successor.client,
@@ -68,7 +74,7 @@ function createHandoffFixture(label: string) {
 it.each(["closed", "force-retired"] as const)(
   "cancels a %s owner handoff and admits a successor without releasing the physical writer fence",
   async (state) => {
-    const fixture = createHandoffFixture(state);
+    const fixture = await createHandoffFixture(state);
     if (state === "closed") {
       fixture.old.client.close();
     } else {
@@ -147,7 +153,7 @@ it.each(["closed", "force-retired"] as const)(
 );
 
 it("rejects a pre-aborted closed-owner handoff without retaining a client lease", async () => {
-  const fixture = createHandoffFixture("pre-aborted-closed");
+  const fixture = await createHandoffFixture("pre-aborted-closed");
   retireSharedCodexAppServerClientIfCurrent(fixture.old.client, { failActiveLeases: true });
   const controller = new AbortController();
   const reason = new Error("already cancelled");
@@ -178,7 +184,7 @@ it("rejects a pre-aborted closed-owner handoff without retaining a client lease"
 it.each(["before", "during"] as const)(
   "releases a usable retired-owner retain when cancellation arrives %s acquisition",
   async (when) => {
-    const fixture = createHandoffFixture(`usable-retired-${when}`);
+    const fixture = await createHandoffFixture(`usable-retired-${when}`);
     retireSharedCodexAppServerClientIfCurrent(fixture.old.client);
     const controller = new AbortController();
     const reason = new Error("cancelled handoff");
@@ -204,3 +210,21 @@ it.each(["before", "during"] as const)(
     }
   },
 );
+
+it("admits a retired-owner handoff when exact closure preceded listener registration", async () => {
+  const fixture = await createHandoffFixture("already-closed-thread-live-sibling");
+  retireSharedCodexAppServerClientIfCurrent(fixture.old.client);
+  fixture.old.send({ method: "thread/closed", params: { threadId: fixture.threadId } });
+  try {
+    await fixture.handoff();
+    await fixture.successor.client.request("thread/resume", { threadId: fixture.threadId });
+    expect(fixture.entry.activeLeases).toBe(1);
+    expect(fixture.old.process.exitCode).toBeNull();
+    expect(fixture.successor.writes.map((line) => JSON.parse(line))).toEqual([
+      expect.objectContaining({ method: "thread/resume", params: { threadId: fixture.threadId } }),
+    ]);
+  } finally {
+    fixture.old.emitExit();
+    fixture.cleanup();
+  }
+});

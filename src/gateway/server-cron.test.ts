@@ -508,6 +508,7 @@ function expectIsolatedRunFields(fields: Record<string, unknown>) {
     callArg(runCronIsolatedAgentTurnMock, 0, 0, "isolated cron run"),
     "isolated cron run",
   );
+  expect(options.trigger).toBe("cron");
   for (const [key, value] of Object.entries(fields)) {
     expect(options[key]).toEqual(value);
   }
@@ -2671,21 +2672,6 @@ describe("buildGatewayCronService", () => {
         server.close((error) => (error ? reject(error) : resolve()));
       });
     }
-  });
-
-  it("passes opaque custom session targets through to isolated cron runs", async () => {
-    const cfg = createCronConfig("server-cron-custom-session");
-    await withCronService(cfg, async (state) => {
-      const sessionKey = "agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==";
-      const job = await addAgentTurnJob(state, "custom-session", "hello", {
-        sessionTarget: `session:${sessionKey}`,
-      });
-
-      await state.cron.run(job.id, "force");
-
-      const options = expectIsolatedRunFields({ sessionKey });
-      expect(requireRecord(options.job, "isolated job").id).toBe(job.id);
-    });
   });
 
   it("removes only one agent's cron jobs and restores them if roster commit fails", async () => {

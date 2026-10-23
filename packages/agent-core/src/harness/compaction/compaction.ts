@@ -3,18 +3,15 @@ import {
   CHARS_PER_TOKEN_ESTIMATE,
   estimateStringChars,
 } from "@openclaw/normalization-core/cjk-chars";
-import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentCoreCompletionRuntimeDeps } from "../../runtime-deps.js";
 import type { AgentMessage, ThinkingLevel } from "../../types.js";
 import { isRuntimeContextCarrier } from "../messages.js";
 import { buildSessionContext, projectSessionEntryMessage } from "../session/session.js";
 import { selectResetKeptEntries } from "../session/tool-result-pairing.js";
 import { CompactionError, err, ok, type Result, type SessionTreeEntry } from "../types.js";
-import {
-  type CompactionDetails,
-  MAX_LATEST_USER_REQUEST_CHARS,
-  parseCompactionDetails,
-} from "./compaction-details.js";
+import { type CompactionDetails, parseCompactionDetails } from "./compaction-details.js";
+import { formatSplitTurnSourceAsk, resolveLatestUnresolvedUserRequest } from "./request-context.js";
 import { runSummarizationCompletion } from "./summarization-completion.js";
 import { buildSummaryCheckpointPrompt } from "./summary-checkpoint-prompt.js";
 import {
@@ -30,6 +27,7 @@ import {
 } from "./utils.js";
 
 export type { CompactionDetails } from "./compaction-details.js";
+export { formatRequiredAskContext } from "./request-context.js";
 
 function getMessageFromEntryForCompaction(entry: SessionTreeEntry): AgentMessage | undefined {
   if (entry.type === "compaction") {
@@ -54,45 +52,6 @@ export interface CompactionResult<T = unknown> {
 export const MAX_COMPACTION_SUMMARY_CHARS = 16_000;
 export const SUMMARY_TRUNCATED_MARKER = "\n\n[Compaction summary truncated to fit budget]";
 const TURN_CONTEXT_PREFIX = "\n\n---\n\n**Turn Context (split turn):**\n\n";
-const LATEST_USER_REQUEST_TRUNCATED_MARKER = "\n[... latest user request truncated ...]\n";
-const MAX_REQUIRED_ASK_CONTEXT_CHARS = 2_000;
-const REQUIRED_ASK_CONTEXT_TRUNCATED_MARKER = "\n[... split-turn ask context truncated ...]\n";
-
-function latestUserText(messages: AgentMessage[]): string {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message?.role === "user") {
-      const source = getCompactionContent(message.content).text.trim();
-      if (source) {
-        return source;
-      }
-    }
-  }
-  return "";
-}
-
-function extractLatestUserRequest(messages: AgentMessage[]): string | undefined {
-  const source = latestUserText(messages);
-  if (!source || source.length <= MAX_LATEST_USER_REQUEST_CHARS) {
-    return source || undefined;
-  }
-  const contentBudget = MAX_LATEST_USER_REQUEST_CHARS - LATEST_USER_REQUEST_TRUNCATED_MARKER.length;
-  const headBudget = Math.floor(contentBudget / 2);
-  return `${truncateUtf16Safe(source, headBudget)}${LATEST_USER_REQUEST_TRUNCATED_MARKER}${sliceUtf16Safe(source, -(contentBudget - headBudget))}`;
-}
-
-/** Bounds a split turn's source ask; the safeguard summary and the no-summary reduction share it. */
-export function formatRequiredAskContext(rawAsk: string): string {
-  const source = rawAsk.trim();
-  if (source.length <= MAX_REQUIRED_ASK_CONTEXT_CHARS) {
-    return source;
-  }
-  const contentBudget =
-    MAX_REQUIRED_ASK_CONTEXT_CHARS - REQUIRED_ASK_CONTEXT_TRUNCATED_MARKER.length;
-  const headBudget = Math.floor(contentBudget / 2);
-  const tailBudget = contentBudget - headBudget;
-  return `${truncateUtf16Safe(source, headBudget)}${REQUIRED_ASK_CONTEXT_TRUNCATED_MARKER}${sliceUtf16Safe(source, -tailBudget)}`;
-}
 
 export function capCompactionSummary(
   summary: string,
@@ -377,6 +336,8 @@ interface CompactionRetentionBudget {
 }
 
 interface CompactionRetentionConstraints {
+  /** The run's source input; later internal updates do not replace its human ask. */
+  requestFromEntryId?: string;
   /** An admitted, unprocessed user remains intact even before its budget is prepared. */
   preserveFromEntryId?: string;
   budget?: CompactionRetentionBudget;
@@ -583,6 +544,8 @@ export interface CompactionPreparation {
   /** Prefix messages summarized separately when compaction splits a turn. */
   turnPrefixMessages: AgentMessage[];
   isSplitTurn: boolean;
+  /** Run-owner selection is authoritative, including an empty pending request. */
+  requestState?: "unresolved" | "none";
   /** Bounded request that the run owner will resume after compaction. */
   latestUnresolvedUserRequest?: string;
   tokensBefore: number;
@@ -655,9 +618,19 @@ export function prepareCompaction(
   const boundaryEnd = effectiveEntries.length;
 
   const contextMessages = buildSessionContext(pathEntries).messages;
-  const latestUnresolvedUserRequest = requestState
-    ? (extractLatestUserRequest(contextMessages) ?? previousLatestUnresolvedUserRequest)
-    : undefined;
+  const latestRequestResult = resolveLatestUnresolvedUserRequest({
+    pathEntries,
+    contextMessages,
+    requestState,
+    requestFromEntryId: constraints?.requestFromEntryId,
+    preserveFromEntryId: constraints?.preserveFromEntryId,
+    previousLatestUnresolvedUserRequest,
+    getMessageFromEntry: getMessageFromEntryForCompaction,
+  });
+  if (!latestRequestResult.ok) {
+    return err(latestRequestResult.error);
+  }
+  const latestUnresolvedUserRequest = latestRequestResult.value;
   const contextUsage = estimateContextTokens(contextMessages);
   const tokensBefore = contextUsage.tokens;
   const totalEstimatedTokens = contextMessages.reduce(
@@ -751,6 +724,7 @@ export function prepareCompaction(
     messagesToSummarize,
     turnPrefixMessages,
     isSplitTurn: cutPoint.isSplitTurn,
+    ...(requestState ? { requestState } : {}),
     ...(latestUnresolvedUserRequest ? { latestUnresolvedUserRequest } : {}),
     tokensBefore,
     previousSummary,
@@ -860,7 +834,7 @@ export function compactWithoutSummary(
   const droppedCount =
     preparation.messagesToSummarize.length + preparation.turnPrefixMessages.length;
   const sourceAsk = preparation.isSplitTurn
-    ? formatRequiredAskContext(latestUserText(preparation.turnPrefixMessages))
+    ? formatSplitTurnSourceAsk(preparation.turnPrefixMessages)
     : "";
   // The notice and the already-bounded split-turn source ask are required; only the
   // carried summary shrinks to fit.
@@ -880,12 +854,20 @@ function previousSummaryWithoutFileOperations(
   preparation: CompactionPreparation,
 ): string | undefined {
   const { previousSummary, previousSummaryDetails } = preparation;
+  const previousRequest = previousSummaryDetails?.latestUnresolvedUserRequest;
+  const previousRequestSection = previousRequest
+    ? `## Latest unresolved user request\n${JSON.stringify(previousRequest)}\n\n`
+    : "";
+  const summaryWithoutRequest =
+    previousRequestSection && previousSummary?.includes(previousRequestSection)
+      ? previousSummary.replace(previousRequestSection, "")
+      : previousSummary;
   const previousFileOperations = previousSummaryDetails
     ? formatFileOperations(previousSummaryDetails.readFiles, previousSummaryDetails.modifiedFiles)
     : "";
-  return previousFileOperations && previousSummary?.endsWith(previousFileOperations)
-    ? previousSummary.slice(0, -previousFileOperations.length)
-    : previousSummary;
+  return previousFileOperations && summaryWithoutRequest?.endsWith(previousFileOperations)
+    ? summaryWithoutRequest.slice(0, -previousFileOperations.length)
+    : summaryWithoutRequest;
 }
 
 function finalizeCompaction(

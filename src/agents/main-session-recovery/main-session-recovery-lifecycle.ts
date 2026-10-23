@@ -2,7 +2,10 @@ import type { InternalSessionEntry as SessionEntry } from "../../config/sessions
 import { mergeRestartRecoveryTerminalRunIds } from "../../config/sessions/restart-recovery-state.js";
 import { retryAsync } from "../../infra/retry.js";
 import { isAgentLifecycleYieldedWaiting } from "../agent-lifecycle-parent-state.js";
-import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agent-run-terminal-outcome.js";
+import {
+  buildAgentRunTerminalOutcomeFromLifecycleEvent,
+  isAgentRunResumableToolTimeout,
+} from "../agent-run-terminal-outcome.js";
 import { resolveAgentRunErrorLifecycleFields } from "../run-termination.js";
 import {
   buildMainSessionRecoveryClearPatch,
@@ -86,7 +89,9 @@ export function inspectMainSessionRecoveryLifecycleEvent(params: {
       (run) => run.runId === runId && run.lifecycleGeneration === lifecycleGeneration,
     ),
   );
-  const interrupted = terminal?.reason === "cancelled" && terminal.stopReason === "restart";
+  const interrupted =
+    (terminal?.reason === "cancelled" && terminal.stopReason === "restart") ||
+    isAgentRunResumableToolTimeout(terminal);
   return {
     runId,
     lifecycleGeneration,

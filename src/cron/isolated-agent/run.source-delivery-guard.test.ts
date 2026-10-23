@@ -110,6 +110,7 @@ describe("cron source delivery policy", () => {
             force: true,
             requireExplicitTarget: false,
             requireExplicitTargetEvidence: false,
+            finalByDefault: false,
           },
           fallback: { directDelivery: true, skipWhenMessageToolSentToTarget: true },
         },

@@ -100,6 +100,7 @@ export const GATEWAY_CLIENT_CAPS = {
   TERMINAL_SESSION_METADATA: "terminal-session-metadata",
   TERMINAL_UPLOAD_PATH_STYLE: "terminal-upload-path-style",
   TOOL_EVENTS: "tool-events",
+  UI_AGENT_GITHUB_SETTINGS: "ui-agent-github-settings",
   UI_COMMANDS: "ui-commands",
   ULTRAFAST: "ultrafast",
   USAGE_REFRESHING: "usage-refreshing",

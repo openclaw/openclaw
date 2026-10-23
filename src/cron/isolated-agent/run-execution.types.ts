@@ -45,6 +45,7 @@ export type CronRunExecutionParams = Pick<
     RunCronAgentTurnParams,
     | "cfg"
     | "job"
+    | "trigger"
     | "lane"
     | "onLaneWait"
     | "executionIdentity"

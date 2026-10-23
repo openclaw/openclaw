@@ -377,16 +377,17 @@ function resolveClaudeCliInternalSourceTool(text: string): string | undefined {
   if (body.startsWith(HEARTBEAT_PROMPT) || body.startsWith(HEARTBEAT_RESPONSE_TOOL_PROMPT)) {
     return "heartbeat";
   }
-  // Restart recovery only, by its full opening sentence behind the CLI timestamp envelope;
+  // Restart recovery only, by a canonical opening behind the CLI timestamp envelope;
   // the bare system-turn tag is too easy for a person to type.
+  const undatedBody = body.replace(
+    /^\[[A-Z][a-z]{2} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]\n]*\] /u,
+    "",
+  );
   if (
-    body
-      .replace(/^\[[A-Z][a-z]{2} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]\n]*\] /u, "")
-      .startsWith(
-        formatSystemTurnPrompt(
-          "Your previous turn was interrupted by a gateway restart while OpenClaw was waiting on tool/model work. ",
-        ),
-      )
+    [
+      "Your previous turn was interrupted while OpenClaw was waiting on tool/model work. ",
+      "Your previous turn was interrupted by a gateway restart while OpenClaw was waiting on tool/model work. ",
+    ].some((opening) => undatedBody.startsWith(formatSystemTurnPrompt(opening)))
   ) {
     return "restart_recovery";
   }

@@ -247,11 +247,15 @@ describe("handleEmbeddedPromptFailure", () => {
       const fields = resolveAgentRunErrorLifecycleFields(error, undefined);
       expect(fields).toEqual({
         stopReason: "timeout",
-        ...(phase === "prompt" ? { timeoutPhase: "provider", providerStarted: true } : {}),
+        ...(phase === "prompt"
+          ? { timeoutPhase: "provider", providerStarted: true }
+          : phase === "tool_execution"
+            ? { timeoutPhase: "tool_execution" }
+            : {}),
       });
       expect(
         buildAgentRunTerminalOutcomeFromLifecycleEvent({ phase: "error", data: fields }).reason,
-      ).toBe(phase === "prompt" ? "hard_timeout" : "timed_out");
+      ).toBe(phase === "compaction" ? "timed_out" : "hard_timeout");
     },
   );
 
@@ -271,7 +275,11 @@ describe("handleEmbeddedPromptFailure", () => {
     params.normalizedAttempt.attempt.promptTimeoutOutcome = { providerStarted: true };
     const error = await handleEmbeddedPromptFailure(params).catch((failure: unknown) => failure);
     const fields = resolveAgentRunErrorLifecycleFields(error, undefined);
-    expect(fields).toEqual({ stopReason: "timeout", providerStarted: true });
+    expect(fields).toEqual({
+      stopReason: "timeout",
+      timeoutPhase: "tool_execution",
+      providerStarted: true,
+    });
     expect(
       buildAgentRunTerminalOutcomeFromLifecycleEvent({ phase: "error", data: fields }).reason,
     ).toBe("hard_timeout");
@@ -290,7 +298,11 @@ describe("handleEmbeddedPromptFailure", () => {
 
       expect(resolveAgentRunErrorLifecycleFields(error, undefined)).toEqual({
         stopReason: "timeout",
-        ...(phase === "prompt" ? { timeoutPhase: "provider", providerStarted: true } : {}),
+        ...(phase === "prompt"
+          ? { timeoutPhase: "provider", providerStarted: true }
+          : phase === "tool_execution"
+            ? { timeoutPhase: "tool_execution" }
+            : {}),
       });
       expect(params.failover.advanceAuthProfile).not.toHaveBeenCalled();
       expect(error).toHaveProperty("cause", params.terminal.promptError);

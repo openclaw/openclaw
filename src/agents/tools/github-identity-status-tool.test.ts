@@ -37,4 +37,35 @@ describe("github_identity_status tool", () => {
     });
     expect(JSON.stringify(result)).toContain("Ask the operator");
   });
+
+  it("directs capable sessions to the masked reconnect action", async () => {
+    const callGateway = vi.fn(async () => ({
+      agentId: "main",
+      selectedScope: "agent" as const,
+      selected: { scope: "agent" as const, configured: false, identity: null },
+      effective: {
+        source: "system-configured" as const,
+        credentialKind: "managed-oauth" as const,
+        credentialState: "configured_unavailable" as const,
+        account: null,
+        gitAuthor: null,
+        evidence: "none" as const,
+        accessExpiresAtMs: null,
+        refreshState: "unavailable" as const,
+        oauthScopes: [],
+        repositoryGrants: "unknown" as const,
+      },
+    }));
+    const tool = createGitHubIdentityStatusTool({
+      callGateway: callGateway as InProcessGatewayCaller,
+      githubIdentitySettingsAvailable: true,
+    });
+
+    const result = await withGatewayToolCallerIdentity(
+      { agentId: "main", sessionKey: "agent:main:status" },
+      async () => await tool.execute("status-2", {}),
+    );
+
+    expect(JSON.stringify(result)).toContain("github_identity_settings");
+  });
 });

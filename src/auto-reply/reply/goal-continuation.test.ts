@@ -4,8 +4,13 @@ import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { createChatSendLateFollowupDisposition } from "../../gateway/server-methods/chat-send-late-followup.js";
+import type { WorkerSessionPlacementRecord } from "../../gateway/worker-environments/placement-record.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { enqueueGoalContinuation, isGoalContinuationCurrent } from "./goal-continuation.js";
+import {
+  enqueueGoalContinuation,
+  isGoalContinuationCurrent,
+  isGoalContinuationPlacementCurrent,
+} from "./goal-continuation.js";
 import { enqueueFollowupRun, getFollowupQueueDepth } from "./queue/enqueue.js";
 import type { FollowupRun } from "./queue/types.js";
 import { createReplyOperation } from "./reply-run-registry.operation.js";
@@ -25,6 +30,34 @@ vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
 vi.mock("./queue/enqueue.js", () => ({
   enqueueFollowupRun: vi.fn(() => true),
   getFollowupQueueDepth: vi.fn(() => 0),
+}));
+
+const workerPlacement = vi.hoisted(() => ({
+  current: vi.fn<() => WorkerSessionPlacementRecord | undefined>(),
+}));
+vi.mock("../../plugins/runtime/gateway-request-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/runtime/gateway-request-scope.js")>()),
+  getInProcessGatewayRequestContext: () => ({
+    workerSessionPlacementService: {
+      prepareSessionPlacement: async () => ({
+        prepareRead: () => undefined,
+        current: workerPlacement.current,
+        release: () => {},
+      }),
+    },
+  }),
+}));
+vi.mock("../../agents/harness/registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/harness/registry.js")>()),
+  getRegisteredAgentHarness: () => ({
+    harness: {
+      id: "codex",
+      label: "Codex",
+      cloudPlacement: { mode: "remote-exec" },
+      supports: () => ({ supported: true }),
+      runAttempt: async () => normal,
+    },
+  }),
 }));
 
 const identity = {
@@ -98,6 +131,7 @@ function fixture() {
 beforeEach(() => {
   vi.useFakeTimers();
   children.mockResolvedValue([]);
+  workerPlacement.current.mockReset();
   vi.mocked(enqueueFollowupRun).mockClear();
   vi.mocked(getFollowupQueueDepth).mockReturnValue(0);
   vi.mocked(readSessionEntryReadOnlyInWorker).mockResolvedValue(entry());
@@ -108,6 +142,91 @@ afterEach(() => {
 });
 
 describe("Goal continuation eligibility", () => {
+  it.each(["local", "worker-required", "no-authority", "revoked"] as const)(
+    "admits unplaced Codex goals only with current local authority (%s)",
+    async (mode) => {
+      const f = fixture();
+      vi.mocked(readSessionEntryReadOnlyInWorker).mockResolvedValue({
+        ...entry(),
+        agentHarnessId: "codex",
+      });
+      workerPlacement.current.mockReturnValue(undefined);
+      if (mode !== "no-authority") {
+        f.params.base.operatorAuthority = {
+          profileId: "operator",
+          scopes: ["operator.admin"],
+          assertCurrent: () => {
+            if (mode === "revoked") {
+              throw new Error("operator revoked");
+            }
+          },
+        };
+      }
+      if (mode === "worker-required") {
+        f.params.base.run.config = { cloudWorkers: { requiredProfile: "worker" } };
+      }
+      if (mode === "revoked") {
+        await expect(enqueueGoalContinuation(f.params)).rejects.toThrow("operator revoked");
+      } else {
+        expect(await enqueueGoalContinuation(f.params)).toBe(mode === "local");
+      }
+      expect(enqueueFollowupRun).toHaveBeenCalledTimes(mode === "local" ? 1 : 0);
+      if (mode === "local") {
+        expect(vi.mocked(enqueueFollowupRun).mock.calls[0]![1].goalContinuation).toEqual({
+          ...identity,
+          localCodexGoal: true,
+        });
+      }
+    },
+  );
+
+  it.each([
+    { marker: "local", current: "local", expected: true },
+    { marker: "local", current: "worker", expected: false },
+    { marker: "worker", current: "local", expected: false },
+    { marker: "worker", current: "worker", expected: true },
+  ] as const)(
+    "revalidates $marker Codex placement at admission when current is $current",
+    async ({ marker, current, expected }) => {
+      workerPlacement.current.mockReturnValue({
+        agentId: "main",
+        sessionKey: "agent:main:goal",
+        sessionId: identity.sessionId,
+        state: current === "local" ? "local" : "requested",
+        executionMode: "remote-exec",
+        generation: 1,
+        turnClaim: null,
+        createdAtMs: 1,
+        updatedAtMs: 1,
+        stateChangedAtMs: 1,
+        environmentId: null,
+        activeOwnerEpoch: null,
+        workspaceBaseManifestRef: null,
+        remoteWorkspaceDir: null,
+        workerBundleHash: null,
+        lastTranscriptAckCursor: null,
+        lastLiveEventAckCursor: null,
+        terminalReason: null,
+        terminalAtMs: null,
+        recoveryError: null,
+      });
+      await expect(
+        isGoalContinuationPlacementCurrent({
+          continuation: {
+            ...identity,
+            ...(marker === "worker"
+              ? { workerGoal: true as const }
+              : { localCodexGoal: true as const }),
+          },
+          agentId: "main",
+          sessionKey: "agent:main:goal",
+          hasOperatorAuthority: true,
+          requiresWorker: false,
+        }),
+      ).resolves.toBe(expected);
+    },
+  );
+
   it.each(["paused", "blocked", "complete", "usage_limited", "budget_limited"] as const)(
     "does not resume %s goals",
     (status) => {

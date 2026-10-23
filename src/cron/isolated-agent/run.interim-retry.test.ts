@@ -159,7 +159,7 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
       cacheRead: 0,
       cacheWrite: 0,
     });
-    expect(result.usage).toEqual({ input_tokens: 0, output_tokens: 0 });
+    expect(result.usage).toBeUndefined();
     expect(cronSession.sessionEntry.estimatedCostUsd).toBeUndefined();
     expect(cronSession.sessionEntry.totalTokens).toBeUndefined();
     expect(cronSession.sessionEntry.totalTokensFresh).toBe(false);

@@ -430,7 +430,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.21.0"
+  NODE_VERSION: "24.22.1"
   PACKAGE_ARTIFACT_NAME: package-under-test-${{ github.run_id }}-${{ github.run_attempt }}
   TELEGRAM_PLUGIN_REGISTRY_ARTIFACT_NAME: package-acceptance-telegram-plugin-registry-${{ github.run_id }}-${{ github.run_attempt }}
 
@@ -1241,7 +1241,7 @@ jobs:
       - name: Setup Node 24
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24
+          node-version: 24.22.1
 
       - name: Download package-under-test artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8

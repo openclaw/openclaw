@@ -1,6 +1,7 @@
 /** Repairs interrupted and finalized cron runs while the service starts. */
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { resolveCronCompletionStatus } from "../completion-status.js";
+import { STARTUP_INTERRUPTED_ERROR } from "../execution-error-constants.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import type { CronRunLogEntry } from "../run-log-types.js";
 import type { InterruptedStartupRun } from "../store/run-recovery.types.js";
@@ -14,8 +15,6 @@ import {
   applyTriggerNoFireResult,
 } from "./timer-outcomes.js";
 import { applyTriggerRunResult } from "./timer-trigger.js";
-
-export const STARTUP_INTERRUPTED_ERROR = "cron: job interrupted by gateway restart";
 
 function resolveOneShotReplacementAtMs(job: CronJob, runningAtMs: number): number | undefined {
   if (job.schedule.kind !== "at" || !job.enabled) {

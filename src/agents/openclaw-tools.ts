@@ -32,6 +32,7 @@ import {
   createHostedConversationTools,
   createHostedGatewayTools,
 } from "./openclaw-tools.gateway.js";
+import { createGitHubTools } from "./openclaw-tools.github.js";
 import {
   isToolExplicitlyAllowedByFactoryPolicy,
   mergeFactoryPolicyList,
@@ -64,8 +65,6 @@ import { createDashboardTool } from "./tools/dashboard-tool.js";
 import { createDecisionTool } from "./tools/decision-tool.js";
 import { createEmbeddedCallGateway } from "./tools/embedded-gateway-stub.js";
 import { createGatewayToolCallerWrapper } from "./tools/gateway-caller-context.js";
-import { createGitHubIdentityStatusTool } from "./tools/github-identity-status-tool.js";
-import { createGitHubPublishTool } from "./tools/github-publish-tool.js";
 import {
   createCreateGoalTool,
   createGetGoalTool,
@@ -450,6 +449,7 @@ function* createOpenClawToolsSteps(
       })
     : null;
   const transcriptsTool = resolveTranscriptsTool(resolvedConfig, sessionAgentId, options);
+  const githubTools = createGitHubTools(options);
   const tools: AnyAgentTool[] = [
     ...createInstalledSkillTools(options?.installedSkills ?? []),
     createDashboardTool({
@@ -494,6 +494,7 @@ function* createOpenClawToolsSteps(
           createScreenTool({
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             agentId: sessionAgentId,
+            githubIdentitySettingsAvailable: githubTools.identitySettingsAvailable,
           }),
           createThemeTool(),
           ...(options?.sandboxed
@@ -532,8 +533,7 @@ function* createOpenClawToolsSteps(
     heartbeatTool,
     createDecisionTool(sessionAgentId, options),
     createTtsTool({ ...options, agentId: sessionAgentId }),
-    options?.githubPublicationAvailable !== undefined ? createGitHubIdentityStatusTool() : null,
-    options?.githubPublicationAvailable === true ? createGitHubPublishTool() : null,
+    ...githubTools.tools,
     transcriptsTool,
     imageGenerateTool,
     musicGenerateTool,

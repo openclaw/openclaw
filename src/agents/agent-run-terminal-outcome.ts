@@ -489,10 +489,16 @@ export function buildAgentRunTerminalOutcomeFromAttempt(input: {
   const assistant = projected.cleanupYieldAborted ? undefined : input.assistant;
   const abortFields = resolveAgentRunAbortLifecycleFields(input.abortSignal);
   const timedOut = projected.timedOut || abortFields.stopReason === "timeout";
-  const timedOutDuringPrompt =
-    projected.timedOut && input.terminal.kind === "timeout" && input.terminal.phase === "prompt";
+  const attemptTimeoutPhase =
+    projected.timedOut && input.terminal.kind === "timeout" ? input.terminal.phase : undefined;
+  const timedOutDuringPrompt = attemptTimeoutPhase === "prompt";
   const timeoutPhase =
-    input.promptTimeoutOutcome?.timeoutPhase ?? (timedOutDuringPrompt ? "provider" : undefined);
+    input.promptTimeoutOutcome?.timeoutPhase ??
+    (attemptTimeoutPhase === "tool_execution"
+      ? "tool_execution"
+      : timedOutDuringPrompt
+        ? "provider"
+        : undefined);
   const providerStarted =
     input.promptTimeoutOutcome?.providerStarted ?? (timedOutDuringPrompt ? true : undefined);
   const restartAborted = hasNestedAbortReason(projected.promptError, isAgentRunRestartAbortReason);
@@ -524,6 +530,13 @@ export function buildAgentRunTerminalOutcomeFromAttempt(input: {
     timeoutPhase,
     providerStarted,
   });
+}
+
+/** Tool execution deadlines preserve an unknown-effect checkpoint for safe continuation. */
+export function isAgentRunResumableToolTimeout(
+  outcome: AgentRunTerminalOutcome | undefined,
+): boolean {
+  return outcome?.reason === "hard_timeout" && outcome.timeoutPhase === "tool_execution";
 }
 
 /** Builds a terminal outcome from wait paths where status may still be pending/unknown. */

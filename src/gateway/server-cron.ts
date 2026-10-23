@@ -22,7 +22,6 @@ import {
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { listKnownSessionStoreAgentIdsAsync } from "../config/sessions/targets-runtime.js";
 import { listConfiguredSessionStoreAgentIds } from "../config/sessions/targets.js";
-import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import { redactCronCommandSummaryForExternalDelivery } from "../cron/command-output-summary.js";
@@ -98,7 +97,9 @@ import {
   fireOnExitJob,
   fireStreamJob,
   formatOnExitRunSummary,
+  runGatewayCronSessionEvent,
 } from "./server-cron-event-dispatch.js";
+import { sanitizeCronHeartbeatOverride } from "./server-cron-heartbeat.js";
 import {
   dispatchGatewayCronFinishedNotifications,
   sendGatewayCronWebhook,
@@ -136,14 +137,6 @@ export type GatewayCronExitWatcherHandoff = {
   adopt: (watchers: CronExitWatchers) => Promise<void> | void;
   stopOwner: () => Promise<void>;
 };
-
-function sanitizeCronHeartbeatOverride(
-  heartbeat: AgentDefaultsConfig["heartbeat"] | undefined,
-): AgentDefaultsConfig["heartbeat"] | undefined {
-  return heartbeat?.target === "last"
-    ? { ...heartbeat, to: undefined, accountId: undefined }
-    : heartbeat;
-}
 
 export function buildGatewayCronService(params: {
   scheduler: GatewayScheduler;
@@ -537,6 +530,7 @@ export function buildGatewayCronService(params: {
       );
       return remove ? { accepted: true, remove } : { accepted: false };
     },
+    runSessionEvent: (request) => runGatewayCronSessionEvent(request, resolveCronTarget),
     resolveOriginDeliveryContext: (opts) => {
       // Resolve the wake target the same way the enqueue/heartbeat deps do,
       // then read the channel-correct delivery context from that session's
@@ -577,6 +571,7 @@ export function buildGatewayCronService(params: {
         deps: params.deps,
         agentId,
         sessionKey,
+        trigger: "cron",
         lane: "cron",
       });
     },

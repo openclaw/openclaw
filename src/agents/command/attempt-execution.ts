@@ -512,11 +512,9 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
           ) {
             return;
           }
-
           log.warn(
             `cli session reset: provider=${sanitizeForLog(cliExecutionProvider)} reason=transcript-missing sessionKey=${params.sessionKey ?? params.sessionId}`,
           );
-
           await clearCliBinding();
         };
         const mediaTaskIdsBefore = getGeneratedMediaTaskIdsForSessionKey(

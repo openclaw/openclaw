@@ -97,7 +97,11 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     sessionStore,
   } = params;
   const assertPreparationActive = composeSessionSourceAssertion(
-    [opts?.operatorAuthority?.assertCurrent, opts?.internalEventExecution?.assertCurrent],
+    [
+      opts?.operatorAuthority?.assertCurrent,
+      opts?.internalEventExecution?.assertCurrent,
+      opts?.scheduledAutomation?.assertCurrent,
+    ],
     (assertSourceCurrent) => {
       opts?.abortSignal?.throwIfAborted();
       opts?.replyOperation?.abortSignal.throwIfAborted();
@@ -404,7 +408,16 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         sessionKey: context.runtimePolicySessionKey,
       });
   const resolveRuntimeAuthProfile = async () => {
-    if (useFastReplyRuntime && !params.configuredProfileId && !modelState.operatorModelOverride) {
+    const binding = opts?.scheduledAutomation?.job.inferenceBinding;
+    if (binding) {
+      return { authProfileId: binding.profileId, authProfileIdSource: binding.source };
+    }
+    if (
+      useFastReplyRuntime &&
+      !params.configuredProfileId &&
+      !modelState.operatorModelOverride &&
+      !opts?.scheduledAutomation
+    ) {
       return {
         authProfileId: preparedSessionState.sessionEntry?.authProfileOverride,
         authProfileIdSource: resolveCollapsedSessionAuthPinSource(
@@ -415,6 +428,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     const shouldUseEphemeralSession =
       params.autoFallbackPrimaryProbe !== undefined ||
       params.configuredProfileId !== undefined ||
+      opts?.scheduledAutomation !== undefined ||
       modelState.operatorModelOverride === true;
     const authSessionKey = shouldUseEphemeralSession ? (sessionKey ?? sessionIdFinal) : sessionKey;
     const authSessionEntry =

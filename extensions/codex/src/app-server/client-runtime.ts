@@ -8,6 +8,8 @@ import {
   initializeCodexClientForkSettings,
   forgetCodexClientForkSettings,
 } from "./client-fork-settings.js";
+import * as runtimeLimits from "./client-runtime-limits.js";
+import * as threadClosure from "./client-thread-closure.js";
 import {
   createThreadOwnerToken,
   isThreadClaimed,
@@ -50,13 +52,6 @@ type ClientRuntime = ThreadOwnershipState &
     evictionTimer?: ReturnType<typeof setTimeout>;
     onThreadOwnershipChange?: () => void;
   };
-
-/** Match Codex's native grace window without retaining inactive conversations indefinitely. */
-const CODEX_APP_SERVER_LIVE_THREAD_IDLE_TIMEOUT_MS = 30 * 60_000;
-/** Native-child parents are active ownership, so only otherwise-idle threads count against this cap. */
-const CODEX_APP_SERVER_LIVE_THREAD_MAX_IDLE = 64;
-/** Return a deterministic error before Codex cancels its ten-second external-auth request. */
-const CODEX_EXTERNAL_AUTH_REFRESH_TIMEOUT_MS = 9_000;
 
 // The shared app-server client is build-scoped. Its retained and claimed owners
 // must follow the same physical client across duplicate plugin module copies.
@@ -113,7 +108,7 @@ export async function readCodexClientSessionMeta(
     sessionsRoot,
     boundRolloutPath,
     threadId,
-    CODEX_APP_SERVER_LIVE_THREAD_MAX_IDLE,
+    runtimeLimits.LIVE_THREAD_MAX_IDLE,
   );
 }
 
@@ -145,6 +140,7 @@ export function ensureCodexAppServerClientRuntime(
     workspaceReferences: new Map(),
   };
   configuredClients.set(client, runtime);
+  threadClosure.ensureCodexAppServerThreadClosureTracking(client);
   initializeCodexClientForkSettings(client);
   client.addCloseHandler(() => {
     // Pending releases may settle after close; their continuations must never
@@ -191,7 +187,7 @@ export function ensureCodexAppServerClientRuntime(
             : {}),
           config: runtime.context.config,
         }),
-        CODEX_EXTERNAL_AUTH_REFRESH_TIMEOUT_MS,
+        runtimeLimits.EXTERNAL_AUTH_REFRESH_TIMEOUT_MS,
         "Codex app-server ChatGPT token refresh timed out before its external-auth deadline. Retry the request; if it persists, sign in again with OpenClaw.",
       );
       if (runtime.closed) {
@@ -329,7 +325,7 @@ async function releaseRetainedThread(
       // A failed unsubscribe leaves the native subscription alive. Retain it as
       // most recently used; renewing TTL prevents a zero-delay retry spin.
       if (retained.ephemeralPolicy === undefined) {
-        retained.expiresAt = performance.now() + CODEX_APP_SERVER_LIVE_THREAD_IDLE_TIMEOUT_MS;
+        retained.expiresAt = performance.now() + runtimeLimits.LIVE_THREAD_IDLE_TIMEOUT_MS;
       }
       runtime.retainedThreads.set(threadId, retained);
     }
@@ -365,7 +361,7 @@ async function evictExcessIdleThreads(
         thread.ephemeralPolicy === undefined && !runtime.protectedThreads.has(threadId),
     );
   let idleThreadIds = idleThreads();
-  while (idleThreadIds.length > CODEX_APP_SERVER_LIVE_THREAD_MAX_IDLE) {
+  while (idleThreadIds.length > runtimeLimits.LIVE_THREAD_MAX_IDLE) {
     await releaseRetainedThread(client, runtime, idleThreadIds[0]![0]);
     idleThreadIds = idleThreads();
   }
@@ -399,6 +395,7 @@ export async function retainCodexAppServerLiveThread(
     return false;
   }
   const previousOwner = runtime.retainedThreads.get(threadId)?.ownerToken;
+  threadClosure.clearCodexAppServerThreadClosed(client, threadId);
   runtime.retainedThreads.delete(threadId);
   const retained: RetainedLiveThread = {
     ownerToken,
@@ -409,7 +406,7 @@ export async function retainCodexAppServerLiveThread(
     // rather than subjecting it to the persistent registry's idle eviction.
     expiresAt:
       ephemeralPolicy === undefined
-        ? performance.now() + CODEX_APP_SERVER_LIVE_THREAD_IDLE_TIMEOUT_MS
+        ? performance.now() + runtimeLimits.LIVE_THREAD_IDLE_TIMEOUT_MS
         : Number.POSITIVE_INFINITY,
     release:
       (releaseThread ? (physicalThreadReleases.get(releaseThread) ?? releaseThread) : undefined) ??
@@ -499,7 +496,7 @@ export async function claimCodexAppServerLiveThread(
     return undefined;
   }
   const retained = runtime.retainedThreads.get(threadId) ?? {
-    expiresAt: performance.now() + CODEX_APP_SERVER_LIVE_THREAD_IDLE_TIMEOUT_MS,
+    expiresAt: performance.now() + runtimeLimits.LIVE_THREAD_IDLE_TIMEOUT_MS,
     release: defaultThreadRelease(client),
   };
   return claimCodexAppServerThreadOwnership(client, runtime, threadId, retained, onInvalidated);
@@ -779,7 +776,7 @@ export function protectCodexAppServerLiveThread(
         // A detached child is live activity, not parent idleness. Its terminal
         // delivery starts the parent's normal warm-session retention window.
         if (retained.ephemeralPolicy === undefined) {
-          retained.expiresAt = performance.now() + CODEX_APP_SERVER_LIVE_THREAD_IDLE_TIMEOUT_MS;
+          retained.expiresAt = performance.now() + runtimeLimits.LIVE_THREAD_IDLE_TIMEOUT_MS;
         }
         runtime.retainedThreads.delete(threadId);
         runtime.retainedThreads.set(threadId, retained);

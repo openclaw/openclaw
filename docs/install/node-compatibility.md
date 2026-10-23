@@ -12,13 +12,13 @@ This reference covers supported Node.js lines, why the minimum versions exist, a
 
 | Line    | Status      | Minimum         | Notes                                                     |
 | ------- | ----------- | --------------- | --------------------------------------------------------- |
-| Node 26 | Recommended | `>=26.1.0`      | Faster Gateway startup and lower memory use than Node 24. |
-| Node 24 | Supported   | `>=24.16.0 <25` | LTS line used by CI and the Linux installer.              |
+| Node 26 | Recommended | `>=26.12.1`     | Faster Gateway startup and lower memory use than Node 24. |
+| Node 24 | Supported   | `>=24.22.1 <25` | LTS line used by CI and the Linux installer.              |
 | Node 25 | Unsupported | —               | Excluded by the current TEXT decoder floor.               |
 | Node 23 | Unsupported | —               | Excluded earlier for incompatible `node:sqlite` behavior. |
-| Node 22 | Unsupported | —               | Unsupported since the 24.16.0/26.1.0 floor.               |
+| Node 22 | Unsupported | —               | Unsupported since the 24.22.1/26.12.1 floor.              |
 
-The exact engines expression is `>=24.16.0 <25 || >=26.1.0`. It remains the documented support policy and the `package.json` engine range used by package managers.
+The exact engines expression is `>=24.22.1 <25 || >=26.12.1`. It remains the documented support policy and the `package.json` engine range used by package managers.
 
 The Bun opt-in runtime requires **Bun 1.4.3+** or the pinned OpenClaw fork; see [Bun compatibility](/install/bun-compatibility).
 
@@ -32,7 +32,7 @@ Installers retain the numeric Node requirement and add the check as a second gat
 
 Update recovery recommends the lowest standard release satisfying both the
 candidate's engine range and this updater's supported range above. For example,
-an older candidate requiring `>=22.19.0` still needs a recommendation of 24.16.0
+an older candidate requiring `>=22.19.0` still needs a recommendation of 24.22.1
 so the updater can run. If the ranges have no common supported release, the
 message identifies both ranges and asks you to select a compatible target.
 After selecting the runtime, continue through the retained absolute launcher so
@@ -43,7 +43,7 @@ the updater rechecks prefix and service ownership before installation; follow th
 
 The **SQLite WAL-reset corruption bug** requires a safe loaded library: SQLite **3.51.3+**, **3.50.7+ within 3.50.x**, or **3.44.6+ within 3.44.x**. OpenClaw validates the library actually loaded because Node builds linked to shared system SQLite can use a different version from Node's own metadata.
 
-Separately, the **`node:sqlite` TEXT decoder** in Node 22.23.x, 24.15.0, 25.9.0, and 26.0.0 silently truncates values at embedded NUL characters. The first fixed releases are Node 24.16.0 and 26.1.0; a WAL-safe SQLite library does not fix this decoder. Node 23 was excluded earlier for incompatible `node:sqlite` behavior.
+Separately, the **`node:sqlite` TEXT decoder** in Node 22.23.x, 24.15.0, 25.9.0, and 26.0.0 silently truncates values at embedded NUL characters. The first fixed releases are Node 24.22.1 and 26.12.1; a WAL-safe SQLite library does not fix this decoder. Node 23 was excluded earlier for incompatible `node:sqlite` behavior.
 
 ## V8 compiler settings
 
@@ -66,7 +66,7 @@ Recommended, supported, and provisioned are three different things.
 | Platform        | Installer path                              | Node provisioned                                                                           |
 | --------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | Linux           | `install.sh`: apt/dnf/yum via NodeSource    | Node 24.x LTS.                                                                             |
-| Linux and macOS | Rootless `install-cli.sh`                   | Node 24.21.0 by default; existing runtime reuse and explicit version selection can differ. |
+| Linux and macOS | Rootless `install-cli.sh`                   | Node 24.22.1 by default; existing runtime reuse and explicit version selection can differ. |
 | macOS           | `install.sh`: Homebrew `node`               | Node 26; no exact patch pinned, and an existing supported Node can be retained.            |
 | Windows         | `install.ps1`: Chocolatey, Scoop, or winget | LTS package; no exact patch pinned, validated after installation.                          |
 | Windows         | `install.ps1`: portable fallback            | Latest 26.x Windows zip.                                                                   |
@@ -81,7 +81,7 @@ node -v
 
 Use a supported Node release for the recommended installation path. A broken TEXT decoder is refused with this diagnostic:
 
-> `Node <v>: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.16+/26.1+ or a build with the fix`
+> `Node <v>: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.22.1+/26.12.1+ or a build with the fix`
 
 ## History across releases
 
@@ -90,7 +90,7 @@ Rows identify the first effective release, including a beta when applicable. Rec
 | Release                              | Node requirement                                 | What changed and why                                                                                                                                                                                          |
 | ------------------------------------ | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Unreleased (main)                    | Unchanged support policy                         | Replaces decoder version-only admission with an in-memory NUL round-trip check; capable vendor builds on Node 24+ may run with an unsupported-version note. Node 22/23 remain excluded.                       |
-| v2026.9.3                            | `>=24.16.0 <25 \|\| >=26.1.0`                    | Raises the Node 24 floor and drops Node 22 and 25 to prevent embedded-NUL TEXT truncation; Node 23 remains excluded. Official Node-based support for macOS 11–13.4 and Linux ARMv7 provisioning ends. #140672 |
+| v2026.9.3                            | `>=24.22.1 <25 \|\| >=26.12.1`                   | Raises the Node 24 floor and drops Node 22 and 25 to prevent embedded-NUL TEXT truncation; Node 23 remains excluded. Official Node-based support for macOS 11–13.4 and Linux ARMv7 provisioning ends. #140672 |
 | v2026.8.2                            | `>=22.22.3 <23 \|\| >=24.15.0 <25 \|\| >=25.9.0` | Preserves supported RPM-owned Node packages with unsafe system SQLite and provisions a separate user-space runtime. The numeric range and loaded-library safety requirement stay unchanged. #134166           |
 | v2026.8.1                            | `>=22.22.3 <23 \|\| >=24.15.0 <25 \|\| >=25.9.0` | Rootless defaults advance to 24.19.0, or 22.23.2 on ARMv7. Linux package provisioning returns to Node 24 LTS to avoid prerelease repository builds. #130369                                                   |
 | v2026.8.1-beta.3; stable v2026.8.1   | `>=22.22.3 <23 \|\| >=24.15.0 <25 \|\| >=25.9.0` | Centralizes release classification in `node-version.mjs`, rejecting prerelease, nightly, and malformed version labels. #124812                                                                                |

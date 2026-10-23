@@ -9,6 +9,7 @@ import {
 } from "../active-jobs.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { isHeartbeatTaskCronJob } from "../heartbeat-task.js";
+import { resolveCronRunAdmissionSource } from "../run-authority.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { resolveCronToolsAllowExecTargetRecoveryError } from "../scheduled-tool-policy.js";
 import { cronScriptFailureMetadata } from "../script-failure.js";
@@ -225,6 +226,19 @@ export async function executeJobCore(
     );
     return triggerEval ? { ...result, triggerEval } : result;
   }
+  if (
+    effectiveJob.sessionTarget.startsWith("session:") &&
+    effectiveJob.payload.kind === "agentTurn"
+  ) {
+    const result = await executeSharedSessionCronJob(
+      state,
+      effectiveJob,
+      effectiveJob.payload.message,
+      abortSignal,
+      options,
+    );
+    return triggerEval ? { ...result, triggerEval } : result;
+  }
 
   const result = await executeDetachedCronJob(state, effectiveJob, abortSignal, options);
   return triggerEval ? { ...result, triggerEval } : result;
@@ -334,6 +348,42 @@ async function executeMainSessionCronJob(
   return { status: "ok", summary: text };
 }
 
+async function executeSharedSessionCronJob(
+  state: CronServiceState,
+  job: CronStoredJob,
+  text: string,
+  abortSignal: AbortSignal | undefined,
+  options?: ExecuteJobCoreOptions,
+): Promise<CronJobExecutionResult> {
+  if (!state.deps.runSessionEvent) {
+    return {
+      status: "error",
+      error: "Session event execution is unavailable; restart the Gateway and retry",
+    };
+  }
+  const assertCurrent = () => {
+    abortSignal?.throwIfAborted();
+    options?.deliveryAttemptFence?.assertCurrent();
+    if (!isCronActiveJobMarkerCurrent(options?.activeJobMarker)) {
+      throw new Error("Gateway restarting.");
+    }
+  };
+  assertCurrent();
+  return await state.deps.runSessionEvent({
+    admissionSource: resolveCronRunAdmissionSource(job),
+    deliveryAttemptFence: options?.deliveryAttemptFence ?? null,
+    onExecutionStarted: options?.onExecutionStarted,
+    onExecutionPhase: options?.onExecutionPhase,
+    onLaneWait: options?.onLaneWait,
+    executionIdentity: options?.executionIdentity,
+    job,
+    text,
+    abortSignal,
+    prepare: options?.assertRunCurrent,
+    assertCurrent,
+  });
+}
+
 async function executeDetachedCronJob(
   state: CronServiceState,
   job: CronStoredJob,
@@ -415,15 +465,7 @@ async function executeDetachedCronJob(
   const res = await state.deps.runIsolatedAgentJob({
     deliveryAttemptFence: options?.deliveryAttemptFence ?? null,
     job,
-    admissionSource:
-      job.owner?.sessionKey ||
-      job.owner?.accountId ||
-      job.scheduledToolPolicy?.mode === "account" ||
-      job.payload.externalContentSource ||
-      job.toolsAllowProvenance?.channelRequester ||
-      (job.toolsAllowProvenance && job.toolsAllowProvenance.callerOrigin?.kind !== "local")
-        ? "requester-schedule"
-        : "operator-schedule",
+    admissionSource: resolveCronRunAdmissionSource(job),
     message: job.payload.message,
     abortSignal,
     onExecutionStarted: options?.onExecutionStarted,

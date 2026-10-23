@@ -53,6 +53,11 @@ export async function cleanupCodexAttempt(
   freezeRunTerminalOutcome();
   // Finalization already owns the bounded checkpoint join. Exceptional exits
   // still fence immediately, without restarting a timed-out settlement's wait.
+  if (!state.projectionClosed) {
+    activeTurn.activeProjector.prepareTerminalToolResultCheckpoint(
+      prompt.context.attemptTools.toolBridge.telemetry,
+    );
+  }
   const projectionClose = state.projectionClosed
     ? undefined
     : activeTurn.activeProjector.closeProjection();

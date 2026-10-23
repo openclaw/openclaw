@@ -63,11 +63,15 @@ const internalInputs = [
 // The display projection already rewrites or hides these even on canonical rows,
 // so only the imported copy is asserted.
 const RESTART_RECOVERY_OPENING = formatSystemTurnPrompt(
+  "Your previous turn was interrupted while OpenClaw was waiting on tool/model work.",
+);
+const LEGACY_RESTART_RECOVERY_OPENING = formatSystemTurnPrompt(
   "Your previous turn was interrupted by a gateway restart while OpenClaw was waiting on tool/model work.",
 );
 const internalWakeInputs = [
   ["heartbeat", `${HEARTBEAT_PROMPT}\nCurrent time: Saturday`],
   ["restart_recovery", RESTART_RECOVERY_OPENING],
+  ["restart_recovery", LEGACY_RESTART_RECOVERY_OPENING],
   ["restart_recovery", `[Tue 2026-09-22 16:00 GMT+8] ${RESTART_RECOVERY_OPENING} Continue.`],
 ] as const;
 

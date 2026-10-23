@@ -1,5 +1,6 @@
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
+import { STARTUP_INTERRUPTED_ERROR } from "../execution-error-constants.js";
 import { cronRunLogEntryToDetail } from "../run-history-detail.js";
 import { createCronExecutionId } from "../run-id.js";
 import { failureNotificationDeliveryFromJobState } from "../service/failure-alerts.js";
@@ -10,7 +11,6 @@ import { resolveCronRunReceiptTerminalStatus } from "../service/run-receipts.js"
 import {
   markInterruptedStartupRun,
   restoreFinalizedStartupRun,
-  STARTUP_INTERRUPTED_ERROR,
 } from "../service/startup-run-repair.js";
 import type { CronJobPolicyContext, DeferredCronNotifications } from "../service/state.js";
 import type { CronJob } from "../types.js";

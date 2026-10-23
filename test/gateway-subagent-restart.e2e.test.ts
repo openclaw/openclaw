@@ -288,10 +288,16 @@ it.skipIf(process.platform === "win32").for([
           url: instance.url,
           token: instance.gatewayToken,
           clientName: "gateway-client",
-          mode: "backend",
+          // Recovery needs the original profiled operator; backend probes are unprofiled.
+          mode: "test",
           scopes: ["operator.admin", "operator.read", "operator.write"],
           deviceIdentity: loadOrCreateDeviceIdentity({
-            path: instance.state.path("proof-device.sqlite"),
+            path: instance.state.statePath(
+              "proof-identities",
+              "requester",
+              "client",
+              "credentials.sqlite",
+            ),
           }),
           onEvent: ({ event, payload }) => {
             if (
@@ -416,6 +422,8 @@ it.skipIf(process.platform === "win32").for([
               slots: { memory: "none" },
             },
             models: {
+              // Keep this synthetic restart fixture independent of remote catalog adoption.
+              catalogRefresh: { enabled: false },
               mode: "replace",
               providers: {
                 [model.providerId]: { ...model.config, request: { allowPrivateNetwork: true } },
@@ -432,7 +440,6 @@ it.skipIf(process.platform === "win32").for([
                     params: { transport: "sse", openaiWsWarmup: false },
                   },
                 },
-                heartbeat: { every: "0m" },
                 skipBootstrap: true,
                 skills: [],
                 timeoutSeconds: 120,
