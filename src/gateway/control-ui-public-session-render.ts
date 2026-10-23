@@ -368,15 +368,6 @@ export function renderPublicSessionDocument(params: {
     remaining -= text.length;
     const entryId = getPublicSessionEntryId(item.message);
     const media: string[] = [];
-    for (const link of item.links) {
-      const html = `<p><a href="${escapeHtml(link.href)}" rel="noreferrer noopener nofollow">${escapeHtml(link.title ?? link.href)}</a></p>`;
-      if (html.length > remaining) {
-        truncated = true;
-        break;
-      }
-      remaining -= html.length;
-      media.push(html);
-    }
     for (const attachment of collectPublicSessionAttachments(item.message)) {
       const name = escapeHtml(truncateUtf16Safe(attachment.name, 200));
       const url =
@@ -393,13 +384,16 @@ export function renderPublicSessionDocument(params: {
       remaining -= html.length;
       media.push(html);
     }
-    for (const widget of item.widgets) {
-      const widgetUrl = params.widgetUrls?.get(widget.docId);
-      if (!widgetUrl) {
+    for (const embed of item.embeds) {
+      const widgetUrl = embed.kind === "widget" ? params.widgetUrls?.get(embed.docId) : undefined;
+      let html: string;
+      if (embed.kind === "link") {
+        html = `<p><a href="${escapeHtml(embed.href)}" rel="noreferrer noopener nofollow">${escapeHtml(embed.title ?? embed.href)}</a></p>`;
+      } else if (widgetUrl) {
+        html = `<iframe class="widget" src="${escapeHtml(widgetUrl)}" title="${embed.title ? escapeHtml(embed.title) : title}" sandbox="allow-scripts" referrerpolicy="no-referrer" loading="lazy" data-public-widget="${escapeHtml(embed.docId)}" style="height:${embed.height ?? 420}px"></iframe>`;
+      } else {
         continue;
       }
-      const url = escapeHtml(widgetUrl);
-      const html = `<iframe class="widget" src="${url}" title="${widget.title ? escapeHtml(widget.title) : title}" sandbox="allow-scripts" referrerpolicy="no-referrer" loading="lazy" data-public-widget="${escapeHtml(widget.docId)}" style="height:${widget.height ?? 420}px"></iframe>`;
       if (html.length > remaining) {
         truncated = true;
         break;

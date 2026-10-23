@@ -11,8 +11,8 @@ import {
   readPublicWidgetReceipt,
 } from "./control-ui-public-session-message.js";
 
-type PublicSessionWidget = { docId: string; title?: string; height?: number };
-type PublicSessionLink = { href: string; title?: string };
+type PublicSessionWidget = { kind: "widget"; docId: string; title?: string; height?: number };
+type PublicSessionEmbed = PublicSessionWidget | { kind: "link"; href: string; title?: string };
 
 export type PublicSessionItem =
   | {
@@ -21,8 +21,8 @@ export type PublicSessionItem =
       text: string;
       message: unknown;
       sourceIndex: number;
-      widgets: PublicSessionWidget[];
-      links: PublicSessionLink[];
+      /** Shortcode order, then the turn's tool-receipt widget. */
+      embeds: PublicSessionEmbed[];
     }
   | { kind: "tools"; calls: { name: string; summary: string }[]; sourceIndex: number };
 
@@ -62,7 +62,12 @@ function hostedWidget(
   if (!path || preview.mcpApp || (preview.viewId && preview.viewId !== path.documentId)) {
     return undefined;
   }
-  return { docId: path.documentId, title: preview.title, height: preview.preferredHeight };
+  return {
+    kind: "widget",
+    docId: path.documentId,
+    title: preview.title,
+    height: preview.preferredHeight,
+  };
 }
 
 /** Same visible-content boundary as chat: narration separates adjacent tool activity. */
@@ -77,27 +82,18 @@ export function projectPublicSessionItems(messages: unknown[]): PublicSessionIte
     }
     const text = entry ? publicSessionMessageText(entry) : "";
     const shortcodes = extractCanvasShortcodes(entry?.role === "assistant" ? text : undefined);
-    const widgets: PublicSessionWidget[] = [];
-    const links: PublicSessionLink[] = [];
     // The reader never frames third-party pages; private Gateway pages are omitted.
-    for (const preview of shortcodes.previews) {
+    const shortcodeEmbeds = shortcodes.previews.flatMap((preview): PublicSessionEmbed[] => {
       const widget = hostedWidget(preview);
-      if (widget) {
-        widgets.push(widget);
-        continue;
-      }
-      const href = publicSessionLinkHref(preview.url);
-      if (href) {
-        links.push({ href, title: preview.title });
-      }
-    }
+      const href = widget ? undefined : publicSessionLinkHref(preview.url);
+      return widget ? [widget] : href ? [{ kind: "link", href, title: preview.title }] : [];
+    });
     return {
       message,
       entry,
       receipt,
       text: entry?.role === "assistant" ? shortcodes.text : text,
-      widgets,
-      links,
+      shortcodeEmbeds,
       deferReceipt: false,
     };
   });
@@ -108,32 +104,35 @@ export function projectPublicSessionItems(messages: unknown[]): PublicSessionIte
       laterWidgets.clear();
     }
     row.deferReceipt = Boolean(row.receipt && laterWidgets.has(row.receipt.docId));
-    for (const widget of row.widgets) {
-      laterWidgets.add(widget.docId);
+    for (const embed of row.shortcodeEmbeds) {
+      if (embed.kind === "widget") {
+        laterWidgets.add(embed.docId);
+      }
     }
   }
   const rendered = new Set<string>();
   for (const [
     sourceIndex,
-    { message, entry, receipt, text, widgets: shortcodes, links, deferReceipt },
+    { message, entry, receipt, text, shortcodeEmbeds, deferReceipt },
   ] of prepared.entries()) {
-    const widgets: PublicSessionWidget[] = [];
-    for (const widget of [...shortcodes, ...(receipt && !deferReceipt ? [receipt] : [])]) {
-      if (!rendered.has(widget.docId)) {
-        rendered.add(widget.docId);
-        widgets.push({ ...widget, title: widget.title ?? receiptTitles.get(widget.docId) });
+    const embeds: PublicSessionEmbed[] = [];
+    for (const embed of [...shortcodeEmbeds, ...(receipt && !deferReceipt ? [receipt] : [])]) {
+      if (embed.kind === "link") {
+        embeds.push(embed);
+      } else if (!rendered.has(embed.docId)) {
+        rendered.add(embed.docId);
+        embeds.push({ ...embed, title: embed.title ?? receiptTitles.get(embed.docId) });
       }
     }
     const attachments = entry ? collectPublicSessionAttachments(entry) : [];
-    if (text || attachments.length > 0 || widgets.length > 0 || links.length > 0) {
+    if (text || attachments.length > 0 || embeds.length > 0) {
       items.push({
         kind: "message",
         role: entry?.role === "user" ? "user" : "assistant",
         text,
         message,
         sourceIndex,
-        widgets,
-        links,
+        embeds,
       });
     }
     if (entry?.role !== "assistant" || !Array.isArray(entry.content)) {

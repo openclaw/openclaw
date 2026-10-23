@@ -211,6 +211,25 @@ describe("public session document", () => {
     ]);
   });
 
+  it("renders mixed widget and link embeds in shortcode order", () => {
+    const page = JSDOM.fragment(
+      render(
+        [
+          message(
+            "assistant",
+            '[embed url="https://example.test/first" /] [embed ref="cv_timeline" /] [embed url="https://example.test/last" /]',
+          ),
+        ],
+        widgetOptions,
+      ),
+    );
+    expect(
+      [...page.querySelectorAll("article a, article iframe")].map(
+        (node) => node.getAttribute("href") ?? node.getAttribute("data-public-widget"),
+      ),
+    ).toEqual(["https://example.test/first", "cv_timeline", "https://example.test/last"]);
+  });
+
   it("retains shortcode-only messages and requires a mapped widget URL to render frames", () => {
     const messages = [message("assistant", '[embed ref="cv_timeline" /]')];
     expect(JSDOM.fragment(render(messages, widgetOptions)).querySelector("iframe")?.title).toBe(
