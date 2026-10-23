@@ -77,16 +77,10 @@ export function shouldRemoveDeadOwnerOrExpiredLock(params: {
   payload: Record<string, unknown> | null;
   staleMs: number;
   nowMs?: number;
-  isPidDefinitelyDead?: (pid: number) => boolean;
-  getProcessStartTime?: (pid: number) => number | null;
 }): boolean {
   const payload = readLockFileOwnerPayload(params.payload);
   if (payload?.pid) {
-    return isLockOwnerDefinitelyStale({
-      payload: params.payload,
-      isPidDefinitelyDead: params.isPidDefinitelyDead,
-      getProcessStartTime: params.getProcessStartTime,
-    });
+    return isLockOwnerDefinitelyStale({ payload: params.payload });
   }
   if (!payload?.createdAt) {
     return false;

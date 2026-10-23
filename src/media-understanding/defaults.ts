@@ -178,11 +178,8 @@ export function resolveDocumentMediaModel(params: {
   mode: "textExtraction" | "image";
   cfg?: OpenClawConfig;
   workspaceDir?: string;
-  providerRegistry?: Map<string, MediaUnderstandingProvider>;
 }): string | false | undefined {
-  const registry =
-    params.providerRegistry ??
-    buildMediaUnderstandingManifestMetadataRegistry(params.cfg, params.workspaceDir);
+  const registry = buildMediaUnderstandingManifestMetadataRegistry(params.cfg, params.workspaceDir);
   const provider = registry.get(normalizeMediaProviderId(params.providerId));
   const value = provider?.documentModels?.pdf?.[params.mode];
   if (value === false) {
