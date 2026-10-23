@@ -543,7 +543,7 @@ try {
   // Full-byte verification and file writes are deliberately outside measured phases.
   const fullScrape = scrapeInfo(retainedStore.render());
   assert(
-    !retainedStore.render().toString().includes("openclaw_prometheus_series_dropped_total"),
+    !retainedStore.render().includes("openclaw_prometheus_series_dropped_total"),
     "Fixture unexpectedly dropped series",
   );
   await writeFile(`${values.output}.prom`, retainedStore.render());
