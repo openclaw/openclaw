@@ -89,14 +89,28 @@ suite.define(() => {
         });
         await page.goto(`${suite.server.baseUrl}chat`);
         await gateway.waitForRequest("models.list");
-        const { picker, option, runtime } = modelPicker(page);
+        const { picker, option, runtime, search } = modelPicker(page);
         await openChatModelPicker(picker);
         const reset = option("fixture/automatic");
-        expect({
-          reset: await reset.count(),
-          deniedRuntime: await runtime("other-runtime").count(),
-          pinned: await option("fixture/manual").count(),
-        }).toEqual({ reset: 1, deniedRuntime: 0, pinned: hasAllowedModel ? 0 : 1 });
+        await revealChatModelOption(picker, "fixture/automatic", { default: true });
+        expect(await reset.count()).toBe(1);
+        await search.fill("other-runtime");
+        await expect
+          .poll(() => picker.locator("[data-chat-model-search-empty]").isVisible())
+          .toBe(true);
+        expect(await runtime("other-runtime").count()).toBe(0);
+        await search.fill("fixture/manual");
+        if (hasAllowedModel) {
+          await expect
+            .poll(() => picker.locator("[data-chat-model-search-empty]").isVisible())
+            .toBe(true);
+          expect(await option("fixture/manual").count()).toBe(0);
+        } else {
+          await expect.poll(() => option("fixture/manual").isVisible()).toBe(true);
+          expect(await option("fixture/manual").count()).toBe(1);
+        }
+        await search.clear();
+        expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
         await selectChatModelOption(picker, "fixture/automatic", { default: true });
         await expectRequest(gateway, "sessions.patch", { key, model: null });
       });

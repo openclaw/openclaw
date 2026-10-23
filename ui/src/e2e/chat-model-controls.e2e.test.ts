@@ -399,7 +399,7 @@ suite.define(() => {
           ).toEqual({ width: "13px", height: "13px" });
           await expect
             .poll(async () => {
-              const box = await account.boundingBox();
+              const box = await trigger.boundingBox();
               return Boolean(box && box.width > 0 && box.x >= 0 && box.x + box.width <= width + 1);
             })
             .toBe(true);

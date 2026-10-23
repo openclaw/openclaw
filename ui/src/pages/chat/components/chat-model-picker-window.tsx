@@ -38,10 +38,9 @@ export function createModelPickerWindow(
     onChange: publish,
   });
   onSettled(() => {
-    // TanStack's adapter lifecycle owns its scroll/resize subscriptions.
-    // eslint-disable-next-line no-underscore-dangle
-    const dispose = virtualizer._didMount();
-    return dispose;
+    // Virtual-core exposes its adapter lifecycle as bound arrow functions.
+    const { _didMount: mountVirtualizer } = virtualizer;
+    return mountVirtualizer();
   });
   createLayoutMeasurement(
     () => ({ rows: rows(), highlighted: highlighted(), shortcuts: shortcuts() }),
@@ -61,8 +60,8 @@ export function createModelPickerWindow(
             (a, b) => a - b,
           ),
       });
-      // eslint-disable-next-line no-underscore-dangle
-      virtualizer._willUpdate();
+      const { _willUpdate: updateVirtualizer } = virtualizer;
+      updateVirtualizer();
       publish();
     },
     { targets: () => [viewport], changeTiming: "sync" },

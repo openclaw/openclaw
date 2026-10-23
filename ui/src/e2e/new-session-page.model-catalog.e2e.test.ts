@@ -362,10 +362,10 @@ suite.define(() => {
   it("starts with a usable retained account despite a refresh failure and leaves the default cleared", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const accountFitsMenu = () =>
-        page.locator("[data-chat-account-selection]").evaluate((section) => {
-          const menu = section.closest(".chat-controls__model-menu")!;
+        page.locator("[data-chat-account-group-toggle]").evaluate((heading) => {
+          const menu = heading.closest(".chat-controls__model-menu")!;
           const bounds = menu.getBoundingClientRect();
-          const accountBounds = section.getBoundingClientRect();
+          const accountBounds = heading.getBoundingClientRect();
           return (
             accountBounds.width > 0 &&
             accountBounds.left >= bounds.left &&
@@ -602,6 +602,7 @@ suite.define(() => {
         }
         await modelSelect.click();
         await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(2);
+        await revealChatModelOption(page, "openai/gpt-5.6-luna");
         await pollCount(page.locator("[data-chat-model-option]")).toBe(models.length);
         expect(await page.locator("[data-chat-model-catalog-state]").count()).toBe(0);
         if (startup) {
@@ -669,6 +670,7 @@ suite.define(() => {
       const retry = page.locator('[data-chat-model-target-retry="cliAgents"]');
       await pollEnabled(retry).toBe(true);
       await pollLocatorText(retry).toContain("Retry");
+      await revealChatModelOption(page, "openai/gpt-5.6-luna");
       await pollLocatorText(
         page.locator(
           '[data-chat-model-option="openai/gpt-5.6-luna"] .chat-controls__model-option-name',

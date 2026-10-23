@@ -490,6 +490,7 @@ suite.define(() => {
         "GPT-5.4 Pro",
       );
       const anthropicModels = composer.locator('[data-chat-model-provider-group="anthropic"]');
+      await revealChatModelOption(composer, "anthropic/claude-sonnet-4-6");
       await polledVisible(anthropicModels).toBe(true);
       await polledText(anthropicModels).toContain("Claude Sonnet 4.6");
       await model.click();

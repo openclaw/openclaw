@@ -617,7 +617,12 @@ suite.define(() => {
       await expect
         .poll(() => modelOption(activeComposer(), "anthropic/other-model").count())
         .toBe(1);
+      const modelSearch = activeComposer().locator("[data-chat-model-search]");
+      await modelSearch.fill("openai/work-model");
+      await expectVisible(activeComposer().locator("[data-chat-model-search-empty]"));
       await expect.poll(() => modelOption(activeComposer(), "openai/work-model").count()).toBe(0);
+      await modelSearch.clear();
+      await expectVisible(modelOption(activeComposer(), "anthropic/other-model"));
       await gateway.waitForRequest("models.list");
     });
   });
@@ -712,11 +717,11 @@ suite.define(() => {
       await expect.poll(() => pickerTrigger.getAttribute("aria-disabled")).toBe("true");
       await gateway.setOnline(true);
       await gateway.waitForRequest("chat.startup", { after: startupCount });
-      await expectCount(modelOption(composer, "openai/gpt-5.6-luna"), 1);
 
       await pickerTrigger.click();
       expect(await gateway.getRequests("models.list")).toHaveLength(2);
       await revealChatModelOption(composer, "openai/gpt-5.6-luna");
+      await expectCount(modelOption(composer, "openai/gpt-5.6-luna"), 1);
       await expectVisible(modelOption(composer, "openai/gpt-5.6-luna"));
       await expectCount(composer.locator("[data-chat-model-catalog-state]"), 0);
       await capture("02-routable-model-after-reconnect");
@@ -739,6 +744,7 @@ suite.define(() => {
       await gateway.setMethodResponse("models.list", { models: [existing, firstOpen] });
       await gateway.emitGatewayEvent("chat.metadata.changed", {});
       await trigger.click();
+      await revealChatModelOption(composer, "example/existing");
       await expectCount(modelOption(composer, "example/existing"), 1);
       await revealChatModelOption(composer, "example/first-open");
       await expectVisible(modelOption(composer, "example/first-open"));

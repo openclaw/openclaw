@@ -273,9 +273,11 @@ it.each(["trigger", "Escape", "selection"])(
     await toggle(() => userEvent.click(trigger));
     expect(option("example/beta")).toBeNull();
     expectExpanded();
-    const visible = option("other/gamma");
-    expect(visible).toMatchObject({ hidden: false });
-    expect(visible.checkVisibility()).toBe(true);
+    await vi.waitFor(() => {
+      const visible = option("other/gamma");
+      expect(visible).toMatchObject({ hidden: false });
+      expect(visible.checkVisibility()).toBe(true);
+    });
     trigger.focus();
     await toggle(() => userEvent.keyboard("1"));
     expect(params.onModelSelect).toHaveBeenLastCalledWith("other/gamma", "main", undefined);

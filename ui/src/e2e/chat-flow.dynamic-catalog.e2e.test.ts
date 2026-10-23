@@ -123,8 +123,8 @@ suite.define(() => {
     await expect.poll(() => newSessionModelSelect.getAttribute("aria-disabled")).toBe("false");
     await newSessionModelSelect.click();
     const newSessionModel = newSessionPage.locator(`[data-chat-model-option="${modelKey}"]`);
-    await expect.poll(() => newSessionModel.textContent()).toContain("262.1k");
     await revealChatModelOption(newSessionPage, modelKey);
+    await expect.poll(() => newSessionModel.textContent()).toContain("262.1k");
     await expect.poll(() => newSessionModel.isVisible()).toBe(true);
   });
 });

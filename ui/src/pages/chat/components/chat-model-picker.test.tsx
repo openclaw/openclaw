@@ -2,6 +2,7 @@
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { findMenuShortcut } from "../../../components/menu-shortcuts.ts";
 import type { ModelProviderAuthLabel } from "../../../lib/model-provider-auth-label.ts";
+import { installModelPickerLayout } from "../../../test-helpers/model-picker-layout.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import {
   modelControlSelector,
@@ -16,15 +17,7 @@ beforeAll(async () => {
   await import("./chat-model-picker-panel.tsx");
 });
 
-// jsdom has no layout; the browser suite owns real measurement and scrolling.
-beforeEach(() => {
-  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (
-    this: HTMLElement,
-  ) {
-    return this.hasAttribute("data-chat-model-window") ? 320 : 32;
-  });
-  vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(340);
-});
+beforeEach(installModelPickerLayout);
 afterEach(() => vi.restoreAllMocks());
 
 it.each([false, true])(

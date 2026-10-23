@@ -285,6 +285,7 @@ suite.define(() => {
     await control(main, "model-select").click();
     const menu = main.locator(".chat-controls__model-menu");
     await expect.poll(() => menu.isVisible()).toBe(true);
+    await revealChatModelOption(main, "openai/long-model");
     for (const [part, text] of [
       ["name", "A deliberately very long model name that must ellipsize inside the provider grid"],
       ["meta", "deliberately-long-context-metadata-that-must-never-create-horizontal-scroll"],
@@ -660,7 +661,7 @@ suite.define(() => {
     await page.keyboard.type("anthropic");
     const anthropicModel = option(main, "anthropic/claude-fable-5");
     await expect.poll(() => anthropicModel.isVisible()).toBe(true);
-    await expect.poll(() => option(main, "openai/gpt-5.6-sol").getAttribute("hidden")).toBe("");
+    await option(main, "openai/gpt-5.6-sol").waitFor({ state: "detached" });
     await expectRequestCountStable(gateway, "sessions.patch", 1);
     await search.press("Enter");
     const patches = await waitForRequests(gateway, "sessions.patch", 2);
