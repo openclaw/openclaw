@@ -55,6 +55,37 @@ window; exclude setup and forced profiler-stop collections. Report promotion,
 collection counts, and maximum pauses with allocation. Profiled timing is context,
 not a Gateway latency measurement. Do not infer tail percentiles from five runs.
 
+## Session tool surface
+
+`session-tool-surface-measure.ts` exercises the production tool pin owner with 50
+synthetic tools, each containing 20 nested string fields. It checks unchanged
+checkpoint counts, pinned descriptions, and current executable bindings. This is
+an owner-only workload, not a Gateway RPC or whole-turn measurement.
+
+```sh
+node --expose-gc --trace-gc-nvp --import ./scripts/tsx.mjs scripts/perf/session-tool-surface-measure.ts \
+  --case warm --calls 2000 --start-at <future-epoch-ms> --output /path/to/result.json
+```
+
+Repeat with `--case restored` (detached transcript schemas) and `--case guidance`
+(restored schemas with changed sibling guidance). `--owner /absolute/path/to/owner.ts`
+can select a baseline copy beside the production owner without another checkout.
+Use concurrent, swapped, interleaved-core pairs under the host's quiet lock and
+shared guard; interrupted pairs do not count. Report paired absolute and relative
+deltas. Opposing signs or baseline values differing by more than fivefold are
+inconclusive; run a third pair when that metric gates and decide on absolute mean.
+
+Timing excludes fixture construction and warmup. Ten-call synchronous batches
+yield for 1 ms; event-loop tails include those yields and carry their own sample
+counts. p95 needs 200 samples and p99 needs 1,000 to gate. Major GC is context below
+50 collections; report total GC and both sides' maximum pauses. Peak RSS is the
+process lifetime high-water mark, including imports and fixtures. Add `--profile`
+in a **separate invocation** for CPU and allocation samples including collected
+objects; this mode writes `.cpuprofile` and `.heapprofile` beside the JSON report
+and ranks serialization/freezing ancestors. Profiled runs supply no timing verdict.
+Sum V8 `promoted` bytes only between `MEASURE_START` and `MEASURE_END` in the
+unprofiled trace, excluding import, warmup, and forced setup collections.
+
 ## Diagnostic heap profile sanitization
 
 `diagnostic-profile-measure.ts` measures the production diagnostics owners on an
