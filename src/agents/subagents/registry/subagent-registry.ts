@@ -197,8 +197,13 @@ export function resumeSubagentRun(runId: string, source: "live" | "restore" = "l
     return;
   }
   if (entry.terminalOwner === "interrupted-recovery") {
-    // Execution is already settled. Retry its delivery without replaying orphan recovery.
     resumeReader.retirePending(entry);
+    if (source === "restore") {
+      // Startup recovery owns terminal reconciliation and resource cleanup before delivery.
+      resumedRuns.add(getSubagentRunRuntimeKey(entry));
+      return;
+    }
+    // The recovery completion path has run; live retries only resume its delivery.
     resumeCheckedSubagentRun(runId, entry, source, null);
     return;
   }
