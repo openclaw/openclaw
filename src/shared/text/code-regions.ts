@@ -182,15 +182,42 @@ export function canReuseMarkdownOwnership(
 }
 
 function completesBlankLine(previousText: string, appended: string): boolean {
-  if (!/[\r\n]/u.test(appended)) {
-    return false;
-  }
   const lastLineStart =
     Math.max(previousText.lastIndexOf("\n"), previousText.lastIndexOf("\r")) + 1;
-  if (/^[ \t]*$/u.test(previousText.slice(lastLineStart))) {
-    return true;
+  let currentLineBlank = /^[ \t]*$/u.test(previousText.slice(lastLineStart));
+  let index = 0;
+
+  // A CR in the previous chunk and LF in this chunk are one line ending, not a blank line.
+  if (previousText.endsWith("\r") && appended.startsWith("\n")) {
+    const lineBeforeCrStart =
+      Math.max(
+        previousText.lastIndexOf("\n", previousText.length - 2),
+        previousText.lastIndexOf("\r", previousText.length - 2),
+      ) + 1;
+    if (/^[ \t]*$/u.test(previousText.slice(lineBeforeCrStart, -1))) {
+      return true;
+    }
+    currentLineBlank = true;
+    index = 1;
   }
-  return /(?:\r\n|\r|\n)[ \t]*(?:\r\n|\r|\n)/u.test(appended);
+
+  for (; index < appended.length; index++) {
+    const character = appended[index];
+    if (character !== "\r" && character !== "\n") {
+      if (character !== " " && character !== "\t") {
+        currentLineBlank = false;
+      }
+      continue;
+    }
+    if (currentLineBlank) {
+      return true;
+    }
+    if (character === "\r" && appended[index + 1] === "\n") {
+      index += 1;
+    }
+    currentLineBlank = true;
+  }
+  return false;
 }
 
 function invalidatesGfmTableDelimiter(previousText: string, appended: string) {

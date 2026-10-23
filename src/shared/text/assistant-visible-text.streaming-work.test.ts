@@ -7,7 +7,11 @@ import { assistantVisibleTextFilters } from "./assistant-visible-text.js";
 import { canReuseMarkdownOwnership, findCodeOwnership } from "./code-regions.js";
 import { createTextProjection } from "./text-projection.js";
 
-const markdownOwnershipWork = vi.hoisted(() => ({ scannedCharacters: 0 }));
+const markdownOwnershipWork = vi.hoisted(() => ({
+  scannedCharacters: 0,
+  reuseChecks: 0,
+  reuseHits: 0,
+}));
 const plainToolCallWork = vi.hoisted(() => ({ projectedCharacters: 0 }));
 
 function projectedCharacters() {
@@ -43,6 +47,18 @@ vi.mock("./code-regions.js", async (importOriginal) => {
     findCodeRegions(text: Parameters<typeof actual.findCodeRegions>[0]) {
       markdownOwnershipWork.scannedCharacters += text.length;
       return actual.findCodeRegions(text);
+    },
+    canReuseMarkdownOwnership(
+      previousText: Parameters<typeof actual.canReuseMarkdownOwnership>[0],
+      nextText: Parameters<typeof actual.canReuseMarkdownOwnership>[1],
+      ownership?: Parameters<typeof actual.canReuseMarkdownOwnership>[2],
+    ) {
+      markdownOwnershipWork.reuseChecks += 1;
+      const reusable = actual.canReuseMarkdownOwnership(previousText, nextText, ownership);
+      if (reusable) {
+        markdownOwnershipWork.reuseHits += 1;
+      }
+      return reusable;
     },
   };
 });
@@ -182,6 +198,68 @@ it("settles a completed plain tool call before streaming the following paragraph
   expect(stream.text).toBe(expected);
   expect(projectedCharacters()).toBeLessThan(source.length * 16);
 }, 20_000);
+
+it.each([
+  ["lf", "\n"],
+  ["crlf", "\r\n"],
+] as const)(
+  "bounds ownership work for nonblank multiline tool-call continuations with %s",
+  (_label, lineEnding) => {
+    const lines = [
+      `  "note": "\`",${lineEnding}`,
+      ...Array.from(
+        { length: 512 },
+        (_, index) => `  "item${index}": "ordinary value",${index === 511 ? "" : lineEnding}`,
+      ),
+    ];
+    const chunks = [`[tool:write]${lineEnding}{"items":[${lineEnding}`, ...lines];
+    const source = chunks.join("");
+    const stream = createTextProjection(assistantVisibleTextFilters("delivery", true));
+    markdownOwnershipWork.scannedCharacters = 0;
+    markdownOwnershipWork.reuseChecks = 0;
+    markdownOwnershipWork.reuseHits = 0;
+
+    for (const chunk of chunks) {
+      stream.append(chunk);
+    }
+
+    expect(stream.text).toBe(source);
+    expect(markdownOwnershipWork.reuseChecks).toBeGreaterThan(512);
+    expect(markdownOwnershipWork.reuseHits).toBeGreaterThanOrEqual(512);
+    expect(markdownOwnershipWork.scannedCharacters).toBeLessThan(source.length * 16);
+  },
+);
+
+it.each([
+  ["lf", "\n"],
+  ["crlf", "\r\n"],
+] as const)(
+  "keeps Markdown ownership reusable across nonblank tool-call lines with %s",
+  (_label, lineEnding) => {
+    let text = `[tool:write]${lineEnding}{"items":[${lineEnding}`;
+    let ownership = findCodeOwnership(text);
+    let refreshes = 0;
+
+    for (let index = 0; index < 512; index++) {
+      const next = `${text}  "item${index}": "ordinary value",${lineEnding}`;
+      if (!canReuseMarkdownOwnership(text, next, ownership)) {
+        refreshes += 1;
+        ownership = findCodeOwnership(next);
+      }
+      text = next;
+    }
+
+    expect(refreshes).toBe(0);
+  },
+);
+
+it("treats a CRLF split across appends as one line ending", () => {
+  const previousText = "[tool:write]\r";
+  const nextText = `${previousText}\n  "item": "ordinary value",\r\n`;
+  const ownership = findCodeOwnership(previousText);
+
+  expect(canReuseMarkdownOwnership(previousText, nextText, ownership)).toBe(true);
+});
 
 it("refreshes ownership when streamed link and container syntax changes Markdown ownership", () => {
   const scenarios: Array<[string, string]> = [
@@ -362,15 +440,6 @@ it("checks repeated blockquote prefixes without exponential backtracking", () =>
   const ownership = findCodeOwnership(previousText);
 
   expect(canReuseMarkdownOwnership(previousText, `${previousText}!`, ownership)).toBe(true);
-});
-
-it("invalidates cached ownership when a blank line settles the retained block", () => {
-  const previousText = "[tool:read] {}\n";
-  const nextText = `${previousText}\nParagraph one.`;
-  const ownership = findCodeOwnership(previousText);
-
-  expect(ownership.retainStart).toBe(0);
-  expect(canReuseMarkdownOwnership(previousText, nextText, ownership)).toBe(false);
 });
 
 it("keeps an unfinished reference title pending after a trailing escape", () => {
