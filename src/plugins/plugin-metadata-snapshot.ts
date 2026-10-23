@@ -7,7 +7,6 @@ import {
 } from "../infra/diagnostics-timeline.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
-import { getOrCreateWeakOwnerMap } from "../shared/weak-owner-map.js";
 import { prepareBundledDiscoveryMode } from "./bundled-discovery-state.js";
 import {
   getCurrentPluginMetadataSnapshot,
@@ -300,7 +299,11 @@ export function projectPluginMetadataSnapshot(
     return snapshot;
   }
   const cache = getPluginMetadataSnapshotCache(snapshot);
-  const selections = getOrCreateWeakOwnerMap(cache.metadata.projections, snapshot);
+  let selections = cache.metadata.projections.get(snapshot);
+  if (!selections) {
+    selections = new Map();
+    cache.metadata.projections.set(snapshot, selections);
+  }
   const cached = selections.get(key);
   if (cached) {
     return cached;
