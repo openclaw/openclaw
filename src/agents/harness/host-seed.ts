@@ -85,6 +85,7 @@ export function bindBoundedSeed(
     };
     const emitCompactionProgress = async (data: {
       phase: "start" | "end" | "context_bounded";
+      message?: string;
       completed?: boolean;
       qualityDegraded?: true;
       summaryRefused?: true;
@@ -327,7 +328,7 @@ export function bindBoundedSeed(
     }
     assert();
     if (cut) {
-      await emitCompactionProgress({ phase: "context_bounded" });
+      await emitCompactionProgress({ phase: "context_bounded", message: BOUNDED_CONTEXT_NOTICE });
     }
     return bounded;
   };
