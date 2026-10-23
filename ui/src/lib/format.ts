@@ -237,11 +237,8 @@ export function toNumber(value: string, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
-export function formatCost(cost: number | null | undefined, fallback = "$0.00"): string {
-  if (cost == null || !Number.isFinite(cost)) {
-    return fallback;
-  }
-  if (cost === 0) {
+export function formatCost(cost: number | null | undefined): string {
+  if (cost == null || !Number.isFinite(cost) || cost === 0) {
     return "$0.00";
   }
   return `$${cost.toFixed(cost < 0.01 ? 4 : cost < 1 ? 3 : 2)}`;
