@@ -78,6 +78,32 @@ for a synthetic turn and direct/nested calls to an owned plugin instance. Counts
 include the turn's outer Gateway scope. No instrumentation remains during the
 allocation or CPU passes. Raw allocation profiles accompany each result.
 
+For complementary transport evidence, `transcript-broadcast-measure.ts --scenario
+plugin.scope` loads a synthetic plugin in an isolated Gateway over a team-shape
+fixture. Every RPC checks its plugin identity, source, registry, request
+client, and scope continuity across an asynchronous suspension using the public
+Plugin SDK. The response echoes the request sequence and confirms those checks.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
+  --state-dir /path/to/team-shape --entry src/entry.ts --scenario plugin.scope \
+  --port 41580 --mock-port 41581 --clients 1 --runs 1 --rpc-concurrency 1 \
+  --warmup-operations 40 --operations 240 --rpc-interval-ms 300 --rounds 1 --diagnostics \
+  --allocations --trace-gc --start-at <future-epoch-ms> --revision <source-sha>
+```
+
+Repeat without `--allocations` for unprofiled CPU and natural-GC measurements.
+Use one long round for allocation to avoid repeated profiler-stop collections.
+The interval paces batches of clients independently of RPC latency; one client at
+300 ms targets 200 calls per minute. Omit it for a throughput workload. Report the
+observed rate and fixture size. Existing results include validated RPC
+counts and latency, allocation and promotion per RPC, main/process CPU, and
+Gateway GC/loop diagnostics. Apply the sample-count rules to each round's tails;
+increase operations if the loop histogram has fewer than 1,000 observations.
+Use the owner workload above for allocation per plugin callback and its separate
+unprofiled promotion measurement. Run both workloads in concurrent swapped pairs
+under the campaign's guard and CPU-placement rules.
+
 ## Subagent idle sweep
 
 `subagent-sweep-measure.ts` exercises the production sweeper with immutable synthetic
@@ -2722,6 +2748,7 @@ Supported scenarios:
 | `chat.send`            | One completed turn: synthetic read-tool call, then paced streaming answer; one client and one run          |
 | `transcript-broadcast` | One completed `agent` turn, streamed to `--clients` subscribers; `--runs` concurrent turns per round       |
 | `plugins.reload`       | One live reload of a synthetic no-op plugin through the lifecycle RPC                                      |
+| `plugin.scope`         | One synthetic plugin RPC checking invocation scope before and after an asynchronous suspension             |
 
 RPC scenarios use `--operations` per round. `--rpc-concurrency` defaults to one
 and bounds concurrent requests across the connected sockets. For a reconnect
