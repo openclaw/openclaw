@@ -299,7 +299,7 @@ export async function refreshConfigAfterMutation(
   }
   const { client, connectionEpoch } = read;
   while (true) {
-    const result = await Promise.race([read.completion.promise, read.invalidated.promise]);
+    const result = await read.settled;
     if (!isCurrentConfigConnection(state, client, connectionEpoch)) {
       return failure("Connection changed before the configuration update was refreshed.");
     }

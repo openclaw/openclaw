@@ -2,6 +2,8 @@ import { createRoot, createSignal } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import { de } from "../i18n/locales/de.ts";
+import { createIdentityAvatars } from "../lib/identity-avatar-loader.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import { createGateway, createSessions, mountSidebar } from "../test-helpers/app-sidebar.ts";
 import {
@@ -19,10 +21,8 @@ import {
 import { renderSidebarSessionSectionHeader as SectionHeader } from "./app-sidebar-session-section-header.tsx";
 import { getAppSidebarOwner } from "./app-sidebar.tsx";
 import { SessionOrganizer } from "./session-organizer.ts";
-import {
-  renderSidebarRailPinMenuForMenus,
-  renderSidebarSessionMenuForMenus,
-} from "./sidebar-menus-render.tsx";
+import { SidebarMenusRenderer } from "./sidebar-menus-render.tsx";
+import type { SidebarMenusOwner } from "./sidebar-menus-types.ts";
 import { createSidebarMenus, type SidebarMenus } from "./sidebar-menus.tsx";
 
 it("updates retained agent creation menu labels when the locale changes", async () => {
@@ -221,11 +221,18 @@ it("keeps personal pinning and navigation usable in an offline session menu", as
         return SessionOrganizer.prototype.runSessionAction.call(this, ...args);
       },
     },
-  } as unknown as Parameters<typeof renderSidebarSessionMenuForMenus>[1];
-  const view = render(() => renderSidebarSessionMenuForMenus(menus, host, menus.sessionMenu!));
-  flush();
+  } as unknown as SidebarMenusOwner;
+  const view = render(() => (
+    <SidebarMenusRenderer
+      menus={menus}
+      host={host}
+      avatars={createIdentityAvatars()}
+      revision={() => 0}
+    />
+  ));
   const action = (value: string) =>
     view.container.querySelector<HTMLButtonElement>(`[data-value="${value}"]`)!;
+  await waitForSolid(() => expect(action("rename")).not.toBeNull());
   expect(action("rename").disabled).toBe(true);
   expect(action("toggle-unread").disabled).toBe(true);
   expect(action("copy-session-link").disabled).toBe(false);
@@ -310,12 +317,7 @@ describe("sidebar rail pin menu", () => {
       pins.append(trigger);
       document.body.append(pins);
       onTestFinished(() => pins.remove());
-      menus.triggers.set("railPin", trigger);
-      const menuPosition: NonNullable<SidebarMenus["railPinMenuPosition"]> = {
-        ...position,
-        entry: entries[index],
-        label: "Pinned item",
-      };
+      menus.openRailPinMenu(entries[index], "Pinned item", position.x, position.y, trigger);
       const move = vi.spyOn(host.sessionOrganizer, "writeSidebarEntryAt").mockImplementation(() => {
         expect(menus.triggers.has("railPin")).toBe(false);
       });
@@ -324,11 +326,22 @@ describe("sidebar rail pin menu", () => {
         .mockImplementation(() => {
           expect(menus.triggers.has("railPin")).toBe(false);
         });
-      const view = render(() => renderSidebarRailPinMenuForMenus(menus, host, menuPosition), {
-        container: pins,
-      });
+      const view = render(
+        () => {
+          const projection = projectOwner(menus, (owner) => owner);
+          return (
+            <SidebarMenusRenderer
+              menus={menus}
+              host={host}
+              avatars={createIdentityAvatars()}
+              revision={projection.revision}
+            />
+          );
+        },
+        { container: pins },
+      );
       onTestFinished(() => view.unmount());
-      flush();
+      await waitForSolid(() => expect(view.queryByRole("menu", { hidden: true })).not.toBeNull());
       const menu = view.getByRole("menu", { hidden: true });
       expect(menu.querySelector('[data-value="before"]')?.hasAttribute("disabled")).toBe(
         index === 0,

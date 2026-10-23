@@ -91,6 +91,13 @@ configured, falls back to the default agent.
 With local llama.cpp embeddings, `--deep` and `--index` also show available
 server, model, capability, and endpoint diagnostics.
 
+In the Control UI, **Memory → Overview → Test** checks embedding readiness on
+demand. The Gateway reuses the result for 30 seconds, including across page
+reloads. After it expires, **No recent check** means readiness needs a fresh
+check, not that embeddings have failed. Reloading the page does not probe the
+provider. CLI `memory status --deep` runs in a separate process and does not
+refresh the Gateway's readiness cache.
+
 Repair preserves recorded recall days, including local dates that differ from
 UTC. It fills in a day from the last recall timestamp only when no day is recorded.
 

@@ -1,6 +1,9 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { createMemo, For, Show } from "solid-js";
-import { createFooterControlRef } from "../../app/shell-layout-traits-solid.tsx";
+import {
+  createFooterControlRef,
+  ShellLayoutBoundary,
+} from "../../app/shell-layout-traits-solid.tsx";
 import { highlightCodeHtml } from "../../components/markdown-code-blocks.ts";
 import { providerIdFromModelRef } from "../../components/provider-icon-data.ts";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
@@ -47,7 +50,7 @@ export function Editor(
         : t("cron.form.fixFieldsPlural", { count: String(blockingFields().length) })
       : "";
   return (
-    <>
+    <ShellLayoutBoundary traits={{ cronEditor: props.canManage }}>
       <fieldset
         class="cron-editor"
         disabled={props.busy || !props.canManage}
@@ -88,46 +91,6 @@ export function Editor(
             </ul>
           </div>
         ) : undefined}
-        <Show when={props.canManage}>
-          {(_visible) => {
-            const footer = createCronEditorClearance();
-            const footerControl = createFooterControlRef();
-            return (
-              <div ref={[footer, footerControl]} class="cron-editor-actions">
-                <button
-                  class="btn primary"
-                  data-test-id="cron-submit"
-                  disabled={props.busy || !props.canSubmit}
-                  onClick={() => props.onSubmit()}
-                >
-                  {props.busy
-                    ? t("cron.form.saving")
-                    : props.mode === "job"
-                      ? t("cron.form.saveChanges")
-                      : t("cron.form.createTask")}
-                </button>
-                {props.mode === "create" && props.form.scheduleKind !== "event" ? (
-                  <button
-                    class="btn"
-                    data-test-id="cron-submit-run"
-                    disabled={props.busy || !props.canSubmit}
-                    onClick={() => props.onSubmitRunNow()}
-                  >
-                    {t("cron.form.createAndRun")}
-                  </button>
-                ) : undefined}
-                <button class="btn" disabled={props.busy} onClick={() => props.onClosePanel()}>
-                  {t("cron.form.cancel")}
-                </button>
-                {submitDisabledReason() ? (
-                  <div class="cron-submit-reason" aria-live="polite">
-                    {submitDisabledReason()}
-                  </div>
-                ) : undefined}
-              </div>
-            );
-          }}
-        </Show>
       </fieldset>
       {props.editingJob && props.canManage ? (
         <CronScratchEditor
@@ -136,7 +99,48 @@ export function Editor(
           getRetired={props.getActionRetired}
         />
       ) : undefined}
-    </>
+      {/* Keep actions last so their sticky containing block includes job scratch. */}
+      <Show when={props.canManage}>
+        {(_visible) => {
+          const footer = createCronEditorClearance();
+          const footerControl = createFooterControlRef();
+          return (
+            <div ref={[footer, footerControl]} class="cron-editor-actions">
+              <button
+                class="btn primary"
+                data-test-id="cron-submit"
+                disabled={props.busy || !props.canSubmit}
+                onClick={() => props.onSubmit()}
+              >
+                {props.busy
+                  ? t("cron.form.saving")
+                  : props.mode === "job"
+                    ? t("cron.form.saveChanges")
+                    : t("cron.form.createTask")}
+              </button>
+              {props.mode === "create" && props.form.scheduleKind !== "event" ? (
+                <button
+                  class="btn"
+                  data-test-id="cron-submit-run"
+                  disabled={props.busy || !props.canSubmit}
+                  onClick={() => props.onSubmitRunNow()}
+                >
+                  {t("cron.form.createAndRun")}
+                </button>
+              ) : undefined}
+              <button class="btn" disabled={props.busy} onClick={() => props.onClosePanel()}>
+                {t("cron.form.cancel")}
+              </button>
+              {submitDisabledReason() ? (
+                <div class="cron-submit-reason" aria-live="polite">
+                  {submitDisabledReason()}
+                </div>
+              ) : undefined}
+            </div>
+          );
+        }}
+      </Show>
+    </ShellLayoutBoundary>
   );
 }
 // Only the read-only payload kinds carry source text; the rest are prose prompts,

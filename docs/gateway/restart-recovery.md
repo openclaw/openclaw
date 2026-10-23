@@ -50,6 +50,8 @@ An accepted child continuation, including a child created with `sessions_spawn`
 or an interrupted child resumed with `sessions_send`,
 keeps the restored operator's current identity and permission checks independently
 of the parent's recovery claim. Completing the parent does not cancel that child.
+Provider retries reuse the child's retained authority, including when session tools
+are prepared again after a transient provider error.
 Explicitly stopping the parent still cancels its children. Revoking the operator,
 replacing the source session, or stopping the Gateway still invalidates the child's
 authority.
@@ -1110,6 +1112,11 @@ When a recovered turn starts with an eligible channel delivery route, OpenClaw
 sends a resumption notice to that conversation, retaining its account and topic.
 The final reply uses the same delivery route. Transcript-only turns stay private,
 and a turn that has already finished does not receive a late resumption notice.
+Channel-less turns started through the `agent` RPC remain channel-less after
+recovery. Control UI and `chat.send` / `sessions.send` WebChat turns retain their
+WebChat context. In-flight claims from older builds that did not record the
+original channel retain the previous WebChat fallback for session keys without
+an external channel route; no migration is needed.
 A failed notice does not restart or replay the recovered work. Main-session
 resumption notices are best-effort and live-only: automatic-delivery permission and the recovery
 owner are rechecked immediately before the channel send. They are not replayed
@@ -1302,21 +1309,30 @@ Startup restores completed runs directly from the registry. Any retained deliver
 keeps its normal session and ownership checks. Unfinished runs still reconcile
 the current child session before resuming.
 Human follow-ups in retained child sessions take native custody under the actual
-executing run ID and follow-up prompt, including browser chat. The completed
-original run keeps its own outcome. Human ownership and dashboard nesting do not
+executing run ID and follow-up prompt, including browser chat. Native child
+follow-ups sent with `sessions_send` retain registry custody whether the caller
+waits for the result or requests an asynchronous completion. An inline result
+settles that same completion obligation; it does not send a second parent notice.
+The completed original run keeps its own outcome. Human ownership and dashboard nesting do not
 turn a child into a main-session replay candidate. The subagent registry owns
 continuation in the same child session, using fresh agent admission and the
 original requester's current permissions. Operator recovery restores the exact
 session binding, including for session-scoped operators and collector tasks.
 Channel-origin children, including collectors, use the private requester claim saved with the interrupted child;
 this claim identifies the original sender and does not grant operator authority.
-Dashboard session keys do not change this ownership. Its final result follows the normal
-completion path even when the parent has already ended its own turn.
+Dashboard session keys and cron parents do not change this ownership. Internal child turns retain
+their admitted requester claim even when they have no outward delivery route.
+Its final result follows the normal completion path even when the parent has
+already ended its own turn.
 If the retained child transcript is empty or missing, automatic recovery stays
 pending and logs a warning; restore that transcript before resuming recovery.
 Explicit Stop, cancellation, and replaced child sessions do not resume.
 Runs without verifiable session ownership or a restorable requester source settle
-through their normal interruption path for the parent to inspect.
+through their normal interruption path. When the original child still owns its
+interrupted turn but requester authority cannot be restored, recovery also records
+a visible interruption in that child’s history. It does not execute work or send
+a parent message using the missing authority; a new authenticated message can
+continue the retained conversation.
 For native children with completion notifications disabled, recovery sends a
 private continuation to the original parent when its saved session identity still
 matches. Normal successful completion stays quiet. A reset or cancellation does
@@ -1386,9 +1402,11 @@ This requires the retained session and registry interruption record with current
 session-effects ownership; it does not require a main-session restart tombstone.
 It cannot recover a deleted session, an expired registry record, or revoked
 custody. For those cases, send a fresh request to the retained parent to reconcile
-the recorded results and finish or reassign the unfinished work. A fresh
-`chat.send` to a retained child can continue its history under the current caller's
-authority. Check for an already-running follow-up before sending either request.
+the recorded results and finish or reassign the unfinished work.
+A fresh authenticated `sessions.send {"key":"<child-session-key>","message":"<continuation>","idempotencyKey":"<unique-request-id>"}`
+can continue the retained child history under the current caller's authority,
+including when the old run's registry record or requester source is missing.
+Check for an already-running follow-up before sending either request.
 Historical failed runs without
 that ownership evidence remain failed: their error text alone cannot distinguish
 a restart from a genuine failure. Inspect those retained sessions before

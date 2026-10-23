@@ -6,7 +6,7 @@ import {
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { getAiTransportHost } from "../host.js";
 import { convertMessages, hasToolCallHistory } from "../openai-completions-messages.js";
-import type { OpenAICompletionsOptions } from "../provider-options.js";
+import { measuredRequestPressure, type OpenAICompletionsOptions } from "../provider-options.js";
 import {
   PROVIDER_MODEL_INPUT,
   type ProviderContext,
@@ -505,7 +505,13 @@ export function buildOpenAICompletionsRequest(
       clampedMaxTokens !== undefined &&
       effectiveContextTokens !== undefined
     ) {
-      const estimatedInputTokens = estimateOpenAICompletionsInputTokens(params);
+      // The measured predecessor does not bind the response-format identity.
+      const measuredInputTokens =
+        params.response_format === undefined
+          ? measuredRequestPressure.get(model, context)
+          : undefined;
+      const estimatedInputTokens =
+        measuredInputTokens ?? estimateOpenAICompletionsInputTokens(params);
       const remainingBudget = Math.max(0, effectiveContextTokens - estimatedInputTokens - 1);
       if (clampedMaxTokens > remainingBudget) {
         // Tool arguments need useful headroom even when the provider accepts a smaller cap.

@@ -42,8 +42,7 @@ import type {
   ChannelIngressQueueRecord,
 } from "./ingress-queue.types.js";
 import {
-  resolveIngressFailureDisposition,
-  resolveIngressRetryDelayMs,
+  createIngressRetryPolicy,
   type IngressNonRetryableFailure,
   type IngressRetryPolicyConfig,
 } from "./ingress-retry-policy.js";
@@ -276,12 +275,14 @@ export function createChannelIngressDrainOwner<
 
   const isStopped = () => disposed || options.abortSignal?.aborted === true;
 
+  const retry = createIngressRetryPolicy(queue);
   const { completeClaimWithRetry, releaseClaim, failClaim } = createIngressWriter(options, {
     queue,
     now,
     formatError,
     log,
     isStopped,
+    onTerminal: retry.clear,
   });
 
   const applyFailureDisposition = async (
@@ -294,7 +295,7 @@ export function createChannelIngressDrainOwner<
       await releaseClaim(claim, { recordAttempt: false });
       return;
     }
-    const disposition = resolveIngressFailureDisposition({
+    const disposition = retry.failure({
       err,
       event: claim,
       formatError,
@@ -305,7 +306,7 @@ export function createChannelIngressDrainOwner<
     const committed =
       disposition.kind === "fail"
         ? await failClaim(claim, disposition.reason, disposition.message)
-        : await releaseClaim(claim, { lastError: disposition.message });
+        : await releaseClaim(claim, { ...disposition, lastError: disposition.message });
     const displayId = claim.id.replace(/^0+(?=\d)/, "") || claim.id;
     if (!committed) {
       log(`spooled update ${displayId} settlement skipped: claim no longer owns the event`);
@@ -386,9 +387,7 @@ export function createChannelIngressDrainOwner<
       readLaneBacklog: async () => {
         const { pending, claims } = await readUnsettled();
         const waiting = [
-          ...pending.filter(
-            (row) => resolveIngressRetryDelayMs(row, options.retryPolicy, now()) <= 0,
-          ),
+          ...pending.filter((row) => retry.delay(row, options.retryPolicy, now()) <= 0),
           ...claims.filter((claim) => {
             const active = activeByClaim.get(activeClaimKey(claim));
             return (
@@ -544,6 +543,7 @@ export function createChannelIngressDrainOwner<
           // The downstream owner atomically tombstoned this exact claim. Do not
           // complete it again or turn a shutdown race into a replayable failure.
           clearStallTimer(state);
+          retry.clear(claim.id);
           await state.settleOnce(async () => {});
           return;
         }
@@ -683,7 +683,7 @@ export function createChannelIngressDrainOwner<
     // The ordered snapshot owns selection for this pass. A delayed head blocks its lane.
     for (const [index, event] of pending.entries()) {
       const laneKey = laneKeyFor(event);
-      if (resolveIngressRetryDelayMs(event, options.retryPolicy, now()) > 0) {
+      if (retry.delay(event, options.retryPolicy, now()) > 0) {
         retryDelayed[index] = 1;
         if (!pendingLaneKeys.has(laneKey)) {
           retryDelayedLaneKeys.add(laneKey);

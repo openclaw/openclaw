@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { root, type Root } from "@openclaw/fs-safe/root";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { resolveSandboxPath } from "../../agents/sandbox-paths.js";
 import { canonicalizePath } from "../../agents/utils/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -66,8 +66,7 @@ function parseSyncedSkillsManifest(value: unknown): SyncedSkillsManifest | null 
     typeof value.skillsVersion !== "number" ||
     !Number.isFinite(value.skillsVersion) ||
     typeof value.skillRootsFingerprint !== "string" ||
-    !Array.isArray(value.entryKeys) ||
-    !value.entryKeys.every((entry) => typeof entry === "string")
+    !isStringArray(value.entryKeys)
   ) {
     return null;
   }

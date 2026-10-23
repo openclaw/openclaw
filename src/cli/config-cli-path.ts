@@ -448,18 +448,6 @@ export function mergeAtPath(
   return merged.suppliedPaths;
 }
 
-function isProtectedMapReplacementPath(path: PathSegment[]): boolean {
-  const joined = path.join(".");
-  return (
-    joined === "agents.defaults.models" ||
-    joined === "models.providers" ||
-    (path.length === 3 && path[0] === "models" && path[1] === "providers") ||
-    joined === "agents.entries" ||
-    joined === "plugins.entries" ||
-    joined === "auth.profiles"
-  );
-}
-
 export function assertNonDestructiveReplacement(params: {
   root: Record<string, unknown>;
   path: PathSegment[];
@@ -477,7 +465,17 @@ export function assertNonDestructiveReplacement(params: {
   const pathLabel = refusalPathLabel(params.command, params.path);
   let removed: string[];
   let mergeHint: string;
-  if (isProtectedMapReplacementPath(params.path) && isPlainRecord(existing.value)) {
+  const path = params.path;
+  const joined = path.join(".");
+  if (
+    (joined === "agents.defaults.models" ||
+      joined === "models.providers" ||
+      (path.length === 3 && path[0] === "models" && path[1] === "providers") ||
+      joined === "agents.entries" ||
+      joined === "plugins.entries" ||
+      joined === "auth.profiles") &&
+    isPlainRecord(existing.value)
+  ) {
     if (!isPlainRecord(params.value)) {
       return;
     }

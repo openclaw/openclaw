@@ -168,8 +168,8 @@ export function getPluginInstance(record: PluginRecord): PluginInstanceHandle | 
 }
 
 /**
- * Code identity of a live instance: the digest of its captured plugin generation source. Core
- * bundled plugins load host-owned modules and have none.
+ * Digest of a live instance's captured plugin generation source. Core-bundled plugins load
+ * host-owned modules and have none; `getPluginInstanceCodeIdentity` covers both.
  */
 export function getPluginInstanceSourceDigest(record: PluginRecord): string | undefined {
   return getPluginInstanceIncarnation(record)

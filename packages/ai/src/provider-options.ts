@@ -1,5 +1,5 @@
 import type Anthropic from "@anthropic-ai/sdk";
-import type { ProviderStreamOptions } from "./provider-types.js";
+import type { ProviderContext, ProviderModel, ProviderStreamOptions } from "./provider-types.js";
 import type { OpenAIReasoningEffort } from "./providers/openai-reasoning-effort.js";
 import type { OpenAICompletionsToolChoice } from "./providers/openai-tool-projection.js";
 import type { StreamOptions } from "./types.js";
@@ -16,6 +16,45 @@ export type OpenAIResponsesCompactionRejection = CompactionReplayRejection;
 export type CodeModeToolSurfaceObservation = {
   beforeToolIdentities: readonly string[];
   afterToolIdentities: readonly string[];
+};
+
+type RequestModelIdentity = Pick<ProviderModel, "provider" | "id" | "api"> & { baseUrl?: string };
+const measuredRequestPressures = new WeakMap<
+  ProviderContext,
+  Pick<ProviderContext, "messages" | "tools" | "systemPrompt"> & {
+    model: RequestModelIdentity;
+    tokens: number;
+  }
+>();
+
+/** Request-local pressure admitted by the host's matched provider-usage owner. */
+export const measuredRequestPressure = {
+  set(model: RequestModelIdentity, context: ProviderContext, tokens: number | undefined): void {
+    if (tokens === undefined) {
+      measuredRequestPressures.delete(context);
+      return;
+    }
+    measuredRequestPressures.set(context, {
+      model: { provider: model.provider, id: model.id, api: model.api, baseUrl: model.baseUrl },
+      messages: context.messages,
+      tools: context.tools,
+      systemPrompt: context.systemPrompt,
+      tokens,
+    });
+  },
+  get(model: RequestModelIdentity, context: ProviderContext): number | undefined {
+    const pressure = measuredRequestPressures.get(context);
+    return pressure &&
+      pressure.model.provider === model.provider &&
+      pressure.model.id === model.id &&
+      pressure.model.api === model.api &&
+      pressure.model.baseUrl === model.baseUrl &&
+      pressure.messages === context.messages &&
+      pressure.tools === context.tools &&
+      pressure.systemPrompt === context.systemPrompt
+      ? pressure.tokens
+      : undefined;
+  },
 };
 
 const CODE_MODE_TOOL_SURFACE_OBSERVER = Symbol("openaiCodeModeToolSurfaceObserver");

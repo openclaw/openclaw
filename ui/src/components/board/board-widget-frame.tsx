@@ -22,7 +22,7 @@ import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
 
 registerEnglishCatalog(registerBoardEnglish);
 
-// Keep in sync with the identical literal in chat widget-card.ts: a shared
+// Keep in sync with the identical literal in chat widget-card-view.tsx: a shared
 // module is not worth its startup-bundle cost for one string.
 const WIDGET_SIZE_MESSAGE_TYPE = "openclaw:widget-size";
 const WIDGET_BOARD_HOST_MESSAGE_TYPE = "openclaw:widget-board-host";

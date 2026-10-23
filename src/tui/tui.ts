@@ -20,6 +20,7 @@ import { captureRuntimeConfigAsyncReader, type OpenClawConfig } from "../config/
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
+import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
 import type { GatewayLockIdentity } from "../infra/gateway-lock.js";
 import { resolveCurrentOpenClawCliInvocation } from "../infra/openclaw-cli-invocation.js";
@@ -1333,12 +1334,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
           authChildClosed,
           autocompleteReady,
         ]);
-        const failures = results.flatMap((outcome) =>
-          outcome.status === "rejected" ? [outcome.reason] : [],
-        );
-        if (failures.length > 0) {
-          throw new AggregateError(failures, "TUI command cleanup failed");
-        }
+        throwSettledAggregate(results, "TUI command cleanup failed");
       },
       stopClient: () => client.stop(),
       stopTui: () => drainAndStopTuiSafely(tui),

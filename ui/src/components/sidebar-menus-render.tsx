@@ -126,7 +126,7 @@ function renderSidebarMenus(
   ];
 }
 
-export function renderSidebarRailPinMenuForMenus(
+function renderSidebarRailPinMenuForMenus(
   menus: SidebarMenus,
   host: SidebarMenusOwner,
   position: NonNullable<SidebarMenus["railPinMenuPosition"]>,
@@ -177,7 +177,7 @@ export function renderSidebarRailPinMenuForMenus(
   );
 }
 
-export function renderSidebarAgentMenuForMenus(
+function renderSidebarAgentMenuForMenus(
   menus: SidebarMenus,
   host: SidebarMenusOwner,
   position: NonNullable<SidebarMenus["agentMenuPosition"]>,
@@ -264,7 +264,7 @@ export function renderSidebarAgentMenuForMenus(
   );
 }
 
-export function renderSidebarAgentCreateDialogForMenus(
+function renderSidebarAgentCreateDialogForMenus(
   menus: SidebarMenus,
   host: SidebarMenusOwner,
 ): JSX.Element | null {
@@ -345,7 +345,7 @@ function renderSidebarIdentityMenuForMenus(
   );
 }
 
-export function renderSidebarSessionMenuForMenus(
+function renderSidebarSessionMenuForMenus(
   menus: SidebarMenus,
   host: SidebarMenusOwner,
   menu: NonNullable<SidebarMenus["sessionMenu"]>,

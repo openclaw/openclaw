@@ -13,6 +13,9 @@ export const uiIsolatedTestFiles = [
   "ui/src/components/app-sidebar.catalog-events.test.ts",
   // The catalog suite exceeds the CI deadline in a shared Bun worker.
   "ui/src/components/app-sidebar.catalog.test.ts",
+  // Holds the report chunk before first import to prove the cold widget boundary.
+  "ui/src/components/board/board-widget-cell-plugin.test.ts",
+  "ui/src/components/board/core-board-widget.test.tsx",
   "ui/src/components/gateway-url-confirmation.test.ts",
   "ui/src/components/link-reader-title-tooltip.test.ts",
   // Import rejection fixtures must not poison the shared module registry.
@@ -63,6 +66,7 @@ export const uiIsolatedTestFiles = [
   "ui/src/pages/config/memory-mutation-owner.test.ts",
   "ui/src/pages/config/memory-page.test.ts",
   "ui/src/pages/new-session/draft-persistence.test.ts",
+  "ui/src/pages/new-session/new-session-attachment-lazy.test.ts",
   "ui/src/pages/sessions/sessions-page.archived.test.ts",
 ].map((file) => resolveUiTypeScriptPath(file));
 

@@ -4,6 +4,8 @@ import { i18n } from "../../../i18n/index.ts";
 import { channelSenderAvatarMemoKey } from "../../../lib/chat/channel-sender-avatar.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { localParticipantIdentityKey } from "../../../lib/chat/sender-label.ts";
+import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
+import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import { assistantGroupCanOwnActiveRunStatus } from "../chat-assistant-reply.ts";
 import { resolveTurnRecap, shouldRenderQueuedSendInThread } from "../chat-progress.ts";
 import { projectChatReasoning } from "../chat-reasoning.ts";
@@ -18,6 +20,7 @@ import {
   setExpansionState,
   syncToolCardExpansionState,
 } from "../chat-thread.ts";
+import { readAsyncQuestions } from "./chat-async-question.ts";
 import { buildChatArchiveNotice } from "./chat-divider.ts";
 import type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
 import { assistantMediaPolicyKey } from "./chat-message-media.ts";
@@ -319,7 +322,6 @@ export function projectChatTranscript(
       ...sharedMessageRenderOptions,
       messageReactions: props.messageReactions,
       onReact: props.onReact,
-      transcriptVisible: props.transcriptVisible,
       latestBrowserTabs: props.latestBrowserTabs,
       showReasoning,
       showToolCalls: props.showToolCalls,
@@ -377,7 +379,7 @@ export function projectChatTranscript(
   };
   // Only the working indicator shows live usage and subagent status, so rows
   // without one keep memoizing across usage and child-roster patches.
-  const workingUsageKey = JSON.stringify([runOutputTokens, subagents.statusKey]);
+  const workingUsageKey = JSON.stringify([runOutputTokens, subagents.statusKey, presented]);
   const liveStatusSignature = (item: ChatRenderItem): string => {
     if (item.kind === "stream-run") {
       return item.parts.some((part) => part.kind === "reading-indicator") ? workingUsageKey : "";
@@ -407,7 +409,27 @@ export function projectChatTranscript(
   };
   const renderItem = guardChatRenderItems(
     state,
-    (item) => [liveStatusSignature(item), ...transcriptReplyDependencies(item, loadedReplySources)],
+    (item) => {
+      const groups = chatItemGroups(item);
+      const hasTools = groups.some((group) =>
+        group.messages.some(({ message }) => extractToolCardsCached(message).length > 0),
+      );
+      const hasQuestions =
+        asyncQuestions &&
+        groups.some((group) => group.messages.some(({ message }) => readAsyncQuestions(message)));
+      return [
+        liveStatusSignature(item),
+        ...transcriptReplyDependencies(item, loadedReplySources),
+        // Durable drafts can restore the same map under a new callback generation.
+        hasQuestions ? asyncQuestions.drafts : undefined,
+        hasQuestions ? state.asyncQuestionGeneration : undefined,
+        // Tool plugins own foreground activity; launch cards also read the child roster.
+        hasTools ? presented : undefined,
+        hasTools ? subagents.rowsKey : undefined,
+        item.kind === "notice" ? props.onRetryRun : undefined,
+        item.kind === "notice" ? props.failureActionsRunId : undefined,
+      ];
+    },
     (item) => {
       if (item.kind === "system-event-group") {
         return { kind: "system-events", item };
@@ -534,14 +556,8 @@ export function projectChatTranscript(
     Math.floor(Date.now() / 60_000),
     props.latestBrowserTabs,
     props.sessionKey,
-    presented,
-    typeof props.transcriptVisible === "object"
-      ? props.transcriptVisible.isPresented()
-      : (props.transcriptVisible ?? true),
     // Invalidate settled rows when spawn metadata arrives, not on activity/title patches.
     avatarPlacement,
-    // Launch rows show each subagent's name, state and duration.
-    subagents.rowsKey,
     props.boardProvider,
     props.boardProvider?.canPinWidgets,
     props.boardProvider?.canPinMcpApps,
@@ -557,8 +573,6 @@ export function projectChatTranscript(
     Boolean(props.runFinalizing),
     props.startupLabel,
     props.retryAt,
-    props.onRetryRun,
-    props.failureActionsRunId,
     Boolean(props.waitingApproval),
     props.questionPrompts,
     state.asyncQuestionRevision,

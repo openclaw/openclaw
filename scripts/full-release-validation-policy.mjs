@@ -28,15 +28,20 @@ import { validateQualificationBaselines } from "./lib/release-upgrade-baseline.m
 import {
   evaluateReleaseChildPolicy,
   isFailedReleaseJob as isFailedJob,
+  releaseChildAdvisories,
 } from "./lib/release-validation-waivers.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 import { parseGithubResponse } from "./pr-lib/gh-api-preflight.mjs";
 import { validateQualificationCoverage } from "./release-qualification-coverage.mjs";
 
-export { MAX_RELEASE_ARTIFACT_BYTES, serializeReleaseArtifact, buildReleaseValidationManifest };
+export {
+  MAX_RELEASE_ARTIFACT_BYTES,
+  serializeReleaseArtifact,
+  buildReleaseValidationManifest,
+  releaseChildAdvisories,
+};
 
-function validateReleaseAdvisoryJobs(value) {
-  const expected = [];
+function validateReleaseAdvisoryJobs(value, expected = []) {
   const recorded = value === undefined ? [] : value;
   if (!Array.isArray(recorded) || jsonSha256(recorded) !== jsonSha256(expected)) {
     throw new Error("Release advisory jobs differ from the release policy evidence");
@@ -65,7 +70,12 @@ export function validateReleaseManifestAdvisoryJobs(manifest) {
       throw new Error("Release manifest contains failed selected job evidence");
     }
   }
-  return validateReleaseAdvisoryJobs(manifest.advisoryJobs);
+  return validateReleaseAdvisoryJobs(
+    manifest.advisoryJobs,
+    Object.entries(manifest.childEvidence ?? {}).flatMap(([key, child]) =>
+      releaseChildAdvisories({ ...child, key }),
+    ),
+  );
 }
 
 const MAX_REPORTED_ISSUES = 25;
@@ -211,6 +221,7 @@ const LEGACY_CHILD_SPECS = Object.freeze([
       "all",
       "install-smoke",
       "cross-os",
+      "windows-node",
       "live-e2e",
       "package",
       "qa-parity",
@@ -262,7 +273,7 @@ const CHILD_SPECS = Object.freeze([
     displayName: "OpenClaw Release Checks",
     key: "releaseChecksCandidate",
     parentJobName: "Run release checks candidate validation",
-    rerunGroups: ["all", "cross-os", "live-e2e", "package"],
+    rerunGroups: ["all", "cross-os", "windows-node", "live-e2e", "package"],
     suffix: "-release-checks-candidate",
     workflow: "openclaw-release-checks.yml",
   },
@@ -761,7 +772,9 @@ function candidatePreparationRequired(input) {
   ) {
     return false;
   }
-  if (["all", "plugin-prerelease", "cross-os", "package"].includes(input.rerunGroup)) {
+  if (
+    ["all", "plugin-prerelease", "cross-os", "windows-node", "package"].includes(input.rerunGroup)
+  ) {
     return true;
   }
   return input.rerunGroup === "live-e2e" && !stringValue(input.liveSuiteFilter).trim();
@@ -779,7 +792,7 @@ function releaseExecutionChildRequired(spec, input, npmTelegramForAll) {
       return input.rerunGroup === "npm-telegram" || npmTelegramForAll;
     case "releaseChecksCandidate":
       return (
-        ["all", "cross-os", "package"].includes(input.rerunGroup) ||
+        ["all", "cross-os", "windows-node", "package"].includes(input.rerunGroup) ||
         (input.rerunGroup === "live-e2e" && !stringValue(input.liveSuiteFilter).trim())
       );
     default:
@@ -1449,15 +1462,16 @@ export function terminalPolicyPass(child, targetVersion) {
     child.status === "completed" &&
     child.jobs.every((job) => job.status === "completed") &&
     (child.conclusion === "success" ||
-      (child.conclusion === "failure" && policy.waivers.length > 0)) &&
+      (child.conclusion === "failure" &&
+        (policy.waivers.length > 0 || policy.advisoryJobs.some(isFailedJob)))) &&
+    policy.advisoryFailureAllowed &&
     policy.blockingJobs.length === 0
   );
 }
 
 export function planReleaseChildRerun({ childKey, jobs }) {
-  const failed = jobs
-    .filter(isFailedJob)
-    .map((job) => job.name)
+  const failed = evaluateReleaseChildPolicy({ child: { key: childKey, jobs } })
+    .blockingJobs.map((job) => job.name)
     .toSorted();
   if (failed.length === 0) {
     throw new Error(`${childKey} has no blocking failed job to rerun`);
@@ -1593,7 +1607,7 @@ export function classifyReleaseSnapshot({
     .toSorted((left, right) => String(left.primaryAt).localeCompare(String(right.primaryAt), "en"));
   return {
     activeRunIds,
-    advisoryJobs: [],
+    advisoryJobs: selected.flatMap(releaseChildAdvisories),
     waivers: selected.flatMap((child) =>
       evaluateReleaseChildPolicy({ child, targetVersion }).waivers.map((waiver) =>
         Object.assign({}, waiver, { runId: child.runId, runAttempt: child.runAttempt }),
@@ -2160,7 +2174,12 @@ export function validateReleaseStateArtifact(payload, expected, expectedMode) {
   return {
     ...payload,
     activeRunIds,
-    advisoryJobs: validateReleaseAdvisoryJobs(payload.advisoryJobs),
+    advisoryJobs: validateReleaseAdvisoryJobs(
+      payload.advisoryJobs,
+      Object.entries(children).flatMap(([key, child]) =>
+        releaseChildAdvisories({ ...child, key, jobs: child.timing.jobs }),
+      ),
+    ),
     waivers: payload.waivers ?? [],
     blockerCount: machineEvidence ? payload.blockerCount : null,
     blockerIndex: completeBlockerIndex,
