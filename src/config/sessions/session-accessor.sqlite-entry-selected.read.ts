@@ -98,10 +98,9 @@ export function readSelectedSessionEntriesInDatabase(
     // rejects delivery-canonical sibling drift, so include its existing dirty set.
     // Older readers have no dirty set and retain their full validation inventory.
     const selectedQuery = query.select((eb) =>
-      (options.transcriptSessionIds === undefined
-        ? eb.val(0)
-        : eb("session_key", "in", selected)
-      ).as("transcript_selected"),
+      options.transcriptSessionIds === undefined
+        ? eb.val(0).as("transcript_selected")
+        : eb("session_key", "in", selected).as("transcript_selected"),
     );
     const rows = iterateSqliteQuerySync(
       database.db,

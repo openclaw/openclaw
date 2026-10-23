@@ -1,4 +1,5 @@
 import { Worker } from "node:worker_threads";
+import { captureRuntimeConfigAsyncReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
@@ -22,6 +23,7 @@ it.each([false, true])(
   "reads only hit identities and required aliases (recall=%s)",
   async (recall) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const anchor = "agent:main:telegram:direct:owner";
       const visible = "agent:main:telegram:direct:friend";
       const shared = "agent:main:telegram:group:team";

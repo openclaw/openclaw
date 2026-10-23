@@ -18,7 +18,6 @@ import {
   closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
 } from "../../state/openclaw-agent-db-lifecycle.js";
-import { registerOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import {
   openOpenClawAgentDatabase,
@@ -547,17 +546,16 @@ it("lists current memory entries and owner changes alongside durable targets", a
 
 it("rejects collisions for transcript aliases discovered in another store", async ({ state }) => {
   const primary = resolveOpenClawAgentSqlitePath({ agentId: "main" });
-  const secondary = state.statePath("secondary.sqlite");
+  const secondary = state.statePath("main.sqlite");
+  const cfg = fleet(["main"], { store: state.statePath("{agentId}.sqlite") });
   const anchor = "agent:main:anchor";
   const alias = "agent:main:alias";
   seed("main", anchor, "shared", {}, primary);
   seed("main", alias, "different", {}, primary);
   seed("main", alias, "shared", {}, secondary);
-  for (const storePath of [primary, secondary]) {
-    registerOpenClawAgentDatabase({ agentId: "main", path: storePath });
-  }
   await expect(
-    loadCombinedStoreAsync(fleet(), {
+    loadCombinedStoreAsync(cfg, {
+      agentId: "main",
       includeIncognito: false,
       projection: "list",
       transcriptSelection: { sessionKeys: [anchor], sessionIds: [] },
