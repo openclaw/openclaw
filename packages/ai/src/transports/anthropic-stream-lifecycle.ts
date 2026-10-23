@@ -83,9 +83,10 @@ export async function runAnthropicStreamLifecycle(params: {
   const { model, stream, options, profile } = params;
   const output = createAssistantOutput(model, "anthropic-messages");
   // Classifier refusals can invalidate partial output until the terminal stop reason is known.
-  const refusalBuffer = usesClaudeStreamingRefusalContract(model)
-    ? createDeferredEventBuffer<AssistantMessageEvent>(stream)
-    : undefined;
+  const refusalContract = usesClaudeStreamingRefusalContract(model);
+  let refusalBuffer:
+    | ReturnType<typeof createDeferredEventBuffer<AssistantMessageEvent>>
+    | undefined;
   let replayedCompaction: AnthropicCompactionBlock | undefined;
   try {
     const prepared = params.prepare();
@@ -105,6 +106,12 @@ export async function runAnthropicStreamLifecycle(params: {
       prepared.options,
       prepared.directApiKeyBetaHeader,
     );
+    // An opted-in route streams live and leaves withdrawal to its consumer. A request
+    // naming `fallbacks` still defers: its fallback boundary rewrites delivered blocks.
+    refusalBuffer =
+      refusalContract && (model.compat?.streamBeforeRefusal !== true || "fallbacks" in body)
+        ? createDeferredEventBuffer<AssistantMessageEvent>(stream)
+        : undefined;
     const { response, events } = await prepared.request({ ...body, stream: true }, headers);
     await notifyProviderHttpResponse({ options: prepared.options, response, model });
     await prepared.checkResponse?.(response);
@@ -552,7 +559,7 @@ export async function runAnthropicStreamLifecycle(params: {
         }
         // Anthropic completes every SSE response with message_stop. Compatible
         // proxy providers are not held to that first-party transport contract.
-        if ((isDirectAnthropicModel(model) || (!managed && refusalBuffer)) && !sawMessageStop) {
+        if ((isDirectAnthropicModel(model) || (!managed && refusalContract)) && !sawMessageStop) {
           throw new Error("Anthropic stream ended before message_stop");
         }
         if (reducerOptions.signal?.aborted) {
@@ -621,7 +628,7 @@ export async function runAnthropicStreamLifecycle(params: {
       error,
       cleanup: () => {
         refusalBuffer?.discard();
-        output.content = refusalBuffer
+        output.content = refusalContract
           ? []
           : output.content.filter((block) => block.type !== "toolCall");
         if (
