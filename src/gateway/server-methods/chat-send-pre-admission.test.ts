@@ -43,6 +43,15 @@ import {
   runChatSendPreAdmission,
 } from "./chat-send-pre-admission.js";
 
+const reviewMocks = vi.hoisted(() => ({
+  stopReview: vi.fn(),
+}));
+
+vi.mock("../../skills/workshop/experience-review-default.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../skills/workshop/experience-review-default.js")>()),
+  stopSkillExperienceReview: reviewMocks.stopReview,
+}));
+
 vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/sessions/session-accessor.js")>()),
   readSessionSubmittedInput: vi.fn(),
@@ -154,6 +163,7 @@ let params: ReturnType<typeof createFixture>;
 beforeEach(() => {
   vi.mocked(readSessionSubmittedInput).mockReset().mockResolvedValue(undefined);
   vi.mocked(resolveDurableChatClaim).mockReset();
+  reviewMocks.stopReview.mockReset();
   params = createFixture();
 });
 
@@ -206,6 +216,15 @@ it("stops admitted session work while preserving a detached producer", async () 
       expect(admittedInterrupt).toHaveBeenCalledOnce();
       expect(controller.signal.aborted).toBe(true);
       expect(loadSessionEntry({ agentId: "main", storePath, sessionKey })).toEqual(before);
+      // Gateway chat.send "/stop" is an explicit Stop: cover the Workshop review bridge
+      // exactly like the fast channel "/stop" path.
+      expect(reviewMocks.stopReview).toHaveBeenCalledOnce();
+      const reviewCall = reviewMocks.stopReview.mock.calls[0]![0] as {
+        sessions: { agentId?: string; sessionKey?: string }[];
+        runIds: Iterable<string>;
+      };
+      expect(reviewCall.sessions).toEqual([{ agentId: "main", sessionKey }]);
+      expect([...reviewCall.runIds]).toContain("admitted-producer");
     } finally {
       admission.release();
       detachActiveEmbeddedRun(entry!.sessionId, handle);

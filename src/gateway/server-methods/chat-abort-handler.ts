@@ -213,6 +213,9 @@ export async function handleChatAbortRequestWithLifecycle(
         assertCurrent,
         preserveSideRuns,
         cascadeDescendants: lifecycle.cascadeDescendants,
+        // Plain chat.abort is the user-facing Stop. Queued-input discard and maintenance
+        // aborts stay unmarked; the exact-run branch bridges its accepted Stop separately.
+        cancelExperienceReview: true,
       },
       prepareAbortSession,
     );
@@ -602,6 +605,9 @@ export async function handleChatAbortRequestWithLifecycle(
     assertCurrent,
     hookContext: stopHookContext,
     afterParent: cancelWorker,
+    // Control UI and native chat clients Stop ordinary local runs with an exact runId; that
+    // accepted Stop must cover Workshop review exactly like a session Stop.
+    experienceReview: { agentId: agentId ?? abortAgentId, sessionKey },
     onAbortPrepared: () => {
       const text = context.chatRunState.resolveBuffer(runId, { final: true }).text;
       if (!partialSession || !text?.trim()) {

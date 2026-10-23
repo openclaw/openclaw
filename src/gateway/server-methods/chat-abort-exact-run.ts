@@ -12,6 +12,7 @@ import {
   stopSession,
   type SessionStopHookContext,
 } from "../../sessions/session-controller.stop.js";
+import { stopSkillExperienceReview } from "../../skills/workshop/experience-review-default.js";
 import { abortChatRunById, type ChatAbortOps } from "../chat-abort.js";
 import { abortControlledSubagents } from "./chat-abort-descendants.js";
 
@@ -36,6 +37,12 @@ export async function stopExactClientRun(params: {
   afterParent?: () => void;
   /** Runs after the chat abort is prepared, before it commits. */
   onAbortPrepared?: () => (() => void) | void;
+  /**
+   * Explicit authorized chat Stop: cancel this session's Workshop review and suppress the
+   * stopped run right before its cancellation commits. Absent for non-chat callers such as
+   * realtime talk, which keep their own Stop contract.
+   */
+  experienceReview?: { agentId?: string; sessionKey: string };
 }): Promise<ExactClientRunStopResult> {
   const { ops, runId, active } = params;
   // Capture the exact input before any await can select a successor.
@@ -79,7 +86,15 @@ export async function stopExactClientRun(params: {
           cancel,
           assertCurrent,
           stopReason: "rpc",
-          onAbortPrepared: params.onAbortPrepared,
+          onAbortPrepared: () => {
+            // The run is about to commit cancellation, so its own completion must not re-arm a
+            // review. Review bookkeeping is best-effort and never fails Stop.
+            const review = params.experienceReview;
+            if (review) {
+              stopSkillExperienceReview({ sessions: [review], runIds: [runId] });
+            }
+            return params.onAbortPrepared?.();
+          },
           onAbortCommitted: () => {
             result.aborted = true;
           },

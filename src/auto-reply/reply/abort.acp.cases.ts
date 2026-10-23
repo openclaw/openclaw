@@ -8,6 +8,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import { isSessionRunActiveForKey } from "../../sessions/session-controller.queries.js";
+import { stopSkillExperienceReview } from "../../skills/workshop/experience-review-default.js";
 import type { tryFastAbortFromMessage } from "./abort.js";
 import { getFollowupQueueDepth } from "./queue.js";
 import type { FollowupRun } from "./queue.js";
@@ -172,6 +173,8 @@ export function registerAbortAcpCases({
   it("fast-abort of a bound ACP target clears captured source input without inventing an active run", async () => {
     const sourceSessionKey = "agent:main:discord:channel:C2";
     const acpSessionKey = "agent:codex:acp:bound-session-stored-source";
+    const stopReview = vi.mocked(stopSkillExperienceReview);
+    stopReview.mockClear();
     const { root, cfg } = await createAbortConfig({
       sessionIdsByKey: {
         [sourceSessionKey]: "source-store-session",
@@ -204,6 +207,15 @@ export function registerAbortAcpCases({
     expect(result.handled).toBe(true);
     expect(getFollowupQueueDepth(sourceSessionKey)).toBe(0);
     expect(getFollowupQueueDepth(acpSessionKey)).toBe(0);
+    // One Stop selected both conversations; each keeps its own review identity.
+    expect(stopReview).toHaveBeenCalledOnce();
+    const reviewCall = stopReview.mock.calls[0]![0];
+    expect(reviewCall.sessions).toEqual(
+      expect.arrayContaining([
+        { agentId: "main", sessionKey: sourceSessionKey },
+        { agentId: "codex", sessionKey: acpSessionKey },
+      ]),
+    );
   });
 
   it("fast-abort from an ACP-bound source conversation aborts source and bound ACP turns", async () => {

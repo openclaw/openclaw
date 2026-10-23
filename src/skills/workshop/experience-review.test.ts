@@ -228,6 +228,39 @@ it("announces changes committed before the review run failed", async () => {
   );
 });
 
+it.each(["succeeded", "failed"] as const)(
+  "keeps an independent cleanup failure when the model %s and the review was stopped",
+  async (modelOutcome) => {
+    const stop = new AbortController();
+    mocks.runSkillWorkshopReview.mockImplementation(async () => {
+      if (modelOutcome === "failed") {
+        throw new Error("Skill review model run aborted.");
+      }
+      return { meta: { durationMs: 1 } };
+    });
+    mocks.listWorkshopChanges.mockImplementation(async () => {
+      // The explicit Stop lands after the model outcome while cleanup is running.
+      stop.abort();
+      throw new Error("workshop change read failed");
+    });
+
+    const error: unknown = await runSkillExperienceReview(candidate, {
+      abortSignal: stop.signal,
+    }).then(
+      () => undefined,
+      (cause: unknown) => cause,
+    );
+
+    expect(error).toBeInstanceOf(AggregateError);
+    expect((error as AggregateError).message).toContain("cleanup");
+    expect(
+      (error as AggregateError).errors.some(
+        (cause) => cause instanceof Error && cause.message === "workshop change read failed",
+      ),
+    ).toBe(true);
+  },
+);
+
 it("keeps prepared effects live through receipt pressure without MAIN SQL and denies revocation", async () => {
   withAdmission(async (assertCurrent) => {
     const session = await SessionManager.openAsync(candidate.source, state.workspaceDir);

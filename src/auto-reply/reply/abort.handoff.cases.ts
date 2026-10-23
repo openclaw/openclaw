@@ -27,6 +27,7 @@ import { captureSessionEntryCurrentCheckAsync } from "../../plugin-sdk/session-b
 import { normalizeSessionDeliveryState } from "../../plugin-sdk/session-store-runtime.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
+import { stopSkillExperienceReview } from "../../skills/workshop/experience-review-default.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
@@ -225,6 +226,8 @@ export function registerAbortHandoffCases({
     "checks the published conversation at the Stop effect (rebound=%s)",
     async (rebound) => {
       const state = await setupStop();
+      const stopReview = vi.mocked(stopSkillExperienceReview);
+      stopReview.mockClear();
       const address = {
         channel: "slack",
         accountId: "default",
@@ -407,6 +410,8 @@ export function registerAbortHandoffCases({
           expect(cancelChild).not.toHaveBeenCalled();
           expect(child.abortSignal.aborted).toBe(false);
           expect(externalOwner?.signal.aborted).toBe(false);
+          // A rebind rejects the foreground Stop before it reaches the review effect.
+          expect(stopReview).not.toHaveBeenCalled();
           expect(loadSessionEntry(scope)?.abortedLastRun).not.toBe(true);
           expect(outcome).toEqual({
             error: expect.objectContaining({
@@ -446,4 +451,50 @@ export function registerAbortHandoffCases({
       }
     },
   );
+
+  function createReviewOperation(state: StopFixture, runId: string) {
+    const operation = createReplyOperation({
+      agentId: "main",
+      sessionKey,
+      sessionId: state.entry.sessionId,
+      target: state.target,
+      resetTriggered: false,
+    });
+    operation.attachBackend({
+      kind: "embedded",
+      runId,
+      cancel: () => operation.complete(),
+      isStreaming: () => true,
+    });
+    return operation;
+  }
+
+  async function runSelectedStop(state: StopFixture) {
+    return pathKind === "fast"
+      ? await tryFastAbortFromMessage(state)
+      : await handleStopCommand(state.params, true);
+  }
+
+  it("cancels the stopped session's review and suppresses its run", async () => {
+    const state = await setupStop();
+    const stopReview = vi.mocked(stopSkillExperienceReview);
+    stopReview.mockClear();
+    const runId = `review-stop-${pathKind}`;
+    const operation = createReviewOperation(state, runId);
+    try {
+      const result = await runSelectedStop(state);
+
+      expect(result).toMatchObject(
+        pathKind === "fast"
+          ? { handled: true, aborted: true }
+          : { shouldContinue: false, reply: { text: "⚙️ Agent was aborted." } },
+      );
+      expect(stopReview).toHaveBeenCalledExactlyOnceWith({
+        sessions: [{ agentId: "main", sessionKey }],
+        runIds: new Set([runId]),
+      });
+    } finally {
+      operation.complete();
+    }
+  });
 }

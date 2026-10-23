@@ -42,6 +42,13 @@ import { buildTestCtx } from "./test-ctx.js";
 const acpManagerMocks = vi.hoisted(() => ({
   cancelSession: vi.fn(async (_params?: unknown) => {}),
 }));
+const stopSkillExperienceReviewMock = vi.hoisted(() => vi.fn());
+
+// mock-isolation: Observe the Stop kernel's review bridge without starting review work.
+vi.mock("../../skills/workshop/experience-review-default.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../skills/workshop/experience-review-default.js")>()),
+  stopSkillExperienceReview: stopSkillExperienceReviewMock,
+}));
 
 vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../config/sessions/session-accessor.js")>();
