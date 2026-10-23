@@ -374,7 +374,7 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
         />
       </openclaw-route-fragment>
     );
-    return props.label ? <main class="connect-splash">{content()}</main> : content();
+    return <>{props.label ? <main class="connect-splash">{content()}</main> : content()}</>;
   }
   function LazyRootBoundary(props: {
     children: Element;

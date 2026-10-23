@@ -141,7 +141,9 @@ function configurePaletteShell(openPalette: () => void, mounted = true): TestShe
   });
   document.body.append(shell.element);
   onTestFinished(() => shell.element.remove());
-  if (mounted) mountPalette(shell, openPalette);
+  if (mounted) {
+    mountPalette(shell, openPalette);
+  }
   return shell;
 }
 

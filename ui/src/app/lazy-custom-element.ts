@@ -236,8 +236,6 @@ export function createLazyCustomElementRequests(
   };
 }
 
-export type LazyCustomElementRequests = ReturnType<typeof createLazyCustomElementRequests>;
-
 export function isOptionalElementDefined(element: OptionalCustomElement): boolean {
   return customElements.get(element.tagName) !== undefined;
 }

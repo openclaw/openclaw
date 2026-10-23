@@ -69,7 +69,9 @@ async function mountShell(waitForSidebar = true) {
     runtime.stop();
   });
   await Promise.resolve();
-  if (waitForSidebar) await vi.dynamicImportSettled();
+  if (waitForSidebar) {
+    await vi.dynamicImportSettled();
+  }
   flush();
   const refresh = () => {
     owner.invalidate();

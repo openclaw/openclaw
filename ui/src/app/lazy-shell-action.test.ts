@@ -230,9 +230,13 @@ describe("shell lazy events", () => {
       state.handleCompositionStart();
       state.handoff(open);
       const take = state.captureHandoff();
-      if (change === "connection") gateway.connectionRevision += 1;
-      else if (change === "account") snapshot = { ...snapshot, selfUser: { id: "second-user" } };
-      else snapshot = { ...snapshot, phase: "reconnecting", selfUser: null };
+      if (change === "connection") {
+        gateway.connectionRevision += 1;
+      } else if (change === "account") {
+        snapshot = { ...snapshot, selfUser: { id: "second-user" } };
+      } else {
+        snapshot = { ...snapshot, phase: "reconnecting", selfUser: null };
+      }
       shell.shellChrome.synchronizeCommandPaletteScope();
       if (change === "reconnect") {
         expect({ active: state.active(), value: state.value() }).toEqual({
@@ -268,23 +272,25 @@ describe("shell lazy events", () => {
     const storage = createStorageMock();
     const denied = ["unavailable", "denied", "replacement-write-failed"].includes(mode);
     vi.stubGlobal("sessionStorage", mode === "unavailable" ? null : storage);
-    if (mode === "denied")
+    if (mode === "denied") {
       Object.defineProperty(globalThis, "sessionStorage", {
         configurable: true,
         get() {
           throw new DOMException("Storage blocked", "SecurityError");
         },
       });
+    }
     const probe = createDeferred<Response>();
     const head = vi.fn(() => probe.promise);
     vi.stubGlobal("fetch", head);
     const shell = shellFixture();
     shell.connect();
     shell.openPalette();
-    if (mode === "replacement-write-failed")
+    if (mode === "replacement-write-failed") {
       vi.spyOn(storage, "setItem").mockImplementation(() => {
         throw new DOMException("Storage full", "QuotaExceededError");
       });
+    }
     try {
       const retry = shell.retryPendingLazyAction(() => true);
       if (denied) {
@@ -292,20 +298,24 @@ describe("shell lazy events", () => {
         expect(head).not.toHaveBeenCalled();
       } else {
         await vi.waitFor(() => expect(head).toHaveBeenCalledOnce());
-        if (mode === "close") shell.closePendingPalette();
-        else if (mode === "context-replaced")
+        if (mode === "close") {
+          shell.closePendingPalette();
+        } else if (mode === "context-replaced") {
           shell.shellChrome.abandonPendingLazyActionForContext();
-        else if (mode === "disconnected") shell.disconnect();
-        else if (mode === "new-request")
+        } else if (mode === "disconnected") {
+          shell.disconnect();
+        } else if (mode === "new-request") {
           shell.shellChrome.requestShellComponent("shortcuts", {
             eventType: KEYBOARD_SHORTCUTS_REQUEST_EVENT,
           });
+        }
         probe.resolve(new Response(null, { status: 200 }));
         await expect(retry).resolves.toBe(mode === "reload");
       }
       expect(recovery.reload).toHaveBeenCalledTimes(mode === "reload" ? 1 : 0);
-      if (mode === "reload")
+      if (mode === "reload") {
         expect(readLazyShellAction()).toEqual({ eventType: COMMAND_PALETTE_OPEN_EVENT });
+      }
     } finally {
       shell.disconnect();
       probe.resolve(new Response(null, { status: 503 }));
@@ -384,7 +394,9 @@ describe("shell lazy events", () => {
           open: opened,
           toggle: opened,
         });
-      if (outcome === "detached") mount().remove();
+      if (outcome === "detached") {
+        mount().remove();
+      }
       await withConnectedShell(shell, () => {
         window.dispatchEvent(new CustomEvent(DEBUG_OVERLAY_REQUEST_EVENT));
         shell.togglePendingDebugOverlayMode();
@@ -393,9 +405,13 @@ describe("shell lazy events", () => {
           eventType: DEBUG_OVERLAY_REQUEST_EVENT,
           detail: { mode: "minimized" },
         });
-        if (outcome === "close") shell.cancelShellComponentRequest("debug");
-        else if (outcome === "context") shell.shellChrome.abandonPendingLazyActionForContext();
-        else if (outcome === "replacement") shell.openPalette();
+        if (outcome === "close") {
+          shell.cancelShellComponentRequest("debug");
+        } else if (outcome === "context") {
+          shell.shellChrome.abandonPendingLazyActionForContext();
+        } else if (outcome === "replacement") {
+          shell.openPalette();
+        }
         shell.restorePendingLazyAction();
         expect(opened).not.toHaveBeenCalled();
         mount();

@@ -85,13 +85,17 @@ export function ShellComponentBoundary(props: {
               const stale = () => isStaleChunkImportError(error());
               onSettled(() => () => {
                 current = false;
-                if (stale()) cancelStaleChunkRecovery();
+                if (stale()) {
+                  cancelStaleChunkRecovery();
+                }
               });
               const retry = async () => {
                 const retryStale =
                   props.retryStale ??
                   ((canReload: () => boolean) => retryStaleChunkReloadWhenReachable({ canReload }));
-                if (stale() && (await retryStale(() => current))) return;
+                if (stale() && (await retryStale(() => current))) {
+                  return;
+                }
                 if (current) {
                   setAttempt((value) => value + 1);
                   reset();
@@ -109,7 +113,9 @@ export function ShellComponentBoundary(props: {
                     () => void retry(),
                     () => {
                       current = false;
-                      if (stale()) cancelStaleChunkRecovery();
+                      if (stale()) {
+                        cancelStaleChunkRecovery();
+                      }
                       close();
                     },
                   )}
@@ -136,7 +142,7 @@ export function ShellRequestedComponent(props: {
   renderLoadState?: LoadStateRenderer;
 }) {
   const request = () => {
-    props.revision;
+    void props.revision;
     const event = props.host.pendingShellAction;
     return event && shellComponentForAction(event) === props.component ? event : null;
   };

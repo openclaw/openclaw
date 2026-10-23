@@ -1,9 +1,12 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { createMemo, Errored, lazy, Loading, Show } from "solid-js";
 import type { RouteId } from "../app-routes.ts";
+import type { CommandPaletteElement } from "../components/command-palette-contract.ts";
 import type { LazyElementState } from "../components/solid/lazy-view-error.tsx";
+import type { KeyboardShortcutsDialogElement } from "../lib/keyboard-shortcut-contract.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import type { DebugOverlayFrameHost } from "../pages/debug/debug-overlay-frame.ts";
+import type { DebugOverlayElement } from "../pages/debug/debug-overlay-state.ts";
 import { CommandPaletteLoading } from "./app-shell-command-palette-loading-view.tsx";
 import type { CommandPaletteLoadingState } from "./app-shell-command-palette-loading.ts";
 import { ShellLoadState, ShellRequestedComponent } from "./app-shell-component-boundary.tsx";
@@ -30,11 +33,11 @@ export type ShellElementAttributes<T extends HTMLElement = HTMLElement> =
   SolidJSX.HTMLAttributes<T> & { [property: `prop:${string}`]: unknown };
 
 export interface ShellOwnedElements {
-  commandPalette?: import("../components/command-palette-contract.ts").CommandPaletteElement;
+  commandPalette?: CommandPaletteElement;
   approvalOverlay?: HTMLElement & { show(): void; dialogOpen?: boolean };
-  debugOverlay?: import("../pages/debug/debug-overlay-state.ts").DebugOverlayElement;
+  debugOverlay?: DebugOverlayElement;
   pendingDebugOverlayFrame?: HTMLElement;
-  keyboardShortcuts?: import("../lib/keyboard-shortcut-contract.ts").KeyboardShortcutsDialogElement;
+  keyboardShortcuts?: KeyboardShortcutsDialogElement;
   assistantPanel?: HTMLElement;
   browserPanel?: HTMLElement;
   desktopPanel?: HTMLElement;
@@ -59,7 +62,7 @@ export function ShellLazyOverlays(props: {
   nativeEmbed: boolean;
 }): SolidJSX.Element {
   const sendShortcut = createMemo(() => {
-    props.revision;
+    void props.revision;
     return normalizeChatSendShortcut(props.host.context?.theme.settings.chatSendShortcut);
   });
   const renderDebugState = (state: LazyElementState, retry: () => void, close: () => void) => (
