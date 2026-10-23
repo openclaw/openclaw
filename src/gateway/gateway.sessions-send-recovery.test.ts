@@ -14,7 +14,6 @@ import {
   awaitGateBeforeSettlement,
   createDeferred,
   withinTest,
-  withTestTimeout,
 } from "../../test/helpers/promise.js";
 import { runQaGatewayTestFixture } from "../../test/helpers/qa-gateway-test-lifetime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -563,11 +562,7 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
           withinTest(awaitGateBeforeSettlement(gate, startup, message), signal);
         try {
           await awaitWhileStarting(
-            withTestTimeout(
-              recoveredResponseReady.promise,
-              60_000,
-              "Recovery did not reach the first chat input",
-            ),
+            recoveredResponseReady.promise,
             "Gateway startup settled before recovery reached the first chat input",
           );
         } catch (error) {
@@ -580,11 +575,7 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
         // deliberately remains pending while the recovered response is held.
         // A held turn in one session must not keep other sessions from replaying.
         await awaitWhileStarting(
-          withTestTimeout(
-            parallelResponsesReady.promise,
-            60_000,
-            "Parallel recovery did not reach every held response",
-          ),
+          parallelResponsesReady.promise,
           "Gateway startup settled before parallel recovery reached every held response",
         );
         expect(parallelObserved).toEqual(
