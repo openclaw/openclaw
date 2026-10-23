@@ -51,6 +51,7 @@ const { observeOwnedDirectory }: typeof import("../../src/infra/owned-directory-
 
 const native: {
   watch(
+    this: void,
     filename: fs.PathLike,
     options: fs.WatchOptionsWithStringEncoding,
     listener: fs.WatchListener<string>,
