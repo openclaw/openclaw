@@ -76,8 +76,8 @@ vi.mock("../../../gateway/call.js", { spy: true });
 const runEmbeddedAgent = vi.hoisted(() =>
   vi.fn<typeof import("../../embedded-agent.js").runEmbeddedAgent>(),
 );
-// mock-isolation: Replace the embedded model producer with fixed replies. Its callback builds
-// the real child's tool catalog; command, spawn, policy, Gateway admission and collectors stay real.
+// Child tool assembly, command admission, native spawn and collection stay real.
+// mock-isolation: Replace only the external embedded model producer with fixed replies.
 vi.mock("../../embedded-agent.js", async () => {
   const { abortEmbeddedAgentRun } = await import("../../embedded-agent-runner/runs.js");
   const { waitForSessionRunEnd } =
