@@ -17,7 +17,7 @@ export type SessionRowSelectionKind =
   | "parent"
   | "running-candidate";
 
-export type SessionRowSelectionMetric = {
+type SessionRowSelectionMetric = {
   kind: SessionRowSelectionKind;
   task: string;
   calls: number;
