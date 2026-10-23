@@ -360,13 +360,12 @@ async function measure() {
   );
   mkdirSync(output);
   const scopedReader = values["scoped-reader"];
+  const historySource = values["history-source"];
   const readerIdentity = "history-diff-reader@example.invalid";
   const readerOrigin = "https://history-diff.example.invalid";
   let gatewayEnv: NodeJS.ProcessEnv = {
     ...env,
-    ...(values["history-source"]
-      ? { OPENCLAW_BENCH_HISTORY_SOURCE: path.resolve(values["history-source"]) }
-      : {}),
+    ...(historySource ? { OPENCLAW_BENCH_HISTORY_SOURCE: path.resolve(historySource) } : {}),
   };
   if (scopedReader) {
     const config: unknown = JSON.parse(readFileSync(path.join(root, "openclaw.json"), "utf8"));
@@ -759,18 +758,16 @@ async function measure() {
     }
     const report = {
       revision: values.revision ?? null,
-      historySources: Object.fromEntries(
-        ["chat-history-session-read.ts", "chat-history-handler.ts"].map((file) => [
-          file,
-          createHash("sha256")
-            .update(
-              readFileSync(
-                path.join(values["history-source"] ?? "src/gateway/server-methods", file),
-              ),
-            )
-            .digest("hex"),
-        ]),
-      ),
+      historySources: historySource
+        ? Object.fromEntries(
+            ["chat-history-session-read.ts", "chat-history-handler.ts"].map((file) => [
+              file,
+              createHash("sha256")
+                .update(readFileSync(path.join(historySource, file)))
+                .digest("hex"),
+            ]),
+          )
+        : undefined,
       entry: values.entry,
       scenario: values.scenario,
       profiling: values.allocations ? "allocations" : "cpu",
