@@ -185,6 +185,7 @@ suite.define(() => {
       });
       await suite.openDashboard(page, sessionKey);
       await gateway.waitForRequest("mcp.app.view");
+      const initialView = await page.locator("mcp-app-view").elementHandle();
       await page.evaluate(() => {
         const view = document.querySelector("mcp-app-view");
         if (!view) throw new Error("Pending App is missing");
@@ -225,7 +226,12 @@ suite.define(() => {
       await gateway.resolveDeferred("mcp.app.view");
       await appFrame(page).getByText("Dashboard app", { exact: true }).waitFor();
       expect(await page.locator("mcp-app-view iframe").count()).toBe(1);
-      expect(await gateway.getRequests("mcp.app.view")).toHaveLength(2);
+      if (change === "scope") {
+        // A scope change retires the whole page, including its previous view owner.
+        expect(await initialView?.evaluate((element) => element.isConnected)).toBe(false);
+      } else {
+        expect(await gateway.getRequests("mcp.app.view")).toHaveLength(2);
+      }
     },
   );
 
