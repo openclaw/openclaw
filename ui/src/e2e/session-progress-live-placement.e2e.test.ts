@@ -690,8 +690,10 @@ suite.define(() => {
             await card.locator("summary").click();
           }
           await captureProof(page, "hide-" + name + "-collapsed-before.png");
-          await card.getByRole("button", { name: "Task progress options" }).press("Enter");
+          const options = card.getByRole("button", { name: "Task progress options" });
+          await options.press("Enter");
           await card.getByRole("menuitem", { name: "Hide this card", exact: true }).press("Enter");
+          await expect.poll(() => options.getAttribute("aria-expanded")).toBe("false");
           expect(await card.count()).toBe(1);
           await page.setViewportSize({ width, height: 900 });
           await page.locator(".agent-chat__header--mobile").waitFor({ state: "visible" });
