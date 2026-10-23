@@ -39,7 +39,6 @@ import {
   DEFAULT_PLUGIN_ENTRY_CANDIDATES,
   getPackageManifestMetadata,
   loadPluginManifest,
-  type PluginManifest,
   resolvePackageExtensionEntries,
   type PackageManifest,
 } from "./manifest.js";
@@ -502,7 +501,6 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
     manifest?: PackageManifest | null;
     packageDir?: string;
     bundledManifestId?: string;
-    bundledManifest?: PluginManifest;
     bundledManifestPath?: string;
     requiredPluginIds?: string[];
     requiredPluginSource?: string;
@@ -565,7 +563,6 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
       packageOptionalDependencies: packageDependencies.optionalDependencies,
       rawPackageManifest: manifest ?? undefined,
       bundledManifestId: params.bundledManifestId,
-      bundledManifest: params.bundledManifest,
       bundledManifestPath: params.bundledManifestPath,
       ...(params.requiredPluginIds && params.requiredPluginIds.length > 0
         ? { requiredPluginIds: params.requiredPluginIds }

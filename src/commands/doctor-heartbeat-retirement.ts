@@ -37,7 +37,7 @@ import {
 import { sanitizeDoctorNote } from "./doctor/emit-notes.js";
 import { migrateHeartbeatVisibility } from "./doctor/shared/channel-legacy-config-migrate.js";
 
-/** Data commits first. Any ambiguous input prevents config removal and remains retryable. */
+/** Data commits first. Unsafe input prevents config removal and remains retryable. */
 export async function retireHeartbeatWithDoctor(
   sourceConfig: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,

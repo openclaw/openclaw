@@ -2337,7 +2337,6 @@
 ["src/agents/tools-effective-inventory.test.ts","./embedded-agent-runner/model.js","6db0bb7ee4dd229b72e9673b3265aadbb5f5d665045188eef56c664ed78cc9ba",1]
 ["src/agents/tools-effective-inventory.test.ts","./embedded-agent-runner/model.static-catalog.js","9499a92249dd1ecf0142b2cac50fdcf1063a2a4c745aac066431c2a5cffe6f83",1]
 ["src/agents/tools-effective-inventory.test.ts","./embedded-agent-runner/tool-schema-runtime.js","0da947b2a29c246ac8b648cfadb859a36c7469246009a0d719d35da913d56996",1]
-["src/agents/tools-effective-mcp-inventory.test.ts","./embedded-agent-runner/tool-schema-runtime.js","cff6f5d32dfe0915f2d991c49385d091fcf25c1100732e5cb86d3906c57595ec",1]
 ["src/agents/tools/agent-step.test.ts","../agent-bundle-mcp-tools.js","60e099d8b10ced6b9d9bee74dc000c455ef9fc8ac4c88178e656b4a48e111b7a",1]
 ["src/agents/tools/agents-wait-tool.test.ts","../subagents/registry/subagent-registry.js","9fabaae3dabd0fd5ad75865dd1c9371d971e952b4c293a638c9070d9a1c55fe8",1]
 ["src/agents/tools/computer-tool.node-resolution.test.ts","../../utils/sleep.js","dc28ab20c0ea2e1d7b667ff01659f615677b92186d572e556be7ebc1c00ffe42",1]
