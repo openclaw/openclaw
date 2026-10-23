@@ -165,6 +165,10 @@ suite.define(() => {
           }
           await capture("dictated-draft");
           await button(page, waitForCompletion ? "Send message" : "Send", true).click();
+          if (!waitForCompletion) {
+            await gateway.waitForRequest("talk.session.close");
+            await close();
+          }
           const request = await gateway.waitForRequest("chat.send");
           expect(request.params).toMatchObject({ message: "Please check the tests too." });
           await expectDraft(textarea, "");
