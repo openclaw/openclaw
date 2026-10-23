@@ -456,6 +456,10 @@ export function openSessionWorkspacePreview(
       workspace.catalogNavigation = captureSessionWorkspaceNavigation(workspace);
     }
   }
+  if (workspace.activePreviewId === null) {
+    workspace.catalogNavigation = captureSessionWorkspaceNavigation(workspace);
+    workspace.tree!.treeVisible = false;
+  }
   let preview = workspace.previews.find(
     (entry) =>
       entry.id === id ||
