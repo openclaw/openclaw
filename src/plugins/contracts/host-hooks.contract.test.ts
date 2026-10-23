@@ -1324,7 +1324,6 @@ describe("host-hook fixture plugin contract", () => {
         const { queuedInjections: drained } = await drainPluginNextTurnInjectionContext({
           cfg: tempConfig,
           sessionKey: "agent:main:main",
-          now: 2,
         });
         expect(drained).toHaveLength(1);
         expectRecordFields(drained[0], {
@@ -1363,7 +1362,6 @@ describe("host-hook fixture plugin contract", () => {
       const { queuedInjections: drained } = await drainPluginNextTurnInjectionContext({
         cfg: tempConfig,
         sessionKey: "agent:main:main",
-        now: 4,
       });
       expect(drained).toHaveLength(3);
       expectRecordFields(drained[0], { id: "a1", text: "first" });

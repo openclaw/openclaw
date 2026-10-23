@@ -645,7 +645,6 @@ export async function closeRelayVoiceSessionRecord(
     sessionKey: string;
     voiceSessionId: string;
     config: OpenClawConfig;
-    now?: number;
   },
   retainedWriter?: ClientVoiceSessionWriter,
 ): Promise<void> {
