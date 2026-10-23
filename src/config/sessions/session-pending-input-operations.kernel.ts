@@ -105,7 +105,7 @@ export function mutatePendingInput(
     writeTransaction,
     admit,
   }: Pick<AgentWorkerOperationContext, "writeTransaction"> & {
-    admit(stage: "transaction" | "commit", publication?: unknown): void;
+    admit: (stage: "transaction" | "commit", publication?: unknown) => void;
   },
   publish: (database: OpenClawAgentDatabase["db"], receipt: PendingInputMutationReceipt) => void,
 ): PendingInputMutationReceipt {
