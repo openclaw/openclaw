@@ -609,15 +609,16 @@ class Monitor {
             ...(state.pendingRegistrations ?? []),
           ]),
         );
+        const addOwner = (owner: ParentOwner | undefined) => {
+          if (owner) {
+            owners.add(owner);
+          }
+        };
         for (const known of this.knownChildren.values()) {
           if (states.includes(known.parent)) {
             for (const pending of known.pendingTurns) {
-              if (pending.admittedOwner) {
-                owners.add(pending.admittedOwner);
-              }
-              if (pending.modelSource) {
-                owners.add(pending.modelSource.owner);
-              }
+              addOwner(pending.admittedOwner);
+              addOwner(pending.modelSource?.owner);
             }
           }
         }
@@ -627,25 +628,15 @@ class Monitor {
               evidence.kind === "interaction" &&
               states.some((state) => state.parentThreadId === evidence.parentThreadId)
             ) {
-              if (evidence.owner) {
-                owners.add(evidence.owner);
-              }
-              if (evidence.modelOwner) {
-                owners.add(evidence.modelOwner);
-              }
-              if (evidence.modelSource) {
-                owners.add(evidence.modelSource.owner);
-              }
+              addOwner(evidence.owner);
+              addOwner(evidence.modelOwner);
+              addOwner(evidence.modelSource?.owner);
             }
           }
         }
         for (const child of selected) {
-          if (child.modelExecution) {
-            owners.add(child.modelExecution.owner);
-          }
-          if (child.directOwner) {
-            owners.add(child.directOwner);
-          }
+          addOwner(child.modelExecution?.owner);
+          addOwner(child.directOwner);
         }
         for (const owner of owners) {
           if (matchesOwner(owner)) {
