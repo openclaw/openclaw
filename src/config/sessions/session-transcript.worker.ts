@@ -182,38 +182,10 @@ serveOwnedWorkerTasks(
         }
         return { kind: "prewarm" as const };
       }
-      if (request.kind === "historical-eviction-candidates") {
-        const { withOpenClawAgentDatabaseReadOnly } =
-          await import("../../state/openclaw-agent-db-readonly.js");
-        const { runSqliteReadSnapshotSync } = await import("../../infra/sqlite-transaction.js");
-        const {
-          readHistoricalSessionIdsInDatabase,
-          readDiskEvictableArchivedSessionBatchInDatabase,
-        } = await import("./session-history-eviction-candidates.js");
-        const result = withOpenClawAgentDatabaseReadOnly(
-          (database) =>
-            runSqliteReadSnapshotSync(database.db, () =>
-              "archived" in request
-                ? {
-                    batch: readDiskEvictableArchivedSessionBatchInDatabase(
-                      database,
-                      request.archived,
-                    ),
-                  }
-                : { sessionIds: readHistoricalSessionIdsInDatabase({ ...request, database }) },
-            ),
-          { ...request.database, env: request.env },
-        );
-        if (!result.found) {
-          if ("archived" in request && result.reason === "database-missing") {
-            return {
-              kind: "historical-eviction-candidates",
-              batch: { candidates: [], exhausted: true },
-            };
-          }
-          throw new Error(`SQLite history eviction cannot read its database: ${result.reason}`);
-        }
-        return { kind: "historical-eviction-candidates" as const, ...result.value };
+      if (request.kind === "historical-eviction-candidates" || request.kind === "live-eviction") {
+        const { readSessionHistoryEvictionRequest } =
+          await import("./session-history-eviction-reader.worker.js");
+        return readSessionHistoryEvictionRequest(request);
       }
       if (request.kind === "session-pending-archives") {
         const { withOpenClawAgentDatabaseReadOnly } =

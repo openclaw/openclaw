@@ -349,7 +349,7 @@ type SqliteSessionReclamationValue =
 
 export type SessionEntryRemovalPlan = {
   expectedEntry: SessionEntry | undefined;
-  maintenanceReason?: "capped" | "model-run-pruned" | "pruned";
+  maintenanceReason?: "capped" | "disk-evicted" | "model-run-pruned" | "pruned";
   sessionKey: string;
 };
 type SessionEntryMaintenanceCounts = {

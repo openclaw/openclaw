@@ -13,6 +13,7 @@ import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-read.j
 import {
   deleteMaterializedSessionStatePlans,
   deletePlannedLifecycleArtifactEntries,
+  hasColdSessionTranscript,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import type {
   ReclamationDatabaseOptions,
@@ -124,6 +125,13 @@ export function finalizeSessionMaintenanceInDatabase(
   const unchanged = plan.entries.filter((planned, index) => {
     const current = readExactSessionEntryRow(database, planned.sessionKey)?.entry;
     if (!sqliteSessionEntriesEqual(current, planned.expectedEntry)) {
+      return false;
+    }
+    if (
+      planned.maintenanceReason === "disk-evicted" &&
+      planned.expectedEntry !== undefined &&
+      hasColdSessionTranscript(database, planned.expectedEntry, planned.sessionKey)
+    ) {
       return false;
     }
     committedEntryIndices.push(index);

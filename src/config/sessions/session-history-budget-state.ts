@@ -12,13 +12,14 @@ import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 const log = createSubsystemLogger("sessions/history-eviction");
 
 export type SessionHistoryDiskBudgetParams = {
+  activeSessionKey?: string;
   agentId?: string;
   env?: NodeJS.ProcessEnv;
   mode: ResolvedSessionMaintenanceConfig["mode"];
   reclamationMode?: "worker" | "in-process";
   storePath: string;
   maintenance: Pick<ResolvedSessionMaintenanceConfig, "highWaterBytes" | "maxDiskBytes"> &
-    Partial<Pick<ResolvedSessionMaintenanceConfig, "preserveRecentMs">>;
+    Partial<Pick<ResolvedSessionMaintenanceConfig, "maxDiskBytesExplicit" | "preserveRecentMs">>;
 };
 
 export function createPhysicalBudgetResult(params: {

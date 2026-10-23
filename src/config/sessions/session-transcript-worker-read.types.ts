@@ -36,6 +36,8 @@ import type { SessionTranscriptAnchorEntry } from "./session-transcript-anchor-r
 import type { SessionTranscriptSearchParams } from "./session-transcript-search.types.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 
+export type { LiveInput } from "./session-history-eviction-worker.types.js";
+
 export type SessionEntryCurrentWorkerInput = Omit<SessionEntryReadWorkerInput, "kind"> & {
   kind: "session-entry-current";
   source?: SessionEntryCurrentSource;

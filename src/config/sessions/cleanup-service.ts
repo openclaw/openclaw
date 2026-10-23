@@ -240,6 +240,7 @@ async function previewStoreCleanup(params: {
   }
   const diskBudgetPreview = fs.existsSync(resolveCleanupSqlitePath(params.target))
     ? await inspectSqliteSessionHistoryDiskBudget({
+        activeSessionKey: params.activeKey,
         agentId: params.target.agentId,
         storePath: params.target.storePath,
         mode: params.mode,
@@ -437,6 +438,7 @@ export async function runSessionsCleanup(params: {
             owner.assertCurrent();
             const removedSessionKeys = new Set(lifecycleResult.removedSessionKeys);
             const appliedDiskBudget = await enforceSqliteSessionHistoryDiskBudget({
+              activeSessionKey: opts.activeKey,
               agentId: target.agentId,
               storePath: target.storePath,
               mode,

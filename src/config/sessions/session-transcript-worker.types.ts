@@ -158,6 +158,7 @@ import type {
   BoardWidgetDocumentWorkerInput,
   SessionHistoricalEvictionCandidatesWorkerInput,
   SessionArchivedEvictionCandidatesWorkerInput,
+  LiveInput,
   SessionTranscriptMatchWorkerInput,
   SessionTranscriptSearchWorkerInput,
   SessionProjectionStatusWorkerInput,
@@ -295,6 +296,7 @@ export type SessionHistoryWorkerInput =
     }
   | SessionHistoricalEvictionCandidatesWorkerInput
   | SessionArchivedEvictionCandidatesWorkerInput
+  | LiveInput
   | SessionArchivePruningWorkerInput
   | SessionPendingArchivesWorkerInput
   | SessionTranscriptInventoryWorkerInput
