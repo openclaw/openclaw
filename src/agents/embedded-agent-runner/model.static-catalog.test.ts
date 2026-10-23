@@ -367,6 +367,19 @@ describe("manifest provider aliases", () => {
     });
   });
 
+  it("keeps custom environments on their own manifest registry context", () => {
+    const env = { HOME: "/custom-home" };
+    manifestMocks.getCurrentPluginMetadataSnapshot.mockReturnValue({ plugins: [] });
+    setPlugins(aliasPlugin("moonshot", { "moonshot-ai": { provider: "moonshot" } }));
+    expect(resolveAlias({ provider: "moonshot-ai", env })).toEqual({ provider: "moonshot" });
+    expect(manifestMocks.getCurrentPluginMetadataSnapshot).not.toHaveBeenCalled();
+    expect(manifestMocks.loadPluginManifestRegistryCore).toHaveBeenCalledWith({
+      config: undefined,
+      env,
+      workspaceDir: undefined,
+    });
+  });
+
   it("canonicalizes endpoint-less aliases and retains complete transport metadata", () => {
     setPlugins(
       aliasPlugin(

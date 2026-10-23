@@ -136,6 +136,25 @@ export async function retireSessionMcpRuntime(params: {
   }
 }
 
+export async function retireSessionMcpRuntimeForSessionKey(params: {
+  sessionKey?: string | null;
+  reason: string;
+  preserveActiveLeases?: boolean;
+  onError?: (error: unknown, sessionId: string, reason: string) => void;
+}): Promise<boolean> {
+  const sessionKey = normalizeOptionalString(params.sessionKey);
+  if (!sessionKey) {
+    return false;
+  }
+  const sessionId = peekSessionMcpRuntimeManager()?.resolveSessionId(sessionKey);
+  return await retireSessionMcpRuntime({
+    sessionId,
+    reason: params.reason,
+    preserveActiveLeases: params.preserveActiveLeases,
+    onError: params.onError,
+  });
+}
+
 export async function reloadSessionMcpRuntimes(params: SessionMcpConfigReload): Promise<void> {
   const manager = peekSessionMcpRuntimeManager();
   if (manager) {

@@ -1,4 +1,5 @@
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-actions";
 import type {
@@ -34,6 +35,12 @@ import {
 import { formatSlackTarget, parseSlackTarget, resolveSlackChannelId } from "./target-parsing.js";
 import { resolveSlackThreadTsValue } from "./thread-ts.js";
 import { countSlackTextUtf8Bytes } from "./truncate.js";
+
+type SlackActionInvoke = (
+  action: Record<string, unknown>,
+  cfg: unknown,
+  toolContext: unknown,
+) => Promise<AgentToolResult<unknown>>;
 
 const SLACK_MESSAGE_ACTIONS = new Map([
   ["reactions", "reactions"],
@@ -123,7 +130,10 @@ function resolveSlackActionContext(
   };
 }
 
-export function createSlackActions(providerId: string): ChannelMessageActionAdapter {
+export function createSlackActions(
+  providerId: string,
+  options?: { invoke?: SlackActionInvoke },
+): ChannelMessageActionAdapter {
   return {
     providerOwnedReadGates: true,
     readAuthorityActions: [
@@ -151,8 +161,9 @@ export function createSlackActions(providerId: string): ChannelMessageActionAdap
       ) => {
         const requestAction = { ...request, accountId };
         const actionContext = resolveSlackActionContext(ctx, toolContext);
-        const runtime = await loadSlackActionRuntime();
-        return await runtime.handleSlackAction(requestAction, cfg, actionContext);
+        return await (options?.invoke
+          ? options.invoke(requestAction, cfg, actionContext)
+          : (await loadSlackActionRuntime()).handleSlackAction(requestAction, cfg, actionContext));
       };
       const resolveChannelId = () => {
         const raw =

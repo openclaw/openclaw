@@ -250,13 +250,13 @@ export async function handleDirectiveOnly(
       return acknowledgeIgnoredDirective(
         withOptions(
           `Current thinking level: ${level}.`,
-          `default, ${formatThinkingLevels(resolvedProvider, resolvedModel, thinkingCatalog, thinkingRuntime)}`,
+          `default, ${formatThinkingLevels(resolvedProvider, resolvedModel, ", ", thinkingCatalog, thinkingRuntime)}`,
         ),
         "hasThinkDirective",
       );
     }
     return acknowledgeIgnoredDirective(
-      `Unrecognized thinking level "${directives.rawThinkLevel}". Valid levels: default, ${formatThinkingLevels(resolvedProvider, resolvedModel, thinkingCatalog, thinkingRuntime)}.`,
+      `Unrecognized thinking level "${directives.rawThinkLevel}". Valid levels: default, ${formatThinkingLevels(resolvedProvider, resolvedModel, ", ", thinkingCatalog, thinkingRuntime)}.`,
       "hasThinkDirective",
     );
   }
@@ -381,7 +381,7 @@ export async function handleDirectiveOnly(
     })
   ) {
     return rejectModelTransaction(
-      `Thinking level "${directives.thinkLevel}" is not supported for ${resolvedProvider}/${resolvedModel}. Use one of: ${formatThinkingLevels(resolvedProvider, resolvedModel, thinkingCatalog, thinkingRuntime)}.`,
+      `Thinking level "${directives.thinkLevel}" is not supported for ${resolvedProvider}/${resolvedModel}. Use one of: ${formatThinkingLevels(resolvedProvider, resolvedModel, ", ", thinkingCatalog, thinkingRuntime)}.`,
     );
   }
 

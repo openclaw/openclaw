@@ -165,13 +165,14 @@ export async function readLatestAssistantReply(params: {
   agentId?: string;
   /** Only rows written by this run qualify. */
   runId?: string;
+  limit?: number;
   callGateway?: GatewayCaller;
 }): Promise<string | undefined> {
   const callGateway = params.callGateway ?? bindAgentToolGatewayRequest({ hostedOnly: true });
   const agentParams = params.agentId ? { agentId: params.agentId } : {};
   const history = await callGateway<{ messages: unknown[] }>({
     method: "chat.history",
-    params: { sessionKey: params.sessionKey, ...agentParams, limit: 50 },
+    params: { sessionKey: params.sessionKey, ...agentParams, limit: params.limit ?? 50 },
   });
   const messages = stripToolMessages(Array.isArray(history?.messages) ? history.messages : []);
   for (let i = messages.length - 1; i >= 0; i -= 1) {

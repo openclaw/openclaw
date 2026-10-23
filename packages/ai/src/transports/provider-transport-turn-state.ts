@@ -8,6 +8,7 @@ export function resolveProviderTransportTurnState(
   params: {
     sessionId?: string;
     turnId: string;
+    attempt: number;
     transport: "stream" | "websocket";
   },
 ) {
@@ -26,7 +27,7 @@ export function resolveProviderTransportTurnState(
       model,
       sessionId: params.sessionId,
       turnId: params.turnId,
-      attempt: 1,
+      attempt: params.attempt,
       transport: params.transport,
     },
   });
@@ -54,6 +55,7 @@ export function resolveProviderSimpleCompletionHeaders(
   const turnState = resolveProviderTransportTurnState(model, {
     sessionId: options?.sessionId,
     turnId: randomUUID(),
+    attempt: 1,
     transport: "stream",
   });
   const turnHeaders = filterProviderTurnHeadersForExplicitOpencodeSession(

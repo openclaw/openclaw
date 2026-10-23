@@ -583,7 +583,7 @@ export async function resolveEmbeddedModelSelection(params: {
     const isSubagentSpawnRun = params.isSubagentLane && isSubagentSessionKey(params.sessionKey);
     if (explicitThink && !isSubagentSpawnRun) {
       throw new Error(
-        `Thinking level "${primaryThinking.requestedLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model, thinkingCatalog, thinkingRuntime)}.`,
+        `Thinking level "${primaryThinking.requestedLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model, ", ", thinkingCatalog, thinkingRuntime)}.`,
       );
     }
   }

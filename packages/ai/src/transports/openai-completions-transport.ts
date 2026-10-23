@@ -325,6 +325,7 @@ export function streamOpenAICompletionsRequest(
               const turnState = resolveProviderTransportTurnState(model, {
                 sessionId: options?.sessionId,
                 turnId: randomUUID(),
+                attempt: 1,
                 transport: "stream",
               });
               const optionHeaders = resolveOpencodeSessionHeaders(model, options);

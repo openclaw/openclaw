@@ -66,6 +66,7 @@ import {
   materializeBundleMcpToolsForRun as materializeTools,
   peekSessionMcpRuntime,
   retireSessionMcpRuntime as retireRuntime,
+  retireSessionMcpRuntimeForSessionKey,
 } from "./agent-bundle-mcp-tools.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { getMcpAppModelContext, updateMcpAppModelContext } from "./mcp-app-model-context.js";
@@ -1509,13 +1510,12 @@ describe("session MCP runtime", () => {
     });
     const materialized = await materializeTools({ runtime });
     expect(runtime.activeLeases).toBe(1);
-    await expect(
-      retireRuntime({
-        sessionId,
-        reason: "subagent-run-cleanup",
-        preserveActiveLeases: true,
-      }),
-    ).resolves.toBe(true);
+    const retired = await retireSessionMcpRuntimeForSessionKey({
+      sessionKey,
+      reason: "subagent-run-cleanup",
+      preserveActiveLeases: true,
+    });
+    expect(retired).toBe(true);
     expect(currentManager().listSessionIds()).toContain(sessionId);
     const followUp = await materializeTools({ runtime });
     expect(runtime.activeLeases).toBe(2);

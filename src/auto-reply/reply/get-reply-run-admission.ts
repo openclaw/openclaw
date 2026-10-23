@@ -310,7 +310,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       explicitThinkingLevelOverride !== undefined;
     if (explicitThink) {
       return finishReplyPreparation(typing, () => ({
-        text: `Thinking level "${resolvedThinkLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model, thinkingCatalog, thinkingRuntime)}.`,
+        text: `Thinking level "${resolvedThinkLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model, ", ", thinkingCatalog, thinkingRuntime)}.`,
       }));
     }
   }

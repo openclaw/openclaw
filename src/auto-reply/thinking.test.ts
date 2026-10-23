@@ -136,7 +136,9 @@ describe("provider profiles", () => {
         "off",
         "on",
       ]);
-      expect(formatThinkingLevels(params.provider, params.model, params.catalog)).toBe("off, on");
+      expect(formatThinkingLevels(params.provider, params.model, ", ", params.catalog)).toBe(
+        "off, on",
+      );
       expect(resolveThinkingDefaultForModel(params)).toBe(defaultLevel ?? "low");
       expect(resolveSupportedThinkingLevel({ ...params, level: "adaptive" })).toBe("low");
     },

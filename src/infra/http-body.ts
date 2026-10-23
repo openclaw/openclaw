@@ -31,6 +31,7 @@ export type RequestBodyLimitErrorCode =
 
 type RequestBodyLimitErrorInit = {
   code: RequestBodyLimitErrorCode;
+  message?: string;
 };
 
 const REQUEST_BODY_LIMIT_ERRORS = {
@@ -52,7 +53,7 @@ export class RequestBodyLimitError extends Error {
   readonly statusCode: number;
 
   constructor(init: RequestBodyLimitErrorInit) {
-    super(REQUEST_BODY_LIMIT_ERRORS[init.code].message);
+    super(init.message ?? REQUEST_BODY_LIMIT_ERRORS[init.code].message);
     this.name = "RequestBodyLimitError";
     this.code = init.code;
     this.statusCode = REQUEST_BODY_LIMIT_ERRORS[init.code].status;

@@ -74,10 +74,12 @@ function truncateEntry(value: string, maxChars: number): string {
 function buildProjectMemoryBootstrap(params: {
   entries: MemorySearchHit[];
   activeProjectKeys: readonly string[];
+  maxChars?: number;
 }): string[] {
   if (params.activeProjectKeys.length === 0) {
     return [];
   }
+  const maxChars = Math.max(0, Math.floor(params.maxChars ?? PROJECT_MEMORY_BOOTSTRAP_MAX_CHARS));
   const active = new Set(params.activeProjectKeys);
   const candidates = params.entries
     .filter((entry) => {
@@ -98,7 +100,7 @@ function buildProjectMemoryBootstrap(params: {
           numeric: true,
         }),
     );
-  if (candidates.length === 0) {
+  if (candidates.length === 0 || maxChars === 0) {
     return [];
   }
   const lines = [
@@ -107,6 +109,9 @@ function buildProjectMemoryBootstrap(params: {
   ];
   // Count the final newline as well as separators between admitted entries.
   let renderedChars = lines.join("\n").length + 1;
+  if (renderedChars > maxChars) {
+    return [];
+  }
   for (const entry of candidates) {
     const snippet = truncateEntry(
       entry.excerpt.replace(/\s+/gu, " ").trim(),
@@ -120,7 +125,7 @@ function buildProjectMemoryBootstrap(params: {
       `${entry.reference.providerId}:${entry.reference.id}`;
     const line = `- ${snippet} (Source: ${citation})`;
     const candidateChars = renderedChars + line.length + 1;
-    if (candidateChars <= PROJECT_MEMORY_BOOTSTRAP_MAX_CHARS) {
+    if (candidateChars <= maxChars) {
       lines.push(line);
       renderedChars = candidateChars;
     }

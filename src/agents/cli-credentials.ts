@@ -324,6 +324,8 @@ function formatCodexApiKeyForLoginStatus(key: string): string {
 export function readCodexCliActiveApiKey(options?: {
   codexHome?: string;
   allowKeychainPrompt?: boolean;
+  platform?: NodeJS.Platform;
+  execSync?: ExecSyncFn;
 }): CodexCliApiKeyCredential | null {
   const { execSyncImpl, codexHome } = resolveCodexKeychainParams(options);
   let status: string;
@@ -356,6 +358,8 @@ export function readCodexCliActiveApiKey(options?: {
   const keychainRecord = readCodexKeychainAuthRecord({
     codexHome,
     allowKeychainPrompt: options?.allowKeychainPrompt,
+    platform: options?.platform,
+    execSync: options?.execSync,
   });
   if (keychainRecord) {
     const keychainCredential = parseCodexApiKeyCredential(keychainRecord);
