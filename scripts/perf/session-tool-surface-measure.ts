@@ -279,8 +279,9 @@ async function profile() {
       `${frame.functionName || "(anonymous)"}@${frame.url}:${frame.lineNumber}`;
     const heapFrames: WeightedFrame[] = [];
     const visit = (node: HeapProfiler.SamplingHeapProfileNode, parent?: number) => {
-      heapFrames.push({ id: node.id, parent, frame: label(node.callFrame), weight: node.selfSize });
-      node.children.forEach((child) => visit(child, node.id));
+      const id = heapFrames.length;
+      heapFrames.push({ id, parent, frame: label(node.callFrame), weight: node.selfSize });
+      node.children.forEach((child) => visit(child, id));
     };
     visit(heap.head);
     const parents = new Map<number, number>();
@@ -291,7 +292,6 @@ async function profile() {
     );
     return {
       sampledAllocationBytes: rank(heapFrames),
-      allocationSamples: heap.samples.length,
       sampledCpuMicroseconds: rank(
         cpu.nodes.map((node) => ({
           id: node.id,
