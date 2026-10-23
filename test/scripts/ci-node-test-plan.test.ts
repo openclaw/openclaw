@@ -108,6 +108,7 @@ const sumSeconds = (jobs: readonly CompactNodeTestShard[]) =>
 const sumOptionalSeconds = (jobs: readonly CompactNodeTestShard[]) =>
   jobs.reduce((sum, job) => sum + (job.predictedSeconds ?? 0), 0);
 const configPath = (name: string) => `test/vitest/vitest.${name}.config.ts`;
+const lintSuppressionInventoryTest = "test/scripts/lint-suppressions.test.ts";
 function planFiles(jobs: readonly CompactNodeTestShard[], patterns = optionalPatterns) {
   return jobs.flatMap(jobGroups).flatMap(patterns);
 }
@@ -1948,6 +1949,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     for (const changedPath of [
       "src/auto-reply/reply/new.test.tsx",
       "src/infra/outbound/new.test.ts",
+      "src/media/new.test.ts",
       "test/tsconfig/tsconfig.core.test.messaging.json",
       "test/tsconfig/tsconfig.core.test.ui-e2e-chat.json",
     ]) {
@@ -3967,10 +3969,17 @@ describe("CI changed Node test plan", () => {
   it("keeps the complete budgeted corpus plan beside a documentation page", () => {
     const targets = startupCorpusTestFiles;
     const before = changedOwnerTests(targets);
-    expect(before).toHaveLength(3);
-    expect(before?.every((shard) => (shard.predictedSeconds ?? 0) <= 150)).toBe(true);
-    expect(before?.flatMap((shard) => shard.targets ?? []).toSorted()).toEqual(targets.toSorted());
-    expect(before?.some((shard) => shard.pretestBuildMode === "runtime")).toBe(true);
+    expect(before).toHaveLength(4);
+    expect(selectedFiles(before)).toContain(lintSuppressionInventoryTest);
+    const corpusShards =
+      before?.filter((shard) => !selectedFiles([shard]).includes(lintSuppressionInventoryTest)) ??
+      [];
+    expect(corpusShards).toHaveLength(3);
+    expect(corpusShards.every((shard) => (shard.predictedSeconds ?? 0) <= 150)).toBe(true);
+    expect(corpusShards.flatMap((shard) => shard.targets ?? []).toSorted()).toEqual(
+      targets.toSorted(),
+    );
+    expect(corpusShards.some((shard) => shard.pretestBuildMode === "runtime")).toBe(true);
     expect(changedOwnerTests([...targets, "docs/ci/pipeline.md"])).toEqual(before);
   });
 

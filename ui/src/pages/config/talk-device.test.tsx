@@ -67,7 +67,7 @@ it.each(["document", "event", "edit"])(
         publish(snapshot);
       } else {
         post.mockResolvedValueOnce(snapshot);
-        capability.set("voice.wakeEnabled", false);
+        await capability.set("voice.wakeEnabled", false);
       }
     }
     await expect(capability.initialSnapshot).resolves.toEqual(snapshot);
@@ -81,7 +81,7 @@ it("retires a pending snapshot without letting an old edit settle the replacemen
   const previous = installBridge();
   const reply = Promise.withResolvers<unknown>();
   previous.post.mockReturnValueOnce(reply.promise);
-  previous.capability.set("voice.wakeEnabled", true);
+  void previous.capability.set("voice.wakeEnabled", true);
   previous.capability.dispose();
   await expect(previous.capability.initialSnapshot).resolves.toBeNull();
 
@@ -176,7 +176,11 @@ it("shows rejected native edits and retries the desired value without replacing 
   expect(microphone.value).toBe("");
   expect(container.querySelector('select[aria-label="Microphone"]')).toBe(microphone);
   container.querySelector<HTMLButtonElement>('[role="alert"] button')!.click();
-  await waitForSolid(() => expect(microphone.value).toBe("builtin"));
+  await waitForSolid(() => {
+    expect(microphone.value).toBe("builtin");
+    expect(container.textContent).toContain("Saving");
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
   expect(post).toHaveBeenLastCalledWith({ type: "set", key: "voice.microphone", value: "builtin" });
   const accepted = structuredClone(snapshot);
   accepted.voice.microphone.selectedId = "builtin";

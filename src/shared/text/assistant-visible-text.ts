@@ -11,7 +11,7 @@ import {
   stripLinesOutsideCode,
 } from "./code-regions.js";
 import { downgradedToolCallTextFilter } from "./downgraded-tool-call-text.js";
-import { stripModelSpecialTokens } from "./model-special-tokens.js";
+import { modelSpecialTokensTextFilter } from "./model-special-tokens.js";
 import { createReasoningTagProbe, stripReasoningTagsFromText } from "./reasoning-tags.js";
 import {
   applyTextFilters,
@@ -130,7 +130,7 @@ function stripMinimaxToolCallXml(text: string): string {
   return result;
 }
 
-export function stripLegacyBracketToolCallBlocks(text: string): string {
+function stripLegacyBracketToolCallBlocks(text: string): string {
   if (!text || !LEGACY_BRACKET_TOOL_BLOCK_QUICK_RE.test(text)) {
     return text;
   }
@@ -256,7 +256,7 @@ export function assistantVisibleTextFilters(
   };
   const filters: TextFilter[] = [
     ...(!preserve ? [minimaxToolCallTextFilter] : []),
-    { transform: stripModelSpecialTokens, activationTokens: ["<|", "<｜"] },
+    modelSpecialTokensTextFilter,
     {
       transform: stripRelevantMemoriesTags,
       activationTokens: ["relevant-memories", "relevant_memories"],

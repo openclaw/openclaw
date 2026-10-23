@@ -1,3 +1,4 @@
+import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
 import type { PluginRuntimeRecovery } from "../plugins/loader-types.js";
 import { PluginSourceRecoveryUnavailableError } from "../plugins/plugin-instance-error.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
@@ -98,11 +99,12 @@ export function createPluginReloadRecovery(
       }
       return preparePlugins(recoveryParams);
     },
-    dispose() {
-      for (const recovery of moduleRecoveries.values()) {
-        recovery.module.dispose();
-      }
+    async dispose() {
+      const results = await Promise.allSettled(
+        [...moduleRecoveries.values()].map((recovery) => recovery.module.dispose()),
+      );
       moduleRecoveries.clear();
+      throwIfSettledRejected(results, "Plugin reload recovery cleanup failed");
     },
   };
 }

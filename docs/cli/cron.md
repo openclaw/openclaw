@@ -226,6 +226,10 @@ Jobs with one of those routes default to an execution-failure alert after 2 cons
 
 Repeated failures with the same cause stay grouped into one incident across Gateway restarts. A changed cause or destination can notify after the cooldown. Successful completion clears the incident silently; the recovery stays in automation history. Skipped runs and unknown delivery outcomes do not count as recovery. If script setup cannot refresh tools after a plugin reload, the alert explains that automatic recovery failed before the script ran.
 
+After an in-place plugin replacement, the next script invocation refreshes its retained tool runtime before executing. It uses the current plugin hooks without restarting the Gateway or replaying a completed tool effect.
+
+For transient failures, a scheduler-authored repair may intentionally return `NO_REPLY` and finish silently without a WebChat error. Public messages do not gain that waiver by claiming cron provenance.
+
 <Note>
 Main-session system-event and script jobs may only use `delivery.failureDestination` when primary delivery mode is `webhook`. Agent-turn and isolated jobs accept it in all modes.
 </Note>

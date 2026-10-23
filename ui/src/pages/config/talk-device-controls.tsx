@@ -44,6 +44,24 @@ type VoiceControlProps = {
   presentationRetired: () => Promise<void>;
 };
 
+export function voiceControlErrorFallback(retry: () => void) {
+  return (error: () => unknown, reset: () => void) => (
+    <div class="callout danger" role="alert">
+      {formatUiError(error())}
+      <button
+        class="btn btn--sm"
+        type="button"
+        onClick={() => {
+          retry();
+          reset();
+        }}
+      >
+        {t("common.retry")}
+      </button>
+    </div>
+  );
+}
+
 function createVoiceEdit<T extends boolean | string | null>(
   props: VoiceControlProps,
   key: () => VoiceSetting,
@@ -86,7 +104,9 @@ function createVoiceEdit<T extends boolean | string | null>(
     }
     const retired = props.presentationRetired();
     const pending = new Promise<void>((resolve, reject) => {
-      props.scope.capability.set(key(), desired, (error) => (error ? reject(error) : resolve()));
+      void props.scope.capability.set(key(), desired, (error) =>
+        error ? reject(error) : resolve(),
+      );
     });
     const previous = command();
     const completion = Promise.withResolvers<void>();
@@ -136,25 +156,11 @@ function VoiceWriteStatus(props: {
           {t("common.saving")}
         </span>
       </Show>
-      <Errored
-        fallback={(error, reset) => (
-          <div class="callout danger" role="alert">
-            {formatUiError(error())}
-            <button
-              class="btn btn--sm"
-              type="button"
-              onClick={() => {
-                props.edit.retry();
-                reset();
-              }}
-            >
-              {t("common.retry")}
-            </button>
-          </div>
-        )}
-      >
-        <Loading>{latest(props.edit.outcome)}</Loading>
-      </Errored>
+      <Show when={!props.edit.saving()}>
+        <Errored fallback={voiceControlErrorFallback(() => props.edit.retry())}>
+          <Loading>{latest(props.edit.outcome)}</Loading>
+        </Errored>
+      </Show>
     </>
   );
 }

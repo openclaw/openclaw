@@ -55,6 +55,7 @@ export class ClawCreatorFlow {
   private seenRevision: string | null = null;
   busy: "starting" | "reviewing" | "publishing" | null = null;
   review: ClawsDraftsReviewResult | null = null;
+  reviewRead: { result: Promise<void> } | null = null;
   reviewCurrent = false;
   choices: ClawDraftReviewChoices | null = null;
   modalOpen = false;
@@ -129,6 +130,7 @@ export class ClawCreatorFlow {
     this.target = target;
     this.seenRevision = null;
     this.review = null;
+    this.reviewRead = null;
     this.reviewCurrent = false;
     this.choices = null;
     this.modalOpen = false;
@@ -256,8 +258,7 @@ export class ClawCreatorFlow {
     }
     this.busy = "reviewing";
     const request = ++this.reviewRequest;
-    this.changed();
-    try {
+    const pending = (async () => {
       const result = await target.client.request<ClawsDraftsReviewResult>("claws.drafts.review", {
         agentId: target.agentId,
         draftId: target.draftId,
@@ -276,6 +277,11 @@ export class ClawCreatorFlow {
       };
       this.modalOpen = true;
       this.error = null;
+    })();
+    this.reviewRead = { result: pending };
+    this.changed();
+    try {
+      await pending;
     } catch (error) {
       if (this.current(target, generation) && request === this.reviewRequest) {
         this.error = formatUiError(error);

@@ -36,6 +36,8 @@ RPC method families for gateway status and identity, models and usage, channels 
   Both usage methods accept `mode: "specific"` with an IANA `timeZone` for DST-aware calendar-day boundaries and buckets. `utcOffset` remains supported for older clients and as a fallback when the Gateway runtime does not recognize the requested zone.
 - `sessions.usage.timeseries` returns timeseries usage for one session.
 - `sessions.usage.logs` returns usage log entries for one session.
+  Its `limit` defaults to 200 entries and is capped at 1000. Non-positive or
+  fractional numeric limits return an empty log list.
   Both detail methods accept the selected row's `key` and optional `agentId`. Preserve both fields when opening details for an unqualified key such as `global`.
 
 ## Memory

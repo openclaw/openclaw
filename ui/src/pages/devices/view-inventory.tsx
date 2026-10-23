@@ -34,7 +34,11 @@ import type { InventoryRemovalRequest } from "../../lib/nodes/page-operations.ts
 import { prettifyPlatform } from "../../lib/platform-label.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { CapabilityChips } from "./capability-chips.tsx";
-import { deviceDesktopEnvironment, DeviceEntryMenu } from "./entry-menu.tsx";
+import {
+  deviceDesktopEnvironment,
+  DeviceEntryMenu,
+  PendingDeviceDecisions,
+} from "./entry-menu.tsx";
 import { HostStats } from "./host-stats.tsx";
 import { deviceIcon, DeviceTile, DeviceIdentityFacts } from "./view-shared.tsx";
 import type { DevicesProps } from "./view.types.ts";
@@ -665,8 +669,6 @@ function PendingDevice(props: {
   devices: DevicesProps;
   paired?: PairedDevice;
 }) {
-  const disabled = () =>
-    props.devices.inventorySaving || !props.devices.connected || !props.devices.canManagePairing;
   const name = () => normalizeOptionalString(props.req.displayName) || props.req.deviceId;
   const age = createMemo(() =>
     props.req.ts === undefined ? t("common.na") : formatRelativeTimestamp(props.req.ts),
@@ -692,20 +694,11 @@ function PendingDevice(props: {
         </span>
       </div>
       <div class="settings-row__control">
-        <button
-          class="btn btn--sm"
-          disabled={disabled()}
-          onClick={() => props.devices.onDeviceApprove(props.req.requestId)}
-        >
-          {t("devices.inventory.approve")}
-        </button>
-        <button
-          class="btn btn--sm"
-          disabled={disabled()}
-          onClick={() => props.devices.onDeviceReject(props.req.requestId)}
-        >
-          {t("devices.inventory.reject")}
-        </button>
+        <PendingDeviceDecisions
+          devices={props.devices}
+          requestId={props.req.requestId}
+          name={name()}
+        />
         <DeviceEntryMenu
           devices={props.devices}
           entry={{ name: name(), deviceId: props.req.deviceId }}

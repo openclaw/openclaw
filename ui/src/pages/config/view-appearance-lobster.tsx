@@ -10,7 +10,7 @@ import { LOBSTER_PALETTE_LORE, lobsterPaletteName } from "../../components/lobst
 import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
 import "../../components/tooltip.ts";
 import { SettingsRow } from "../../components/solid/settings-ui.tsx";
-import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { projectLobsterdex } from "../../lib/reactive/events-browser.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { LocalToggleRow } from "./local-toggle-row.tsx";
@@ -143,13 +143,9 @@ export function LobsterPetSection(props: ConfigProps) {
                   <a
                     class="btn btn--sm lobsterdex__open"
                     href={props.lobsterdexHref}
-                    onClick={(event: MouseEvent) => {
-                      if (!shouldHandleNavigationClick(event)) {
-                        return;
-                      }
-                      event.preventDefault();
-                      props.onOpenLobsterdex?.();
-                    }}
+                    onClick={(event: MouseEvent) =>
+                      handleNavigationClick(event, () => props.onOpenLobsterdex?.())
+                    }
                   >
                     {t("quickSettings.appearance.lobsterdexOpen")}
                   </a>

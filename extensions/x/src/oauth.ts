@@ -19,9 +19,7 @@ export type XOAuthOptions = {
   clientId: string;
   clientSecret: string;
   refreshToken: string;
-  loadRefreshToken?: () => Promise<string | undefined>;
-  saveRefreshToken?: (token: string) => Promise<void>;
-  claimRefreshToken?: () => Promise<XRefreshClaim>;
+  claimRefreshToken: () => Promise<XRefreshClaim>;
   assertCurrent?: () => void;
   onTokenState?: (state: XTokenState) => void;
 };
@@ -122,26 +120,9 @@ export function createXOAuthAccess(options: XOAuthOptions) {
   let accessToken: string | undefined;
   let expiresAt = 0;
   let refreshToken = options.refreshToken;
-  let loaded = false;
   let uncertain = false;
   let pending: { token: Awaited<ReturnType<typeof exchange>>; claim: XRefreshClaim } | undefined;
   let task: Promise<void> | undefined;
-  async function claim(): Promise<XRefreshClaim> {
-    if (options.claimRefreshToken) {
-      return await options.claimRefreshToken();
-    }
-    if (!loaded) {
-      refreshToken = (await options.loadRefreshToken?.()) ?? refreshToken;
-      loaded = true;
-    }
-    return {
-      refreshToken,
-      commit: async (next) => {
-        await options.saveRefreshToken?.(next);
-      },
-      restore: async () => {},
-    };
-  }
   async function refresh() {
     let providerFailure: unknown;
     options.onTokenState?.("refreshing");
@@ -155,7 +136,7 @@ export function createXOAuthAccess(options: XOAuthOptions) {
         if (uncertain) {
           throw unknownFailure();
         }
-        const owned = await claim();
+        const owned = await options.claimRefreshToken();
         refreshToken = owned.refreshToken;
         uncertain = true;
         try {

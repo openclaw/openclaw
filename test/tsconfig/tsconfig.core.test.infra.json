@@ -5,9 +5,7 @@
   },
   "include": [
     "../../src/infra/**/*.test.ts",
-    "../../src/infra/**/*.test.tsx",
-    "../../src/media/**/*.test.ts",
-    "../../src/media/**/*.test.tsx"
+    "../../src/infra/**/*.test.tsx"
   ],
   "exclude": [
     "../../src/infra/heartbeat-*.test.ts",

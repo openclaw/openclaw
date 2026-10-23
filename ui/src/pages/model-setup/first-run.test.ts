@@ -89,6 +89,7 @@ describe("model setup first-run redirect", () => {
       ["/chat/main", "", "", "", true],
       ["/chat/main/", "", "", "", true],
       ["/openclaw/chat/main", "", "", "/openclaw", true],
+      ["/openclaw/chat/main/", "", "", "/openclaw", true],
       ["/chat/research", "", "", "", false],
       ["/chat/main/existing-session", "", "", "", false],
       ["/dashboard/main", "", "", "", false],

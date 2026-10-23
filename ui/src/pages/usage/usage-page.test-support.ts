@@ -86,7 +86,7 @@ export function changeUsageControl(control: HTMLInputElement | HTMLSelectElement
 
 export function usageButton(page: TestUsagePage, label: string, selector = "button") {
   const button = [...page.querySelectorAll<HTMLButtonElement>(selector)].find(
-    (entry) => entry.textContent?.trim() === label,
+    (entry) => (entry.getAttribute("aria-label") ?? entry.textContent?.trim()) === label,
   );
   expect(button).toBeDefined();
   return button!;
@@ -396,6 +396,13 @@ export async function preloadUsage(page: TestUsagePage): Promise<void> {
     cause: "navigation",
   } satisfies RouteLoaderOptions;
   page.routeData = (await usageRoute.loader!(page.context, options)) as UsageRouteData;
+  await page.updateComplete;
+}
+
+/** Tests written against the recent-first session order opt back into it; the page sorts by cost. */
+export async function showRecentSessions(page: TestUsagePage): Promise<void> {
+  page.read().callbacks.display.onChange({ sessionSort: "recent" });
+  await vi.waitFor(() => expect(page.usageLoading).toBe(false));
   await page.updateComplete;
 }
 

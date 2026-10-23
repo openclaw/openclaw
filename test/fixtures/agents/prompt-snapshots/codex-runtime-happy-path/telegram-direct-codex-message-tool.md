@@ -38,9 +38,6 @@
 {
   "agents": {
     "defaults": {
-      "heartbeat": {
-        "every": "30m"
-      },
       "userTimezone": "UTC"
     },
     "entries": {
@@ -256,8 +253,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 79656,
-    "roughTokens": 19914
+    "chars": 80956,
+    "roughTokens": 20239
   },
   "openClawDeveloperInstructions": {
     "chars": 3490,
@@ -272,8 +269,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6876
   },
   "totalWithDynamicToolsJson": {
-    "chars": 107159,
-    "roughTokens": 26790
+    "chars": 108459,
+    "roughTokens": 27115
   },
   "userInputText": {
     "chars": 879,
@@ -611,7 +608,7 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
 ```json
 [
   {
-    "description": "Send/manage channel messages. Supports actions: send.",
+    "description": "Send/manage channel messages. Supports actions: react, send. When the current WebChat prompt permits reactions, react with emoji (and optional remove:true) as the agent. Omit channel, target, and messageId. This stays local; use an explicit external channel and messageId for external reactions.",
     "inputSchema": {
       "properties": {
         "accountId": {
@@ -619,7 +616,7 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
         },
         "action": {
           "description": "Select one action. For action=\"send\", provide message or another send payload; fields for other actions do not count as send content.",
-          "enum": ["send"],
+          "enum": ["react", "send"],
           "type": "string"
         },
         "asDocument": {
@@ -676,6 +673,10 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
           "description": "sendWithEffect id/name.",
           "type": "string"
         },
+        "emoji": {
+          "description": "One Unicode emoji for the current WebChat prompt; explicit external channels validate their own emoji.",
+          "type": "string"
+        },
         "filename": {
           "type": "string"
         },
@@ -696,12 +697,23 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
         "gifPlayback": {
           "type": "boolean"
         },
+        "groupId": {
+          "type": "string"
+        },
         "media": {
           "description": "Media URL/path. data: use buffer.",
           "type": "string"
         },
         "message": {
           "description": "Text for action=\"send\". A send needs message or another send payload such as media, attachments, or presentation.",
+          "type": "string"
+        },
+        "message_id": {
+          "description": "snake_case alias of messageId; same defaults.",
+          "type": "string"
+        },
+        "messageId": {
+          "description": "Target read/react/edit/delete/pin/unpin id; reactions default current inbound.",
           "type": "string"
         },
         "mimeType": {
@@ -711,6 +723,9 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
           "description": "Telegram reply quote text.",
           "type": "string"
         },
+        "remove": {
+          "type": "boolean"
+        },
         "replyTo": {
           "type": "string"
         },
@@ -719,6 +734,12 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
         },
         "target": {
           "description": "Recipient/channel: E.164 for WhatsApp/Signal, Telegram chat id/@username, Discord/Slack/Mattermost <channelId|user:ID|channel:ID>, or iMessage handle/chat_id",
+          "type": "string"
+        },
+        "targetAuthor": {
+          "type": "string"
+        },
+        "targetAuthorUuid": {
           "type": "string"
         },
         "targets": {
@@ -734,6 +755,14 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
         "timeoutMs": {
           "minimum": 1,
           "type": "integer"
+        },
+        "track_tool_calls": {
+          "description": "snake_case alias of trackToolCalls.",
+          "type": "boolean"
+        },
+        "trackToolCalls": {
+          "description": "Use the reacted message for this turn's status reaction lifecycle.",
+          "type": "boolean"
         },
         "voiceId": {
           "description": "Per-send speech voice override.",

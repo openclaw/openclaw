@@ -1,5 +1,5 @@
 import { createMemo, Loading, onSettled } from "solid-js";
-import type { AgentSelectElement } from "../../components/agent-select.ts";
+import type { AgentSelectElement } from "../../components/agent-select.tsx";
 import type { PopoverHandle } from "../../components/solid/popover.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { normalizeAgentTargetLabel } from "../../lib/agents/display.ts";

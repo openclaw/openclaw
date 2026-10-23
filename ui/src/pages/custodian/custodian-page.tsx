@@ -1,18 +1,18 @@
 import type { SystemChangesListResult } from "@openclaw/gateway-protocol";
 import {
-  action,
   createMemo,
-  createOptimistic,
   createSignal,
   Errored,
   isPending,
   latest,
+  lazy,
   Loading,
   onSettled,
   Show,
 } from "solid-js";
-import "../../components/openclaw-mascot.ts";
+import "../../components/openclaw-mascot.tsx";
 import type { SidebarAttentionElementAttributes } from "../../components/sidebar-attention-element.ts";
+import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { channelSnapshotHasActiveChannel } from "../../lib/channels/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
@@ -23,7 +23,7 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import "../../styles/custodian.css";
-import type { SetupAutoCandidate } from "./custodian-auto-setup.ts";
+import { createCustodianActions } from "./custodian-actions.ts";
 import { CustodianChangeHistory, type HistorySnapshot } from "./custodian-history.tsx";
 import { CustodianChannelOnboardingNudge } from "./custodian-nudge.tsx";
 import { custodianSessionStore, type CustodianSessionStore } from "./custodian-session-store.ts";
@@ -31,51 +31,16 @@ import { CustodianSurface } from "./custodian-surface.tsx";
 import type { CustodianRouteData } from "./route.tsx";
 
 type Props = { onboarding: boolean; newAgentIntent: boolean; store: CustodianSessionStore };
+const SidebarAttention = lazy(() => import("../../components/sidebar-attention.tsx"), {
+  export: "SidebarAttention",
+});
 const propertyReceipts = new WeakMap<HTMLElement, (key: keyof Props) => void>();
 function CustodianPageContent(props: Props, host: SolidBridgeElement<Props>) {
   const context = useApplication();
   const gateway = projectGateway(context.gateway);
   const channels = projectChannels(context.channels);
   const store = projectOwner(host.store, (source) => source);
-  const [activating, setActivating] = createOptimistic(false);
-  let retireActivation = () => {};
-  const presentActivation = action(function* (pending: Promise<void>, retired: Promise<void>) {
-    setActivating(true);
-    yield Promise.race([pending, retired]);
-  });
-  async function activate(candidate: SetupAutoCandidate) {
-    const source = host.store;
-    const setup = source.autoSetup;
-    if (setup.pending || !setup.result) {
-      return;
-    }
-    const pending = setup.activate(candidate);
-    const lifetime = Promise.withResolvers<void>();
-    retireActivation = lifetime.resolve;
-    const stop = source.subscribe(() => {
-      if (host.store !== source || !setup.pending || setup.dismissed) {
-        lifetime.resolve();
-      }
-    });
-    // Admission publishes before the action joins its owner-controlled operation.
-    await Promise.resolve();
-    try {
-      if (host.store === source && setup.pending) {
-        await presentActivation(pending, lifetime.promise);
-      } else {
-        await pending;
-      }
-    } catch (error) {
-      if (host.store === source && setup.pending) {
-        setup.reportError(error);
-      }
-    } finally {
-      stop();
-      if (retireActivation === lifetime.resolve) {
-        retireActivation = () => {};
-      }
-    }
-  }
+  const presentation = createCustodianActions(() => host.store);
   const historyAvailable = createMemo(() => {
     const snapshot = gateway.read().snapshot;
     return (
@@ -126,7 +91,7 @@ function CustodianPageContent(props: Props, host: SolidBridgeElement<Props>) {
   }
   onSettled(() => {
     propertyReceipts.set(host, (key) => {
-      retireActivation();
+      presentation.retire();
       if (key === "store") {
         store.replaceSource(host.store);
         void host.store.refreshTranscriptIfIdle();
@@ -141,7 +106,6 @@ function CustodianPageContent(props: Props, host: SolidBridgeElement<Props>) {
     void host.store.refreshTranscriptIfIdle();
     refreshChannelInventory();
     return () => {
-      retireActivation();
       disposed = true;
       propertyReceipts.delete(host);
       subscriptions.forEach((stop) => stop());
@@ -291,7 +255,13 @@ function CustodianPageContent(props: Props, host: SolidBridgeElement<Props>) {
         </Show>
         <div class="custodian__header-actions">
           <Show when={props.onboarding}>
-            <openclaw-sidebar-attention />
+            <Errored
+              fallback={(error, reset) => <LazyViewError error={error()} onRetry={reset} inline />}
+            >
+              <Loading>
+                <SidebarAttention />
+              </Loading>
+            </Errored>
           </Show>
           <Show when={historyAvailable()}>
             <button
@@ -319,11 +289,10 @@ function CustodianPageContent(props: Props, host: SolidBridgeElement<Props>) {
       <CustodianSurface
         class="custodian__column"
         store={props.store}
+        actions={presentation.actions}
         onboarding={props.onboarding}
         newAgentIntent={props.newAgentIntent}
         channelOnboardingContent={<ChannelOnboarding />}
-        activating={activating()}
-        onActivate={(candidate) => void activate(candidate)}
         historyContent={
           <Show when={historyOpen() && historyAvailable()}>
             <CustodianChangeHistory

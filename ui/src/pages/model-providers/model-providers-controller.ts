@@ -17,7 +17,6 @@ import { projectAgents, projectRuntimeConfig } from "../../lib/reactive/domain-c
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import { observeState } from "../../lib/reactive/observe-state.ts";
 import { UsageRefreshPolicy } from "../usage/refresh-policy.ts";
-import type { ModelAccountUsageElement } from "./account-usage.tsx";
 import { createModelProviderConfigActions } from "./config-actions.ts";
 import { createModelProviderMutationPresentation } from "./config-mutation-presentation.ts";
 import {
@@ -29,12 +28,7 @@ import {
   type ModelProviderRowMessage,
 } from "./config-mutation.ts";
 import { ModelProviderCoreLoader, type ModelProviderRefreshReason } from "./core-load.ts";
-import {
-  buildModelProviderPresentation,
-  collectProviderLocalCost,
-  collectProviderUsage,
-  type DefaultsDraft,
-} from "./data.ts";
+import { buildModelProviderPresentation, type DefaultsDraft } from "./data.ts";
 import { createModelProviderDiscovery } from "./discovery-controller.tsx";
 import { createInstalledAgents } from "./installed-agents.tsx";
 import { EMPTY_MODEL_PROVIDERS_DATA } from "./load.ts";
@@ -45,7 +39,6 @@ import { createModelProviderProfilePresentation } from "./profile-actions-presen
 import { updateRecordEntry } from "./record-state.ts";
 import type { ModelProvidersRouteData } from "./route.ts";
 import { ModelProviderSupplementalLoader } from "./supplemental-load.ts";
-import { projectSupplementalRead } from "./supplemental-read.ts";
 
 export function createModelProviders(
   context: ApplicationContext,
@@ -68,7 +61,6 @@ export function createModelProviders(
     mutationBlockedReason() === null && !modelProviderConfigBusy(context);
   let loaderPending = false;
   let connected = false;
-  const accountUsages = new Set<ModelAccountUsageElement>();
   let pendingConnection = false;
   let pendingCredentialInvalidation = false;
   let profilesVisible = false;
@@ -84,9 +76,7 @@ export function createModelProviders(
     onStart: (reason) => {
       supplemental.beginCoreRefresh(reason === "forced");
       if (reason === "forced") {
-        for (const account of accountUsages) {
-          account.refreshUsage();
-        }
+        state.accountUsageRevision += 1;
       }
     },
     onComplete: ({ client, data }) => {
@@ -105,9 +95,7 @@ export function createModelProviders(
     },
   });
   const refreshPolicy = new UsageRefreshPolicy({
-    isLoading: () =>
-      loaderPending || !routeDataObserved || core.loading || supplemental.usageLoading,
-    // Usage convergence must not restart the independent local-cost request.
+    isLoading: () => loaderPending || !routeDataObserved || core.loading || supplemental.loading,
     reload: () => supplemental.loadUsage(),
     onIncompleteUsageExhausted: notify,
   });
@@ -120,20 +108,6 @@ export function createModelProviders(
     setDataClient: (client) => (dataClient = client),
     refreshPolicy,
   });
-  const metrics = {
-    usage: projectSupplementalRead(
-      projection.read,
-      () => supplemental.usageRead(),
-      (data) => data?.providerUsage ?? null,
-      (result) => collectProviderUsage(result?.ok ? result.value : null),
-    ),
-    cost: projectSupplementalRead(
-      projection.read,
-      () => supplemental.costRead(),
-      (data) => data?.costByProvider ?? null,
-      collectProviderLocalCost,
-    ),
-  };
   const gateway = new GatewayPageBinding(notify, {
     getGateway: () => context.gateway,
     onIdentityChange: () => resetConnectionState(),
@@ -232,6 +206,7 @@ export function createModelProviders(
     setOrders: (orders) => (state.profileOrders = orders),
     clearMessage: (cardId) => setMessage(cardId, null),
     canMutate: () => canMutate(),
+    hasMutationAccess: () => mutationBlockedReason() === null,
     cancelRefresh: () => core.invalidate(),
     refresh: () => refresh("forced"),
     isCurrentClient: (client, epoch) => gateway.isCurrent({ client, epoch }),
@@ -317,7 +292,6 @@ export function createModelProviders(
         gateway.isRouteDataCurrent(data)
       ) {
         supplemental.adoptCoreData(data.client, data.data);
-        core.adopt();
         if (!catalogCurrent) {
           retryCatalog();
         }
@@ -606,29 +580,27 @@ export function createModelProviders(
     const props = {
       installedAgents: undefined,
       providerQuery: providerQuery(),
-      onProviderQueryChange: setProviderQuery,
       onConnectProvider: () => void login.connectProvider(values.configuredModels),
-      usageClient: !mutationBlockedReason() && usageAvailable ? gatewaySnapshot.client : null,
-      usageAgentId: state.selectedAgentId,
-      registerAccountUsage: (element: ModelAccountUsageElement) => {
-        accountUsages.add(element);
-        return () => accountUsages.delete(element);
-      },
+      accountUsage:
+        !mutationBlockedReason() && usageAvailable && gatewaySnapshot.client
+          ? {
+              client: gatewaySnapshot.client,
+              agentId: state.selectedAgentId,
+              revision: state.accountUsageRevision,
+            }
+          : null,
       connected: gatewaySnapshot.phase === "connected",
       loading: state.data === null && !rosterError && !noSelectableAgents,
-      coreReceipt: core.receipt,
-      scopeError: rosterError ?? (noSelectableAgents ? t("agents.noAgents") : null),
+      refreshing: core.loading,
       error: rosterError ?? (noSelectableAgents ? t("agents.noAgents") : data.error),
-      providerUsageFailed: data.providerUsage?.ok === false,
-      // Admission also coordinates usage retries; do not hold the shared row on either read.
-      supplementalLoading: loaderPending || supplemental.loading,
-      metrics,
+      providerUsageFailed: data.providerUsageFailed,
       updatedAt: data.updatedAt,
+      onOpenUsage: () => context.navigate("usage"),
       credentialAgentLabel: agentLabel,
       cards: noSelectableAgents ? [] : installedAgents.filterProviders(cards),
       ...values,
       catalogReceipt: core.catalogReceipt,
-      catalogDiscovering: Boolean(catalog?.pendingProviders?.length),
+      catalogDiscovering: core.catalogLoading || Boolean(catalog?.pendingProviders?.length),
       catalogDiscoveryError: core.catalogLoading ? null : (core.catalogError ?? data.catalogError),
       configBusy: modelProviderConfigBusy(context),
       canViewProfiles: profilesVisible,
@@ -661,8 +633,6 @@ export function createModelProviders(
       onKeyDraftChange: (value: string) => (state.keyDraft = value),
       onSaveKey: (provider: string, configKey: string) =>
         void mutateApiKey(provider, configKey, state.keyDraft.trim()),
-      onRemoveKey: (provider: string, configKey: string) =>
-        void mutateApiKey(provider, configKey, null),
       onProbe: (cardId: string, providers: string[]) =>
         void profileActions.probe(cardId, providers),
       onRequestLogout: (pending: Parameters<typeof profileActions.requestLogout>[0]) =>
@@ -689,7 +659,6 @@ export function createModelProviders(
       cards,
       installedAgentsAvailable: installedAgents.available(),
       scope: {
-        agentLabel,
         onConnect: pageLogin.onConnect,
         connectDisabled: pageLogin.connectDisabled || discovery.busy || addProviderOpen(),
       },

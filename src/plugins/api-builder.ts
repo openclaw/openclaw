@@ -138,6 +138,9 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     runtime: params.runtime,
     logger: params.logger,
     ...registrations,
+    ...(params.registerSubagentProfile
+      ? { registerSubagentProfile: params.registerSubagentProfile }
+      : {}),
     registerNodeCliFeature: (registrar, opts) =>
       registrations.registerCli(registrar, { ...opts, parentPath: ["nodes"] }),
     resolvePath: params.resolvePath,

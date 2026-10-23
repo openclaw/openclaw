@@ -407,6 +407,10 @@ describePosix("explicit prior-CI admin landing", () => {
   it.each([
     ["success", ""],
     ["pending", ""],
+    ["head-only-enforcement", ""],
+    ["wrong-ci-run", "successful exact-head security enforcement is required"],
+    ["wrong-ci-attempt", "successful exact-head security enforcement is required"],
+    ["duplicate-enforcement", "successful exact-head security enforcement is required"],
     ["automation-dispatch", "successful protected Security Review publisher is required"],
     ["missing-job", "security-fast must pass independently"],
     ["duplicate-job", "security-fast must pass independently"],
@@ -429,7 +433,7 @@ describePosix("explicit prior-CI admin landing", () => {
   ])("validates %s security evidence without dispatch", (fault, message) => {
     const f = preExistingCandidate();
     const state = f.state();
-    const accepted = fault === "success" || fault === "pending";
+    const accepted = ["success", "pending", "head-only-enforcement"].includes(fault!);
     if (fault === "success" || fault === "pending") {
       state.priorCi.security.combinedState = fault;
     } else {

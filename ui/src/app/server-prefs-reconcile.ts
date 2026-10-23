@@ -33,7 +33,7 @@ import {
   readRetainedLocalKeys,
 } from "./server-prefs-storage.ts";
 import { serverUiPrefsOutbox as sync } from "./server-prefs.ts";
-import type { UiSettings } from "./settings-contract.ts";
+import type { UiPreferences, UiSettings } from "./settings-contract.ts";
 import {
   loadSettings,
   loadUiPreferences,
@@ -81,7 +81,7 @@ function resolveServerUiPrefStateFromSnapshot<K extends SyncedPrefKey>(
   configObject: unknown,
   key: K,
   shadowPrefs: ServerUiPrefs | null,
-  settings: UiSettings,
+  settings: UiPreferences,
   canSync?: boolean | null,
   profilePrefs?: SyncedServerUiPrefs | null,
 ): ServerUiPrefState<SyncedPrefValue<K>> {
@@ -126,7 +126,7 @@ function resolveServerUiPrefStateFromSnapshot<K extends SyncedPrefKey>(
     serverValue !== undefined &&
     (!specification.canApply ||
       // SAFETY: serverValue is selected from this key descriptor; canApply belongs to that same key.
-      (specification.canApply as (value: unknown, settings: UiSettings) => boolean)(
+      (specification.canApply as (value: unknown, settings: UiPreferences) => boolean)(
         serverValue,
         settings,
       ));
@@ -238,7 +238,7 @@ export function resolveServerUiPrefState<K extends SyncedPrefKey>(
   configObject: unknown,
   key: K,
   scope = "",
-  settings = loadSettings(scope || undefined),
+  settings: UiPreferences = loadSettings(scope || undefined),
   options: { canSync?: boolean | null; profileId?: string | null } = {},
 ): ServerUiPrefState<SyncedPrefValue<K>> {
   const disconnectedProfile = !options.profileId && isProfilePref(key) && options.canSync === null;

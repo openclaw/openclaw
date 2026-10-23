@@ -409,6 +409,23 @@ export function isPluginRecordActive(registry: PluginRegistry, record: PluginRec
   );
 }
 
+/**
+ * A retained scoped registry can outlive one plugin's replacement: the replaced
+ * instance is disposed while the registry itself is never retired. Callers that
+ * cache such a registry must stop reusing it once any loaded plugin it dispatches
+ * can no longer admit calls.
+ */
+export function isPluginRegistryRecordSetAdmitting(registryView: PluginRegistry): boolean {
+  const registry = getPluginRegistryResourceOwner(registryView);
+  return registry.plugins.every(
+    (record) =>
+      !record.enabled ||
+      record.status !== "loaded" ||
+      (!pluginInstanceState.records.get(record)?.revoked &&
+        getPluginInstance(record)?.acceptingCalls !== false),
+  );
+}
+
 export function revokePluginRecord(registry: PluginRegistry, record: PluginRecord): void {
   resolvePluginInstanceOwner(record, registry).revoked = true;
 }

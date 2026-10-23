@@ -1,7 +1,6 @@
 // Detached chat.send dispatch owns runtime delivery, post-dispatch persistence, and terminalization.
 import { performance } from "node:perf_hooks";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveWebchatPromptCacheKey } from "../../agents/embedded-agent-runner/run/session-boundary-prompt-cache-key.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { runWithAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import { dispatchInboundMessageWithProjectedDispatcher } from "../../auto-reply/dispatch.js";
@@ -31,7 +30,6 @@ import {
 } from "../../sessions/session-controller.rpc-sources.js";
 import { withCurrentUserTurnInput } from "../../sessions/user-turn-transcript-runtime-context.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { isOperatorUiClient } from "../../utils/message-channel.js";
 import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { updateChatRunProvider } from "../chat-abort.js";
 import { discardPreparedInboundMedia } from "../chat-attachments.js";
@@ -96,19 +94,10 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
     retainGatewayWorkAdmission,
     restartSafeAdmission,
   } = admission;
-  const {
-    activeRunScopeKey,
-    agentId,
-    cfg,
-    clientRunId,
-    expectedLeafEntryId,
-    resolvedSessionModel,
-    storePath,
-    selectedAgent,
-    sessionKey,
-  } = session;
+  const { agentId, cfg, clientRunId, expectedLeafEntryId, storePath, selectedAgent, sessionKey } =
+    session;
   let { entry } = session;
-  const { clientInfo, p, supportsTaskSuggestions } = request;
+  const { p, supportsTaskSuggestions } = request;
   const {
     accountId,
     ctx,
@@ -385,16 +374,6 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
                   skillLibraryAuthoring,
                   ...(cronCreatorAuthority
                     ? { cronCreatorAuthorityCapability: cronCreatorAuthority }
-                    : {}),
-                  ...(isOperatorUiClient(clientInfo)
-                    ? {
-                        promptCacheKey: resolveWebchatPromptCacheKey({
-                          agentId,
-                          provider: resolvedSessionModel.provider,
-                          model: resolvedSessionModel.model,
-                          sessionKey: activeRunScopeKey,
-                        }),
-                      }
                     : {}),
                   ...(supportsTaskSuggestions
                     ? { taskSuggestionDeliveryMode: "gateway" as const }

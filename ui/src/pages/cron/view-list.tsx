@@ -20,7 +20,13 @@ import { isCronJobActiveFailure, isCronJobRunning } from "../../lib/cron-status.
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { CRON_SUGGESTIONS, suggestionFormPatch } from "./suggestions.ts";
-import { AdminRequired, ErrorBanner, EnabledSwitch, JobMenu } from "./view-controls.tsx";
+import {
+  AdminRequired,
+  ErrorBanner,
+  EnabledSwitch,
+  JobMenu,
+  NoticeBanner,
+} from "./view-controls.tsx";
 import {
   describeJobSchedule,
   JobStateIndicator,
@@ -30,7 +36,7 @@ import {
 } from "./view-job-status.tsx";
 import { JobsFilterPopover } from "./view-jobs-filter.tsx";
 import { RunsSection } from "./view-runs.tsx";
-import type { CronProps } from "./view-types.ts";
+import type { CronJobActionProps, CronProps } from "./view-types.ts";
 const ENABLED_TABS: Array<{
   value: CronJobsEnabledFilter;
   labelKey: string;
@@ -91,7 +97,9 @@ export function ListView(props: CronProps) {
               <Loading on={latest(scope)}>
                 <SchedulerStatus {...props} />
               </Loading>
-              <ErrorBanner error={props.listError} /> <ErrorBanner error={props.error} />
+              <ErrorBanner error={props.listError} />{" "}
+              <ErrorBanner error={props.error} reads={props.reads} />
+              <NoticeBanner notice={props.notice} />
               <Toolbar {...props} hasAdvancedJobsFilters={hasAdvancedJobsFilters()} />
             </div>
             <div
@@ -260,6 +268,9 @@ function JobsTable(
 ) {
   // A snapshot revision is the successful-list fact. Until one exists, show
   // pending or failure, never completed-empty guidance.
+  const canManage = createMemo(() => props.canManage);
+  const busy = createMemo(() => props.busy);
+  const connected = createMemo(() => props.connected);
   const initialPending = () => props.loading && !props.hasLoaded;
   const tableBusy = () =>
     (props.reads ? isPending(props.reads.jobs) : props.loading) || props.jobsLoadingMore;
@@ -296,7 +307,20 @@ function JobsTable(
         ) : undefined
       ) : (
         <For each={jobs} keyed={(job) => job.id}>
-          {(job) => <JobRow job={job()} {...props} />}
+          {(job) => (
+            <JobRow
+              job={job()}
+              jobs={props.jobs}
+              canManage={canManage()}
+              busy={busy()}
+              connected={connected()}
+              onRun={props.onRun}
+              onToggle={props.onToggle}
+              onClone={props.onClone}
+              onRemove={props.onRemove}
+              onSelectJob={props.onSelectJob}
+            />
+          )}
         </For>
       )}
       <CronJobsPagination
@@ -328,9 +352,10 @@ function JobsTableFrame(props: { canManage: boolean; busy: boolean; children: JS
   );
 }
 function JobRow(
-  props: CronProps & {
-    job: CronJob;
-  },
+  props: CronJobActionProps &
+    Pick<CronProps, "jobs" | "onSelectJob"> & {
+      job: CronJob;
+    },
 ) {
   const displayName = () => props.job.displayName ?? props.job.name;
   const description = () => props.job.description?.trim();

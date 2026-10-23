@@ -247,6 +247,40 @@ describe("createChatRunState", () => {
     ]);
   });
 
+  it.each(["full", "summary"] as const)(
+    "replays the latest recovery compaction after an attempt failure (%s)",
+    (mode) => {
+      const { state, event } = progressHarness(mode);
+      const replay = () =>
+        projectInFlightRunSnapshot({ chatRunState: state, runId: "run-1" }).events;
+      event(1, "lifecycle", {
+        phase: "finishing",
+        error: "Context overflow",
+        livenessState: "blocked",
+        endedAt: 1,
+      });
+      event(2, "compaction", { phase: "start", itemId: "recovery-1" });
+      expect(replay()).toMatchObject([
+        { seq: 2, stream: "compaction", data: { phase: "start", itemId: "recovery-1" } },
+      ]);
+      event(3, "compaction", { phase: "end", itemId: "recovery-1", completed: true });
+      expect(replay()).toMatchObject([
+        { seq: 3, stream: "compaction", data: { phase: "end", completed: true } },
+      ]);
+      event(4, "compaction", { phase: "start", itemId: "recovery-2" });
+      event(3, "compaction", { phase: "end", itemId: "recovery-1", completed: true });
+      expect(replay()).toMatchObject([
+        { seq: 4, stream: "compaction", data: { phase: "start", itemId: "recovery-2" } },
+      ]);
+      event(5, "compaction", { phase: "end", itemId: "recovery-2", completed: false });
+      event(6, "lifecycle", { phase: "finishing" });
+      expect(replay()).toMatchObject([
+        { seq: 5, stream: "compaction", data: { phase: "end", completed: false } },
+        { seq: 6, stream: "lifecycle", data: { phase: "finishing" } },
+      ]);
+    },
+  );
+
   const fallbackTransition = {
     phase: "fallback_step",
     fallbackStepFromModel: "primary/model",

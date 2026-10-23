@@ -61,10 +61,23 @@ suite.define(() => {
         taskMs: metric("TaskDuration"),
       };
       console.log(JSON.stringify({ proof: "model-catalog-typing", ...timings }));
+      const openBefore: typeof before = await cdp.send("Performance.getMetrics");
+      const openStarted = performance.now();
       await trigger.click();
-      await expect
-        .poll(() => picker.locator("[data-chat-model-option]").count())
-        .toBe(models.length);
+      await expect.poll(() => picker.locator("[data-chat-model-option]").count()).toBe(9);
+      const openAfter: typeof before = await cdp.send("Performance.getMetrics");
+      console.log(
+        JSON.stringify({
+          proof: "model-catalog-open",
+          route,
+          models: models.length,
+          elapsedMs: performance.now() - openStarted,
+          scriptMs: metric("ScriptDuration", openBefore, openAfter),
+          taskMs: metric("TaskDuration", openBefore, openAfter),
+          layoutMs: metric("LayoutDuration", openBefore, openAfter),
+          styleMs: metric("RecalcStyleDuration", openBefore, openAfter),
+        }),
+      );
       expect(await picker.locator("[data-chat-model-catalog-state]").count()).toBe(0);
       const refresh = picker.locator(".chat-controls__model-search-wrap [data-chat-model-refresh]");
       expect(await refresh.textContent()).toContain("Refreshing models for Example…");
@@ -130,6 +143,8 @@ suite.define(() => {
         elapsedMs: performance.now() - searchStarted,
         scriptMs: metric("ScriptDuration", searchBefore, searchAfter),
         taskMs: metric("TaskDuration", searchBefore, searchAfter),
+        layoutMs: metric("LayoutDuration", searchBefore, searchAfter),
+        styleMs: metric("RecalcStyleDuration", searchBefore, searchAfter),
       };
       console.log(JSON.stringify({ proof: "model-catalog-search-typing", ...searchTimings }));
       const result = picker.locator('[data-chat-model-option="example/model-999"]');
@@ -202,13 +217,59 @@ suite.define(() => {
         taskMs: metric("TaskDuration", selectionBefore, selectionAfter),
       };
       console.log(JSON.stringify({ proof: "model-catalog-selection", ...selectionTimings }));
-      await cdp.detach();
       if (route === "chat") {
         expect((await gateway.waitForRequest("sessions.patch")).params).toMatchObject({
           expectedSessionId: "session:agent:main:main",
           model: "example/model-999",
         });
+        await page.emulateMedia({ reducedMotion: "no-preference" });
+        const sessions = page.locator('[data-navigation-view="sessions"]');
+        if ((await sessions.getAttribute("aria-pressed")) !== "true") {
+          await sessions.click();
+        }
+        await expect.poll(() => sessions.getAttribute("aria-pressed")).toBe("true");
+        const toggleSidebar = async () => {
+          for (const pressed of ["false", "true"]) {
+            await sessions.click();
+            await expect.poll(() => sessions.getAttribute("aria-pressed")).toBe(pressed);
+            await page.locator(".shell").evaluate(async (shell) => {
+              await new Promise<void>((resolve) => {
+                requestAnimationFrame(() => resolve());
+              });
+              await Promise.all(shell.getAnimations().map((animation) => animation.finished));
+              await new Promise<void>((resolve) => {
+                requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+              });
+            });
+          }
+        };
+        await toggleSidebar();
+        const requestsBeforeToggle = (await gateway.getRequests("models.list")).length;
+        const toggleBefore: typeof before = await cdp.send("Performance.getMetrics");
+        const toggleStarted = performance.now();
+        await toggleSidebar();
+        const toggleAfter: typeof before = await cdp.send("Performance.getMetrics");
+        expect(await trigger.textContent()).toContain("Model 0999");
+        expect((await gateway.getRequests("models.list")).length).toBe(requestsBeforeToggle);
+        const toggleTimings = {
+          route,
+          models: models.length,
+          viewport: contextOptions.viewport,
+          elapsedMs: performance.now() - toggleStarted,
+          scriptMs: metric("ScriptDuration", toggleBefore, toggleAfter),
+          taskMs: metric("TaskDuration", toggleBefore, toggleAfter),
+          layoutMs: metric("LayoutDuration", toggleBefore, toggleAfter),
+          styleMs: metric("RecalcStyleDuration", toggleBefore, toggleAfter),
+        };
+        console.log(JSON.stringify({ proof: "model-catalog-sidebar-toggle", ...toggleTimings }));
+        if (artifactDir) {
+          await writeFile(
+            `${artifactDir}/sidebar-timings.json`,
+            `${JSON.stringify(toggleTimings, null, 2)}\n`,
+          );
+        }
       }
+      await cdp.detach();
     });
   });
 
@@ -338,7 +399,7 @@ suite.define(() => {
           ).toEqual({ width: "13px", height: "13px" });
           await expect
             .poll(async () => {
-              const box = await account.boundingBox();
+              const box = await trigger.boundingBox();
               return Boolean(box && box.width > 0 && box.x >= 0 && box.x + box.width <= width + 1);
             })
             .toBe(true);
@@ -505,17 +566,23 @@ suite.define(() => {
         const search = composer.locator("[data-chat-model-search]");
         await search.fill("account");
         await expect.poll(() => workOption.isVisible()).toBe(true);
-        await search.fill(work.label);
-        await search.press("ArrowDown");
-        await expect.poll(() => workOption.getAttribute("data-chat-model-highlighted")).toBe("");
-        await search.press("Enter");
+        if (input === "keyboard") {
+          await workOption.press("Enter");
+        } else {
+          await workOption.click();
+        }
         const patch = await gateway.waitForRequest("sessions.patch");
         expect(patch.params).toEqual({
           expectedSessionId: `session:${sessionKey}`,
           key: sessionKey,
           model: `openai/gpt-5.5@${work.authProfileId}`,
         });
-        await expect.poll(() => trigger.textContent()).toContain(personal.label);
+        // A pending model override must not change the confirmed account.
+        const currentOption = picker.locator('[data-chat-account-option="current"]');
+        await expect.poll(() => currentOption.isVisible()).toBe(true);
+        expect(await currentOption.textContent()).toContain(personal.label);
+        expect(await currentOption.getAttribute("aria-selected")).toBe("true");
+        expect(await search.isDisabled()).toBe(true);
         await gateway.resolveDeferred("sessions.patch", { ok: true });
         await gateway.setMethodResponse("sessions.list", sessionList);
         await gateway.setMethodResponse("models.list", {
@@ -534,6 +601,7 @@ suite.define(() => {
           agentId: "main",
           reason: "patch",
         });
+        await search.clear();
         await expect.poll(() => trigger.textContent()).toContain(work.label);
         await expect.poll(() => heading.textContent()).toContain("Subscription · work@example.com");
         expect(await gateway.getRequests("users.selectModelAccount")).toHaveLength(0);
@@ -671,9 +739,7 @@ suite.define(() => {
           expect(
             await menu.locator("[data-chat-thinking-slider], [data-chat-speed-option]").count(),
           ).toBe(0);
-          await revealChatModelOption(
-            menu.locator('[data-chat-model-option="openai/gpt-5.6-luna"]'),
-          );
+          await revealChatModelOption(composer, "openai/gpt-5.6-luna");
           await expect
             .poll(() => menu.getByRole("option", { name: new RegExp(longName) }).count())
             .toBe(1);
@@ -813,7 +879,7 @@ suite.define(() => {
             )
             .toBe("false");
           await model.click();
-          await selectChatModelOption(composer.locator('[data-chat-model-option="example/basic"]'));
+          await selectChatModelOption(composer, "example/basic");
           await expect.poll(() => effort.count()).toBe(0);
         }
       });
@@ -942,11 +1008,9 @@ suite.define(() => {
         const trigger = picker.locator('[data-chat-model-select="true"]');
         await expect.poll(() => trigger.getAttribute("aria-disabled")).toBe("false");
         await trigger.click();
+        await revealChatModelOption(picker, "openai/gpt-5.5");
+        await revealChatModelOption(picker, "anthropic/claude-sonnet-4-6");
         await expect.poll(() => picker.locator("[data-chat-model-option]").count()).toBe(2);
-        await revealChatModelOption(picker.locator('[data-chat-model-option="openai/gpt-5.5"]'));
-        await revealChatModelOption(
-          picker.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]'),
-        );
         const search = picker.locator("[data-chat-model-search]");
         // Enter search with the pointer so row tooltips do not own Escape.
         await search.click();

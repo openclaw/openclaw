@@ -1,6 +1,9 @@
 import { expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
-import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import {
+  waitForControlUiGatewayReady,
+  waitForControlUiTerminalReady,
+} from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -128,11 +131,7 @@ suite.define(() => {
       await page.getByText("Server updated", { exact: true }).waitFor();
 
       expect(await gateway.getRequests("terminal.open")).toHaveLength(0);
-      expect(
-        await page.locator("openclaw-terminal-panel").evaluate((element) => {
-          return (element as HTMLElement & { available: boolean }).available;
-        }),
-      ).toBe(false);
+      expect(await page.locator("openclaw-terminal-panel").count()).toBe(0);
     });
   });
 
@@ -154,12 +153,7 @@ suite.define(() => {
 
       expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
       await gateway.waitForRequest("connect");
-      await page.waitForFunction(() => {
-        const panel = document.querySelector("openclaw-terminal-panel") as
-          | (HTMLElement & { available: boolean })
-          | null;
-        return panel?.available === true;
-      });
+      await waitForControlUiTerminalReady(page);
       await page.evaluate(() => {
         window.dispatchEvent(
           new CustomEvent("openclaw:terminal-toggle", {
@@ -207,12 +201,7 @@ suite.define(() => {
       expect((await page.goto(`${suite.server.baseUrl}new`))?.status()).toBe(200);
       await gateway.waitForRequest("connect");
       await page.locator(".new-session-page__message").waitFor();
-      await page.waitForFunction(() => {
-        const panel = document.querySelector("openclaw-terminal-panel") as
-          | (HTMLElement & { available: boolean })
-          | null;
-        return panel?.available === true;
-      });
+      await waitForControlUiTerminalReady(page);
       await evaluateControlUiContext(page, (context) => {
         context.agentSelection.set("research");
         window.dispatchEvent(

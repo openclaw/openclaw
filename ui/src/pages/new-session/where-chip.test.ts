@@ -1,10 +1,14 @@
 /* @vitest-environment jsdom */
 import { expectDefined } from "@openclaw/normalization-core";
+import { createComponent } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
+import type { PopoverHandle } from "../../components/solid/popover.tsx";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { DraftEnvironment } from "./discovery.ts";
-import { renderPicker } from "./where-chip.test-support.ts";
+import { pickerParams, renderPicker } from "./where-chip.test-support.ts";
+import { WhereChip } from "./where-chip.tsx";
 
 function device(id: string, label: string, overrides: Partial<DraftEnvironment> = {}) {
   return {
@@ -56,9 +60,46 @@ function expectIconShape(actual: SVGElement | null, paths: readonly string[]) {
 }
 
 describe("Where chip", () => {
-  it("offers the suggested Cloud profile with its provider icon before adoption", () => {
+  it("loads the menu on first open, focuses its search, and retains it after closing", async () => {
+    const props = pickerParams(true);
+    vi.spyOn(props.params.place.browser, "popoverOpen").mockReturnValue(false);
+    const hostedEnvironments = vi.spyOn(props.params.place.modelControl, "hostedEnvironments");
+    hostedEnvironments.mockClear();
+    let picker: PopoverHandle | undefined;
+    const { container } = mountSolid(() =>
+      createComponent(WhereChip, {
+        ...props,
+        ref: (handle) => {
+          picker = handle;
+        },
+      }),
+    );
+    expect(container.querySelector(".new-session-page__environment-list")).toBeNull();
+    expect(hostedEnvironments).not.toHaveBeenCalled();
+    const trigger = expectDefined(
+      container.querySelector<HTMLButtonElement>("#new-session-where-trigger"),
+      "Where trigger",
+    );
+    trigger.focus();
+    trigger.click();
+    await vi.dynamicImportSettled();
+    await waitForSolid(() =>
+      expect(container.querySelector(".new-session-page__environment-list")).not.toBeNull(),
+    );
+    const search = expectDefined(
+      container.querySelector<HTMLInputElement>('input[type="search"]'),
+      "environment search",
+    );
+    expect(document.activeElement).toBe(search);
+    picker?.hide();
+    picker?.show();
+    expect(container.querySelector('input[type="search"]')).toBe(search);
+    expect(container.querySelector("#new-session-where-trigger")).toBe(trigger);
+  });
+
+  it("offers the suggested Cloud profile with its provider icon before adoption", async () => {
     const onAdoptSuggestedProfile = vi.fn();
-    const container = renderPicker(
+    const container = await renderPicker(
       true,
       undefined,
       { cloudProfiles: [] },
@@ -80,8 +121,8 @@ describe("Where chip", () => {
     { isAdmin: true, profiles: [{ id: "configured", providerId: "crabbox" }] },
   ])(
     "does not offer a suggestion without admin authority or beside configured profiles: %j",
-    ({ isAdmin, profiles }) => {
-      const container = renderPicker(
+    async ({ isAdmin, profiles }) => {
+      const container = await renderPicker(
         isAdmin,
         undefined,
         { cloudProfiles: profiles },
@@ -95,7 +136,7 @@ describe("Where chip", () => {
 
   it("keeps the trigger and focused search through a delayed first catalog read", async () => {
     const completion = createDeferred();
-    const container = renderPicker(
+    const container = await renderPicker(
       true,
       undefined,
       { environments: null, cloudProfiles: [] },
@@ -158,8 +199,8 @@ describe("Where chip", () => {
     ],
   ] as const)(
     "uses the same device outline in the selected row and trigger: %s / %s",
-    (label, platform, form, paths) => {
-      const container = renderPicker(true, undefined, {
+    async (label, platform, form, paths) => {
+      const container = await renderPicker(true, undefined, {
         deviceId: "model-device",
         environments: [device("model-device", label, { platform })],
       });
@@ -175,8 +216,8 @@ describe("Where chip", () => {
     },
   );
 
-  it("places usable devices before disabled devices while preserving each group's order", () => {
-    const container = renderPicker(true, undefined, {
+  it("places usable devices before disabled devices while preserving each group's order", async () => {
+    const container = await renderPicker(true, undefined, {
       environments: [
         device("offline", "Offline", { status: "offline", workerSlots: undefined }),
         device("ready", "Ready"),
@@ -191,8 +232,8 @@ describe("Where chip", () => {
     ).toEqual(["device:ready", "device:ready2", "device:busy", "device:offline"]);
   });
 
-  it("keeps matching Local, Devices and Cloud in order with device facts searchable", () => {
-    const container = renderPicker(
+  it("keeps matching Local, Devices and Cloud in order with device facts searchable", async () => {
+    const container = await renderPicker(
       true,
       undefined,
       {
@@ -215,13 +256,13 @@ describe("Where chip", () => {
     expect(hoverDetails(option(container, "device:alpha"))).toContain("Linux");
   });
 
-  it("keeps explicit destinations selectable while Auto is enabled", () => {
+  it("keeps explicit destinations selectable while Auto is enabled", async () => {
     const onSelectDevice = vi.fn();
     const onSelectCloudProfile = vi.fn();
     const onApplyCloudDefaults = vi.fn();
     const onEnvironmentQueryInput = vi.fn();
     const onConnectMachine = vi.fn();
-    const container = renderPicker(
+    const container = await renderPicker(
       true,
       undefined,
       { autoDevice: true },
@@ -260,8 +301,8 @@ describe("Where chip", () => {
     expect(onConnectMachine).toHaveBeenCalledOnce();
   });
 
-  it("preserves aws while filtering its cloud card from search", () => {
-    const container = renderPicker(
+  it("preserves aws while filtering its cloud card from search", async () => {
+    const container = await renderPicker(
       true,
       undefined,
       {
@@ -294,14 +335,14 @@ describe("Where chip", () => {
     expect(container.querySelector("openclaw-select-picker")).toBeNull();
   });
 
-  it("renders devices for writers while cloud and Connect remain admin-only", () => {
-    const writer = renderPicker(false);
+  it("renders devices for writers while cloud and Connect remain admin-only", async () => {
+    const writer = await renderPicker(false);
     const autoRow = option(writer, "auto-device");
     expect(autoRow?.querySelector(".session-menu__text")?.textContent).toBe("Any available device");
     expect(autoRow?.tagName).toBe("BUTTON");
     expect(autoRow?.getAttribute("aria-pressed")).toBe("false");
     expect(hoverDetails(autoRow)).toContain("Chooses the least-busy connected device");
-    const remoteExec = renderPicker(false, "eligible-order");
+    const remoteExec = await renderPicker(false, "eligible-order");
     expect(hoverDetails(option(remoteExec, "auto-device"))).toContain(
       "Chooses the first eligible connected device",
     );
@@ -313,14 +354,14 @@ describe("Where chip", () => {
     expect(option(writer, "cloud:aws")).toBeNull();
     expect(writer.querySelector('[data-action="connect-machine"]')).toBeNull();
 
-    const admin = renderPicker(true);
+    const admin = await renderPicker(true);
     expect(option(admin, "device:runner")).not.toBeNull();
     expect(option(admin, "cloud:aws")).not.toBeNull();
     expect(admin.querySelector('[data-action="connect-machine"]')).not.toBeNull();
   });
 
-  it("disables device placements when the selected runtime cannot dispatch to devices", () => {
-    const container = renderPicker(true, undefined, {
+  it("disables device placements when the selected runtime cannot dispatch to devices", async () => {
+    const container = await renderPicker(true, undefined, {
       environments: [device("macbook", "MacBook", { workerSlots: { total: 1, available: 1 } })],
       cloudProfiles: [],
       deviceDisabledReason: "This runtime does not support paired devices",
@@ -352,20 +393,27 @@ describe("Where chip", () => {
       ],
       reason: /openclaw update.*openclaw node restart/i,
     },
-  ])("disables automatic selection with an actionable reason when $name", ({ issues, reason }) => {
-    const container = renderPicker(false, undefined, {
-      environments: [
-        device("other", "Other", { status: "offline", sessionHost: false, workerSlots: undefined }),
-        device("macbook", "MacBook", { sessionHost: false, workerSlots: undefined, issues }),
-      ],
-      cloudProfiles: [],
-    });
+  ])(
+    "disables automatic selection with an actionable reason when $name",
+    async ({ issues, reason }) => {
+      const container = await renderPicker(false, undefined, {
+        environments: [
+          device("other", "Other", {
+            status: "offline",
+            sessionHost: false,
+            workerSlots: undefined,
+          }),
+          device("macbook", "MacBook", { sessionHost: false, workerSlots: undefined, issues }),
+        ],
+        cloudProfiles: [],
+      });
 
-    const automatic = option(container, "auto-device");
-    expect(automatic?.disabled).toBe(true);
-    expect(hoverDetails(automatic)).toMatch(reason);
-    expect(automatic?.querySelector(".session-menu__description")).toBeNull();
-  });
+      const automatic = option(container, "auto-device");
+      expect(automatic?.disabled).toBe(true);
+      expect(hoverDetails(automatic)).toMatch(reason);
+      expect(automatic?.querySelector(".session-menu__description")).toBeNull();
+    },
+  );
 
   it.each([
     {
@@ -385,8 +433,8 @@ describe("Where chip", () => {
       reason:
         "Authorize codex.exec-server.stdio.v1 in the Gateway node command policy, or pick another device.",
     },
-  ])("$name", ({ workerSlots, invocableCommands, state, disabled, reason, label }) => {
-    const container = renderPicker(true, undefined, {
+  ])("$name", async ({ workerSlots, invocableCommands, state, disabled, reason, label }) => {
+    const container = await renderPicker(true, undefined, {
       environments: [
         device("runner", "Build runner", {
           workerSlots,

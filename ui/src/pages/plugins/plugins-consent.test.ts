@@ -88,6 +88,7 @@ function createConsentHarness(
       closeDetails: () => {},
       applyMutationResult,
       refreshCatalogAfterMutation: refreshCatalog,
+      presentMutation: ({ result: pending }) => pending,
       onChange: () => {},
     });
   });

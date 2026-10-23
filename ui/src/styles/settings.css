@@ -238,7 +238,7 @@ openclaw-appearance-background .settings-background-preview .session-background_
 }
 
 .content-header + .settings-workspace,
-.settings-workspace__body > * + * {
+.settings-workspace__body > :where(:not(:first-child)) {
   margin-top: var(--space-5);
 }
 

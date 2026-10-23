@@ -224,7 +224,6 @@ async function agentCommandInternalOwned(
       sessionStateActor.actorType === "human" &&
       !isSubagentLane &&
       !opts.internalEvents?.length &&
-      opts.bootstrapContextRunKind !== "heartbeat" &&
       opts.bootstrapContextRunKind !== "cron"
     ) {
       releaseForeground = await beginForegroundSessionMaintenance(sessionKey ?? sessionId);
@@ -346,7 +345,13 @@ async function agentCommandInternalOwned(
               isCompletionCurrent(current) &&
               (isSessionRollover
                 ? current?.sessionId === initialEntry.sessionId
-                : shouldPersistRestartRecoveryContextClaim(current, sessionId, runId, allowCreate))
+                : shouldPersistRestartRecoveryContextClaim(
+                    current,
+                    sessionId,
+                    runId,
+                    allowCreate,
+                    entry,
+                  ))
             );
           },
         });

@@ -77,6 +77,10 @@ export function createProps(overrides: SkillsTestOverrides = {}): SkillsProps {
   };
   return {
     readClawHubVerdicts: () => state.clawhubVerdicts,
+    get mutationSkills() {
+      return state.skillsReport?.skills ?? [];
+    },
+    saving: false,
     readClawHubDetail: () => {
       if (state.clawhubDetailError) {
         throw new Error(state.clawhubDetailError);

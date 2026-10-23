@@ -164,11 +164,15 @@ describe("native PR provisioning diagnostics", () => {
       const report = result.stderr.split("\n").find((line) => line.startsWith('{"error":'));
       expect(report, result.stderr).toBeDefined();
       const out = JSON.parse(report!);
-      expect(out.outcome, report).toEqual({ kind: "store-unavailable", reason: "storage-error" });
+      expect(out.outcome, report).toBeUndefined();
       expect(out.error.nodes).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ code: "OPENCLAW_STATE_LEASE_STORAGE_FAILED" }),
           expect.objectContaining({ code: "ERR_SQLITE_ERROR", errcode: 26 }),
+        ]),
+      );
+      expect(out.error.nodes).not.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ code: "OPENCLAW_STATE_LEASE_STORAGE_FAILED" }),
         ]),
       );
       expect(readFileSync(database, "utf8")).toBe(corrupt);

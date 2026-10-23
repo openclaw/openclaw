@@ -20,7 +20,7 @@ import {
   resolveCappedMessageId,
   resolveSourceMessageId,
 } from "../chat-message-recovery.ts";
-import { persistedMessageEntryId } from "../chat-thread.ts";
+import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import {
   registerMessageActionElements,
   type MessageActionElements,

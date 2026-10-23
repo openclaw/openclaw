@@ -15,7 +15,7 @@ import {
 } from "../../test-helpers/gateway-client.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { questionPanelIn } from "../chat/components/chat-question-card.test-support.ts";
-import "./question-page-registration.ts";
+import "./question-page.tsx";
 
 type QuestionPage = HTMLElementTagNameMap["openclaw-question-page"];
 const answers = { answers: { audience: ["The design team"] } };

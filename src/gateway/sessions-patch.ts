@@ -59,7 +59,6 @@ import { projectCanonicalSessionEntryShape } from "../config/sessions/store-entr
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeExecTarget } from "../infra/exec-approvals.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
   isSubagentSessionKey,
   normalizeAgentId,
@@ -90,7 +89,10 @@ import {
 import { invalidSessionRequest as invalid } from "./session-request-error.js";
 import { validateSessionPatchAdmission } from "./sessions-patch-admission.js";
 import { applySessionContextWindowPatch } from "./sessions-patch-context-window.js";
-import { applySessionsPatchDisplayMetadata } from "./sessions-patch-display-metadata.js";
+import {
+  applySessionsPatchDisplayMetadata,
+  isSessionIconColorOnlyPatch,
+} from "./sessions-patch-display-metadata.js";
 import { applySessionPatchLifecycleFlags } from "./sessions-patch-lifecycle-flags.js";
 import { applySessionsPatchSubagentPolicy } from "./sessions-patch-subagent-policy.js";
 
@@ -107,7 +109,6 @@ type SessionPatchProjectionParams = {
   /** Trusted catalog runtime must own selection checks before the new row is persisted. */
   preparedAgentRuntime?: string;
   archivedBy?: SessionEntry["archivedBy"];
-  providerAuthMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
   /** Exact harness owner authorized to project its new reserved session row. */
   authorizedAgentHarnessId?: string;
   personalModelSelection?: UserModelAccountSelection;
@@ -273,10 +274,10 @@ function* projectSessionPatchSteps(
 
   const existing =
     params.existingEntry && projectCanonicalSessionEntryShape({ ...params.existingEntry });
-  // A read acknowledgement is not session activity: ageing the row here would move a
-  // just-opened session to the top of recency order, so only the read state commits.
-  const unreadAckOnly = isSessionUnreadAckOnlyPatch(patch);
-  const nextUpdatedAt = unreadAckOnly
+  // A read acknowledgement or an icon/color change is not session activity: ageing the
+  // row here would move the session to the top of recency order, so only the patch commits.
+  const recencyNeutral = isSessionUnreadAckOnlyPatch(patch) || isSessionIconColorOnlyPatch(patch);
+  const nextUpdatedAt = recencyNeutral
     ? (existing?.updatedAt ?? now)
     : Math.max(existing?.updatedAt ?? 0, now);
   // Existing entries without session ids are placeholder aliases; assigning an id makes them real.
@@ -642,9 +643,6 @@ function* projectSessionPatchSteps(
         explicitDefaultSelection: selection.isDefault,
         profileOverride: selection.profile,
         recordedProvider,
-        ...(params.providerAuthMetadataSnapshot
-          ? { metadataSnapshot: params.providerAuthMetadataSnapshot }
-          : {}),
         markLiveSwitchPending: statusModelPatch || raw !== null,
       });
       if (raw === null && !statusModelPatch) {

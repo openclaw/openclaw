@@ -27,6 +27,8 @@ import type { SkillWorkshopRunOptions } from "./tools/skill-workshop-tool-factor
 
 /** Options shared by the coding-tool factory and its OpenClaw tool surface. */
 export type OpenClawSharedToolsOptions = {
+  /** Creator policy retained by the scheduled session owner. */
+  scheduledToolPolicy?: import("./scheduled-tool-policy.js").ScheduledToolPolicyContext;
   /** Complete model-discoverable catalog, prepared by the current host. */
   installedSkills?: readonly InstalledSkill[];
   skillsSnapshot?: SkillSnapshot;

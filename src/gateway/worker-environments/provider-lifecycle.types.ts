@@ -119,6 +119,7 @@ export type WorkerProviderLifecycleOptions = Omit<
   ) => Promise<T>;
   callProvider: <T>(
     environmentId: string,
+    operationName: string,
     run: () => Promise<T>,
     timeoutMs?: number,
     observationSignal?: AbortSignal,

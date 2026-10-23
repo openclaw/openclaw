@@ -316,6 +316,28 @@ it.runIf(!isWin)(
   },
 );
 
+it.each<[Record<string, string>, string | undefined]>([
+  [{ POWERSHELL_DISTRIBUTION_CHANNEL: "synthetic", BASH_VERSION: "5" }, "pwsh"],
+  [{ BASH_VERSION: "5", ZSH_VERSION: "5" }, "bash"],
+  [{ ZSH_VERSION: "5", FISH_VERSION: "4" }, "zsh"],
+  [{ FISH_VERSION: "4", KSH_VERSION: "1" }, "fish"],
+  [{ KSH_VERSION: "1", NU_VERSION: "1" }, "ksh"],
+  [{ NU_VERSION: "1", NUSHELL_VERSION: "1" }, "nu"],
+  [{ NUSHELL_VERSION: "1" }, "nu"],
+  [{ BASH_VERSION: "", ZSH_VERSION: "5" }, "zsh"],
+  [{}, undefined],
+])("detectRuntimeShell preserves runtime hint precedence: %j", (hints, expected) => {
+  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+  for (const key of runtimeHints) {
+    delete process.env[key];
+  }
+  vi.stubEnv("SHELL", "");
+  for (const [key, value] of Object.entries(hints)) {
+    vi.stubEnv(key, value);
+  }
+  expect(detectRuntimeShell()).toBe(expected);
+});
+
 const ps51 = "System32/WindowsPowerShell/v1.0/powershell.exe";
 it.each([
   {

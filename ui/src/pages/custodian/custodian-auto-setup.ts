@@ -52,12 +52,16 @@ export class CustodianAutoSetup {
     },
     onBackgroundCompletion: (completion) => this.finishSignIn(completion),
     requestFailedMessage: () => t("custodian.autoSetup.failed"),
-    cancelledMessage: () => t("custodian.cancel"),
+    cancelledMessage: () => t("modelSetup.wizard.cancelled"),
     sessionExpiredMessage: () => t("modelSetup.wizard.sessionExpired"),
     gatewayNotRespondingMessage: () => t("modelSetup.wizard.gatewayNotResponding"),
   });
 
   constructor(private readonly changed: () => void) {}
+
+  get operationEpoch(): number {
+    return this.epoch;
+  }
 
   get ready(): boolean {
     return this.result?.status === "configured" || this.result?.status === "activated";

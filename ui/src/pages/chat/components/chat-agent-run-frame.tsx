@@ -75,7 +75,7 @@ function FrameBody(props: {
   const [readParent, setParent] = createSignal<HTMLElement | null>(null, { ownedWrite: true });
   const ranges = new Map<string, PartRange>();
   const retire = (range: PartRange) => {
-    // Lit descendants must park their widgets while the range is still connected.
+    // Native descendants must park their widgets while the range is still connected.
     range.dispose();
     const after = range.end.nextSibling;
     for (let node: Node | null = range.start; node && node !== after;) {

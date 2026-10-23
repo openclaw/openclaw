@@ -96,9 +96,7 @@ export class NewSessionPageOwner {
 
   retainedForHandoff: object | null = null;
   openedFor: string | null = null;
-  readonly critterImport = createIdleImport(
-    () => import("../../components/lobster-pet.runtime.ts"),
-  );
+  readonly critterImport = createIdleImport(() => import("../../components/lobster-pet.tsx"));
   openedGroupDefaults = "";
   openedAgentId = "";
   messageOwnerKey = "";

@@ -6,7 +6,7 @@ import {
   normalizeChatFollowUpMode,
   normalizeChatSendShortcut,
   UI_APPEARANCE_DEFAULTS,
-} from "../../app/settings.ts";
+} from "../../app/settings-contract.ts";
 import { Picker } from "../../components/select-picker.ts";
 import {
   SettingsDefaultDescription,
@@ -330,6 +330,8 @@ export function ChatPreferencesSection(props: ConfigProps) {
           setting={"send-shortcut"}
           description={
             <>
+              {t("chat.sendShortcutHint")}
+              <br />
               {sendShortcutDefaultDescription} {sendShortcutProvenance()}
             </>
           }

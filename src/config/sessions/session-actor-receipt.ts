@@ -102,7 +102,6 @@ export function createSessionActorCommittedOutcome<
       conversationPublication: params.conversationPublication,
       pendingInputReceipt: turn?.custody ?? append?.value.pendingInputReceipt,
       pendingInputMutationReceipt: applied.pendingInputMutationReceipt,
-      pendingFinalDelivery: structuredClone(after.entry?.pendingFinalDelivery),
       reducers: applied.reducers,
       postimage: after,
     },

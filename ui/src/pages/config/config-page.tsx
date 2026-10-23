@@ -212,7 +212,7 @@ export function ConfigPage(props: ConfigPageProps) {
     <openclaw-config-page ref={(element) => (host = element)}>
       <Show when={props.pageId !== "memory"}>
         <SettingsPageHeader
-          title={titleForRoute(props.pageId)}
+          title={titleForRoute(props.pageId, t)}
           subtitle={renderConfigPageSubtitle(props.pageId)}
         />
       </Show>

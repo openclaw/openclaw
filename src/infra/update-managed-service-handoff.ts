@@ -647,7 +647,7 @@ async function collectUpdateFailureTriage() {
     const recovery = typeof triageFailure.restored === "boolean"
       ? "Service recovery " + (triageFailure.restored ? "succeeded." : "failed.")
       : "Service recovery outcome was not recorded; inspect the handoff log before restarting.";
-    failure.error = [failure.error, recovery].filter(Boolean).join("\n");
+    failure.error = [failure.error, recovery, triageFailure.recoveryReason].filter(Boolean).join("\n");
     // Keep the canonical export intact even when installed triage cannot start.
     // Only this private annotated input is removed with the helper's other files.
     fs.writeFileSync(params.triageInputPath, JSON.stringify(failure), { mode: 0o600, flag: "wx" });
@@ -922,6 +922,7 @@ async function collectUpdateFailureTriage() {
     const childStatus = !exit.signal && resultRoot === params.updateLeaseKey && ["error", "skipped"].includes(result?.status) ? result.status : undefined;
     if (childStatus) closedUpdateResult = result;
     const recovery = childStatus ? result.recovery : null;
+    if (triageFailure && recovery?.service) triageFailure.restored = recovery.service === "healthy";
     const safe = !exit.signal && recovery?.serviceRestartSafe === true &&
       typeof recovery.version === "string" && recovery.version.trim() &&
       (recovery.buildId === undefined ? result.mode !== "git" :
@@ -962,7 +963,6 @@ async function collectUpdateFailureTriage() {
       if (restorationArmed && safe && recovery.service === undefined) {
         restored = await restoreGatewayService(previousGeneration ? result.reason : "managed-service-handoff-failed", recovery, childStatus, previousGeneration);
       } else {
-        if (restorationArmed && restored && triageFailure) triageFailure.restored = true;
         appendLog("managed update recovery not attempted: " +
           (recovery?.serviceRestartSafe === false ? "updater explicitly rejected activation" :
             recovery?.service === "healthy" ? "updater already verified recovery" :

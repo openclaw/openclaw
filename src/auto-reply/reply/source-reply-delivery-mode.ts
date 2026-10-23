@@ -96,7 +96,7 @@ export function resolveSourceReplyDeliveryMode(params: {
 export function resolveSourceReplyExpectation(params: {
   ctx: SourceReplyDeliveryModeContext;
   cfg: OpenClawConfig;
-  isHeartbeat?: boolean;
+  scheduledAutomation?: boolean;
 }): ReplyExpectation {
   const commandExpectation = resolveCommandReplyExpectation({
     cfg: params.cfg,
@@ -110,7 +110,7 @@ export function resolveSourceReplyExpectation(params: {
   if (
     isSyntheticSourceReplyTurn({
       inputProvenance: params.ctx.InputProvenance,
-      isHeartbeat: params.isHeartbeat,
+      scheduledAutomation: params.scheduledAutomation,
     })
   ) {
     return "optional";
@@ -153,6 +153,7 @@ export function resolveFollowupReplyExpectation(queued: FollowupRun, cfg: OpenCl
         InputProvenance: queued.run.inputProvenance,
       },
       cfg,
+      scheduledAutomation: queued.run.scheduledAutomation !== undefined,
     })
   );
 }
@@ -160,6 +161,7 @@ export function resolveFollowupReplyExpectation(queued: FollowupRun, cfg: OpenCl
 export function resolveSourceReplyVisibilityPolicy(params: {
   cfg: OpenClawConfig;
   ctx: SourceReplyDeliveryModeContext;
+  scheduledAutomation?: boolean;
   requested?: SourceReplyDeliveryMode;
   strictMessageToolOnly?: boolean;
   sendPolicy: SessionSendPolicyDecision;
@@ -175,13 +177,12 @@ export function resolveSourceReplyVisibilityPolicy(params: {
    */
   sessionStableMessageToolAvailable?: boolean;
   defaultVisibleReplies?: "automatic" | "message_tool";
-  isHeartbeat?: boolean;
 }) {
   const sourceReplyDeliveryMode = resolveSourceReplyDeliveryMode(params);
   const hasStableTurnOverride =
     !isSyntheticSourceReplyTurn({
       inputProvenance: params.ctx.InputProvenance,
-      isHeartbeat: params.isHeartbeat,
+      scheduledAutomation: params.scheduledAutomation,
     }) &&
     (params.requested !== undefined || isExplicitCommandTurnContext(params.ctx, params.cfg));
   const sessionStableSourceReplyDeliveryMode = hasStableTurnOverride

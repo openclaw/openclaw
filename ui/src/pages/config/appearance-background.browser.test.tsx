@@ -1,6 +1,6 @@
 import { createRouter, definePage } from "@openclaw/uirouter";
 import { createSignal } from "solid-js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   DEFAULT_BACKGROUND_PREFERENCE,
   type BackgroundPreference,
@@ -9,13 +9,14 @@ import type { UsersBackgroundResult } from "../../../../packages/gateway-protoco
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { RouteId } from "../../app-route-paths.ts";
-import type { ApplicationContext, ApplicationTheme } from "../../app/context.ts";
+import { createApplicationTheme } from "../../app/bootstrap-theme.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import { RouterOutlet } from "../../app/router-outlet.tsx";
 import {
   rememberProfileAppearanceIdentity,
   resetProfileAppearancePrefs,
 } from "../../app/server-prefs-profile.ts";
-import { loadSettings } from "../../app/settings.ts";
+import { loadSettings, patchSettings } from "../../app/settings.ts";
 import type { SessionBackground } from "../../components/session-background.tsx";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -26,6 +27,7 @@ import {
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { AppearanceBackground } from "./appearance-background.tsx";
+import { createConfigRouteContext } from "./config-page.test-support.ts";
 import {
   AppearanceBackground as BackgroundView,
   type AppearanceBackgroundView as BackgroundViewProps,
@@ -66,22 +68,13 @@ async function mount(
       selfUser: { id: "background-demo" },
     });
   }
-  const notifications = new EventTarget();
-  const subscribe = (type: string) => (listener: () => void) => {
-    notifications.addEventListener(type, listener);
-    return () => notifications.removeEventListener(type, listener);
-  };
-  const notify = (type: string) => notifications.dispatchEvent(new Event(type));
-  const settings = {
-    ...loadSettings(),
+  const settings = patchSettings({
+    gatewayUrl: gateway.gateway.connection.gatewayUrl,
+    themeMode: "dark",
     background: { ...DEFAULT_BACKGROUND_PREFERENCE, ...preference },
-  };
-  const theme: Pick<ApplicationTheme, "settings" | "resolvedMode" | "refresh" | "subscribe"> = {
-    settings,
-    resolvedMode: "dark",
-    refresh: () => notify("theme"),
-    subscribe: subscribe("theme"),
-  };
+  });
+  const theme = createApplicationTheme(settings, gateway.gateway);
+  onTestFinished(() => theme.dispose());
   const backgroundModule = { renderSolid: AppearanceBackground };
   const router = createRouter<RouteId, ApplicationContext, typeof backgroundModule>({
     routes: [
@@ -97,18 +90,18 @@ async function mount(
       }),
     ],
   });
-  const contextFixture: Pick<ApplicationContext, "gateway" | "router"> & {
-    runtimeConfig: Pick<ApplicationContext["runtimeConfig"], "canPatch"> & {
-      state: Pick<ApplicationContext["runtimeConfig"]["state"], "connected">;
-    };
-    theme: typeof theme;
-  } = {
+  const applicationFixture = createConfigRouteContext();
+  const context: ApplicationContext = {
+    ...applicationFixture,
     gateway: gateway.gateway,
-    runtimeConfig: { state: { connected: true }, canPatch: true },
+    runtimeConfig: {
+      ...applicationFixture.runtimeConfig,
+      state: { ...applicationFixture.runtimeConfig.state, connected: true },
+      canPatch: true,
+    },
     theme,
     router,
   };
-  const context = contextFixture as ApplicationContext;
   const provider = createSolidApplicationContextProvider(context);
   host.innerHTML = '<div class="config-content"><div class="settings-page"></div></div>';
   const container = host.querySelector<HTMLElement>(".settings-page")!;
@@ -132,8 +125,6 @@ async function mount(
     range,
     preview,
     gateway,
-    settings,
-    theme,
     context,
     navigate: () => void router.navigate("usage", context),
     leavePage: () => router.navigate("usage", context),
@@ -282,20 +273,26 @@ it.each([
 );
 
 it("passes live preferences to the shared renderer without enabling disabled placement", async () => {
-  const { range, preview, settings, theme } = await mount({ ...disabledPlacement, visibility: 0 });
+  const { range, preview } = await mount({ ...disabledPlacement, visibility: 0 });
   activate(range);
   await preview.updateComplete;
   expect(preview.preferenceOverride?.visibility).toBe(0);
   expect(preview.querySelector(".session-background__image")).toBeNull();
-  settings.background = { ...settings.background, visibility: 0.8 };
-  theme.refresh();
+  patchSettings({
+    background: { ...DEFAULT_BACKGROUND_PREFERENCE, ...loadSettings().background, visibility: 0.8 },
+  });
   flush();
   await preview.updateComplete;
   expect(preview.preferenceOverride).toMatchObject({ ...disabledPlacement, visibility: 0.8 });
   expect(range.getAttribute("aria-valuetext")).toBe("80%");
   expect(preview.querySelector(".session-background__image")).not.toBeNull();
-  settings.background = { ...settings.background, source: { kind: "none" } };
-  theme.refresh();
+  patchSettings({
+    background: {
+      ...DEFAULT_BACKGROUND_PREFERENCE,
+      ...loadSettings().background,
+      source: { kind: "none" },
+    },
+  });
   flush();
   expect(preview.presented).toBe(false);
 });
@@ -547,7 +544,7 @@ it("dismisses metadata errors on a local choice and retires reads across profile
         ? abandoned.promise
         : Promise.resolve({ status: "ok", asset: null, preference: null });
   });
-  const { element, gateway, range, settings, theme } = await mount(
+  const { element, gateway, range } = await mount(
     { source: { kind: "custom", assetId: "metadata-old" } },
     createTestGatewayClient(request),
   );
@@ -558,21 +555,15 @@ it("dismisses metadata errors on a local choice and retires reads across profile
       "Synthetic metadata failure",
     ),
   );
-  const refreshTheme = theme.refresh;
-  const refresh = vi.spyOn(theme, "refresh").mockImplementation(() => {
-    // Mirror the real theme owner adopting a locally persisted choice.
-    settings.background = loadSettings().background ?? DEFAULT_BACKGROUND_PREFERENCE;
-    refreshTheme();
-  });
   element.querySelector<HTMLButtonElement>('[data-background-source="theme"]')!.click();
   await waitForSolid(() => {
     expect(reads).toBe(2);
     expect(element.querySelector('[role="alert"]')).toBeNull();
   });
-  refresh.mockRestore();
   gateway.publish({ ...gateway.gateway.snapshot, selfUser: { id: "replacement-demo" } });
-  settings.background = { ...settings.background, visibility: 0.8 };
-  theme.refresh();
+  patchSettings({
+    background: { ...DEFAULT_BACKGROUND_PREFERENCE, ...loadSettings().background, visibility: 0.8 },
+  });
   await waitForSolid(() => {
     expect(reads).toBe(3);
     expect(range.getAttribute("aria-valuetext")).toBe("80%");

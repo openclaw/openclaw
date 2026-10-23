@@ -69,12 +69,14 @@ function healthSnapshot(stateDir: string, overrides: Partial<HealthSummary> = {}
 function createHealthReader(
   snapshot: HealthSummary,
   getEventLoopHealth?: () => HealthSummary["eventLoop"],
+  getReadiness?: import("../server/readiness.js").ReadinessChecker,
 ) {
   const context = {
     getHealthCache: () => snapshot,
     refreshHealthSnapshot: vi.fn(async () => snapshot),
     getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
     getEventLoopHealth,
+    getReadiness,
     logHealth: { error: vi.fn() },
   };
   return async (probe = false) => {
@@ -92,6 +94,25 @@ function createHealthReader(
 }
 
 describe("Gateway status owner routing", () => {
+  it.each([false, true])("publishes live core readiness with probe=%s", async (probe) => {
+    await withStateDirEnv("health-core-readiness-", async ({ stateDir }) => {
+      let coreReady = false;
+      const readHealth = createHealthReader(
+        healthSnapshot(stateDir, { coreReady: true }),
+        undefined,
+        () => ({
+          ready: coreReady,
+          coreReady,
+          failing: coreReady ? [] : ["chat-recovery"],
+          uptimeMs: 1,
+        }),
+      );
+      expect((await readHealth(probe)).mock.calls[0]?.[1]).toMatchObject({ coreReady: false });
+      coreReady = true;
+      expect((await readHealth(probe)).mock.calls[0]?.[1]).toMatchObject({ coreReady: true });
+    });
+  });
+
   it("omits an agent deleted while the final worker-pool read is pending", async () => {
     await withOpenClawTestState({ label: "status-worker-pool-publication" }, async (state) => {
       const config: OpenClawConfig = {

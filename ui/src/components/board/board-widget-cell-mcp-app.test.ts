@@ -2,15 +2,19 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import type { BoardWidgetAppViewState } from "../../lib/board/view-types.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { testId, boardWidget } from "./board-view.test-support.ts";
+import type {
+  BoardWidgetCellCallbacks,
+  BoardWidgetCellProps,
+} from "./board-widget-cell-options.ts";
 import {
   callbacks,
   cleanupCells,
   mountCell,
   mountElement,
 } from "./board-widget-cell.test-support.ts";
-import type { BoardWidgetCellCallbacks, BoardWidgetCellProps } from "./board-widget-cell.ts";
-import "./board-widget-cell.ts";
+import "./board-widget-cell.solid.tsx";
 
 class TestMcpAppView extends HTMLElement {
   sessionKey = "";
@@ -133,7 +137,8 @@ afterEach(() => {
 describe("board MCP App cell lifecycle", () => {
   it("admits one action per tick and restores controls after it fails", async () => {
     const removal = deferred();
-    const remove = vi.fn(() => removal.promise);
+    const retry = deferred();
+    const remove = vi.fn().mockReturnValueOnce(removal.promise).mockReturnValueOnce(retry.promise);
     const cell = await mount(
       { remove },
       { widget: widget({ contentKind: "html", grantState: "pending" }) },
@@ -149,8 +154,38 @@ describe("board MCP App cell lifecycle", () => {
     removal.reject(new Error("Removal failed"));
     await settle(cell);
 
-    expect(testId(cell, "board-widget-action-error")?.textContent).toContain("Removal failed");
+    await waitForSolid(() =>
+      expect(testId(cell, "board-widget-action-error")?.textContent).toContain("Removal failed"),
+    );
     expect(allow.disabled).toBe(false);
+    cell.selectMenuItem("remove");
+    await settle(cell);
+    expect(testId(cell, "board-widget-action-error")).toBeNull();
+    expect(cell.querySelector('[data-test-id="board-grant-allow"]')).toBe(allow);
+    expect(allow.disabled).toBe(true);
+    retry.reject(new Error("Retry failed differently"));
+    await settle(cell);
+    expect(allow.disabled).toBe(false);
+    await waitForSolid(() =>
+      expect(testId(cell, "board-widget-action-error")?.textContent).toContain(
+        "Retry failed differently",
+      ),
+    );
+  });
+
+  it("does not publish an old action failure into a replacement widget", async () => {
+    const removal = deferred();
+    const current = widget({ contentKind: "html", grantState: "pending" });
+    const cell = await mount({ remove: () => removal.promise }, { widget: current });
+    cell.selectMenuItem("remove");
+    await settle(cell);
+    await update(cell, { widget: { ...current, name: "replacement" } });
+    removal.reject(new Error("Retired widget failed"));
+    await settle(cell);
+    expect(testId(cell, "board-widget-action-error")).toBeNull();
+    expect(
+      cell.querySelector<HTMLButtonElement>('[data-test-id="board-grant-allow"]')?.disabled,
+    ).toBe(false);
   });
 
   it.each([
@@ -173,7 +208,7 @@ describe("board MCP App cell lifecycle", () => {
       const error = () => testId(cell, "board-widget-action-error");
       cell.selectMenuItem("remove");
       await settle(cell);
-      expect(error()?.textContent).toContain("Removal failed");
+      await waitForSolid(() => expect(error()?.textContent).toContain("Removal failed"));
 
       await update(cell, { widget: { ...current, title: "Updated title" }, active: false });
       expect(error()?.textContent).toContain("Removal failed");

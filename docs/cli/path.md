@@ -164,6 +164,9 @@ all four slots:
   other backslash escapes are rejected. The file slot is
   also quote-aware: `oc://"skills/email-drafter"/Tools/$last` treats
   `skills/email-drafter` as a single file path.
+  Use `""` for an empty-string object key in JSONC, JSONL, or YAML, for example
+  `oc://sample.jsonc/""/value`. It is distinct from a missing segment and is not
+  an array index.
 - **Predicates** — `[k=v]`, `[k!=v]`, `[k<v]`, `[k<=v]`, `[k>v]`, `[k>=v]`.
   Numeric operators require both sides to coerce to finite numbers.
 - **Unions** — `{a,b,c}` matches any of the alternatives.
@@ -238,6 +241,8 @@ depending on the per-kind AST shape.
   `yaml` package's document API for map/sequence updates. Malformed YAML
   documents with parser errors are refused before mutation with
   `parse-error`.
+  Leaf replacement through object-valued mapping keys, such as YAML 1.1
+  timestamp keys, is refused with `unresolved` and leaves the file unchanged.
 
 Use `--dry-run` before user-visible writes when the exact bytes matter. JSONC
 and YAML edits patch the existing document (via `jsonc-parser` or the `yaml`
@@ -523,6 +528,10 @@ openclaw path emit ./gateway.jsonc --json
 `openclaw path` is TTY-aware: human-readable output on a terminal, JSON when
 stdout is piped or redirected. `--json` and `--human` override the
 auto-detection.
+
+Path/file parse errors and refused patterns in JSON mode write one error object to stdout, with `ok: false`
+and an `error` containing `type: "cli_error"`, the domain `code`, and `message`.
+Human-mode diagnostics remain on stderr. Refusals still return a nonzero exit code.
 
 ## Notes
 

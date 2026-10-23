@@ -16,18 +16,14 @@ import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-sessio
 import { formatUiError } from "../../lib/format-error.ts";
 import { formatMs, formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { searchVisibleSessionTranscripts } from "../../lib/sessions/transcript-search.ts";
+import type { TranscriptSearchResult, TranscriptSearchState } from "./transcript-search.ts";
 
 registerSessionOrganizationEnglish();
 
 registerCommandPaletteEnglish();
 
-type TranscriptSearchResult = Awaited<ReturnType<typeof searchVisibleSessionTranscripts>>;
-
-export type TranscriptSearchProps = {
+export type TranscriptSearchProps = TranscriptSearchState & {
   transcriptSearchAvailable: boolean;
-  transcriptSearchQuery: string;
-  transcriptSearch: Promise<TranscriptSearchResult | null> | null;
   onTranscriptSearchChange: (query: string) => void;
   onTranscriptSearch: () => void;
   onClearTranscriptSearch: () => void;

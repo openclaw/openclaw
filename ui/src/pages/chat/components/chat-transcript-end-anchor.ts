@@ -112,9 +112,11 @@ export class TranscriptEndAnchor {
         ? previousOffset
         : before;
     const correction = { before: beforeResize, after: element.scrollTop, resumeFollow };
-    if (previousMax !== max || correction.before !== correction.after) {
+    // A native return can reach the old end before the viewport itself resizes.
+    if (resumeFollow || previousMax !== max || correction.before !== correction.after) {
       publishTranscriptScroll(element, {
         type: "resize",
+        resumeFollow,
         viewport: {
           clientHeight: element.clientHeight,
           scrollHeight: element.scrollHeight,

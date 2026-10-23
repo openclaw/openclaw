@@ -294,13 +294,16 @@ export async function createRenderedPage(
   statusFilter: "active" | "archived" | "all" = "active",
   expandedSessionKey: string | null = null,
 ): Promise<TestSessionsPage> {
-  const query = buildSessionsListQuery(context, {
-    limit: 50,
-    includeGlobal: true,
-    includeUnknown: false,
-    statusFilter,
-    deepLinkSessionKey: expandedSessionKey,
-  });
+  const query = buildSessionsListQuery(
+    context.agentSelection.state.scopeId,
+    {
+      limit: "50",
+      includeGlobal: true,
+      includeUnknown: false,
+      statusFilter,
+    },
+    expandedSessionKey,
+  );
   const publish = managedListPublishers.get(context.sessions);
   if (publish) {
     publish(query, { result, agentId: query.agentId ?? null, loading: false, error: null });

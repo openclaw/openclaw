@@ -143,10 +143,9 @@ export function wrapStreamFnWithSessionFork(
       onPayload,
       onResponse: _onResponse,
       onActiveResponse: _onActiveResponse,
-      headers,
-      ...requestOptions
+      ...savedOptions
     } = options ?? {};
-    const savedOptions = { ...requestOptions, headers: safeHeaders(headers) };
+    savedOptions.headers = safeHeaders(savedOptions.headers);
     // Internal symbol carriers belong to the parent run, not the independent request.
     for (const key of Object.getOwnPropertySymbols(savedOptions)) {
       Reflect.deleteProperty(savedOptions, key);

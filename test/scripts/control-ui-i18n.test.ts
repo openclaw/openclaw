@@ -35,6 +35,7 @@ import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { configHintTranslationKey } from "../../ui/src/i18n/lib/config-hint-translation.ts";
 import { registerCodeBlocksEnglish } from "../../ui/src/i18n/locales/en-code-blocks.ts";
 import { registerLabsEnglish } from "../../ui/src/i18n/locales/en-labs.ts";
+import { registerNewSessionRuntimeEnglish } from "../../ui/src/i18n/locales/en-new-session-runtime.ts";
 import { registerSettingsEnglish } from "../../ui/src/i18n/locales/en-settings.ts";
 import { registerTranscriptsEnglish } from "../../ui/src/i18n/locales/en-transcripts.ts";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
@@ -308,6 +309,7 @@ describe("control-ui-i18n generated ownership", () => {
     for (const fragment of [
       registerCodeBlocksEnglish.catalog,
       registerLabsEnglish.catalog,
+      registerNewSessionRuntimeEnglish.catalog,
       registerSettingsEnglish.catalog,
       registerTranscriptsEnglish.catalog,
     ]) {

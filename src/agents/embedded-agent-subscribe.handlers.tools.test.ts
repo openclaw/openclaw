@@ -395,7 +395,9 @@ describe("handleToolExecutionStart read path checks", () => {
           );
         } else {
           await expect(outcome).resolves.toMatchObject({
-            error: new Error("credential-request prompt delivery failed"),
+            error: expect.objectContaining({
+              message: expect.stringContaining("Open a trusted Control UI or native app and retry"),
+            }),
           });
           expect(gatewayCall).toHaveBeenCalledWith(
             "question.resolve",

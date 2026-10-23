@@ -115,7 +115,7 @@ async function restartReply(
   let drains = 0;
   const reply = await handleReplyAgentRunError(new Error("Backend stopped"), {
     resolveVisibleReplyDelivery: async () => false,
-    isHeartbeat: false,
+
     replyExpectation: "required",
     isRestartRecoveryArmed: controller.isArmed,
     replyOperation: operation,
@@ -259,6 +259,7 @@ it.each([
       let assertBoundary: () => void;
       try {
         if (stage === "cold-registration") {
+          operation.abortForRestart();
           await fixture.releaseDatabase();
           await closeOpenClawAgentDatabasesAsync();
           clearOpenClawAgentDatabaseValidationCache();
@@ -280,7 +281,6 @@ it.each([
             expect(witnessed).toBe(1);
             expect(readEntry()).toMatchObject({ sessionId: "old-session" });
           };
-          operation.abortForRestart();
         } else {
           const read = entryReads.readSessionEntryInWorker;
           const reads = vi.spyOn(entryReads, "readSessionEntryInWorker");

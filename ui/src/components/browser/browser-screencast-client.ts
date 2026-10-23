@@ -1,5 +1,6 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGatewayWebSocketUrl } from "../../lib/gateway-websocket-url.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 
 export type BrowserScreencastMeta = { url: string; title: string };
 export type BrowserScreencastFrame = {
@@ -26,19 +27,17 @@ export class BrowserScreencastClient {
   constructor(private readonly options: BrowserScreencastOptions) {
     this.socket = new WebSocket(resolveGatewayWebSocketUrl(options.wsPath, options.gatewayUrl));
     this.socket.binaryType = "arraybuffer";
-    this.socket.addEventListener("message", (event) => this.receive(event.data), {
-      signal: this.events.signal,
-    });
-    this.socket.addEventListener("close", ({ code, reason }) => this.finish(code, reason), {
-      signal: this.events.signal,
-    });
-    this.socket.addEventListener(
+    const listenerOptions = { signal: this.events.signal };
+    listen(this.socket, "message", (event) => this.receive(event.data), listenerOptions);
+    listen(this.socket, "close", ({ code, reason }) => this.finish(code, reason), listenerOptions);
+    listen(
+      this.socket,
       "error",
       () => {
         this.finish(1006, "");
         this.socket.close();
       },
-      { signal: this.events.signal },
+      listenerOptions,
     );
   }
 

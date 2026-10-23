@@ -1404,12 +1404,12 @@
   margin-block-start: inherit;
 }
 
-.chat-text > * + *,
-.chat-text > * + .markdown-external-image {
+.chat-text > :where(:not(:first-child)),
+.chat-text > .markdown-external-image:where(:not(:first-child)) {
   margin-block-start: var(--chat-block-gap);
 }
 
-.chat-text > * + :where(h1, h2, h3, h4) {
+.chat-text > :where(h1, h2, h3, h4):where(:not(:first-child)) {
   margin-block-start: calc(var(--chat-block-gap) * 1.5);
 }
 

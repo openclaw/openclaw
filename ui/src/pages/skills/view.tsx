@@ -51,7 +51,7 @@ function skillStatus(skill: SkillStatusEntry): Exclude<SkillsStatusFilter, "all"
 }
 
 function skillControlsLocked(view: SkillsProps): boolean {
-  return view.loading || view.state.skillOperation !== null;
+  return view.saving || view.loading || view.state.skillOperation !== null;
 }
 
 function skillInstallLocked(view: SkillsProps): boolean {
@@ -67,7 +67,7 @@ export function Skills(props: SkillsProps) {
     return receipt?.completion ?? Promise.resolve({ value, error: null });
   });
   // Toolbar counts and selection stay available outside the inventory's first-load boundary.
-  const acceptedSkills = createMemo(() => acceptedReport()?.skills ?? []);
+  const skills = createMemo(() => props.mutationSkills);
   const readError = () => {
     const outcome = latest(read);
     const error = outcome.error ?? props.error;
@@ -82,12 +82,12 @@ export function Skills(props: SkillsProps) {
       : t("skillsPage.empty");
   const statusCounts = createMemo(() => {
     const counts: Record<SkillsStatusFilter, number> = {
-      all: acceptedSkills().length,
+      all: skills().length,
       ready: 0,
       "needs-setup": 0,
       disabled: 0,
     };
-    for (const skill of acceptedSkills()) {
+    for (const skill of skills()) {
       counts[skillStatus(skill)]++;
     }
     return counts;
@@ -106,11 +106,11 @@ export function Skills(props: SkillsProps) {
         )
       : afterStatus;
   };
-  const acceptedFiltered = createMemo(() => filterSkills(acceptedSkills()));
+  const acceptedFiltered = createMemo(() => filterSkills(skills()));
   const groups = createMemo(() => groupSkills(acceptedFiltered()));
   const detailSkill = createMemo(() =>
     props.state.skillsDetailKey
-      ? (acceptedSkills().find((skill) => skill.skillKey === props.state.skillsDetailKey) ?? null)
+      ? (skills().find((skill) => skill.skillKey === props.state.skillsDetailKey) ?? null)
       : null,
   );
   return (

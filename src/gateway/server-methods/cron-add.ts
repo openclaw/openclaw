@@ -214,7 +214,12 @@ export const cronAddHandler: GatewayRequestHandler = async ({
 
           enabledExplicit,
           ...creatorOptions,
-          ...(commandCreation.creation ? { pluginCommand: commandCreation.creation.envelope } : {}),
+          ...(commandCreation.creation
+            ? {
+                pluginCommand: commandCreation.creation.envelope,
+                pluginCommandSourceDigest: commandCreation.creation.sourceDigest,
+              }
+            : {}),
           commitGuard,
           ...(capture ? { captureRuntimeAuthority: capture.captureRuntimeAuthority } : {}),
           matchesExisting: (job) =>

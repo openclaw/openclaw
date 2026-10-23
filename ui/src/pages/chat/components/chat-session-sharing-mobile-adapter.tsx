@@ -16,7 +16,7 @@ import {
   ChatSessionSharingModeIcon,
   projectChatSessionSharingRoster,
   createChatSessionSharingPresentation,
-} from "./chat-session-sharing.solid.tsx";
+} from "./chat-session-sharing-shared.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -207,6 +207,9 @@ export function createChatSessionSharingMobileAdapter(
       },
     },
     sharing: {
+      get pending() {
+        return presentation.busy();
+      },
       get visibility() {
         return visibility();
       },
@@ -216,7 +219,10 @@ export function createChatSessionSharingMobileAdapter(
         return accessReason();
       },
       get error() {
-        return source()?.state?.error ?? presentation.error();
+        return source()?.state?.error;
+      },
+      get completion() {
+        return presentation.completion();
       },
       get publicLink() {
         return source()?.onPublicShareChange ? publicLink : undefined;
@@ -256,7 +262,10 @@ export function createChatSessionSharingMobileAdapter(
         return accessReason();
       },
       get error() {
-        return source()?.state?.error ?? presentation.error();
+        return source()?.state?.error;
+      },
+      get completion() {
+        return presentation.completion();
       },
       onVisibilityChange: async (value) => {
         const current = source();

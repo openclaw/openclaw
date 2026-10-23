@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import { applyMergePatch } from "../../../src/config/merge-patch.js";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { pickerValue, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
+import { sessionsUsageResponse } from "../test-helpers/sessions-usage-response.ts";
 import { agentRoster } from "./agent-roster.test-support.ts";
 import { requireRecord } from "./chat-flow.test-support.ts";
 import { configSnapshot, createConfigSuite } from "./config-composer-fixtures.test-support.ts";
@@ -45,7 +46,7 @@ suite.define(() => {
             "models.list": { models: [], decisionModels },
             "config.get": snapshot(),
             "usage.status": { updatedAt: 1, providers: [] },
-            "sessions.usage": { aggregates: { byProvider: [] } },
+            "sessions.usage": sessionsUsageResponse(),
           },
         });
         const commitConfig = async (method: "config.patch" | "config.set") => {

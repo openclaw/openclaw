@@ -330,6 +330,23 @@ function prepareAttachment(
   };
 }
 
+function createAttachmentPresentation(
+  props: Parameters<typeof prepareAttachment>[0],
+  fallback?: "card",
+) {
+  const refreshAttachment = () => void refresh(model);
+  const model = createMemo(() => {
+    observeChatMediaResourceSubscriber(props.options.mediaOwner, refreshAttachment);
+    return prepareAttachment({
+      ...props,
+      presentation: props.presentation ?? fallback,
+      options: { ...props.options, onMediaChange: refreshAttachment },
+    });
+  });
+  onCleanup(() => releaseChatMediaResourceOwner(refreshAttachment));
+  return model;
+}
+
 function AttachmentContent(
   props: AttachmentProps & {
     item: AttachmentItem;
@@ -337,15 +354,7 @@ function AttachmentContent(
     admission?: AttachmentAdmission;
   },
 ): SolidJSX.Element {
-  const refreshAttachment = () => void refresh(model);
-  const model = createMemo(() => {
-    observeChatMediaResourceSubscriber(props.options.mediaOwner, refreshAttachment);
-    return prepareAttachment({
-      ...props,
-      options: { ...props.options, onMediaChange: refreshAttachment },
-    });
-  });
-  onCleanup(() => releaseChatMediaResourceOwner(refreshAttachment));
+  const model = createAttachmentPresentation(props);
   const attachment = () => model().attachment;
   const unavailable = () =>
     !model().pastedText &&
@@ -558,16 +567,7 @@ function AttachmentActionContent(
     render: (action: () => MessageMediaAction) => SolidJSX.Element;
   },
 ): SolidJSX.Element {
-  const refreshAttachment = () => void refresh(model);
-  const model = createMemo(() => {
-    observeChatMediaResourceSubscriber(props.options.mediaOwner, refreshAttachment);
-    return prepareAttachment({
-      ...props,
-      presentation: "card",
-      options: { ...props.options, onMediaChange: refreshAttachment },
-    });
-  });
-  onCleanup(() => releaseChatMediaResourceOwner(refreshAttachment));
+  const model = createAttachmentPresentation(props, "card");
   const action = createMemo<MessageMediaAction>(() => ({
     pending: !model().resolved || model().resolved?.status === "checking",
     reason:

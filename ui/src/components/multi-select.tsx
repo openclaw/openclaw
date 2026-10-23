@@ -7,6 +7,7 @@ import { createOverlayAnchor } from "./overlay-anchor.ts";
 import { createOverlay, findOverlayParent } from "./overlay-lifecycle.ts";
 import { Icon } from "./solid/icon.tsx";
 import { useMenuMachine } from "./solid/menu-machine.ts";
+import { MenuNavigationError } from "./solid/menu-navigation-error.tsx";
 import { useOverlayControl } from "./solid/overlay-control.ts";
 import { ProviderBrandIcon } from "./solid/provider-icon.tsx";
 import "./solid/overlay.css";
@@ -104,7 +105,7 @@ export function MultiSelect(initial: Partial<MultiSelectProps> & { class?: strin
       props.onChange([...props.value, ...additions]);
     }
     setQuery("");
-    menu.service.send({ type: "HIGHLIGHTED.SET", value: null });
+    menu.setHighlightedValue(null);
   };
   const select = (value: string) => {
     const row = rows().find((item) => item.value === value);
@@ -125,8 +126,8 @@ export function MultiSelect(initial: Partial<MultiSelectProps> & { class?: strin
     },
   );
   const activeId = () => {
-    const value = menu.read().highlightedValue;
-    return value ? menu.read().getItemProps({ value }).id : undefined;
+    const value = menu.highlightedValue();
+    return value ? menu.itemId(value) : undefined;
   };
   const openMenu = () => {
     if (!props.disabled && !overlay.open) {
@@ -243,7 +244,7 @@ export function MultiSelect(initial: Partial<MultiSelectProps> & { class?: strin
           value={query()}
           disabled={props.disabled}
           onInput={(event) => {
-            menu.service.send({ type: "HIGHLIGHTED.SET", value: null });
+            menu.setHighlightedValue(null);
             setQuery(event.currentTarget.value);
             openMenu();
           }}
@@ -262,6 +263,7 @@ export function MultiSelect(initial: Partial<MultiSelectProps> & { class?: strin
         id={`${id}-content`}
         aria-label={label()}
       >
+        <MenuNavigationError binding={menu} />
         <For each={rows()}>
           {(row) => {
             const itemRef = menu.itemRef();
@@ -271,7 +273,7 @@ export function MultiSelect(initial: Partial<MultiSelectProps> & { class?: strin
                 ref={itemRef}
                 class="multi-select__option"
                 role="option"
-                aria-selected={menu.read().highlightedValue === row.value ? "true" : "false"}
+                aria-selected={menu.highlightedValue() === row.value ? "true" : "false"}
                 aria-disabled={row.disabled ? "true" : "false"}
                 data-value={row.value}
                 data-custom={row.custom ? "" : undefined}

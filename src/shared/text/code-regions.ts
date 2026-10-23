@@ -74,13 +74,14 @@ export function findCodeOwnership(
   text: string,
   options?: Parameters<typeof parseMarkdownOwnership>[1],
 ) {
-  const { regions, retainStart, completedParagraphs, paragraphs, definitions } =
+  const { regions, retainStart, completedParagraphs, paragraphs, definitions, textSpans } =
     parseMarkdownOwnership(text, options);
   return {
     regions,
     retainStart,
     completedParagraphs,
     definitions,
+    textSpans,
     ...(paragraphs ? { paragraphs } : {}),
   };
 }

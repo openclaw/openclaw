@@ -12,6 +12,7 @@ import {
 import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
 import { emitChildProcessSpawnSample } from "../process/spawn-diagnostics.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { captureDiagnosticSessionOperation } from "./diagnostic-controller-projection.js";
 import { reconcileDiagnosticGcObserver, stopDiagnosticGcObserver } from "./diagnostic-gc.js";
 import {
   DEFAULT_LIVENESS_EVENT_LOOP_DELAY_WARN_MS,
@@ -31,7 +32,6 @@ import { emitMessageProcessedDiagnosticEvent } from "./diagnostic-message-conten
 import { getCurrentDiagnosticPhase, getRecentDiagnosticPhases } from "./diagnostic-phase.js";
 import {
   getDiagnosticSessionActivitySnapshot,
-  resolveRunStaleThresholdMs,
   startDiagnosticRunActivityTracking,
   stopDiagnosticRunActivityTracking,
   type DiagnosticSessionActivitySnapshot,
@@ -44,7 +44,6 @@ import {
 } from "./diagnostic-runtime.js";
 import {
   classifySessionAttention,
-  isRepeatedModelRequestStalled,
   isTerminalDiagnosticProgressReason,
   type SessionAttentionClassification,
 } from "./diagnostic-session-attention.js";
@@ -115,7 +114,7 @@ type StartDiagnosticHeartbeatOptions = {
   sampleLiveness?: SampleDiagnosticLiveness;
   recoverStuckSession?: RecoverStuckSession;
   startupGraceMs?: number;
-  /** Keeps fake-timer recovery tests fast without reopening runtime config tuning. */
+  /** Bounds diagnostic reporting in tests, never the controller-owned watchdog policy. */
   testTimings?: {
     stuckSessionWarnMs: number;
     stuckSessionAbortMs: number;
@@ -296,51 +295,6 @@ function resolveStuckSessionAbortMs(stuckSessionWarnMs: number): number {
   return Math.max(
     MIN_STALLED_EMBEDDED_RUN_ABORT_MS,
     stuckSessionWarnMs * STALLED_EMBEDDED_RUN_ABORT_WARN_MULTIPLIER,
-  );
-}
-
-function isActiveAbortRecoveryEligible(params: {
-  classification: SessionAttentionClassification | undefined;
-  activity?: DiagnosticSessionActivitySnapshot;
-  stuckSessionAbortMs: number;
-}): boolean {
-  const { activity, classification, stuckSessionAbortMs } = params;
-  const lastProgressAgeMs = activity?.lastProgressAgeMs;
-  if (
-    !activity ||
-    classification?.eventType !== "session.stalled" ||
-    lastProgressAgeMs === undefined
-  ) {
-    return false;
-  }
-  if (
-    classification.classification === "blocked_tool_call" &&
-    classification.activeWorkKind === "tool_call"
-  ) {
-    const abortMs = resolveRunStaleThresholdMs(activity, lastProgressAgeMs, stuckSessionAbortMs);
-    return (
-      activity.activeToolAgeMs !== undefined &&
-      lastProgressAgeMs >= abortMs &&
-      (activity.activeToolDeadlineAtMs !== undefined || activity.activeToolAgeMs >= abortMs)
-    );
-  }
-  if (classification.classification !== "stalled_agent_run") {
-    return false;
-  }
-  // Repeated requests can be stalled while a tool owns the current phase.
-  // Transport liveness must not replace that independent semantic evidence.
-  if (isRepeatedModelRequestStalled(activity, stuckSessionAbortMs)) {
-    return true;
-  }
-  const modelAllowanceExpired =
-    activity.activeModelCallRequestTimeoutMs === undefined ||
-    lastProgressAgeMs >= activity.activeModelCallRequestTimeoutMs;
-  return (
-    (classification.activeWorkKind === "model_call" ||
-      classification.activeWorkKind === "embedded_run") &&
-    lastProgressAgeMs >=
-      resolveRunStaleThresholdMs(activity, lastProgressAgeMs, stuckSessionAbortMs) &&
-    modelAllowanceExpired
   );
 }
 
@@ -732,6 +686,7 @@ export function startGatewayDiagnosticHeartbeat(
       ) {
         continue;
       }
+      const operation = captureDiagnosticSessionOperation(observation);
       const activity = getDiagnosticSessionActivitySnapshot(observation, recoveryObservationNow);
       // Also detect orphaned activity (model_call or tool_call left behind
       // without an active embedded owner) so recovery can pump the stale queue.
@@ -749,9 +704,7 @@ export function startGatewayDiagnosticHeartbeat(
         (observation.expectedState === "processing" && attentionAgeMs > stuckSessionWarnMs) ||
         idleQueuedRecoverableStall
       ) {
-        function logSessionAttention():
-          | { classification: SessionAttentionClassification; allowActiveAbort: boolean }
-          | undefined {
+        function logSessionAttention(): SessionAttentionClassification | undefined {
           if (!areDiagnosticsEnabledForProcess()) {
             return undefined;
           }
@@ -764,16 +717,7 @@ export function startGatewayDiagnosticHeartbeat(
             stuckSessionAbortMs,
             runtimeOwnsLiveness: recoveryBlocker === "runtime_owned_wait",
           });
-          const allowActiveAbort = isActiveAbortRecoveryEligible({
-            classification,
-            activity,
-            stuckSessionAbortMs,
-          });
-          const eligibleRecovery =
-            classification.recoveryEligible || allowActiveAbort
-              ? { classification, allowActiveAbort }
-              : undefined;
-          // Warning backoff throttles reports, never recovery justified by this observation.
+          // Warning backoff throttles reports, never the captured controller's own decision.
           const warningAgeField =
             classification.eventType === "session.stuck"
               ? "lastStuckWarnAgeMs"
@@ -787,7 +731,7 @@ export function startGatewayDiagnosticHeartbeat(
                 ? stuckSessionWarnMs
                 : Math.max(lastWarnAgeMs + stuckSessionWarnMs, lastWarnAgeMs * 2);
             if (attentionAgeMs < nextWarnAgeMs) {
-              return eligibleRecovery;
+              return classification;
             }
             state[warningAgeField] = attentionAgeMs;
           }
@@ -816,7 +760,7 @@ export function startGatewayDiagnosticHeartbeat(
                   classification.activeWorkKind
                     ? ` activeWorkKind=${classification.activeWorkKind}`
                     : ""
-                }${detailFields ? ` ${detailFields}` : ""} recovery=${eligibleRecovery ? "checking" : "none"}`;
+                }${detailFields ? ` ${detailFields}` : ""} recovery=${operation ? "controller_owned" : "state_reconciliation"}`;
               },
             });
           }
@@ -869,22 +813,22 @@ export function startGatewayDiagnosticHeartbeat(
             });
           }
           markActivity();
-          return eligibleRecovery;
+          return classification;
         }
-        const recovery = logSessionAttention();
-        if (!recovery || shouldDeferRecovery) {
+        const classification = logSessionAttention();
+        if (!classification || shouldDeferRecovery) {
           continue;
         }
         requestStuckSessionRecovery({
           recover: opts?.recoverStuckSession ?? recoverStuckSession,
-          classification: recovery.classification,
+          classification,
           request: {
             ...observation,
             ageMs: attentionAgeMs,
-            ...(recovery.allowActiveAbort
-              ? { allowActiveAbort: true }
-              : { staleActiveProgressAbortMs: stuckSessionAbortMs }),
-            ...(recovery.classification.reason === "repeated_model_requests_without_progress"
+            operation,
+            // SDK callback fields describe this observation, not recovery authority.
+            staleActiveProgressAbortMs: stuckSessionAbortMs,
+            ...(classification.reason === "repeated_model_requests_without_progress"
               ? { repeatedRequestNoProgressAbortMs: stuckSessionAbortMs }
               : {}),
             compactionSafetyTimeoutMs,

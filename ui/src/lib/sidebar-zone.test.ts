@@ -1,8 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { SIDEBAR_NAV_ROUTES } from "../app-navigation.ts";
+import { SIDEBAR_NAV_ROUTES, personalSessionPinKeys } from "../app-navigation.ts";
 import { reconcileSidebarZone } from "./sidebar-zone.ts";
 
 describe("reconcileSidebarZone", () => {
+  it("persists a sidebar pin and independent rail shortcut for the same session", () => {
+    const entries = ["session:agent:main:alpha", "session-rail:agent:main:alpha"];
+    const result = reconcileSidebarZone(entries, [{ key: "agent:main:alpha" }], SIDEBAR_NAV_ROUTES);
+    expect(result.sidebarEntries).toEqual(entries);
+    expect(result.entries).toEqual([
+      { type: "session", key: "agent:main:alpha" },
+      { type: "session", key: "agent:main:alpha", rail: true },
+    ]);
+    expect([...personalSessionPinKeys(result.sidebarEntries)]).toEqual(["agent:main:alpha"]);
+    expect([...personalSessionPinKeys(entries.slice(1))]).toEqual([]);
+  });
   it("retains personal session refs without importing global pins", () => {
     const result = reconcileSidebarZone(
       ["session:agent:main:stale", "route:usage", "session:agent:main:alpha"],

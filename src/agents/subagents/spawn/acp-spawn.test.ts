@@ -134,11 +134,6 @@ vi.mock("../../../config/config.js", () => ({ getRuntimeConfig: () => hoisted.st
 // mock-isolation: Capture Gateway calls without connecting to an operator Gateway.
 vi.mock("../../../gateway/call.js", () => ({ callGateway: hoisted.callGatewayMock }));
 
-// mock-isolation: Spawn tests do not start or inspect live heartbeat services.
-vi.mock("../../../infra/heartbeat-wake.js", () => ({
-  areHeartbeatsEnabled: () => true,
-}));
-
 // mock-isolation: Keep captured requester identity with the fixture's synthetic session store.
 vi.mock("../../../auto-reply/reply/session-event-handoff.js", () => ({
   captureSessionEventTargetForHost: async (agentId: string, sessionKey: string) => ({
@@ -410,11 +405,7 @@ function mockSessionStore(entries: Record<string, SessionEntry> = {}) {
   );
 }
 
-function configureHeartbeatParent(sessionKey: string, envelope: Partial<SessionEntry> = {}) {
-  const cfg = hoisted.state.cfg;
-  cfg.agents = {
-    defaults: { ...cfg.agents?.defaults, heartbeat: { every: "30m", target: "last" } },
-  };
+function configureParentDelivery(sessionKey: string, envelope: Partial<SessionEntry> = {}) {
   mockSessionStore({
     [sessionKey]: {
       sessionId: "parent-sess-1",
@@ -1092,8 +1083,8 @@ describe("spawnAcpDirect", () => {
     expectRecordFields(await spawn(), { status: "forbidden" });
   });
 
-  it("implicitly streams mode=run ACP spawns for subagent requester sessions", async () => {
-    const context = configureHeartbeatParent("agent:main:subagent:parent");
+  it("implicitly streams mode=run ACP spawns for subagent requesters without heartbeat configuration", async () => {
+    const context = configureParentDelivery("agent:main:subagent:parent");
     const firstHandle = createRelayHandle(new Promise<void>(() => {}));
     const secondHandle = createRelayHandle();
     hoisted.startAcpSpawnParentStreamRelayMock
@@ -1130,7 +1121,7 @@ describe("spawnAcpDirect", () => {
   });
 
   it("does not implicitly stream for ACP requester sessions inside a subagent envelope", async () => {
-    const context = configureHeartbeatParent("agent:main:acp:child", {
+    const context = configureParentDelivery("agent:main:acp:child", {
       spawnedBy: "agent:main:subagent:parent",
       spawnDepth: 1,
       subagentRole: "orchestrator",

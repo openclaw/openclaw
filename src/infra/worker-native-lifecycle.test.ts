@@ -118,9 +118,14 @@ function startSupervisor() {
   const replies: NativeWorkerReply[] = [];
   const waiters = new Set<() => void>();
   let exitCode: number | undefined;
+  let failure: Error | undefined;
   const notify = () => waiters.forEach((wake) => wake());
   port1.on("message", (reply: NativeWorkerReply) => {
     replies.push(reply);
+    notify();
+  });
+  supervisor.once("error", (error) => {
+    failure = error;
     notify();
   });
   supervisor.once("exit", (code) => {
@@ -133,15 +138,13 @@ function startSupervisor() {
     exitCode: () => exitCode,
     post: (request: NativeWorkerRequest, transfers: Transferable[] = []) =>
       port1.postMessage(request, transfers),
-    until(done: () => boolean, label: string) {
+    until(done: () => boolean) {
       return new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => {
-          waiters.delete(check);
-          reject(new Error(`Timed out waiting for ${label}: ${JSON.stringify(replies)}`));
-        }, 10_000);
         const check = () => {
-          if (done() || exitCode !== undefined) {
-            clearTimeout(timer);
+          if (failure) {
+            waiters.delete(check);
+            reject(failure);
+          } else if (done() || exitCode !== undefined) {
             waiters.delete(check);
             resolve();
           }
@@ -187,23 +190,22 @@ it("keeps the supervisor alive when a resource attachment endpoint is rejected s
     createRequest(1, { resource: { workerDataKey: "resource", attachment }, taskPort: task.port2 }),
     [task.port2],
   );
-  await supervisor.until(() => types(1).includes("execution-exit"), "failed child join");
+  await supervisor.until(() => types(1).includes("stop-error"));
   task.port1.close();
 
   expect(supervisor.exitCode()).toBeUndefined();
-  expect(types(1)).toEqual(expect.arrayContaining(["created", "error", "execution-exit"]));
-  expect(types(1)).not.toContain("create-error");
+  expect(types(1)).toEqual(["created", "error", "execution-exit", "stop-error"]);
   const failure = supervisor.replies.find((reply) => reply.id === 1 && reply.type === "error");
   expect(failure).toMatchObject({
-    error: { name: "RangeError", message: expect.stringContaining("Received 70000") },
+    error: { name: "RangeError", code: "ERR_SOCKET_BAD_PORT" },
   });
 
   supervisor.post(createRequest(2));
-  await supervisor.until(() => types(2).includes("created"), "sibling creation");
+  await supervisor.until(() => types(2).includes("created"));
   supervisor.post({ type: "post", id: 2, value: "ping", transferList: [] });
-  await supervisor.until(() => types(2).includes("message"), "sibling round trip");
+  await supervisor.until(() => types(2).includes("message"));
   supervisor.post({ type: "stop", id: 2 });
-  await supervisor.until(() => types(2).includes("stopped"), "sibling stop");
+  await supervisor.until(() => types(2).includes("stopped"));
 
   expect(supervisor.exitCode()).toBeUndefined();
   expect(supervisor.replies).toContainEqual({ type: "message", id: 2, value: "ping" });
