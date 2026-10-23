@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { parseGatewayPayload } from "./server-methods/nodes.helpers.js";
+import { parseGatewayPayload } from "./server-json.js";
 
 it.each<[string | null | undefined, unknown]>([
   [undefined, undefined],

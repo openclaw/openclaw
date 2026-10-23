@@ -7,6 +7,7 @@ import {
   resolveGatewayAssistantAvatar,
 } from "./assistant-avatar.js";
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
+import { resolveControlUiBootstrapPresentation } from "./control-ui-bootstrap-presentation.js";
 import type {
   ControlUiBootstrapConfig,
   ControlUiPluginFrameGrantAck,
@@ -115,18 +116,7 @@ export async function prepareControlUiBootstrapConfig(
         ? (resolveRuntimeServiceBuildId() ?? undefined)
         : undefined,
     devGitBranch: devGitBranch ?? undefined,
-    // Public presentation settings of the Gateway serving the UI, never model permissions.
-    embedSandbox: config?.gateway?.controlUi?.embedSandbox ?? "scripts",
-    allowExternalEmbedUrls: config?.gateway?.controlUi?.allowExternalEmbedUrls === true,
-    automaticallyFetchFavicons: config?.gateway?.controlUi?.automaticallyFetchFavicons !== false,
-    seamColor: config?.ui?.seamColor,
-    environment: config?.gateway?.controlUi?.environment,
-    chatBubblesEnabled: config?.gateway?.controlUi?.experimental?.chatBubbles === true,
-    composerPredictionsEnabled:
-      config?.gateway?.controlUi?.experimental?.composerPredictions?.enabled === true,
-    communityInvite: config?.gateway?.controlUi?.communityInvite !== false,
-    newSessionModelDefaults: config?.gateway?.controlUi?.newSessionModelDefaults ?? "last-used",
-    uploadsEnabled: config?.gateway?.uploads?.enabled !== false,
+    ...resolveControlUiBootstrapPresentation(config),
     terminalEnabled,
     cliAgentsEnabled: config?.gateway?.cliAgents?.enabled !== false,
     pluginAssetsRequireAuth: opts?.auth !== undefined && opts.auth.mode !== "none",

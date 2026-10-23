@@ -1,12 +1,12 @@
 // Covers plugin config policy validation and ownership decisions.
 import { describe, expect, it } from "vitest";
 import { resolvePluginActivationStateShared } from "./config-activation-shared.js";
-import { normalizePluginsConfigWithResolverCore } from "./config-normalization-shared.js";
+import { normalizePluginsConfigWithResolver } from "./config-policy.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
 
-describe("normalizePluginsConfigWithResolverCore", () => {
+describe("normalizePluginsConfigWithResolver", () => {
   it("uses case-normalized resolved identities for allow deny and entry keys", () => {
-    const normalized = normalizePluginsConfigWithResolverCore(
+    const normalized = normalizePluginsConfigWithResolver(
       {
         allow: [" alpha "],
         deny: [" beta "],
@@ -47,7 +47,7 @@ describe("metadata plugin activation policy", () => {
     const params = {
       id: "telegram",
       origin: "bundled" as const,
-      config: normalizePluginsConfigWithResolverCore(rootConfig.plugins),
+      config: normalizePluginsConfigWithResolver(rootConfig.plugins),
       rootConfig,
     };
 

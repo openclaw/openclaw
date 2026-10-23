@@ -1,10 +1,6 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import {
-  getCurrentPluginMetadataSnapshotRequiredRuntime,
-  loadPluginMetadataSnapshotRuntime,
-} from "../../plugins/plugin-metadata-snapshot-required.js";
+import { resolveProviderManagesOwnAvailability } from "../../plugins/provider-availability-policy.js";
 import { isStringOption } from "../../utils/string-readers.js";
 import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
 
@@ -70,19 +66,10 @@ export function isAuthCooldownBypassedForProvider(
   provider: string | undefined,
   reason: AuthProfileFailureReason | undefined,
 ): boolean {
-  if (reason !== "rate_limit" && reason !== "overloaded") {
-    return false;
-  }
-  const providerId = normalizeProviderId(provider ?? "");
-  if (!providerId) {
-    return false;
-  }
-  const snapshot =
-    getCurrentPluginMetadataSnapshotRequiredRuntime({
-      allowScopedSnapshot: true,
-      allowWorkspaceScopedSnapshot: true,
-    }) ?? loadPluginMetadataSnapshotRuntime({ config: getRuntimeConfigSnapshot() ?? {} });
-  return snapshot.owners.providersManagingOwnAvailability?.has(providerId) === true;
+  return (
+    (reason === "rate_limit" || reason === "overloaded") &&
+    resolveProviderManagesOwnAvailability(provider ?? "")
+  );
 }
 
 /** Projects enforced health while preserving stored evidence and permanent failures. */
