@@ -41,11 +41,6 @@ export type EnvelopeFormatOptions = {
   userTimezone?: string;
 };
 
-type ResolvedEnvelopeTimezone =
-  | { mode: "utc" }
-  | { mode: "local" }
-  | { mode: "iana"; timeZone: string };
-
 function sanitizeEnvelopeHeaderPart(value: string): string {
   // Header parts are metadata and must not be able to break the bracketed prefix.
   // Keep ASCII; collapse newlines/whitespace; neutralize brackets.
@@ -64,7 +59,9 @@ export function resolveEnvelopeFormatOptions(cfg?: OpenClawConfig): EnvelopeForm
   };
 }
 
-function resolveEnvelopeTimezone(options?: EnvelopeFormatOptions): ResolvedEnvelopeTimezone {
+function resolveEnvelopeTimezone(
+  options?: EnvelopeFormatOptions,
+): { mode: "utc" } | { mode: "local" } | { mode: "iana"; timeZone: string } {
   const trimmed = normalizeOptionalString(options?.timezone);
   if (!trimmed) {
     return { mode: "local" };

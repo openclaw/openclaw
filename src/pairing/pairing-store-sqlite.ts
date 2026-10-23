@@ -3,6 +3,7 @@
 import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { Selectable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
@@ -13,7 +14,6 @@ import {
 } from "../state/openclaw-state-db.js";
 import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
 import {
-  dedupePreserveOrder,
   resolveAllowFromAccountId,
   resolvePairingRequestAccountId,
   safeChannelKey,
@@ -259,7 +259,7 @@ export function writeChannelPairingStateToDatabase(
   }
   const updatedAt = Date.now();
   for (const [accountId, entries] of Object.entries(state.allowFrom ?? {})) {
-    const normalizedEntries = dedupePreserveOrder(
+    const normalizedEntries = normalizeUniqueStringEntries(
       entries
         .map((entry) => normalizeOptionalString(entry) ?? "")
         .filter((entry) => entry && entry !== "*"),

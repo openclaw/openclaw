@@ -8,24 +8,6 @@ import {
 import { normalizeXaiRealtimeBaseUrl } from "./realtime-voice-config.js";
 import { xaiUserAgentHeaderFor } from "./src/xai-user-agent.js";
 
-type XaiTranscriptionRuntime = Pick<
-  PluginCapabilityCatalogHostContext,
-  | "isProviderAuthProfileConfigured"
-  | "isProviderAuthProfileConfiguredAsync"
-  | "resolveApiKeyForProvider"
-  | "createRealtimeTranscriptionWebSocketSession"
->;
-
-type XaiRealtimeTranscriptionEvent = {
-  type?: string;
-  text?: string;
-  transcript?: string;
-  is_final?: boolean;
-  speech_final?: boolean;
-  error?: unknown;
-  message?: string;
-};
-
 function readErrorDetail(value: unknown): string {
   if (typeof value === "string") {
     return value;
@@ -37,7 +19,13 @@ function readErrorDetail(value: unknown): string {
 }
 
 export function buildXaiRealtimeTranscriptionProvider(
-  runtime: XaiTranscriptionRuntime,
+  runtime: Pick<
+    PluginCapabilityCatalogHostContext,
+    | "isProviderAuthProfileConfigured"
+    | "isProviderAuthProfileConfiguredAsync"
+    | "resolveApiKeyForProvider"
+    | "createRealtimeTranscriptionWebSocketSession"
+  >,
 ): RealtimeTranscriptionProviderPlugin {
   return {
     ...createXaiRealtimeTranscriptionProviderMetadata(runtime),
@@ -58,7 +46,15 @@ export function buildXaiRealtimeTranscriptionProvider(
         callbacks.onTranscript?.(text);
       };
 
-      return runtime.createRealtimeTranscriptionWebSocketSession<XaiRealtimeTranscriptionEvent>({
+      return runtime.createRealtimeTranscriptionWebSocketSession<{
+        type?: string;
+        text?: string;
+        transcript?: string;
+        is_final?: boolean;
+        speech_final?: boolean;
+        error?: unknown;
+        message?: string;
+      }>({
         providerId: "xai",
         callbacks,
         url: () => {
