@@ -112,7 +112,7 @@ it("keeps the PR wrapper inventory closed over runtime imports", () => {
   entrypoints.delete("postgresBridge");
   const forked = closure.flatMap((file) =>
     [...readFileSync(file, "utf8").matchAll(/resolveRuntimeProcessEntrypointUrl\(([^)]*)\)/g)]
-      .flatMap(([, argument]) => [...argument!.matchAll(/"(\w+)"/g)])
+      .flatMap(([, argument]) => Array.from(argument!.matchAll(/"(\w+)"/g)))
       .flatMap(([, name]) => {
         const entry = entrypoints.get(name!);
         return entry ? [posix.join("src/infra", `${entry.sourceWorkerName}.ts`)] : [];
