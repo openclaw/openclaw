@@ -71,7 +71,7 @@ function register(
     backend,
     readRuntime,
     runCommandWithTimeout,
-    prepare: () => backend.prepareExecution?.(executionContext),
+    prepare: () => backend.prepareExecutionV2?.(executionContext),
     args: () =>
       backend.resolveExecutionArgs?.({
         ...executionContext,

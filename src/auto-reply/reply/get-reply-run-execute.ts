@@ -95,8 +95,7 @@ export async function executePreparedReplyRun(
     shouldFollowup,
     hasQueuedFollowups,
     isActive,
-    authProfileId,
-    authProfileIdSource,
+    runtimeAuthSelection,
   } = state;
   const {
     prefixedCommandBody,
@@ -576,8 +575,7 @@ export async function executePreparedReplyRun(
       // them to the subagent fallback ladder like hidden subagent sessions.
       subagentSpawnLineage: (preparedSessionState.sessionEntry?.spawnDepth ?? 0) > 0,
       autoFallbackPrimaryProbe: params.autoFallbackPrimaryProbe,
-      authProfileId,
-      authProfileIdSource,
+      ...runtimeAuthSelection,
       thinkingCatalog,
       thinkLevel: resolvedThinkLevel,
       thinkingExplicit: params.thinkingExplicit,

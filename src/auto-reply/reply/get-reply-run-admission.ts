@@ -3,7 +3,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { clearAutoFallbackPrimaryProbeSelection } from "../../agents/agent-scope.js";
 import { resolveSessionAuthSelection } from "../../agents/auth-profiles/session-override.js";
 import { hasResolvedThinkingCatalogEntry } from "../../agents/thinking-runtime.js";
-import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import {
+  bindConfiguredModelAuthProfileScope,
+  resolveCollapsedSessionAuthPinSource,
+} from "../../config/sessions/auth-profile-override-provenance.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   resolveSessionFilePathCore,
@@ -384,6 +387,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         authProfileIdSource: resolveCollapsedSessionAuthPinSource(
           preparedSessionState.sessionEntry,
         ),
+        configuredPrimaryProvider: undefined,
       };
     }
     const shouldUseEphemeralSession =
@@ -429,9 +433,10 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     return {
       authProfileId: selection?.profileId,
       authProfileIdSource: selection?.source,
+      configuredPrimaryProvider: selection?.configuredPrimaryProvider,
     };
   };
-  let { authProfileId, authProfileIdSource } = await traceRunPhase(
+  let { authProfileId, authProfileIdSource, configuredPrimaryProvider } = await traceRunPhase(
     "reply.resolve_auth_profile",
     () => resolveRuntimeAuthProfile(),
   );
@@ -551,7 +556,8 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         ]),
       refreshPreparedState: async () => {
         preparedSessionState = resolvePreparedSessionState();
-        ({ authProfileId, authProfileIdSource } = await resolveRuntimeAuthProfile());
+        ({ authProfileId, authProfileIdSource, configuredPrimaryProvider } =
+          await resolveRuntimeAuthProfile());
         preparedSessionState = resolvePreparedSessionState();
         // The interrupted run may have changed goal or suggestion state while admission waited.
         refreshInboundContextAfterAdmissionWait();
@@ -569,6 +575,8 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   await traceRunPhase("reply.drain_system_events", () => drainSystemEventBlocks());
   const promptBodies = await rebuildPromptBodies();
 
+  const runtimeAuthSelection = { authProfileId, authProfileIdSource };
+  bindConfiguredModelAuthProfileScope(runtimeAuthSelection, configuredPrimaryProvider);
   return {
     kind: "ready",
     context,
@@ -599,8 +607,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     shouldFollowup,
     hasQueuedFollowups,
     isActive,
-    authProfileId,
-    authProfileIdSource,
+    runtimeAuthSelection,
   } as const;
 }
 

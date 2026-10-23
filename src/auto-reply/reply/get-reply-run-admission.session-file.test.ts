@@ -437,7 +437,10 @@ describe("prepared reply transcript identity", () => {
           modelState: { ...context.params.modelState, operatorModelOverride: true },
         },
       });
-      expect(result).toMatchObject({ kind: "ready", authProfileId: "fixture:turn" });
+      expect(result).toMatchObject({
+        kind: "ready",
+        runtimeAuthSelection: { authProfileId: "fixture:turn" },
+      });
       expect(resolveSessionAuthSelection).toHaveBeenCalledOnce();
       expect(entry.authProfileOverride).toBe("fixture:shared");
     },

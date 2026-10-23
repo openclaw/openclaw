@@ -18,7 +18,7 @@ import {
   resolveMcpLoopbackScopedTools,
 } from "../../gateway/mcp-http.runtime.js";
 import type {
-  CliBackendExecuteContext,
+  CliBackendExecuteContextV2,
   CliBackendPlugin,
 } from "../../plugins/cli-backend.types.js";
 import { readTranscriptMessages } from "../../sessions/user-turn-transcript.test-support.js";
@@ -46,7 +46,7 @@ const nativeSessionId = "f1a63c45-3c40-4395-b97a-e1e43997c587";
 let fixture: ReturnType<typeof createCliRunnerPrepareFixture>;
 const sent: Array<
   Pick<
-    CliBackendExecuteContext,
+    CliBackendExecuteContextV2,
     "args" | "sessionId" | "useResume" | "systemPrompt" | "prompt" | "toolAvailability"
   >
 > = [];
@@ -67,9 +67,9 @@ function installBackend(args?: string[]) {
         // Replace only final provider I/O; config, storage, preparation and
         // session-reusing execution are exercised through their production paths.
         runtimeArtifact: undefined,
-        prepareExecution: async (context) => ({
-          ...(await backend.prepareExecution?.(context)),
-          async *execute(input: CliBackendExecuteContext) {
+        prepareExecutionV2: async (context) => ({
+          ...(await backend.prepareExecutionV2?.(context)),
+          async *execute(input: CliBackendExecuteContextV2) {
             sent.push({
               args: [...input.args],
               sessionId: input.sessionId,

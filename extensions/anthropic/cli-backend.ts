@@ -1,8 +1,8 @@
 import { createHmac, randomBytes } from "node:crypto";
 import type {
-  CliBackendExecuteContext,
+  CliBackendExecuteContextV2,
   CliBackendPlugin,
-  CliBackendPreparedExecution,
+  CliBackendPreparedExecutionV2,
 } from "openclaw/plugin-sdk/cli-backend";
 import {
   CLAUDE_CLI_BACKEND_ID,
@@ -30,7 +30,7 @@ type ClaudeCliAuthCredential =
   | { type: "api_key"; key: string }
   | { type: string };
 
-type ClaudeCliPreparedExecution = CliBackendPreparedExecution & {
+type ClaudeCliPreparedExecution = CliBackendPreparedExecutionV2 & {
   isolatedCompletionEnforced?: true;
   secretInput: {
     fd: 3;
@@ -258,7 +258,7 @@ export function buildAnthropicCliBackend(
       contextWindow === "1m" ? `${modelId}[1m]` : modelId,
     authEpochMode: "profile-only",
     autoSelectAuthProfile: false,
-    prepareExecution: (context) => {
+    prepareExecutionV2: (context) => {
       const prepare = () => {
         const credentialContext = context as typeof context & {
           authCredential?: ClaudeCliAuthCredential;
@@ -270,9 +270,9 @@ export function buildAnthropicCliBackend(
         const cliExecution =
           !isolatedCompletion && context.executionMode === "agent"
             ? {
-                async *execute(executionContext: CliBackendExecuteContext) {
+                async *execute(executionContext: CliBackendExecuteContextV2) {
                   const { executeClaudeCli } = await import("./cli.runtime.js");
-                  executionContext.assertCurrent?.();
+                  executionContext.assertCurrent();
                   yield* executeClaudeCli(executionContext, authInput?.secretInput);
                 },
               }
