@@ -16,7 +16,11 @@ export function ModelProviderLoginView(props: { controller: ModelProviderLogin }
       when={picker()}
       fallback={
         <div onModal-cancel={(event: Event) => event.preventDefault()}>
-          <ModelSetupWizard {...wizard()} />
+          <ModelSetupWizard
+            {...wizard()}
+            busy={props.controller.saving()}
+            doneAction={props.controller.doneAction()}
+          />
         </div>
       }
     >

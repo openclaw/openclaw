@@ -85,13 +85,9 @@ export function resolveVersionFromModuleUrl(moduleUrl: string): string | null {
 export function resolveBinaryVersion(params: {
   moduleUrl: string;
   bundledVersion?: string;
-  fallback?: string;
 }): string {
   return (
-    resolveVersionFromModuleUrl(params.moduleUrl) ||
-    firstNonEmpty(params.bundledVersion) ||
-    params.fallback ||
-    "0.0.0"
+    resolveVersionFromModuleUrl(params.moduleUrl) || firstNonEmpty(params.bundledVersion) || "0.0.0"
   );
 }
 

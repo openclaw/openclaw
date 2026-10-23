@@ -1,6 +1,5 @@
 // @vitest-environment node
 import { expect, it } from "vitest";
-import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
 import type {
   ModelAuthStatusProvider,
   ModelAuthStatusResult,
@@ -55,7 +54,6 @@ function input(
     authStatus: { ts: 1, providers, providerCapabilities },
     models: null,
     providerUsage: null,
-    costByProvider: null,
     ...extra,
   };
 }
@@ -241,7 +239,7 @@ it.each<[string, CardsInput, unknown[]]>([
         configKey: "OpenAI",
         configAuthMode: "api-key",
         credentialProviderIds: ["OpenAI"],
-        hasConfigApiKey: true,
+        configApiKeys: [{ key: "OpenAI", reference: true }],
         profiles: [],
       },
     ],
@@ -274,19 +272,6 @@ it("prefers usage.status snapshots over the auth-status embed", () => {
   ]);
 });
 
-it("attaches local spend through aliases and includes cost-only providers", () => {
-  const totals = { ...createEmptyCostUsageTotals(), totalTokens: 150, totalCost: 0.42 };
-  const cards = build([provider("claude-cli")], {
-    costByProvider: [
-      { provider: "anthropic", count: 3, totals },
-      { provider: "openrouter", count: 1, totals },
-    ],
-  });
-  expect(cards).toMatchObject([
-    { id: "anthropic", localCost: { totalCost: 0.42, totalTokens: 150, messageCount: 3 } },
-    { id: "openrouter" },
-  ]);
-});
 it("keeps a fresh restricted catalog authoritative over a draft", () => {
   const configured = defaults(modelSelection("openai/configured-model"));
   const presentation = resolveDefaultModelPresentation(
@@ -399,8 +384,8 @@ it("reads string and object defaults and preserves disabled utility", () => {
     ),
   ).toEqual({
     providers: [
-      { key: "openai", hasApiKey: true },
-      { key: "anthropic", hasApiKey: false, authMode: "oauth" },
+      { key: "openai", hasApiKey: true, apiKeyReference: false },
+      { key: "anthropic", hasApiKey: false, apiKeyReference: false, authMode: "oauth" },
     ],
     defaults: {
       primary: "openai/main",
@@ -419,4 +404,31 @@ it("offers only unconfigured providers with quick API-key setup", () => {
       ["openai"],
     ),
   ).toEqual([{ id: "anthropic", displayName: "Anthropic" }]);
+});
+
+it("keeps the first usage alias label and the last alias payload", () => {
+  const cards = build([], {
+    providerUsage: {
+      updatedAt: 1,
+      providers: [
+        {
+          provider: "claude-cli",
+          displayName: "First label",
+          windows: [{ label: "old", usedPercent: 10 }],
+        },
+        {
+          provider: "anthropic",
+          displayName: "Later label",
+          windows: [{ label: "latest", usedPercent: 75 }],
+        },
+      ],
+    },
+  });
+  expect(cards).toMatchObject([
+    {
+      id: "anthropic",
+      displayName: "First label",
+      usage: { windows: [{ label: "latest", usedPercent: 75 }] },
+    },
+  ]);
 });

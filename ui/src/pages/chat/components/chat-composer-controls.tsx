@@ -3,6 +3,7 @@ import { Show, createMemo, createUniqueId } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Kbd } from "../../../components/solid/kbd.tsx";
 import { Menu, type MenuEntry, type MenuHandle } from "../../../components/solid/menu.tsx";
+import { isMobileBrowserPlatform } from "../../../lib/browser-platform.ts";
 import { canSubmitBeforeChatHistory } from "../../../lib/chat/commands.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../../lib/solid-native-listener.ts";
@@ -448,7 +449,10 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
   const hasSendableContent = () =>
     hasComposedContent() && props.canSend && !props.sending && !sendDisabledReason();
   const showShortcutTooltip = () =>
-    !props.preparingAttachments && sendStatus() == null && alternateAvailable();
+    !isMobileBrowserPlatform() &&
+    !props.preparingAttachments &&
+    sendStatus() == null &&
+    alternateAvailable();
   const SendAction = () => (
     <openclaw-tooltip
       prop:content={

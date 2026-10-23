@@ -95,25 +95,14 @@ async function runDiscordReactionHandler(params: {
         isPolicyCurrent: policy.isCurrent,
       }
     : params.handlerParams;
-  await handleDiscordReactionEvent({
+  const eventParams = {
     ...handlerParams,
     data: params.data,
     client: params.client,
     action: params.action,
-  });
-}
-
-async function handleDiscordReactionEvent(
-  params: {
-    data: DiscordReactionEvent;
-    client: Client;
-    action: "added" | "removed";
-    cfg: OpenClawConfig;
-    logger: DiscordListenerLogger;
-  } & DiscordReactionRoutingParams,
-) {
+  };
   try {
-    const { data, client, action, botUserId, guildEntries } = params;
+    const { data, client, action, botUserId, guildEntries } = eventParams;
     if (!("user" in data)) {
       return;
     }
@@ -139,7 +128,7 @@ async function handleDiscordReactionEvent(
     const memberRoleIds = Array.isArray(data.rawMember?.roles) ? data.rawMember.roles.slice() : [];
     const reactionMode = guildInfo?.reactionNotifications ?? "own";
     const shouldSkipGuildReactionBeforeChannelFetch = () => {
-      if (reactionMode === "off" || params.groupPolicy === "disabled") {
+      if (reactionMode === "off" || eventParams.groupPolicy === "disabled") {
         return true;
       }
       if (reactionMode !== "allowlist") {
@@ -156,7 +145,7 @@ async function handleDiscordReactionEvent(
         userTag: formatDiscordUserTag(user),
         guildInfo,
         memberRoleIds,
-        allowNameMatching: params.allowNameMatching,
+        allowNameMatching: eventParams.allowNameMatching,
       });
     };
     if (isGuildMessage && shouldSkipGuildReactionBeforeChannelFetch()) {
@@ -181,30 +170,30 @@ async function handleDiscordReactionEvent(
     const authorizeDiscordReactionIngress = async (
       resolvedConfig?: import("./allow-list.js").DiscordChannelConfigResolved | null,
     ): Promise<{ allowed: true } | { allowed: false; reason: string }> => {
-      if (params.isPolicyCurrent?.() === false) {
+      if (eventParams.isPolicyCurrent?.() === false) {
         return { allowed: false, reason: "policy-changed" };
       }
-      if (isDirectMessage && !params.dmEnabled) {
+      if (isDirectMessage && !eventParams.dmEnabled) {
         return { allowed: false, reason: "dm-disabled" };
       }
-      if (isGroupDm && !params.groupDmEnabled) {
+      if (isGroupDm && !eventParams.groupDmEnabled) {
         return { allowed: false, reason: "group-dm-disabled" };
       }
       if (isDirectMessage) {
         const access = await resolveDiscordDmCommandAccess({
-          cfg: params.cfg,
-          accountId: params.accountId,
-          dmPolicy: params.dmPolicy,
-          configuredAllowFrom: params.allowFrom,
+          cfg: eventParams.cfg,
+          accountId: eventParams.accountId,
+          dmPolicy: eventParams.dmPolicy,
+          configuredAllowFrom: eventParams.allowFrom,
           sender: {
             id: user.id,
             name: user.username,
             tag: formatDiscordUserTag(user),
           },
-          allowNameMatching: params.allowNameMatching,
+          allowNameMatching: eventParams.allowNameMatching,
           eventKind: "reaction",
         });
-        if (params.isPolicyCurrent?.() === false) {
+        if (eventParams.isPolicyCurrent?.() === false) {
           return { allowed: false, reason: "policy-changed" };
         }
         if (access.senderAccess.decision !== "allow") {
@@ -214,7 +203,7 @@ async function handleDiscordReactionEvent(
       if (
         isGroupDm &&
         !resolveGroupDmAllow({
-          channels: params.groupDmChannels,
+          channels: eventParams.groupDmChannels,
           channelId: data.channel_id,
           channelName,
           channelSlug,
@@ -229,7 +218,7 @@ async function handleDiscordReactionEvent(
       const channelAllowed = resolvedConfig?.allowed !== false;
       if (
         !isDiscordGroupAllowedByPolicy({
-          groupPolicy: params.groupPolicy,
+          groupPolicy: eventParams.groupPolicy,
           guildAllowlisted: Boolean(guildInfo),
           channelAllowlistConfigured,
           channelAllowed,
@@ -249,7 +238,7 @@ async function handleDiscordReactionEvent(
           name: user.username,
           tag: formatDiscordUserTag(user),
         },
-        allowNameMatching: params.allowNameMatching,
+        allowNameMatching: eventParams.allowNameMatching,
       });
       if (hasAccessRestrictions && !memberAllowed) {
         return { allowed: false, reason: "guild-member-denied" };
@@ -304,7 +293,7 @@ async function handleDiscordReactionEvent(
         channelConfig,
         guildInfo,
         memberRoleIds,
-        allowNameMatching: params.allowNameMatching,
+        allowNameMatching: eventParams.allowNameMatching,
       })
     ) {
       return;
@@ -328,9 +317,9 @@ async function handleDiscordReactionEvent(
     const text = authorLabel ? `${baseText} from ${authorLabel}` : baseText;
     const contextKey = `discord:reaction:${action}:${data.message_id}:${user.id}:${emojiLabel}${data.burst ? ":burst" : ""}`;
     const route = resolveAgentRoute({
-      cfg: params.cfg,
+      cfg: eventParams.cfg,
       channel: "discord",
-      accountId: params.accountId,
+      accountId: eventParams.accountId,
       guildId: data.guild_id ?? undefined,
       memberRoleIds,
       peer: {
@@ -341,6 +330,6 @@ async function handleDiscordReactionEvent(
     });
     enqueueRoutedSystemEvent(text, route, { contextKey });
   } catch (err) {
-    params.logger.error(danger(`discord reaction handler failed: ${String(err)}`));
+    eventParams.logger.error(danger(`discord reaction handler failed: ${String(err)}`));
   }
 }

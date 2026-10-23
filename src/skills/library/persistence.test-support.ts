@@ -46,20 +46,18 @@ export function persistenceFiles(version: "old" | "new" | "orphan"): SkillLibrar
 
 function persistenceEnvironment(root: string): NodeJS.ProcessEnv {
   return {
+    ...Object.fromEntries(
+      ["HOME", "USERPROFILE", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR", "TMPDIR", "TMP", "TEMP"].map(
+        (key) => [key, root],
+      ),
+    ),
     PATH: process.env.PATH,
     SystemRoot: process.env.SystemRoot,
     WINDIR: process.env.WINDIR,
-    HOME: root,
-    USERPROFILE: root,
-    OPENCLAW_HOME: root,
-    OPENCLAW_STATE_DIR: root,
     OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
     OPENCLAW_AGENT_DIR: path.join(root, "agents", "main", "agent"),
     XDG_CONFIG_HOME: path.join(root, "config"),
     XDG_CACHE_HOME: path.join(root, "cache"),
-    TMPDIR: root,
-    TMP: root,
-    TEMP: root,
     NODE_ENV: "test",
   };
 }
@@ -183,15 +181,15 @@ export function readPersistenceDisk(root: string) {
     skillLibrarySelections: SkillLibrarySelection[];
     label?: string;
   };
+  const rows = (table: string, order: string) =>
+    state.prepare(`SELECT * FROM skill_library_${table} ORDER BY ${order}`).all();
   return {
     stateVersion: state.prepare("PRAGMA user_version").get()!.user_version,
     agentVersion: agent.prepare("PRAGMA user_version").get()!.user_version,
-    entries: state.prepare("SELECT * FROM skill_library_entries ORDER BY skill_id").all(),
-    revisions: state
-      .prepare("SELECT * FROM skill_library_revisions ORDER BY skill_id, revision")
-      .all(),
-    events: state.prepare("SELECT * FROM skill_library_events ORDER BY event_id").all(),
-    uploads: state.prepare("SELECT * FROM skill_library_uploads ORDER BY upload_id").all(),
+    entries: rows("entries", "skill_id"),
+    revisions: rows("revisions", "skill_id, revision"),
+    events: rows("events", "event_id"),
+    uploads: rows("uploads", "upload_id"),
     pins: session.skillLibrarySelections,
     label: session.label,
   };

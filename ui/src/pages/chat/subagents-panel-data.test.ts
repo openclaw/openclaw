@@ -73,12 +73,14 @@ function page(
   return { ...sessionsResult(rows, 1), hasMore: false, nextOffset: null, ...extra };
 }
 
-function history(row: GatewaySessionRow, calls = 0): ChatHistoryResult {
-  const messages = Array.from({ length: calls }, (_, index) => ({
-    role: "assistant",
-    runId: "run-1",
-    content: [{ type: "toolCall", id: `call-${index}`, name: "read", arguments: {} }],
-  }));
+function history(row: GatewaySessionRow, calls: number | unknown[] = 0): ChatHistoryResult {
+  const messages = Array.isArray(calls)
+    ? calls
+    : Array.from({ length: calls }, (_, index) => ({
+        role: "assistant",
+        runId: "run-1",
+        content: [{ type: "toolCall", id: `call-${index}`, name: "read", arguments: {} }],
+      }));
   return { sessionId: row.sessionId, messages, hasMore: false, totalMessages: messages.length };
 }
 
@@ -341,14 +343,7 @@ describe("Subagents panel data ownership", () => {
     publish(item);
     expect(view(f)?.activity).toBe(item.meta);
     for (const flag of ["hideFromChannelProgress", "suppressChannelProgress"]) {
-      publish({
-        ...item,
-        itemId: flag,
-        toolCallId: flag,
-        title: "Exec Hidden purpose",
-        meta: "Hidden purpose",
-        [flag]: true,
-      });
+      publish(execItem(flag, "Hidden purpose", { toolCallId: flag, [flag]: true }));
       expect(view(f)?.activity).toBe(item.meta);
     }
     publish({ ...item, progressText: "Public progress" });
@@ -363,17 +358,12 @@ describe("Subagents panel data ownership", () => {
       phase: "end",
       status: "failed",
     });
-    const messages = [
-      { role: "assistant", runId: "previous-run", content: [], activity: [previous] },
-    ];
     const f = rowFixture(
       () => row,
-      () => ({
-        sessionId: row.sessionId,
-        messages,
-        hasMore: false,
-        totalMessages: messages.length,
-      }),
+      () =>
+        history(row, [
+          { role: "assistant", runId: "previous-run", content: [], activity: [previous] },
+        ]),
     );
     const publish = (runId: string, data: Record<string, unknown>) =>
       f.publish(row, data, { runId });
@@ -383,14 +373,7 @@ describe("Subagents panel data ownership", () => {
     expect(view(f)?.activity).toBeUndefined();
     expect(view(f)?.callCount).toEqual({ count: 1, exact: true });
 
-    publish("continuation-run", {
-      ...previous,
-      itemId: "continuation-item",
-      phase: "update",
-      status: "running",
-      title: "Exec Continue the repair",
-      meta: "Continue the repair",
-    });
+    publish("continuation-run", execItem("continuation-item", "Continue the repair"));
     expect(view(f)).toMatchObject({
       activity: "Continue the repair",
       callCount: { count: 2, exact: true },

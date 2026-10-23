@@ -81,9 +81,12 @@ beforeEach(() => {
   });
 });
 
-it("persists storage metadata by default", async () => {
-  await createMatrixClient(auth);
-
+it("persists metadata and hydrates sync state before constructing the client", async () => {
+  const hydration = createDeferred<typeof preparedSyncStore>();
+  mocks.createSyncStore.mockReturnValue(hydration.promise);
+  const pending = createMatrixClient(auth);
+  await vi.waitFor(() => expect(mocks.createSyncStore).toHaveBeenCalled());
+  expect(mocks.MatrixClient).not.toHaveBeenCalled();
   expect(mocks.writeStorageMeta).toHaveBeenCalledWith({
     storagePaths,
     homeserver: "https://matrix.example.org",
@@ -92,27 +95,14 @@ it("persists storage metadata by default", async () => {
     deviceId: undefined,
   });
   expect(mocks.resolveMatrixStoragePaths).toHaveBeenCalledTimes(1);
+  hydration.resolve(preparedSyncStore);
+  await pending;
   expectClient({
     syncStore: preparedSyncStore,
     recoveryKeyPath: storagePaths.recoveryKeyPath,
     idbSnapshotPath: storagePaths.idbSnapshotPath,
     cryptoDatabasePrefix: "openclaw-matrix-default-token-hash",
   });
-});
-
-it("loads persisted sync state before constructing or returning the client", async () => {
-  const hydration = createDeferred<typeof preparedSyncStore>();
-  mocks.createSyncStore.mockReturnValue(hydration.promise);
-  const pending = createMatrixClient(auth);
-  await vi.waitFor(() => expect(mocks.createSyncStore).toHaveBeenCalled());
-  expect(mocks.MatrixClient).not.toHaveBeenCalled();
-  hydration.resolve(preparedSyncStore);
-  await pending;
-  expect(mocks.MatrixClient).toHaveBeenCalledWith(
-    "https://matrix.example.org",
-    "tok",
-    expect.objectContaining({ syncStore: preparedSyncStore }),
-  );
 });
 
 const explicitPolicy = { allowPrivateNetwork: true, customField: "test" };

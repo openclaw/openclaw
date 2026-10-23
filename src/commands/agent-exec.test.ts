@@ -258,6 +258,31 @@ describe("agent exec command composition", () => {
     });
   });
 
+  it.each([
+    [new Error("deadline", { cause: { name: "TimeoutError" } }), 2],
+    [new Error("deadline", { cause: Object.assign([], { code: "ETIMEDOUT" }) }), 2],
+    [new Error("deadline", { cause: { reason: "timeout" } }), 2],
+    [new Error("ordinary failure"), 1],
+    [new Error("ordinary failure", { cause: "ETIMEDOUT" }), 1],
+    [
+      new Error("ordinary failure", {
+        cause: { cause: { cause: { cause: { code: "ETIMEDOUT" } } } },
+      }),
+      1,
+    ],
+  ] as const)(
+    "classifies structured execution errors %j with exit code %s",
+    async (error, code) => {
+      const result = await runExec({ json: true }, async () => {
+        throw error;
+      });
+      expect(result).toMatchObject({
+        exitCode: code,
+        envelope: { status: code === 2 ? "timeout" : "error" },
+      });
+    },
+  );
+
   it("writes plain final text to stdout when diagnostics are routed to stderr", async () => {
     const source = `
       import { registerHooks } from "node:module";

@@ -46,6 +46,9 @@ const route = {
   source: "zalo-hosted-media",
   handler: () => {},
 };
+const targetMap = () => new Map<string, Array<{ path: string; id: string }>>();
+const registerRoute = (targetsByPath: ReturnType<typeof targetMap>, path: string, id: string) =>
+  registerWebhookTargetWithPluginRoute({ targetsByPath, target: { path, id }, route });
 
 function createPipelineRequest(url: string): IncomingMessage {
   const req = createRequest("POST", url);
@@ -78,7 +81,7 @@ describe("webhook paths", () => {
 });
 
 it("runs first/last path lifecycle hooks only at path boundaries", () => {
-  const targets = new Map<string, Array<{ path: string; id: string }>>();
+  const targets = targetMap();
   const teardown = vi.fn();
   const onFirstPathTarget = vi.fn(() => teardown);
   const onLastPathTargetRemoved = vi.fn();
@@ -94,13 +97,11 @@ it("runs first/last path lifecycle hooks only at path boundaries", () => {
   expect(onLastPathTargetRemoved).not.toHaveBeenCalled();
 
   registeredA.unregister();
-  expect(teardown).toHaveBeenCalledTimes(1);
-  expect(onLastPathTargetRemoved).toHaveBeenCalledTimes(1);
+  expect([teardown.mock.calls.length, onLastPathTargetRemoved.mock.calls.length]).toEqual([1, 1]);
   expect(onLastPathTargetRemoved).toHaveBeenCalledWith({ path: "/hook" });
 
   registeredA.unregister();
-  expect(teardown).toHaveBeenCalledTimes(1);
-  expect(onLastPathTargetRemoved).toHaveBeenCalledTimes(1);
+  expect([teardown.mock.calls.length, onLastPathTargetRemoved.mock.calls.length]).toEqual([1, 1]);
 });
 
 describe("registerWebhookTargetWithPluginRoute", () => {
@@ -115,7 +116,7 @@ describe("registerWebhookTargetWithPluginRoute", () => {
     };
     registry.httpRoutes.push(existingRoute);
     setActivePluginRegistry(registry);
-    const targets = new Map<string, Array<{ path: string; id: string }>>();
+    const targets = targetMap();
 
     expect(() =>
       registerWebhookTargetWithPluginRoute({
@@ -138,18 +139,9 @@ describe("registerWebhookTargetWithPluginRoute", () => {
   it("keeps one canonical route until the last alias target unregisters", () => {
     const registry = createEmptyPluginRegistry();
     setActivePluginRegistry(registry);
-    const targets = new Map<string, Array<{ path: string; id: string }>>();
-
-    const first = registerWebhookTargetWithPluginRoute({
-      targetsByPath: targets,
-      target: { path: "/Hooks//Zalo/Media/", id: "A" },
-      route,
-    });
-    const second = registerWebhookTargetWithPluginRoute({
-      targetsByPath: targets,
-      target: { path: "/hooks/zalo/media", id: "B" },
-      route,
-    });
+    const targets = targetMap();
+    const first = registerRoute(targets, "/Hooks//Zalo/Media/", "A");
+    const second = registerRoute(targets, "/hooks/zalo/media", "B");
 
     const path = "/hooks/zalo/media";
     const expectedTargets = [

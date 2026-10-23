@@ -25,7 +25,7 @@ import {
 import { acquireOpenClawStateLeaseInTransaction } from "../state/openclaw-state-lease-store.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { beginDoctorMaintenance } from "./doctor-maintenance.js";
+import { beginDoctorRepair } from "./doctor-maintenance.admission.test-support.js";
 import { useDoctorMaintenanceRuntimeDirectory } from "./doctor-maintenance.test-support.js";
 
 const boundary = vi.hoisted(() => ({
@@ -193,10 +193,8 @@ it.each([
           }
           const operation = withCommandProcessScope(
             () =>
-              beginDoctorMaintenance({
-                options: { repair: true, nonInteractive: true },
+              beginDoctorRepair({
                 root: state.root,
-                runtime: { log() {}, error() {}, exit() {} },
                 assertCurrent: () => {
                   if (!authorized) {
                     throw refused;

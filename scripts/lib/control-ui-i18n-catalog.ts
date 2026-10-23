@@ -20,6 +20,7 @@ import { registerChatGoalsEnglish } from "../../ui/src/i18n/locales/en-chat-goal
 import { registerChatMessageMetadataEnglish } from "../../ui/src/i18n/locales/en-chat-message-metadata.ts";
 import { registerChatProviderReviewEnglish } from "../../ui/src/i18n/locales/en-chat-provider-review.ts";
 import { registerChatSessionEnglish } from "../../ui/src/i18n/locales/en-chat-session.ts";
+import { registerChatToolContentEnglish } from "../../ui/src/i18n/locales/en-chat-tool-content.ts";
 import { registerClawsEnglish } from "../../ui/src/i18n/locales/en-claws.ts";
 import { registerCodeBlocksEnglish } from "../../ui/src/i18n/locales/en-code-blocks.ts";
 import { registerCommandPaletteEnglish } from "../../ui/src/i18n/locales/en-command-palette.ts";
@@ -100,6 +101,7 @@ const sourceFiles = [
   "en-chat-message-metadata.ts",
   "en-chat-provider-review.ts",
   "en-chat-session.ts",
+  "en-chat-tool-content.ts",
   "en-claws.ts",
   "en-code-blocks.ts",
   "en-command-palette.ts",
@@ -127,6 +129,7 @@ const sourceFiles = [
   "en-session-organization.ts",
   "en-session-people.ts",
   "en-session-placement.ts",
+  "en-new-session-runtime.ts",
   "en-new-session-setup.ts",
   "en-plugin-consent.ts",
   "en-plugin-management.ts",
@@ -182,6 +185,34 @@ export function loadControlUiSourceCatalog(): TranslationMap {
       Object.assign(sessionsView, registerSessionPeopleEnglish.catalog.sessionsView);
     }
   }
+  const toolCards: TranslationMap = {};
+  const toolContent = registerChatToolContentEnglish.catalog.chat.toolCards;
+  for (const [key, value] of Object.entries(en.chat.toolCards)) {
+    toolCards[key] = value;
+    const contentKeys: Array<keyof typeof toolContent> =
+      key === "toolOutput"
+        ? [
+            "providerResponse",
+            "executionOutput",
+            "showFullOutput",
+            "fullOutputUnavailable",
+            "copyOutput",
+            "downloadOutput",
+            "outputLoadFailed",
+            "outputDownloadFailed",
+            "toolError",
+          ]
+        : key === "hideRawDetails"
+          ? ["viewMode", "diff", "raw"]
+          : key === "openFile"
+            ? ["openDetails"]
+            : key === "failureCount"
+              ? ["noOutputFailed"]
+              : [];
+    for (const contentKey of contentKeys) {
+      toolCards[contentKey] = toolContent[contentKey];
+    }
+  }
   const boardWidget: TranslationMap = {};
   for (const [key, value] of Object.entries(en.board.widget)) {
     boardWidget[key] = value;
@@ -212,6 +243,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
         commands: registerCommandPaletteEnglish.catalog.chat.commands,
         welcome: registerCommandPaletteEnglish.catalog.chat.welcome,
         messages: registerChatMessageMetadataEnglish.catalog.chat.messages,
+        toolCards,
         pullRequests: registerGitHubEnglish.catalog.chat.pullRequests,
       },
       sessionHovercard: registerGitHubEnglish.catalog.sessionHovercard,

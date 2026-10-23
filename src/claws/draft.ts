@@ -2,22 +2,28 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tempWorkspace } from "@openclaw/fs-safe/temp";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { stringify } from "yaml";
 import {
   type ClawDraftDocument,
   type ClawDraftReviewChoices,
+  type ClawDraftReviewItem,
   validateClawDraftDocument,
 } from "../../packages/gateway-protocol/src/index.js";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { redactSensitiveText } from "../logging/redact.js";
-import { applyClawDraftChoices } from "./draft-choices.js";
+import { CLAW_BOOTSTRAP_FILE_NAMES } from "./manifest-contract.js";
 import { buildClawProject, extractBuiltClawArtifact } from "./project-build.js";
 import { ClawProjectError } from "./project.js";
+import { parseClawMarkdown } from "./reader.js";
 import {
   isExactSemVer,
   isSafeClawRelativePath,
   portableClawPathKey,
 } from "./schema-portability.js";
+import { parseClawManifest } from "./schema.js";
+import { parseClawYaml } from "./yaml-document.js";
 
 export const MAX_CLAW_DRAFT_BYTES = 1_000_000;
 const DRAFT_ID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
@@ -117,6 +123,43 @@ function parseProposal(content: string): ClawDraftDocument {
   return value;
 }
 
+function manifestFromDraft(markdown: string) {
+  const parsed = parseClawMarkdown(Buffer.from(markdown), "CLAW.md");
+  const manifest = parsed.ok ? parseClawManifest(parsed.value) : null;
+  if (!parsed.ok || !manifest?.ok) {
+    throw new ClawProjectError("invalid_draft", "Fix the Claw manifest before reviewing it.");
+  }
+  return { manifest: manifest.manifest, body: parsed.body.toString("utf8") };
+}
+
+function titleCaseClawName(value: string) {
+  return value
+    .replace(/[-_]+/gu, " ")
+    .trim()
+    .split(/\s+/u)
+    .map((word) => word.replace(/^(\p{L})/u, (letter) => letter.toUpperCase()))
+    .join(" ");
+}
+
+function profileWithoutExcludedPlugins(content: string, refs: ReadonlySet<string>) {
+  if (refs.size === 0) {
+    return content;
+  }
+  const parsed = parseClawYaml(content, "profiles/openclaw.yml", "profile");
+  if (!parsed.ok || !isRecord(parsed.value)) {
+    return content;
+  }
+  const profile = parsed.value;
+  if (!Array.isArray(profile.extensions)) {
+    return content;
+  }
+  profile.extensions = profile.extensions.filter(
+    (extension) =>
+      !isRecord(extension) || typeof extension.ref !== "string" || !refs.has(extension.ref),
+  );
+  return stringify(profile);
+}
+
 /** Build a disposable, immutable publication snapshot from authored text only. */
 export async function prepareClawDraft(params: {
   workspaceDir: string;
@@ -131,8 +174,104 @@ export async function prepareClawDraft(params: {
     );
   }
   const draft = await readClawDraft(params.workspaceDir, params.draftId);
-  const selected = applyClawDraftChoices(parseProposal(draft.content), params.choices);
-  const proposal = selected.proposal;
+  const authored = parseProposal(draft.content);
+  const choices = params.choices;
+  const { manifest: draftManifest, body } = manifestFromDraft(authored.manifest);
+  const excluded = new Set(choices?.excluded ?? []);
+  const items: ClawDraftReviewItem[] = [];
+  const add = (item: Omit<ClawDraftReviewItem, "included">) => {
+    items.push({ ...item, included: !excluded.has(item.id) });
+  };
+  const sourcePaths = new Set([
+    ...draftManifest.workspace.files.map((entry) => entry.source),
+    ...Object.values(draftManifest.workspace.bootstrapFiles).flatMap((entry) =>
+      entry ? [entry.source] : [],
+    ),
+    "profiles/openclaw.yml",
+    "BOOTSTRAP.md",
+    "LICENSE",
+  ]);
+  for (const file of authored.files) {
+    if (sourcePaths.has(file.path)) {
+      add({ id: `file:${file.path}`, kind: "file", label: file.path, detail: file.content });
+    }
+  }
+  for (const pkg of draftManifest.packages) {
+    add({
+      id: `package:${pkg.kind}:${pkg.ref}`,
+      kind: pkg.kind === "skill" ? "skill" : "plugin",
+      label: pkg.ref,
+      detail: `${pkg.source} · ${pkg.version}`,
+    });
+  }
+  for (const [name, server] of Object.entries(draftManifest.mcpServers)) {
+    add({ id: `mcp:${name}`, kind: "mcp", label: name, detail: JSON.stringify(server, null, 2) });
+  }
+  for (const job of draftManifest.cronJobs) {
+    add({
+      id: `cron:${job.id}`,
+      kind: "automation",
+      label: job.name ?? job.id,
+      detail: `${job.schedule.cron} · ${job.schedule.timezone}`,
+    });
+  }
+  const known = new Set(items.map((item) => item.id));
+  if (
+    excluded.size !== (choices?.excluded.length ?? 0) ||
+    [...excluded].some((id) => !known.has(id))
+  ) {
+    throw new ClawProjectError(
+      "invalid_review_choices",
+      "Reload the Claw review before changing its selections.",
+    );
+  }
+  const draftName = choices?.name ?? authored.name;
+  const displayName =
+    choices?.displayName ?? titleCaseClawName(draftManifest.agent.name ?? draftName);
+  const description =
+    choices?.description ?? authored.description ?? draftManifest.agent.description ?? "";
+  draftManifest.agent.id = draftName;
+  draftManifest.agent.name = displayName;
+  draftManifest.agent.description = description || undefined;
+  draftManifest.workspace.files = draftManifest.workspace.files.filter(
+    (entry) => !excluded.has(`file:${entry.source}`),
+  );
+  for (const target of CLAW_BOOTSTRAP_FILE_NAMES) {
+    const entry = draftManifest.workspace.bootstrapFiles[target];
+    if (entry && excluded.has(`file:${entry.source}`)) {
+      delete draftManifest.workspace.bootstrapFiles[target];
+    }
+  }
+  draftManifest.packages = draftManifest.packages.filter(
+    (pkg) => !excluded.has(`package:${pkg.kind}:${pkg.ref}`),
+  );
+  for (const key of Object.keys(draftManifest.mcpServers)) {
+    if (excluded.has(`mcp:${key}`)) {
+      delete draftManifest.mcpServers[key];
+    }
+  }
+  draftManifest.cronJobs = draftManifest.cronJobs.filter((job) => !excluded.has(`cron:${job.id}`));
+  const removedPluginRefs = new Set(
+    items.filter((item) => item.kind === "plugin" && !item.included).map((item) => item.label),
+  );
+  const selectedFiles = [];
+  for (const file of authored.files) {
+    if (excluded.has(`file:${file.path}`)) {
+      continue;
+    }
+    selectedFiles.push(
+      file.path === "profiles/openclaw.yml"
+        ? { ...file, content: profileWithoutExcludedPlugins(file.content, removedPluginRefs) }
+        : file,
+    );
+  }
+  const proposal = {
+    ...authored,
+    name: draftName,
+    description,
+    manifest: `---\n${stringify(draftManifest).trimEnd()}\n---\n${body}`,
+    files: selectedFiles,
+  };
   const name = `@${params.publisher}/${proposal.name}`;
   const manifest = `${proposal.manifest.trimEnd()}\n\n## Portable workflow\n\n${Object.entries(
     proposal.scope,
@@ -190,9 +329,9 @@ export async function prepareClawDraft(params: {
       name,
       version: proposal.version,
       scope: proposal.scope,
-      description: selected.description,
-      displayName: selected.displayName,
-      items: selected.items,
+      description,
+      displayName,
+      items,
       revision: draft.revision,
       integrity: built.integrity,
       artifact: built.artifact,

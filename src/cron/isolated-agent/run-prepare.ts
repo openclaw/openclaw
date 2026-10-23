@@ -340,7 +340,7 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
         owner: modelOwner,
         agentConfigOverride,
         sessionEntry: cronSession.sessionEntry,
-        payload: input.job.payload,
+        payloadModel: input.job.payload.kind === "agentTurn" ? input.job.payload.model : undefined,
         isGmailHook,
         agentId,
         agentDir,
@@ -470,16 +470,20 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
           ? { ...input.job.payload, toolsAllow: resolveCronRunToolsAllow(input.job) }
           : null;
       const configuredProvider = admittedConfig.models?.providers?.[provider];
-      const modelApi =
-        findModelInCatalog(thinkingSelection.catalog, provider, model)?.api ??
-        configuredProvider?.models?.find((candidate) => candidate.id === model)?.api ??
-        configuredProvider?.api;
+      const catalogModel = findModelInCatalog(thinkingSelection.catalog, provider, model);
+      const configuredModel = configuredProvider?.models?.find(
+        (candidate) => candidate.id === model,
+      );
+      const modelApi = catalogModel?.api ?? configuredModel?.api ?? configuredProvider?.api;
       const preflightDiagnostics = await createCronToolsAllowPreflightDiagnostics({
         cfg: admittedConfig,
         jobId: input.job.id,
         provider,
         model,
         modelApi,
+        modelBaseUrl:
+          catalogModel?.baseUrl ?? configuredModel?.baseUrl ?? configuredProvider?.baseUrl,
+        modelParams: catalogModel?.params ?? configuredModel?.params,
         agentId: modelOwner.agentId,
         agentDir: modelOwner.agentDir,
 
@@ -534,6 +538,7 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
           sourceSessionKey,
           sourceEntry,
           storePath: cronSession.storePath,
+          cronStorePath: input.cronStorePath,
           assertCurrent: assertPreparationCurrent,
           signal: input.abortSignal ?? input.signal,
           baseSessionKey,

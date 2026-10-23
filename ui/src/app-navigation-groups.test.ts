@@ -21,8 +21,9 @@ import {
 it.each([true, false])("shows device settings only with the capability, admin=%s", (canAdmin) => {
   const capability: Device = {
     snapshot: createNativeDeviceSettingsSnapshot(),
+    initialSnapshot: Promise.resolve(createNativeDeviceSettingsSnapshot()),
     subscribe: () => () => undefined,
-    set: () => undefined,
+    set: () => Promise.resolve(),
     requestPermission: () => undefined,
     openSystemSettings: () => undefined,
     openPanel: () => undefined,

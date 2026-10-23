@@ -57,7 +57,6 @@ import {
   mergePreparedConfiguredCatalog,
   resolveRuntimeNormalization,
 } from "./model-runtime-normalization.js";
-import { isStaleHeartbeatAutoFallbackOverride } from "./stored-model-override.js";
 export {
   resolveModelDirectiveSelection,
   type ModelDirectiveSelection,
@@ -110,20 +109,11 @@ export function resolveTurnModelSelection(params: {
   agentId: string;
   defaultProvider: string;
   aliasIndex: ModelAliasIndex;
-  configuredHeartbeatModel?: string;
-  options?: Pick<
-    InternalGetReplyOptions,
-    "modelOverride" | "isHeartbeat" | "heartbeatModelOverride"
-  >;
+  options?: Pick<InternalGetReplyOptions, "modelOverride">;
 }) {
   const { options } = params;
   const explicitModel = normalizeOptionalString(options?.modelOverride);
-  const raw =
-    explicitModel ??
-    (options?.isHeartbeat
-      ? (normalizeOptionalString(options.heartbeatModelOverride) ??
-        normalizeOptionalString(params.configuredHeartbeatModel))
-      : undefined);
+  const raw = explicitModel;
   if (!raw) {
     return undefined;
   }
@@ -166,12 +156,8 @@ export async function createModelSelectionState(params: {
   model: string;
   hasModelDirective: boolean;
   skipStoredModelOverride?: boolean;
-  /** True when heartbeat.model was explicitly resolved for this run.
-   *  In that case, skip session-stored overrides so the heartbeat selection wins. */
-  hasResolvedHeartbeatModelOverride?: boolean;
   /** One-shot scheduled model selection never changes the stored session preference. */
   hasResolvedTurnModelOverride?: boolean;
-  isHeartbeat?: boolean;
   preparedModelCatalog?: ModelCatalogSnapshot;
   operatorAuthority?: AdmittedRunOperatorAuthority;
 }): Promise<ModelSelectionState> {
@@ -286,16 +272,6 @@ export async function createModelSelectionState(params: {
     entry: SessionEntry | undefined,
     override: storedModelOverrides.StoredModelOverride | null,
   ) => {
-    const staleHeartbeatAutoFallbackOverride = isStaleHeartbeatAutoFallbackOverride({
-      isHeartbeat: params.isHeartbeat,
-      hasResolvedHeartbeatModelOverride: params.hasResolvedHeartbeatModelOverride,
-      sessionEntry: entry,
-      storedOverride: override,
-      defaultProvider,
-      defaultModel,
-      primaryProvider: params.primaryProvider,
-      primaryModel: params.primaryModel,
-    });
     const staleLegacyOpenAICodexAutoOverride =
       override?.source === "session" &&
       entry?.modelOverrideSource === "auto" &&
@@ -310,11 +286,7 @@ export async function createModelSelectionState(params: {
       hasLegacyAutoFallbackWithoutOrigin(entry) &&
       (params.provider !== (override.provider ?? defaultProvider) ||
         params.model !== override.model);
-    return (
-      staleHeartbeatAutoFallbackOverride ||
-      staleLegacyOpenAICodexAutoOverride ||
-      staleLegacyAutoFallbackWithoutOrigin
-    );
+    return staleLegacyOpenAICodexAutoOverride || staleLegacyAutoFallbackWithoutOrigin;
   };
   const staleDirectStoredOverride = isStaleStoredOverride(sessionEntry, directStoredModelOverride);
 
@@ -338,7 +310,7 @@ export async function createModelSelectionState(params: {
     );
   }
 
-  if (params.hasResolvedTurnModelOverride && !params.hasResolvedHeartbeatModelOverride) {
+  if (params.hasResolvedTurnModelOverride) {
     // Scheduled payload choices are explicit, so re-admission must reject revoked models.
     const selection = { provider, model };
     if (!visibilityPolicy.allows(selection)) {
@@ -355,9 +327,7 @@ export async function createModelSelectionState(params: {
     sessionKey &&
     storedOverrideRef &&
     (effectiveStoredModelOverride?.source === "session" ||
-      (!params.skipStoredModelOverride &&
-        !params.hasResolvedHeartbeatModelOverride &&
-        !params.hasResolvedTurnModelOverride)) &&
+      (!params.skipStoredModelOverride && !params.hasResolvedTurnModelOverride)) &&
     (!params.hasModelDirective || !operatorAuthority?.modelPolicy)
   ) {
     const key = buildModelCatalogRef(storedOverrideRef.provider, storedOverrideRef.model);
@@ -435,11 +405,10 @@ export async function createModelSelectionState(params: {
   }
 
   const storedOverride = resolveStoredOverride();
-  // Resolved heartbeat and scheduled model choices stay turn-local. Ordinary
+  // Scheduled model choices stay turn-local. Ordinary
   // turns retain stored choices except stale automatic fallback pins.
   const skipStoredOverride =
     params.skipStoredModelOverride === true ||
-    params.hasResolvedHeartbeatModelOverride === true ||
     params.hasResolvedTurnModelOverride === true ||
     (resetModelOverride && staleDirectStoredOverride && storedOverride?.source === "session");
   const usesStoredAutomaticSelection =

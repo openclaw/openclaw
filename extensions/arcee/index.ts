@@ -26,6 +26,11 @@ const ARCEE_WIZARD_GROUP = {
   groupHint: "Direct API or OpenRouter",
 } as const;
 
+function normalizeArceeBaseUrl<T extends { baseUrl?: string }>(value: T) {
+  const baseUrl = normalizeArceeOpenRouterBaseUrl(value.baseUrl);
+  return baseUrl && baseUrl !== value.baseUrl ? { ...value, baseUrl } : undefined;
+}
+
 async function resolveArceeCatalog(ctx: ProviderCatalogContext) {
   const configuredBaseUrl = resolveMergedModelProviderConfig(ctx.config, PROVIDER_ID)?.baseUrl;
   if (!normalizeArceeOpenRouterBaseUrl(configuredBaseUrl)) {
@@ -123,22 +128,9 @@ export default defineSingleProviderPluginEntry({
         config,
         providerId: PROVIDER_ID,
       }),
-    normalizeConfig: ({ providerConfig }) => {
-      const normalizedBaseUrl = normalizeArceeOpenRouterBaseUrl(providerConfig.baseUrl);
-      return normalizedBaseUrl && normalizedBaseUrl !== providerConfig.baseUrl
-        ? { ...providerConfig, baseUrl: normalizedBaseUrl }
-        : undefined;
-    },
+    normalizeConfig: ({ providerConfig }) => normalizeArceeBaseUrl(providerConfig),
     normalizeResolvedModel: ({ model }) => normalizeArceeResolvedModel(model),
-    normalizeTransport: ({ api: apiLocal, baseUrl }) => {
-      const normalizedBaseUrl = normalizeArceeOpenRouterBaseUrl(baseUrl);
-      return normalizedBaseUrl && normalizedBaseUrl !== baseUrl
-        ? {
-            api: apiLocal,
-            baseUrl: normalizedBaseUrl,
-          }
-        : undefined;
-    },
+    normalizeTransport: ({ api, baseUrl }) => normalizeArceeBaseUrl({ api, baseUrl }),
     ...buildProviderReplayFamilyHooks({ family: "openai-compatible" }),
   },
 });

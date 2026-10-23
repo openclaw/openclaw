@@ -424,7 +424,7 @@ describe("unit-fast vitest lane", () => {
     for (const [file, expected] of [
       ["src/plugin-sdk/text-chunking.ts", "src/plugin-sdk/text-chunking.test.ts"],
       ["src/commands/text-format.ts", "src/commands/text-format.test.ts"],
-      ["src/infra/heartbeat-runner.exact-session-busy.test.ts", null],
+      ["src/cron/service.restart-session-event.test.ts", null],
     ] as const) {
       expect(paths.resolveUnitFastTestIncludePattern(file)).toBe(expected);
     }

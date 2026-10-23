@@ -60,14 +60,14 @@ function PairingDialogFallback(props: {
           </div>
         </header>
         <openclaw-modal-actions class="device-pair-setup__footer">
+          <button class="btn btn--ghost" type="button" onClick={() => props.onClose()}>
+            {t("common.close")}
+          </button>
           <Show when={props.failed}>
             <button class="btn btn--primary" type="button" onClick={() => props.retry?.()}>
               {t("common.retry")}
             </button>
           </Show>
-          <button class="btn btn--ghost" type="button" onClick={() => props.onClose()}>
-            {t("common.close")}
-          </button>
         </openclaw-modal-actions>
       </section>
     </openclaw-modal-dialog>

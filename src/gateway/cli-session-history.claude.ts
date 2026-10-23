@@ -236,6 +236,28 @@ function isClaudeCliVisibleHarnessContext(entry: ClaudeCliProjectEntry): boolean
   return entry.isCompactSummary === true || entry.isVisibleInTranscriptOnly === true;
 }
 
+function isClaudeCliInterrupt(entry: ClaudeCliProjectEntry, content: string | unknown[]): boolean {
+  // Native interrupts have one text block and no prompt-origin fields. Human
+  // strings or attributed prompts with the same words must remain user turns.
+  if (
+    !Array.isArray(content) ||
+    content.length !== 1 ||
+    "promptSource" in entry ||
+    "turnOrigin" in entry ||
+    "turnPosition" in entry ||
+    "permissionMode" in entry
+  ) {
+    return false;
+  }
+  const block = content[0];
+  return (
+    isRecord(block) &&
+    block.type === "text" &&
+    (block.text === "[Request interrupted by user]" ||
+      block.text === "[Request interrupted by user for tool use]")
+  );
+}
+
 function isClaudeCliTaskNotification(
   entry: ClaudeCliProjectEntry,
   content: string | unknown[],
@@ -434,6 +456,11 @@ export function parseClaudeCliHistoryEntry(
   }
 
   if (type === "user") {
+    // Omit before reseed inspection and indexing: a harness marker must neither
+    // consume a canonical human duplicate nor occupy a visible-history page.
+    if (isClaudeCliInterrupt(entry, content)) {
+      return null;
+    }
     const reseedState = options.reseedState;
     const promptTextCandidates = resolveClaudeCliPromptTextCandidates(entry, content);
     if (

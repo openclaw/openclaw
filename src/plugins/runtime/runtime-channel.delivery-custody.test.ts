@@ -486,31 +486,52 @@ beforeEach(async () => {
 
 afterEach(() => vi.restoreAllMocks());
 
+type Fixture = Awaited<ReturnType<typeof fixture>>;
+
+async function withFixture(
+  options: Parameters<typeof fixture>[0],
+  exercise: (f: Fixture) => Promise<void>,
+) {
+  const f = await fixture(options);
+  try {
+    await exercise(f);
+  } finally {
+    f.proceed.resolve();
+    f.finalization.resolve();
+    await Promise.allSettled([f.work]);
+    await f.channelOwner.dispose();
+    await f.acpOwner.dispose();
+    await f.disposeManager();
+  }
+}
+
+async function expectBeforeCompletion(event: Promise<unknown>, work: Promise<unknown>) {
+  expect(await Promise.race([event.then(() => "event"), work.then(() => "completed")])).toBe(
+    "event",
+  );
+}
+
 describe("registered ACP channel delivery custody", () => {
   it.each([
+    { adapterStyle: undefined, ingress: false },
+    { adapterStyle: undefined, ingress: true },
     { adapterStyle: "prototype", ingress: false },
     { adapterStyle: "own", ingress: false },
     { adapterStyle: "prototype", ingress: true },
     { adapterStyle: "own", ingress: true },
   ] as const)(
-    "preserves frozen class adapters (ingress: $ingress, $adapterStyle)",
-    async (options) => {
-      const f = await fixture({ ...options, streaming: true });
-      try {
+    "preserves streaming callbacks and adapters (ingress: $ingress, $adapterStyle)",
+    (options) =>
+      withFixture({ ...options, streaming: true }, async (f) => {
         f.finalization.resolve();
         await f.work;
         expect(f.previews).toEqual(["offline preview"]);
         expect(f.sends).toEqual(["offline final"]);
-        expect(f.observers).toEqual(options.ingress ? ["delivered", "finalized"] : ["delivered"]);
+        expect(f.observers).toEqual(
+          options.ingress && options.adapterStyle ? ["delivered", "finalized"] : ["delivered"],
+        );
         expect(f.channelOwner.hasRetainedConsumers).toBe(false);
-      } finally {
-        f.finalization.resolve();
-        await Promise.allSettled([f.work]);
-        await f.channelOwner.dispose();
-        await f.acpOwner.dispose();
-        await f.disposeManager();
-      }
-    },
+      }),
   );
 
   it("sends fresh persistent Claude and Codex ACP finals through the Matrix formatter and client", async () => {
@@ -552,99 +573,55 @@ describe("registered ACP channel delivery custody", () => {
       .mockResolvedValue("$synthetic-final:example.org");
     for (const agentId of ["claude", "codex"]) {
       const roomId = `!${agentId}:example.org`;
-      const f = await fixture({
-        ingress: true,
-        matrix: {
-          agentId,
-          roomId,
-          setRuntime: setMatrixRuntime,
-          sendText,
-          stateDir: await tempDirs.make(),
+      await withFixture(
+        {
+          ingress: true,
+          matrix: {
+            agentId,
+            roomId,
+            setRuntime: setMatrixRuntime,
+            sendText,
+            stateDir: await tempDirs.make(),
+          },
         },
-      });
-      try {
-        f.finalization.resolve();
-        await f.work;
-        expect(f.backendRuns).toEqual([`agent:${agentId}:acp:${roomId}`]);
-        expect(f.deliveryOwners).toEqual(["matrix"]);
-        expect(f.deliveryErrors).toEqual([]);
-        expect(f.observers).toEqual(["delivered"]);
-        expect(f.messageIds).toEqual(["$synthetic-final:example.org"]);
-        expect(sendMessage).toHaveBeenLastCalledWith(
-          roomId,
-          expect.objectContaining({ msgtype: "m.text", body: "offline final" }),
-          undefined,
-          undefined,
-        );
-        expect(f.channelOwner.hasRetainedConsumers).toBe(false);
-      } finally {
-        f.finalization.resolve();
-        await Promise.allSettled([f.work]);
-        await f.channelOwner.dispose();
-        await f.acpOwner.dispose();
-        await f.disposeManager();
-      }
+        async (f) => {
+          f.finalization.resolve();
+          await f.work;
+          expect(f.backendRuns).toEqual([`agent:${agentId}:acp:${roomId}`]);
+          expect(f.deliveryOwners).toEqual(["matrix"]);
+          expect(f.deliveryErrors).toEqual([]);
+          expect(f.observers).toEqual(["delivered"]);
+          expect(f.messageIds).toEqual(["$synthetic-final:example.org"]);
+          expect(sendMessage).toHaveBeenLastCalledWith(
+            roomId,
+            expect.objectContaining({ msgtype: "m.text", body: "offline final" }),
+            undefined,
+            undefined,
+          );
+          expect(f.channelOwner.hasRetainedConsumers).toBe(false);
+        },
+      );
     }
     expect(sendMessage).toHaveBeenCalledTimes(2);
   });
 
   it.each([false, true])(
-    "keeps fresh agent streaming callbacks with the channel owner (ingress: %s)",
-    async (ingress) => {
-      const f = await fixture({ streaming: true, ingress });
-      try {
-        f.finalization.resolve();
-        await f.work;
-        expect(f.previews).toEqual(["offline preview"]);
-        expect(f.sends).toEqual(["offline final"]);
-        expect(f.observers).toEqual(["delivered"]);
-        expect(f.channelOwner.hasRetainedConsumers).toBe(false);
-      } finally {
-        f.finalization.resolve();
-        await Promise.allSettled([f.work]);
-        await f.channelOwner.dispose();
-        await f.acpOwner.dispose();
-        await f.disposeManager();
-      }
-    },
-  );
-
-  it.each([false, true])(
     "retains raw ingress delivery until finalization (prewrapped: %s)",
-    async (prewrapped) => {
-      const f = await fixture({ retire: true, ingress: true, prewrapped });
-      try {
-        expect(
-          await Promise.race([
-            f.started.promise.then(() => "started"),
-            f.work.then(() => "completed"),
-          ]),
-        ).toBe("started");
+    (prewrapped) =>
+      withFixture({ retire: true, ingress: true, prewrapped }, async (f) => {
+        await expectBeforeCompletion(f.started.promise, f.work);
         expect(f.channelOwner.hasRetainedConsumers).toBe(true);
         f.channelOwner.quiesce();
         const retired = f.channelOwner.dispose();
         f.proceed.resolve();
-        expect(
-          await Promise.race([
-            f.delivered.promise.then(() => "delivered"),
-            f.work.then(() => "completed"),
-          ]),
-        ).toBe("delivered");
+        await expectBeforeCompletion(f.delivered.promise, f.work);
         expect(f.channelOwner.hasRetainedConsumers).toBe(true);
         f.finalization.resolve();
         await f.work;
         expect((await retired).errors).toEqual([]);
         expect(f.sends).toEqual(["offline final"]);
         expect(f.channelOwner.hasRetainedConsumers).toBe(false);
-      } finally {
-        f.proceed.resolve();
-        f.finalization.resolve();
-        await Promise.allSettled([f.work]);
-        await f.channelOwner.dispose();
-        await f.acpOwner.dispose();
-        await f.disposeManager();
-      }
-    },
+      }),
   );
 
   it.each([false, true])(
@@ -653,23 +630,14 @@ describe("registered ACP channel delivery custody", () => {
       const f = await fixture({ retire: true, assembled });
       let replacement: PluginInstance | undefined;
       try {
-        expect(
-          await Promise.race([
-            f.started.promise.then(() => "started"),
-            f.work.then((result) => result),
-          ]),
-        ).toBe("started");
+        await expectBeforeCompletion(f.started.promise, f.work);
         f.channelOwner.quiesce();
         const retired = f.channelOwner.dispose();
         replacement = ownedInstance("discord");
         expect(() => f.oldQueued()).toThrow("reloaded or disabled");
         f.proceed.resolve();
-        const outcome = await Promise.race([
-          f.delivered.promise.then(() => "delivered"),
-          f.work.then((result) => result),
-        ]);
+        await expectBeforeCompletion(f.delivered.promise, f.work);
         expect(f.deliveryOwners).toEqual(["discord"]);
-        expect(outcome).toBe("delivered");
         expect(f.channelOwner.hasRetainedConsumers).toBe(true);
         f.finalization.resolve();
         await f.work;
@@ -694,15 +662,9 @@ describe("registered ACP channel delivery custody", () => {
     { streaming: true, ingress: true },
   ] as const)(
     "releases admitted custody when the caller cancels during retirement (streaming: $streaming)",
-    async (options) => {
-      const f = await fixture({ ...options, retire: true });
-      try {
-        expect(
-          await Promise.race([
-            f.started.promise.then(() => "started"),
-            f.work.then(() => "completed"),
-          ]),
-        ).toBe("started");
+    (options) =>
+      withFixture({ ...options, retire: true }, async (f) => {
+        await expectBeforeCompletion(f.started.promise, f.work);
         expect(f.channelOwner.hasRetainedConsumers).toBe(true);
         f.channelOwner.quiesce();
         const retired = f.channelOwner.dispose();
@@ -714,15 +676,7 @@ describe("registered ACP channel delivery custody", () => {
         expect(f.deliveryOwners).toEqual([]);
         expect(f.channelOwner.hasRetainedConsumers).toBe(false);
         expect((await retired).errors).toEqual([]);
-      } finally {
-        f.proceed.resolve();
-        f.finalization.resolve();
-        await Promise.allSettled([f.work]);
-        await f.channelOwner.dispose();
-        await f.acpOwner.dispose();
-        await f.disposeManager();
-      }
-    },
+      }),
   );
 
   it("isolates concurrent distinct channel instances through queued delivery", async () => {
@@ -731,22 +685,12 @@ describe("registered ACP channel delivery custody", () => {
     const secondSends: string[] = [];
     let secondWork: ReturnType<typeof f.start> | undefined;
     try {
-      expect(
-        await Promise.race([
-          f.started.promise.then(() => "started"),
-          f.work.then(() => "completed"),
-        ]),
-      ).toBe("started");
+      await expectBeforeCompletion(f.started.promise, f.work);
       second.run(() => {
         getPluginInstanceRuntimeSlot("delivery-fixture")!.runtime = secondSends;
       });
       secondWork = f.start(second, "agent:main:acp:second", secondSends);
-      expect(
-        await Promise.race([
-          f.secondStarted.promise.then(() => "started"),
-          secondWork.then(() => "completed"),
-        ]),
-      ).toBe("started");
+      await expectBeforeCompletion(f.secondStarted.promise, secondWork);
       f.channelOwner.quiesce();
       second.quiesce();
       const retired = Promise.all([f.channelOwner.dispose(), second.dispose()]);
@@ -772,29 +716,24 @@ describe("registered ACP channel delivery custody", () => {
 
   it.each(["success", "assembled-success", "observe-only", "callback-error"] as const)(
     "releases custody after %s without unintended sends",
-    async (mode) => {
-      const f = await fixture({
-        observeOnly: mode === "observe-only",
-        fail: mode === "callback-error",
-        assembled: mode === "assembled-success",
-      });
-      try {
-        f.finalization.resolve();
-        await f.work;
-        expect(f.backendRuns).toEqual(["agent:main:acp:custody"]);
-        expect(f.deliveryOwners).toEqual(mode === "observe-only" ? [] : ["discord"]);
-        expect(f.sends).toEqual(mode.endsWith("success") ? ["offline final"] : []);
-        expect(f.observers).toEqual(
-          mode === "observe-only" ? [] : [mode.endsWith("success") ? "delivered" : "error"],
-        );
-        expect(f.channelOwner.hasRetainedConsumers).toBe(false);
-      } finally {
-        f.finalization.resolve();
-        await Promise.allSettled([f.work]);
-        await f.channelOwner.dispose();
-        await f.acpOwner.dispose();
-        await f.disposeManager();
-      }
-    },
+    (mode) =>
+      withFixture(
+        {
+          observeOnly: mode === "observe-only",
+          fail: mode === "callback-error",
+          assembled: mode === "assembled-success",
+        },
+        async (f) => {
+          f.finalization.resolve();
+          await f.work;
+          expect(f.backendRuns).toEqual(["agent:main:acp:custody"]);
+          expect(f.deliveryOwners).toEqual(mode === "observe-only" ? [] : ["discord"]);
+          expect(f.sends).toEqual(mode.endsWith("success") ? ["offline final"] : []);
+          expect(f.observers).toEqual(
+            mode === "observe-only" ? [] : [mode.endsWith("success") ? "delivered" : "error"],
+          );
+          expect(f.channelOwner.hasRetainedConsumers).toBe(false);
+        },
+      ),
   );
 });

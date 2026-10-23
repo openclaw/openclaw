@@ -36,12 +36,12 @@ describe("Codex rate-limit cache", () => {
     expect(readCodexRateLimitsRevision(first)).toBe(1);
     expect(readCodexRateLimitsRevision(second)).toBe(0);
 
-    now.mockReturnValue(600_100);
+    now.mockReturnValue(600_099);
     expect([first, second].map((client) => readRecentCodexRateLimits(client))).toEqual([
       { rateLimits: { limitId: "codex" } },
       { rateLimits: { limitId: "codex_other" } },
     ]);
-    now.mockReturnValue(600_101);
+    now.mockReturnValue(600_100);
     expect(readRecentCodexRateLimits(first)).toBeUndefined();
     expect(readRecentCodexRateLimits(second)).toEqual({
       rateLimits: { limitId: "codex_other" },
@@ -110,12 +110,13 @@ describe("Codex rate-limit cache", () => {
     try {
       const addNotificationHandler = vi.spyOn(harness.client, "addNotificationHandler");
       ensureCodexAppServerClientRuntime(harness.client, { agentDir: "/tmp/agent" });
+      const initialHandlerCount = addNotificationHandler.mock.calls.length;
 
       vi.resetModules();
       const nextRuntime = await import("./client-runtime.js");
       const nextCache = await import("./rate-limit-cache.js");
       nextRuntime.ensureCodexAppServerClientRuntime(harness.client, { agentDir: "/tmp/agent" });
-      expect(addNotificationHandler).toHaveBeenCalledTimes(1);
+      expect(addNotificationHandler).toHaveBeenCalledTimes(initialHandlerCount);
 
       const notificationObserved = new Promise<void>((resolve) => {
         stopObserving = harness.client.addNotificationHandler((notification) => {

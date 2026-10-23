@@ -3,9 +3,9 @@ import { expect, it, onTestFinished } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { resolveSessionWorkspace } from "../../../lib/sessions/workspace.ts";
 import {
-  canRevealSessionWorkspace,
+  resolveChatPaneWorkspace,
   resolveChatPaneParentSession,
-} from "./chat-pane-header-identity.tsx";
+} from "../chat-pane-header-identity.ts";
 import {
   chatPaneHeaderSessionRow as row,
   mountChatPaneHeader,
@@ -75,25 +75,25 @@ it("does not expose a new agent's storage ID in the workspace breadcrumb tooltip
   expect(crumb?.getAttribute("title")).toBe("Workspace");
 });
 
-it.each<Partial<Parameters<typeof canRevealSessionWorkspace>[0]>>([
+it.each<Partial<Parameters<typeof resolveChatPaneWorkspace>[0]>>([
   {
     session: row({ execNode: "build-mac", execCwd: "/remote/build" }),
-    workspaceRoot: "/remote/build",
   },
   {
     session: row({ placement: { state: "requested" } as GatewaySessionRow["placement"] }),
-    workspaceRoot: "/cloud/work",
   },
   { methodAdvertised: false },
   { hasAdminAccess: false },
 ])("disables reveal for unavailable or unauthorized workspaces: %j", (overrides) => {
   expect(
-    canRevealSessionWorkspace({
+    resolveChatPaneWorkspace({
       session: row(),
-      workspaceRoot: repo,
+      agentWorkspace: repo,
+      worktreePaths: new Map(),
+      branches: new Map(),
       methodAdvertised: true,
       hasAdminAccess: true,
       ...overrides,
-    }),
+    }).canReveal,
   ).toBe(false);
 });

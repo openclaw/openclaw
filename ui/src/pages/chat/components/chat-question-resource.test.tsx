@@ -17,7 +17,7 @@ import {
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatQuestionResource } from "./chat-question-resource.tsx";
 // Load before the timed interaction: this regression covers context, not cold module transforms.
-import "../../../components/mcp-app-view-registration.ts";
+import "../../../components/mcp-app-view.tsx";
 
 const previewQuestion = {
   questionId: "part",
@@ -182,6 +182,14 @@ it("publishes uploaded resource selections and follows controlled selections", a
   expect(view.getByRole("button", { name: "Remove" })).toBe(remove);
   expect(view.queryByText("notes.txt")).toBeNull();
   expect(selections).toHaveBeenLastCalledWith(["parts://notes"]);
+  request.mockRejectedValueOnce(new Error("Resource upload failed"));
+  input.dispatchEvent(new Event("change", { bubbles: true }));
+  await waitForSolid(() =>
+    expect(view.getByRole("alert").textContent).toBe("Resource upload failed"),
+  );
+  expect(view.getByText("updated-notes.txt")).toBeTruthy();
+  expect(view.getByRole("button", { name: "Remove" })).toBe(remove);
+  expect(selections).toHaveBeenCalledTimes(2);
   setDisabled(true);
   await waitForSolid(() => expect(remove.disabled).toBe(true));
   expect(view.getByText("updated-notes.txt")).toBeTruthy();
@@ -236,10 +244,10 @@ it("retires pending previews on disabled and request changes while retaining con
     expect(view.getByText("Current preview")).toBeTruthy();
     expect(button.disabled).toBe(false);
   });
-  second.resolve({ preview: { contents: [{ text: "Retired request preview" }] } });
-  await second.promise;
+  second.reject(new Error("Retired request failed"));
+  await second.promise.catch(() => {});
   expect(view.queryByText("Retired disabled preview")).toBeNull();
-  expect(view.queryByText("Retired request preview")).toBeNull();
+  expect(view.queryByRole("alert")).toBeNull();
   expect(request.mock.calls[2]?.[1]).toMatchObject({ requestId: "replacement-request" });
   request.mockRejectedValueOnce(new Error("Resource preview failed"));
   button.click();
@@ -248,9 +256,27 @@ it("retires pending previews on disabled and request changes while retaining con
     expect(button.disabled).toBe(false);
   });
   expect(view.getByText("Current preview")).toBeTruthy();
+  const retry = Promise.withResolvers<QuestionResourceActionResult>();
+  request.mockImplementationOnce(() => retry.promise);
+  button.click();
   button.click();
   await waitForSolid(() => {
     expect(view.queryByRole("alert")).toBeNull();
     expect(request).toHaveBeenCalledTimes(5);
+    expect(button.disabled).toBe(true);
+    expect(view.getByRole("status").textContent).toBe("Loading…");
+  });
+  expect(view.getByText("Current preview")).toBeTruthy();
+  expect(view.getByRole("button", { name: "Preview resource: Bracket" })).toBe(button);
+  retry.reject(new Error("Resource retry failed"));
+  await waitForSolid(() => {
+    expect(view.getByRole("alert").textContent).toBe("Resource retry failed");
+    expect(button.disabled).toBe(false);
+  });
+  expect(view.getByText("Current preview")).toBeTruthy();
+  button.click();
+  await waitForSolid(() => {
+    expect(view.queryByRole("alert")).toBeNull();
+    expect(request).toHaveBeenCalledTimes(6);
   });
 });

@@ -11,7 +11,7 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { createSessionCapabilityFixture, createTestChatPane } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { admitStoredChatComposerQueueItem } from "./composer-persistence.ts";
+import { admitStoredChatComposerQueueItemResult } from "./composer-queue-persistence.ts";
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
@@ -80,7 +80,9 @@ function queuedSendFixture(options: { attempted?: boolean; initialIdle?: boolean
     sessionsResult: sessionsResult(active),
   });
   const admission = captureChatOutboxAdmission(host, host.sessionKey);
-  expect(admitStoredChatComposerQueueItem(host, admission, host.chatQueue[0]!)).toBe(true);
+  expect(admitStoredChatComposerQueueItemResult(host, admission, host.chatQueue[0]!)).toBe(
+    "admitted",
+  );
   const { pane } = createTestChatPane({ client: host.client!, sessions: host.sessions });
   pane.state = host as unknown as ChatPageHost;
   pane.applySessionsState(host.sessions.state);

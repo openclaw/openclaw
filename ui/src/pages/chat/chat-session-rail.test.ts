@@ -417,9 +417,12 @@ describe("ChatSessionRailElement", () => {
 
     element.querySelector("form")?.dispatchEvent(new SubmitEvent("submit", { bubbles: true }));
     expect(onSubmit).toHaveBeenCalledWith("What should I verify?");
-    expect(element.querySelector(".chat-session-rail__answer strong")?.textContent).toBe("Only");
+    const answer = element.querySelector(".chat-group.assistant");
+    expect(answer?.querySelector(".chat-group-messages strong")?.textContent).toBe("Only");
     expect(element.querySelector("script")).toBeNull();
-    expect(element.querySelector(".chat-session-rail__timestamp")?.textContent).toContain("as of");
+    // The main transcript's footer replaces the bespoke "as of" line.
+    expect(answer?.querySelector(".chat-group-footer time.chat-group-timestamp")).not.toBeNull();
+    expect(element.textContent).not.toContain("as of");
   });
 
   it("returns focus to the rail composer after deleting its last comment", async () => {
@@ -472,7 +475,9 @@ describe("ChatSessionRailElement", () => {
         draft: "",
       },
     });
-    const text = element.querySelector(".chat-session-rail__answer strong")!.firstChild!;
+    const text = element.querySelector(
+      ".chat-group.assistant .chat-group-messages strong",
+    )!.firstChild!;
     const range = document.createRange();
     range.selectNodeContents(text);
     const selection = document.getSelection()!;

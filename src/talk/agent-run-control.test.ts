@@ -78,8 +78,6 @@ describe("classifyRealtimeVoiceAgentControlText", () => {
   it("keeps ambiguous active-call speech out of automatic steering", () => {
     const safeDefault = {
       mode: "status",
-      confidence: "low",
-      reason: "safe_default",
       shouldAutoControl: false,
     };
     expect(resolveIntent({ text: "hello" })).toMatchObject(safeDefault);

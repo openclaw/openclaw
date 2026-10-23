@@ -18,6 +18,7 @@ function evaluate(overrides: Partial<EntryParams>) {
     ...overrides,
   });
 }
+const fm = (frontmatter: NonNullable<EntryParams["entry"]["frontmatter"]>) => ({ frontmatter });
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -55,13 +56,10 @@ it("combines metadata presentation fields with evaluated requirements", () => {
 it("evaluates OS requirements against process.platform", () => {
   mockProcessPlatform("darwin");
 
-  expect(
-    evaluate({
-      entry: { metadata: { os: ["darwin"] } },
-      isEnvSatisfied: () => true,
-      isConfigSatisfied: () => true,
-    }),
-  ).toMatchObject({ requirementsSatisfied: true, missing: { os: [] } });
+  expect(evaluate({ entry: { metadata: { os: ["darwin"] } } })).toMatchObject({
+    requirementsSatisfied: true,
+    missing: { os: [] },
+  });
 });
 
 it("combines frontmatter presentation with always-on requirements", () => {
@@ -90,33 +88,26 @@ it.each<[string, EntryParams["entry"], { emoji?: string; homepage?: string }]>([
     "blank metadata wins",
     {
       metadata: { emoji: "", homepage: "   " },
-      frontmatter: { emoji: "🙂", homepage: "https://example.com" },
+      ...fm({ emoji: "🙂", homepage: "https://example.com" }),
     },
     {},
   ],
   [
     "trims fallback URL",
-    { frontmatter: { emoji: " ", url: " https://openclaw.ai/install " } },
+    fm({ emoji: " ", url: " https://openclaw.ai/install " }),
     { emoji: " ", homepage: "https://openclaw.ai/install" },
   ],
   [
     "blank homepage wins",
-    {
-      frontmatter: {
-        homepage: " ",
-        website: "https://docs.openclaw.ai",
-        url: "https://openclaw.ai/install",
-      },
-    },
+    fm({ homepage: " ", website: "https://docs.openclaw.ai", url: "https://openclaw.ai/install" }),
     {},
   ],
 ])("preserves presentation precedence: %s", (_name, entry, expected) => {
-  const result = evaluate({ entry });
-  expect({ emoji: result.emoji, homepage: result.homepage }).toEqual({
-    emoji: expected.emoji,
-    homepage: expected.homepage,
+  expect(evaluate({ entry })).toStrictEqual({
+    ...expected,
+    required: requirements(),
+    missing: requirements(),
+    requirementsSatisfied: true,
+    configChecks: [],
   });
-  expect(["emoji", "homepage"].filter((key) => Object.hasOwn(result, key))).toEqual(
-    Object.keys(expected),
-  );
 });

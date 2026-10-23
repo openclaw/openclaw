@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
+import { selectLiveRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveAgentRuntimeToolConfig } from "./tool-runtime-config.js";
 import { resolveAgentToolSurfacePlan } from "./tool-surface-plan.js";
 
 const secretMarker = () => ({ source: "exec", provider: "example", id: "example/value" });
@@ -73,7 +73,7 @@ describe("Tool Search runtime snapshot selection", () => {
     const config: OpenClawConfig = snapshot
       ? { plugins: pluginConfig("explicit") }
       : { tools: { toolSearch: false } };
-    expect(resolveAgentRuntimeToolConfig(config)).toBe(config);
+    expect(selectLiveRuntimeConfig(config)).toBe(config);
     expect(resolveSurface(config)).toBe(config);
   });
 });

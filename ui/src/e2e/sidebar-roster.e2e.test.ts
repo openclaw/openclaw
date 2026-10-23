@@ -141,7 +141,12 @@ suite.define(() => {
             items.map((item) => item.getAttribute("data-agent-id")),
           ),
         ).toEqual(["main", "forge", "scout"]);
-        expect(await sidebar.locator(".sidebar-recent-session").count()).toBe(0);
+        // Agent-only roster: the saved personal pin is the only session row, in Pinned.
+        expect(
+          await sidebar
+            .locator(".sidebar-recent-session")
+            .evaluateAll((items) => items.map((item) => item.getAttribute("data-session-key"))),
+        ).toEqual(["agent:forge:project"]);
         expect(await sidebar.locator("[data-agent-collapse]").count()).toBe(0);
         expect(
           await sidebar.locator(".sidebar-agent-roster__signals .session-unread-dot").count(),
@@ -153,11 +158,26 @@ suite.define(() => {
             )
             .count(),
         ).toBe(1);
+        // The run ring overhangs the avatar; keep it clear of the hover background's edge.
+        const ringInset = await sidebar
+          .locator('[data-agent-group="forge"] .sidebar-agent-roster__header')
+          .evaluate((header) => {
+            const ring = header.querySelector<HTMLElement>(".session-glyph__ring");
+            if (!ring) {
+              return null;
+            }
+            ring.style.animation = "none";
+            return ring.getBoundingClientRect().left - header.getBoundingClientRect().left;
+          });
+        expect(ringInset).toBeGreaterThanOrEqual(4);
         expect(
           await sidebar
-            .locator('.sidebar-rail [data-sidebar-entry="session:agent:forge:project"]')
+            .locator('[data-session-section="pinned"] [data-session-key="agent:forge:project"]')
             .count(),
         ).toBe(1);
+        expect(
+          await sidebar.locator('.sidebar-rail [data-sidebar-entry^="session:"]').count(),
+        ).toBe(0);
         await captureSidebarUiProof(suite, page, "sidebar-agent-only-roster.png");
 
         const forge = sidebar.locator('[data-agent-group="forge"]');

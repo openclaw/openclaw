@@ -243,8 +243,8 @@ describe("warnings", () => {
       const store = captureConfigHealthStateStore(deps, "/config.json");
       const previous = await store.read();
       expect(previous.state).toEqual({});
-      await store.update(healthEntry, previous);
-      await store.update(healthEntry, previous);
+      await expect(store.update(healthEntry, previous)).resolves.toEqual({ status: "unavailable" });
+      await expect(store.update(healthEntry, previous)).resolves.toEqual({ status: "unavailable" });
       expect(deps.logger.warn).toHaveBeenCalledExactlyOnceWith(
         expect.stringContaining("Config health-state write failed:"),
       );
@@ -418,15 +418,34 @@ describe("observation scope", () => {
     expect(reads).toHaveBeenCalledTimes(2);
 
     const owner = capture();
-    await owner.update({ lastObservedSuspiciousSignature: "worker commit" }, after);
+    await expect(
+      owner.update({ lastObservedSuspiciousSignature: "worker commit" }, after),
+    ).resolves.toEqual({ status: "applied" });
     expect((await observe()).state.entries?.[configPath]?.lastObservedSuspiciousSignature).toBe(
       "worker commit",
     );
-    await owner.update({ lastObservedSuspiciousSignature: "stale" }, before);
+    await expect(
+      owner.update({ lastObservedSuspiciousSignature: "stale" }, before),
+    ).resolves.toEqual({ status: "conflict" });
     expect((await observe()).state.entries?.[configPath]?.lastObservedSuspiciousSignature).toBe(
       "worker commit",
     );
     expect(reads).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not classify a failed read as a conditional-write conflict", async () => {
+    const { capture, signature } = fixture();
+    const read = vi
+      .spyOn(stateReads, "executeExistingOpenClawStateRead")
+      .mockRejectedValueOnce(new Error("synthetic health read failure"));
+    const owner = capture();
+    const previous = await owner.read();
+    expect(previous.basis).toBeNull();
+    read.mockRestore();
+    await expect(owner.update(signaturePatch("unverified"), previous)).resolves.toEqual({
+      status: "unavailable",
+    });
+    expect(signature()).toBe("before");
   });
 
   it("keeps a pinned snapshot separate from the published live health fact", async () => {
@@ -637,7 +656,9 @@ describe("observation scope", () => {
         },
       }),
     );
-    await observation.update(signaturePatch("committed"), before);
+    await expect(observation.update(signaturePatch("committed"), before)).resolves.toEqual({
+      status: "applied",
+    });
     expect(applied).toBe(true);
     expect(deps.logger.warn).not.toHaveBeenCalled();
     expect(signature()).toBe("committed");

@@ -13,9 +13,14 @@ import {
 import { isDeliverableMessageChannel } from "../utils/message-channel-normalize.js";
 import type { AgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.types.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
+import type {
+  ReplyCompletion,
+  ReplyCompletionEvidence,
+  ReplyExpectation,
+} from "./reply-completion.types.js";
 import type { EmbeddedRunTrigger } from "./run-trigger.js";
 
-export type ReplyExpectation = "required" | "optional" | "result-required";
+export type { ReplyCompletion, ReplyExpectation } from "./reply-completion.types.js";
 
 export function isRequiredReplyExpectation(expectation: ReplyExpectation | undefined): boolean {
   return expectation === "required" || expectation === "result-required";
@@ -28,7 +33,6 @@ export type ReplyDeliveryFactsObserver = (minimumAssistantMessageIndex?: number)
   source: ReplyDeliveryState;
   terminal: ReplyDeliveryState;
 }>;
-type ReplyCompletionEvidence = "ready" | "delivered" | "pending" | "blocked" | "empty" | "silent";
 
 export const MISSING_REPLY_NOTICE_TEXT = "No answer was returned. Ask again if you still need one.";
 export const MISSING_REPLY_SIDE_EFFECT_NOTICE_TEXT = `${MISSING_REPLY_NOTICE_TEXT} Note: some tool actions may have already been executed — please verify before retrying.`;
@@ -44,11 +48,6 @@ export function createMissingReplyNotice(text = MISSING_REPLY_NOTICE_TEXT): Repl
     { assistantTranscriptOwned: true, deliverDespiteSourceReplySuppression: true },
   );
 }
-
-export type ReplyCompletion = {
-  readonly expectation: ReplyExpectation;
-  readonly outcome: ReplyCompletionEvidence | "missing";
-};
 
 const EMPTY_REPLY_CONFIG: OpenClawConfig = {};
 
@@ -99,10 +98,10 @@ export function resolveCommandReplyExpectation(params: {
 /** Returns true when a lifecycle turn must not redefine session-stable reply policy. */
 export function isSyntheticSourceReplyTurn(params: {
   inputProvenance?: InputProvenance;
-  isHeartbeat?: boolean;
+  scheduledAutomation?: boolean;
 }): boolean {
   return (
-    params.isHeartbeat === true ||
+    params.scheduledAutomation === true ||
     params.inputProvenance?.kind === "inter_session" ||
     params.inputProvenance?.kind === "internal_system"
   );
@@ -111,6 +110,7 @@ export function isSyntheticSourceReplyTurn(params: {
 export function resolveReplyExpectation(params: {
   terminalReplyExpectation?: ReplyExpectation;
   allowEmptyAssistantReplyAsSilent?: boolean;
+  scheduledAutomation?: boolean;
   trigger?: EmbeddedRunTrigger;
   inputProvenance?: InputProvenance;
   config?: OpenClawConfig;
@@ -147,7 +147,6 @@ export function resolveReplyExpectation(params: {
 /** Background failures are recorded; only an admitted user's missing answer needs chat text. */
 export function shouldDeliverMissingReplyNotice(
   params: Parameters<typeof resolveReplyExpectation>[0] & {
-    isHeartbeat?: boolean;
     currentInboundEventKind?: InboundEventKind;
   },
 ): boolean {

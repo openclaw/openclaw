@@ -105,26 +105,19 @@ function parseTwilioSuccessPayload(text: string): TwilioMessagePayload {
   };
 }
 
-function requestSearch(req: IncomingMessage): string {
-  return URL.parse(req.url ?? "/", "http://localhost")?.search ?? "";
-}
-
-function stripUrlFragment(url: string): string {
-  const hashIndex = url.indexOf("#");
-  return hashIndex === -1 ? url : url.slice(0, hashIndex);
-}
-
 export function resolveTwilioWebhookSignatureUrl(params: {
   req: IncomingMessage;
   publicWebhookUrl: string;
 }): string {
   // Twilio connection overrides live in the fragment but are excluded from its
   // signature input. Strip without URL reserialization so exact port/path bytes survive.
-  const signatureBaseUrl = stripUrlFragment(params.publicWebhookUrl);
+  const hashIndex = params.publicWebhookUrl.indexOf("#");
+  const signatureBaseUrl =
+    hashIndex === -1 ? params.publicWebhookUrl : params.publicWebhookUrl.slice(0, hashIndex);
   if (signatureBaseUrl.includes("?")) {
     return signatureBaseUrl;
   }
-  const search = requestSearch(params.req);
+  const search = URL.parse(params.req.url ?? "/", "http://localhost")?.search ?? "";
   if (!search) {
     return signatureBaseUrl;
   }
@@ -150,29 +143,6 @@ class TwilioSmsApiError extends Error {
   }
 }
 
-function parseTwilioFormBody(body: string): Record<string, string> {
-  const parsed = querystring.parse(body);
-  const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(parsed)) {
-    out[key] = firstString(value);
-  }
-  return out;
-}
-
-function computeTwilioSignature(params: {
-  url: string;
-  authToken: string;
-  form: Record<string, string>;
-}): string {
-  const data =
-    params.url +
-    Object.keys(params.form)
-      .toSorted()
-      .map((key) => `${key}${params.form[key] ?? ""}`)
-      .join("");
-  return createHmac("sha1", params.authToken).update(data).digest("base64");
-}
-
 export function verifyTwilioSignature(params: {
   signature: string | undefined;
   url: string;
@@ -182,13 +152,15 @@ export function verifyTwilioSignature(params: {
   if (!params.signature || !params.url || !params.authToken) {
     return false;
   }
+  const data =
+    params.url +
+    Object.keys(params.form)
+      .toSorted()
+      .map((key) => `${key}${params.form[key] ?? ""}`)
+      .join("");
   return safeEqualSecret(
     params.signature,
-    computeTwilioSignature({
-      url: params.url,
-      authToken: params.authToken,
-      form: params.form,
-    }),
+    createHmac("sha1", params.authToken).update(data).digest("base64"),
   );
 }
 
@@ -273,7 +245,12 @@ export async function readTwilioWebhookForm(req: IncomingMessage): Promise<Recor
     // Defer destruction so the webhook can answer 413 before the connection closes.
     destroyOnLimit: false,
   });
-  return parseTwilioFormBody(body);
+  const parsed = querystring.parse(body);
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(parsed)) {
+    out[key] = firstString(value);
+  }
+  return out;
 }
 
 export const TWIML_CONTENT_TYPE = "text/xml; charset=utf-8";
@@ -288,17 +265,13 @@ function basicAuthHeader(account: ResolvedSmsAccount): string {
   return `Basic ${Buffer.from(`${account.accountSid}:${account.authToken}`).toString("base64")}`;
 }
 
-function appendTruncatedResponseSuffix(text: string): string {
-  return `${text.trimEnd()}${TRUNCATED_RESPONSE_SUFFIX}`;
-}
-
 async function readTwilioApiResponseText(response: Response): Promise<string> {
   const maxBytes = response.ok
     ? TWILIO_API_SUCCESS_BODY_LIMIT_BYTES
     : TWILIO_API_ERROR_BODY_LIMIT_BYTES;
   if (!response.ok) {
     const prefix = await readResponseTextPrefix(response, maxBytes);
-    return prefix.truncated ? appendTruncatedResponseSuffix(prefix.text) : prefix.text;
+    return prefix.truncated ? `${prefix.text.trimEnd()}${TRUNCATED_RESPONSE_SUFFIX}` : prefix.text;
   }
 
   const body = await readResponseWithLimit(response, maxBytes, {

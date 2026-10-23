@@ -19,6 +19,7 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyDispatchRuntimeInfo, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
+import { beginDiscordActiveTurnThreadRoute } from "../active-turn-thread-route.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import { discordTextHasBroadcastMention } from "../mentions.js";
 import { buildDiscordMessageProcessContext } from "./message-handler.context.js";
@@ -31,7 +32,6 @@ import {
   formatDiscordReasoningQuote,
   formatDiscordGroupThreadReply,
 } from "./message-handler.process-reply-runtime.js";
-import { createDiscordMessageActiveThreadRoute } from "./message-handler.process-thread-route.js";
 import { completeDiscordSessionConflict } from "./message-handler.retry.js";
 import {
   deliverDiscordReply,
@@ -141,15 +141,35 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   }
   const { ctxPayload, persistedSessionKey, record, replyPlan } = processContext;
   let deliverTarget = replyPlan.deliverTarget;
-  const activeThreadRoute = createDiscordMessageActiveThreadRoute({
-    sessionKey: ctxPayload.SessionKey,
+  const sourceMessageId = ctx.canonicalMessageId ?? message.id;
+  const sourceReplyReference = replyPlan.replyReference;
+  let adoptedThreadId: string | undefined;
+  // Delivery is dispatch-scoped: the model may continue after the message tool
+  // returns, but that continuation cannot undo the visible thread reply.
+  let threadReplyDelivered = false;
+  let onThreadAdopted: ((threadId: string) => Promise<void>) | undefined = undefined;
+  const endActiveThreadRoute = beginDiscordActiveTurnThreadRoute(ctxPayload.SessionKey, {
     accountId,
     sourceChannelId: messageChannelId,
-    sourceMessageId: ctx.canonicalMessageId ?? message.id,
-    sourceReplyReference: replyPlan.replyReference,
-    log: logVerbose,
+    sourceMessageId,
+    onThreadAdopted: async (threadId) => {
+      // Route identity must change before migration so a successful thread
+      // reply remains current-source even when moving the draft later fails.
+      adoptedThreadId = threadId;
+      await onThreadAdopted?.(threadId);
+    },
+    onThreadReplyDelivered: () => {
+      threadReplyDelivered = true;
+    },
+    onThreadAdoptionError: (error) => {
+      logVerbose(`discord: failed to move active progress into adopted thread (${String(error)})`);
+    },
   });
-  const replyReference = activeThreadRoute.replyReference;
+  const replyReference = {
+    peek: () => (adoptedThreadId ? undefined : sourceReplyReference.peek()),
+    use: () => (adoptedThreadId ? undefined : sourceReplyReference.use()),
+    markSent: () => sourceReplyReference.markSent(),
+  };
   const {
     replyPipeline,
     onModelSelected,
@@ -172,10 +192,10 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     feedbackRest: reactions.feedbackRest,
     deliveryRest: reactions.deliveryRest,
   });
-  activeThreadRoute.bindThreadAdoption(async (threadId) => {
+  onThreadAdopted = async (threadId) => {
     deliverTarget = `channel:${threadId}`;
     await draftPreview.retarget(threadId);
-  });
+  };
   const { lifecycle } = draftPreview;
   const hasCompletedFinalReply = () => lifecycle.finalSucceeded || lifecycle.previewFinalized;
   const observeFinalDelivery = async () => {
@@ -184,7 +204,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     }
     draftPreview.freezeProgress();
     const retainedProgress =
-      activeThreadRoute.threadReplyDelivered && !lifecycle.previewFinalized
+      threadReplyDelivered && !lifecycle.previewFinalized
         ? draftPreview.finalizeProgressDraft().catch((error: unknown) => {
             logVerbose(`discord: failed to finalize adopted thread progress (${String(error)})`);
           })
@@ -518,7 +538,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       dispatchAborted = true;
       return;
     }
-    if (activeThreadRoute.threadReplyDelivered) {
+    if (threadReplyDelivered) {
       await observeFinalDelivery();
     }
   } catch (err) {
@@ -548,7 +568,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     }
     throw err;
   } finally {
-    activeThreadRoute.end();
+    endActiveThreadRoute();
     endDeliveryCorrelation();
     dispatchError ||= readAgentRunTerminalOutcome(dispatchResult) === "failed";
     const finalReceipt = dispatchResult?.settledReceipt?.counts.final;

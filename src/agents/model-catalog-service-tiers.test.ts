@@ -1,10 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { assert, expect, it } from "vitest";
+import { projectModelServiceTiers } from "../gateway/server-methods/models-list-public-projection.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog-outcome.js";
 import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.js";
 import { evaluate, platformRoute } from "./model-auth-availability.test-support.js";
 import { providerConfig, snapshot as makeSnapshot } from "./model-catalog-fixtures.test-support.js";
-import { resolveModelCatalogServiceTiers } from "./model-catalog-service-tiers.js";
 import { createPreparedAccountCatalogAccess } from "./prepared-model-runtime.catalog-auth.js";
 
 const entry = { provider: "fixture", id: "opaque-model" };
@@ -38,8 +38,9 @@ const evaluation: ModelAuthAvailabilityEvaluation = {
 };
 const snapshot = (providerOutcomes: ProviderCatalogOutcome[] = [outcome]) =>
   makeSnapshot([], { providerOutcomes });
-function resolve(overrides: Partial<Parameters<typeof resolveModelCatalogServiceTiers>[0]> = {}) {
-  return resolveModelCatalogServiceTiers({
+function resolve(overrides: Partial<Parameters<typeof projectModelServiceTiers>[0]> = {}) {
+  return projectModelServiceTiers({
+    config: {},
     entry,
     evaluation,
     runtimeId: capability.runtimeId,

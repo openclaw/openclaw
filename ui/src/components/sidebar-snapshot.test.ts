@@ -440,15 +440,17 @@ describe("sidebar snapshot lifecycle", () => {
     expect(cancelIdle).toHaveBeenCalledWith(1);
   });
 
-  it.each(["timeout", "scope-change"] as const)(
-    "bounds a stalled transcript handoff and retires it on %s",
+  it.each(["incomplete-roster", "transcript", "scope-change"] as const)(
+    "bounds a stalled handoff and retires it on %s",
     async (boundary) => {
       const test = await warmFixture();
       test.foreground.foregroundReady = false;
       test.publish();
-      void test.settle();
+      if (boundary !== "incomplete-roster") {
+        void test.settle();
+      }
       test.snapshotOwner.synchronize();
-      await vi.advanceTimersByTimeAsync(1799);
+      await vi.advanceTimersByTimeAsync(2999);
       expect(test.host.sidebarSnapshot).toEqual(model);
       if (boundary === "scope-change") {
         test.publish({ selfUser: { id: "profile-b" } });
@@ -458,6 +460,21 @@ describe("sidebar snapshot lifecycle", () => {
       expect(test.capture).not.toHaveBeenCalled();
     },
   );
+
+  it("starts a new handoff deadline after reconnecting", async () => {
+    const test = await warmFixture();
+    test.publish();
+    await vi.advanceTimersByTimeAsync(2999);
+    test.publish({ phase: "reconnecting" });
+    await vi.advanceTimersByTimeAsync(3001);
+    test.publish();
+    expect(test.host.sidebarSnapshot).toEqual(model);
+    await vi.advanceTimersByTimeAsync(2999);
+    expect(test.host.sidebarSnapshot).toEqual(model);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(test.host.sidebarSnapshot).toBeNull();
+    expect(test.capture).not.toHaveBeenCalled();
+  });
 
   it.each(["idle", "pagehide", "hidden"] as const)(
     "coalesces a burst and persists its latest shape on %s for the next reload",

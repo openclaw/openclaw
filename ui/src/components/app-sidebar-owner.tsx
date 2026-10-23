@@ -14,6 +14,7 @@ import "./tooltip.ts";
 import { renderAppSidebarOnline, sidebarOnlineOrder } from "./app-sidebar-online.tsx";
 import { hidePersonalSidebarCatalog } from "./app-sidebar-personal-navigation.ts";
 import { renderSidebarRail, renderSidebarPages } from "./app-sidebar-rail.tsx";
+import "../styles/sidebar-reorder.css";
 import "../styles/app-sidebar.css";
 import "../styles/sidebar-rail.css";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.tsx";
@@ -161,13 +162,17 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
 
   // Token suppression and schema validation stay behind the live-activity boundary.
   narration: SidebarNarration | null = null;
-  private narrationLoad: Promise<SidebarNarration> | null = null;
-  loadNarration(): SidebarNarration | Promise<SidebarNarration> {
+  private narrationLoad: Promise<SidebarNarration | null> | null = null;
+  loadNarration(): SidebarNarration | Promise<SidebarNarration | null> {
     return (
       this.narration ??
-      (this.narrationLoad ??= import("./app-sidebar-session-narration.ts").then(
-        (module) => (this.narration = module.createSidebarNarration()),
-      ))
+      (this.narrationLoad ??= import("./app-sidebar-session-narration.ts")
+        .then((module) => (this.narration = module.createSidebarNarration()))
+        .catch(() => {
+          // Optional row decoration degrades until the next live-activity activation.
+          this.narrationLoad = null;
+          return null;
+        }))
     );
   }
   constructor(

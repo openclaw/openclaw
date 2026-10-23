@@ -107,6 +107,10 @@ the current run's latest stop and restarts the installed package after Doctor's
 writers settle. It records the observed recovery outcome while preserving the
 failed update result. Earlier runs' stop receipts never authorize that restart;
 operator-stopped services and explicit data-risk refusals remain stopped.
+Normal Doctor exits do not require a separate process-settlement receipt. On
+Windows, recovery restores the suspended Scheduled Task before restarting the
+Gateway, while preserving the failed Doctor check IDs in the update report.
+This recovery behavior requires the installed updater to contain the fix.
 
 After activation succeeds, a failure to read or publish update reporting leaves
 the updated installation in place. Reporting failures do not trigger package
@@ -603,6 +607,10 @@ the installation repair command. These maintenance warnings also appear in
 | `--yes`                                          | Skip confirmation prompts.                                                                                                                                                                                                                                                                       |
 | `--accept-capabilities`                          | Accept each plugin's reviewed capability changes while repairing plugin state.                                                                                                                                                                                                                   |
 | `--no-restart`                                   | Accepted for parity; repair does not request update activation. The repair parent restores a Gateway it stopped for maintenance.                                                                                                                                                                 |
+
+An invalid `--channel` exits with status 1 without changing the configured channel.
+With `--json`, stdout contains a JSON error object (`ok: false`, `error.type: "cli_error"`)
+and stderr retains the diagnostic. You can place `--json` before or after `repair`.
 
 Untouched, identityless 2026.9.2-era update admissions heal automatically after
 more than 24 hours. Gateway startup, `openclaw update status`, and `openclaw status`

@@ -8,7 +8,6 @@ import {
   normalizeUpdateFailureFacts,
   type UpdateFailureFact,
 } from "../../infra/update-failure-facts.js";
-import type { UpdateRepairValidation } from "../../infra/update-repair-protocol.js";
 import {
   getUpdateRun,
   recordUpdateRunStep,
@@ -119,7 +118,7 @@ export async function recordFailedUpdateGatewayState(
   const facts = await readFailedUpdateGatewayState(run, env, timeoutMs);
   assertCurrent();
   if (run && facts) {
-    recordUpdateRunVerification(run.runId, facts, { env: run.env });
+    recordUpdateRunVerification(run.runId, facts, run);
   }
 }
 
@@ -167,7 +166,7 @@ export async function verifyPreviousManagedGatewayForUpdate(
           : "Previous gateway was not verified; automatic rollback cannot restart it.",
         endedAtMs: Date.now(),
       },
-      { env: run.env },
+      run,
     );
   }
 }
@@ -212,12 +211,13 @@ export async function verifyUpdatedGateway(
     onVerified?: (verifiedAtMs: number) => void;
     purpose?: "recovery" | "package-replacement";
   },
-): Promise<
-  UpdateRepairValidation & {
-    pluginWarnings?: PluginUpdateWarning[];
-    serviceDefinitionRefusal?: SystemdServiceStartRefusal;
-  }
-> {
+): Promise<{
+  ok: boolean;
+  summary: string;
+  stopReason?: string;
+  pluginWarnings?: PluginUpdateWarning[];
+  serviceDefinitionRefusal?: SystemdServiceStartRefusal;
+}> {
   const startedAtMs = Date.now();
   const { proofOptions, assertCurrent } = captureUpdateGatewayReadinessOwner(params);
   const { health, readyz, http, launchAgentRecovery } = await observeUpdateGatewayReadiness({
@@ -260,7 +260,7 @@ export async function verifyUpdatedGateway(
     recordUpdateRunVerification(
       proofOptions.run.runId,
       updateGatewayHealthFacts(health, params.gatewayPort, readyz, http?.coreReady),
-      { env: proofOptions.run.env },
+      proofOptions.run,
     );
   }
   const serviceDefinitionRefusal = health.runtime?.systemd?.startRefusal;
@@ -271,7 +271,6 @@ export async function verifyUpdatedGateway(
   ) {
     return {
       ok: false,
-      score: 0,
       summary: serviceDefinitionRefusal.message,
       serviceDefinitionRefusal,
     };
@@ -321,7 +320,7 @@ export async function verifyUpdatedGateway(
         recordUpdateRunStep(
           run.runId,
           { failureFacts: undefined, ...row, endedAtMs, detail: row.detail ?? detail },
-          { env: run.env },
+          run,
         );
       }
     }
@@ -360,7 +359,6 @@ export async function verifyUpdatedGateway(
     }
     return {
       ok: true,
-      score: 7,
       summary: health.authenticationError
         ? "Gateway service, version, and readiness verified through local HTTP; RPC authentication needs attention."
         : verificationWarnings.length > 0
@@ -382,7 +380,6 @@ export async function verifyUpdatedGateway(
     defaultRuntime.error(detail);
     return {
       ok: false,
-      score: 0,
       summary: "Gateway is still starting; readiness remains unverified.",
       stopReason:
         health.waitOutcome === "still-starting" ? "still-starting" : "gateway-readiness-pending",
@@ -476,16 +473,7 @@ export async function verifyUpdatedGateway(
       defaultRuntime.log(theme.muted(line));
     }
   }
-  const score = [
-    serviceRunning,
-    !health.versionMismatch,
-    !health.buildIdMismatch,
-    !health.activatedPluginErrors?.length,
-    !health.channelProbeErrors?.length,
-    health.healthy,
-    readyz,
-  ].filter(Boolean).length;
-  return { ok: params.purpose === "package-replacement", score, summary: reason };
+  return { ok: params.purpose === "package-replacement", summary: reason };
 }
 
 export { verifyPreviousGatewayForUpdate } from "./update-command-readiness.js";

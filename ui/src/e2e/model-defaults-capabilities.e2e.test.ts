@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { configAuth } from "./model-catalog-fixtures.test-support.ts";
 import { requestRaw, resolveConfigMutation } from "./model-providers.test-support.ts";
 import { configSnapshot } from "./model-setup-fixtures.test-support.ts";
 
@@ -41,7 +42,7 @@ suite.define(() => {
             "config.get": configSnapshot(config, "qa-defaults"),
             "models.authStatus": {
               ts: 1,
-              providers: [{ provider: "openai", profiles: [], apiKey: { source: "config" } }],
+              providers: [configAuth("openai")],
             },
           },
         });

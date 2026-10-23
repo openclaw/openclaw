@@ -184,7 +184,6 @@ type SessionCleanupOptions = {
   childAgentId?: string;
   isCurrent?: () => boolean;
   emitLifecycleHooks?: boolean;
-  deleteTranscript?: boolean;
   expectedSessionId?: string;
   expectedLifecycleRevision?: string;
   callGateway?: GatewayCall;
@@ -199,7 +198,7 @@ function requestProvisionalSessionCleanup(
     ...options,
     childSessionKey,
     callGateway: options?.callGateway ?? callSubagentGateway,
-    deleteTranscript: options?.deleteTranscript === true,
+    deleteTranscript: true,
     timeoutMs: options?.timeoutMs ?? SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS,
   });
 }
@@ -218,7 +217,6 @@ export async function cleanupFailedSpawnBeforeAgentStart(params: {
   childAgentId?: string;
   attachmentId?: string;
   emitLifecycleHooks?: boolean;
-  deleteTranscript?: boolean;
   waitForSessionDeletion?: boolean;
   waitForCleanup?: () => Promise<void> | undefined;
   expectedSessionId?: string;
@@ -333,7 +331,6 @@ export async function terminateAcceptedCollectorRun(params: {
   }
   const cleanup = await requestProvisionalSessionCleanup(params.childSessionKey, {
     isCurrent: params.isCurrent,
-    deleteTranscript: true,
     expectedSessionId: params.expectedSessionId,
     expectedLifecycleRevision: params.expectedLifecycleRevision,
     callGateway: call,

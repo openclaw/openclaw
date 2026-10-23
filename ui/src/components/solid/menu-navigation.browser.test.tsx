@@ -411,7 +411,7 @@ describe("Solid menu navigation", () => {
     trigger("people-move").focus();
     await userEvent.keyboard(dir === "ltr" ? "{ArrowRight}" : "{ArrowLeft}");
     await phase(surface("people-move"), "open");
-    expect(surface("people-assign").matches(":popover-open")).toBe(false);
+    await phase(surface("people-assign"), "hidden");
     expect(document.activeElement).toBe(item("Engineering", "people-move"));
     await userEvent.keyboard(dir === "ltr" ? "{ArrowLeft}" : "{ArrowRight}");
     expect(document.activeElement).toBe(trigger("people-move"));

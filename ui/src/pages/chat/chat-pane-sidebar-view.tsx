@@ -1,6 +1,5 @@
 import { dynamic } from "@solidjs/web";
 import { For, Show, createSignal, onSettled } from "solid-js";
-import { shellViewport } from "../../app/shell-viewport.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
@@ -222,9 +221,6 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
     onSettled(() => props.mobileScrollFades?.connect(shell));
     return undefined;
   };
-  onSettled(() =>
-    shellViewport.subscribe(() => props.mobileHost?.onViewportChange(shellViewport.snapshot)),
-  );
   const column = () => props.layout.columns[0];
   const visiblePanels = () =>
     column()?.panels.filter(

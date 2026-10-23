@@ -153,6 +153,7 @@ export function buildReleasePrepushPlan(
   headSha: string,
   cwd: string,
   env: NodeJS.ProcessEnv = process.env,
+  trustedPolicyRef: string = baseSha,
 ): ReleasePrepushCommand[] {
   return [
     {
@@ -167,7 +168,13 @@ export function buildReleasePrepushPlan(
       bin: "pnpm",
       args: ["check:changed", "--base", baseSha, "--head", headSha],
       cwd,
-      env: { ...env, CI: "1", OPENCLAW_LOCAL_CHECK: "0" },
+      env: {
+        ...env,
+        CHECKOUT_BASE_SHA: baseSha,
+        CI: "1",
+        OPENCLAW_LOCAL_CHECK: "0",
+        OPENCLAW_OXLINT_TRUSTED_POLICY_REF: trustedPolicyRef,
+      },
     },
     {
       name: "production dead-code gate",
@@ -258,7 +265,13 @@ export async function runReleasePrepush(
 
   const validationCheckout = dependencies.createValidationCheckout(headSha);
   try {
-    for (const command of buildReleasePrepushPlan(comparisonBaseSha, headSha, validationCheckout)) {
+    for (const command of buildReleasePrepushPlan(
+      comparisonBaseSha,
+      headSha,
+      validationCheckout,
+      process.env,
+      baseSha,
+    )) {
       const status = await dependencies.runCommand(command);
       if (status !== 0) {
         console.error(`[release:prepush] failed: ${command.name}`);

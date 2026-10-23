@@ -257,36 +257,24 @@ describe("createGatewayEventLoopHealthMonitor", () => {
     await harness.samples(50, { delayMaxMs: 30, reasons: ["event_loop_utilization", "cpu"] });
   });
 
-  it.each([0, 4, 50])("keeps overdue reads passive after %s samples", async (priorSamples) => {
-    const loaded = priorSamples === 0;
-    const harness = createMonitorHarness(loaded ? { cpuMsPerWallMs: 1, utilization: 1 } : {});
-    await harness.samples(priorSamples);
-    const previous = harness.monitor.snapshot();
+  it("keeps overdue reads passive before the first sample under load", async () => {
+    const harness = createMonitorHarness({ cpuMsPerWallMs: 1, utilization: 1 });
     harness.elapseWithoutSampling(1_200);
     for (let index = 0; index < 100; index++) {
-      expect(harness.monitor.snapshot()).toBe(previous);
-      if (loaded) {
-        expect(harness.monitor.persistentDegradationSnapshot()).toBeUndefined();
-      }
+      expect(harness.monitor.snapshot()).toBeUndefined();
+      expect(harness.monitor.persistentDegradationSnapshot()).toBeUndefined();
     }
-    if (loaded) {
-      expect(previous).toBeUndefined();
-      expect(harness.cpuUsage).toHaveBeenCalledTimes(1);
-      expect(harness.eventLoopUtilization).toHaveBeenCalledTimes(1);
-    }
+    expect(harness.cpuUsage).toHaveBeenCalledTimes(1);
+    expect(harness.eventLoopUtilization).toHaveBeenCalledTimes(1);
     await harness.sample();
     const current = harness.monitor.snapshot();
     expect(current?.delayMaxMs).toBeGreaterThanOrEqual(1_200);
-    if (loaded) {
-      expect(current?.delayMaxMs).toBeLessThanOrEqual(1_200.5);
-      harness.expectHealth({
-        degraded: true,
-        intervalMs: 1_220,
-        reasons: ["event_loop_delay", "event_loop_utilization", "cpu"],
-      });
-    } else {
-      harness.expectHealth({ degraded: true, reasons: ["event_loop_delay"] });
-    }
+    expect(current?.delayMaxMs).toBeLessThanOrEqual(1_200.5);
+    harness.expectHealth({
+      degraded: true,
+      intervalMs: 1_220,
+      reasons: ["event_loop_delay", "event_loop_utilization", "cpu"],
+    });
     expect(harness.monitor.snapshot()).toBe(current);
   });
 
@@ -417,11 +405,6 @@ describe("event-loop measurement telemetry", () => {
     subscribe: () => () => void | Promise<void>;
   }>([
     { name: "no listener", subscribe: () => () => {} },
-    { name: "public listener", subscribe: () => onDiagnosticEvent(() => {}) },
-    {
-      name: "unrelated listener",
-      subscribe: () => onInternalDiagnosticEvent(() => {}, { include: ["diagnostic.heartbeat"] }),
-    },
     {
       name: "stability recorder",
       subscribe: () => {

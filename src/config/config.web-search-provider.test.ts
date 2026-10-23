@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { assert, expect, it, vi } from "vitest";
 import { loadPluginManifestRegistryCore } from "../plugins/manifest-registry.js";
 import { buildWebSearchProviderConfig } from "./test-helpers.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
@@ -99,19 +99,23 @@ it.each([
     'web_search provider is not available: brave (install or enable plugin "brave", then run openclaw doctor --fix)',
     ["brave"],
   ],
+  [
+    "Brave",
+    missingPlugins,
+    'web_search provider is not available: Brave (install or enable plugin "brave", then run openclaw doctor --fix)',
+    ["brave"],
+  ],
   ["brvae", undefined, "unknown web_search provider: brvae", ["acme-search", "brave", "gemini"]],
 ] as const)("rejects unavailable provider %s", (provider, options, message, allowedValues) => {
   const result = validateWebSearchConfig(searchConfig(provider), options);
-  expect(result.ok).toBe(false);
-  if (!result.ok) {
-    expect(result.issues).toContainEqual(
-      expect.objectContaining({
-        path: "tools.web.search.provider",
-        message,
-        allowedValues: expect.arrayContaining([...allowedValues]),
-      }),
-    );
-  }
+  assert(!result.ok);
+  expect(result.issues).toContainEqual(
+    expect.objectContaining({
+      path: "tools.web.search.provider",
+      message,
+      allowedValues: expect.arrayContaining([...allowedValues]),
+    }),
+  );
 });
 
 it("warns for unavailable installable providers with stale plugin config", () => {
@@ -131,4 +135,14 @@ it("warns for unknown provider ids with stale plugin config", () => {
       message: expect.stringContaining("unknown web_search provider: missing-third-party"),
     }),
   );
+});
+
+it("accepts provider ids that differ from the manifest only in case or padding", () => {
+  for (const provider of ["Brave", "BRAVE", " brave "]) {
+    const res = validateWebSearchConfig(searchConfig(provider));
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.warnings).toEqual([]);
+    }
+  }
 });

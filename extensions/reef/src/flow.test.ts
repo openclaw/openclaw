@@ -3,7 +3,6 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   canonicalBytes,
-  generateIdentity,
   guardInstructions,
   openClaimed,
   sha256Hex,
@@ -13,21 +12,17 @@ import {
 } from "../protocol/index.js";
 import { MemoryReplayStore } from "../protocol/memory-stores.test-support.js";
 import { ReefChannelConfigSchema } from "./config-schema.js";
-import { ReefMessageFlow } from "./flow.js";
 import {
   allow,
   config,
+  createFlow,
   envelope,
-  guard,
   peerTrust,
-  reefKeys,
   resetFlowStoresForTests,
-  transport,
-  workerFlowStores,
 } from "./flow.test-helpers.js";
 import { createConfiguredGuard } from "./guard.js";
 import { setReefRuntime } from "./runtime.js";
-import { ReefInboxEntryParkedError, type ReefTransportClient } from "./transport.js";
+import { ReefInboxEntryParkedError } from "./transport.js";
 import type { InboxEntry } from "./types.js";
 
 const oauthGuardModel = "gpt-5.6-terra";
@@ -101,42 +96,6 @@ afterEach(() => {
   vi.unstubAllEnvs();
   return resetFlowStoresForTests();
 });
-
-async function createFlow({
-  handle = "bob",
-  peer = "alice",
-  verdicts = [allow],
-  replay = new MemoryReplayStore(),
-}: { handle?: string; peer?: string; verdicts?: Verdict[]; replay?: ReplayStore } = {}) {
-  const keys = reefKeys();
-  const peerKeys = generateIdentity();
-  const cfg = config();
-  cfg.handle = handle;
-  const { trusted, audit, ...stores } = await workerFlowStores(cfg, {
-    [peer]: peerTrust(peerKeys),
-  });
-  const relay = transport();
-  const classifier = guard(...verdicts);
-  const onIngress = vi.fn<ConstructorParameters<typeof ReefMessageFlow>[0]["onIngress"]>(
-    async () => {},
-  );
-  const flow = new ReefMessageFlow({
-    config: cfg,
-    trust: trusted,
-    keys,
-    transport: relay as unknown as ReefTransportClient,
-    guard: classifier,
-    audit,
-    replay,
-    ...stores,
-    onIngress: async (message, assertCurrent) => {
-      assertCurrent();
-      await onIngress(message, assertCurrent);
-    },
-    onOwnerNotice: async () => {},
-  });
-  return { keys, peerKeys, trusted, relay, stores, classifier, audit, onIngress, flow };
-}
 
 describe("createConfiguredGuard", () => {
   it("rejects a whitespace-only guard credential", () => {
@@ -429,26 +388,6 @@ describe("ReefMessageFlow outbound", () => {
       ),
     );
     await expect(reviews.request(request)).resolves.toBeUndefined();
-  });
-
-  it("stops a guard denial before transport send", async () => {
-    const deny: Verdict = {
-      ...allow,
-      decision: "deny",
-      category: "confidential",
-      reason: "Denied.",
-    };
-    const { relay, flow } = await createFlow({ handle: "alice", peer: "bob", verdicts: [deny] });
-    const onPlatformSendDispatch = vi.fn(async () => undefined);
-
-    await expect(
-      flow.send("bob", "ordinary text", { onPlatformSendDispatch }),
-    ).rejects.toMatchObject({
-      stage: "guard",
-      message: expect.stringContaining("Do not retry or rephrase it automatically"),
-    });
-    expect(onPlatformSendDispatch).not.toHaveBeenCalled();
-    expect(relay.sendEnvelope).not.toHaveBeenCalled();
   });
 });
 

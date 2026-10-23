@@ -81,28 +81,6 @@ it.each([false, true])(
 
     for (const entry of evidence.entries) {
       expect(entry.result.status).toBe("pass");
-      expect(entry.execution).toMatchObject({
-        runner: "host",
-        provider: {
-          id: "openai",
-          live: false,
-          fixture: "mock-openai",
-          model: {
-            name: "gpt-5.6-luna",
-            ref: "mock-openai/gpt-5.6-luna",
-          },
-        },
-        channel: {
-          id: "qa-channel",
-          live: false,
-        },
-        packageSource: { kind: "source-checkout" },
-      });
-      expect(entry.execution?.environment).toEqual({
-        ref: expect.any(String),
-        os: expect.any(String),
-        nodeVersion: expect.stringMatching(/^v\d+/u),
-      });
       expect(entry.execution?.artifacts).toEqual([
         {
           kind: "scenario-observation",

@@ -236,6 +236,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
     if (!client || this.disposed) {
       return;
     }
+    const context = this.getContext();
     const generation = ++this.refreshGeneration;
     // Explicit reload supersedes pending activation even when a plugin's async
     // initializer never settles; retained host closures are revoked immediately.
@@ -252,7 +253,12 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
       const sameOrigin = hasSameOriginGatewayTransport(client.gatewayUrl);
       const [catalog, bootstrap] = await Promise.all([
         client.request<PluginsControlUiCatalog>("plugins.controlUi.list", {}),
-        sameOrigin ? this.getContext().config.refresh({ ifNeeded: reuseBootstrap }) : null,
+        sameOrigin
+          ? context.config.refresh({
+              ifNeeded: reuseBootstrap,
+              signal: context.lifecycleAbortSignal,
+            })
+          : null,
       ]);
       if (!current()) {
         return;
@@ -284,11 +290,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
             ? `Native plugin UI requires the Control UI served by the connected Gateway. Open ${gatewayUrl.origin} and reconnect there.`
             : !bootstrap
               ? "Could not authenticate native plugin assets. Reconnect and retry."
-              : controlUiPluginAssetGrantError(
-                  descriptor,
-                  bootstrap,
-                  this.getContext().resourceBasePath,
-                );
+              : controlUiPluginAssetGrantError(descriptor, bootstrap, context.resourceBasePath);
           if (grantError) {
             installed.delete(descriptor.pluginId);
             const error = new Error(grantError);
@@ -363,8 +365,9 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
     }
     this.grantTimer = setInterval(() => {
       if (this.client && this.owners.size) {
-        void this.getContext()
-          .config.refresh()
+        const context = this.getContext();
+        void context.config
+          .refresh({ signal: context.lifecycleAbortSignal })
           .catch((error: unknown) => this.reportError("host", error));
       }
     }, CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS / 2);

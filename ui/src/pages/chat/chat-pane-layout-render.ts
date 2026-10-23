@@ -19,12 +19,13 @@ import { resolveChatPaneDesktopTarget } from "./chat-pane-placement.ts";
 import type { createChatPaneRails } from "./chat-pane-rails.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import { renderSidebarRegion } from "./chat-pane-sidebar-layout.ts";
+import { hasTerminalRunStatus } from "./chat-run-working.ts";
 import { createSideChatModelControlProps } from "./chat-session-companion-model-controls.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createChatToolIcons, type PluginToolIcons } from "./chat-tool-icon-controller.ts";
 import type { ChatProps } from "./chat-view.tsx";
 import { publishChatWorkContext } from "./chat-work-context.ts";
-import { getChatComposerState, hasTerminalRunStatus } from "./components/chat-composer-state.ts";
+import { getChatComposerState } from "./components/chat-composer-state.ts";
 import type { ChatDetailsElements } from "./components/chat-details.tsx";
 import type { SidebarRegionCallbacks } from "./components/chat-sidebar-region-types.ts";
 import { resolveAssistantDisplayAvatar } from "./components/chat-welcome.ts";
@@ -222,7 +223,16 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
       chatProps.canAbort &&
       chatProps.onAbort &&
       !hasTerminalRunStatus(chatProps.runStatus)
-        ? { onAbort: chatProps.onAbort }
+        ? {
+            target: JSON.stringify([
+              this.connectionGeneration,
+              state.sessionKey,
+              state.currentSessionId,
+              observerRunId ?? state.chatRunId,
+              selectedSession?.activeRunIds,
+            ]),
+            onAbort: chatProps.onAbort,
+          }
         : undefined;
     const subagentStopInNotice =
       this.sessionPresentation === "desktop" &&
