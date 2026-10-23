@@ -250,8 +250,11 @@ export const cronHandlers: GatewayRequestHandlers = {
     }
     const callerScope = readCronCallerScope(client);
     const jobCreate = applyCronCreateCallerScopeDefault(candidate as CronJobCreate, callerScope);
-    const { assertCurrent: assertCreatorSessionCurrent, ...creatorOptions } =
-      captureCronCreatorSession(jobCreate, callerScope, client);
+    const {
+      assertCurrent: assertCreatorSessionCurrent,
+      assertOperatorSourceCurrent,
+      ...creatorOptions
+    } = captureCronCreatorSession(jobCreate, callerScope, client);
     let captureRuntimeAuthority: (() => CronRuntimeAuthority | undefined) | undefined;
     let assertCapturedAuthorityCurrent: (() => void) | undefined;
     try {
@@ -270,6 +273,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       assertMutationCurrent?.();
       assertCapturedAuthorityCurrent?.();
       assertCreatorSessionCurrent();
+      assertOperatorSourceCurrent?.();
     };
     const cfg = context.getRuntimeConfig();
     if (

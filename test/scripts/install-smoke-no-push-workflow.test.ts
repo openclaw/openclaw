@@ -758,7 +758,7 @@ describe("install smoke no-push root image transport", () => {
     });
     expect(step(bunConsumer, "Setup trusted release harness for Bun smoke")).toMatchObject({
       uses: "./.release-harness/.github/actions/setup-release-harness",
-      with: { "node-version": "24.x" },
+      with: { "node-version": "24.22.1" },
     });
     const bunVerify = step(bunConsumer, "Verify candidate payload contents");
     expect(bunVerify.env).toMatchObject({

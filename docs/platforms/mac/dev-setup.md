@@ -16,7 +16,7 @@ the Xcode requirements below.
 
 - **Xcode 26.4+** (Swift 6.3 toolchain), on the latest macOS available in
   Software Update.
-- **Node.js 24.16+ or 26.1+ & pnpm** for the gateway, CLI, and packaging scripts.
+- **Node.js 24.22.1+ or 26.12.1+ & pnpm** for the gateway, CLI, and packaging scripts.
 
 macOS shell tooling uses the system `/bin/bash` (3.2); Homebrew Bash is not
 required. Run scripts directly or with `/bin/bash`. Bash 5.3+ can stall on a

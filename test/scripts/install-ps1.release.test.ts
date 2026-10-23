@@ -234,12 +234,12 @@ function Invoke-NpmCommand { throw 'unexpected npm invocation' }
 function Invoke-RestMethod {
     param([string]$Uri, [int]$TimeoutSec)
     if ($Uri -ne 'https://nodejs.org/dist/index.json') { throw "unexpected metadata URL: $Uri" }
-    return @([pscustomobject]@{ version = 'v26.1.0'; files = @('win-x64-zip', 'win-arm64-zip') })
+    return @([pscustomobject]@{ version = 'v26.12.1'; files = @('win-x64-zip', 'win-arm64-zip') })
 }
 function Save-InstallerDownload {
     param([string]$Uri, [string]$OutFile)
     if ($script:Scenario -eq 'download') { throw 'fixture download failure' }
-    if ($Uri -eq 'https://nodejs.org/dist/v26.1.0/SHASUMS256.txt') {
+    if ($Uri -eq 'https://nodejs.org/dist/v26.12.1/SHASUMS256.txt') {
         $archive = Get-ChildItem -LiteralPath (Split-Path -Parent $OutFile) -Filter '*.zip' | Select-Object -First 1
         $hash = (Get-FileHash -LiteralPath $archive.FullName -Algorithm SHA256).Hash
         if ($script:Scenario -eq 'checksum') { $hash = '0' * 64 }
@@ -247,7 +247,7 @@ function Save-InstallerDownload {
         [IO.File]::WriteAllText($OutFile, "$hash  $name")
         return
     }
-    if ($Uri -notmatch '^https://nodejs\.org/dist/v26\.1\.0/node-v26\.1\.0-win-(x64|arm64)\.zip$') { throw "unexpected archive URL: $Uri" }
+    if ($Uri -notmatch '^https://nodejs\.org/dist/v26\.12\.1/node-v26\.12\.1-win-(x64|arm64)\.zip$') { throw "unexpected archive URL: $Uri" }
     [IO.File]::WriteAllText($OutFile, 'downloaded archive bytes')
 }
 function Expand-PortableNodeArchive {
@@ -528,8 +528,8 @@ try {
           "  return $script:FixtureSqlite",
           "}",
           "foreach ($case in @(",
-          "  @{ version = 'v24.19.0'; text = $true; expected = $true },",
-          "  @{ version = 'v24.19.0'; text = $false; expected = $false },",
+          "  @{ version = 'v24.22.1'; text = $true; expected = $true },",
+          "  @{ version = 'v24.22.1'; text = $false; expected = $false },",
           "  @{ version = 'v24.15.0+vendor.1'; text = $true; expected = $false },",
           "  @{ version = 'v26.0.0+vendor.1'; text = $true; expected = $false },",
           "  @{ version = 'v24.15.0'; text = $false; expected = $false },",
@@ -661,7 +661,7 @@ try {
           "",
           "function private-node-fixture {",
           "  $global:LASTEXITCODE = 0",
-          "  if ($args[0] -eq '-v') { return 'v26.1.0' }",
+          "  if ($args[0] -eq '-v') { return 'v26.12.1' }",
           "  $input | Out-Null",
           "  return (@{ available = $true; version = $script:FixtureSqliteVersion; text = $true; blob = $true; json = $true } | ConvertTo-Json -Compress)",
           "}",
@@ -2144,7 +2144,7 @@ function Get-Command {
 function Invoke-FixtureNode {
     $global:LASTEXITCODE = 0
     if ($args[0] -eq '-v') {
-        return 'v26.1.0'
+        return 'v26.12.1'
     }
     $probe = @($input) -join [Environment]::NewLine
     if (-not $probe.Contains('CREATE TABLE probe') -or -not $probe.Contains('a\u0000b\u0000')) {

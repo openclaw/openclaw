@@ -504,6 +504,7 @@ describe("candidate update admission", () => {
   });
 
   it("uses the explicit installed root and emits one JSON verdict without creating live state", async () => {
+    vi.spyOn(runtimeGuard, "nodeVersionSatisfiesEngine").mockReturnValue(true);
     const before = snapshotFiles();
     const program = new Command().name("openclaw");
     registerUpdateCli(program);

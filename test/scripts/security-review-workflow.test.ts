@@ -206,7 +206,7 @@ describe("security review workflow trust boundaries", () => {
                 name: "Setup supported Node runtime",
                 "timeout-minutes": 3,
                 uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
-                with: { "node-version": "24.21.0", "package-manager-cache": false },
+                with: { "node-version": "24.22.1", "package-manager-cache": false },
               },
             ]
           : [],
@@ -576,7 +576,7 @@ describe("security review workflow trust boundaries", () => {
     const setup = runtimeAction.runs.steps.filter((step) => step.uses);
     expect(setup).toHaveLength(1);
     expect(setup[0]?.uses).toMatch(/^actions\/setup-node@[a-f0-9]{40}$/u);
-    expect(setup[0]?.with).toEqual({ "node-version": "24.x", "package-manager-cache": false });
+    expect(setup[0]?.with).toEqual({ "node-version": "24.22.1", "package-manager-cache": false });
     for (const step of runtimeAction.runs.steps) {
       expect(step.env).toBeUndefined();
       expect(JSON.stringify(step)).not.toMatch(/github\.token|secrets\.|github\.event/u);

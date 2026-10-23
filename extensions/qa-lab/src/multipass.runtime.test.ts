@@ -316,7 +316,7 @@ describe("qa multipass runtime", () => {
     ["22.99.0", "24.99.0"],
     ["24.15.0", "24.99.0"],
     ["25.1.0", "24.99.0"],
-    ["24.16.0", "24.16.0"],
+    ["24.22.1", "24.22.1"],
     ["26.1.0", "24.99.0"],
   ])("bootstraps a runnable guest toolchain from Node %s", async (version, expectedVersion) => {
     const { executableScript } = await captureGuestScriptsAtTransfer({

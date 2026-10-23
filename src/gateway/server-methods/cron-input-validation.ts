@@ -4,6 +4,7 @@ import {
   readStringField,
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { createRestartRecoveryOperatorSource } from "../../agents/operator-run-recovery-source.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   assertValidCronAnnounceDelivery,
@@ -22,6 +23,7 @@ import {
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
   isAgentHarnessSessionKey,
 } from "../../sessions/agent-harness-session-key.js";
+import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import type { CronCallerScope } from "./cron-caller-scope.js";
@@ -215,8 +217,26 @@ export function captureCronCreatorSession(
   const isolatedAgentTurn = job.sessionTarget === "isolated" && job.payload.kind === "agentTurn";
   const sessionKey = callerScope?.sessionKey ?? (isolatedAgentTurn ? job.sessionKey : undefined);
   const agentId = callerScope?.agentId ?? job.agentId;
+  const operatorAuthority = client?.internal?.operatorRunAuthority;
   const loaded = sessionKey ? loadGatewaySessionEntryReadOnly(sessionKey, { agentId }) : undefined;
   const creatorSession = loaded?.entry;
+  const operatorSource =
+    callerScope &&
+    loaded &&
+    creatorSession &&
+    operatorAuthority &&
+    operatorScopeSatisfied("operator.write", operatorAuthority.scopes) &&
+    job.payload.kind === "agentTurn" &&
+    job.sessionTarget === `session:${loaded.canonicalKey}` &&
+    client?.internal?.agentRuntimeIdentity
+      ? createRestartRecoveryOperatorSource({
+          authority: operatorAuthority,
+          entry: creatorSession,
+          agentId: loaded.agentId,
+          sessionKey: loaded.canonicalKey,
+          sourceRunId: client.internal.agentRuntimeIdentity.operationalRunInstance.runId,
+        })
+      : undefined;
   const sourceConversation =
     isolatedAgentTurn && loaded && creatorSession?.sessionId
       ? {
@@ -233,6 +253,8 @@ export function captureCronCreatorSession(
   const createdActor = actor ? { ...actor, ...(actorId ? { id: actorId } : {}) } : undefined;
   const selectionIdentity = JSON.stringify(creatorSession?.skillLibrarySelections);
   return {
+    ...(operatorSource ? { operatorSource } : {}),
+    assertOperatorSourceCurrent: operatorSource ? operatorAuthority?.assertCurrent : undefined,
     ...(sourceConversation ? { sourceConversation } : {}),
     ...(createdActor ? { createdActor } : {}),
     ...(callerScope && creatorSession?.skillLibrarySelections

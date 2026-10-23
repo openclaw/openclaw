@@ -6,7 +6,6 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { build as esbuild } from "esbuild";
 import { afterEach, describe, expect, it } from "vitest";
-import { parseNodeReleaseVersion } from "../node-version.mjs";
 import {
   inspectManagedProcessGroup,
   terminateManagedChild,
@@ -575,8 +574,8 @@ describe("openclaw launcher", () => {
     });
 
     it.each([
-      { version: "24.15.0", broken: false },
-      { version: "26.8.1", broken: true },
+      { version: "24.22.1", broken: false },
+      { version: "26.12.1", broken: true },
     ])(
       "admits pending lifecycle according to SQLite capability: $version",
       async ({ version, broken }) => {
@@ -677,13 +676,14 @@ describe("openclaw launcher", () => {
     expect(result.stdout).toMatch(/OpenClaw 2026\.9\.3|diagnostic-entry/);
   });
 
-  it("admits lossless Node builds outside the support table while retaining the major floor", async () => {
+  it("requires the TLS security release floor even when SQLite is lossless", async () => {
     const fixtureRoot = await makeLauncherFixture(fixtures);
     await fs.writeFile(
       path.join(fixtureRoot, "dist", "entry.js"),
       'process.stdout.write("runtime-loaded\\n");\n',
       "utf8",
     );
+    const admitted = new Set(["24.22.1", "26.12.1"]);
 
     for (const version of NODE_RELEASE_VERSION_CASES) {
       const mockNodeVersionPath = path.join(fixtureRoot, `mock-node-version-${version}.mjs`);
@@ -713,13 +713,13 @@ describe("openclaw launcher", () => {
         },
       );
 
-      if ((parseNodeReleaseVersion(version)?.major ?? 0) >= 24) {
+      if (admitted.has(version)) {
         expect(result.status, version).toBe(0);
         expect(result.stdout, version).toContain("runtime-loaded");
       } else {
         expect(result.status, version).toBe(1);
         expect(result.stderr, version).toContain(
-          `openclaw: Node ${version}: openclaw requires Node >=24.16.0 <25, or >=26.1.0.`,
+          `openclaw: Node ${version}: openclaw requires Node >=24.22.1 <25, or >=26.12.1.`,
         );
       }
     }

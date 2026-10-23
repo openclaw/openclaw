@@ -81,8 +81,8 @@ must declare their own development dependencies rather than rely on hoisting.
 
 ## Before You PR
 
-- Use **Node 24.16+ LTS** or **Node 26.1+** for source checkouts. Older Node releases can truncate SQLite TEXT reads; Node 22, 23, and 25 are unsupported. See [Node install guidance](docs/install/node.md) if your local version is too old.
-- Run the Vitest 5 suite on Node 24.16+ or Node 26.1+, matching the packaged runtime floor.
+- Use **Node 24.22.1+ LTS** or **Node 26.12.1+** for source checkouts. Older Node releases can truncate SQLite TEXT reads; Node 22, 23, and 25 are unsupported. See [Node install guidance](docs/install/node.md) if your local version is too old.
+- Run the Vitest 5 suite on Node 24.22.1+ or Node 26.12.1+, matching the packaged runtime floor.
 - Test locally with your OpenClaw instance
 - An explicit maintainer repair-and-land request covers internal database scheduling, admission, and lifecycle decisions. The implementer owns the design and its verification. Get separate design acceptance when changing public contracts, schemas, durability, retention, or permissions; see the [database schema review checkpoint](docs/reference/database-schemas.md#review-checkpoint-for-material-changes).
 - External PRs must describe the user, product, or operational problem in **What Problem This Solves** and include useful validation in **Evidence**. Focused tests, CI results, screenshots, recordings, terminal output, live observations, redacted logs, and artifact links all count. Reviewers will inspect the code, tests, and CI; use the PR body to explain intent and make validation easy to understand.

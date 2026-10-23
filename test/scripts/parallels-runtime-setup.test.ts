@@ -176,7 +176,7 @@ describe("Parallels runtime companion setup", () => {
 
 describe("Parallels Linux runtime prerequisites", () => {
   it.each([
-    { nodeVersion: "26.1.0", npmExit: 0, gitExit: 0, bootstrap: false },
+    { nodeVersion: "26.12.1", npmExit: 0, gitExit: 0, bootstrap: false },
     { nodeVersion: "26.0.0", npmExit: 0, gitExit: 0, bootstrap: true },
     { nodeVersion: "24.14.1", npmExit: 0, gitExit: 0, bootstrap: true },
   ])("checks usable Node/npm/Git before bootstrap: %j", (scenario) => {

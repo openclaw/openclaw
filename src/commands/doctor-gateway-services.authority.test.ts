@@ -231,7 +231,7 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
       }
       return {
         stdout: JSON.stringify({
-          nodeVersion: "24.16.0",
+          nodeVersion: "24.22.1",
           sqliteVersion: "3.51.3",
           sqliteProbe: { available: true, version: "3.51.3", text: true, blob: true, json: true },
         }),

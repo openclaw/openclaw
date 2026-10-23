@@ -379,11 +379,8 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     runtimePath = recordedRuntime.path;
   }
   if (recordedRuntime?.runtime === "node") {
-    if (recordedRuntime.status !== "probe-failed") {
-      const diagnostic = recordedRuntime.capabilityError ?? recordedRuntime.note;
-      if (diagnostic) {
-        warn(diagnostic);
-      }
+    if (recordedRuntime.status !== "probe-failed" && recordedRuntime.capabilityError) {
+      warn(recordedRuntime.capabilityError);
     }
     const missingRuntime =
       recordedRuntime.status === "probe-failed" &&

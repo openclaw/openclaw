@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import {
   clearCommandLane,
   enqueueCommandInLane,
@@ -513,3 +513,135 @@ describe("cron one-shot schedule ownership", () => {
     }
   });
 });
+
+it.for([
+  { edit: "none", deleteAfterRun: true, overdueRestart: false },
+  { edit: "none", deleteAfterRun: false, overdueRestart: true },
+  { edit: "disable", deleteAfterRun: true, overdueRestart: false },
+  { edit: "reschedule", deleteAfterRun: true, overdueRestart: false },
+  { edit: "schedule round trip", deleteAfterRun: true, overdueRestart: false },
+  { edit: "remove", deleteAfterRun: true, overdueRestart: false },
+] as const)(
+  "rearms only the current explicit continuation and retains its definition ($edit, deleteAfterRun=$deleteAfterRun)",
+  async ({ edit, deleteAfterRun, overdueRestart }, { signal }) => {
+    const delayMs = 60_000;
+    const started = createDeferred();
+    const release = createDeferred();
+    const runIsolatedAgentJob = vi
+      .fn<CronServiceDeps["runIsolatedAgentJob"]>()
+      .mockImplementationOnce(async () => {
+        started.resolve();
+        await release.promise;
+        return { status: "ok", summary: "CI is pending", nextCheck: { delayMs } };
+      })
+      .mockResolvedValue({ status: "ok", summary: "CI passed" });
+    const jobViews = async (service: CronService) => [
+      await service.list({ includeDisabled: true }),
+      (await loadCronStore(storePath)).jobs,
+    ];
+    let cron = createCron({ runIsolatedAgentJob });
+    try {
+      await cron.start();
+      cron.pauseScheduling();
+      const atMs = clock.clock.now() + 1_000;
+      const job = await cron.add({
+        name: "CI continuation",
+        enabled: true,
+        deleteAfterRun,
+        schedule: { kind: "at", at: new Date(atMs).toISOString() },
+        sessionTarget: "session:agent:main:dashboard:synthetic-ci",
+        wakeMode: "next-heartbeat",
+        payload: {
+          kind: "agentTurn",
+          message: "Check CI and finish the authorized work.",
+          toolsAllow: ["automations"],
+        },
+        delivery: { mode: "none" },
+      });
+      clock.setTime(atMs);
+      const pendingRun = cron.run(job.id, "due");
+      await withinTest(started.promise, signal);
+      const editedAtMs = atMs + 600_000;
+      if (edit === "disable") {
+        await cron.update(job.id, { enabled: false });
+      } else if (edit === "reschedule" || edit === "schedule round trip") {
+        await cron.update(job.id, {
+          schedule: { kind: "at", at: new Date(editedAtMs).toISOString() },
+        });
+        if (edit === "schedule round trip") {
+          await cron.update(job.id, { schedule: job.schedule });
+        }
+      } else if (edit === "remove") {
+        await cron.remove(job.id);
+      }
+      clock.setTime(atMs + 1_000);
+      release.resolve();
+      await pendingRun;
+      const continuationAtMs = atMs + 1_000 + delayMs;
+      for (const jobs of await jobViews(cron)) {
+        if (edit === "remove") {
+          expect(jobs).toEqual([]);
+          continue;
+        }
+        expect(jobs).toHaveLength(1);
+        expect(jobs[0]).toMatchObject({
+          id: job.id,
+          enabled: edit !== "disable",
+          schedule:
+            edit === "reschedule"
+              ? { kind: "at", at: new Date(editedAtMs).toISOString() }
+              : { kind: "at", at: new Date(atMs).toISOString() },
+          sessionTarget: "session:agent:main:dashboard:synthetic-ci",
+          payload: {
+            kind: "agentTurn",
+            message: "Check CI and finish the authorized work.",
+            toolsAllow: ["automations"],
+          },
+          deleteAfterRun,
+        });
+        // Release adaptation: an A->B->A schedule edit during a run restores the authored
+        // slot on this line with or without a proposal; the edit still retires the rearm.
+        expect(jobs[0]?.state.nextRunAtMs).toBe(
+          edit === "none"
+            ? continuationAtMs
+            : edit === "reschedule"
+              ? editedAtMs
+              : edit === "schedule round trip"
+                ? atMs
+                : undefined,
+        );
+      }
+      if (edit !== "none") {
+        return;
+      }
+      cron.stop();
+      const restartAtMs = continuationAtMs + (overdueRestart ? 1_000 : -1_000);
+      clock.setTime(restartAtMs);
+      cron = createCron({ runIsolatedAgentJob });
+      cron.pauseScheduling();
+      await cron.start();
+      expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+      // Release adaptation: startup catch-up staggers every missed agent turn on this
+      // line; the rearmed continuation keeps its job and runs at the deferred slot.
+      const resumedAtMs = overdueRestart
+        ? restartAtMs + DEFAULT_STARTUP_DEFERRED_MISSED_AGENT_JOB_DELAY_MS
+        : continuationAtMs;
+      expect(cron.getJob(job.id)?.state.nextRunAtMs).toBe(resumedAtMs);
+      clock.setTime(resumedAtMs + 2_000);
+      await expect(cron.run(job.id, "due")).resolves.toMatchObject({ ok: true, ran: true });
+      expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
+      for (const jobs of await jobViews(cron)) {
+        if (deleteAfterRun) {
+          expect(jobs).toEqual([]);
+        } else {
+          expect(jobs).toHaveLength(1);
+          expect(jobs[0]?.enabled).toBe(false);
+          expect(jobs[0]?.state.nextRunAtMs).toBeUndefined();
+        }
+      }
+    } finally {
+      release.resolve();
+      cron.stop();
+    }
+  },
+);

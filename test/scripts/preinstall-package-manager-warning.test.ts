@@ -17,7 +17,7 @@ import { isSupportedNodeVersion } from "../../src/infra/runtime-guard.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const EXPECTED_NODE_ENGINE_RANGE = ">=24.16.0 <25 || >=26.1.0";
+const EXPECTED_NODE_ENGINE_RANGE = ">=24.22.1 <25 || >=26.12.1";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const testNodeExecPath = resolveTestNodeExecPath();
 
@@ -26,7 +26,7 @@ describe("install runtime enforcement", () => {
     expect(readPackageNodeEngine()).toBe(EXPECTED_NODE_ENGINE_RANGE);
   });
 
-  it.each(["v24.16.0+local.1"])("matches the CLI runtime guard for Node %s", (version) => {
+  it.each(["v24.22.1+local.1"])("matches the CLI runtime guard for Node %s", (version) => {
     expect(nodeVersionSatisfiesPackageEngine(version, EXPECTED_NODE_ENGINE_RANGE)).toBe(
       isSupportedNodeVersion(version),
     );
@@ -37,7 +37,7 @@ describe("install runtime enforcement", () => {
     expect(
       enforceSupportedNodeRuntime(
         {
-          version: "24.16.0",
+          version: "24.22.1",
           bunVersion: null,
           engine: EXPECTED_NODE_ENGINE_RANGE,
           execPath: "/opt/node/bin/node",
@@ -153,7 +153,7 @@ describe("install runtime enforcement", () => {
                 _command === "/opt/node/bin/node"
                   ? persistent === "old-node"
                     ? "24.14.1"
-                    : "24.16.0"
+                    : "24.22.1"
                   : "24.3.0",
               bunVersion: _command === "/opt/node/bin/node" ? null : bun,
               execPath: _command,
@@ -217,7 +217,7 @@ describe("install runtime enforcement", () => {
   it
     .skipIf(process.platform === "win32")
     .each([
-      { name: "persistent supported Node", nodeVersion: "24.16.0", marker: true, accepted: true },
+      { name: "persistent supported Node", nodeVersion: "24.22.1", marker: true, accepted: true },
     ])(
     "never spawns absent or nonexecutable Node candidates: $name",
     ({ nodeVersion, marker, accepted }) => {

@@ -89,5 +89,5 @@ export async function auditGatewayRuntime(
       }
     }
   }
-  return runtime.status === "supported" ? runtime.note : undefined;
+  return undefined;
 }

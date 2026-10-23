@@ -61,7 +61,7 @@ beforeEach(() => {
     sqliteVersion: "3.50.2",
     nodeSharedSqlite: false,
   });
-  mockCliRuntime("26.8.1");
+  mockCliRuntime("26.12.1");
 });
 
 afterEach(() => {
@@ -72,7 +72,7 @@ afterEach(() => {
 
 describe("Node runtime diagnostics command surfaces", () => {
   it.each(["invalid config", "snapshot failure"])(
-    "renders informational Node findings without a missing fix hint after %s",
+    "keeps Node repair hints after %s",
     async (failure) => {
       useInvalidConfig();
       const originalIsTTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
@@ -162,26 +162,15 @@ describe("Node runtime diagnostics command surfaces", () => {
     expect(runtime.log).not.toHaveBeenCalled();
   });
 
-  it.each(["cli", "service"])(
-    "renders an admitted out-of-table %s runtime as information",
-    async (source) => {
-      mocks.readCommand.mockResolvedValue(null);
-      if (source === "cli") {
-        mockCliRuntime("24.15.0");
-      } else {
-        mocks.readCommand.mockResolvedValue({ programArguments: ["/fixture/node", "gateway"] });
-        mocks.resolveNodeRuntimeInfo.mockResolvedValue({
-          status: "supported",
-          version: "24.15.0",
-          note: "Node 24.15.0: unsupported version, capability check passed.",
-        });
-      }
-      await statusCommand({ json: true }, runtime);
-      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("[info] Node 24.15.0:"));
-      expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("[warning]"));
-      expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("undefined"));
-    },
-  );
+  it("renders a below-floor service runtime as unsupported without an informational note", async () => {
+    mocks.resolveNodeRuntimeInfo.mockResolvedValue({ status: "unsupported", version: "24.22.0" });
+    await statusCommand({ json: true }, runtime);
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Gateway service Node 24.22.0 is unsupported."),
+    );
+    expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("[info]"));
+    expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("undefined"));
+  });
 
   it("reports an uninspectable service without claiming its Node is unsupported", async () => {
     mocks.resolveNodeRuntimeInfo.mockResolvedValue({

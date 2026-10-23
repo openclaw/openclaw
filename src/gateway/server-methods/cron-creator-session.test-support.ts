@@ -172,6 +172,7 @@ export function registerCronCreatorSessionTests(fixture: {
   it.each([
     { createdActor: { type: "human", source: "profile", id: "spoofed-profile" } },
     { sourceConversation: { sessionKey: "agent:main:other", sessionId: "spoofed-session" } },
+    { operatorSource: { source: { profileId: "spoofed-profile" } } },
   ])("rejects caller-supplied private cron creator facts: %j", async (privateFields) => {
     const { context, respond } = await invokeCron("cron.add", agentTurnCronParams(privateFields));
 

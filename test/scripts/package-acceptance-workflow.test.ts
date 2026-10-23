@@ -2596,7 +2596,7 @@ describe("frozen admission workflow barriers", () => {
       const steps = job.steps ?? [];
       const setup = workflowStep(job, "Setup admission Node.js");
       expect(setup.if).toBeUndefined();
-      expect(setup.env).toMatchObject({ REQUESTED_NODE_VERSION: "24.x" });
+      expect(setup.env).toMatchObject({ REQUESTED_NODE_VERSION: "24.22.1" });
       expect(setup.run).toContain(
         `source ${toolingRoot}/.github/actions/setup-pnpm-store-cache/ensure-node.sh`,
       );
@@ -8261,7 +8261,7 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(hydrateNode.run).toContain(
       "source .github/actions/setup-pnpm-store-cache/ensure-node.sh",
     );
-    expect(hydrateNode.run).toContain('openclaw_ensure_node "24.x"');
+    expect(hydrateNode.run).toContain('openclaw_ensure_node "24.22.1"');
     const hydratePnpm = workflowStep(hydrate, "Setup pnpm and dependencies");
     expect(hydratePnpm.if).toBeUndefined();
     expect(hydratePnpm.run).toContain('corepack enable --install-directory "$PNPM_HOME"');

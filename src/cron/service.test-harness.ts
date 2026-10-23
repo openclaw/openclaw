@@ -8,6 +8,7 @@ import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-cloc
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import type { CronEvent } from "./service.js";
 import { CronService } from "./service.js";
+import * as cronServiceState from "./service/state.js";
 import {
   createCronServiceState,
   type CronServiceState,
@@ -30,6 +31,29 @@ export function createNoopLogger(): NoopLogger {
     warn: vi.fn(),
     error: vi.fn(),
   };
+}
+
+/** Capture the facade's actual state while keeping construction and runtime behavior intact. */
+export function createCronServiceWithStateForTest(deps: CronServiceDeps): {
+  cron: CronService;
+  state: CronServiceState;
+} {
+  let state: CronServiceState | undefined;
+  const createState = cronServiceState.createCronServiceState;
+  const capture = vi.spyOn(cronServiceState, "createCronServiceState");
+  capture.mockImplementationOnce((serviceDeps) => {
+    state = createState(serviceDeps);
+    return state;
+  });
+  try {
+    const cron = new CronService(deps);
+    if (!state) {
+      throw new Error("Cron service construction did not publish its state");
+    }
+    return { cron, state };
+  } finally {
+    capture.mockRestore();
+  }
 }
 
 export function createCronStoreHarness(options?: { prefix?: string }) {

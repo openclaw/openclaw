@@ -283,6 +283,9 @@ describeLive("OpenAI AgentSession repeated compaction live", () => {
             thinkLevel: "low",
             timeoutMs: 2 * 60 * 1000,
             runId,
+            // The proof needs raw read output in tool history. Code Mode lets the model keep
+            // file data in guest state (for example a session-store entry) instead.
+            codeModeOverride: false,
             disableTools: !allowRead,
             ...(allowRead ? { toolsAllow: ["read"] } : {}),
             onExecutionPhase: ({ phase }) => {
@@ -316,9 +319,13 @@ describeLive("OpenAI AgentSession repeated compaction live", () => {
         );
         const seeded = await reopen();
         const history = seeded.buildSessionContext().messages;
+        // A rejected call (for example offset 0) may precede the retry that supplies the file.
         const suppliedText = history
-          .filter((message) => message.role === "toolResult")
-          .flatMap((message) => message.content)
+          .flatMap((message) =>
+            message.role === "toolResult" && message.toolName === "read" && !message.isError
+              ? message.content
+              : [],
+          )
           .filter((block) => block.type === "text")
           .map((block) => block.text)
           .join("\n");

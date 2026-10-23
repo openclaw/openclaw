@@ -48,7 +48,7 @@ struct BundledGatewayPreparationTests {
             try """
             #!/bin/sh
             if [ "$#" -eq 1 ] && [ "$1" = --version ]; then
-              printf '%s\n' 'v24.16.0'
+              printf '%s\n' 'v24.22.1'
               exit 0
             fi
             for argument in "$@"; do

@@ -91,7 +91,7 @@ reconcile dependencies before the remote wrapper starts.
 
 ## Core commands
 
-Run the test toolchain on Node 24.16+ or Node 26.1+, matching the packaged
+Run the test toolchain on Node 24.22.1+ or Node 26.12.1+, matching the packaged
 runtime floor. Older Node bindings can truncate SQLite TEXT values at embedded NUL characters.
 
 To compare the same Vitest selection on Node and Bun, use the existing wrapper:

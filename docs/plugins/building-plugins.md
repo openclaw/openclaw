@@ -27,7 +27,7 @@ ClawHub resolution.
 
 - All plugin APIs are [experimental](/plugins/sdk-overview#api-stability).
   Pin your OpenClaw host version and test each version you declare compatible.
-- Node 24.16+ or Node 26.1+, and `npm` or `pnpm`.
+- Node 24.22.1+ or Node 26.12.1+, and `npm` or `pnpm`.
 - TypeScript ESM modules.
 - For in-repo bundled plugin work, clone the repository and run `pnpm install`.
   Source-checkout plugin development is pnpm-only because OpenClaw discovers

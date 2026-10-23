@@ -1,5 +1,5 @@
 import fs from "node:fs";
-// Raw launchers meet the repo's Node 24.16.0 minimum, where native TS stripping is enabled.
+// Raw launchers meet the repo's Node 24.22.1 minimum, where native TS stripping is enabled.
 import { truncateUtf16Safe } from "../../../packages/normalization-core/src/utf16-slice.ts";
 import { readPositiveIntEnv } from "./env-limits.mjs";
 import { readBoundedRequestBody } from "./request-body.mjs";

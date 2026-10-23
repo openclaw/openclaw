@@ -19,7 +19,7 @@ const source = readFileSync(
 );
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function fixture(platform = "linux", version = "12.3.4") {
+function fixture(platform = "linux", version = "12.15.0") {
   const root = tempDirs.make("pnpm-image-");
   const image = join(root, "image");
   const runnerTemp = join(root, "runner");
@@ -45,14 +45,13 @@ function fixture(platform = "linux", version = "12.3.4") {
     .replaceAll("/opt/crabbox/toolchain-archives", image)
     .replaceAll("process.platform", JSON.stringify(platform))
     .replaceAll("process.arch", '"x64"')
+    .replace("process.report?.getReport().header.glibcVersionRuntime", '"fixture-glibc"')
     .replace(
-      version === "12.9.0"
-        ? "8f64efa0b792986ca98ae568791bcd7722807e274c4f0c1d9853c62116495c584119db98762a2a5343b1684d361b9ae26fdd16d551666d7635346d3fae830ddd"
-        : "961aa41fb077da3a04a441d9f8e15ebc0c96da8ef710b2eb67bf9ee7cb0610eabd48f1fd85f51cffe73846785fa0f87c56a3a872a1d893f8446741b5cce45457",
+      "b3951d6d6ff4a9f13dc7cf56cd28d2b8eb37dbcc9c68e52e1e1191873ea9f82a017287ab50baadc5ccc494f036c67c0e47eb13608c2fa36f47711b61ea128e61",
       wrapperHash,
     )
     .replace(
-      "d99a8e9523e47f05f5879711f853e259ff3e17eda1653ff74ef8542b9b22807ab06900888aaf11ec21b186774ab3adc9b5c2e2d9ad50a68fb05ff128c9f8f225",
+      "c9cf9095947ef7e9ebdbd2787d1ce13286a98314c10e776affea5eca8ab55d4b9f9d01677db5d4305b9d0c82b31e2e78e658a71aa98e9977e7d0da2e7cd81c3a",
       nativeHash,
     );
   const scriptPath = join(root, "seed.mjs");
@@ -80,8 +79,8 @@ function fixture(platform = "linux", version = "12.3.4") {
 
 describe("pnpm image archive consumer", () => {
   it.each([
-    { platform: "win32", version: "12.9.0" },
-    { platform: "linux", version: "12.3.4" },
+    { platform: "win32", version: "12.15.0" },
+    { platform: "linux", version: "12.15.0" },
   ])(
     "seeds $platform jobs from verified $version archives into private Corepack state",
     ({ platform, version }) => {
@@ -119,9 +118,9 @@ describe("pnpm image archive consumer", () => {
   );
 
   it.each([
-    { platform: "win32", version: "12.9.0", name: "pnpm-12.9.0.tgz" },
-    { platform: "linux", version: "12.3.4", name: "pnpm-12.3.4.tgz" },
-    { platform: "linux", version: "12.3.4", name: "exe.linux-x64-12.3.4.tgz" },
+    { platform: "win32", version: "12.15.0", name: "pnpm-12.15.0.tgz" },
+    { platform: "linux", version: "12.15.0", name: "pnpm-12.15.0.tgz" },
+    { platform: "linux", version: "12.15.0", name: "exe.linux-x64-12.15.0.tgz" },
   ])(
     "delegates substituted $name on $platform to Corepack, ignoring adjacent trust markers",
     ({ platform, version, name }) => {
@@ -145,7 +144,7 @@ describe("pnpm image archive consumer", () => {
       const f = fixture();
       const requested =
         kind === "different-version"
-          ? f.spec.replace("12.3.4", "12.3.5")
+          ? f.spec.replace("12.15.0", "12.3.4")
           : f.spec.replace(/.$/u, "z");
       const result = f.run(requested);
       expect(result.status, result.stderr).toBe(0);
@@ -168,7 +167,7 @@ describe("pnpm image archive consumer", () => {
     }
     const hydration = workflow.jobs.hydrate.steps;
     expect(hydration.find((step: { name: string }) => step.name === "Setup Node.js").run).toContain(
-      'openclaw_ensure_node "24.x"',
+      'openclaw_ensure_node "24.22.1"',
     );
     expect(
       hydration.find((step: { run?: string }) => step.run?.includes("install_args=")).run,

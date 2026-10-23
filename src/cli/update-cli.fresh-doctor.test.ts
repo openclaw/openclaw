@@ -399,14 +399,14 @@ describe("update-cli", () => {
       });
       primeNpmChannelTag("latest", "2026.7.1");
       vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
-        packageTargetStatus({ version: "2026.7.1", nodeEngine: ">=26.1.0" }),
+        packageTargetStatus({ version: "2026.7.1", nodeEngine: ">=26.12.1" }),
       );
       nodeVersionSatisfiesEngine.mockImplementation(
-        (version: string | null) => version === "26.8.1",
+        (version: string | null) => version === "26.12.1",
       );
       resolveNodeRuntimeInfo.mockImplementation(async (nodePath) => ({
         status: "supported",
-        version: nodePath === replacementNode ? "26.8.1" : "24.20.0",
+        version: nodePath === replacementNode ? "26.12.1" : "24.20.0",
         sqliteVersion: "3.51.3",
         nodeSharedSqlite: false,
         sqliteProbe: { available: true, version: "3.51.3", text: true, blob: true, json: true },
@@ -423,7 +423,7 @@ describe("update-cli", () => {
         npmCommands: ["npm", fixture.serviceNpm, requireValue(fixture.serviceNpmReal, "npm")],
         nodeVersions: {
           [serviceNode]: "v24.20.0",
-          [replacementNode]: "v26.8.1",
+          [replacementNode]: "v26.12.1",
         },
         onGatewayInstall: (argv) =>
           primeServiceCommand([requireValue(argv[0], "Node"), fixture.entrypoint, "gateway"]),

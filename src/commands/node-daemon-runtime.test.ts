@@ -53,7 +53,7 @@ describe.skipIf(process.platform === "win32")("node-host runtime install boundar
   it("accepts a Node 26 system runtime with safe embedded SQLite", async () => {
     runExec.mockResolvedValue({
       stdout: JSON.stringify({
-        nodeVersion: "26.8.1",
+        nodeVersion: "26.12.1",
         sqliteVersion: "3.53.4",
         sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
         nodeSharedSqlite: false,

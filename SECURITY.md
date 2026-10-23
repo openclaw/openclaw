@@ -334,12 +334,12 @@ OpenClaw's web interface (Gateway Control UI + HTTP endpoints) is intended for *
 
 ### Node.js Version
 
-OpenClaw requires **Node.js 24.16+ or Node.js 26.1+**. Node 26 is recommended; Node 24 is the supported LTS line. These minimum versions include the upstream SQLite WAL-reset corruption fix and preserve embedded NUL characters in SQLite TEXT reads. Node 22, 23, and 25 are unsupported.
+OpenClaw requires **Node.js 24.22.1+ or Node.js 26.12.1+**. Node 26 is recommended; Node 24 is the supported LTS line. These minimum versions include the upstream SQLite WAL-reset corruption fix and preserve embedded NUL characters in SQLite TEXT reads. Node 22, 23, and 25 are unsupported.
 
 Verify your Node.js version:
 
 ```bash
-node --version  # Should be v24.16+ or v26.1+
+node --version  # Should be v24.22.1+ or v26.12.1+
 ```
 
 ### Docker Security
