@@ -1,5 +1,4 @@
 import { isMainThread } from "node:worker_threads";
-import { expressionBuilder } from "kysely";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
 import { chunkItems } from "../utils/chunk-items.js";
 import {
@@ -7,13 +6,13 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "./kysely-sync.js";
+import { boundedUsageCacheColumn, usageCacheJsonText } from "./session-cost-usage-expressions.js";
 import {
   USAGE_COST_PARTITION_SCOPE,
   readUsageCostPartitionKey,
   usageCostPartitionKey,
   type UsageCostPartition,
 } from "./session-cost-usage-partitions.js";
-import { boundedUsageCacheColumn } from "./session-cost-usage-read-expression.js";
 import { USAGE_COST_ROLLUP_SCOPE } from "./session-cost-usage-rollup-codec.js";
 import type { EngineConnection } from "./sql-connection.js";
 
@@ -192,12 +191,7 @@ export function pruneSessionCostUsagePartitionsInDatabase(
 ): void {
   assertUsagePartitionWorker();
   const kysely = getNodeSqliteKysely<CacheDatabase>(db);
-  const expression = expressionBuilder<CacheDatabase, "cache_entries">();
   for (const row of existing) {
-    const value =
-      typeof row.valueJson === "string"
-        ? row.valueJson
-        : expression.cast<string>(expression.val(row.valueJson), "text");
     const current = executeSqliteQuerySync(
       db,
       kysely
@@ -205,7 +199,7 @@ export function pruneSessionCostUsagePartitionsInDatabase(
         .select("key")
         .where("scope", "=", USAGE_COST_ROLLUP_SCOPE)
         .where("key", "=", row.key)
-        .where("value_json", "=", value)
+        .where("value_json", "=", usageCacheJsonText(row.valueJson))
         .where("updated_at", "=", row.updatedAt),
     ).rows[0];
     if (current) {

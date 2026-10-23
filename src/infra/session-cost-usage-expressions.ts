@@ -3,6 +3,12 @@ import type { DB } from "../state/openclaw-agent-db.generated.js";
 
 const cacheExpressions = expressionBuilder<Pick<DB, "cache_entries">, "cache_entries">();
 
+export function usageCacheJsonText(value: string | Uint8Array) {
+  return typeof value === "string"
+    ? value
+    : cacheExpressions.cast<string>(cacheExpressions.val(value), "text");
+}
+
 export function boundedUsageCacheColumn<Column extends "value_json" | "blob">(
   column: Column,
   budget?: { remainingBytes: number },

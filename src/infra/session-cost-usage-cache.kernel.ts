@@ -1,4 +1,3 @@
-import { expressionBuilder } from "kysely";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { chunkItems } from "../utils/chunk-items.js";
 import {
@@ -6,6 +5,7 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "./kysely-sync.js";
+import { boundedUsageCacheColumn, usageCacheJsonText } from "./session-cost-usage-expressions.js";
 import {
   USAGE_COST_PARTITION_SCOPE,
   usageCostPartitionKey,
@@ -15,7 +15,6 @@ import {
   deleteSessionCostUsagePartitionsInDatabase,
   pruneSessionCostUsagePartitionsInDatabase,
 } from "./session-cost-usage-partitions.worker.js";
-import { boundedUsageCacheColumn } from "./session-cost-usage-read-expression.js";
 import {
   decodeUsageCostRollupEnvelope,
   USAGE_COST_ROLLUP_SCOPE as ROLLUP_SCOPE,
@@ -30,7 +29,6 @@ const RETIRED_ROLLUP_SCOPES = ["session-cost-usage-rollup-v1", "session-cost-usa
 const ROLLUP_PRUNE_BATCH_SIZE = 32;
 
 type AgentCacheDatabase = Pick<OpenClawAgentKyselyDatabase, "cache_entries">;
-const cacheExpressions = expressionBuilder<AgentCacheDatabase, "cache_entries">();
 
 export type SessionCostUsageRollupRow = {
   key: string;
@@ -45,12 +43,6 @@ type SessionCostUsageJson = string | Uint8Array;
 export type SessionCostUsageRollupSnapshot = Omit<SessionCostUsageRollupRow, "valueJson"> & {
   valueJson: SessionCostUsageJson;
 };
-
-function cacheJsonText(value: SessionCostUsageJson) {
-  return typeof value === "string"
-    ? value
-    : cacheExpressions.cast<string>(cacheExpressions.val(value), "text");
-}
 
 export type SessionCostUsageDeferredMetadata = {
   checkpoint: UsageCostFreshnessCheckpoint;
@@ -189,7 +181,7 @@ export function writeSessionCostUsageRollupsInDatabase(
       {
         scope: ROLLUP_SCOPE,
         key: row.rollupId,
-        value_json: cacheJsonText(row.valueJson),
+        value_json: usageCacheJsonText(row.valueJson),
         blob: row.blob,
         expires_at: null,
         updated_at: row.updatedAt,
@@ -264,7 +256,7 @@ export function pruneSessionCostUsageRollupsInDatabase(
               batch.map((row) =>
                 eb.and([
                   eb("key", "=", row.key),
-                  eb("value_json", "=", cacheJsonText(row.valueJson)),
+                  eb("value_json", "=", usageCacheJsonText(row.valueJson)),
                   eb("updated_at", "=", row.updatedAt),
                 ]),
               ),
