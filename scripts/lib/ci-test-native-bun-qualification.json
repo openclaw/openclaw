@@ -174,7 +174,6 @@
     "src/cli/program/helpers.test.ts": "034accfb58e8940107d2547e674ac4c67fda4b586bdde5e090c52af58f236084",
     "src/cli/quote-cli-arg.test.ts": "b13508c5b0e21a274e3e27bc3134e318454c2c057ca42004dd25f45f323dfd84",
     "src/cli/root-option-value.test.ts": "88a550cd633ea6e7312db192b9ec271d056b76e0494fc5aa3baee20dbe93cfff",
-    "src/cli/update-cli/update-command-legacy-service-stop.test.ts": "f23d80ffae28f5e90e77001072777a927f80f76805c79923809a2941c826405b",
     "src/commands/daemon-runtime.test.ts": "4aa49bca4461212ac6d2a9fb5f34982a4847375ee2d16fad803aa9c77cd768e4",
     "src/commands/doctor/shared/legacy-models-add-metadata.test.ts": "037fa8fc92db14eaa88f72ba0ecd7076ca1c547702586f129182d93c3f48b37b",
     "src/commands/gateway-presence.test.ts": "924fbce142b4e822a6f91d6d4909852fec5fb0fc41319e0165e3cf0725e2befb",
