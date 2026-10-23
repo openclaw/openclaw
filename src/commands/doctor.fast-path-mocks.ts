@@ -181,6 +181,10 @@ vi.mock("../flows/doctor-startup-channel-maintenance.js", () => ({
 
 vi.mock("./doctor-heartbeat-cadence-migration.js", () => ({
   collectHeartbeatCadenceMigrationFindings: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock("./doctor-heartbeat-retirement.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./doctor-heartbeat-retirement.js")>()),
   maybeMigrateHeartbeatCadenceToCron: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
 }));
 

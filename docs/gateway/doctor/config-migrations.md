@@ -106,6 +106,16 @@ unset markers, disabled state, schedule anchors and pending occurrences, tool
 authority, delivery targets, and quiet hours. A standalone `HEARTBEAT_OK` marker
 in a saved prompt becomes `NO_REPLY`; every other prompt byte remains unchanged.
 
+Doctor retains the original heartbeat settings through the entire pass, including
+workspace-file discovery for agents excluded by explicit per-agent enrollment.
+Disabled heartbeats stay disabled, and newly migrated jobs finish their cutover
+before Doctor returns. Interrupted cutovers also retain their original enablement
+in the existing receipt. Doctor disables a pending job when that receipt or the
+remaining source configuration proves it was disabled. Older pending receipts
+without those facts retain their job and report its exact disable command; after
+disabling it, rerun `openclaw doctor --fix`, then re-enable it if intended.
+Completed cutovers preserve later operator edits.
+
 Migrated jobs use standard Automations delivery semantics. Heartbeat-specific
 duplicate suppression and no-route skipping are removed: repeated updates can be
 delivered, and a missing route no longer skips the run before execution. Delivery
