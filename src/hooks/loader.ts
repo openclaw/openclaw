@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { pathToFileURL } from "node:url";
 import { sanitizeForLog as safeLogValue } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openRootFile } from "../infra/boundary-file-read.js";
@@ -12,7 +13,6 @@ import {
   isHookNameSelected,
   resolveInternalHookSelection,
 } from "./configured.js";
-import { buildImportUrl } from "./import-url.js";
 import { isKnownInternalHookEventKey } from "./internal-hook-types.js";
 import {
   type InternalHookHandler,
@@ -21,8 +21,26 @@ import {
   unregisterInternalHook,
 } from "./internal-hooks.js";
 import { resolveFunctionModuleExport } from "./module-loader.js";
-import type { HookPolicyEntry } from "./types.js";
+import type { HookPolicyEntry, HookSource } from "./types.js";
 import { prepareWorkspaceHookEntries, type HookSourceFact } from "./workspace.js";
+
+function buildImportUrl(handlerPath: string, source: HookSource): string {
+  const base = pathToFileURL(handlerPath).href;
+
+  // Bundled hooks are immutable between installs; other sources may change between restarts.
+  if (source === "openclaw-bundled") {
+    return base;
+  }
+
+  // ctime detects same-size edits even when mtime is restored.
+  try {
+    const { ctimeMs, mtimeMs, size } = fs.statSync(handlerPath);
+    return `${base}?t=${mtimeMs}&c=${ctimeMs}&s=${size}`;
+  } catch {
+    // Missing metadata still requires a fresh import.
+    return `${base}?t=${Date.now()}`;
+  }
+}
 
 const log = createSubsystemLogger("hooks:loader");
 // Configured hooks belong to the Gateway, not to any one plugin registry generation.
