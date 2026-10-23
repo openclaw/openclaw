@@ -17,25 +17,17 @@ it.each(["loading", "open"] as const)(
   async (stage) => {
     const dialog = createModalDialogTestFixture();
     const run = createUpdateRunFixture();
+    const replies: Record<string, unknown> = {
+      "update.run": { runId: run.runId },
+      "update.runs.get": { run },
+      "update.status": {
+        updateAvailable: { channel: "stable", currentVersion: "1.0.0", latestVersion: "2.0.0" },
+      },
+    };
     const request = () =>
-      dialog.mockRequest<Parameters<RequestFn>, unknown>(async (method) => {
-        if (method === "update.run") {
-          return { runId: run.runId };
-        }
-        if (method === "update.runs.get") {
-          return { run };
-        }
-        if (method === "update.status") {
-          return {
-            updateAvailable: {
-              channel: "stable",
-              currentVersion: "1.0.0",
-              latestVersion: "2.0.0",
-            },
-          };
-        }
-        return {};
-      });
+      dialog.mockRequest<Parameters<RequestFn>, unknown>(async (method) =>
+        Object.hasOwn(replies, method) ? replies[method] : {},
+      );
     const requestA = request();
     const requestB = request();
     const harness = updateRunHarness(requestA);
@@ -61,15 +53,18 @@ it.each(["loading", "open"] as const)(
         configObject: {},
         configBusy: false,
         updateBusy: false,
+        statusRead: null,
+        onCheckStatus: () => overlays.refreshUpdateStatus(),
+        captureCommandPresentation: () => ({
+          retired: new Promise<void>(() => {}),
+          isCurrent: () => true,
+        }),
       }),
     );
     const updateButton = () => {
-      const button = [...mounted.container.querySelectorAll<HTMLButtonElement>("button")].find(
-        (candidate) => candidate.textContent?.trim() === "Update now",
-      );
-      expect(button).toBeDefined();
-      expect(button!.disabled).toBe(false);
-      return button!;
+      const button = mounted.getByRole<HTMLButtonElement>("button", { name: "Update Gateway…" });
+      expect(button).toMatchObject({ disabled: false });
+      return button;
     };
     const confirmButton = () =>
       document.body.querySelector<HTMLButtonElement>(
@@ -90,8 +85,7 @@ it.each(["loading", "open"] as const)(
       await vi.dynamicImportSettled();
       confirmButton()?.click();
       await vi.dynamicImportSettled();
-      expect(updateCalls(requestA.mock.calls)).toEqual([]);
-      expect(updateCalls(requestB.mock.calls)).toEqual([]);
+      expect([requestA, requestB].map((rpc) => updateCalls(rpc.mock.calls))).toEqual([[], []]);
       expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
 
       await overlays.refreshUpdateStatus();

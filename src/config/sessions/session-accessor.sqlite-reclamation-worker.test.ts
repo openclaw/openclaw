@@ -391,10 +391,6 @@ test("logs a native reclamation Worker throw with its cause, first frame and has
             errorFrame: expect.stringMatching(/^at (?:MessagePort\.)?failReclamation \(/u),
           },
         },
-        {
-          message: "reclamation worker retired reason=failure kind=entry ageMs=0 opsServed=1",
-          "1": { reason: "failure", kind: "entry", ageMs: 0, opsServed: 1, workerThreadId },
-        },
       ]);
       expect(content).not.toContain(secret);
       expect(content).not.toContain(scope.sessionId);

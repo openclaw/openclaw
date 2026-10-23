@@ -222,12 +222,19 @@ describe("describeImageWithModelCore", () => {
           }
         : undefined;
       const result = await describeImage("google", "gemini-2.5-flash", {
-        cfg,
+        cfg: supplied ? { logging: { level: "debug" } } : cfg,
         buffer: Buffer.alloc(1),
         ...(supplied
-          ? { agentDir, workspaceDir, preparedModelRuntime }
+          ? {
+              agentDir: "/tmp/request-agent",
+              workspaceDir: "/tmp/request-workspace",
+              preparedModelRuntime,
+            }
           : { agentId: "vision-agent" }),
       });
+      expect(registerProviderStreamForModelMock).toHaveBeenCalledWith(
+        expect.objectContaining({ cfg, agentDir, workspaceDir, wrapProviderStream: true }),
+      );
       if (supplied) {
         expect(result.text).toBe(text);
         expect(acquireAgentRunPreparedModelRuntimeMock).not.toHaveBeenCalled();

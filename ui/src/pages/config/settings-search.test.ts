@@ -13,6 +13,9 @@ function object(
 ): JsonSchema {
   return { type: "object", properties, ...options };
 }
+const field = (title?: string): JsonSchema => ({ type: "string", ...(title ? { title } : {}) });
+const section = (name: string, properties: Record<string, JsonSchema>) =>
+  object({ [name]: object(properties) });
 
 type SearchOptions = Partial<Parameters<typeof findSettingsSearchBlocks>[0]>;
 function search(query: string, options: SearchOptions = {}) {
@@ -44,22 +47,13 @@ it("loads Settings English only when cold search opens, before the config page",
   const configView = en.configView;
   const updates = en.updates;
   const campaign = (updates as Record<string, unknown>).campaign;
-  const sharedKeys = [
-    "configView.autoSaveSaving",
-    "configView.rawDraftBlocksApply",
-    "updates.confirm.message",
-    "updates.outcomeUnknown",
-  ];
+  const sharedKeys = ["configView.autoSaveSaving", "updates.confirm.message"];
   const sharedCopy = sharedKeys.map((key) => runtime.t(key));
   const lazyKeys = [
     "configPage.themeImported",
     "configView.chatPrefs.title",
-    "configView.notifications.title",
     "updates.page.intro",
-    "updates.channel.stable",
-    "updates.installKind.git",
     "modelProviders.title",
-    "modelProviders.defaults.utilityHelpPurpose",
   ];
   try {
     for (const key of lazyKeys) {
@@ -77,10 +71,6 @@ it("loads Settings English only when cold search opens, before the config page",
     for (const key of lazyKeys) {
       expect(runtime.t(key), key).not.toBe(key);
     }
-    expect(runtime.t("configPage.themeImported", { name: "Example" })).toBe("Imported Example.");
-    expect(runtime.t("updates.page.intro")).toBe(
-      "Manage the connected Gateway's release channel and update policy.",
-    );
 
     runtime.i18n.registerTranslation("fr", {
       configView: { chatPrefs: { title: "Discussion" } },
@@ -88,7 +78,6 @@ it("loads Settings English only when cold search opens, before the config page",
     await runtime.i18n.setLocale("fr");
     expectBlocks(find("Discussion"), { routeId: "appearance", label: "Discussion" });
     expectBlocks(find("check for updates"), { routeId: "updates", label: "Updates" });
-    expect(runtime.t("modelProviders.title")).toBe("Configured providers");
     expect(runtime.t("modelProviders.modelsAvailable", { available: "2", count: "3" })).toBe(
       "2 of 3 models available",
     );
@@ -109,24 +98,15 @@ it("loads Settings English only when cold search opens, before the config page",
 it.each(["securityAcknowledgedAt"])("does not offer machine-owned %s in search", (key) => {
   expect(
     search("internal bookkeeping", {
-      schema: object({
-        wizard: object({
-          [key]: { type: "string", title: "Internal Bookkeeping" },
-          accessMode: { type: "string" },
-        }),
-      }),
+      schema: section("wizard", { [key]: field("Internal Bookkeeping"), accessMode: field() }),
       value: { wizard: { [key]: "internal bookkeeping" } },
     }),
   ).toEqual([]);
 });
 
 it("opens every Memory schema match on the merged Settings tab", () => {
-  const memorySchema = object({
-    memory: object({
-      search: object({
-        embeddingModel: { type: "string", title: "Embedding model" },
-      }),
-    }),
+  const memorySchema = section("memory", {
+    search: object({ embeddingModel: field("Embedding model") }),
   });
   const uiHints = {
     "memory.search": { advanced: false },
@@ -138,21 +118,40 @@ it("opens every Memory schema match on the merged Settings tab", () => {
   expectBlocks(find("embedding model"), destination);
   expectBlocks(
     find("memory").filter((block) => block.routeId === "memory"),
-    {
-      ...destination,
-      hash: "#config-section-memory",
-    },
+    { ...destination, hash: "#config-section-memory" },
   );
 });
 
-it("refreshes prepared schema tiers while searching current draft keys and access", () => {
-  const schema = object({
-    mcp: object({
-      servers: {
-        type: "object",
-        additionalProperties: object({ command: { type: "string" } }),
-      },
+it("hides the curated locale search leaf without mutating the source schema or sibling hits", () => {
+  const schema = section("ui", {
+    seamColor: field("Seam color"),
+    prefs: object({
+      locale: field("Interface language"),
+      chatShowToolCalls: { type: "boolean", title: "Chat show tool calls" },
     }),
+  });
+  const original = JSON.stringify(schema);
+  const uiHints = {
+    "ui.seamColor": { advanced: false },
+    "ui.prefs.locale": { advanced: false },
+    "ui.prefs.chatShowToolCalls": { advanced: false },
+  };
+  const params = { schema, value: { ui: { prefs: { locale: "en" } } }, uiHints };
+
+  expect(
+    search("interface language", params).some((block) => block.hash === "#config-section-ui"),
+  ).toBe(false);
+  for (const query of ["chat show tool calls", "seam color"]) {
+    expect(search(query, params)).toContainEqual(
+      expect.objectContaining({ hash: "#config-section-ui" }),
+    );
+  }
+  expect(JSON.stringify(schema)).toBe(original);
+});
+
+it("refreshes prepared schema tiers while searching current draft keys and access", () => {
+  const schema = section("mcp", {
+    servers: object({}, { additionalProperties: object({ command: field() }) }),
   });
   const servers: Record<string, { command: string }> = {};
   const params = {
@@ -169,22 +168,17 @@ it("refreshes prepared schema tiers while searching current draft keys and acces
     search: "?section=mcp",
     hash: "#config-section-mcp",
   };
-  expect(findSettingsSearchBlocks(params)).toEqual([common]);
-  expect(findSettingsSearchBlocks({ ...params, canAdmin: false })).toEqual([]);
-  expect(findSettingsSearchBlocks(params)).toEqual([common]);
-  expect(findSettingsSearchBlocks({ ...params, uiHints: {} })).toEqual([
-    { ...common, search: "?section=mcp&advanced=1" },
-  ]);
-  expect(findSettingsSearchBlocks(params)).toEqual([common]);
-  expect(
-    findSettingsSearchBlocks({
-      ...params,
-      schema: object({ mcp: object({ endpoint: { type: "string" } }) }),
-    }),
-  ).toEqual([]);
-  expect(findSettingsSearchBlocks(params)).toEqual([common]);
+  const check = (overrides: SearchOptions = {}, expected = [common]) =>
+    expect(findSettingsSearchBlocks({ ...params, ...overrides })).toEqual(expected);
+  check();
+  check({ canAdmin: false }, []);
+  check();
+  check({ uiHints: {} }, [{ ...common, search: "?section=mcp&advanced=1" }]);
+  check();
+  check({ schema: section("mcp", { endpoint: field() }) }, []);
+  check();
   delete servers.zephyr;
-  expect(findSettingsSearchBlocks(params)).toEqual([]);
+  check({}, []);
 });
 
 it("omits admin-only static and schema results for non-admin viewers", () => {

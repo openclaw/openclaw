@@ -106,6 +106,8 @@ async function runGatewayCronFailureRepair(
         idempotencyKey: runId,
       },
       {
+        // The scheduler's repair brief permits silence; public provenance does not grant it.
+        replyExpectation: "optional",
         internalDeliverySuppressErrors: true,
         timeoutMs: request.timeoutMs,
         ...(resolveGatewayContext ? { resolveGatewayContext } : {}),

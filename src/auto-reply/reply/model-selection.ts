@@ -1,4 +1,5 @@
 import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   assertAdmittedRunOperatorAuthority,
   assertOperatorModelAllowed,
@@ -16,9 +17,12 @@ import { resolveModelProviderAuthConfig } from "../../agents/model-auth-provider
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { ModelFallbackRouteResolution } from "../../agents/model-fallback.types.js";
+import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import {
   normalizeProviderId,
   normalizeModelRef,
+  resolveModelRefFromString,
+  type ModelAliasIndex,
   resolveModelAliasFromPair,
   resolveReasoningDefault,
   resolveThinkingDefault,
@@ -47,12 +51,12 @@ import * as storedModelOverrides from "../../sessions/stored-model-overrides.js"
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import type { ThinkLevel } from "../thinking.shared.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import {
   findSelectedCatalogEntry,
   mergePreparedConfiguredCatalog,
   resolveRuntimeNormalization,
 } from "./model-runtime-normalization.js";
-import { isStaleHeartbeatAutoFallbackOverride } from "./stored-model-override.js";
 export {
   resolveModelDirectiveSelection,
   type ModelDirectiveSelection,
@@ -99,6 +103,42 @@ const sessionPersistenceRuntimeLoader = createLazyImportLoader(
   () => import("./session-entry-persistence.js"),
 );
 
+/** Resolve a caller-owned model/profile choice without changing session preferences. */
+export function resolveTurnModelSelection(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  defaultProvider: string;
+  aliasIndex: ModelAliasIndex;
+  options?: Pick<InternalGetReplyOptions, "modelOverride">;
+}) {
+  const { options } = params;
+  const explicitModel = normalizeOptionalString(options?.modelOverride);
+  const raw = explicitModel;
+  if (!raw) {
+    return undefined;
+  }
+  const resolved = resolveModelRefFromString({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    raw,
+    defaultProvider: params.defaultProvider,
+    aliasIndex: params.aliasIndex,
+  });
+  if (!resolved) {
+    if (explicitModel) {
+      throw new Error(
+        `Invalid model override "${explicitModel}". Use a valid provider/model or model alias.`,
+      );
+    }
+    return undefined;
+  }
+  const profileId = splitTrailingAuthProfile(raw).profile;
+  return {
+    ref: resolved.ref,
+    authProfile: profileId ? { ...resolved.ref, profileId } : undefined,
+  };
+}
+
 export async function createModelSelectionState(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -116,10 +156,8 @@ export async function createModelSelectionState(params: {
   model: string;
   hasModelDirective: boolean;
   skipStoredModelOverride?: boolean;
-  /** True when heartbeat.model was explicitly resolved for this run.
-   *  In that case, skip session-stored overrides so the heartbeat selection wins. */
-  hasResolvedHeartbeatModelOverride?: boolean;
-  isHeartbeat?: boolean;
+  /** One-shot scheduled model selection never changes the stored session preference. */
+  hasResolvedTurnModelOverride?: boolean;
   preparedModelCatalog?: ModelCatalogSnapshot;
   operatorAuthority?: AdmittedRunOperatorAuthority;
 }): Promise<ModelSelectionState> {
@@ -234,16 +272,6 @@ export async function createModelSelectionState(params: {
     entry: SessionEntry | undefined,
     override: storedModelOverrides.StoredModelOverride | null,
   ) => {
-    const staleHeartbeatAutoFallbackOverride = isStaleHeartbeatAutoFallbackOverride({
-      isHeartbeat: params.isHeartbeat,
-      hasResolvedHeartbeatModelOverride: params.hasResolvedHeartbeatModelOverride,
-      sessionEntry: entry,
-      storedOverride: override,
-      defaultProvider,
-      defaultModel,
-      primaryProvider: params.primaryProvider,
-      primaryModel: params.primaryModel,
-    });
     const staleLegacyOpenAICodexAutoOverride =
       override?.source === "session" &&
       entry?.modelOverrideSource === "auto" &&
@@ -258,11 +286,7 @@ export async function createModelSelectionState(params: {
       hasLegacyAutoFallbackWithoutOrigin(entry) &&
       (params.provider !== (override.provider ?? defaultProvider) ||
         params.model !== override.model);
-    return (
-      staleHeartbeatAutoFallbackOverride ||
-      staleLegacyOpenAICodexAutoOverride ||
-      staleLegacyAutoFallbackWithoutOrigin
-    );
+    return staleLegacyOpenAICodexAutoOverride || staleLegacyAutoFallbackWithoutOrigin;
   };
   const staleDirectStoredOverride = isStaleStoredOverride(sessionEntry, directStoredModelOverride);
 
@@ -286,13 +310,24 @@ export async function createModelSelectionState(params: {
     );
   }
 
+  if (params.hasResolvedTurnModelOverride) {
+    // Scheduled payload choices are explicit, so re-admission must reject revoked models.
+    const selection = { provider, model };
+    if (!visibilityPolicy.allows(selection)) {
+      throw new Error(
+        `Scheduled model "${buildModelCatalogRef(provider, model)}" is not allowed by ${visibilityPolicy.allowRepairConfigPath}. Update the automation model or the agent's model policy.`,
+      );
+    }
+    assertOperatorModelAllowed(operatorAuthority, selection);
+  }
+
   if (
     sessionEntry &&
     sessionStore &&
     sessionKey &&
     storedOverrideRef &&
     (effectiveStoredModelOverride?.source === "session" ||
-      (!params.skipStoredModelOverride && !params.hasResolvedHeartbeatModelOverride)) &&
+      (!params.skipStoredModelOverride && !params.hasResolvedTurnModelOverride)) &&
     (!params.hasModelDirective || !operatorAuthority?.modelPolicy)
   ) {
     const key = buildModelCatalogRef(storedOverrideRef.provider, storedOverrideRef.model);
@@ -370,13 +405,11 @@ export async function createModelSelectionState(params: {
   }
 
   const storedOverride = resolveStoredOverride();
-  // Skip stored session model override only when an explicit heartbeat.model
-  // was resolved. Heartbeats without heartbeat.model still inherit normal
-  // overrides unless a direct auto fallback override is stale for the current
-  // configured default.
+  // Scheduled model choices stay turn-local. Ordinary
+  // turns retain stored choices except stale automatic fallback pins.
   const skipStoredOverride =
     params.skipStoredModelOverride === true ||
-    params.hasResolvedHeartbeatModelOverride === true ||
+    params.hasResolvedTurnModelOverride === true ||
     (resetModelOverride && staleDirectStoredOverride && storedOverride?.source === "session");
   const usesStoredAutomaticSelection =
     !skipStoredOverride &&
@@ -456,6 +489,7 @@ export async function createModelSelectionState(params: {
 
   if (
     !params.skipStoredModelOverride &&
+    !params.hasResolvedTurnModelOverride &&
     !operatorModelOverride &&
     sessionEntry &&
     sessionStore &&

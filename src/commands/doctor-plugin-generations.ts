@@ -18,7 +18,6 @@ export const PLUGIN_REGISTRY_CHECK_ID = "core/doctor/plugin-registry";
 
 export type StaleManagedNpmInstallGenerationIssue = {
   kind: "stale-managed-npm-install-generation";
-  activePackageDir: string;
   packageDir: string;
   pluginId: string;
   version?: string;
@@ -65,7 +64,6 @@ export async function listStaleManagedNpmInstallGenerations(
       stale.push({
         kind: "stale-managed-npm-install-generation",
         pluginId,
-        activePackageDir: activeRecord.installPath,
         packageDir,
         ...(candidate.installRecord.resolvedVersion
           ? { version: candidate.installRecord.resolvedVersion }
@@ -130,6 +128,8 @@ export function staleManagedNpmInstallGenerationToHealthFinding(
   return {
     checkId: PLUGIN_REGISTRY_CHECK_ID,
     severity: "warning",
+    category: "recommended",
+    docsUrl: "https://docs.openclaw.ai/cli/doctor/checks",
     message: `Managed npm plugin ${issue.pluginId}${issue.version ? `@${issue.version}` : ""} is a stale non-authoritative generation.`,
     path: issue.packageDir,
     target: issue.pluginId,

@@ -24,6 +24,7 @@ import {
 } from "./session-accessor.sqlite-entry-cache.types.js";
 import {
   projectSessionEntryPredicateChange,
+  projectSessionEntryPredicatePostimage,
   publishRetainedSessionEntryPredicate,
   publishRetainedSessionGeneration,
   recordAcquiringSessionEntry,
@@ -33,6 +34,7 @@ import {
   type PreparedSessionSharingRead,
   type SessionSharingRetentionRequest,
 } from "./session-accessor.sqlite-sharing-acquisition.js";
+import type { SessionEntryProjection } from "./session-entry-snapshot-values.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export const preparedSharingReads = resolveGlobalSingleton(
@@ -149,6 +151,7 @@ export function recordCommittedSessionMetadataPublication(
   sessionKey: string,
   change?: SessionRowFacts,
   entry?: SessionEntry,
+  fullEntry?: SessionEntry,
 ): void {
   for (const read of retainedSharingReads(database, sessionKey) ?? []) {
     const postimage =
@@ -156,7 +159,9 @@ export function recordCommittedSessionMetadataPublication(
       (read.predicate && change
         ? projectSessionEntryPredicateChange(read.predicate, change)
         : undefined);
-    publishRetainedSessionEntryPredicate(read, postimage, postimage !== undefined);
+    publishRetainedSessionEntryPredicate(read, postimage, postimage !== undefined, {
+      fullEntry: entry ? fullEntry : postimage,
+    });
   }
   recordCommittedSessionEntryPublication(database, sessionKey);
 }
@@ -252,10 +257,11 @@ export function publishRetainedSessionEntryChange(
   previousIdentity: Pick<SessionSharingEntry, "sessionId" | "lifecycleRevision"> | undefined,
   known: boolean,
   metadataEntry?: SessionEntry,
+  fullEntry?: SessionEntry,
 ): void {
   recordCommittedSessionEntryPublication(database, sessionKey);
   for (const read of retainedSharingReads(database, sessionKey) ?? []) {
-    publishRetainedSessionEntryPredicate(read, metadataEntry, known);
+    publishRetainedSessionEntryPredicate(read, metadataEntry, known, { fullEntry });
     recordAcquiringSessionEntry(read.acquisition, entry, previousIdentity);
     publishRetainedSessionGeneration(read, entry, known);
     const previous = read.facts;
@@ -263,7 +269,7 @@ export function publishRetainedSessionEntryChange(
       entry &&
       previous?.entry &&
       previous.entry.sessionId === entry.sessionId &&
-      previous.entry.lifecycleRevision === entry.lifecycleRevision
+      (read.followLifecycle || previous.entry.lifecycleRevision === entry.lifecycleRevision)
         ? { entry, membership: previous.membership }
         : undefined;
   }
@@ -274,6 +280,7 @@ export function retainPreparedSessionSharingFacts(params: SessionSharingRetentio
   const key = `${params.databaseIdentity}\0${params.sessionKey}`;
   const initial = "acquiring" in params ? undefined : params;
   const read: PreparedSessionSharingRead = {
+    followLifecycle: params.followLifecycle,
     predicate: params.predicate,
     pending: new Set(),
     facts: initial && {
@@ -336,7 +343,12 @@ export function retainPreparedSessionSharingFacts(params: SessionSharingRetentio
       if (read.predicate && entryPostimage) {
         // These fields are unchanged whether the pending transaction commits or rolls back.
         try {
-          return !read.predicate.matches(entryPostimage);
+          const postimage = projectSessionEntryPredicatePostimage(
+            read.predicate,
+            entryPostimage,
+            publication.fullEntryPostimages?.get(params.sessionKey),
+          );
+          return !postimage.known || !read.predicate.matches(postimage.entry);
         } catch {
           return true;
         }
@@ -408,6 +420,7 @@ export function retainPreparedSessionEntryPredicate(params: {
   entry: SessionEntry | undefined;
   matches: (before: SessionEntry | undefined, after: SessionEntry | undefined) => boolean;
   acquiring?: boolean;
+  projection?: SessionEntryProjection;
 }) {
   const { acquiring, ...retention } = params;
   const predicate: PreparedSessionEntryPredicate = {
@@ -416,6 +429,7 @@ export function retainPreparedSessionEntryPredicate(params: {
     state: acquiring ? "acquiring" : "current",
     revision: 0,
     pending: new Set(),
+    projection: params.projection,
   };
   const retained = retainPreparedSessionSharingFacts({
     ...retention,

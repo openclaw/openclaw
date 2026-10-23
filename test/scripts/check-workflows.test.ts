@@ -337,7 +337,7 @@ describe("check-workflows", () => {
     });
     expect(native.steps.find((step) => step.name === "Setup Node.js")?.env).toMatchObject({
       REQUESTED_NODE_VERSION:
-        "${{ inputs.windows_ci_replay != '' && env.OPENCLAW_WINDOWS_REPLAY_NODE_VERSION || inputs.installed_startup_package != '' && inputs.startup_node_version || '24.x' }}",
+        "${{ inputs.windows_ci_replay != '' && env.OPENCLAW_WINDOWS_REPLAY_NODE_VERSION || inputs.installed_startup_package != '' && inputs.startup_node_version || '24.22.1' }}",
     });
     expect(native.steps.find((step) => step.name === "Setup pnpm")?.uses).toBe(
       "./.github/actions/setup-pnpm-store-cache",
@@ -388,7 +388,7 @@ describe("check-workflows", () => {
     const { workflow, probe, native } = readWindowsProbe();
     expect(workflow.on.workflow_dispatch.inputs).toMatchObject({
       installed_startup_package: { default: "", type: "string" },
-      startup_node_version: { default: "26.9.0" },
+      startup_node_version: { default: "26.12.1" },
       installed_startup_cpu_diagnostic: { default: false, type: "boolean" },
     });
     const validation = findStep(probe, "startup_input", "id");

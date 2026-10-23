@@ -16,6 +16,18 @@ const currentWorkScopeAncestry = resolveGlobalSingleton(
   () => new AsyncLocalStorage<AsyncWorkScopeFrame>(),
 );
 
+// Replacement chunks reject through the same class so callers can classify lifecycle refusals.
+export const AsyncWorkScopeClosedError = resolveGlobalSingleton(
+  Symbol.for("openclaw.asyncWorkScopeClosedError"),
+  () =>
+    class ClosedError extends Error {
+      constructor() {
+        super("Async work scope is closed");
+        this.name = "AsyncWorkScopeClosedError";
+      }
+    },
+);
+
 /** Joins cooperating descendants even when their caller returns a cached value first. */
 export class AsyncWorkScope {
   private readonly pending = new Set<Promise<unknown>>();
@@ -51,7 +63,7 @@ export class AsyncWorkScope {
   /** Enters synchronous work without inspecting or assimilating its return value. */
   run<T>(run: () => T): T {
     if (this.phase === "closed") {
-      throw new Error("Async work scope is closed");
+      throw new AsyncWorkScopeClosedError();
     }
     // Synchronous work is removed in finally and needs no promise cleanup reactions.
     const operation = createDeferredCore();
@@ -66,7 +78,7 @@ export class AsyncWorkScope {
 
   track<T>(run: () => T | Promise<T>): Promise<T> {
     if (this.phase === "closed") {
-      return Promise.reject(new Error("Async work scope is closed"));
+      return Promise.reject(new AsyncWorkScopeClosedError());
     }
     // Register before invoking without delaying received node results behind
     // a subsequent socket-close event. Async descendants inherit this exact owner.

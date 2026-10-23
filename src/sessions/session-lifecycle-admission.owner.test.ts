@@ -1,7 +1,9 @@
 import { expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { getSessionWorkAdmissionOwnerRelease } from "./session-controller.lifecycle-work.js";
-import { beginSessionEffect } from "./session-controller.lifecycle.js";
+import {
+  beginSessionEffect,
+  getCompetingSessionWorkAdmissionRelease,
+} from "./session-controller.lifecycle.js";
 
 it("captures acquired owners without waiting for pending successors", async () => {
   const scope = "store-named-owner";
@@ -21,13 +23,18 @@ it("captures acquired owners without waiting for pending successors", async () =
   });
   try {
     await started.promise;
-    const release = getSessionWorkAdmissionOwnerRelease({ scope, identities, owner });
+    const release = getCompetingSessionWorkAdmissionRelease({ scope, identities, owner });
     expect(release).toBeInstanceOf(Promise);
     expect(
-      getSessionWorkAdmissionOwnerRelease({ scope, identities, owner, phase: "acquired" }),
+      getCompetingSessionWorkAdmissionRelease({
+        scope,
+        identities,
+        owner,
+        excludePendingOwner: owner,
+      }),
     ).toBeUndefined();
     unrelated.release();
-    expect(getSessionWorkAdmissionOwnerRelease({ scope, identities, owner })).toBeInstanceOf(
+    expect(getCompetingSessionWorkAdmissionRelease({ scope, identities, owner })).toBeInstanceOf(
       Promise,
     );
     allowed.resolve();
@@ -40,25 +47,25 @@ it("captures acquired owners without waiting for pending successors", async () =
       serializeOwner: true,
       assertAllowed: () => laterAllowed.promise,
     });
-    const acquiredRelease = getSessionWorkAdmissionOwnerRelease({
+    const acquiredRelease = getCompetingSessionWorkAdmissionRelease({
       scope,
       identities,
       owner,
-      phase: "acquired",
+      excludePendingOwner: owner,
     });
     expect(acquiredRelease).toBeInstanceOf(Promise);
     admission.release();
     try {
       await acquiredRelease;
       await release;
-      expect(getSessionWorkAdmissionOwnerRelease({ scope, identities, owner })).toBeInstanceOf(
+      expect(getCompetingSessionWorkAdmissionRelease({ scope, identities, owner })).toBeInstanceOf(
         Promise,
       );
     } finally {
       laterAllowed.resolve();
       (await laterAdmission).release();
     }
-    expect(getSessionWorkAdmissionOwnerRelease({ scope, identities, owner })).toBeUndefined();
+    expect(getCompetingSessionWorkAdmissionRelease({ scope, identities, owner })).toBeUndefined();
   } finally {
     unrelated.release();
     allowed.resolve();

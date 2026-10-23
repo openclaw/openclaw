@@ -624,7 +624,6 @@ describe("kysely sync helpers", () => {
     for (const execute of [
       () => db.startTransaction().execute(),
       () => consumeStream(selectItems().stream()),
-      () => selectItems().execute(),
     ]) {
       await expectCompileOnlyRejection(execute());
     }

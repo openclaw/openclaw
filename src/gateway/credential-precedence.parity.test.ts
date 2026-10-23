@@ -1,5 +1,3 @@
-// Credential precedence parity tests keep call, probe, status, and auth surfaces
-// aligned on local/remote gateway token and password resolution.
 import { describe, expect, it } from "vitest";
 import { resolveGatewayProbeAuthResolution } from "../commands/status.gateway-probe.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -8,36 +6,40 @@ import { resolveGatewayAuth } from "./auth.js";
 import { resolveGatewayCredentialsFromConfig } from "./credentials.js";
 import { resolveGatewayProbeAuth } from "./probe-auth.js";
 
-type ExpectedCredentialSet = {
-  call: { token?: string; password?: string };
-  probe: { token?: string; password?: string };
-  status: { token?: string; password?: string };
-  auth: { token?: string; password?: string };
-};
+type Credentials = { token?: string; password?: string };
 
 type TestCase = {
   name: string;
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-  expected: ExpectedCredentialSet;
+  expected: { call: Credentials; probe: Credentials; status: Credentials; auth: Credentials };
 };
 
 const gatewayEnv = {
   OPENCLAW_GATEWAY_TOKEN: "env-token", // pragma: allowlist secret
   OPENCLAW_GATEWAY_PASSWORD: "env-password", // pragma: allowlist secret
-} as NodeJS.ProcessEnv;
+};
+const localCredentials = { token: "local-token", password: "local-password" }; // pragma: allowlist secret
+const configuredCredentials = { token: "config-token", password: "config-password" }; // pragma: allowlist secret
+const remoteCredentials = { token: "remote-token", password: "env-password" }; // pragma: allowlist secret
+function localConfig(): OpenClawConfig {
+  return { gateway: { mode: "local", auth: { ...configuredCredentials } } };
+}
+const localExpected = {
+  call: configuredCredentials,
+  probe: configuredCredentials,
+  status: configuredCredentials,
+  auth: configuredCredentials,
+};
 
 function makeRemoteGatewayConfig(remote: { token?: string; password?: string }): OpenClawConfig {
   return {
     gateway: {
       mode: "remote",
       remote,
-      auth: {
-        token: "local-token",
-        password: "local-password", // pragma: allowlist secret
-      },
+      auth: { ...localCredentials },
     },
-  } as OpenClawConfig;
+  };
 }
 
 function withGatewayAuthEnv<T>(env: NodeJS.ProcessEnv, fn: () => T): T {
@@ -55,25 +57,9 @@ describe("gateway credential precedence coverage", () => {
   const cases: TestCase[] = [
     {
       name: "local mode keeps configured auth aligned across client and server surfaces",
-      cfg: {
-        gateway: {
-          mode: "local",
-          auth: {
-            token: "config-token",
-            password: "config-password", // pragma: allowlist secret
-          },
-        },
-      } as OpenClawConfig,
-      env: {
-        OPENCLAW_GATEWAY_TOKEN: "env-token", // pragma: allowlist secret
-        OPENCLAW_GATEWAY_PASSWORD: "env-password", // pragma: allowlist secret
-      } as NodeJS.ProcessEnv,
-      expected: {
-        call: { token: "config-token", password: "config-password" }, // pragma: allowlist secret
-        probe: { token: "config-token", password: "config-password" }, // pragma: allowlist secret
-        status: { token: "config-token", password: "config-password" }, // pragma: allowlist secret
-        auth: { token: "config-token", password: "config-password" }, // pragma: allowlist secret
-      },
+      cfg: localConfig(),
+      env: gatewayEnv,
+      expected: localExpected,
     },
     {
       name: "remote mode with remote token configured",
@@ -83,10 +69,10 @@ describe("gateway credential precedence coverage", () => {
       }),
       env: gatewayEnv,
       expected: {
-        call: { token: "remote-token", password: "env-password" }, // pragma: allowlist secret
-        probe: { token: "remote-token", password: "env-password" }, // pragma: allowlist secret
-        status: { token: "local-token", password: "local-password" }, // pragma: allowlist secret
-        auth: { token: "local-token", password: "local-password" }, // pragma: allowlist secret
+        call: remoteCredentials,
+        probe: remoteCredentials,
+        status: localCredentials,
+        auth: localCredentials,
       },
     },
     {
@@ -98,52 +84,25 @@ describe("gateway credential precedence coverage", () => {
       expected: {
         call: { token: "env-token", password: "env-password" }, // pragma: allowlist secret
         probe: { token: undefined, password: "env-password" }, // pragma: allowlist secret
-        status: { token: "local-token", password: "local-password" }, // pragma: allowlist secret
-        auth: { token: "local-token", password: "local-password" }, // pragma: allowlist secret
+        status: localCredentials,
+        auth: localCredentials,
       },
     },
     {
       name: "gateway service runtime uses the same local credential policy",
-      cfg: {
-        gateway: {
-          mode: "local",
-          auth: {
-            token: "config-token",
-            password: "config-password", // pragma: allowlist secret
-          },
-        },
-      } as OpenClawConfig,
-      env: {
-        OPENCLAW_GATEWAY_TOKEN: "env-token",
-        OPENCLAW_GATEWAY_PASSWORD: "env-password", // pragma: allowlist secret
-        OPENCLAW_SERVICE_KIND: "gateway",
-      } as NodeJS.ProcessEnv,
-      expected: {
-        call: { token: "config-token", password: "config-password" }, // pragma: allowlist secret
-        probe: { token: "config-token", password: "config-password" }, // pragma: allowlist secret
-        status: { token: "config-token", password: "config-password" }, // pragma: allowlist secret
-        auth: { token: "config-token", password: "config-password" }, // pragma: allowlist secret
-      },
+      cfg: localConfig(),
+      env: { ...gatewayEnv, OPENCLAW_SERVICE_KIND: "gateway" },
+      expected: localExpected,
     },
   ];
 
   it.each(cases)("$name", async ({ cfg, env, expected }) => {
     const mode = cfg.gateway?.mode === "remote" ? "remote" : "local";
-    const call = resolveGatewayCredentialsFromConfig({
-      cfg,
-      env,
-    });
-    const probe = resolveGatewayProbeAuth({
-      cfg,
-      mode,
-      env,
-    });
+    const call = resolveGatewayCredentialsFromConfig({ cfg, env });
+    const probe = resolveGatewayProbeAuth({ cfg, mode, env });
     const status = (await withGatewayAuthEnv(env, () => resolveGatewayProbeAuthResolution(cfg)))
       .auth;
-    const auth = resolveGatewayAuth({
-      authConfig: cfg.gateway?.auth,
-      env,
-    });
+    const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, env });
 
     expect(call).toEqual(expected.call);
     expect(probe).toEqual(expected.probe);

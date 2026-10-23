@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import { publishSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
 import * as gitReads from "../infra/git-read-cache.js";
 import { publicationRowDefaults } from "../state/github-publication-fixtures.test-support.js";
 import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
@@ -11,6 +14,7 @@ import type { ControlUiSessionPullRequestSnapshot } from "./control-ui-contract.
 import { createFixture, sessionKey } from "./control-ui-session-pr-access.test-support.js";
 import { prepareControlUiSessionPrServiceTarget } from "./control-ui-session-pr-read.js";
 import { githubJson, pullListItem, requestUrl } from "./control-ui-session-prs.test-support.js";
+import { selectTaskPublicationSessions } from "./control-ui-session-task-prs.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { insertRepositoryGitHubPublicationFixture } from "./github-publication-store.test-support.js";
 import { repositoryGitHubPublicationDigest } from "./github-repository-publication.kernel.js";
@@ -73,6 +77,114 @@ function snapshots(socket = fixture.socket): ControlUiSessionPullRequestSnapshot
     .filter((frame) => frame.event === "controlUi.sessionPullRequests.changed")
     .map((frame) => frame.payload.sessions[sessionKey]);
 }
+const latest = () => snapshots().at(-1);
+const taskNumbers = () => latest()?.taskPullRequests?.map((pr) => pr.number);
+function closedPull(number: number) {
+  return pullListItem({
+    number,
+    state: "closed",
+    html_url: "https://github.com/example/repository/pull/" + number,
+    base: { repo: { name: "repository", owner: { login: "example" } } },
+  });
+}
+function stubGitHub(branchPull = closedPull(40)) {
+  const fetcher = vi.fn<typeof fetch>(async (input) => {
+    const url = requestUrl(input);
+    return githubJson(
+      url.includes("?head=")
+        ? [branchPull]
+        : closedPull(Number(new URL(url).pathname.split("/").at(-1)) || 40),
+    );
+  });
+  vi.stubGlobal("fetch", fetcher);
+  return fetcher;
+}
+function stubOffline(message = "offline") {
+  const fetcher = vi.fn<typeof fetch>(async () => {
+    throw new Error(message);
+  });
+  vi.stubGlobal("fetch", fetcher);
+  return fetcher;
+}
+
+it("shares lineage work across audiences without sharing visibility or stale descendants", async () => {
+  const child = "agent:main:a-child";
+  const hidden = "agent:main:b-hidden";
+  const leaf = "agent:main:c-leaf";
+  const privateChild = "agent:main:d-private";
+  await fixture.seed(child, fixture.profile.id, { parentSessionKey: sessionKey });
+  await fixture.seed(hidden, fixture.other.id, {
+    parentSessionKey: sessionKey,
+    visibility: "draft",
+  });
+  await fixture.seed(leaf, fixture.profile.id, { parentSessionKey: child });
+  await fixture.seed(privateChild, fixture.profile.id, {
+    parentSessionKey: sessionKey,
+    incognito: true,
+  });
+  const projection = getSessionRowProjection(fixture.context)!;
+  await projection.ensureMaterialized();
+  const root = projection.describe({ agentId: "main", key: sessionKey })!;
+  const reads = vi.spyOn(projection, "selectEntries");
+  const expected = (keys: string[]) =>
+    keys.map((key) => ({
+      agentId: "main",
+      sessionKey: key,
+      sessionId:
+        key === sessionKey ? fixture.sessionId : key + "-" + fixture.sessionId.split("-").at(-1),
+      lifecycleRevision: null,
+    }));
+  const allowsAll = () => true;
+  const allowsShared = (row: { key: string }) => row.key !== hidden;
+  expect(selectTaskPublicationSessions(projection, root, allowsAll)).toEqual(
+    expected([child, hidden, leaf, sessionKey]),
+  );
+  const firstReads = reads.mock.calls.length;
+  expect(firstReads).toBeGreaterThan(0);
+  expect(selectTaskPublicationSessions(projection, root, allowsShared)).toEqual(
+    expected([child, leaf, sessionKey]),
+  );
+  expect(selectTaskPublicationSessions(projection, root, allowsAll)).toEqual(
+    expected([child, hidden, leaf, sessionKey]),
+  );
+  expect(reads).toHaveBeenCalledTimes(firstReads);
+
+  await fixture.seed(leaf, fixture.profile.id, { parentSessionKey: hidden, updatedAt: 2 });
+  await projection.ensureMaterialized();
+  const current = projection.describe({ agentId: "main", key: sessionKey })!;
+  expect(selectTaskPublicationSessions(projection, current, allowsShared)).toEqual(
+    expected([child, sessionKey]),
+  );
+  expect(selectTaskPublicationSessions(projection, current, allowsAll)).toEqual(
+    expected([child, hidden, leaf, sessionKey]),
+  );
+  expect(reads.mock.calls.length).toBeGreaterThan(firstReads);
+
+  const runId = "task-pr-registry-lineage";
+  subagentRuns.set(
+    runId,
+    createSubagentRunRecord({
+      runId,
+      childSessionKey: leaf,
+      requesterSessionKey: child,
+      controllerSessionKey: child,
+      expectsCompletionMessage: false,
+    }),
+  );
+  try {
+    publishSubagentRunChanges();
+    // No intervening describe/read may prepare the registry's deferred parent indexes.
+    expect(selectTaskPublicationSessions(projection, current, allowsShared)).toEqual(
+      expected([child, leaf, sessionKey]),
+    );
+  } finally {
+    subagentRuns.delete(runId);
+    publishSubagentRunChanges();
+  }
+  expect(selectTaskPublicationSessions(projection, current, allowsShared)).toEqual(
+    expected([child, sessionKey]),
+  );
+});
 
 it("projects three descendant receipts without mixing the parent's current branch", async () => {
   await fixture.seedRepository();
@@ -82,33 +194,14 @@ it("projects three descendant receipts without mixing the parent's current branc
     receipt(key, number);
   }
   receipt("agent:main:child-1", 1, "duplicate");
-  const fetcher = vi.fn<typeof fetch>(async (input) => {
-    const url = requestUrl(input);
-    const number = Number(new URL(url).pathname.split("/").at(-1)) || 40;
-    return githubJson(
-      url.includes("?head=")
-        ? [pullListItem({ number: 40, state: "closed" })]
-        : pullListItem({
-            number,
-            state: "closed",
-            html_url: "https://github.com/example/repository/pull/" + number,
-            base: { repo: { name: "repository", owner: { login: "example" } } },
-          }),
-    );
-  });
-  vi.stubGlobal("fetch", fetcher);
+  const fetcher = stubGitHub(pullListItem({ number: 40, state: "closed" }));
   await fixture.subscribe();
   await fixture.subscriptions.pollNow();
-  expect(snapshots().at(-1)).toMatchObject({
+  expect(latest()).toMatchObject({
     pullRequests: [{ number: 40 }],
     taskPullRequestCount: 3,
   });
-  expect(
-    snapshots()
-      .at(-1)
-      ?.taskPullRequests?.map((pr) => pr.number)
-      .toSorted((a, b) => a - b),
-  ).toEqual([1, 2, 3]);
+  expect(taskNumbers()?.toSorted((a, b) => a - b)).toEqual([1, 2, 3]);
   const sharedTarget = await prepareControlUiSessionPrServiceTarget(
     () => getSessionRowProjection(fixture.context),
     { sessionKey, agentId: "main" },
@@ -128,52 +221,8 @@ it("projects three descendant receipts without mixing the parent's current branc
     throw new Error("offline");
   });
   await fixture.subscriptions.pollNow();
-  expect(snapshots().at(-1)).toMatchObject({
-    status: "unavailable",
-    taskPullRequestCount: 3,
-  });
-  expect(
-    snapshots()
-      .at(-1)
-      ?.taskPullRequests?.every((pr) => pr.pullRequest?.state === "closed"),
-  ).toBe(true);
-});
-
-it("counts branch PRs against the complete receipt set, not only the bounded preview", async () => {
-  await fixture.seedRepository();
-  for (let number = 1; number <= 25; number++) {
-    receipt(sessionKey, number);
-  }
-  vi.stubGlobal(
-    "fetch",
-    vi.fn<typeof fetch>(async (input) => {
-      const url = requestUrl(input);
-      const number = Number(new URL(url).pathname.split("/").at(-1)) || 40;
-      const item = pullListItem({
-        number,
-        state: "closed",
-        html_url: "https://github.com/example/repository/pull/" + number,
-        base: { repo: { name: "repository", owner: { login: "example" } } },
-      });
-      return githubJson(url.includes("?head=") ? [item] : item);
-    }),
-  );
-  await fixture.subscribe();
-  await fixture.subscriptions.pollNow();
-  expect(snapshots().at(-1)).toMatchObject({ taskPullRequestCount: 25, pullRequestCount: 26 });
-  expect(snapshots().at(-1)?.taskPullRequests).toHaveLength(20);
-  receipt(sessionKey, 40, "older-branch-receipt", { updated_at_ms: 1 });
-  await vi.waitFor(() =>
-    expect(snapshots().at(-1)).toMatchObject({
-      taskPullRequestCount: 26,
-      pullRequestCount: 26,
-    }),
-  );
-  expect(
-    snapshots()
-      .at(-1)
-      ?.taskPullRequests?.some((pr) => pr.number === 40),
-  ).toBe(false);
+  expect(latest()).toMatchObject({ status: "unavailable", taskPullRequestCount: 3 });
+  expect(latest()?.taskPullRequests?.every((pr) => pr.pullRequest?.state === "closed")).toBe(true);
 });
 
 async function passive(client = fixture.client) {
@@ -201,23 +250,16 @@ it("reads own and nested receipts without a checkout, refreshes on commit, and n
   await fixture.seed(grandchild, fixture.profile.id, { parentSessionKey: child });
   receipt(sessionKey, 1);
   receipt(grandchild, 2);
-  const fetcher = vi.fn<typeof fetch>(async () => {
-    throw new Error("No GitHub allowed for passive rows");
-  });
-  vi.stubGlobal("fetch", fetcher);
+  const fetcher = stubOffline("No GitHub allowed for passive rows");
   const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
   await passive();
-  expect(snapshots().at(-1)).toMatchObject({
+  expect(latest()).toMatchObject({
     branchRead: false,
     pullRequests: [],
     taskPullRequestCount: 2,
   });
-  expect(snapshots().at(-1)?.pullRequestCount).toBeUndefined();
-  expect(
-    snapshots()
-      .at(-1)
-      ?.taskPullRequests?.every((pr) => !pr.pullRequest),
-  ).toBe(true);
+  expect(latest()?.pullRequestCount).toBeUndefined();
+  expect(latest()?.taskPullRequests?.every((pr) => !pr.pullRequest)).toBe(true);
   const work = reads.mock.calls.filter(
     ([, command]) => command.type === "githubPublications.taskReceipts",
   ).length;
@@ -227,65 +269,58 @@ it("reads own and nested receipts without a checkout, refreshes on commit, and n
     reads.mock.calls.filter(([, command]) => command.type === "githubPublications.taskReceipts"),
   ).toHaveLength(work);
   receipt(child, 3);
-  await vi.waitFor(() => expect(snapshots().at(-1)?.taskPullRequestCount).toBe(3));
+  await vi.waitFor(() => expect(latest()?.taskPullRequestCount).toBe(3));
   expect(fetcher).not.toHaveBeenCalled();
 });
 
-it("retains an external branch PR when active watching becomes passive without polling", async () => {
-  await fixture.seedRepository();
-  for (let number = 1; number <= 25; number++) {
-    receipt(sessionKey, number);
-  }
-  const fetcher = vi.fn<typeof fetch>(async (input) => {
-    const url = requestUrl(input);
-    const number = Number(new URL(url).pathname.split("/").at(-1)) || 40;
-    const item = pullListItem({
-      number,
-      state: "closed",
-      html_url: "https://github.com/example/repository/pull/" + number,
-      base: { repo: { name: "repository", owner: { login: "example" } } },
-    });
-    return githubJson(url.includes("?head=") ? [item] : item);
-  });
-  vi.stubGlobal("fetch", fetcher);
-  await fixture.subscribe();
-  await fixture.subscriptions.pollNow();
-  const active = snapshots().at(-1);
-  expect(active).toMatchObject({
-    pullRequests: [{ number: 40 }],
-    taskPullRequestCount: 25,
-    pullRequestCount: 26,
-  });
-  const git = vi.spyOn(gitReads, "runGitReadOperation");
-  const networkCalls = fetcher.mock.calls.length;
-  // Another browser may already retain this profile's passive audience cell.
-  await passive(fixture.addReader("passive-peer").client);
-  await passive();
-  expect(snapshots().at(-1)).toMatchObject({
-    branchRead: false,
-    pullRequests: active?.pullRequests,
-    repository: active?.repository,
-    taskPullRequestCount: 25,
-    pullRequestCount: 26,
-  });
-  // This overlap is outside the preview: counting only visible URLs is incorrect.
-  receipt(sessionKey, 40, "passive-overlap", { updated_at_ms: 1 });
-  await vi.waitFor(() =>
-    expect(snapshots().at(-1)).toMatchObject({
-      branchRead: false,
-      taskPullRequestCount: 26,
+it.each([false, true])(
+  "counts branch PRs beyond the receipt preview (passive=%s)",
+  async (watchPassively) => {
+    await fixture.seedRepository();
+    for (let number = 1; number <= 25; number++) {
+      receipt(sessionKey, number);
+    }
+    const fetcher = stubGitHub();
+    await fixture.subscribe();
+    await fixture.subscriptions.pollNow();
+    const active = latest();
+    expect(active).toMatchObject({
+      pullRequests: [{ number: 40 }],
+      taskPullRequestCount: 25,
       pullRequestCount: 26,
-    }),
-  );
-  expect(
-    snapshots()
-      .at(-1)
-      ?.taskPullRequests?.some((pr) => pr.number === 40),
-  ).toBe(false);
-  await fixture.subscriptions.pollNow();
-  expect(git).not.toHaveBeenCalled();
-  expect(fetcher).toHaveBeenCalledTimes(networkCalls);
-});
+    });
+    expect(active?.taskPullRequests).toHaveLength(20);
+    const git = vi.spyOn(gitReads, "runGitReadOperation");
+    const networkCalls = fetcher.mock.calls.length;
+    if (watchPassively) {
+      // Another browser may already retain this profile's passive audience cell.
+      await passive(fixture.addReader("passive-peer").client);
+      await passive();
+      expect(latest()).toMatchObject({
+        branchRead: false,
+        pullRequests: active?.pullRequests,
+        repository: active?.repository,
+        taskPullRequestCount: 25,
+        pullRequestCount: 26,
+      });
+    }
+    // This overlap is outside the preview: counting only visible URLs is incorrect.
+    receipt(sessionKey, 40, "passive-overlap", { updated_at_ms: 1 });
+    await vi.waitFor(() =>
+      expect(latest()).toMatchObject({
+        ...(watchPassively ? { branchRead: false } : {}),
+        taskPullRequestCount: 26,
+        pullRequestCount: 26,
+      }),
+    );
+    expect(taskNumbers()?.includes(40)).toBe(false);
+    if (watchPassively) {
+      await fixture.subscriptions.pollNow();
+      expect(git).not.toHaveBeenCalled();
+      expect(fetcher).toHaveBeenCalledTimes(networkCalls);
+    }
+  },
+);
 
 it("keeps personal receipts viewer-scoped and withdraws inaccessible descendants", async () => {
   const child = "agent:main:private-child";
@@ -299,14 +334,38 @@ it("keeps personal receipts viewer-scoped and withdraws inaccessible descendants
     identity_source: "personal",
     connection_generation: "personal-generation",
   });
-  vi.stubGlobal(
-    "fetch",
-    vi.fn<typeof fetch>(async () => {
-      throw new Error("offline");
-    }),
-  );
+  const incognito = "agent:main:incognito-child";
+  await fixture.seed(incognito, fixture.profile.id, {
+    parentSessionKey: sessionKey,
+    incognito: true,
+  });
+  receipt(incognito, 3);
+  const childReceipt = {
+    url: "https://github.com/example/repository/pull/1",
+    owner: "example",
+    repo: "repository",
+    number: 1,
+    branch: "openclaw/worker-proof",
+    sourceSessionKey: child,
+    sourceAgentId: "main",
+  };
+  const personalReceipt = {
+    ...childReceipt,
+    url: "https://github.com/example/repository/pull/2",
+    number: 2,
+    sourceSessionKey: sessionKey,
+  };
+  const expectedSnapshot = {
+    pullRequests: [],
+    rateLimited: false,
+    taskPullRequests: [personalReceipt, childReceipt],
+    taskPullRequestCount: 2,
+    branchRead: false,
+    status: "ready",
+  };
+  stubOffline();
   await passive();
-  expect(snapshots().at(-1)?.taskPullRequestCount).toBe(2);
+  expect(latest()).toEqual(expectedSnapshot);
   const other = fixture.addReader("other-viewer");
   other.client.authenticatedUserProfile = {
     ...other.client.authenticatedUserProfile!,
@@ -314,14 +373,24 @@ it("keeps personal receipts viewer-scoped and withdraws inaccessible descendants
   };
   prepareGatewayRecipientProfile(other.client);
   await passive(other.client);
-  expect(snapshots(other.socket).at(-1)?.taskPullRequestCount).toBe(1);
+  expect(snapshots(other.socket).at(-1)).toEqual({
+    ...expectedSnapshot,
+    taskPullRequests: [childReceipt],
+    taskPullRequestCount: 1,
+  });
   await fixture.seed(child, fixture.other.id, {
     parentSessionKey: sessionKey,
     visibility: "draft",
     updatedAt: 2,
   });
   await fixture.subscriptions.pollNow();
-  await vi.waitFor(() => expect(snapshots().at(-1)?.taskPullRequestCount).toBe(1));
+  await vi.waitFor(() =>
+    expect(latest()).toEqual({
+      ...expectedSnapshot,
+      taskPullRequests: [personalReceipt],
+      taskPullRequestCount: 1,
+    }),
+  );
   await fixture.changeReader("grant");
   const delivered = snapshots().length;
   receipt(sessionKey, 3);
@@ -331,25 +400,20 @@ it("keeps personal receipts viewer-scoped and withdraws inaccessible descendants
 
 it("keeps a known cold URL when GitHub metadata fails, and ignores a replaced session lifecycle", async () => {
   receipt(sessionKey, 1);
-  vi.stubGlobal(
-    "fetch",
-    vi.fn<typeof fetch>(async () => {
-      throw new Error("offline");
-    }),
-  );
+  stubOffline();
   await fixture.subscribe();
   await fixture.subscriptions.pollNow();
-  expect(snapshots().at(-1)).toMatchObject({
+  expect(latest()).toMatchObject({
     status: "unavailable",
     taskPullRequestCount: 1,
     taskPullRequests: [{ url: "https://github.com/example/repository/pull/1" }],
   });
-  expect(snapshots().at(-1)?.taskPullRequests?.[0]?.pullRequest).toBeUndefined();
+  expect(latest()?.taskPullRequests?.[0]?.pullRequest).toBeUndefined();
   await fixture.seed(sessionKey, fixture.profile.id, {
     sessionId: "replacement",
     lifecycleRevision: "replacement-revision",
     updatedAt: 2,
   });
   await fixture.subscriptions.pollNow();
-  await vi.waitFor(() => expect(snapshots().at(-1)?.taskPullRequestCount).toBe(0));
+  await vi.waitFor(() => expect(latest()?.taskPullRequestCount).toBe(0));
 });

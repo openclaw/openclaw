@@ -21,7 +21,6 @@ import {
   type McpAppFormOrigin,
   type McpFormResourceUpload,
 } from "../agents/mcp-ui-resource.js";
-import { readRetainedSessionEntryFacts } from "../config/sessions/session-entry-read-facts.js";
 import { captureSessionEntryMetadataRead } from "../config/sessions/session-entry-source-authority.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveMcpAppRequesterId, callMcpAppToolWithElicitation } from "./mcp-app-operations.js";
@@ -496,7 +495,7 @@ export function createMcpAppWorkspaceUploadProvider(params: {
     withSessionFileRoot(
       params,
       request.options.context.getRuntimeConfig(),
-      async (loaded, assertSourceCurrent) => {
+      async (loaded, assertSourceCurrent, readEntry) => {
         const assertCurrent = () => {
           params.assertCurrent();
           assertSourceCurrent();
@@ -511,19 +510,7 @@ export function createMcpAppWorkspaceUploadProvider(params: {
               throw new Error("Form upload session generation changed");
             }
           }
-          const current = metadata
-            ? metadata.readCurrent()
-            : readRetainedSessionEntryFacts(
-                {
-                  agentId: loaded.readSource?.agentId ?? params.agentId,
-                  path: loaded.readSource?.path ?? loaded.storePath,
-                },
-                {
-                  sessionKeys: [loaded.canonicalKey],
-                  projection: "exact",
-                  snapshotFields: ["skillsSnapshot"],
-                },
-              )?.entries.find((row) => row.sessionKey === loaded.canonicalKey)?.entry;
+          const current = metadata ? metadata.readCurrent() : readEntry();
           if (!current || current.execNode || loaded.root !== params.workspaceDir) {
             throw new Error("Form upload workspace authority changed");
           }

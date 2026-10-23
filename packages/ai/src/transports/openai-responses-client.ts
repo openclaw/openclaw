@@ -542,6 +542,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
                   transport === "websocket" ? websocketBaseline : continuationBaseline,
                 ),
               ...config.pricingOptions?.(responsesOptions, model),
+              promptCacheTtl: params.prompt_cache_options?.ttl,
               resolveServiceTier: (responseTier, originalTier) =>
                 responseTier ??
                 (requestedTier === "priority" || requestedTier === "default"

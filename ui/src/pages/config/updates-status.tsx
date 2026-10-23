@@ -7,7 +7,7 @@ import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { getLocale, t } from "../../lib/reactive/i18n.ts";
 import type { UpdatesViewProps } from "./updates-types.ts";
 
-export function UpdatesStatus(props: UpdatesViewProps) {
+export function UpdatesStatus(props: UpdatesViewProps & { checking: boolean }) {
   const status = createMemo(() => {
     getLocale();
     const run = props.update.updateRun;
@@ -23,7 +23,7 @@ export function UpdatesStatus(props: UpdatesViewProps) {
     if (running) {
       kind = "accent";
       label = t("updates.page.activePhase", { phase: t(`updates.run.phase.${run.phase}`) });
-    } else if (props.update.updateStatusRefreshing && !props.updateBusy) {
+    } else if ((props.checking || props.update.updateStatusRefreshing) && !props.updateBusy) {
       label = t("updates.page.checking");
     } else if (props.update.updateStatusCheckBanner && !props.updateBusy) {
       kind = "warn";

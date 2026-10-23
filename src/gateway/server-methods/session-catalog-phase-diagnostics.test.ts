@@ -13,9 +13,9 @@ import { runWithDiagnosticTraceContext } from "../../infra/diagnostic-trace-cont
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as projectionAccess from "../session-row-projection-access.js";
 import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
+import { catalogProvider as provider } from "./session-catalog.fixtures.test-support.js";
 import {
   hoisted,
-  provider,
   resetSessionCatalogTestState,
   startCall,
   type SessionCatalogProvider,

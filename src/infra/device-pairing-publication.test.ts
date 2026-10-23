@@ -19,6 +19,7 @@ import { updatePairedNodeBins, updatePairedNodeSessionHost } from "./device-pair
 import {
   captureNodePairingGeneration,
   isNodePairingGenerationCurrent,
+  type NodePairingGeneration,
 } from "./device-pairing-node-state.js";
 import {
   recordPairedNodeConnection,
@@ -39,6 +40,7 @@ import {
   updatePairedDeviceMetadata,
   updatePairedDevicePresence,
 } from "./device-pairing.js";
+import type { PairedDevice } from "./device-pairing.types.js";
 import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
 
 let baseDir: string;
@@ -55,25 +57,90 @@ beforeAll(() => {
   database = openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } });
 });
 
+function persistNodes(
+  pairedByDeviceId: Record<string, PairedDevice>,
+  mode: "both" | "paired" = "paired",
+) {
+  persistDevicePairingStoreState({ pendingById: {}, pairedByDeviceId }, baseDir, mode);
+}
+
+function holdWorker() {
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const run = stateWorker.runOpenClawStateWorkerOperation;
+  const writer = vi
+    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+    .mockImplementationOnce(async (...args) => {
+      entered.resolve();
+      await release.promise;
+      return run(...args);
+    });
+  return { entered, release, writer };
+}
+
+async function seedOther(overrides: Partial<PairedDevice> = {}) {
+  const node = expectDefined(await getPairedDevice("node", baseDir), "paired node");
+  const other = {
+    ...structuredClone(node),
+    deviceId: "other",
+    publicKey: "synthetic-other-key",
+    tokens: { node: { token: "synthetic-other-token", role: "node", scopes: [], createdAtMs: 1 } },
+    ...overrides,
+  };
+  persistNodes({ node, other });
+  await readDevicePairingNodeSnapshot(baseDir);
+  return { node, other };
+}
+
+function changesFor(nodeId: string, generation: NodePairingGeneration) {
+  const facts = { nodeId, expectedPairingGeneration: generation, baseDir };
+  const token = { deviceId: nodeId, role: "node", baseDir };
+  const consent = () =>
+    updatePairedNodeSessionHost({
+      ...facts,
+      sessionHost: true,
+      isConnectionCurrent: () => true,
+    });
+  return {
+    rename: () => renamePairedNode(nodeId, "Renamed node", baseDir),
+    "host stats": () =>
+      recordPairedNodeHostStats({
+        ...facts,
+        hostStats: { cpuCount: 2, memoryTotalBytes: 8_192, memoryFreeBytes: 4_096, updatedAtMs: 2 },
+      }),
+    "skill bins": () => updatePairedNodeBins(nodeId, ["git"], generation, baseDir),
+    "token revocation": () => revokeDeviceToken(token),
+    "session-host consent": consent,
+    "metadata after a failed read": consent,
+    "token verification": () =>
+      verifyDeviceToken({ ...token, token: `synthetic-${nodeId}-token`, scopes: [] }),
+    "connection record": () => recordPairedNodeConnection(nodeId, 2, baseDir, generation),
+    "presence update": () =>
+      updatePairedDevicePresence(
+        nodeId,
+        { lastSeenAtMs: 2, lastSeenReason: "node-event" },
+        generation,
+        baseDir,
+      ),
+    "metadata update": () => updatePairedDeviceMetadata(nodeId, { displayName: "Other" }, baseDir),
+  };
+}
+
 beforeEach(() => {
-  persistDevicePairingStoreState(
+  persistNodes(
     {
-      pendingById: {},
-      pairedByDeviceId: {
-        node: {
-          deviceId: "node",
-          publicKey: "synthetic-node-key",
-          roles: ["node"],
-          tokens: {
-            node: { token: "synthetic-node-token", role: "node", scopes: [], createdAtMs: 1 },
-          },
-          nodeSurface: { createdAtMs: 1, approvedAtMs: 1 },
-          createdAtMs: 1,
-          approvedAtMs: 1,
+      node: {
+        deviceId: "node",
+        publicKey: "synthetic-node-key",
+        roles: ["node"],
+        tokens: {
+          node: { token: "synthetic-node-token", role: "node", scopes: [], createdAtMs: 1 },
         },
+        nodeSurface: { createdAtMs: 1, approvedAtMs: 1 },
+        createdAtMs: 1,
+        approvedAtMs: 1,
       },
     },
-    baseDir,
     "both",
   );
 });
@@ -114,16 +181,7 @@ test("keeps node authority available while retained setup cleanup is pending", a
     const snapshot = await readDevicePairingNodeSnapshot(baseDir);
     const binding = getPublishedPairedDeviceBinding("node", baseDir);
     expect(binding).not.toBeNull();
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const run = stateWorker.runOpenClawStateWorkerOperation;
-    const writer = vi
-      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-      .mockImplementationOnce(async (...args) => {
-        entered.resolve();
-        await release.promise;
-        return run(...args);
-      });
+    const { entered, release, writer } = holdWorker();
     const clock = createGatewaySchedulerClock(Date.now());
     const scheduler = createTestGatewayScheduler(clock.clock);
     const onError = vi.fn();
@@ -147,161 +205,86 @@ test("keeps node authority available while retained setup cleanup is pending", a
 });
 
 test.for([
-  "session-host consent",
-  "host stats",
-  "skill bins",
-  "rename",
-  "token revocation",
-  "metadata after a failed read",
-] as const)("retains only usable node authority during %s", async (change, { signal }) => {
-  const snapshot = await readDevicePairingNodeSnapshot(baseDir);
-  const generation = await withEnvAsync({ OPENCLAW_STATE_DIR: baseDir }, () =>
-    captureNodePairingGeneration("node"),
-  );
-  if (!generation) {
-    throw new Error("expected paired node generation");
-  }
-  const binding = getPublishedPairedDeviceBinding("node", baseDir);
-  if (change === "metadata after a failed read") {
-    const read = vi
-      .spyOn(stateReads, "executeExistingOpenClawStateRead")
-      .mockRejectedValueOnce(new Error("pairing read unavailable"));
-    try {
-      await expect(getPendingDevicePairing("unavailable", baseDir)).rejects.toThrow(
-        "pairing read unavailable",
-      );
-    } finally {
-      read.mockRestore();
-    }
-  }
-  const mutationQueued = createDeferredCore();
-  const releaseMutation = createDeferredCore();
-  const originalMutation = stateWorker.runOpenClawStateWorkerOperation;
-  const writer = vi
-    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-    .mockImplementationOnce(async (...args) => {
-      mutationQueued.resolve();
-      await releaseMutation.promise;
-      return originalMutation(...args);
-    });
-  const mutate = () => {
-    switch (change) {
-      case "rename":
-        return renamePairedNode("node", "Renamed node", baseDir);
-      case "host stats":
-        return recordPairedNodeHostStats({
-          nodeId: "node",
-          hostStats: {
-            cpuCount: 2,
-            memoryTotalBytes: 8_192,
-            memoryFreeBytes: 4_096,
-            updatedAtMs: 2,
-          },
-          expectedPairingGeneration: generation,
-          baseDir,
-        });
-      case "skill bins":
-        return updatePairedNodeBins("node", ["git"], generation, baseDir);
-      case "token revocation":
-        return revokeDeviceToken({ deviceId: "node", role: "node", baseDir });
-      default:
-        return updatePairedNodeSessionHost({
-          nodeId: "node",
-          sessionHost: true,
-          expectedPairingGeneration: generation,
-          isConnectionCurrent: () => true,
-          baseDir,
-        });
-    }
-  };
-  const mutation = mutate();
-  try {
-    await awaitGateBeforeSettlement(
-      mutationQueued.promise,
-      mutation,
-      "pairing mutation settled before worker dispatch",
+  ["session-host consent", { nodeSurface: { sessionHost: true } }],
+  ["host stats", { nodeSurface: { lastHostStats: { cpuCount: 2, updatedAtMs: 2 } } }],
+  ["skill bins", { nodeSurface: { bins: ["git"] } }],
+  ["rename", { nodeSurface: { displayName: "Renamed node" } }],
+  ["token revocation", { tokens: { node: { revokedAtMs: expect.any(Number) } } }],
+  ["metadata after a failed read", { nodeSurface: { sessionHost: true } }],
+] as const)(
+  "retains only usable node authority during %s",
+  async ([change, expected], { signal }) => {
+    const snapshot = await readDevicePairingNodeSnapshot(baseDir);
+    const generation = await withEnvAsync({ OPENCLAW_STATE_DIR: baseDir }, () =>
+      captureNodePairingGeneration("node"),
     );
+    if (!generation) {
+      throw new Error("expected paired node generation");
+    }
+    const binding = getPublishedPairedDeviceBinding("node", baseDir);
     if (change === "metadata after a failed read") {
-      expect(() => getPublishedPairedDeviceBinding("node", baseDir)).toThrow(
-        "Device pairing authority requires a current worker publication",
+      const read = vi
+        .spyOn(stateReads, "executeExistingOpenClawStateRead")
+        .mockRejectedValueOnce(new Error("pairing read unavailable"));
+      try {
+        await expect(getPendingDevicePairing("unavailable", baseDir)).rejects.toThrow(
+          "pairing read unavailable",
+        );
+      } finally {
+        read.mockRestore();
+      }
+    }
+    const { entered: mutationQueued, release: releaseMutation, writer } = holdWorker();
+    const mutation = changesFor("node", generation)[change]();
+    try {
+      await awaitGateBeforeSettlement(
+        mutationQueued.promise,
+        mutation,
+        "pairing mutation settled before worker dispatch",
       );
-    } else {
-      expect(getPublishedPairedDeviceBinding("node", baseDir)).toEqual(binding);
-      // Discovery must finish while the write is still queued, using committed facts.
-      expect(await withinTest(readDevicePairingNodeSnapshot(baseDir), signal)).toBe(snapshot);
+      if (change === "metadata after a failed read") {
+        expect(() => getPublishedPairedDeviceBinding("node", baseDir)).toThrow(
+          "Device pairing authority requires a current worker publication",
+        );
+      } else {
+        expect(getPublishedPairedDeviceBinding("node", baseDir)).toEqual(binding);
+        // Discovery must finish while the write is still queued, using committed facts.
+        expect(await withinTest(readDevicePairingNodeSnapshot(baseDir), signal)).toBe(snapshot);
+      }
+      releaseMutation.resolve();
+      expect(await mutation).toEqual(
+        change === "token revocation"
+          ? expect.objectContaining({ ok: true })
+          : change === "rename"
+            ? expect.objectContaining({ displayName: "Renamed node" })
+            : true,
+      );
+      expect(getPublishedPairedDeviceBinding("node", baseDir)).toEqual(
+        change === "token revocation" ? null : binding,
+      );
+      const updated = await readDevicePairingNodeSnapshot(baseDir);
+      expect(updated).not.toBe(snapshot);
+      expect(await readDevicePairingNodeSnapshot(baseDir)).toBe(updated);
+      expect(updated.bindings.get("node") ?? null).toEqual(
+        change === "token revocation" ? null : binding,
+      );
+      expect(updated.paired[0]).toMatchObject(expected);
+    } finally {
+      releaseMutation.resolve();
+      await Promise.allSettled([mutation]);
+      writer.mockRestore();
     }
-    releaseMutation.resolve();
-    expect(await mutation).toEqual(
-      change === "token revocation"
-        ? expect.objectContaining({ ok: true })
-        : change === "rename"
-          ? expect.objectContaining({ displayName: "Renamed node" })
-          : true,
-    );
-    expect(getPublishedPairedDeviceBinding("node", baseDir)).toEqual(
-      change === "token revocation" ? null : binding,
-    );
-    const updated = await readDevicePairingNodeSnapshot(baseDir);
-    expect(updated).not.toBe(snapshot);
-    expect(await readDevicePairingNodeSnapshot(baseDir)).toBe(updated);
-    expect(updated.bindings.get("node") ?? null).toEqual(
-      change === "token revocation" ? null : binding,
-    );
-    switch (change) {
-      case "host stats":
-        expect(updated.paired[0]!.nodeSurface!.lastHostStats).toMatchObject({
-          cpuCount: 2,
-          updatedAtMs: 2,
-        });
-        break;
-      case "skill bins":
-        expect(updated.paired[0]!.nodeSurface!.bins).toEqual(["git"]);
-        break;
-      case "rename":
-        expect(updated.paired[0]!.nodeSurface!.displayName).toBe("Renamed node");
-        break;
-      case "token revocation":
-        expect(updated.paired[0]!.tokens!.node!.revokedAtMs).toEqual(expect.any(Number));
-        break;
-      default:
-        expect(updated.paired[0]!.nodeSurface!.sessionHost).toBe(true);
-    }
-  } finally {
-    releaseMutation.resolve();
-    await Promise.allSettled([mutation]);
-    writer.mockRestore();
-  }
-});
+  },
+);
 
 test.each(["lookup", "pending read", "token revocation"] as const)(
   "keeps unrelated node authority when a %s publishes a revision the cache missed",
   async (source) => {
-    const node = await getPairedDevice("node", baseDir);
-    if (!node) {
-      throw new Error("expected paired node");
-    }
-    const other = {
-      ...structuredClone(node),
-      deviceId: "other",
-      publicKey: "synthetic-other-key",
-      tokens: {
-        node: { token: "synthetic-other-token", role: "node", scopes: [], createdAtMs: 1 },
-      },
-    };
-    persistDevicePairingStoreState(
-      { pendingById: {}, pairedByDeviceId: { node, other } },
-      baseDir,
-      "paired",
-    );
-    await readDevicePairingNodeSnapshot(baseDir);
+    const { node, other } = await seedOther();
     const binding = getPublishedPairedDeviceBinding("node", baseDir);
     expect(binding).not.toBeNull();
     // Boot and Doctor migrations commit without a worker receipt.
-    persistDevicePairingStoreState(
-      { pendingById: {}, pairedByDeviceId: { node, other: { ...other, lastSeenAtMs: 2 } } },
-      baseDir,
-      "paired",
-    );
+    persistNodes({ node, other: { ...other, lastSeenAtMs: 2 } });
     if (source === "lookup") {
       await getPairedDevice("other", baseDir);
     } else if (source === "pending read") {
@@ -321,22 +304,7 @@ test.for([
   "metadata update",
   "token revocation",
 ] as const)("keeps other node authority during %s", async (change, { signal }) => {
-  const node = expectDefined(await getPairedDevice("node", baseDir), "paired node");
-  const other = {
-    ...structuredClone(node),
-    deviceId: "other",
-    approvedScopes: [],
-    publicKey: "synthetic-other-key",
-    tokens: {
-      node: { token: "synthetic-other-token", role: "node", scopes: [], createdAtMs: 1 },
-    },
-  };
-  persistDevicePairingStoreState(
-    { pendingById: {}, pairedByDeviceId: { node, other } },
-    baseDir,
-    "paired",
-  );
-  await readDevicePairingNodeSnapshot(baseDir);
+  await seedOther({ approvedScopes: [] });
   const nodeBinding = getPublishedPairedDeviceBinding("node", baseDir);
   const otherBinding = getPublishedPairedDeviceBinding("other", baseDir);
   expect(nodeBinding).not.toBeNull();
@@ -364,32 +332,7 @@ test.for([
     },
     { once: true },
   );
-  const mutate = () => {
-    switch (change) {
-      case "token verification":
-        return verifyDeviceToken({
-          deviceId: "other",
-          token: "synthetic-other-token",
-          role: "node",
-          scopes: [],
-          baseDir,
-        });
-      case "connection record":
-        return recordPairedNodeConnection("other", 2, baseDir, generation);
-      case "presence update":
-        return updatePairedDevicePresence(
-          "other",
-          { lastSeenAtMs: 2, lastSeenReason: "node-event" },
-          generation,
-          baseDir,
-        );
-      case "metadata update":
-        return updatePairedDeviceMetadata("other", { displayName: "Other" }, baseDir);
-      default:
-        return revokeDeviceToken({ deviceId: "other", role: "node", baseDir });
-    }
-  };
-  const mutation = mutate();
+  const mutation = changesFor("other", generation)[change]();
   try {
     if (change === "token verification") {
       expect(await mutation).toEqual({ ok: true });
@@ -449,11 +392,7 @@ test.each([
         device!.tokens!.node!.revokedAtMs = 2;
         break;
     }
-    persistDevicePairingStoreState(
-      { pendingById: {}, pairedByDeviceId: { node: device! } },
-      baseDir,
-      "paired",
-    );
+    persistNodes({ node: device! });
     await expect(isNodePairingGenerationCurrent(generation!)).resolves.toBe(remainsCurrent);
   });
 });
@@ -520,17 +459,11 @@ test.each(["worker commit", "native owner commit"] as const)(
     await listDevicePairing(baseDir);
     expect(getPublishedPairedDeviceBinding("node", baseDir)).not.toBeNull();
     // A native owner's commit retires the resident rows, forcing this read through the worker.
-    const state = {
-      pendingById: {},
-      pairedByDeviceId: { node: (await getPairedDevice("node", baseDir))! },
-    };
-    persistDevicePairingStoreState(state, baseDir, "paired");
+    persistNodes({ node: (await getPairedDevice("node", baseDir))! });
     const releaseRead = createDeferredCore();
-    const releaseMutation = createDeferredCore();
-    const mutationQueued = createDeferredCore();
     const originalRead = stateReads.executeExistingOpenClawStateRead;
     const readProduced = createDeferredCore<Awaited<ReturnType<typeof originalRead>>>();
-    const originalMutation = stateWorker.runOpenClawStateWorkerOperation;
+    const { entered: mutationQueued, release: releaseMutation, writer } = holdWorker();
     const read = vi
       .spyOn(stateReads, "executeExistingOpenClawStateRead")
       .mockImplementationOnce(async (...args) => {
@@ -543,13 +476,6 @@ test.each(["worker commit", "native owner commit"] as const)(
           readProduced.reject(error);
           throw error;
         }
-      });
-    const writer = vi
-      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-      .mockImplementationOnce(async (...args) => {
-        mutationQueued.resolve();
-        await releaseMutation.promise;
-        return originalMutation(...args);
       });
     try {
       await withDevicePairingLock(async () => {
@@ -571,11 +497,7 @@ test.each(["worker commit", "native owner commit"] as const)(
             releaseMutation.resolve();
             await mutation;
           } else {
-            persistDevicePairingStoreState(
-              { pendingById: {}, pairedByDeviceId: {} },
-              baseDir,
-              "paired",
-            );
+            persistNodes({});
             expect(await getPairedDevice("node", baseDir)).toBeNull();
           }
           expect(getPublishedPairedDeviceBinding("node", baseDir)).toBeNull();
@@ -601,7 +523,7 @@ test.each(["worker commit", "native owner commit"] as const)(
 
 test("retires prepared nodes after a native owner commit and database close", async () => {
   const snapshot = await readDevicePairingNodeSnapshot(baseDir);
-  persistDevicePairingStoreState({ pendingById: {}, pairedByDeviceId: {} }, baseDir, "paired");
+  persistNodes({});
   const deleted = await readDevicePairingNodeSnapshot(baseDir);
   expect(deleted).not.toBe(snapshot);
   expect(deleted.paired).toEqual([]);

@@ -17,7 +17,6 @@ export function clearCronRunsPage(state: CronState) {
   cronRunsViews.delete(state);
   state.cronRunsError = null;
   state.cronRuns = [];
-  state.cronRunsTotal = 0;
   state.cronRunsHasMore = false;
   state.cronRunsNextOffset = null;
 }
@@ -162,7 +161,6 @@ export async function loadCronRuns(
     cronRunsViews.set(state, request);
     state.cronRunsError = null;
     state.cronRuns = append ? [...state.cronRuns, ...res.entries] : res.entries;
-    state.cronRunsTotal = Math.max(res.total, state.cronRuns.length);
     state.cronRunsHasMore = res.hasMore;
     state.cronRunsNextOffset = res.nextOffset;
     return "ok";

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -84,6 +85,72 @@ console.log(value, privateValue, local, process.env.TOOLING_FIXTURE_PRELOADED);
   symlinkSync(installed, link, directoryLink);
   return { ...fixture, source, donor, entry, wrapper, installed, link, manifest };
 }
+
+it.each(["full", "sparse", "different origin"])(
+  "qualifies a %s donor independently of inherited hook Git context",
+  (donor) => {
+    const root = tempDirs.make("openclaw-tooling-hook-context-");
+    const fixture = createToolingDependencyFixture(root);
+    execFileSync("git", ["-C", fixture.checkout, "config", "core.sparseCheckout", "true"]);
+    if (donor === "sparse") {
+      execFileSync("git", ["-C", fixture.tooling, "config", "core.sparseCheckout", "true"]);
+    } else if (donor === "different origin") {
+      execFileSync("git", [
+        "-C",
+        fixture.tooling,
+        "remote",
+        "set-url",
+        "origin",
+        "https://github.com/fixture/other.git",
+      ]);
+    }
+    writeFileSync(
+      join(fixture.checkout, "scripts/hook-context.mjs"),
+      `import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { toolingDependencyOptions } from "./lib/tooling-dependencies.mjs";
+const checkout = dirname(dirname(fileURLToPath(import.meta.url)));
+const gitDir = join(checkout, ".git");
+const index = join(checkout, "hook-index");
+execFileSync("git", ["-C", checkout, "read-tree", "--empty"], {
+  env: { ...process.env, GIT_INDEX_FILE: index },
+});
+Object.assign(process.env, {
+  GIT_DIR: gitDir,
+  GIT_WORK_TREE: checkout,
+  GIT_COMMON_DIR: gitDir,
+  GIT_INDEX_FILE: index,
+  GIT_PREFIX: "scripts/",
+  GIT_OBJECT_DIRECTORY: join(gitDir, "objects"),
+  GIT_ALTERNATE_OBJECT_DIRECTORIES: join(gitDir, "objects"),
+});
+const before = { ...process.env };
+const indexBefore = readFileSync(index);
+try {
+  assert.ok(toolingDependencyOptions(checkout, "hook-context").execArgv.length);
+} finally {
+  assert.deepEqual({ ...process.env }, before);
+  assert.deepEqual(readFileSync(index), indexBefore);
+}
+await import("./crabbox-wrapper.mjs");
+`,
+    );
+    const result = expectRun(
+      fixture,
+      donor === "full" ? 0 : 1,
+      donor === "full" ? "qualified bootstrap OK\n" : "",
+      "hook-context.mjs",
+    );
+    if (donor !== "full") {
+      expect(result.stderr).toContain(
+        donor === "sparse" ? "Sparse checkout." : "Different repository.",
+      );
+    }
+  },
+);
 
 it.each(["clean", "stale", "missing subpath exports"])(
   "bootstraps qualified dependencies beside a %s ancestor without linking them",

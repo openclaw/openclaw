@@ -49,8 +49,7 @@ export type ChatComposerPlusMenuProps = {
 export type ChatComposerCapabilityMenuProps = {
   basePath: string;
   skills: readonly ChatComposerMenuSkill[] | null;
-  skillsLoading: boolean;
-  skillsError: boolean;
+  skillsRead: Promise<readonly ChatComposerMenuSkill[] | null> | null;
   library?: ComposerLibraryProps;
   mcpServers: readonly McpServerSummary[];
   toolsEffectiveResult: ToolsEffectiveResult | null;

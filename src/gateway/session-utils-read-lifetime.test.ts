@@ -1,19 +1,19 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { hasOpenClawAgentDatabaseAsyncResources } from "../state/openclaw-agent-db-resources.js";
 import {
-  closeOpenClawAgentDatabaseByPathAsync,
-  openOpenClawAgentDatabase,
+  closeOpenClawAgentDatabaseByPathAsync as closeDatabase,
+  openOpenClawAgentDatabase as openDatabase,
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  retainGatewaySessionEntryReadOnly,
-  withGatewaySessionEntryReadOnly,
+  retainGatewaySessionEntryReadOnly as retainRead,
+  withGatewaySessionEntryReadOnly as withRead,
 } from "./session-utils-read-lifetime.js";
 
 it("reads committed durable rows without host SQL and checks caller authority", async () => {
@@ -23,47 +23,31 @@ it("reads committed durable rows without host SQL and checks caller authority", 
     const key = "agent:main:saved";
     const scope = { agentId: "main", sessionKey: key, env: state.env };
     const params = { cfg, key, env: state.env };
-    await upsertSessionEntryCore(scope, {
-      sessionId: "durable-session",
-      updatedAt: 1,
-      displayName: "Before write",
-    });
-    const read = () => withGatewaySessionEntryReadOnly(params, async (loaded) => loaded.entry);
+    const entry = { sessionId: "saved", updatedAt: 1, displayName: "Before" };
+    await upsertSessionEntryCore(scope, entry);
+    const read = () => withRead(params, async (loaded) => loaded.entry);
     await read();
     const expectRead = async (displayName: string) => {
       const sql = observeHostDataSql();
-      try {
-        expect(await read()).toMatchObject({ sessionId: "durable-session", displayName });
-        expect(sql.queries).toEqual([]);
-      } finally {
-        sql.restore();
-      }
+      using _ = { [Symbol.dispose]: sql.restore };
+      expect(await read()).toMatchObject({ sessionId: "saved", displayName });
+      expect(sql.queries).toEqual([]);
     };
-    await expectRead("Before write");
-    await patchSessionEntryCore(scope, () => ({ displayName: "After write" }), {
+    await expectRead("Before");
+    await patchSessionEntryCore(scope, () => ({ displayName: "After" }), {
       requireWriteSuccess: true,
     });
-    await expectRead("After write");
+    await expectRead("After");
 
     const revoked = new Error("Caller no longer authorized");
-    let active = true;
-    let consumed = false;
-    const pending = withGatewaySessionEntryReadOnly(
-      {
-        ...params,
-        assertActive() {
-          if (!active) {
-            throw revoked;
-          }
-        },
-      },
-      async () => {
-        consumed = true;
-      },
-    );
-    active = false;
+    const assertActive = vi.fn();
+    const consume = vi.fn(async () => {});
+    const pending = withRead({ ...params, assertActive }, consume);
+    assertActive.mockImplementation(() => {
+      throw revoked;
+    });
     await expect(pending).rejects.toBe(revoked);
-    expect(consumed).toBe(false);
+    expect(consume).not.toHaveBeenCalled();
   });
 });
 
@@ -78,18 +62,12 @@ it.each(["alias replacement", "cold-store close", "same-file reopen"] as const)(
       const replacement = state.statePath("replacement", "catalog.sqlite");
       const alias = state.statePath("selected", "catalog.sqlite");
       const sessionKey = "agent:main:saved";
+      const entry = { sessionId: "same", lifecycleRevision: "same", updatedAt: 1 };
       for (const storePath of [original, replacement]) {
-        await upsertSessionEntryCore(
-          { agentId: "main", storePath, sessionKey },
-          {
-            sessionId: "identical-session",
-            lifecycleRevision: "identical-generation",
-            updatedAt: 1,
-          },
-        );
+        await upsertSessionEntryCore({ agentId: "main", storePath, sessionKey }, entry);
         // Settle seed workers, then restore the warm handle before testing read lifetime.
-        await closeOpenClawAgentDatabaseByPathAsync(storePath);
-        openOpenClawAgentDatabase({ agentId: "main", path: storePath });
+        await closeDatabase(storePath);
+        openDatabase({ agentId: "main", path: storePath });
       }
       fs.symlinkSync(originalDirectory, aliasDirectory, "junction");
       const config = {
@@ -99,21 +77,21 @@ it.each(["alias replacement", "cold-store close", "same-file reopen"] as const)(
       await state.writeConfig(config);
       setRuntimeConfigSnapshot(config);
       if (change === "cold-store close") {
-        await closeOpenClawAgentDatabaseByPathAsync(original);
+        await closeDatabase(original);
       } else if (change === "same-file reopen") {
-        openOpenClawAgentDatabase({ agentId: "main", path: alias });
+        openDatabase({ agentId: "main", path: alias });
       }
-      const read = await retainGatewaySessionEntryReadOnly(sessionKey, "main");
+      const read = await retainRead(sessionKey, "main");
       try {
-        expect(read.entry?.sessionId).toBe("identical-session");
+        expect(read.entry?.sessionId).toBe("same");
         expect(read.isCurrentAtResponse()).toBe(true);
         if (change === "alias replacement") {
           fs.rmSync(aliasDirectory, { recursive: true });
           fs.symlinkSync(replacementDirectory, aliasDirectory, "junction");
         } else {
-          await closeOpenClawAgentDatabaseByPathAsync(read.readSource!.path);
+          await closeDatabase(read.readSource!.path);
           if (change === "same-file reopen") {
-            const successor = await retainGatewaySessionEntryReadOnly(sessionKey, "main");
+            const successor = await retainRead(sessionKey, "main");
             expect(successor.isCurrentAtResponse()).toBe(true);
             successor.release();
           }
@@ -123,7 +101,7 @@ it.each(["alias replacement", "cold-store close", "same-file reopen"] as const)(
         read.release();
       }
       expect(read.isCurrent()).toBe(false);
-      await closeOpenClawAgentDatabaseByPathAsync(read.readSource!.path);
+      await closeDatabase(read.readSource!.path);
       expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
     });
   },

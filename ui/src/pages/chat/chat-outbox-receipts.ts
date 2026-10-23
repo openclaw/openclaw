@@ -210,15 +210,16 @@ export async function reconcileStoredChatOutboxHead(
   scheduleRetry: (delayMs: number) => void,
   accepted: Set<string>,
   retryUnconfirmed = false,
+  reconcileActiveRun = false,
 ): Promise<"blocked" | "continue" | "send"> {
-  // Never-attempted input needs only the session row. Attempted input still needs
-  // history to retire delivered messages, even while a run streams.
+  // Passive wakes can trust active rows; a new foreground follow-up must check
+  // history in case that cached row missed the terminal event.
   const neverAttempted =
     (item.sendAttempts ?? 0) === 0 && item.sendRequestStartedAtMs === undefined;
   if (neverAttempted && item.queueMode && item.sendState !== "unconfirmed") {
     return "send";
   }
-  if (neverAttempted) {
+  if (neverAttempted && !reconcileActiveRun) {
     const row =
       !isUiGlobalSessionKey(outbox.sessionKey) || host.sessions.state.agentId === outbox.agentId
         ? host.sessions.state.result?.sessions.find((session) =>

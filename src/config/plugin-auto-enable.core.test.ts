@@ -51,14 +51,6 @@ vi.mock("../channels/plugins/package-state-probes.js", async (importOriginal) =>
       if (params.channelId === "cache-channel") {
         return Boolean(params.env?.CACHE_CHANNEL_TOKEN?.trim());
       }
-      if (params.channelId === "irc") {
-        return Boolean(params.env?.IRC_HOST?.trim() && params.env?.IRC_NICK?.trim());
-      }
-      if (params.channelId === "slack") {
-        return ["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_USER_TOKEN"].some((key) =>
-          Boolean(params.env?.[key]?.trim()),
-        );
-      }
       return actual.hasBundledChannelPackageState(params);
     },
   };
@@ -571,27 +563,13 @@ describe("applyPluginAutoEnable core", () => {
     expect(second).not.toBe(first);
   });
 
-  it("respects explicit disable", () => {
-    const result = autoEnable(slackConfig({ entries: { slack: { enabled: false, config: {} } } }));
-
-    expect(result.config.plugins?.entries?.slack?.enabled).toBe(false);
-    expect(result.changes).toStrictEqual([]);
-  });
-
-  it("respects built-in channel explicit disable via channels.<id>.enabled", () => {
-    const result = autoEnable({ channels: { slack: { botToken: "x", enabled: false } } });
-
-    expect(result.config.channels?.slack?.enabled).toBe(false);
-    expect(result.config.plugins?.entries?.slack).toBeUndefined();
-    expect(result.changes).toStrictEqual([]);
-  });
-
-  it("does not auto-enable plugin channels when only enabled=false is set", () => {
-    const result = autoEnable({ channels: { matrix: { enabled: false } } }, [
-      { id: "matrix", channels: ["matrix"] },
-    ]);
-
-    expect(result.config.plugins?.entries?.matrix).toBeUndefined();
+  it.each<[OpenClawConfig, ManifestPlugin[]?]>([
+    [slackConfig({ entries: { slack: { enabled: false, config: {} } } })],
+    [{ channels: { slack: { botToken: "x", enabled: false } } }],
+    [{ channels: { matrix: { enabled: false } } }, [{ id: "matrix", channels: ["matrix"] }]],
+  ])("respects explicit disablement: %j", (config, plugins) => {
+    const result = autoEnable(config, plugins);
+    expect(result.config).toEqual(config);
     expect(result.changes).toStrictEqual([]);
   });
 

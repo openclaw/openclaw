@@ -58,14 +58,10 @@ function hasManifestWebSearchEnvCredentialCandidate(params: {
 export function hasConfiguredWebSearchCredential(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  searchConfig?: Record<string, unknown>;
   origin?: PluginManifestRecord["origin"];
 }): boolean {
-  const searchConfig =
-    params.searchConfig ??
-    (params.config.tools?.web?.search as Record<string, unknown> | undefined);
   return (
-    hasConfiguredSearchCredentialCandidate(searchConfig) ||
+    hasConfiguredSearchCredentialCandidate(params.config.tools?.web?.search) ||
     hasConfiguredPluginWebSearchCandidate(params.config) ||
     hasManifestWebSearchEnvCredentialCandidate(params)
   );

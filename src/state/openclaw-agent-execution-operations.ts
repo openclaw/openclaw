@@ -136,7 +136,7 @@ async function loadAgentRestartRecoveryOperations() {
   } satisfies Handlers;
 }
 
-export async function loadAgentEntryReadOperations() {
+async function loadAgentEntryReadOperations() {
   const kernel = await import("../config/sessions/session-entry-read.worker.js");
   const result = await import("../config/sessions/session-entry-read-result.worker.js");
   const cohort = await import("../config/sessions/session-entry-cohort.worker.js");
@@ -227,7 +227,7 @@ export async function prepareAgentNativeBindingOperation(
   await kernel.prepareSessionNativeBindingDeletion(input, env);
 }
 
-export async function loadAgentTrajectoryOperations() {
+async function loadAgentTrajectoryOperations() {
   const kernel = await import("../trajectory/runtime-store.sqlite.js");
   const retention = await import("../trajectory/runtime-retention.sqlite.js");
   return {

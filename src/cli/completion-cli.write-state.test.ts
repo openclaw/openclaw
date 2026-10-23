@@ -157,21 +157,6 @@ describe("completion-cli write-state", () => {
     vi.unstubAllEnvs();
   });
 
-  it("publishes zsh completion atomically and preserves file/directory modes", async () => {
-    const { cachePath, cacheDir } = await seedCache();
-
-    const expectedScript = await writeCache("zsh");
-
-    await expect(fs.readFile(cachePath, "utf8")).resolves.toBe(expectedScript);
-    expect(publish).toHaveBeenCalledWith(
-      expect.objectContaining({
-        filePath: cachePath,
-        tempPrefix: ".openclaw-completion-cache",
-      }),
-    );
-    await expectCacheModes(cachePath, cacheDir);
-  });
-
   it("preserves zsh completion when staged publication fails", async () => {
     const { cachePath, cacheDir } = await seedCache();
     publish.mockImplementationOnce(async (params) => {
@@ -278,15 +263,23 @@ describe("completion-cli write-state", () => {
   });
 
   it("generates and installs completion after registering commands and plugins", async () => {
+    const { cachePath, cacheDir } = await seedCache();
+    const profilePath = resolveCompletionProfilePath("zsh");
+    await fs.writeFile(profilePath, "", { mode: 0o640 });
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    await runCompletion(["--shell", "zsh", "--write-state", "--install", "--yes"]);
+    const program = await runCompletion(["--shell", "zsh", "--write-state", "--install", "--yes"]);
 
-    const cachePath = resolveCompletionCachePath("zsh", "openclaw");
-    await expect(fs.readFile(cachePath, "utf8")).resolves.toContain("#compdef openclaw");
-    await expect(fs.readFile(resolveCompletionProfilePath("zsh"), "utf8")).resolves.toContain(
-      cachePath,
+    const { getCompletionScript } = await import("./completion-cli.js");
+    await expect(fs.readFile(cachePath, "utf8")).resolves.toBe(getCompletionScript("zsh", program));
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({ filePath: cachePath, tempPrefix: ".openclaw-completion-cache" }),
     );
+    await expectCacheModes(cachePath, cacheDir);
+    await expect(fs.readFile(profilePath, "utf8")).resolves.toContain(cachePath);
+    if (process.platform !== "win32") {
+      expect((await fs.stat(profilePath)).mode & 0o777).toBe(0o640);
+    }
     expect(log).toHaveBeenCalledWith(
       "Completion installed. Restart your shell or run: source ~/.zshrc",
     );

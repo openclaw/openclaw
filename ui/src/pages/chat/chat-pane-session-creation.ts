@@ -19,6 +19,7 @@ import { cloneChatAttachmentsForIndependentOwner } from "./attachment-payload-st
 import { clearChatHistory } from "./chat-history-actions.ts";
 import { isExpiredIncognitoSession, setChatError } from "./chat-history-state.ts";
 import { createChatModelSetupBanner } from "./chat-model-setup.ts";
+import { resolveChatPaneParentSession } from "./chat-pane-header-identity.ts";
 import { ChatPaneRetainedPresentation } from "./chat-pane-retained-presentation.ts";
 import {
   NEW_SESSION_ACTIVE_RUN_MESSAGE,
@@ -27,7 +28,6 @@ import {
   preparePaneSessionHandoff,
 } from "./chat-pane-shared.ts";
 import { canCreateChatSession, selectedChatSessionRow } from "./chat-state-route.ts";
-import { resolveChatPaneParentSession } from "./components/chat-pane-header.ts";
 
 /** Creates or resets a conversation while guarding its asynchronous ownership. */
 export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentation {

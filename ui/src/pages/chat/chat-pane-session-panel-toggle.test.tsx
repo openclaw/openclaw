@@ -13,6 +13,7 @@ import {
   LINK_READER_PANEL_TOGGLE_EVENT,
   PLUGIN_PANEL_TOGGLE_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
+  TERMINAL_PANEL_DOCK_BOTTOM_EVENT,
 } from "../../components/panel-toggle-contract.ts";
 import {
   rememberSessionPanelToggle,
@@ -33,7 +34,7 @@ import {
 } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
-import { isSidebarSlotVisible } from "./sidebar-layout.ts";
+import { isSidebarSlotVisible, openSlot } from "./sidebar-layout.ts";
 
 const reader: ControlUiLinkReaderDescriptor = {
   pluginId: "forge",
@@ -120,6 +121,21 @@ it("opens the terminal while the sidebar region bridge awaits upgrade", () => {
   window.dispatchEvent(new Event(TERMINAL_PANEL_TOGGLE_EVENT));
   expect(isSidebarSlotVisible(f.state.sidebarLayout, "terminal")).toBe(true);
 });
+
+it.each([
+  ["desktop", true],
+  ["mobile", false],
+] as const)(
+  "preserves the %s panel state when moving its last terminal to the bottom",
+  (presentation, open) => {
+    const f = fixture();
+    f.region.presentation = presentation;
+    f.state.sidebarLayout = openSlot(f.state.sidebarLayout, "terminal");
+    window.dispatchEvent(new Event(TERMINAL_PANEL_DOCK_BOTTOM_EVENT));
+    expect(isSidebarSlotVisible(f.state.sidebarLayout, "terminal")).toBe(false);
+    expect(f.state.sidebarLayout.open).toBe(open);
+  },
+);
 
 describe("plugin panel intent delivery", () => {
   it.each(["buffered", "direct"] as const)(
@@ -392,6 +408,7 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
             callbacks: {
               activatePanel: () => undefined,
               togglePanelExpanded: () => undefined,
+              setDock: () => undefined,
               closeSlot: () => undefined,
               openSlot: () => undefined,
               reorderPanel: () => undefined,

@@ -3,7 +3,7 @@ import { getCommandPathWithRootOptions } from "./argv.js";
 import type { CliCommandPathPolicy, CliNetworkProxyPolicy } from "./command-catalog-types.js";
 import { cliCommandCatalog } from "./command-catalog.js";
 import { matchesCommandPath } from "./command-path-matches.js";
-import { resolveGatewayCatalogCommandPath } from "./gateway-run-argv.js";
+import { resolveGatewayCommandPath } from "./gateway-run-argv.js";
 import { resolveCliParentCommandPath } from "./parent-command-path.js";
 
 const DEFAULT_CLI_COMMAND_PATH_POLICY: CliCommandPathPolicy = {
@@ -35,7 +35,7 @@ export function resolveCliCommandPathPolicy(commandPath: string[]): CliCommandPa
 function resolveCliCatalogCommandPath(argv: string[]): string[] {
   // Gateway `run openclaw ...` argv needs catalog routing against the embedded command path.
   const tokens =
-    resolveGatewayCatalogCommandPath(argv) ??
+    resolveGatewayCommandPath(argv) ??
     resolveCliParentCommandPath(argv) ??
     getCommandPathWithRootOptions(argv, argv.length);
   if (tokens.length === 0) {

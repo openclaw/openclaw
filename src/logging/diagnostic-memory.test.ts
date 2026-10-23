@@ -72,6 +72,7 @@ describe("diagnostic memory", () => {
       workerMemoryCoverage: "complete",
       workerMemoryMissing: [],
       workerHeaps: [],
+      workerTaskMetrics: [],
       workerLifecycle: structuredClone(workerLifecycle),
     });
   });
@@ -288,6 +289,7 @@ describe("diagnostic memory", () => {
           workerMemoryCoverage: "complete",
           workerMemoryMissing: [],
           workerHeaps: [],
+          workerTaskMetrics: [],
           workerLifecycle,
           workerMessages: [],
           externalBytes: 10,
@@ -319,6 +321,7 @@ describe("diagnostic memory", () => {
           workerMemoryCoverage: "complete",
           workerMemoryMissing: [],
           workerHeaps: [],
+          workerTaskMetrics: [],
           workerLifecycle,
           workerMessages: [],
           externalBytes: 10,

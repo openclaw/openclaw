@@ -110,22 +110,9 @@ export async function approveDevicePairing(
 export async function approveBootstrapDevicePairing(
   requestId: string,
   bootstrapProfile: DeviceBootstrapProfile,
+  options: DeviceBootstrapApprovalOptions = {},
   baseDir?: string,
-): Promise<ApproveDevicePairingResult>;
-export async function approveBootstrapDevicePairing(
-  requestId: string,
-  bootstrapProfile: DeviceBootstrapProfile,
-  options: DeviceBootstrapApprovalOptions,
-  baseDir?: string,
-): Promise<ApproveDevicePairingResult>;
-export async function approveBootstrapDevicePairing(
-  requestId: string,
-  bootstrapProfile: DeviceBootstrapProfile,
-  optionsOrBaseDir?: DeviceBootstrapApprovalOptions | string,
-  maybeBaseDir?: string,
 ): Promise<ApproveDevicePairingResult> {
-  const options = typeof optionsOrBaseDir === "object" ? optionsOrBaseDir : undefined;
-  const baseDir = typeof optionsOrBaseDir === "string" ? optionsOrBaseDir : maybeBaseDir;
   return await withDevicePairingLock(async () => {
     const admission = approvalAdmission(options);
     const { result } = await executeDevicePairingMutation(

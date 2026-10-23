@@ -5,16 +5,34 @@ import type { SettingsMediaDeviceState } from "./view-state.ts";
 import type { TabIconViewProps } from "./view-tab-icon.tsx";
 
 type ConfigPageProps = ReturnType<ReturnType<typeof createConfigPage>["configProps"]>;
-// Rendering does not consume the completion values returned by owner callbacks.
+// Async presenters retain their owners' admitted completions.
 type ConfigData = {
-  [Key in keyof ConfigPageProps]: ConfigPageProps[Key] extends (...args: infer Args) => unknown
-    ? (...args: Args) => void
-    : ConfigPageProps[Key];
+  [Key in keyof ConfigPageProps]: Key extends
+    | "onSave"
+    | "onRawDiscard"
+    | "onOpenFile"
+    | "presentationRetired"
+    | "setSessionObserverEnabled"
+    | "setSessionObserverUtilityModel"
+    | "onNativeNotificationsSendTest"
+    | "onImportCustomTheme"
+    | "onCameraSelect"
+    | "onWebPushSubscribe"
+    | "onWebPushUnsubscribe"
+    | "onWebPushTest"
+    | "onWebPushSetUserPreferences"
+    | "onWebPushSetDevicePreferences"
+    ? ConfigPageProps[Key]
+    : ConfigPageProps[Key] extends (...args: infer Args) => unknown
+      ? (...args: Args) => void
+      : ConfigPageProps[Key];
 };
 
 type ConfigViewOptions = Partial<
   Pick<
     ConfigData,
+    | "schemaRead"
+    | "onRetrySchema"
     | "mutationAllowed"
     | "openFileAllowed"
     | "rawDraftPending"
@@ -33,6 +51,7 @@ type ConfigViewOptions = Partial<
     | "sessionObserverEnabled"
     | "sessionObserverUtilityModel"
     | "sessionObserverResolvedModel"
+    | "sessionObserverModelsScope"
     | "sessionObserverModelsUnavailable"
     | "sessionObserverDisabled"
     | "setSessionObserverEnabled"
@@ -44,7 +63,6 @@ type ConfigViewOptions = Partial<
     | "onCameraRefresh"
     | "onCameraSelect"
     | "pluginsHref"
-    | "sessionSourcePluginsLoading"
     | "configPath"
     | "navRootLabel"
     | "showRootTab"
@@ -64,11 +82,18 @@ type ConfigViewOptions = Partial<
 > & {
   textScale: number;
   hiddenSessionCatalogIds: ReadonlySet<string>;
+  hiddenSessionCatalogLabels: {
+    read: () => ReadonlyMap<string, string>;
+    scope: object | null;
+  };
+  sessionSourcePlugins?: {
+    read: () => ReadonlySet<string> | null;
+    scope: object | null;
+  };
   sessionObserverModels?: readonly ConfigPageProps["sessionObserverModels"][number][];
-  installedSessionSourcePluginIds?: ReadonlySet<string> | null;
   microphone?: SettingsMediaDeviceState;
   camera?: SettingsMediaDeviceState;
-  onOpenFile?: () => void;
+  onOpenFile?: ConfigPageProps["onOpenFile"];
   webPush?: WebPushSnapshot;
   includeSections?: readonly string[];
   excludeSections?: readonly string[];

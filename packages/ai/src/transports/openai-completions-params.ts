@@ -173,6 +173,7 @@ function convertTools(
   compat: ResolvedOpenAICompletionsCompat,
   model: OpenAIModeModel,
   mode: "direct" | "managed",
+  mutableParameters: boolean,
 ) {
   const prepared = mode === "managed" ? prepareOpenAITools(tools) : undefined;
   const projection = prepared?.projection ?? projectOpenAITools(tools);
@@ -206,6 +207,7 @@ function convertTools(
             ? parameters
             : normalizeOpenAIStrictToolParameters(parameters, strict === true, model.compat),
           strict,
+          mutableParameters,
         ).completions;
       }),
     };
@@ -300,7 +302,7 @@ export function buildOpenAICompletionsRequest(
   const supportsTools = policy.mode === "direct" || supportsModelTools(model);
   const converted =
     supportsTools && context.tools
-      ? convertTools(context.tools, compat, model, policy.mode)
+      ? convertTools(context.tools, compat, model, policy.mode, Boolean(options?.onPayload))
       : undefined;
   // The converter needs intact boundaries for Runtime relocation or cache markers.
   const providerModel: ProviderModel = {
@@ -315,9 +317,9 @@ export function buildOpenAICompletionsRequest(
     preserveSystemPromptCacheBoundary:
       cacheControl !== undefined && !managedCompat?.requiresStringContent,
   });
+  applyCompletionsReplay(convertedMessages, context, model, compat);
   let messages: unknown[] = convertedMessages;
   if (managedCompat) {
-    applyCompletionsReplay(convertedMessages, context, model, managedCompat);
     if (managedCompat.strictMessageKeys) {
       messages = stripCompletionMessagesToRoleContent(messages);
     }

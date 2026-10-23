@@ -651,6 +651,23 @@ MiMo reasoning replay and final-answer handling. Without the flag, a replacement
 stream keeps the existing behavior of taking ownership of those compatibility
 policies. Returning the original stream or no wrapper also preserves them.
 
+Providers routing OpenAI Responses through a proxy can opt into
+`buildProviderStreamFamilyHooks("openai-responses-service-tier")` from
+`openclaw/plugin-sdk/provider-stream-family`. Apply it only after qualifying the
+upstream as OpenAI and the selected API as `openai-responses`, not merely because
+an endpoint is OpenAI-compatible. The family shares native Fast/Standard and
+service-tier precedence, samples timed Auto once per request, and preserves
+explicit payload tiers, provider identity, credentials, and cancellation. It does
+not attach native OpenAI headers or unrelated Responses defaults.
+
+ClawRouter qualifies these routes from the OpenAI provider's Responses catalog
+entries and preserves exact `pricing.serviceTiers[].id` values in private route
+metadata. Its lightweight picker policy and runtime hook share those facts: Fast
+requires advertised `priority`, and explicit Ultrafast requires `ultrafast`.
+Missing tier metadata never enables Fast by model name. Pricing tiers describe
+model capability, not key entitlement; the service remains authoritative and
+returns an unallowed-tier error without silently downgrading the request.
+
 Bundled adapters share `wrapProviderPayloadHook` and `mapAssistantMessageStream`
 through the existing private `provider-stream-shared` seam. Payload composition
 runs defaults before the caller hook and wire constraints after its result settles;
@@ -661,6 +678,12 @@ implementation helpers, not new third-party SDK contracts.
 `applyOpenAICompletionsToolReasoning` shares the native tools/reasoning wire
 policy with pass-through adapters through that private seam. Callers qualify
 the endpoint and normalize vendor-prefixed model IDs before applying it.
+
+Bundled transports use `recordSuppressedReasoning` from that same private seam
+when a model marked `reasoning: false` returns thought fields. It records only
+their presence and returns an error for a completed response with no visible
+answer or tool call. Transports publish that error through their ordinary error
+terminal; the host owns per-session warning limits and status hints.
 
 Injected-client adapters also reuse the Anthropic thinking and output-cap owners
 through the private `provider-transport-runtime` seam. Client creation and

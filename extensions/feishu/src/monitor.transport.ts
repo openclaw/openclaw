@@ -38,7 +38,6 @@ import {
   FEISHU_WEBHOOK_MAX_BODY_BYTES,
   feishuWebhookRateLimiter,
   recordWebhookStatus,
-  wsClients,
 } from "./monitor.state.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 import { normalizeFeishuWebhookPath } from "./webhook-path.js";
@@ -200,7 +199,6 @@ function cleanupFeishuWsClient(params: {
       );
     }
   }
-  wsClients.delete(accountId);
   if (clearIdentity) {
     clearFeishuBotIdentityState(accountId);
   }
@@ -266,7 +264,6 @@ export async function monitorWebSocket({
         cleanupFeishuWsClient({ accountId, wsClient, error, clearIdentity: true });
         break;
       }
-      wsClients.set(accountId, wsClient);
       await wsClient.start({ eventDispatcher });
       attempt = 0;
       log(`feishu[${accountId}]: WebSocket client started`);

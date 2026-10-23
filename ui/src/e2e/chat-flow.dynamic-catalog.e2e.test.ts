@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
+import { sessionRow } from "./chat-flow-fixtures.test-support.ts";
 import {
   newChatPage,
   createChatFlowE2eSuite,
@@ -7,6 +8,7 @@ import {
   installMockGateway,
   thinkingLevels,
 } from "./chat-flow.test-support.ts";
+import { modelSessionList } from "./chat-runtime-fixtures.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const rosterMatch = { includeGlobal: true };
@@ -40,19 +42,13 @@ suite.define(() => {
         thinkingLevels: levels,
       };
       return {
-        count: 1,
-        defaults,
-        path: "",
-        sessions: [
-          {
+        ...modelSessionList(
+          sessionRow(sessionKey, "Dynamic catalog", 2, {
             ...defaults,
-            key: sessionKey,
             sessionId: "control-ui-dynamic-catalog-convergence",
-            kind: "direct",
-            label: "Dynamic catalog",
-            updatedAt: 2,
-          },
-        ],
+          }),
+          defaults,
+        ),
         ts: Date.now(),
       };
     };
@@ -94,19 +90,14 @@ suite.define(() => {
     const sessionDescribeCount = (
       await gateway.getRequests("sessions.describe", sessionDescribeMatch)
     ).length;
-    expect(await gateway.getRequests("models.list")).toHaveLength(1);
     await gateway.emitGatewayEvent("chat.metadata.changed", {});
     const modelsRequest = await gateway.waitForRequest("models.list", { after: 1 });
-    expect(modelsRequest.params).toEqual({
-      view: "configured",
-      agentId: "main",
-      sessionKey,
-    });
+    expect(modelsRequest.params).toEqual({ view: "configured", agentId: "main", sessionKey });
     const refreshedSessionRequest = await gateway.waitForRequest("sessions.describe", {
       after: sessionDescribeCount,
       match: sessionDescribeMatch,
     });
-    expect(refreshedSessionRequest.params).toEqual({ key: sessionKey, agentId: "main" });
+    expect(refreshedSessionRequest.params).toEqual(sessionDescribeMatch);
     await modelSelect.click();
     expect(await gateway.getRequests("models.list")).toHaveLength(2);
     const modelOption = main.locator(`[data-chat-model-option="${modelKey}"]`);

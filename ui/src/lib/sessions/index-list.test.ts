@@ -33,14 +33,11 @@ type ListParams = {
 function listResult(keys: string[] = [], totalCount = keys.length): SessionsListResult {
   const nextOffset = keys.length;
   return {
-    ts: 1,
+    ...sessionsResult(keys.map((key, updatedAt) => ({ key, kind: "direct", updatedAt }))),
     path: "",
-    count: keys.length,
     totalCount,
     hasMore: nextOffset < totalCount,
     nextOffset: nextOffset < totalCount ? nextOffset : null,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions: keys.map((key, updatedAt) => ({ key, kind: "direct", updatedAt })),
   };
 }
 

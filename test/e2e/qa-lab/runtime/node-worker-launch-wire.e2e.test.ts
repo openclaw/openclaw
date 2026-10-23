@@ -172,8 +172,14 @@ describe("node worker launch wire", () => {
             role: "operator",
             identity: null,
             onEvent: (event) => {
-              settlement.onEvent(event);
               const payload = event.payload;
+              if (event.event === "sessions.changed" && isRecord(payload)) {
+                // An older snapshot cannot prove this turn's workspace has settled.
+                settlement.onEvent({
+                  event: event.event,
+                  payload: { sessionKey: payload.sessionKey },
+                });
+              }
               if (
                 event.event === "chat" &&
                 isRecord(payload) &&
@@ -282,6 +288,9 @@ describe("node worker launch wire", () => {
             throw new Error("active worker placement did not expose a remote workspace directory");
           }
           const baseManifestRef = placement?.workspaceBaseManifestRef;
+          if (typeof baseManifestRef !== "string" || !baseManifestRef) {
+            throw new Error("Baseline workspace has no dispatched manifest reference");
+          }
           await expect(
             fs.readFile(path.join(remoteWorkspaceDir, "gateway-push.txt"), "utf8"),
           ).resolves.toBe("dirty gateway workspace\n");
@@ -322,7 +331,7 @@ describe("node worker launch wire", () => {
               `node worker turn failed: ${JSON.stringify(completed)}\n${gateway.logs().slice(-12_000)}`,
             );
           }
-          await settlement.wait(operator, SESSION_KEY, signal);
+          await settlement.wait(operator, SESSION_KEY, signal, baseManifestRef);
           markPhase("baseline node invocations");
           await workerNode.waitForInvokes();
           expect(workerNode.invokeErrors).toEqual([]);
@@ -368,7 +377,7 @@ describe("node worker launch wire", () => {
             session?: {
               execCwd?: string;
               spawnedCwd?: string;
-              placement?: Record<string, unknown>;
+              placement?: { workspaceBaseManifestRef?: string };
             };
           };
           expect(described.session?.placement).toMatchObject({
@@ -376,6 +385,10 @@ describe("node worker launch wire", () => {
             remoteWorkspaceDir,
           });
           expect(described.session?.placement?.workspaceBaseManifestRef).not.toBe(baseManifestRef);
+          const permissionBaseManifestRef = described.session?.placement?.workspaceBaseManifestRef;
+          if (!permissionBaseManifestRef) {
+            throw new Error("Baseline workspace has no accepted manifest reference");
+          }
           const reconciledLocalDir = described.session?.execCwd ?? described.session?.spawnedCwd;
           expect(reconciledLocalDir).toBeTruthy();
           await expect(
@@ -435,7 +448,8 @@ describe("node worker launch wire", () => {
               }),
             ).slice(0, 8_000),
           ).toMatchObject({ status: "ok" });
-          await settlement.wait(operator, SESSION_KEY, signal);
+          // The reply can arrive before this turn reserves its workspace result.
+          await settlement.wait(operator, SESSION_KEY, signal, permissionBaseManifestRef);
           await workerNode.waitForInvokes();
           expect(workerNode.invokeErrors).toEqual([]);
 

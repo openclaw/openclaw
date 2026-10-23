@@ -31,7 +31,10 @@ describe("mantis before/after runtime", () => {
   it.each(["repo-root-token-outside-lane"] as const)(
     "runs baseline and candidate worktrees and writes stable comparison artifacts (%s)",
     async () => {
-      const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "test-run");
+      const outputDir = path.join(
+        repoRoot,
+        ".artifacts/qa-e2e/mantis/run-2026-05-03T12-00-00-000Z",
+      );
       await fs.mkdir(outputDir, { recursive: true });
       await fs.writeFile(path.join(outputDir, "error.txt"), "stale failure", "utf8");
       await fs.writeFile(path.join(outputDir, "unrelated.txt"), "preserve me", "utf8");
@@ -106,13 +109,13 @@ describe("mantis before/after runtime", () => {
         candidate: "--force",
         commandRunner: runner,
         now: () => new Date("2026-05-03T12:00:00.000Z"),
-        outputDir: ".artifacts/qa-e2e/mantis/test-run",
         repoRoot,
         skipBuild: true,
         skipInstall: true,
       });
 
       expect(result.status).toBe("pass");
+      expect(result.outputDir).toBe(outputDir);
       expect(commands).toHaveLength(8);
       expect(commands.map((entry) => entry.stage)).toEqual([
         "worktree-add",
@@ -399,7 +402,6 @@ describe("mantis before/after runtime", () => {
           outputRoot: {
             exists: outputRoot.exists.bind(outputRoot),
             mkdir: outputRoot.mkdir.bind(outputRoot),
-            stat: outputRoot.stat.bind(outputRoot),
             async move(from, to, options) {
               await outputRoot.move(from, to, options);
               if (
@@ -482,7 +484,6 @@ describe("mantis before/after runtime", () => {
             await outputRoot.move(from, to, options);
           }),
           remove: outputRoot.remove.bind(outputRoot),
-          stat: outputRoot.stat.bind(outputRoot),
         },
         runId: "test",
         staging,

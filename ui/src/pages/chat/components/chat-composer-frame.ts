@@ -4,8 +4,8 @@ import {
   type ChatFollowUpMode,
 } from "../../../app/settings.ts";
 import { t } from "../../../i18n/index.ts";
-import "../../../components/tooltip.ts";
 import { registerChatGoalsEnglish } from "../../../i18n/locales/en-chat-goals.ts";
+import "../../../components/tooltip.ts";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
 import {
   canSubmitBeforeChatHistory,
@@ -16,6 +16,11 @@ import { updateHumanMentions } from "../../../lib/chat/human-mentions.ts";
 import { clearCompositionEnd, recordCompositionEnd } from "../../../lib/ime.ts";
 import { isSessionRunVisuallyActive } from "../../../lib/session-run-state.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
+import {
+  hasTerminalRunStatus,
+  isChatRunWorking,
+  isCurrentSessionSubmittedProgress,
+} from "../chat-run-working.ts";
 import { insertComposerDictation, type ComposerDictationOwner } from "../composer-dictation.ts";
 import { normalizeChatComposerDraft } from "../composer-draft.ts";
 import type {
@@ -42,9 +47,6 @@ import {
   composerDraftKey,
   consumeComposerInputIntent,
   getChatComposerState,
-  hasTerminalRunStatus,
-  isChatRunWorking,
-  isCurrentSessionSubmittedProgress,
   markComposerInputIntent,
   suppressStaleSubmittedDraftReplay,
 } from "./chat-composer-state.ts";
@@ -67,11 +69,12 @@ export function createChatComposerContext(
   voice: { dictation: ComposerDictationOwner; picker: ComposerMicrophoneOwner },
   prediction: ComposerPrediction | undefined,
   questionPanelProps: QuestionPanelProps | null,
+  streaming: boolean,
 ) {
   const state = getChatComposerState(props.paneId);
   state.slashCommandDispatchConnected = props.connected;
   const canCompose = props.canCompose ?? props.canSend;
-  const isBusy = props.sending || props.stream !== null;
+  const isBusy = props.sending || streaming;
   const canAbort = Boolean(props.canAbort && props.onAbort);
   const showAbortableUi = canAbort && !hasTerminalRunStatus(props.runStatus);
   const submittedProgress = props.queue.find((item) =>
@@ -139,7 +142,7 @@ export function createChatComposerContext(
     ? t("chat.waitingForApproval")
     : submittedProgress?.sendState === "waiting-model"
       ? t("chat.composer.preparingModel")
-      : props.stream !== null
+      : streaming
         ? t("chat.composer.responding", { name: assistantName })
         : sendingForCurrentSession || submittedProgress
           ? t("chat.composer.sendingMessage")
@@ -221,8 +224,9 @@ export function createChatComposerContext(
         : "steer"
       : undefined;
   const showComposer =
-    !state.presentation.activeQuestionKey?.startsWith("gateway:") ||
-    state.presentation.questionCollapsed;
+    !questionPanelProps ||
+    questionPanelProps.model.nonBlocking === true ||
+    questionPanelProps.model.collapsed;
 
   // Offline text and attachments may enter the persisted reconnect queue, but
   // slash commands are live controls and must not execute against stale state.
@@ -594,7 +598,7 @@ export function createChatComposerContext(
     clearSkillMenu,
     props,
     state,
-    attachmentReadRevision: props.attachmentReads?.revision,
+    attachmentReadRevision: props.attachmentReadRevision ?? props.attachmentReads?.revision,
     canCompose,
     showAbortableUi,
     visibleDraft,

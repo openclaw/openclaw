@@ -10,6 +10,7 @@ import {
   SessionApprovalEventSchema,
   SessionApprovalReplaySchema,
 } from "../packages/gateway-protocol/src/schema/approvals.js";
+import { BoardSnapshotSchema } from "../packages/gateway-protocol/src/schema/board.js";
 import { CommandsListResultSchema } from "../packages/gateway-protocol/src/schema/commands.js";
 import {
   AgentActivityItemSchema,
@@ -47,6 +48,7 @@ type Group =
   | "approvals"
   | "session-input"
   | "transcript"
+  | "board"
   | "history-state"
   | "sender-identity";
 const compilerLintRules = [
@@ -61,6 +63,12 @@ const additionalLintRules: Partial<Record<Group, string[]>> = {
   approvals: ["unicorn/no-useless-length-check"],
 };
 const validators: Array<[name: string, schema: TSchema, type: string, group: Group]> = [
+  [
+    "BoardSnapshot",
+    BoardSnapshotSchema,
+    'import("' + schemaRoot + 'board.js").BoardSnapshot',
+    "board",
+  ],
   [
     "SessionParticipantIdentity",
     SessionParticipantIdentitySchema,
@@ -297,6 +305,7 @@ async function main() {
     "transcript",
     "history-state",
     "sender-identity",
+    "board",
   ] as const) {
     const selected = validators.filter((entry) => entry[3] === group);
     // Share repeated shapes only within each existing lazy boundary.
@@ -337,6 +346,9 @@ async function main() {
       target: "es2022",
       write: false,
       minifySyntax: true,
+      // Remove esbuild's physical input-path banners before canonical formatting.
+      // The TypeBox license is retained explicitly below.
+      minifyWhitespace: true,
       legalComments: "none",
     });
     const outputFile = result.outputFiles[0];

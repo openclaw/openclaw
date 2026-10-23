@@ -18,6 +18,7 @@ import {
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import { retainGatewayPluginMetadata } from "./plugin-metadata-lifecycle.js";
 import { withPluginSourceCaptureDirectory } from "./plugin-package-metadata-capture.js";
+import { resolvePluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 import {
   createPluginNativeCaptureRoot,
   createPluginSourceCaptureRoot,
@@ -108,8 +109,14 @@ it("keeps update source copies in TMPDIR without relocating retained native capt
   ).toBe(true);
   const native = createPluginNativeCaptureRoot(stateDir);
   cleanups.push(() => native.disposeAsync());
+  const storage = resolvePluginSourceCaptureStorage();
+  const preparedNative = createPluginNativeCaptureRoot(storage.stateDir, storage.placement);
+  cleanups.push(() => preparedNative.disposeAsync());
   expect(
     native.directory.startsWith(path.join(stateDir, "tmp", "plugin-captures") + path.sep),
+  ).toBe(true);
+  expect(
+    preparedNative.directory.startsWith(path.join(stateDir, "tmp", "plugin-captures") + path.sep),
   ).toBe(true);
 });
 

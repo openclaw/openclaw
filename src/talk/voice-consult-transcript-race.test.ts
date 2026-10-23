@@ -1,35 +1,30 @@
 import path from "node:path";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import {
   appendTranscriptMessage,
-  loadTranscriptEventsSync,
+  loadTranscriptEventsSync as loadEvents,
 } from "../config/sessions/session-accessor.js";
 import { runWithSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { ensureClientVoiceAgentSessionEntry } from "./client-voice-session-write.js";
 import {
-  appendRelayVoiceTranscript,
-  createOrResumeClientVoiceSession,
+  appendRelayVoiceTranscript as appendRelay,
+  createOrResumeClientVoiceSession as createVoiceSession,
 } from "./client-voice-session.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 const agentId = "main";
-const CONSULT_REPLY = "Two meetings tomorrow.";
+const CONSULT_REPLY = "Two meetings.";
+const QUESTION = "Calendar tomorrow?";
 
-function readMessageTexts(scope: {
-  agentId: string;
-  sessionId: string;
-  sessionKey: string;
-  storePath: string;
-}): string[] {
-  return loadTranscriptEventsSync(scope).flatMap((event) => {
-    const message = (event as { message?: { content?: unknown } } | null)?.message;
-    const content = message?.content;
+function readMessageTexts(scope: Parameters<typeof loadEvents>[0]): string[] {
+  return loadEvents(scope).flatMap((event) => {
+    const content = (event as { message?: { content?: unknown } } | null)?.message?.content;
     if (typeof content === "string") {
       return [content];
     }
@@ -53,22 +48,14 @@ async function prepareConsultTurn(label: string) {
   const scope = { agentId, sessionId, sessionKey, storePath };
   const manager = SessionManager.open(scope, dir);
   manager.appendMessage({ role: "user", content: "earlier question", timestamp: 1 });
-  const admission = manager.appendMessageWithTranscriptAnchor({
-    role: "user",
-    content: "what is on the calendar tomorrow?",
-    timestamp: 2,
-  });
-  const anchor = admission.anchor;
+  const input = { role: "user" as const, content: QUESTION, timestamp: 2 };
+  const { anchor } = manager.appendMessageWithTranscriptAnchor(input);
   if (!anchor) {
     throw new Error("missing current-turn anchor");
   }
   const appendConsultReply = () =>
     runWithSessionTranscriptReadFence({ ...anchor, logicalTurnId: label, role: "user" }, () =>
-      SessionManager.openBounded(scope, {
-        cwd: dir,
-        maxBytes: 8192,
-        maxEvents: 16,
-      }).appendMessage(
+      SessionManager.openBounded(scope, { cwd: dir, maxBytes: 8192, maxEvents: 16 }).appendMessage(
         makeAgentAssistantMessage({
           content: [{ type: "text", text: CONSULT_REPLY }],
           timestamp: 5,
@@ -77,10 +64,6 @@ async function prepareConsultTurn(label: string) {
     );
   return { appendConsultReply, scope, sessionKey, storePath };
 }
-
-beforeEach(() => {
-  envSnapshot.restore();
-});
 
 afterEach(async () => {
   for (const stateDir of tempDirs.dirs) {
@@ -93,7 +76,7 @@ afterEach(async () => {
 it("keeps the voice transcript from failing an in-flight agent consult", async () => {
   const { appendConsultReply, scope, sessionKey, storePath } =
     await prepareConsultTurn("voice-consult-relay");
-  const voiceSessionId = await createOrResumeClientVoiceSession({
+  const voiceSessionId = await createVoiceSession({
     agentId,
     sessionKey,
     origin: "relay",
@@ -105,53 +88,25 @@ it("keeps the voice transcript from failing an in-flight agent consult", async (
     sessionTarget: { sessionKey, storePath },
     voiceSessionId,
   };
-  await appendRelayVoiceTranscript({
-    ...target,
-    entryId: "utterance-1",
-    role: "user",
-    text: "what is on the calendar tomorrow?",
-  });
-  await appendRelayVoiceTranscript({
-    ...target,
-    entryId: "filler-1",
-    role: "assistant",
-    text: "I'll check that request.",
-  });
-
+  await appendRelay({ ...target, entryId: "utterance-1", role: "user", text: QUESTION });
+  await appendRelay({ ...target, entryId: "filler-1", role: "assistant", text: "Checking." });
   expect(() => appendConsultReply()).not.toThrow();
-
-  expect(readMessageTexts(scope)).toEqual([
-    "earlier question",
-    "what is on the calendar tomorrow?",
-    "what is on the calendar tomorrow?",
-    "I'll check that request.",
-    CONSULT_REPLY,
-  ]);
+  const messages = readMessageTexts(scope);
+  expect(messages).toEqual(["earlier question", QUESTION, QUESTION, "Checking.", CONSULT_REPLY]);
 });
 
 // The exemption keys on the marker the voice writer stamps, not on the kind alone.
 it.each([
-  { label: "no-channel", provenance: { kind: "realtime_voice" } },
-  {
-    label: "foreign-channel",
-    provenance: { kind: "realtime_voice", sourceChannel: "discord" },
-  },
-  {
-    label: "foreign-kind",
-    provenance: { kind: "typed_chat", sourceChannel: "talk" },
-  },
-])(
-  "still rejects a consult reply superseded by a $label user row",
-  async ({ label, provenance }) => {
+  ["no-channel", { kind: "realtime_voice" }],
+  ["foreign-channel", { kind: "realtime_voice", sourceChannel: "discord" }],
+  ["foreign-kind", { kind: "typed_chat", sourceChannel: "talk" }],
+] as const)(
+  "still rejects a consult reply superseded by a %s user row",
+  async (label, provenance) => {
     const { appendConsultReply, scope } = await prepareConsultTurn(`voice-consult-${label}`);
     await appendTranscriptMessage(scope, {
       eventId: `forged:${label}`,
-      message: {
-        role: "user",
-        content: [{ type: "text", text: "different question" }],
-        timestamp: 3,
-        provenance,
-      },
+      message: { role: "user", content: [{ type: "text", text: "new" }], timestamp: 3, provenance },
       now: 3,
     });
 

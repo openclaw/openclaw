@@ -81,12 +81,17 @@ vi.mock("../channels/plugins/bootstrap-registry.js", () => ({
   getBootstrapChannelPlugin: vi.fn((_channelId: string) => undefined),
 }));
 
-vi.mock("./doctor/shared/channel-legacy-config-migrate.js", () => ({
-  applyChannelDoctorCompatibilityMigrations: (cfg: Record<string, unknown>) => ({
-    next: cfg,
-    changes: [],
-  }),
-}));
+vi.mock("./doctor/shared/channel-legacy-config-migrate.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./doctor/shared/channel-legacy-config-migrate.js")>();
+  return {
+    ...actual,
+    applyChannelDoctorCompatibilityMigrations: (cfg: Record<string, unknown>) => ({
+      next: cfg,
+      changes: [],
+    }),
+  };
+});
 
 vi.mock("./doctor/shared/bundled-plugin-load-paths.js", () => ({
   maybeRepairBundledPluginLoadPaths: vi.fn((cfg: Record<string, unknown>) => ({
@@ -612,6 +617,42 @@ describe("doctor config flow", () => {
       sharedStateMode: "read-only",
     });
   });
+
+  it.each([false, true])(
+    "preserves auth warning delivery with a findings reporter: %s",
+    async (withReporter) => {
+      const warning = "Could not verify imported auth profiles; originals retained.";
+      const reportFindings = vi.fn();
+      runDoctorRepairSequenceMock.mockImplementation(
+        async (params: { state: unknown; reportFindings?: typeof reportFindings }) => {
+          params.reportFindings?.([], [warning]);
+          return {
+            state: params.state,
+            changeNotes: [],
+            warningNotes: [warning],
+            displayWarningNotes: [],
+            authProfilesRepaired: false,
+          };
+        },
+      );
+      await using result = await runDoctorConfigWithInput({
+        config: {},
+        repair: true,
+        run: (args) =>
+          loadAndMaybeMigrateDoctorConfig({
+            ...args,
+            ...(withReporter ? { reportFindings } : {}),
+          }),
+      });
+      expect(result).toBeTruthy();
+      if (withReporter) {
+        expect(reportFindings).toHaveBeenCalledWith([], [warning]);
+        expect(terminalNoteMock).not.toHaveBeenCalledWith(warning, "Doctor warnings");
+      } else {
+        expect(terminalNoteMock).toHaveBeenCalledWith(warning, "Doctor warnings");
+      }
+    },
+  );
 
   it("emits warning-only stale channel cleanup without changing config", async () => {
     const input = {

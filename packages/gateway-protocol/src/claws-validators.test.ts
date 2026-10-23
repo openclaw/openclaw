@@ -20,6 +20,7 @@ const catalogEntry = {
   channel: "official",
   official: true,
   downloads: 0,
+  installs: 0,
   updatedAtMs: 0,
 };
 const basePlan = {
@@ -47,7 +48,38 @@ describe("Claws Gateway contract", () => {
     const preview = { kind: "instruction", name: "AGENTS.md" };
     expect(validateClawsCatalogPreviewParams({ ...coordinate, ...preview })).toBe(true);
     expect(
-      validateClawsCatalogPreviewResult({ preview: { ...preview, content: "# Instructions" } }),
+      validateClawsCatalogSearchResult({
+        entries: [
+          {
+            packageName: "@openclaw/workflow-operator",
+            displayName: "Workflow Operator",
+            channel: "official",
+            official: true,
+            downloads: 0,
+            installs: 0,
+            updatedAtMs: 0,
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      validateClawsCatalogDetailParams({
+        packageName: "@openclaw/workflow-operator",
+        version: "1.0.0",
+      }),
+    ).toBe(true);
+    expect(
+      validateClawsCatalogPreviewParams({
+        packageName: "@openclaw/workflow-operator",
+        version: "1.0.0",
+        kind: "instruction",
+        name: "AGENTS.md",
+      }),
+    ).toBe(true);
+    expect(
+      validateClawsCatalogPreviewResult({
+        preview: { kind: "instruction", name: "AGENTS.md", content: "# Instructions" },
+      }),
     ).toBe(true);
     expect(
       validateClawsCatalogDetailResult({
@@ -102,6 +134,7 @@ describe("Claws Gateway contract", () => {
             official: false,
             ownerHandle: "alice",
             downloads: 0,
+            installs: 0,
             updatedAtMs: 0,
           },
         ],
@@ -312,6 +345,29 @@ describe("Claws Gateway contract", () => {
       },
     };
     checkPlan(updatePlan);
+    for (const field of ["current", "proposed"] as const) {
+      for (const [schedule, delivery, valid] of [
+        [{ cron: "0 9 * * *", timezone: "UTC" }, "none", true],
+        [{ cron: "0 9 * * *", timezone: "UTC" }, "last-channel", true],
+        [{ cron: "0 9 * * *", timezone: "UTC" }, "owner", true],
+        [{ everyMs: 1 }, "none", true],
+        [{ everyMs: 60_000 }, "last-channel", true],
+        [{ everyMs: 1_800_000 }, "owner", true],
+        [{ everyMs: 0 }, "owner", false],
+        [{ everyMs: -1 }, "owner", false],
+        [{ everyMs: 0.5 }, "owner", false],
+        [{ cron: "0 9 * * *", timezone: "UTC", everyMs: 60_000 }, "owner", false],
+      ] as const) {
+        expect(
+          validateClawLifecyclePlanResult(
+            withJob(updatePlan, {
+              ...updatedJob,
+              [field]: { ...updatedJob[field], schedule, delivery },
+            }),
+          ),
+        ).toBe(valid);
+      }
+    }
     rejectPlan(
       withJob(updatePlan, {
         ...updatedJob,

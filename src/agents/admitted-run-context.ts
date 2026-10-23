@@ -6,6 +6,7 @@ import {
   enqueueExecutionIdentityContextAtAdmission,
   type ExecutionIdentityAdmissionFacts,
   type ExecutionIdentityAdmissionToken,
+  type ExecutionIdentityRecoveryAdmission,
 } from "../audit/execution-identity-admission.js";
 import { executionIdentitySpawnAdmission } from "../audit/execution-identity-spawn-admission.js";
 import {
@@ -202,10 +203,11 @@ export function bindOperatorModelExecution(
     return undefined;
   }
   const selected = model ? { ...model } : undefined;
+  const assertModelAllowed = createOperatorModelSelectionAssertion(authority, selected);
   const mapError = (error: unknown) => mapAuthorizationError?.(error) ?? error;
   let releaseAuthority: (() => void) | undefined;
   try {
-    assertOperatorModelAllowed(authority, selected);
+    assertModelAllowed();
     releaseAuthority = authority.retain?.();
   } catch (error) {
     throw mapError(error);
@@ -218,7 +220,7 @@ export function bindOperatorModelExecution(
     }
     revoked.signal.throwIfAborted();
     try {
-      assertOperatorModelAllowed(authority, selected);
+      assertModelAllowed();
     } catch (error) {
       const failure = mapError(error);
       revoked.abort(failure);
@@ -275,6 +277,34 @@ export type PreparedAgentRunAdmission = Readonly<{
   /** Idempotently closes the exact delegated approval lease, if admission occurred. */
   close: () => void;
 }>;
+
+type PreparedRestartRecovery = Readonly<{
+  operationalRunInstance: OperationalRunInstanceRef;
+  assertCurrent: () => void;
+}>;
+
+// Existing adapters preserve this exact prepared owner through its close operation.
+const preparedRestartRecoveries = new WeakMap<
+  PreparedAgentRunAdmission["close"],
+  PreparedRestartRecovery
+>();
+
+/** Recognizes an admitted restart continuation without granting execution permission. */
+export function isPreparedRunRestartRecovery(
+  prepared: PreparedAgentRunAdmission,
+  runId: string,
+): boolean {
+  const recovery = preparedRestartRecoveries.get(prepared.close);
+  if (
+    !recovery ||
+    recovery.operationalRunInstance !== prepared.operationalRunInstance ||
+    prepared.operationalRunInstance.runId !== runId
+  ) {
+    return false;
+  }
+  recovery.assertCurrent();
+  return true;
+}
 
 type DelegatedAuthorityLease = {
   authority: AgentRunDelegatedAuthority;
@@ -382,7 +412,7 @@ export function getAdmittedRunSource(
 export function resolveAdmittedRunActiveAssertion(
   context: AdmittedRunContext,
   signal?: AbortSignal,
-): SessionSourceAssertion | undefined {
+): ReturnType<typeof captureAdmittedRunActiveAssertion> {
   const authority = getAdmittedRunDelegatedAuthority(context);
   return authority ? captureAdmittedRunActiveAssertion(context, authority, signal) : undefined;
 }
@@ -476,15 +506,6 @@ export function retainAdmittedRunBeforeToolCallRecovery(
     },
   };
 }
-
-type ExecutionIdentityRecoveryAdmission = Readonly<{
-  /** Recovery retries never manufacture replacement identity when exact evidence is absent. */
-  retryOnly: boolean;
-  consume: (runId: string) => Readonly<{
-    accepted: boolean;
-    token?: ExecutionIdentityAdmissionToken;
-  }>;
-}>;
 
 /** Creates a one-shot recovery admission owned by the durable recovery resolver. */
 export function createExecutionIdentityRecoveryAdmission(params: {
@@ -594,7 +615,7 @@ export function prepareAgentRunAdmission(params: {
     assertPreparationOpen();
     assertSource();
   });
-  return Object.freeze({
+  const prepared: PreparedAgentRunAdmission = Object.freeze({
     operationalRunInstance,
     assertSourceCurrent: Object.assign(composeSessionSourceAssertion([assertSourceCurrent]), {
       assertScopeCurrent: assertPreparationOpen,
@@ -667,6 +688,21 @@ export function prepareAgentRunAdmission(params: {
       return admitted;
     },
   });
+  if (
+    params.facts.ingress.kind === "recovery" &&
+    params.facts.ingress.boundary === "gateway.main-session-recovery"
+  ) {
+    preparedRestartRecoveries.set(prepared.close, {
+      operationalRunInstance,
+      assertCurrent: () => {
+        if (closed) {
+          throw new Error("prepared restart recovery is no longer active");
+        }
+        assertSourceCurrent?.();
+      },
+    });
+  }
+  return prepared;
 }
 
 /** Resolves a host-only continuation or validates an already-admitted internal caller. */

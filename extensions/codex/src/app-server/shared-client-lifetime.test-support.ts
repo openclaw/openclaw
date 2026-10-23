@@ -444,7 +444,7 @@ export function registerSharedClientLifetimeTests(
       client: successor.client,
       clientId: successor.client.getInstanceId(),
       ownerClientId: retired.getInstanceId(),
-      lifecycleTiming: createCodexThreadLifecycleTimingTracker(),
+      lifecycleTiming: createCodexThreadLifecycleTimingTracker(false),
       threadId: "thread",
       signal: abort.signal,
     }).then(

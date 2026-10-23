@@ -5,7 +5,7 @@ import { renderTelegramHtmlText, telegramHtmlToPlainTextFallback } from "./forma
 import type { LaneDeliveryResult } from "./lane-delivery-text-deliverer.js";
 import {
   createHarness,
-  deliverFinalAnswer,
+  deliver,
   deliverProjectedFinalAnswer,
   expectPreviewFinalized,
   expectRecordedPreview,
@@ -20,16 +20,6 @@ const photoPayload = {
   channelData: { telegram: { buttons, effect: "spark" }, other: true },
 };
 type Harness = ReturnType<typeof createHarness>;
-type Delivery = Parameters<Harness["deliverLaneText"]>[0];
-function deliver(harness: Harness, text: string, overrides: Partial<Delivery> = {}) {
-  return harness.deliverLaneText({
-    laneName: "answer",
-    text,
-    payload: { text },
-    infoKind: "final",
-    ...overrides,
-  });
-}
 function streamedHarness() {
   const harness = createHarness({ answerMessageId: 999 });
   harness.lanes.answer.hasStreamedMessage = true;
@@ -43,7 +33,7 @@ describe("createLaneTextDeliverer", () => {
   it("replaces a raw trailing-token preview with the prepared final answer", async () => {
     const harness = streamedHarness();
     harness.answer?.update("answer\n\nNO_REPLY");
-    expectFinal(harness, await deliverFinalAnswer(harness, "answer"), "answer");
+    expectFinal(harness, await deliver(harness, "answer"), "answer");
     expect(harness.answer?.lastDeliveredText()).toBe("answer");
   });
 
@@ -215,7 +205,7 @@ describe("createLaneTextDeliverer", () => {
     answer.sendMayHaveLanded.mockReturnValue(true);
     const harness = createHarness({ answerStream: answer });
 
-    expect(await deliverFinalAnswer(harness, HELLO_FINAL)).toMatchObject({
+    expect(await deliver(harness, HELLO_FINAL)).toMatchObject({
       kind: "preview-retained",
       deliveryResult: {
         visibleReplySent: false,

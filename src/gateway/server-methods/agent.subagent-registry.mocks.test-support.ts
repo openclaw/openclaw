@@ -1,12 +1,13 @@
 import { vi } from "vitest";
-import type { runSubagentAnnounceFlow } from "../../agents/subagents/announce/subagent-announce.js";
-import type { maybeWakeRequesterAfterAllChildrenSettled } from "../../agents/subagents/announce/subagent-announce.requester-settle-wake.js";
+import type * as Announce from "../../agents/subagents/announce/subagent-announce.js";
+import type * as Wake from "../../agents/subagents/announce/subagent-announce.requester-settle-wake.js";
+import type * as StateStore from "../../state/openclaw-state-worker-store.js";
 import type { callGateway } from "../call.js";
 
 const subagentRegistryMocks = vi.hoisted(() => ({
   registryCallGateway: vi.fn<typeof callGateway>().mockResolvedValue({ status: "pending" }),
-  registryAnnounce: vi.fn<typeof runSubagentAnnounceFlow>(),
-  registryWake: vi.fn<typeof maybeWakeRequesterAfterAllChildrenSettled>(),
+  registryAnnounce: vi.fn<typeof Announce.runSubagentAnnounceFlow>(),
+  registryWake: vi.fn<typeof Wake.maybeWakeRequesterAfterAllChildrenSettled>(),
   registryWrite: vi.fn<() => void>(),
   pendingWakeRoots: new Set<Promise<void>>(),
 }));
@@ -19,8 +20,7 @@ vi.mock("../server-recovery-runtime-context.js", async (importOriginal) => ({
 }));
 
 vi.mock("../../state/openclaw-state-worker-store.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../state/openclaw-state-worker-store.js")>();
+  const actual = await importOriginal<typeof StateStore>();
   return {
     ...actual,
     runOpenClawStateWorkerOperation: (
@@ -43,8 +43,7 @@ vi.mock("../../state/openclaw-state-worker-store.js", async (importOriginal) => 
 });
 
 vi.mock("../../agents/subagents/announce/subagent-announce.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../agents/subagents/announce/subagent-announce.js")>();
+  const actual = await importOriginal<typeof Announce>();
   return {
     ...actual,
     runSubagentAnnounceFlow: (...args: Parameters<typeof actual.runSubagentAnnounceFlow>) =>
@@ -57,10 +56,7 @@ vi.mock("../../agents/subagents/announce/subagent-announce.js", async (importOri
 vi.mock(
   "../../agents/subagents/announce/subagent-announce.requester-settle-wake.js",
   async (importOriginal) => {
-    const actual =
-      await importOriginal<
-        typeof import("../../agents/subagents/announce/subagent-announce.requester-settle-wake.js")
-      >();
+    const actual = await importOriginal<typeof Wake>();
     const { captureGatewayRootWorkReleaseObserver } =
       await import("../../process/gateway-work-admission.js");
     return {

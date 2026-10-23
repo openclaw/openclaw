@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { ChildProcess } from "node:child_process";
+import { once } from "node:events";
 import path from "node:path";
 import process from "node:process";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
@@ -21,10 +22,148 @@ import { killProcessTree } from "./kill-tree.js";
 import { scheduleAdoptedChildZombieReapAfterExit } from "./scoped-child-reaper.js";
 import { BrokerChild } from "./spawn-broker/child.js";
 import { getSpawnBroker } from "./spawn-broker/context.js";
-import { brokerExecaOptions, spawnBrokerCommand } from "./spawn-broker/execa-client.js";
+import {
+  restoreExecaResult,
+  type BrokerExecaOptions,
+  type BrokerOutputOption,
+} from "./spawn-broker/execa-protocol.js";
 import type { CommandSpawnOptions, CommandSubprocess } from "./spawn-broker/execa-types.js";
+import type { SpawnBrokerHost } from "./spawn-broker/host.js";
 import { recordChildProcessSpawn } from "./spawn-diagnostics.js";
 import { resolveSafeChildProcessInvocation } from "./windows-command.js";
+
+function isOutputOption(value: unknown): value is BrokerOutputOption | undefined {
+  return (
+    value === undefined ||
+    value === "pipe" ||
+    value === "ignore" ||
+    value === "inherit" ||
+    (typeof value === "object" &&
+      value !== null &&
+      "file" in value &&
+      typeof value.file === "string" &&
+      Object.keys(value).length === 1)
+  );
+}
+
+/** Unsupported native descriptors and independent-lifetime commands remain explicit local paths. */
+function brokerExecaOptions(options: CommandSpawnOptions): BrokerExecaOptions | undefined {
+  if (options.ipc || options.cleanup === false || typeof options.stdin === "number") {
+    return undefined;
+  }
+  if (
+    options.stdout === "inherit" ||
+    options.stderr === "inherit" ||
+    options.stdio === "inherit" ||
+    typeof options.stdout === "number" ||
+    typeof options.stderr === "number"
+  ) {
+    return undefined;
+  }
+  if (
+    options.stdio &&
+    typeof options.stdio !== "string" &&
+    options.stdio.some((entry, fd) => typeof entry === "number" || (fd > 0 && entry === "inherit"))
+  ) {
+    return undefined;
+  }
+  if (
+    (options.cwd !== undefined && typeof options.cwd !== "string") ||
+    (options.input !== undefined &&
+      typeof options.input !== "string" &&
+      !(options.input instanceof Uint8Array)) ||
+    (options.stdin !== undefined &&
+      options.stdin !== "pipe" &&
+      options.stdin !== "ignore" &&
+      options.stdin !== "inherit") ||
+    !isOutputOption(options.stdout) ||
+    !isOutputOption(options.stderr) ||
+    (options.shell !== undefined && options.shell !== false)
+  ) {
+    throw new TypeError("Unsupported spawn broker execa stream or invocation options");
+  }
+  if (
+    Array.isArray(options.stdio) &&
+    (options.stdio.length !== 3 ||
+      !["pipe", "ignore", "inherit"].includes(String(options.stdio[0])) ||
+      !isOutputOption(options.stdio[1]) ||
+      !isOutputOption(options.stdio[2]))
+  ) {
+    throw new TypeError("Unsupported spawn broker execa stdio");
+  }
+  const { cancelSignal: _cancelSignal, ...serializable } = options;
+  // SAFETY: The allowed options were checked above, excluding streams, URLs, IPC and native descriptors.
+  return serializable as BrokerExecaOptions;
+}
+
+function spawnBrokerCommand(
+  host: SpawnBrokerHost,
+  argv: string[],
+  options: ExecaOptions,
+  prepared: BrokerExecaOptions,
+) {
+  const remote = host.spawnExeca(argv, prepared);
+  const child = remote.child;
+  const closed = child.waitForClose();
+  const onAbort = () => {
+    child.killed = true;
+    remote.cancel();
+  };
+  options.cancelSignal?.addEventListener("abort", onAbort, { once: true });
+  if (options.cancelSignal?.aborted) {
+    onAbort();
+  }
+  const promise = remote.result
+    .then(async (result) => {
+      if (result.timedOut) {
+        child.killed = true;
+      }
+      // Result IPC can overtake the last bytes on separately transferred sockets.
+      await closed;
+      const restored = restoreExecaResult(result);
+      // Broker admission refusals remain exceptions even for reject:false.
+      if (
+        restored instanceof Error &&
+        (options.reject !== false || restored.code === "ERR_SPAWN_BROKER_UNAVAILABLE")
+      ) {
+        throw restored;
+      }
+      return restored;
+    })
+    .finally(() => options.cancelSignal?.removeEventListener("abort", onAbort));
+  void promise.catch(() => {});
+  void once(child, "spawn").then(
+    () => {
+      setImmediate(() => {
+        for (const stream of [child.stdout, child.stderr]) {
+          if (stream?.readableFlowing === null) {
+            stream.resume();
+          }
+        }
+      });
+    },
+    () => {},
+  );
+  const properties = {
+    nodeChildProcess: child,
+    get pid() {
+      return child.pid;
+    },
+    get stdin() {
+      return child.stdin;
+    },
+    get stdout() {
+      return child.stdout;
+    },
+    get stderr() {
+      return child.stderr;
+    },
+    kill: (signal?: NodeJS.Signals | number) => child.kill(signal ?? options.killSignal),
+  };
+  const command = Object.assign(promise, properties);
+  // Restore the accessors: child handles arrive after the promise is constructed.
+  return Object.defineProperties(command, Object.getOwnPropertyDescriptors(properties));
+}
 
 export const COMMAND_PROCESS_TREE_KILL_GRACE_MS = 300;
 /**
@@ -87,7 +226,7 @@ const commandProcessScope = new AsyncLocalStorage<CommandProcessScope>();
 
 export function resolveCommandProcessSignal(signal?: AbortSignal): AbortSignal | undefined {
   const inherited = commandProcessScope.getStore()?.signal;
-  return inherited ? AbortSignal.any(signal ? [inherited, signal] : [inherited]) : signal;
+  return inherited && signal ? AbortSignal.any([inherited, signal]) : (inherited ?? signal);
 }
 
 /** Cleanup helpers must outlive cancellation of the commands they are settling. */

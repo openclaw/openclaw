@@ -191,7 +191,6 @@ describe("provider request config", () => {
     expect(resolved.auth).toEqual({
       configured: false,
       mode: "authorization-bearer",
-      injectAuthorizationHeader: true,
     });
     expect(resolved.headers).toBeUndefined();
   });

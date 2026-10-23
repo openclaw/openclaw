@@ -2,11 +2,12 @@ import fsSync, { type BigIntStats, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import { vi } from "vitest";
 
-/** Control only ctime observations; bytes, identities and other metadata stay on the real filesystem. */
+/** Control libuv timestamps; bytes, identities and other metadata stay on the real filesystem. */
 export function createFileMutationClock(
   hooks: {
     beforeLstat?: (file: fsSync.PathLike) => void;
     beforeLstatSync?: (file: fsSync.PathLike) => void;
+    birthtimeFromCtime?: boolean;
   } = {},
 ) {
   const times = new Map<string, bigint>();
@@ -15,6 +16,9 @@ export function createFileMutationClock(
       const time = times.get(`${stat.dev}:${stat.ino}`);
       if (time !== undefined) {
         stat.ctimeNs = time;
+      }
+      if (hooks.birthtimeFromCtime) {
+        stat.birthtimeNs = stat.ctimeNs;
       }
     }
     return stat;

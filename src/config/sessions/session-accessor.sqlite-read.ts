@@ -315,7 +315,6 @@ export function readTranscriptExportSnapshotsFromDatabase(
               : transcriptEventJsonSql(database.db)
             ).as("event_json"),
           ])
-          .where("session_id", "in", [...bySession.keys()])
           .where((eb) =>
             eb.or(
               batch.map(({ request, throughSeq, afterSeq }) =>
@@ -562,7 +561,6 @@ export function readTranscriptSnapshot(
 export function readTranscriptEventRows(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,
-  options: { afterSeq?: number } = {},
 ): SqliteTranscriptSnapshotRow[] {
   return readHotSessionTranscriptSnapshot(database, sessionId, "raw rows", () => {
     const db = getSessionKysely(database.db);
@@ -572,7 +570,6 @@ export function readTranscriptEventRows(
         .selectFrom("transcript_events")
         .select([transcriptEventJsonSql(database.db).as("event_json"), "seq"])
         .where("session_id", "=", sessionId)
-        .$if(options.afterSeq !== undefined, (query) => query.where("seq", ">", options.afterSeq!))
         .orderBy("seq", "asc"),
     ).rows;
     return rows.map((row) => ({
@@ -672,6 +669,7 @@ export function findTranscriptEventInDatabase(
   sessionId: string,
   match: (event: TranscriptEvent) => boolean,
   navigationMatch?: (event: TranscriptEvent) => boolean,
+  { malformed = "skip" }: { malformed?: "skip" | "throw" } = {},
 ): { event: TranscriptEvent } | undefined {
   return readHotSessionTranscriptSnapshot(database, sessionId, "match", () => {
     const events = getSessionKysely(database.db)
@@ -700,7 +698,7 @@ export function findTranscriptEventInDatabase(
               .where("seq", "=", row.seq),
           )
         : row;
-      const found = payload && findTranscriptEventInRows([payload], match);
+      const found = payload && findTranscriptEventInRows([payload], match, malformed);
       if (found) {
         return found;
       }

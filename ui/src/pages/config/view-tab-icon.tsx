@@ -7,7 +7,7 @@ import { controlUiFaviconBaseSvg } from "../../app/control-ui-environment-presen
 import { inferControlUiPublicAssetPath } from "../../app/public-assets.ts";
 import { LobsterSvg } from "../../components/lobster-pet-artwork.tsx";
 import type { LobsterPetPalette } from "../../components/lobster-pet-contract.ts";
-import { canonicalLobsterLook, lobsterLookStyle } from "../../components/lobster-pet-look.ts";
+import { canonicalLobsterLook, lobsterLookStyle } from "../../components/lobster-pet-identity.ts";
 import { lobsterPaletteName } from "../../components/lobster-pet-lore.ts";
 import { SettingsRow, SettingsSegmented } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../lib/reactive/i18n.ts";

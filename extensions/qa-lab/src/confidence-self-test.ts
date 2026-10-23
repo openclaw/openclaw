@@ -157,7 +157,6 @@ function detectTokenEfficiencyRegression(): boolean {
         },
       ],
     },
-    thresholdPercent: 15,
     generatedAt: "2026-05-12T00:00:00.000Z",
   });
   return !report.pass && report.failures.length === 1;

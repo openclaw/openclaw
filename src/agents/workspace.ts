@@ -18,7 +18,6 @@ import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shar
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveUserPath } from "../utils.js";
-import { DuplicateAgentError } from "./agent-create-error.js";
 import { getAgentWorkspaceAccess } from "./workspace-access.js";
 import {
   DEFAULT_AGENTS_FILENAME,
@@ -51,7 +50,10 @@ import {
 } from "./workspace-file-read.js";
 import { ensureGitRepo } from "./workspace-git.js";
 import { LEGACY_WORKSPACE_STATE_CURRENT_FILENAME } from "./workspace-legacy-state.js";
-import { runWorkspacePreparation } from "./workspace-preparation.js";
+import {
+  maybeWriteWorkspaceAttestation,
+  runWorkspacePreparation,
+} from "./workspace-preparation.js";
 import { captureWorkspaceStateFilesystemGuard } from "./workspace-state-guard.js";
 import { WorkspaceVanishedError } from "./workspace-state-identity.js";
 import { readCanonicalWorkspaceStateSnapshot } from "./workspace-state-read.js";
@@ -61,7 +63,6 @@ import {
   hasWorkspaceSetupStateMarker,
   recentWorkspaceAttestation,
   mergeWorkspaceSetupState,
-  replaceWorkspaceAttestation,
   type WorkspaceAttestation,
   type WorkspaceSetupState,
 } from "./workspace-state-store.js";
@@ -174,14 +175,20 @@ export function isExpectedAbsentBootstrapFile(name: string): boolean {
   return OPTIONAL_BOOTSTRAP_FILENAMES.has(name) || name === DEFAULT_MEMORY_FILENAME;
 }
 
-export async function fileDiffersFromTemplate(dir: string, fileName: string): Promise<boolean> {
+export async function fileDiffersFromTemplate(
+  dir: string,
+  fileName: string,
+  generatedHash?: string,
+): Promise<boolean> {
   try {
     return await retryAsync(
-      async () =>
-        !(await isGeneratedTemplateContent(
-          fileName,
-          await fs.readFile(path.join(dir, fileName), "utf-8"),
-        )),
+      async () => {
+        const content = await fs.readFile(path.join(dir, fileName), "utf-8");
+        return (
+          (!generatedHash || sha256Hex(content) !== generatedHash) &&
+          !(await isGeneratedTemplateContent(fileName, content))
+        );
+      },
       {
         attempts: 3,
         minDelayMs: 50,
@@ -270,10 +277,11 @@ async function hasSkipBootstrapWorkspaceContentEvidence(dir: string): Promise<bo
 async function workspaceProfileLooksConfigured(params: {
   dir: string;
   includeGitEvidence?: boolean;
+  generatedHashes?: ReadonlyMap<string, string>;
 }): Promise<boolean> {
   const profileFileDiffs = await Promise.all(
     WORKSPACE_ONBOARDING_PROFILE_FILENAMES.map(async (fileName) =>
-      fileDiffersFromTemplate(params.dir, fileName),
+      fileDiffersFromTemplate(params.dir, fileName, params.generatedHashes?.get(fileName)),
     ),
   );
   return (
@@ -339,6 +347,7 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
   dir: string;
   bootstrapPath: string;
   state: WorkspaceSetupState;
+  generatedHashes?: ReadonlyMap<string, string>;
   bootstrapExists: boolean;
   guard?: WorkspaceStateGuard;
 }): Promise<WorkspaceBootstrapCompletionReconcileResult> {
@@ -348,7 +357,10 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
 
   if (
     bootstrapExists
-      ? !(await workspaceProfileLooksConfigured({ dir: params.dir }))
+      ? !(await workspaceProfileLooksConfigured({
+          dir: params.dir,
+          generatedHashes: params.generatedHashes,
+        }))
       : !params.state.bootstrapSeededAt
   ) {
     return { repaired: false, bootstrapExists, state: params.state };
@@ -384,49 +396,26 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
   }
 }
 
-async function collectGeneratedBootstrapHashes(dir: string): Promise<Map<string, string>> {
+async function collectGeneratedBootstrapHashes(
+  dir: string,
+  previousHashes?: ReadonlyMap<string, string>,
+): Promise<Map<string, string>> {
   const hashes = new Map<string, string>();
   for (const fileName of GENERATED_WORKSPACE_BOOTSTRAP_FILENAMES) {
     try {
       const content = await fs.readFile(path.join(dir, fileName), "utf-8");
-      if (await isGeneratedTemplateContent(fileName, content)) {
-        hashes.set(fileName, sha256Hex(content));
+      const contentHash = sha256Hex(content);
+      if (
+        contentHash === previousHashes?.get(fileName) ||
+        (await isGeneratedTemplateContent(fileName, content))
+      ) {
+        hashes.set(fileName, contentHash);
       }
     } catch {
       // Missing or unreadable files are not attested as generated.
     }
   }
   return hashes;
-}
-
-async function maybeWriteWorkspaceAttestation(
-  dir: string,
-  guard?: WorkspaceStateGuard,
-): Promise<void> {
-  const assertHost = guard?.assertHost;
-  // Order snapshots by when their filesystem observation starts. The store
-  // compares against a separate lock-time clock, so a newer committed scan
-  // wins when this async collection finishes later.
-  const attestedAtMs = Date.now();
-  const generatedHashes = await collectGeneratedBootstrapHashes(dir);
-  assertHost?.();
-  try {
-    await replaceWorkspaceAttestation({
-      workspaceDir: dir,
-      attestedAtMs,
-      generatedHashes,
-      assertCurrent: assertHost,
-      recoveryHoldPredicate: guard?.recoveryHoldPredicate,
-      beforeLegacyApply: guard?.beforeLegacyApply,
-    });
-  } catch (error) {
-    if (error instanceof DuplicateAgentError) {
-      throw error;
-    }
-    // Attestation is a lifecycle guard; setup should not fail solely because
-    // the auxiliary disappearance evidence could not be refreshed.
-  }
-  assertHost?.();
 }
 
 async function workspaceAttestationHasSurvivalEvidence(params: {
@@ -445,7 +434,12 @@ async function workspaceAttestationHasSurvivalEvidence(params: {
   ) {
     return true;
   }
-  if (await workspaceProfileLooksConfigured({ dir: params.dir })) {
+  if (
+    await workspaceProfileLooksConfigured({
+      dir: params.dir,
+      generatedHashes: params.attestation.generatedHashes,
+    })
+  ) {
     return true;
   }
   return (
@@ -704,7 +698,12 @@ async function ensureAgentWorkspaceOwned(
       );
     }
     if (hasContentEvidence || purpose) {
-      await maybeWriteWorkspaceAttestation(dir, guard);
+      await maybeWriteWorkspaceAttestation(
+        dir,
+        initialState.attestation,
+        collectGeneratedBootstrapHashes,
+        guard,
+      );
     }
     return { dir, bootstrapPending: false };
   }
@@ -801,7 +800,8 @@ async function ensureAgentWorkspaceOwned(
     await publishBootstrapFile(userPath, userTemplate, beforeFileMutation);
   }
 
-  let state = (await readCanonicalWorkspaceStateSnapshot(dir, undefined, guard)).setup;
+  const setupSnapshot = await readCanonicalWorkspaceStateSnapshot(dir, undefined, guard);
+  let state = setupSnapshot.setup;
   let stateDirty = false;
   const markState = (next: Partial<WorkspaceSetupState>) => {
     state = { ...state, ...next };
@@ -819,6 +819,7 @@ async function ensureAgentWorkspaceOwned(
       dir,
       bootstrapPath,
       state,
+      generatedHashes: setupSnapshot.attestation?.generatedHashes,
       bootstrapExists,
       guard,
     });
@@ -841,6 +842,7 @@ async function ensureAgentWorkspaceOwned(
       hasRecentAttestedCustomization ||
       (await workspaceProfileLooksConfigured({
         dir,
+        generatedHashes: setupSnapshot.attestation?.generatedHashes,
         // A preexisting Git repository is user evidence. Git metadata left by
         // an expired, wiped OpenClaw workspace is not completion evidence.
         includeGitEvidence: !reseedingExpiredWorkspaceState,
@@ -870,7 +872,12 @@ async function ensureAgentWorkspaceOwned(
     });
   }
   await ensureGitRepo(dir, isBrandNewWorkspace, beforeFileMutation);
-  await maybeWriteWorkspaceAttestation(dir, guard);
+  await maybeWriteWorkspaceAttestation(
+    dir,
+    initialState.attestation,
+    collectGeneratedBootstrapHashes,
+    guard,
+  );
 
   return {
     dir,

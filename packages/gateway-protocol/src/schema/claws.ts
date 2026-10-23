@@ -16,18 +16,23 @@ const ClawCatalogCoordinateSchema = closedObject({
 
 export const ClawsCatalogSearchParamsSchema = closedObject({
   query: Type.Optional(Type.String({ maxLength: 200 })),
+  category: Type.Optional(Type.String({ maxLength: 40 })),
+  featured: Type.Optional(Type.Boolean()),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
 });
 
 export const ClawsCatalogEntrySchema = closedObject({
   packageName: ClawPackageName,
   displayName: NonEmptyString,
+  iconUrl: Type.Optional(NonEmptyString),
   summary: Type.Optional(Type.String()),
   latestVersion: Type.Optional(NonEmptyString),
   channel: Type.Union([Type.Literal("official"), Type.Literal("community")]),
   official: Type.Boolean(),
   ownerHandle: Type.Optional(NonEmptyString),
   downloads: Type.Number({ minimum: 0 }),
+  installs: Type.Number({ minimum: 0 }),
+  featuredAt: Type.Optional(Type.Number({ minimum: 0 })),
   updatedAtMs: Type.Number({ minimum: 0 }),
 });
 
@@ -293,9 +298,12 @@ export const ClawConfiguredAccessSchema = closedObject({
 });
 
 const ClawScheduledDeclarationSchema = closedObject({
-  schedule: closedObject({ cron: NonEmptyString, timezone: NonEmptyString }),
+  schedule: Type.Union([
+    closedObject({ cron: NonEmptyString, timezone: NonEmptyString }),
+    closedObject({ everyMs: Type.Integer({ minimum: 1 }) }),
+  ]),
   session: stringLiteralUnion(["main", "isolated"]),
-  delivery: stringLiteralUnion(["none", "last-channel"]),
+  delivery: stringLiteralUnion(["none", "last-channel", "owner"]),
   messageDigest: NonEmptyString,
 });
 

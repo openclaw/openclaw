@@ -102,7 +102,7 @@ export function pluginRuntime(
           return responses[method] as TResponse;
         },
       }),
-    ...(params.refresh ? { refresh: params.refresh } : {}),
+    refresh: params.refresh ?? vi.fn(async () => ({ diagnostics: [] })),
   } satisfies CodexPluginsManagementRuntime;
 }
 

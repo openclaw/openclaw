@@ -193,26 +193,10 @@ async function migrateWithExclusiveStateOwnership(params: {
   let snapshot: LegacyCommitmentsSnapshot;
   try {
     snapshot = await source.read();
-    await source.verify(snapshot, "retired commitments source changed after Doctor loaded it");
   } catch (error) {
     return {
       changes: [],
       warnings: [`Failed reading retired commitments JSON: ${String(error)}`],
-    };
-  }
-
-  try {
-    await source.claim({
-      snapshot,
-      mismatchMessage: "retired commitments source changed before Doctor could claim it",
-    });
-  } catch (error) {
-    const restoreError = await source.restore();
-    return {
-      changes: [],
-      warnings: [
-        `Failed claiming retired commitments JSON: ${String(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
-      ],
     };
   }
 
@@ -224,22 +208,15 @@ async function migrateWithExclusiveStateOwnership(params: {
       snapshot,
     });
   } catch (error) {
-    const restoreError = await source.restore();
     return {
       changes: [],
-      warnings: [
-        `Failed recording retired commitments discard: ${String(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
-      ],
+      warnings: [`Failed recording retired commitments discard: ${String(error)}`],
     };
   }
 
   try {
-    await source.verify(snapshot, "retired commitments Doctor claim changed before cleanup", true);
-    await source.remove({
-      sourceReappearedMessage: "retired commitments source reappeared during cleanup",
-      sourceRemainingMessage: "retired commitments source remains after cleanup",
-      claimRemainingMessage: "retired commitments Doctor claim remains after cleanup",
-    });
+    await source.verify(snapshot, "retired commitments source changed before cleanup");
+    await params.stateRoot.remove(source.sourceRelativePath);
   } catch (error) {
     return {
       changes: [],

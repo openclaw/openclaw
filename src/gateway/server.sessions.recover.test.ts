@@ -149,6 +149,16 @@ async function recoveryFixture(
       loadTranscriptEvents({ ...scope, sessionKey, sessionId }),
     placement: (state: WorkerSessionPlacementRecord["state"]) =>
       recoveryWorkerPlacement({ sessionId: sourceSessionId, sessionKey: sourceKey, state }),
+    recoverWith: (
+      launchContinuation: Parameters<typeof recoverGatewaySession>[0]["launchContinuation"],
+    ) =>
+      recoverGatewaySession({
+        cfg: getRuntimeConfig(),
+        key: sourceKey,
+        agentId: "main",
+        workerPlacementContext: {},
+        launchContinuation,
+      }),
     recover: <T = unknown>(options?: Parameters<typeof directSessionReq<T>>[2]) =>
       directSessionReq<T>("sessions.recover", { agentId: "main", key: sourceKey }, options),
   };
@@ -169,6 +179,29 @@ function runtimeClient(sessionKey: string) {
     connect: { scopes: ["operator.write"] },
     internal: { agentRuntimeIdentity: { kind: "agentRuntime", agentId: "main", sessionKey } },
   } as never;
+}
+
+function roleConfig(
+  name: string,
+  others: "view" | "write",
+  agents: "*" | string[] = "*",
+  sandbox?: "required",
+) {
+  const cfg = getRuntimeConfig();
+  const role = {
+    sessions: { others },
+    agents,
+    scopes: ["operator.read" as const, "operator.write" as const],
+    ...(sandbox ? { sandbox } : {}),
+  };
+  return {
+    ...cfg,
+    gateway: { ...cfg.gateway, roles: { default: name, definitions: { [name]: role } } },
+  };
+}
+
+function expectRecoveryError(result: unknown, error: Record<string, unknown>) {
+  expect(result).toMatchObject({ ok: false, error });
 }
 
 function expectUnrecovered(source: ReturnType<typeof loadSessionEntry>) {
@@ -207,16 +240,12 @@ async function sessionWorktree(dir: string, name: string, sessionKey: string) {
 
 test("recovery source reads and commit guards execute no host SQLite", async () => {
   const fixture = await recoveryFixture("worker-routed-recovery");
-  const cfg = getRuntimeConfig();
   const sql = observeHostDataSql();
   try {
-    const result = await recoverGatewaySession({
-      cfg,
-      key: fixture.sourceKey,
-      agentId: "main",
-      workerPlacementContext: {},
-      launchContinuation: async () => ({ status: "started", runId: "recovery-proof" }),
-    });
+    const result = await fixture.recoverWith(async () => ({
+      status: "started",
+      runId: "recovery-proof",
+    }));
     expect(result).toMatchObject({ ok: true, created: true });
     expect(sql.queries).toEqual([]);
   } finally {
@@ -229,6 +258,8 @@ test("sessions.recover settles its active placement before archiving a real sess
   const { dir, storePath } = await createSessionStoreDir();
   const sourceKey = "agent:main:dashboard:recovery-cloud-active";
   const sourceSessionId = "recovery-cloud-active-source";
+  const scope = { agentId: "main", sessionKey: sourceKey, storePath };
+  const read = (sessionKey = sourceKey) => loadSessionEntry({ ...scope, sessionKey });
   const { worktree, entry } = await sessionWorktree(dir, "recovery-cloud-active", sourceKey);
   const unsyncedPath = path.join(worktree.path, "unsynced.txt");
   await fs.writeFile(unsyncedPath, "preserve local work\n");
@@ -313,7 +344,7 @@ test("sessions.recover settles its active placement before archiving a real sess
       expect.any(Function),
       expect.any(Function),
     );
-    const unsettledSource = loadSessionEntry({ agentId: "main", sessionKey: sourceKey, storePath });
+    const unsettledSource = read();
     expect(unsettledSource?.archivedAt).toBeUndefined();
     expect(unsettledSource?.mainRestartRecovery?.tombstone?.recoveredSessionKey).toBeUndefined();
   } finally {
@@ -324,7 +355,7 @@ test("sessions.recover settles its active placement before archiving a real sess
   const recovered = await recovering;
   expect(recovered).toMatchObject({ ok: true, payload: { key: expect.any(String) } });
   expect(placement.state).toBe("reclaimed");
-  expect(loadSessionEntry({ agentId: "main", sessionKey: sourceKey, storePath })).toMatchObject({
+  expect(read()).toMatchObject({
     archivedAt: expect.any(Number),
     worktree: { id: worktree.id },
   });
@@ -335,13 +366,7 @@ test("sessions.recover settles its active placement before archiving a real sess
   expect(
     await managedWorktrees.findLiveByOwner("session", recovered.payload?.key ?? ""),
   ).toBeUndefined();
-  expect(
-    loadSessionEntry({
-      agentId: "main",
-      sessionKey: recovered.payload?.key ?? "",
-      storePath,
-    })?.worktree,
-  ).toBeUndefined();
+  expect(read(recovered.payload?.key ?? "")?.worktree).toBeUndefined();
   await expect(fs.readFile(unsyncedPath, "utf8")).resolves.toBe(
     "preserve local work\nfinal worker sync\n",
   );
@@ -463,13 +488,10 @@ test.each(["rejected", "unavailable", "stale-result"] as const)(
       context: placementContext(() => placement, failure === "unavailable" ? undefined : reclaim),
     });
 
-    expect(recovered).toMatchObject({
-      ok: false,
-      error: {
-        code: "UNAVAILABLE",
-        retryable: true,
-        message: expect.stringContaining("sessions.reclaim"),
-      },
+    expectRecoveryError(recovered, {
+      code: "UNAVAILABLE",
+      retryable: true,
+      message: expect.stringContaining("sessions.reclaim"),
     });
     expectUnrecovered(fixture.source());
     expect(reclaim).toHaveBeenCalledTimes(failure === "unavailable" ? 0 : 1);
@@ -487,9 +509,10 @@ test.each(["requested", "failed"] as const)(
       context: placementContext(() => placement, reclaim),
     });
 
-    expect(recovered).toMatchObject({
-      ok: false,
-      error: { code: "UNAVAILABLE", retryable: true, message: expect.stringContaining(state) },
+    expectRecoveryError(recovered, {
+      code: "UNAVAILABLE",
+      retryable: true,
+      message: expect.stringContaining(state),
     });
     expect(reclaim).not.toHaveBeenCalled();
     expect(fixture.source()?.archivedAt).toBeUndefined();
@@ -522,9 +545,9 @@ test.each(["session-id", "lifecycle-revision"] as const)(
       context: placementContext(() => placement, reclaim),
     });
 
-    expect(recovered).toMatchObject({
-      ok: false,
-      error: { code: "INVALID_REQUEST", message: expect.stringContaining("changed") },
+    expectRecoveryError(recovered, {
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("changed"),
     });
     expectUnrecovered(fixture.source());
   },
@@ -537,13 +560,7 @@ test("sessions.recover preserves device-folder affinity before launching its suc
     expect(loadSessionEntry(target)?.deviceFolder).toEqual(deviceFolder);
     return { status: "started" as const, runId: "device-folder-recovery-run" };
   });
-  const result = await recoverGatewaySession({
-    cfg: getRuntimeConfig(),
-    key: fixture.sourceKey,
-    agentId: "main",
-    workerPlacementContext: {},
-    launchContinuation,
-  });
+  const result = await fixture.recoverWith(launchContinuation);
   expect(result).toMatchObject({
     ok: true,
     created: true,
@@ -603,14 +620,15 @@ test("sessions.recover rolls over one tombstone and returns its continuation out
   });
   const successorKey = recovered.payload?.key ?? "";
   const successorSessionId = recovered.payload?.sessionId ?? "";
-  expect(concurrentRetry, JSON.stringify(concurrentRetry)).toMatchObject({
+  const expectedRetry = {
     ok: true,
     payload: {
       key: successorKey,
       sessionId: successorSessionId,
       continuation: { status: "started" },
     },
-  });
+  };
+  expect(concurrentRetry, JSON.stringify(concurrentRetry)).toMatchObject(expectedRetry);
   expect(fixture.read(successorKey)).toMatchObject({
     ...inherited,
     previousSessionId: sourceSessionId,
@@ -633,14 +651,7 @@ test("sessions.recover rolls over one tombstone and returns its continuation out
   );
 
   const repeated = await fixture.recover<RecoveryPayload>();
-  expect(repeated, JSON.stringify(repeated)).toMatchObject({
-    ok: true,
-    payload: {
-      key: successorKey,
-      sessionId: successorSessionId,
-      continuation: { status: "started" },
-    },
-  });
+  expect(repeated, JSON.stringify(repeated)).toMatchObject(expectedRetry);
 });
 
 test.each([
@@ -679,23 +690,9 @@ test.each([
       storePath,
       overrides: { ...sourceStamp, visibility: "shared" },
     });
-    const cfg = {
-      ...getRuntimeConfig(),
-      gateway: {
-        ...getRuntimeConfig().gateway,
-        roles: {
-          default: "requester",
-          definitions: {
-            requester: {
-              sessions: { others: "write" as const },
-              agents: "*" as const,
-              scopes: ["operator.read" as const, "operator.write" as const],
-              ...(required ? { sandbox: "required" as const } : {}),
-            },
-          },
-        },
-      },
-    };
+    const cfg = roleConfig("requester", "write", "*", required ? "required" : undefined);
+    const currentConfig =
+      identity === "owner" ? { ...cfg, gateway: { ...cfg.gateway, roles: undefined } } : cfg;
     const request = {
       client: {
         ...(systemActor && identity !== "owner"
@@ -720,10 +717,8 @@ test.each([
           : {}),
       },
       context: {
-        getRuntimeConfig: () =>
-          identity === "owner" ? { ...cfg, gateway: { ...cfg.gateway, roles: undefined } } : cfg,
-        getCommittedRuntimeConfig: () =>
-          identity === "owner" ? { ...cfg, gateway: { ...cfg.gateway, roles: undefined } } : cfg,
+        getRuntimeConfig: () => currentConfig,
+        getCommittedRuntimeConfig: () => currentConfig,
       },
     };
     prepareGatewayRecipientProfile(request.client);
@@ -769,42 +764,13 @@ test.each([
 );
 
 test("sessions.recover cannot create a successor on an agent excluded by the caller's role", async () => {
-  const { storePath } = await createSessionStoreDir();
   const profile = ensureProfileForEmail("restricted-session-recovery@example.com");
   setUserProfileRole(profile.id, "guest");
-  using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-  const key = "agent:main:dashboard:role-denied-recovery";
-  await writeSessionStore({
-    entries: {
-      [key]: sessionStoreEntry("role-denied-recovery-session", {
-        status: "failed",
-        abortedLastRun: true,
-        createdActor: { type: "human", source: "profile", id: profile.id },
-        mainRestartRecovery: {
-          cycleId: "cycle-role-denied-recovery",
-          revision: 1,
-          chargedAttempts: 3,
-          tombstone: { reason: "automatic recovery exhausted" },
-        },
-      }),
-    },
+  const fixture = await recoveryFixture("role-denied-recovery", {
+    createdActor: { type: "human", source: "profile", id: profile.id },
   });
-  const cfg = {
-    ...getRuntimeConfig(),
-    gateway: {
-      ...getRuntimeConfig().gateway,
-      roles: {
-        default: "guest",
-        definitions: {
-          guest: {
-            sessions: { others: "view" as const },
-            agents: ["guest-only"],
-            scopes: ["operator.read" as const, "operator.write" as const],
-          },
-        },
-      },
-    },
-  };
+  using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+  const cfg = roleConfig("guest", "view", ["guest-only"]);
   const client = {
     connect: { role: "operator", scopes: ["operator.write"] },
     authenticatedUserProfile: {
@@ -815,17 +781,13 @@ test("sessions.recover cannot create a successor on an agent excluded by the cal
     },
   } as never;
 
-  const recovered = await directSessionReq(
-    "sessions.recover",
-    { agentId: "main", key },
-    { client, context: { getRuntimeConfig: () => cfg } },
-  );
+  const recovered = await fixture.recover({ client, context: { getRuntimeConfig: () => cfg } });
 
-  expect(recovered).toMatchObject({
-    ok: false,
-    error: { code: "FORBIDDEN", message: expect.stringContaining('agent "main"') },
+  expectRecoveryError(recovered, {
+    code: "FORBIDDEN",
+    message: expect.stringContaining('agent "main"'),
   });
-  expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
+  expect(fixture.source()).toMatchObject({
     mainRestartRecovery: {
       revision: 1,
       tombstone: { reason: "automatic recovery exhausted" },
@@ -925,9 +887,9 @@ test("sessions.recover revalidates runtime authority after its cloud placement r
     },
   });
 
-  expect(recovered).toMatchObject({
-    ok: false,
-    error: { code: "INVALID_REQUEST", message: "agent runtime authority is no longer active" },
+  expectRecoveryError(recovered, {
+    code: "INVALID_REQUEST",
+    message: "agent runtime authority is no longer active",
   });
   expect(reclaim).toHaveBeenCalledOnce();
   expectUnrecovered(fixture.source());

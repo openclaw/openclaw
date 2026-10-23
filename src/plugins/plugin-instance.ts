@@ -24,7 +24,12 @@ import type {
   PluginInstanceDisposalResult,
   PluginInstanceLifecycle,
   PluginModuleLoaderRecovery,
+  PluginRetentionSnapshot,
+  PluginRetentionReason,
+  PluginRetentionOwner,
+  PluginWorkRelease,
 } from "./plugin-instance.types.js";
+import { PluginReferenceDiagnostics } from "./plugin-retention-diagnostics.js";
 import { mapPluginReturnPromise, resolvePluginReturnPromise } from "./plugin-return-value.js";
 import { releasePluginInstanceRegistry } from "./registry-lifecycle.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
@@ -55,6 +60,7 @@ export class PluginInstance {
   private accepting = true;
   private replacementReserved = false;
   private readonly retainedWork = new Set<object>();
+  private readonly referenceDiagnostics = new PluginReferenceDiagnostics();
   private readonly calls = new Map<object, PluginInstanceCall>();
   private callsExpired = false;
   private forcedRetirement = false;
@@ -216,14 +222,26 @@ export class PluginInstance {
   }
 
   /** Track finite host work without granting invocation authority or joining disposal. */
-  retainWork(): () => void {
+  retainWork(reason: PluginRetentionReason = "unknown"): PluginWorkRelease {
     const token = {};
     this.retainedWork.add(token);
-    return () => {
+    return this.referenceDiagnostics.workRelease(token, this.activeCall()?.token, reason, () => {
       if (this.retainedWork.delete(token)) {
         this.waiters.forEach((wake) => wake());
       }
-    };
+    });
+  }
+
+  /** Observe live holds without changing admission, release, or plugin execution. */
+  retentionSnapshot(
+    options: { limit?: number; includeOwners?: boolean } = {},
+  ): PluginRetentionSnapshot {
+    return this.referenceDiagnostics.snapshot(
+      this,
+      this.owner?.registry,
+      [this.retainedWork, this.consumers.keys(), this.calls.keys()],
+      options,
+    );
   }
 
   get retainedWorkCount(): number {
@@ -280,6 +298,7 @@ export class PluginInstance {
     invoke?: <T>(run: () => T) => T,
     registry?: PluginRegistry,
     kind: "work" | "custody" = "work",
+    diagnostics: { reason?: PluginRetentionReason; owner?: PluginRetentionOwner } = {},
   ): PluginInstanceConsumer {
     const current = this.activeCall();
     const parent = current && this.consumers.get(current.token);
@@ -290,6 +309,13 @@ export class PluginInstance {
     const released = createDeferredCore();
     const token = { active: true, completion: released.promise, registry, kind };
     this.consumers.set(token, token);
+    const reference = this.referenceDiagnostics.record(
+      token,
+      current?.token,
+      kind === "custody" ? "custody" : "consumer",
+      diagnostics.reason ?? "consumer",
+      diagnostics.owner,
+    );
     let closing: Promise<void> | undefined;
     const release = () => {
       token.active = false;
@@ -313,6 +339,7 @@ export class PluginInstance {
           // Close operation callbacks before entering a separate host teardown token.
           // Its release must not join the disposal waiting on this physical hold.
           token.active = false;
+          reference.cleanupState = "pending";
           closing = new Promise<void>((resolve) => {
             resolve(
               this.invoke(
@@ -450,6 +477,12 @@ export class PluginInstance {
     const cleanup = options.cleanup === true || parent?.cleanup === true;
     // Not joining disposal never grants teardown authority to ordinary work; its
     // lifecycle owner stops and joins that work during cleanup instead.
+    this.referenceDiagnostics.record(
+      token,
+      current?.token,
+      cleanup ? "cleanup" : "call",
+      cleanup ? "cleanup" : "call",
+    );
     this.calls.set(token, { registry, cleanup, ownerJoined: !cleanup && !joinDisposal });
     return {
       token,

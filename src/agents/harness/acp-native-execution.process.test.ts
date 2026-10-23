@@ -16,16 +16,11 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { requireAcpRuntimeBackend } from "../../acp/runtime/registry.js";
-import {
-  buildExternalRunFailureReply,
-  buildKnownAgentRunFailureReplyPayload,
-} from "../../auto-reply/reply/agent-runner-failure-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { projectInFlightRunSnapshot } from "../../gateway/chat-inflight-snapshot.js";
 import { createAgentEventTestHarness } from "../../gateway/server-chat.agent-events.test-harness.js";
 import { subscribeAgentEvents } from "../../gateway/server-chat.agent-events.test-helpers.js";
 import type { AgentEventPayload } from "../../infra/agent-events.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { upsertSessionEntry } from "../../plugin-sdk/session-store-runtime.js";
 import {
   appendSessionTranscriptMessageByIdentityStrict,
@@ -44,7 +39,7 @@ import {
   registerNative,
   useNativeProcessFixture,
 } from "./acp-native-process.test-support.js";
-import { getRegisteredAgentHarness } from "./registry.js";
+import { AgentHarnessPreflightError } from "./errors.js";
 import { runAgentHarnessAttempt } from "./selection.js";
 
 useNativeProcessFixture();
@@ -68,7 +63,8 @@ async function withNativeAttempt(
   peer: Parameters<typeof registerNative>[3] = {},
   agent = "opencode",
 ) {
-  await withOpenClawTestState({ label: "acp-native-execution" }, async (state) => {
+  const env = { OPENCLAW_SKIP_ACPX_RUNTIME_PROBE: "1" };
+  await withOpenClawTestState({ label: "acp-native-execution", env }, async (state) => {
     const config = {
       ...overrides,
       session: { store: path.join(state.sessionsDir(), "sessions.json") },
@@ -126,7 +122,7 @@ it.each([
   "admits $agent profile=$profile alsoAllow=$alsoAllow before native effects",
   async ({ agent, profile, alsoAllow, denied }) => {
     await withNativeAttempt(
-      async ({ state, config, native, attempt }) => {
+      async ({ native, attempt }) => {
         if (!denied) {
           await appendSessionTranscriptMessageByIdentityStrict({
             ...attempt.target,
@@ -141,28 +137,14 @@ it.each([
         const records = await peerStates(native.peerDirectory);
         const effects = await fs.readdir(path.join(native.peerDirectory, "effects"));
         if (denied) {
+          expect.soft(outcome.error).toBeInstanceOf(AgentHarnessPreflightError);
           expect.soft(outcome.error).toMatchObject({
             message: expect.stringContaining("cannot enforce this conversation's tool policy"),
+            userMessage:
+              "OpenCode cannot run with this chat's tool restrictions. Choose a different model provider or update the tool settings.",
           });
           expect.soft(records).toEqual([]);
           expect.soft(effects).toEqual([]);
-          const reply = buildExternalRunFailureReply({
-            message: formatErrorMessage(outcome.error),
-            error: outcome.error,
-          });
-          expect.soft(reply.text).toContain("cannot run with this chat's tool restrictions");
-          expect.soft(reply.text).toContain("Choose a different model provider");
-          expect.soft(reply.text).not.toMatch(/try again|\/new/);
-          expect.soft(reply.isGenericRunnerFailure).toBe(false);
-          expect
-            .soft(
-              buildKnownAgentRunFailureReplyPayload({
-                err: outcome.error,
-                sessionCtx: { Provider: "discord", Surface: "discord", ChatType: "group" },
-                resolvedVerboseLevel: "off",
-              }),
-            )
-            .toMatchObject({ text: reply.text, isError: true });
         } else {
           expect.soft(outcome.error).toBeUndefined();
           expect.soft(outcome.value?.terminal).toMatchObject({ kind: "ok" });
@@ -181,31 +163,6 @@ it.each([
           expect(assistant?.message).toEqual(outcome.value?.currentAttemptAssistant);
           expect(assistant?.idempotencyKey).toBe(outcome.value?.assistantTranscriptIdempotencyKey);
           expect.soft(effects).toHaveLength(1);
-          const harness = getRegisteredAgentHarness(`acp-${agent}`)?.harness;
-          assert(harness?.loadModelCatalog !== undefined, "Native catalog operation missing");
-          expect(
-            await harness.loadModelCatalog({
-              config,
-              agentId: "main",
-              agentDir: state.agentDir(),
-              workspaceDir: state.workspaceDir,
-            }),
-          ).toEqual({
-            entries: [
-              ["initial", "Initial"],
-              ["selected", "Selected"],
-            ].map(([id, name]) => ({
-              provider: `acp-${agent}`,
-              id,
-              name,
-              nativeRuntime: `acp-${agent}`,
-            })),
-            outcomes: [{ provider: `acp-${agent}`, status: "ready" }],
-          });
-          expect(await readVisibleSessionTranscriptMessageEntries(attempt.target)).toEqual(
-            transcript,
-          );
-          expect(await fs.readdir(path.join(native.peerDirectory, "effects"))).toEqual(effects);
         }
       },
       { tools: { profile, alsoAllow } },

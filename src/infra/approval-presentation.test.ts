@@ -1,6 +1,7 @@
 // Canonical durable approval presentation safety tests.
 import { describe, expect, it } from "vitest";
 import { prepareExecApprovalPresentation as prepare } from "./approval-presentation.js";
+import type { ExecApprovalRequestPayload } from "./exec-approvals-core.js";
 import type { PluginApprovalRequestPayload } from "./plugin-approvals.js";
 
 const allowedDecisions = ["allow-once", "deny"] as const;
@@ -13,6 +14,7 @@ function exec(request: {
   host?: string | null;
   nodeId?: string | null;
   agentId?: string | null;
+  streamProposal?: ExecApprovalRequestPayload["streamProposal"];
 }) {
   return prepare("exec", request, allowedDecisions);
 }
@@ -59,6 +61,10 @@ describe("prepareExecApprovalPresentation", () => {
       kind: params.kind,
       scope: { ...scope, target: "Stripe\\u{202E}" },
     });
+    const emojiScope = { ...scope, target: "🦞".repeat(128) };
+    expect(
+      prepare(params.kind, { ...params.request, scope: emojiScope }, allowedDecisions),
+    ).toMatchObject({ scope: emojiScope });
 
     const oversizedScopePresentation = prepare(
       params.kind,
@@ -77,6 +83,11 @@ describe("prepareExecApprovalPresentation", () => {
       host: "gate\nway\u202E",
       nodeId: "node\u0000id",
       agentId: githubToken,
+      streamProposal: {
+        jobId: "watcher-id",
+        name: `Errors\u202E ${githubToken}`,
+        operation: "add",
+      },
     });
 
     expect(presentation).toMatchObject({
@@ -84,6 +95,11 @@ describe("prepareExecApprovalPresentation", () => {
       host: "gate\\u{A}way\\u{202E}",
       nodeId: "node\\u{0}id",
       agentId: githubToken,
+      streamProposal: {
+        jobId: "watcher-id",
+        name: expect.stringContaining("Errors\\u{202E}"),
+        operation: "add",
+      },
     });
     expect(
       exec({ command: "printf safe", host: "   ", nodeId: null, agentId: "\t" }),
@@ -182,32 +198,27 @@ describe("prepareExecApprovalPresentation", () => {
     });
   });
 
-  it("drops split emoji at the title and description boundaries without lone surrogates", () => {
-    const title = `${"a".repeat(79)}\u{1F600}`;
-    const description = `${"a".repeat(511)}\u{1F6E1}`;
-    const presentation = prepare(
-      "system-agent",
-      {
-        title,
-        description,
-        proposalHash: "a".repeat(64),
-      },
-      allowedDecisions,
-    );
-    expect(presentation).toMatchObject({
-      kind: "system-agent",
-      title: "a".repeat(79),
-      description: "a".repeat(511),
-    });
-  });
-
-  it("keeps an emoji that fits within the title limit intact", () => {
-    const title = `${"a".repeat(78)}\u{1F600}`;
-    const presentation = prepare(
-      "system-agent",
-      { title, description: "d", proposalHash: "a".repeat(64) },
-      allowedDecisions,
-    );
-    expect(presentation).toMatchObject({ kind: "system-agent", title });
-  });
+  it.each([
+    { prefix: 79, expectedSuffix: "" },
+    { prefix: 78, expectedSuffix: "\u{1F600}" },
+  ])(
+    "preserves only whole emoji at system-agent UTF-16 boundaries ($prefix)",
+    ({ prefix, expectedSuffix }) => {
+      expect(
+        prepare(
+          "system-agent",
+          {
+            title: `${"a".repeat(prefix)}\u{1F600}`,
+            description: `${"a".repeat(511)}\u{1F6E1}`,
+            proposalHash: "a".repeat(64),
+          },
+          allowedDecisions,
+        ),
+      ).toMatchObject({
+        kind: "system-agent",
+        title: "a".repeat(prefix) + expectedSuffix,
+        description: "a".repeat(511),
+      });
+    },
+  );
 });

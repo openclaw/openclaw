@@ -1,11 +1,9 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { collectManifestModelIdNormalizationPolicies } from "@openclaw/model-catalog-core/provider-model-id-normalization";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginManifestProviderEndpoint } from "./manifest.js";
 import { listOfficialExternalProviderEndpointManifests } from "./official-external-provider-endpoints.js";
@@ -25,10 +23,6 @@ const PROVIDER_ENDPOINT_CLASSES = new Set(
 
 export function isPluginProviderEndpointClass(endpointClass: string): boolean {
   return PROVIDER_ENDPOINT_CLASSES.has(endpointClass);
-}
-
-function normalizeProviderHosts(value: unknown): string[] {
-  return normalizeTrimmedStringList(value).map((entry) => entry.toLowerCase());
 }
 
 export function normalizePluginProviderBaseUrl(value: string): string | undefined {
@@ -67,32 +61,22 @@ export function matchesPluginProviderEndpoint(
   );
 }
 
-export function prepareProviderEndpoints(value: unknown): PluginManifestProviderEndpoint[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
+export function prepareProviderEndpoints(
+  value: readonly PluginManifestProviderEndpoint[] | undefined,
+): PluginManifestProviderEndpoint[] {
   const endpoints: PluginManifestProviderEndpoint[] = [];
-  for (const endpoint of value) {
-    if (!isRecord(endpoint)) {
-      continue;
-    }
-    const endpointClass = normalizeOptionalString(endpoint.endpointClass);
-    if (!endpointClass) {
-      continue;
-    }
-    const googleVertexRegion = normalizeOptionalString(endpoint.googleVertexRegion);
-    const googleVertexRegionHostSuffix = normalizeOptionalString(
-      endpoint.googleVertexRegionHostSuffix,
-    )?.toLowerCase();
+  for (const endpoint of value ?? []) {
     endpoints.push({
-      endpointClass,
-      hosts: normalizeProviderHosts(endpoint.hosts),
-      hostSuffixes: normalizeProviderHosts(endpoint.hostSuffixes),
-      baseUrls: normalizeProviderHosts(endpoint.baseUrls)
-        .map(normalizePluginProviderBaseUrl)
+      endpointClass: endpoint.endpointClass,
+      hosts: endpoint.hosts ?? [],
+      hostSuffixes: endpoint.hostSuffixes ?? [],
+      baseUrls: (endpoint.baseUrls ?? [])
+        .map((baseUrl) => normalizePluginProviderBaseUrl(baseUrl.toLowerCase()))
         .filter((baseUrl): baseUrl is string => baseUrl !== undefined),
-      ...(googleVertexRegion ? { googleVertexRegion } : {}),
-      ...(googleVertexRegionHostSuffix ? { googleVertexRegionHostSuffix } : {}),
+      ...(endpoint.googleVertexRegion ? { googleVertexRegion: endpoint.googleVertexRegion } : {}),
+      ...(endpoint.googleVertexRegionHostSuffix
+        ? { googleVertexRegionHostSuffix: endpoint.googleVertexRegionHostSuffix }
+        : {}),
     });
   }
   return endpoints;

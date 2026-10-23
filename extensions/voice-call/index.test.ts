@@ -53,7 +53,6 @@ function createRuntimeStub(callId = "call-1"): VoiceCallRuntime {
       toNumber: "+15550001234",
       realtime: { enabled: false },
     }),
-    provider: {} as VoiceCallRuntime["provider"],
     manager: {
       initiateCall: vi.fn(async () => ({ callId, success: true })),
       continueCall: vi.fn(async () => ({ success: true, transcript: "hello" })),
@@ -69,8 +68,6 @@ function createRuntimeStub(callId = "call-1"): VoiceCallRuntime {
     webhookServer: {
       speakRealtime: vi.fn(() => ({ success: false, error: "No active realtime bridge for call" })),
     } as unknown as VoiceCallRuntime["webhookServer"],
-    webhookUrl: "http://127.0.0.1:3334/voice/webhook",
-    publicUrl: null,
     stop: vi.fn(async () => {}),
   };
 }

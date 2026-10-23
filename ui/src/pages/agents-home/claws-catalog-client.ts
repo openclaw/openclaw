@@ -30,11 +30,14 @@ export async function searchClaws(
   client: GatewayBrowserClient,
   query: string,
   limit?: number,
+  options: { category?: string; featured?: boolean } = {},
 ): Promise<ClawCatalogEntry[]> {
   const trimmed = query.trim();
   const result = await client.request<{ entries: ClawCatalogEntry[] }>("claws.catalog.search", {
     ...(trimmed ? { query: trimmed } : {}),
     ...(limit ? { limit } : {}),
+    ...(options.category ? { category: options.category } : {}),
+    ...(options.featured ? { featured: true } : {}),
   });
   return result.entries.filter(isPublicEntry);
 }

@@ -51,31 +51,25 @@ export function isCompletionShell(value: string): value is CompletionShell {
   return COMPLETION_SHELLS.includes(value as CompletionShell);
 }
 
-function resolveShellBasename(
-  shellPath: string,
-  platform: NodeJS.Platform = process.platform,
-): string {
+function resolveShellBasename(shellPath: string): string {
   const platformBasename =
-    platform === "win32" ? path.win32.basename(shellPath) : path.basename(shellPath);
+    process.platform === "win32" ? path.win32.basename(shellPath) : path.basename(shellPath);
   const winBasename = path.win32.basename(shellPath);
   const basename = winBasename.length < platformBasename.length ? winBasename : platformBasename;
   return normalizeLowercaseStringOrEmpty(basename.replace(/\.(?:exe|cmd|bat)$/i, ""));
 }
 
 /** Resolves the active shell from environment paths, using the platform's native default. */
-export function resolveShellFromEnv(
-  env: NodeJS.ProcessEnv = process.env,
-  platform: NodeJS.Platform = process.platform,
-): CompletionShell {
-  const shellPath = normalizeOptionalString(env.SHELL) ?? "";
-  const shellName = shellPath ? resolveShellBasename(shellPath, platform) : "";
+export function resolveShellFromEnv(): CompletionShell {
+  const shellPath = normalizeOptionalString(process.env.SHELL) ?? "";
+  const shellName = shellPath ? resolveShellBasename(shellPath) : "";
   if (isCompletionShell(shellName)) {
     return shellName;
   }
   if (shellName === "pwsh") {
     return "powershell";
   }
-  return platform === "win32" ? "powershell" : "zsh";
+  return process.platform === "win32" ? "powershell" : "zsh";
 }
 
 /** Returns the per-shell cached completion script path for a sanitized CLI binary name. */
@@ -401,19 +395,11 @@ async function resolveCompletionProfileWritePath(profilePath: string): Promise<s
 }
 
 /** Resolves the shell startup profile path that should contain the OpenClaw completion block. */
-export function resolveCompletionProfilePath(
-  shell: CompletionShell,
-  options: {
-    env?: NodeJS.ProcessEnv;
-    homeDir?: () => string;
-    platform?: NodeJS.Platform;
-  } = {},
-): string {
-  const env = options.env ?? process.env;
-  const homeDir = options.homeDir ?? os.homedir;
-  const platform = options.platform ?? process.platform;
+export function resolveCompletionProfilePath(shell: CompletionShell): string {
+  const env = process.env;
+  const platform = process.platform;
   const pathApi = platform === "win32" ? path.win32 : path.posix;
-  const home = env.HOME || homeDir();
+  const home = env.HOME || os.homedir();
   if (shell === "zsh") {
     const profileDirectory = env.ZDOTDIR === undefined ? home : env.ZDOTDIR || pathApi.sep;
     return appendCompletionProfilePath(profileDirectory, pathApi, ".zshrc");
@@ -435,7 +421,7 @@ export function resolveCompletionProfilePath(
   }
   if (platform === "win32") {
     const shellPath = normalizeOptionalString(env.SHELL) ?? "";
-    const shellName = shellPath ? resolveShellBasename(shellPath, platform) : "";
+    const shellName = shellPath ? resolveShellBasename(shellPath) : "";
     const profileDirectory = shellName === "powershell" ? "WindowsPowerShell" : "PowerShell";
     return appendCompletionProfilePath(
       env.USERPROFILE || home,

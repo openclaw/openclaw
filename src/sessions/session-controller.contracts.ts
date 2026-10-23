@@ -1,17 +1,12 @@
 import type { SessionPermissionMode } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import type { MessagingToolSend } from "../agents/embedded-agent-messaging.types.js";
-import type { ReplyCompletion, ReplyExpectation } from "../agents/reply-completion.js";
+import type { ReplyCompletion, ReplyExpectation } from "../agents/reply-completion.types.js";
 import type { RequesterOrigin } from "../agents/requester-origin.js";
-import type {
-  SourceReplyDeliveryMode,
-  TaskSuggestionDeliveryMode,
-} from "../auto-reply/get-reply-options.types.js";
 import type { resolveAgentTurnExecutionStatus } from "../auto-reply/reply/agent-runner-execution-status.js";
 import type { FollowupQueueDisposition } from "../auto-reply/reply/queue-policy.js";
 import type { FollowupRunPayload } from "../auto-reply/reply/queue/followup-run-payload.types.js";
 import type { QueueSettings } from "../auto-reply/reply/queue/queue-settings.types.js";
-import type { ReplyDispatchDeliveryOutcome } from "../auto-reply/reply/reply-dispatch-outcome.types.js";
 import type { ReplyFollowupAdmissionBarrierTimeoutPolicy } from "../auto-reply/reply/reply-dispatcher.types.js";
 import type { ReplyOperationStaleReason } from "../auto-reply/reply/reply-run-finalization-lease.js";
 import type { SessionEntryTargetPatchScope } from "../config/sessions/session-accessor.types.js";
@@ -23,7 +18,6 @@ import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { AgentRunDelegatedAuthority } from "../infra/agent-run-authority.types.js";
 import type { DiagnosticEmbeddedRunOwner } from "../infra/diagnostic-model-request-provenance.js";
 import type { Deferred, createDeferredCore } from "../shared/deferred.js";
-import type { ReplyPayload } from "../shared/reply-payload.types.js";
 import type { OpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type {
@@ -34,6 +28,8 @@ import type {
 import type { AgentWorkAdmissionIdentity } from "./session-agent-work-admission.js";
 import type {
   ReplyBackendQueueMessageOptions,
+  ReplyMessageInjectionResolution,
+  ReplyMessageInjectionRejectionReason,
   ReplyToolAuthorityRoute,
   ReplyToolAuthorityOverlay,
   ReplyToolAuthorityRequester,
@@ -55,6 +51,9 @@ import type {
 
 export type {
   ReplyBackendCancelReason,
+  ReplyMessageInjectionResolution,
+  ReplyMessageInjectionRejectionReason,
+  ReplyBackendQueueMessageMismatch,
   ReplyBackendQueueMessageOptions,
   ReplyMessageInjectionOptions,
   ReplyToolAuthorityRoute,
@@ -73,21 +72,7 @@ export type {
 export type ReplyOperationPhase = ReplyOperationActivePhase | "completed" | "failed" | "aborted";
 type ReplyOperationResult = Exclude<ControllerReplyOperationResult, { kind: "yielded" }>;
 
-export type ReplyTurnKind = "visible" | "heartbeat" | "queued_followup";
-
-export type ReplyMessageInjectionResolution =
-  | {
-      reason: ReplyMessageInjectionRejectionReason;
-      errorMessage?: string;
-      backend?: ReplyBackendHandle;
-      cancelPendingUserInput?: ReplyBackendHandle["cancelPendingUserInput"];
-    }
-  | {
-      backend: ReplyBackendHandle;
-      injection: ReplyBackendMessageInjection;
-      /** Internal FIFO preflight for a released synchronous sink. */
-      prepareQueueMessage?: () => Promise<void>;
-    };
+export type ReplyTurnKind = "visible" | "queued_followup";
 
 /** An adapter over one existing execution owner; it never acquires another run slot. */
 type ReplyMessageInjectionOwner = {
@@ -98,9 +83,9 @@ type ReplyMessageInjectionOwner = {
   readonly admissionIdentity: object;
   acceptParticipant?(participant: ReplyTurnParticipantInput): void;
   projectToolAuthorityFingerprint(overlay: ReplyToolAuthorityOverlay): string | undefined;
-  projectToolAuthorityFingerprintAsync(
+  projectToolAuthorityFingerprintAsync: (
     overlay: ReplyToolAuthorityOverlay,
-  ): Promise<string | undefined>;
+  ) => Promise<string | undefined>;
   projectRequesterToolAuthorityFingerprint(
     requester: ReplyToolAuthorityRequester,
   ): string | undefined;
@@ -137,18 +122,6 @@ export type ReplyRunInterruptTarget = {
   readonly [replyRunInterruptTargetOperation]: ReplyOperation;
 };
 
-export type ReplyMessageInjectionRejectionReason =
-  | "no_active_run"
-  | "not_running"
-  | "stale_run"
-  | "injection_unavailable"
-  | "guarded_injection_unsupported"
-  | "requester_origin_mismatch"
-  | "audio_input_unsupported"
-  | "collaborative_steering_disabled"
-  | ReplyBackendQueueMessageMismatch
-  | "runtime_rejected";
-
 export type ReplyMessageInjectionOutcome =
   | { status: "indeterminate"; errorMessage: string }
   | { status: "accepted" }
@@ -164,15 +137,6 @@ export type ReplyMessageInjectionAttempt = {
   /** Settles after the backend confirms or rejects this exact injection. */
   outcome: Promise<ReplyMessageInjectionOutcome>;
 };
-
-export type ReplyBackendQueueMessageMismatch =
-  | "transcript_commit_wait_unsupported"
-  | "input_visibility_mismatch"
-  | "tool_authority_mismatch"
-  | "image_input_unsupported"
-  | "source_reply_delivery_mode_mismatch"
-  | "reply_expectation_mismatch"
-  | "task_suggestion_delivery_mode_mismatch";
 
 export type ReplyOperation = {
   readonly watchdog: SessionControllerWatchdog;
@@ -478,7 +442,12 @@ export type Effect = {
   handoffs: Set<string>;
   validated: Deferred;
 };
-export type SessionMutationKind = "reset" | "delete" | "compaction";
+export type SessionMutationKind =
+  | "reset"
+  | "delete"
+  | "compaction"
+  | "read-marker"
+  | "background-result";
 
 export type Mutation = {
   diagnostic?: LifecycleDiagnosticOperation;
@@ -709,15 +678,6 @@ export type ReplyOperationRunState = {
   replyCompletion?: ReplyCompletion;
   /** The source delivery owner can keep spawned completion turns private. */
   sessionEventDelivery?: false;
-  heartbeat?: {
-    prepareReply: (
-      replyResult: ReplyPayload | ReplyPayload[] | undefined,
-      runState: ReplyOperationRunState,
-    ) => Promise<{
-      reply?: ReplyPayload;
-      settle?: (outcome: ReplyDispatchDeliveryOutcome) => Promise<void>;
-    }>;
-  };
   admission?: ReplyOperationAdmissionSnapshot;
   /** Latest queue-owned disposition; original acceptance still records custody. */
   followupQueueDisposition?: FollowupQueueDisposition;
@@ -758,14 +718,9 @@ export type EmbeddedAgentQueueHandle = {
     revokeApprovals: () => void,
   ) => Promise<boolean>;
   /** Atomically consumes one plain-text answer for this run's pending user-input request. */
-  claimPendingUserInputAnswer?: (
-    text: string,
-    options?: EmbeddedAgentQueueMessageOptions,
-  ) => Promise<boolean>;
+  claimPendingUserInputAnswer?: ReplyBackendHandle["claimPendingUserInputAnswer"];
   /** Cancels this run's pending user-input request before an image is queued as a later turn. */
   cancelPendingUserInput?: (resolvedBy: string) => Promise<boolean>;
-  /** Exact heartbeat owner retained after its reply-operation registration clears. */
-  readonly preemptByVisibleTurn?: () => boolean;
   queueMessage: (
     text: string,
     options?: EmbeddedAgentQueueMessageOptions,
@@ -789,9 +744,9 @@ export type EmbeddedAgentQueueHandle = {
   readonly supportsCrossProfileSteering?: boolean;
   cancel?: (reason?: "user_abort" | "restart" | "superseded") => void;
   abort: (reason?: "restart") => void;
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  sourceReplyDeliveryMode?: ReplyBackendHandle["sourceReplyDeliveryMode"];
   terminalReplyExpectation?: ReplyExpectation;
-  taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
+  taskSuggestionDeliveryMode?: ReplyBackendHandle["taskSuggestionDeliveryMode"];
 };
 
 export type EmbeddedAgentQueueMessageOptions = ReplyBackendQueueMessageOptions;

@@ -1,112 +1,69 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveInstallPolicyWarningAcknowledgementCliOptions } from "./install-policy-warning-acknowledgement.ts";
+import { afterEach, expect, it, vi } from "vitest";
+import { resolveInstallPolicyWarningAcknowledgementCliOptions as resolveOptions } from "./install-policy-warning-acknowledgement.ts";
 
-const promptTextMock = vi.hoisted(() => vi.fn());
-
-vi.mock("./prompt.js", () => ({
-  promptText: promptTextMock,
-}));
-
-const ORIGINAL_STDIN_TTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
-const ORIGINAL_STDOUT_TTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
-
-function setTty(value: boolean): void {
-  Object.defineProperty(process.stdin, "isTTY", { value, configurable: true });
-  Object.defineProperty(process.stdout, "isTTY", { value, configurable: true });
-}
-
-function restoreTty(): void {
-  if (ORIGINAL_STDIN_TTY) {
-    Object.defineProperty(process.stdin, "isTTY", ORIGINAL_STDIN_TTY);
-  } else {
-    Reflect.deleteProperty(process.stdin, "isTTY");
-  }
-  if (ORIGINAL_STDOUT_TTY) {
-    Object.defineProperty(process.stdout, "isTTY", ORIGINAL_STDOUT_TTY);
-  } else {
-    Reflect.deleteProperty(process.stdout, "isTTY");
+const promptText = vi.hoisted(() => vi.fn());
+// mock-isolation: Supply explicit acknowledgement answers without an interactive terminal prompt.
+vi.mock("./prompt.js", () => ({ promptText }));
+const streams = [process.stdin, process.stdout];
+const originalTtys = streams.map((stream) => Object.getOwnPropertyDescriptor(stream, "isTTY"));
+function setTty(value: boolean) {
+  for (const stream of streams) {
+    Object.defineProperty(stream, "isTTY", { value, configurable: true });
   }
 }
-
-describe("resolveInstallPolicyWarningAcknowledgementCliOptions", () => {
-  afterEach(() => {
-    promptTextMock.mockReset();
-    restoreTty();
+const warning = (targetName = "demo") => ({
+  targetName,
+  targetType: "plugin" as const,
+  requestMode: "install" as const,
+  reason: "Policy warning",
+});
+afterEach(() => {
+  promptText.mockReset();
+  streams.forEach((stream, index) => {
+    const descriptor = originalTtys[index];
+    if (descriptor) {
+      Object.defineProperty(stream, "isTTY", descriptor);
+    } else {
+      Reflect.deleteProperty(stream, "isTTY");
+    }
   });
+});
 
-  it.each([
-    { requestMode: "install", action: "install" },
-    { requestMode: "update", action: "update" },
-  ] as const)("uses the ClawHub suspicious-warning copy for $requestMode", async (fixture) => {
+it.each([
+  ["install", "plugin", "demo\npkg", "demo\\npkg", "approved"],
+  ["update", "plugin", "demo\npkg", "demo\\npkg", "approved"],
+  ["install", "skill", "demo", "another-package", "declined"],
+] as const)(
+  "requires exact sanitized target for %s (%s)",
+  async (requestMode, targetType, target, answer, status) => {
     setTty(true);
-    promptTextMock.mockResolvedValueOnce("demo\\npkg");
-
-    const options = resolveInstallPolicyWarningAcknowledgementCliOptions({});
-    await expect(
-      options.onInstallPolicyWarning?.({
-        targetName: "demo\npkg",
-        targetType: "plugin",
-        requestMode: fixture.requestMode,
-        reason: "Policy warning",
-      }),
-    ).resolves.toEqual({ status: "approved" });
-
-    expect(promptTextMock).toHaveBeenCalledWith(
-      `type: 'demo\\npkg' to ${fixture.action} anyway\n> `,
+    promptText.mockResolvedValueOnce(answer);
+    const request = { ...warning(target), requestMode, targetType };
+    await expect(resolveOptions({}).onInstallPolicyWarning?.(request)).resolves.toEqual({ status });
+    expect(promptText).toHaveBeenCalledWith(
+      `type: '${target.replaceAll("\n", "\\n")}' to ${requestMode} anyway\n> `,
     );
+  },
+);
+
+it.each([
+  { tty: false, options: {} },
+  { tty: true, options: { allowPrompt: false } },
+])("requires prompt authority, tty=$tty options=$options", ({ tty, options }) => {
+  setTty(tty);
+  expect(resolveOptions(options)).toEqual({});
+  expect(promptText).not.toHaveBeenCalled();
+});
+
+it("uses the dedicated acknowledgement flag for every warning without prompting", async () => {
+  setTty(false);
+  const options = resolveOptions({ acknowledgeInstallPolicyWarning: true });
+  await expect(options.onInstallPolicyWarning?.(warning())).resolves.toEqual({
+    status: "approved",
   });
-
-  it("requires the exact target name", async () => {
-    setTty(true);
-    promptTextMock.mockResolvedValueOnce("another-package");
-
-    const options = resolveInstallPolicyWarningAcknowledgementCliOptions({});
-
-    await expect(
-      options.onInstallPolicyWarning?.({
-        targetName: "demo",
-        targetType: "skill",
-        requestMode: "install",
-        reason: "Policy warning",
-      }),
-    ).resolves.toEqual({ status: "declined" });
+  const dependency = { ...warning("demo-dependency"), reason: "Dependency policy warning" };
+  await expect(options.onInstallPolicyWarning?.(dependency)).resolves.toEqual({
+    status: "approved",
   });
-
-  it("does not prompt outside a TTY", () => {
-    setTty(false);
-    expect(resolveInstallPolicyWarningAcknowledgementCliOptions({})).toEqual({});
-  });
-
-  it("does not infer prompt authority from an attached TTY", () => {
-    setTty(true);
-    expect(resolveInstallPolicyWarningAcknowledgementCliOptions({ allowPrompt: false })).toEqual(
-      {},
-    );
-    expect(promptTextMock).not.toHaveBeenCalled();
-  });
-
-  it("uses the dedicated acknowledgement flag for every warning without prompting", async () => {
-    setTty(false);
-    const options = resolveInstallPolicyWarningAcknowledgementCliOptions({
-      acknowledgeInstallPolicyWarning: true,
-    });
-
-    await expect(
-      options.onInstallPolicyWarning?.({
-        targetName: "demo",
-        targetType: "plugin",
-        requestMode: "install",
-        reason: "Policy warning",
-      }),
-    ).resolves.toEqual({ status: "approved" });
-    await expect(
-      options.onInstallPolicyWarning?.({
-        targetName: "demo-dependency",
-        targetType: "plugin",
-        requestMode: "install",
-        reason: "Dependency policy warning",
-      }),
-    ).resolves.toEqual({ status: "approved" });
-    expect(promptTextMock).not.toHaveBeenCalled();
-  });
+  expect(promptText).not.toHaveBeenCalled();
 });

@@ -7,8 +7,11 @@ import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory
 import { hashText } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it, vi } from "vitest";
 import type { EmbeddingProvider } from "./embeddings.js";
-import { createManagerIndexFixture } from "./manager-index.test-support.js";
-import type { MemoryIndexWorkItem } from "./manager-sync-ops.js";
+import {
+  createManagerIndexFixture,
+  holdMemoryTestOperation as hold,
+} from "./manager-index.test-support.js";
+import type { MemoryIndexWorkItem } from "./manager-sync-base.js";
 
 type LifecycleFields = {
   provider: EmbeddingProvider | null;
@@ -283,22 +286,16 @@ describe("memory index", () => {
     await fs.writeFile(path.join(fixture.paths.memory, "generation-race-first.md"), firstContent);
     await fs.writeFile(path.join(fixture.paths.memory, "generation-race-second.md"), secondContent);
 
-    const firstEmbeddingGate = createDeferred<void>();
-    const secondEmbeddingGate = createDeferred<void>();
-    const firstEmbeddingStarted = createDeferred<void>();
-    const secondEmbeddingStarted = createDeferred<void>();
+    const firstEmbedding = hold(() => {});
+    const secondEmbedding = hold(() => {});
     indexedProvider.embedBatch = async (texts) => {
-      if (texts.some((text) => (typeof text === "string" ? text : text.text).includes("First"))) {
-        firstEmbeddingStarted.resolve();
-        await firstEmbeddingGate.promise;
-      } else {
-        secondEmbeddingStarted.resolve();
-        await secondEmbeddingGate.promise;
-      }
+      const first = texts.some((text) =>
+        (typeof text === "string" ? text : text.text).includes("First"),
+      );
+      await (first ? firstEmbedding : secondEmbedding).run();
       return texts.map(() => [1, 0, 0, 0]);
     };
-    const publicationGate = createDeferred<void>();
-    const publicationStarted = createDeferred<void>();
+    const publication = hold(() => {});
     const ensureVectorReady = fields.ensureVectorReady.bind(manager);
     let publicationCalls = 0;
     fields.ensureVectorReady = async (dimensions) => {
@@ -306,8 +303,7 @@ describe("memory index", () => {
       if (publicationCalls === 1) {
         return await ensureVectorReady(dimensions);
       }
-      publicationStarted.resolve();
-      await publicationGate.promise;
+      await publication.run();
       return await ensureVectorReady(dimensions);
     };
 
@@ -328,31 +324,28 @@ describe("memory index", () => {
     const secondIndexPromise = index("generation-race-second.md", secondContent);
     let fallbackPromise: Promise<boolean> | null = null;
     try {
-      const embeddingsStarted = Promise.all([
-        firstEmbeddingStarted.promise,
-        secondEmbeddingStarted.promise,
-      ]);
+      const embeddingsStarted = Promise.all([firstEmbedding.entered, secondEmbedding.entered]);
       await fields.withTimeout(embeddingsStarted, 5_000, "concurrent embeddings did not start");
       fields.markLocalEmbeddingProviderDegraded(providerFixture.createLocalWorkerExitError());
       await vi.waitFor(() => expect(fields.provider).toBeNull());
       fallbackPromise = fields.activateFallbackProvider("local worker exited");
-      firstEmbeddingGate.resolve();
+      firstEmbedding.release();
       await firstIndexPromise;
       expect(providerFixture.providerCloseCalls).toBe(0);
       expect(providerFixture.providerCalls).toHaveLength(callsBeforeFallback);
 
-      secondEmbeddingGate.resolve();
-      await fields.withTimeout(publicationStarted.promise, 5_000, "publication did not start");
+      secondEmbedding.release();
+      await fields.withTimeout(publication.entered, 5_000, "publication did not start");
       expect(providerFixture.providerCloseCalls).toBe(0);
       expect(providerFixture.providerCalls).toHaveLength(callsBeforeFallback);
 
-      publicationGate.resolve();
+      publication.release();
       await secondIndexPromise;
       await expect(fallbackPromise).resolves.toBe(true);
     } finally {
-      firstEmbeddingGate.resolve();
-      secondEmbeddingGate.resolve();
-      publicationGate.resolve();
+      firstEmbedding.release();
+      secondEmbedding.release();
+      publication.release();
       await Promise.allSettled([
         firstIndexPromise,
         secondIndexPromise,

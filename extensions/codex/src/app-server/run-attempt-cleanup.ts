@@ -8,10 +8,7 @@ import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import type { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import { clearCodexBindingForClient } from "./session-binding.js";
-import {
-  isSameCodexAppServerThreadOwner,
-  withExclusiveCodexAppServerThread,
-} from "./thread-ownership.js";
+import { withExclusiveCodexAppServerThread } from "./thread-ownership.js";
 
 export async function cleanupCodexAttempt(
   resources: CodexAttemptResources,
@@ -54,6 +51,11 @@ export async function cleanupCodexAttempt(
   freezeRunTerminalOutcome();
   // Finalization already owns the bounded checkpoint join. Exceptional exits
   // still fence immediately, without restarting a timed-out settlement's wait.
+  if (!state.projectionClosed) {
+    activeTurn.activeProjector.prepareTerminalToolResultCheckpoint(
+      prompt.context.attemptTools.toolBridge.telemetry,
+    );
+  }
   const projectionClose = state.projectionClosed
     ? undefined
     : activeTurn.activeProjector.closeProjection();
@@ -143,14 +145,6 @@ export async function cleanupCodexAttempt(
           bindingStore.withLease(
             bindingIdentity,
             async () => {
-              if (
-                !isSameCodexAppServerThreadOwner(
-                  await bindingStore.readAsync(bindingIdentity),
-                  resourceState.thread,
-                )
-              ) {
-                throw new Error("Codex plugin refresh lost its managed thread binding.");
-              }
               if (!(await releaseThreadSubscription(connection.assertCurrent))) {
                 throw new Error("Plugin reload could not release the previous Codex thread.");
               }

@@ -1,16 +1,26 @@
 import type { SkillsWorkshopUndoResult } from "@openclaw/gateway-protocol";
-import { createSignal, For, onCleanup, Show } from "solid-js";
+import {
+  action,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  Errored,
+  For,
+  onSettled,
+  Show,
+} from "solid-js";
 import type { SkillWorkshopChangeNotice } from "../../../../../src/shared/skill-workshop-change-notice.js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../../lib/gateway-methods.ts";
 import { projectGateway } from "../../../lib/reactive/application.ts";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
-import { normalizeAgentId } from "../../../lib/sessions/session-key.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import "../../../styles/chat/skill-learned-notice.css";
+import { normalizeAgentId } from "../../../lib/sessions/session-key.ts";
 
-type UndoState = "idle" | "pending" | "done" | { error: string };
+registerEnglishCatalog(registerChatSessionEnglish);
 
 /** One review's changes, with Workshop links and one whole-review Undo operation. */
 export function ChatSkillLearnedNotice(props: { notice?: SkillWorkshopChangeNotice }) {
@@ -20,60 +30,65 @@ export function ChatSkillLearnedNotice(props: { notice?: SkillWorkshopChangeNoti
     <openclaw-chat-skill-learned-notice>
       <Show when={props.notice} keyed>
         {(notice) => {
-          const [undo, setUndo] = createSignal<UndoState>("idle");
-          let pending = false;
+          const [undone, setUndone] = createSignal(false);
+          const [attempt, setAttempt] = createSignal<{ result: Promise<void> }>();
+          // A pending outcome must not hold the co-written Undoing affordance.
+          const outcome = createMemo(() => attempt()?.result.then(() => null), {
+            loadingValue: undefined,
+          });
+          const [pending, setPending] = createOptimistic(false);
+          let inFlight = false;
           let disposed = false;
-          onCleanup(() => {
+          onSettled(() => () => {
             disposed = true;
           });
-          const runUndo = () => {
+          const runUndo = action(function* () {
             const snapshot = context?.gateway.snapshot;
             const client = snapshot?.phase === "connected" ? snapshot.client : null;
             if (
               !context ||
               !client ||
-              pending ||
-              undo() === "done" ||
+              inFlight ||
+              undone() ||
               !canCallGatewayMethod(snapshot, "skills.workshop.undo", "operator.admin")
             ) {
               return;
             }
-            pending = true;
-            setUndo("pending");
-            void (async () => {
-              try {
-                // "already-undone" also means the review's changes were successfully reverted.
-                await client.request<SkillsWorkshopUndoResult>("skills.workshop.undo", {
-                  agentId: notice.agentId,
-                  runId: notice.runId,
-                });
-                if (!disposed) {
-                  setUndo(context.gateway.snapshot.client === client ? "done" : "idle");
-                }
-              } catch (error) {
-                if (!disposed) {
-                  setUndo(
-                    context.gateway.snapshot.client === client
-                      ? { error: formatUiError(error) }
-                      : "idle",
-                  );
-                }
-              } finally {
-                pending = false;
+            inFlight = true;
+            setPending(true);
+            try {
+              // "already-undone" also means the review's changes were successfully reverted.
+              yield client.request<SkillsWorkshopUndoResult>("skills.workshop.undo", {
+                agentId: notice.agentId,
+                runId: notice.runId,
+              });
+              if (!disposed) {
+                setUndone(context.gateway.snapshot.client === client);
               }
-            })();
+            } catch (error) {
+              if (!disposed && context.gateway.snapshot.client === client) {
+                throw error;
+              }
+            } finally {
+              inFlight = false;
+            }
+          });
+          const undo = () => {
+            if (inFlight) {
+              return;
+            }
+            const result = runUndo();
+            // The keyed notice may retire before its error slot observes this attempt.
+            void result.catch(() => {});
+            setAttempt({ result });
           };
           const openSkill = (agentId: string, name: string) => {
             context?.agentSelection.set(normalizeAgentId(agentId));
             context?.navigate("skill-workshop", { search: `?skill=${encodeURIComponent(name)}` });
           };
-          const error = () => {
-            const state = undo();
-            return typeof state === "object" ? state.error : undefined;
-          };
           return (
             <div
-              class={["chat-skill-notice", { "chat-skill-notice--undone": undo() === "done" }]}
+              class={["chat-skill-notice", { "chat-skill-notice--undone": undone() }]}
               role="group"
               aria-label={t("chat.skillLearned.label")}
             >
@@ -106,7 +121,7 @@ export function ChatSkillLearnedNotice(props: { notice?: SkillWorkshopChangeNoti
                   }}
                 </For>
                 <Show
-                  when={undo() === "done"}
+                  when={undone()}
                   fallback={
                     <Show
                       when={canCallGatewayMethod(
@@ -118,16 +133,14 @@ export function ChatSkillLearnedNotice(props: { notice?: SkillWorkshopChangeNoti
                       <button
                         type="button"
                         class="chat-skill-notice__undo"
-                        disabled={undo() === "pending"}
-                        aria-busy={undo() === "pending" ? "true" : "false"}
-                        onClick={runUndo}
+                        disabled={pending()}
+                        aria-busy={pending() ? "true" : "false"}
+                        onClick={undo}
                       >
-                        <Show when={undo() === "pending"} fallback={<Icon name="rotateCcw" />}>
+                        <Show when={pending()} fallback={<Icon name="rotateCcw" />}>
                           <span class="btn__spinner" aria-hidden="true" />
                         </Show>
-                        {undo() === "pending"
-                          ? t("chat.skillLearned.undoing")
-                          : t("chat.skillLearned.undo")}
+                        {pending() ? t("chat.skillLearned.undoing") : t("chat.skillLearned.undo")}
                       </button>
                     </Show>
                   }
@@ -138,12 +151,16 @@ export function ChatSkillLearnedNotice(props: { notice?: SkillWorkshopChangeNoti
                   </span>
                 </Show>
               </div>
-              <Show when={error()}>
-                {(message) => (
-                  <p class="chat-skill-notice__error" role="alert">
-                    {t("chat.skillLearned.undoError", { error: message() })}
-                  </p>
-                )}
+              <Show when={!pending()}>
+                <Errored
+                  fallback={(error) => (
+                    <p class="chat-skill-notice__error" role="alert">
+                      {t("chat.skillLearned.undoError", { error: formatUiError(error()) })}
+                    </p>
+                  )}
+                >
+                  {outcome()}
+                </Errored>
               </Show>
             </div>
           );

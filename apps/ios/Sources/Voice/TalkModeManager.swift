@@ -3658,7 +3658,29 @@ extension TalkModeManager {
         case "Confirmation needed":
             (String(localized: "Confirmation needed"), .idle, .localized("Confirmation needed"))
         default:
-            (status, .idle, .verbatim(status))
+            self.realtimeInputNoticePresentation(for: status) ?? (status, .idle, .verbatim(status))
+        }
+    }
+
+    /// Input-loss notices arrive mid-call; the relay keeps listening while the user repeats.
+    private static func realtimeInputNoticePresentation(for status: String) -> (
+        text: String,
+        phase: TalkPhase,
+        watch: TalkWatchPresentation)?
+    {
+        switch status {
+        case "Realtime audio input fell behind; repeat the last part":
+            (
+                String(localized: "Realtime audio input fell behind; repeat the last part"),
+                .listening,
+                .localized("Realtime audio input fell behind; repeat the last part"))
+        case "Microphone input recovered; repeat the last part":
+            (
+                String(localized: "Microphone input recovered; repeat the last part"),
+                .listening,
+                .localized("Microphone input recovered; repeat the last part"))
+        default:
+            nil
         }
     }
 

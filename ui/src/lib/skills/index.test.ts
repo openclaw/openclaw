@@ -15,6 +15,7 @@ import {
   loadSkills,
   loadSkillCard,
   loadClawHubDetail,
+  loadClawHubSecurityVerdicts,
   refreshSkills,
   reconcileSkillsAgentId,
   saveSkillApiKey,
@@ -51,25 +52,23 @@ function createState(): { state: SkillsState; request: ReturnType<typeof vi.fn<T
     skillsAgentRevision: 0,
     skillsLoading: false,
     skillsReport: null,
+    skillsRead: null,
     skillsError: null,
     skillOperation: null,
     skillEdits: {},
     skillMessages: {},
     clawhubSearchResults: [],
-    clawhubSearchLoading: false,
-    clawhubSearchError: "old error",
     clawhubIconUrls: {},
     clawhubDetail: null,
     clawhubDetailRef: null,
-    clawhubDetailLoading: false,
     clawhubDetailError: null,
     clawhubInstallMessage: null,
     clawhubVerdicts: {},
-    clawhubVerdictsLoading: false,
+    clawhubVerdictsRead: null,
     clawhubVerdictsError: null,
     skillCardContents: {},
     skillCardContentKeys: {},
-    skillCardLoadingKey: null,
+    skillCardReads: {},
     skillCardErrors: {},
   };
   return { state, request };
@@ -180,6 +179,47 @@ function createSkillCardReport(installedVersion?: string, installedAt = 123): Sk
 }
 
 describe("loadSkills", () => {
+  it.each(["inventory", "verdicts", "card"] as const)(
+    "releases the retired %s read before its transport settles",
+    async (kind) => {
+      const { state, request } = createState();
+      const pending = createDeferred<unknown>();
+      request.mockReturnValue(pending.promise);
+      state.skillsReport = createSkillCardReport("1.2.3");
+      const task =
+        kind === "inventory"
+          ? loadSkills(state)
+          : kind === "verdicts"
+            ? loadClawHubSecurityVerdicts(state, state.skillsReport)
+            : loadSkillCard(state, "agentreceipt");
+      const completion =
+        kind === "inventory"
+          ? state.skillsRead?.completion
+          : kind === "verdicts"
+            ? state.clawhubVerdictsRead?.completion
+            : state.skillCardReads.agentreceipt?.completion;
+      let settled = false;
+      void expectDefined(completion, "admitted skill read").then(() => {
+        settled = true;
+      });
+      setSkillsAgentId(state, "research");
+      await Promise.resolve();
+      expect(settled).toBe(true);
+      expect(state.skillsReport).toBeNull();
+      pending.resolve(
+        kind === "inventory"
+          ? createSkillCardReport("1.2.3")
+          : kind === "verdicts"
+            ? { items: [verdict()] }
+            : { skillKey: "agentreceipt", content: "Retired card" },
+      );
+      await task;
+      expect(state.skillsReport).toBeNull();
+      expect(state.clawhubVerdicts).toEqual({});
+      expect(state.skillCardContents).toEqual({});
+    },
+  );
+
   it("does not issue an ownerless status request", async () => {
     const { state, request } = createState();
     state.skillsAgentId = null;
@@ -222,7 +262,6 @@ describe("loadSkills", () => {
       }),
     });
     expect(state.skillsReport?.workspaceDir).toBe("/tmp/research");
-    expect(state.clawhubVerdictsLoading).toBe(false);
     expect(state.clawhubVerdictsError).toBeNull();
   });
 
@@ -352,12 +391,10 @@ describe("loadSkills", () => {
     });
     await loadSkills(state);
     expect(state.skillsLoading).toBe(false);
-    expect(state.clawhubVerdictsLoading).toBe(true);
 
     verdicts.resolve({ schema: "openclaw.skills.security-verdicts.v1", items: [] });
     await Promise.resolve();
     await Promise.resolve();
-    expect(state.clawhubVerdictsLoading).toBe(false);
   });
 
   it("drops cached Skill Card content when refreshed card metadata changes", async () => {
@@ -374,6 +411,62 @@ describe("loadSkills", () => {
 });
 
 describe("loadSkillCard", () => {
+  it("joins an admitted card read after selecting another card and reuses empty cached content", async () => {
+    const { state, request } = createState();
+    const first = createDeferred<unknown>();
+    const second = createDeferred<unknown>();
+    request
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise)
+      .mockReturnValue(first.promise);
+    const report = createSkillCardReport();
+    const original = report.skills[0]!;
+    state.skillsReport = {
+      ...report,
+      skills: [
+        original,
+        {
+          ...original,
+          skillKey: "second-card",
+          skillCard: { ...original.skillCard!, path: "/tmp/second-card.md" },
+        },
+      ],
+    };
+    const originalRead = loadSkillCard(state, "agentreceipt");
+    const otherRead = loadSkillCard(state, "second-card");
+    const revisited = loadSkillCard(state, "agentreceipt");
+    let revisitedSettled = false;
+    void revisited.then(() => {
+      revisitedSettled = true;
+    });
+    await Promise.resolve();
+    expect(revisitedSettled).toBe(false);
+    first.resolve({ skillKey: "agentreceipt", content: "# First card" });
+    second.resolve({ skillKey: "second-card", content: "" });
+    await Promise.all([originalRead, otherRead, revisited]);
+    await loadSkillCard(state, "second-card");
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(state.skillCardContents).toEqual({ agentreceipt: "# First card", "second-card": "" });
+  });
+
+  it("admits changed card metadata while the old version is pending", async () => {
+    const { state, request } = createState();
+    const old = createDeferred<unknown>();
+    const fresh = createDeferred<unknown>();
+    request.mockReturnValueOnce(old.promise).mockReturnValueOnce(fresh.promise);
+    state.skillsReport = createSkillCardReport("1.2.3");
+    const oldRead = loadSkillCard(state, "agentreceipt");
+    state.skillsReport = createSkillCardReport("1.2.4", 456);
+    const freshRead = loadSkillCard(state, "agentreceipt");
+    old.resolve({ skillKey: "agentreceipt", content: "Old version" });
+    await oldRead;
+    expect(state.skillCardContents.agentreceipt).toBeUndefined();
+    fresh.resolve({ skillKey: "agentreceipt", content: "Fresh version" });
+    await freshRead;
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(state.skillCardContents.agentreceipt).toBe("Fresh version");
+  });
+
   it("loads local Skill Card content on demand", async () => {
     const { state, request } = createState();
     state.skillsAgentId = "research";
@@ -391,7 +484,6 @@ describe("loadSkillCard", () => {
     expect(state.skillCardContentKeys.agentreceipt).toBe(
       "/tmp/workspace/skills/agentreceipt/skill-card.md\u000034\u0000",
     );
-    expect(state.skillCardLoadingKey).toBeNull();
     expect(state.skillCardErrors).toEqual({});
   });
 
@@ -439,7 +531,6 @@ describe("loadClawHubDetail", () => {
       skill: { slug: "gitlab", displayName: "GitLab", createdAt: 3, updatedAt: 4 },
     });
     await secondPending;
-    expect(state.clawhubDetailLoading).toBe(false);
     expect(state.clawhubDetail?.skill?.slug).toBe("gitlab");
   });
 
@@ -449,14 +540,12 @@ describe("loadClawHubDetail", () => {
     const pending = loadClawHubDetail(state, "github");
     state.connected = false;
     state.skillsAgentRevision++;
-    state.clawhubDetailLoading = false;
     state.connected = true;
     queue.resolveNext({
       skill: { slug: "stale", displayName: "Stale", createdAt: 1, updatedAt: 2 },
     });
     await pending;
     expect(state.clawhubDetail).toBeNull();
-    expect(state.clawhubDetailLoading).toBe(false);
   });
 });
 
@@ -859,7 +948,7 @@ describe("skill mutations", () => {
 });
 
 describe("reconcileSkillsAgentId", () => {
-  it("selects the roster default after the selected agent is deleted", () => {
+  it("retires presentation before selecting the roster default after the selected agent is deleted", () => {
     const { state } = createState();
     state.skillsAgentId = "deleted";
     state.skillsReport = {
@@ -868,13 +957,25 @@ describe("reconcileSkillsAgentId", () => {
       skills: [],
     };
     state.skillOperation = { kind: "clawhub", ref: "calendar" };
-
-    reconcileSkillsAgentId(state, {
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [{ id: "main" }],
+    const beforeRetarget = vi.fn(() => {
+      expect(state.skillsAgentId).toBe("deleted");
+      expect(state.skillsAgentRevision).toBe(0);
+      expect(state.skillsReport?.workspaceDir).toBe("/tmp/deleted");
     });
+    setSkillsAgentId(state, " deleted ", beforeRetarget);
+    expect(beforeRetarget).not.toHaveBeenCalled();
+
+    reconcileSkillsAgentId(
+      state,
+      {
+        defaultId: "main",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [{ id: "main" }],
+      },
+      beforeRetarget,
+    );
+    expect(beforeRetarget).toHaveBeenCalledTimes(1);
     expect(state.skillsAgentId).toBe("main");
     expect(state.skillsAgentRevision).toBe(1);
     expect(state.skillsReport).toBeNull();

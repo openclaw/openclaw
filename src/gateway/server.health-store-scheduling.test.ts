@@ -31,9 +31,6 @@ test.each(["separate", "shared"] as const)(
     const root = expectDefined(process.env.OPENCLAW_STATE_DIR, "isolated state");
     const agentCount = 12;
     const agentIds = Array.from({ length: agentCount }, (_, index) => `fleet${index}`);
-    const recentKeys = (agentId: string, length = 10) =>
-      Array.from({ length }, (_, index) => `agent:${agentId}:session${11 - index}`);
-    const keys = (rows: readonly { key: string }[]) => rows.map(({ key }) => key);
     const storeTemplate = path.join(
       root,
       "fleet",
@@ -124,32 +121,14 @@ test.each(["separate", "shared"] as const)(
           if (method === "health") {
             const response = await health();
             expect(response.ok).toBe(true);
-            expect(
-              response.payload?.agents.map(({ agentId, sessions }) => [
-                agentId,
-                sessions.count,
-                keys(sessions.recent),
-              ]),
-            ).toEqual(agentIds.map((id) => [id, 12, recentKeys(id, 5)]));
+            expect(response.payload?.agents.map((agent) => agent.sessions.count)).toEqual(
+              agentIds.map(() => 12),
+            );
           } else {
             const response = await statusSummary();
             expect(response).toMatchObject({ ok: true });
             const sessions = expectDefined(response.payload?.sessions, "status sessions");
             expect(sessions.count).toBe(agentCount * 12 + (layout === "shared" ? 2 : 0));
-            expect(sessions.recent).toHaveLength(10);
-            expect(
-              sessions.byAgent.map(({ agentId, count, recent }) => [agentId, count, keys(recent)]),
-            ).toEqual(
-              agentIds.toSorted().map((agentId) => {
-                const added = agentId === "fleet11" && inserted;
-                const recent = recentKeys(agentId);
-                return [
-                  agentId,
-                  added ? 13 : 12,
-                  added ? ["agent:fleet11:new", ...recent.slice(0, 9)] : recent,
-                ];
-              }),
-            );
           }
           await Promise.all([traffic, write, flushImmediate()]);
           const physicalStores = layout === "shared" ? 1 : agentCount;

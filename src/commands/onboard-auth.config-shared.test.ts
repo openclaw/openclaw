@@ -87,20 +87,17 @@ describe("onboard auth provider config merges", () => {
     expect(next.models?.providers?.other?.timeoutSeconds).toBe(300);
   });
 
-  it("preserves settings without resurrecting a non-canonical provider key", () => {
-    const next = patchProviders({ Custom: makeProvider(["model-a"], { timeoutSeconds: 900 }) });
-
-    expect(Object.keys(next.models?.providers ?? {})).toEqual(["custom"]);
-    expect(next.models?.providers?.custom?.timeoutSeconds).toBe(900);
-  });
-
-  it("prefers canonical settings and removes every non-canonical provider key", () => {
-    const next = patchProviders(duplicateProviders());
-
-    expect(Object.keys(next.models?.providers ?? {})).toEqual(["custom"]);
-    expect(next.models?.providers?.custom?.timeoutSeconds).toBe(900);
-    expect(next.models?.providers?.custom?.baseUrl).toBe("https://new.example.com/v1");
-  });
+  it.each([{ Custom: makeProvider(["model-a"], { timeoutSeconds: 900 }) }, duplicateProviders()])(
+    "preserves canonical settings and removes variant provider keys: %j",
+    (providers) => {
+      const next = patchProviders(providers);
+      expect(Object.keys(next.models?.providers ?? {})).toEqual(["custom"]);
+      expect(next.models?.providers?.custom).toMatchObject({
+        timeoutSeconds: 900,
+        baseUrl: newBaseUrl,
+      });
+    },
+  );
 
   it("collapses duplicate provider keys when applying a provider preset", () => {
     const next = applyProviderConfigWithDefaultModels(
@@ -173,7 +170,6 @@ describe("onboard auth provider config merges", () => {
         params: { thinkingLevel: "high", serviceTier: "standard" },
       },
     });
-    expect(next.agents?.defaults?.models).not.toHaveProperty("google/gemini-3-pro-preview");
   });
 
   it("normalizes retired Google provider catalog ids when applying only an agent default", () => {

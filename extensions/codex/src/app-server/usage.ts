@@ -10,7 +10,6 @@ export async function fetchCodexAppServerUsageSnapshot(
   ctx: ProviderFetchUsageSnapshotContext,
   options: {
     pluginConfig?: unknown;
-    readUsage?: typeof readCodexAppServerUsage;
   } = {},
 ): Promise<ProviderUsageSnapshot | null> {
   if (ctx.token !== CODEX_APP_SERVER_AUTH_MARKER) {
@@ -19,7 +18,7 @@ export async function fetchCodexAppServerUsageSnapshot(
   const appServer = resolveCodexAppServerRuntimeOptions({
     pluginConfig: readCodexPluginConfig(options.pluginConfig),
   });
-  const usage = await (options.readUsage ?? readCodexAppServerUsage)({
+  const usage = await readCodexAppServerUsage({
     timeoutMs: ctx.timeoutMs,
     signal: ctx.signal,
     agentDir: ctx.agentDir,

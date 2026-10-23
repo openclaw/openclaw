@@ -50,7 +50,7 @@ Scans recent successful Full Release Validation runs for an exact-target
 validation manifest whose recorded lane-selection inputs match --inputs-json
 and whose normalized strict-v4 phased evidence is accepted by the current trusted-main
 verifier identified by --verifier-source-sha (defaults to --workflow-sha).
-Candidate-owned qualification requires independently admitted exact C/Q/P and inputs.
+Candidate-owned qualification requires independently admitted exact code-parent C=Q/P and inputs.
 The historical producer workflow SHA
 remains independent. A descendant target may reuse product validation only
 when GitHub proves the entire delta is the selected release changelog. Writes reuse=true plus
@@ -179,13 +179,12 @@ fi
 qualification_args=()
 candidate_owned=false
 if [[ -n "$QUALIFICATION_ADMISSION_JSON" || -n "$QUALIFICATION_INPUTS_JSON" ]]; then
-  if [[ "$TARGET_SHA" != "$VERIFIER_WORKFLOW_SHA" ]] ||
-    ! jq -e 'type == "object"' <<< "$QUALIFICATION_ADMISSION_JSON" >/dev/null 2>&1 ||
+  if ! jq -e 'type == "object"' <<< "$QUALIFICATION_ADMISSION_JSON" >/dev/null 2>&1 ||
     ! jq -e 'type == "object"' <<< "$QUALIFICATION_INPUTS_JSON" >/dev/null 2>&1; then
-    no_reuse "candidate qualification reuse requires exact C=Q and complete admission inputs"
+    no_reuse "candidate qualification reuse requires complete admission inputs"
   fi
   qualification_args=(--qualification-reuse-json "$(jq -nc \
-    --arg candidateSha "$TARGET_SHA" --arg qualificationSha "$VERIFIER_WORKFLOW_SHA" \
+    --arg candidateSha "$VERIFIER_WORKFLOW_SHA" --arg qualificationSha "$VERIFIER_WORKFLOW_SHA" \
     --arg workflowRef "$WORKFLOW_REF" \
     --argjson descriptor "$QUALIFICATION_ADMISSION_JSON" \
     --argjson inputs "$QUALIFICATION_INPUTS_JSON" \
@@ -328,7 +327,6 @@ for ((index = 0; index < run_count; index += 1)); do
     --arg trusted_workflow_ref "$TRUSTED_WORKFLOW_REF" \
     --arg trusted_workflow_route "$trusted_workflow_route" \
     --arg verifier_sha "$VERIFIER_SOURCE_SHA" \
-    --arg qualification_sha "$VERIFIER_WORKFLOW_SHA" \
     --argjson candidate_owned "$candidate_owned" '
       . as $record
       | .schema == "openclaw.release-validation-evidence/v4"
@@ -364,8 +362,8 @@ for ((index = 0; index < run_count; index += 1)); do
         and if $candidate_owned then
           .manifestVersion == 4
           and .workflowRefProof == "candidate-owned-admission-v1"
-          and .targetSha == $qualification_sha
-          and .workflowSha == $qualification_sha
+          and .targetSha == $record.qualificationAdmission.request.candidateSha
+          and .workflowSha == $record.qualificationAdmission.request.qualificationSha
           and (.workflowRef | test("^release-ci/[0-9a-f]{12}-[1-9][0-9]*$"))
           and (.workflowRef | startswith("release-ci/\($parent.workflowSha[0:12])-"))
         elif $trusted_workflow_route == "main" then

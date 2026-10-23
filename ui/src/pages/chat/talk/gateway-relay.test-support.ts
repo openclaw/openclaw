@@ -10,6 +10,32 @@ import {
 } from "./shared.ts";
 
 type GatewayFrame = { event: string; payload?: unknown };
+export function expectClose(
+  client: ReturnType<typeof createClient>,
+  disposition: "abort" | "detach",
+) {
+  expect(requestCallsFor(client, "talk.session.close")).toEqual([
+    ["talk.session.close", { sessionId: "relay-1", disposition }, { timeoutMs: 8_000 }],
+  ]);
+}
+export function relayEvent(payload: Record<string, unknown>) {
+  emitTalkEvent({ relaySessionId: "relay-1", ...payload });
+}
+export function emitAudio(audioBase64 = "AAAA") {
+  relayEvent({ type: "audio", audioBase64 });
+}
+export function pumpSpeech() {
+  const samples = new Float32Array(4096).fill(0.25);
+  for (let frame = 0; frame < 3; frame += 1) {
+    pumpMicrophone(samples);
+  }
+}
+export function emitFinal(text: string) {
+  emitGatewayFrame({
+    event: "chat",
+    payload: { runId: "run-1", state: "final", message: { text } },
+  });
+}
 type GatewayListener = (event: GatewayFrame) => void;
 type MockProcessor = {
   connect: ReturnType<typeof vi.fn>;

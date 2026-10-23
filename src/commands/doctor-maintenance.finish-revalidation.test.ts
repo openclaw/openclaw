@@ -46,6 +46,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
+import { doctorMaintenanceTestEnv } from "./doctor-maintenance.admission.test-support.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 import { mockDoctorServicePlatform } from "./doctor-maintenance.state-owner.test-support.js";
 import {
@@ -158,14 +159,10 @@ type Continuation =
 type LegacyCatalog = "exact" | "conflict-on-recheck" | "different-state";
 
 function withLegacyWriter<T>(pathname: string, write: (db: DatabaseSync) => T): T {
-  const db = openNodeSqliteDatabase(pathname);
-  try {
-    db.enableDefensive?.(false);
-    db.exec("PRAGMA writable_schema = ON");
-    return write(db);
-  } finally {
-    db.close();
-  }
+  using db = openNodeSqliteDatabase(pathname);
+  db.enableDefensive?.(false);
+  db.exec("PRAGMA writable_schema = ON");
+  return write(db);
 }
 
 async function runDoctorFinishForStoppedUnit(
@@ -182,21 +179,10 @@ async function runDoctorFinishForStoppedUnit(
   const home = tempDirs.make("openclaw-doctor-finish-");
   return await withEnvAsync(
     {
+      ...doctorMaintenanceTestEnv,
       HOME: home,
       USERPROFILE: home,
       APPDATA: path.join(home, "AppData"),
-      OPENCLAW_HOME: undefined,
-      OPENCLAW_STATE_DIR: undefined,
-      OPENCLAW_CONFIG_PATH: undefined,
-      OPENCLAW_PROFILE: undefined,
-      OPENCLAW_SUPERVISOR_MODE: undefined,
-      OPENCLAW_SERVICE_REPAIR_POLICY: undefined,
-      OPENCLAW_SERVICE_MARKER: undefined,
-      OPENCLAW_SERVICE_KIND: undefined,
-      OPENCLAW_SYSTEMD_UNIT: undefined,
-      OPENCLAW_UPDATE_RUN_ID: undefined,
-      OPENCLAW_UPDATE_IN_PROGRESS: undefined,
-      OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: undefined,
     },
     async () => {
       const boundedInspection = scenario === "slow-loadunit-admission";
@@ -615,26 +601,32 @@ it.each([
   },
 );
 
-it("refuses offline Doctor repair of a newer schema without recommending repair or changing files", async () => {
-  const stateDir = tempDirs.make("openclaw-doctor-newer-schema-");
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-  vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
-  const databasePath = openOpenClawStateDatabase().path;
-  await closeOpenClawStateDatabaseAsync();
-  writeUnreadableNewerStateSchema(databasePath);
-  const before = snapshotSourceFamily(databasePath);
+it.each(process.platform === "win32" ? ["0600"] : ["0600", "0444"])(
+  "refuses offline Doctor repair of a newer schema without recommending repair or changing files (mode %s)",
+  async (mode) => {
+    const stateDir = tempDirs.make("openclaw-doctor-newer-schema-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
+    const databasePath = openOpenClawStateDatabase().path;
+    await closeOpenClawStateDatabaseAsync();
+    writeUnreadableNewerStateSchema(databasePath);
+    fs.chmodSync(databasePath, Number.parseInt(mode, 8));
+    const beforeMode = fs.statSync(databasePath).mode;
+    const before = snapshotSourceFamily(databasePath);
 
-  const admission = beginDoctorMaintenance({
-    root: null,
-    options: { repair: true, nonInteractive: true },
-    runtime: createTestRuntime(),
-  });
-  await expect(admission).rejects.toThrow("newer schema version");
-  await expect(admission).rejects.toThrow(/restore.*backup/);
-  await expect(admission).rejects.not.toThrow(/doctor --fix/);
-  expect(snapshotSourceFamily(databasePath)).toEqual(before);
-  expect(mocks.stops).toBe(0);
-});
+    const admission = beginDoctorMaintenance({
+      root: null,
+      options: { repair: true, nonInteractive: true },
+      runtime: createTestRuntime(),
+    });
+    await expect(admission).rejects.toThrow("newer schema version");
+    await expect(admission).rejects.toThrow(/restore.*backup/);
+    await expect(admission).rejects.not.toThrow(/doctor --fix/);
+    expect(snapshotSourceFamily(databasePath)).toEqual(before);
+    expect(fs.statSync(databasePath).mode).toBe(beforeMode);
+    expect(mocks.stops).toBe(0);
+  },
+);
 
 it.each<{
   scenario?: StoppedUnitState;

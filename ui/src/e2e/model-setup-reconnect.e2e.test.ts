@@ -58,12 +58,20 @@ suite.define(() => {
         ],
       });
       const gateway = await installMockGateway(page, {
-        featureMethods: [rpc.detect, rpc.auth, rpc.verify, rpc.next, "openclaw.chat"],
+        featureMethods: [
+          rpc.detect,
+          rpc.auth,
+          rpc.verify,
+          rpc.next,
+          "openclaw.chat",
+          "openclaw.chat.history",
+        ],
         methodResponses: {
           [rpc.detect]: initialDetection,
           [rpc.auth]: runningWizard(),
           [rpc.next]: runningStep("endpoint", "text", "API Base URL"),
           [rpc.verify]: { ok: true, modelRef },
+          "openclaw.chat.history": { turns: [] },
           "openclaw.chat": onboardingWelcome,
         },
       });
@@ -107,8 +115,10 @@ suite.define(() => {
             rpc.next,
             rpc.verify,
             "openclaw.chat",
+            "openclaw.chat.history",
           ],
           methodResponses: {
+            "openclaw.chat.history": { turns: [] },
             "openclaw.chat": onboardingWelcome,
             [rpc.detect]: makeDetection({ manualProviders: [{ id: "openai", label: "OpenAI" }] }),
             [rpc.activate]: runningWizard("activation-session"),
@@ -150,8 +160,9 @@ suite.define(() => {
           await page.close();
           destination = await context.newPage();
           reconnectedGateway = await installMockGateway(destination, {
-            featureMethods: [rpc.detect, rpc.verify, "openclaw.chat"],
+            featureMethods: [rpc.detect, rpc.verify, "openclaw.chat", "openclaw.chat.history"],
             methodResponses: {
+              "openclaw.chat.history": { turns: [] },
               "openclaw.chat": onboardingWelcome,
               [rpc.detect]: detection(modelRef),
               [rpc.verify]: pendingVerification,
@@ -214,8 +225,10 @@ suite.define(() => {
             rpc.prepare,
             rpc.next,
             "openclaw.chat",
+            "openclaw.chat.history",
           ],
           methodResponses: {
+            "openclaw.chat.history": { turns: [] },
             "openclaw.chat": onboardingWelcome,
             [rpc.detect]: makeDetection({
               candidates:

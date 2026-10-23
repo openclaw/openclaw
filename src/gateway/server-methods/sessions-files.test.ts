@@ -7,6 +7,10 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as identityFile from "../../agents/identity-file.js";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { withSessionTranscriptDeltaReader } from "../../config/sessions/session-transcript-delta-read.js";
 import { root as openSafeRoot } from "../../infra/fs-safe.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
@@ -129,9 +133,11 @@ const mockVisibleMessages = createVisibleMessagesMock(hoisted.readDelta);
 let workspaceRoot: string;
 beforeEach(() => {
   workspaceRoot = prepareSessionFilesTest(hoisted, mockVisibleMessages);
+  setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
 });
 
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   removeWorkspaceFixture(workspaceRoot);
 });
 
@@ -215,6 +221,7 @@ describe("sessions.files RPC handlers", () => {
 
   it("uses the persisted fixed-store owner for a bare session workspace", async () => {
     const cfg = fixedStoreConfig();
+    setRuntimeConfigSnapshot(cfg);
     hoisted.loadSessionEntry.mockReturnValue({
       agentId: "ops",
       canonicalKey: "global",
@@ -242,6 +249,7 @@ describe("sessions.files RPC handlers", () => {
 
   it("rejects a foreign agent before a bare fixed-store workspace write", async () => {
     const cfg = fixedStoreConfig();
+    setRuntimeConfigSnapshot(cfg);
 
     const error = await files.error(
       "set",
@@ -401,6 +409,32 @@ describe("sessions.files RPC handlers", () => {
     const payload = await files.ok("list", { search: "needle" });
 
     expect(payload.browser).toMatchObject({ search: "needle", truncated: true, entries: [] });
+  });
+
+  it("marks searches incomplete when an excluded directory may hide a match", async () => {
+    writeWorkspace("src/REPORT.md", "# Source report\n");
+    writeWorkspace("dist/REPORT.md", "# Generated report\n");
+
+    const payload = await files.ok("list", { search: "REPORT.md" });
+
+    expect(payload.browser).toMatchObject({
+      search: "REPORT.md",
+      truncated: true,
+      entries: [{ path: "src/REPORT.md" }],
+    });
+  });
+
+  it("keeps searches complete when only repository metadata is excluded", async () => {
+    writeWorkspace("src/REPORT.md", "# Source report\n");
+    writeWorkspace(".git/objects/REPORT.md", "# Git object\n");
+
+    const payload = await files.ok("list", { search: "REPORT.md" });
+
+    expect(payload.browser).toMatchObject({
+      search: "REPORT.md",
+      entries: [{ path: "src/REPORT.md" }],
+    });
+    expect(payload.browser).not.toHaveProperty("truncated");
   });
 
   it.runIf(process.platform === "linux")(

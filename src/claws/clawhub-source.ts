@@ -4,7 +4,11 @@ import { flattenMarkdownToPlainText } from "@openclaw/normalization-core/markdow
 import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
 import { stripFrontmatterBlock } from "../../packages/markdown-core/src/frontmatter.js";
 import { downloadClawHubPackageArchive } from "../infra/clawhub-artifacts.js";
-import { resolveClawHubBaseUrl, type ClawHubFetchOptions } from "../infra/clawhub-client.js";
+import {
+  resolveClawHubBaseUrl,
+  resolveClawHubImageUrl,
+  type ClawHubFetchOptions,
+} from "../infra/clawhub-client.js";
 import { checkClawHubPackageTrust } from "../infra/clawhub-install-trust.js";
 import { normalizeClawHubSha256Hex } from "../infra/clawhub-integrity.js";
 import {
@@ -47,11 +51,14 @@ export type ClawHubClawCatalogEntry = {
   packageName: string;
   displayName: string;
   summary?: string;
+  iconUrl?: string;
   latestVersion?: string;
   channel: "official" | "community";
   official: boolean;
   ownerHandle: string;
   downloads: number;
+  installs: number;
+  featuredAt?: number;
   updatedAtMs: number;
 };
 export type ClawHubClawCatalogDetail = ClawHubClawCatalogEntry & {
@@ -149,10 +156,16 @@ function requireExactVersion(version: string): void {
   }
 }
 
-function projectCatalogEntry(pkg: OwnedClawPackage): ClawHubClawCatalogEntry {
+function projectCatalogEntry(pkg: OwnedClawPackage, baseUrl?: string): ClawHubClawCatalogEntry {
+  const iconUrl = resolveClawHubImageUrl(
+    typeof pkg.icon === "string" ? pkg.icon : undefined,
+    baseUrl,
+  );
   const downloads = pkg.stats?.downloads;
+  const installs = pkg.stats?.installs;
   return {
     packageName: pkg.name,
+    ...(iconUrl ? { iconUrl } : {}),
     displayName: pkg.displayName,
     ...(pkg.summary ? { summary: pkg.summary } : {}),
     ...(pkg.latestVersion ? { latestVersion: pkg.latestVersion } : {}),
@@ -161,12 +174,18 @@ function projectCatalogEntry(pkg: OwnedClawPackage): ClawHubClawCatalogEntry {
     ownerHandle: pkg.ownerHandle,
     downloads:
       typeof downloads === "number" && Number.isFinite(downloads) ? Math.max(0, downloads) : 0,
+    installs: typeof installs === "number" && Number.isFinite(installs) ? Math.max(0, installs) : 0,
+    ...(typeof pkg.featuredAt === "number" ? { featuredAt: pkg.featuredAt } : {}),
     updatedAtMs: Math.max(0, pkg.updatedAt),
   };
 }
 
-function projectPublicEntries(packages: unknown[]): ClawHubClawCatalogEntry[] {
-  return packages.filter(isPublicClawListItem).map(projectCatalogEntry);
+function projectPublicEntries(packages: unknown[], baseUrl?: string): ClawHubClawCatalogEntry[] {
+  return packages.filter(isPublicClawListItem).map((pkg) => projectCatalogEntry(pkg, baseUrl));
+}
+
+function rankByInstalls(left: ClawHubClawCatalogEntry, right: ClawHubClawCatalogEntry): number {
+  return right.installs - left.installs || left.packageName.localeCompare(right.packageName);
 }
 
 function readExactClawArtifact(
@@ -235,30 +254,37 @@ function readExactClawArtifact(
 }
 
 export async function listClawHubClaws(
-  params: ClawHubFetchOptions & { limit?: number } = {},
+  params: ClawHubFetchOptions & { limit?: number; category?: string; featured?: boolean } = {},
 ): Promise<ClawHubClawCatalogEntry[]> {
   const entries = new Map<string, ClawHubClawCatalogEntry>();
+  const finish = () => {
+    const result = [...entries.values()];
+    return params.category && !params.featured ? result.toSorted(rankByInstalls) : result;
+  };
   const seenCursors = new Set<string>();
-  const requestedLimit = params.limit && params.limit > 0 ? params.limit : undefined;
+  const requestedLimit =
+    !params.category && params.limit && params.limit > 0 ? params.limit : undefined;
   let cursor: string | undefined;
   for (let page = 0; page < MAX_CATALOG_PAGES; page += 1) {
     const result = await listClawHubPackages({
       ...params,
       family: "claw",
+      category: params.category,
+      featured: params.featured,
       limit: Math.min(
         CATALOG_PAGE_SIZE,
         requestedLimit ? requestedLimit - entries.size : CATALOG_PAGE_SIZE,
       ),
       ...(cursor ? { cursor } : {}),
     });
-    for (const entry of projectPublicEntries(result.items)) {
+    for (const entry of projectPublicEntries(result.items, params.baseUrl)) {
       entries.set(entry.packageName, entry);
       if (requestedLimit && entries.size >= requestedLimit) {
-        return [...entries.values()];
+        return finish();
       }
     }
     if (result.nextCursor === null) {
-      return [...entries.values()];
+      return finish();
     }
     if (!result.nextCursor || seenCursors.has(result.nextCursor)) {
       throw new ClawHubSourceError(
@@ -276,7 +302,7 @@ export async function listClawHubClaws(
 }
 
 export async function searchClawHubClaws(
-  params: ClawHubFetchOptions & { query: string; limit?: number },
+  params: ClawHubFetchOptions & { query: string; limit?: number; category?: string },
 ): Promise<ClawHubClawCatalogEntry[]> {
   const query = params.query.trim();
   if (!query) {
@@ -286,9 +312,14 @@ export async function searchClawHubClaws(
     ...params,
     query,
     family: "claw",
+    category: params.category,
     limit: params.limit ?? CATALOG_PAGE_SIZE,
   });
-  return projectPublicEntries(results.map((result) => result.package));
+  const entries = projectPublicEntries(
+    results.map((result) => result.package),
+    params.baseUrl,
+  );
+  return params.category ? entries.toSorted(rankByInstalls) : entries;
 }
 
 export async function readClawHubClawDetail(
@@ -322,10 +353,10 @@ export async function readClawHubClawDetail(
     version,
   });
   return {
-    ...projectCatalogEntry(pkg),
+    ...projectCatalogEntry({ ...pkg, icon: release.version.icon }, params.baseUrl),
     version,
-    ...(summary.agent.name ? { agentName: summary.agent.name } : {}),
-    ...(summary.agent.description ? { agentDescription: summary.agent.description } : {}),
+    ...(summary.name ? { agentName: summary.name } : {}),
+    ...(summary.description ? { agentDescription: summary.description } : {}),
     workspaceFiles: contents.instructions.length,
     skills: contents.skills.length,
     plugins: contents.integrations.filter((item) => item.kind === "plugin").length,

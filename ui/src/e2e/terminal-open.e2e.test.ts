@@ -19,7 +19,9 @@ async function openTerminalSidePanel(page: Page): Promise<Locator> {
   await page.goto(`${suite.server.baseUrl}chat`);
   await waitForControlUiGatewayReady(page);
   await openChatSidePanelType(page, "Terminal");
-  return page.locator(".sidebar-region__right-runtime openclaw-terminal-panel");
+  const panel = page.locator(".sidebar-region__right-runtime openclaw-terminal-panel");
+  await panel.locator(".tp-session.is-current").click();
+  return panel;
 }
 
 async function canvasDigest(canvas: Locator): Promise<string> {
@@ -61,6 +63,20 @@ suite.define(() => {
             featureMethods: ["chat.startup", "terminal.open"],
             terminalEnabled: true,
             methodResponses: {
+              "terminal.list": {
+                sessions: [
+                  {
+                    sessionId: "logout-shell",
+                    agentId: "main",
+                    shell: "/bin/bash",
+                    cwd: "/workspace/openclaw",
+                    confined: false,
+                    owner: "agent:main:main",
+                    attached: true,
+                    createdAtMs: 1,
+                  },
+                ],
+              },
               "terminal.open": {
                 sessionId: "logout-shell",
                 agentId: "main",
@@ -204,7 +220,10 @@ suite.define(() => {
         terminalEnabled: true,
       });
 
-      const panel = await openTerminalSidePanel(page);
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await waitForControlUiGatewayReady(page);
+      await openChatSidePanelType(page, "Terminal");
+      const panel = page.locator(".sidebar-region__right-runtime openclaw-terminal-panel");
       const error =
         "The Gateway returned an unusable terminal session (missing cwd). The Gateway is likely older than this Control UI — update it, then retry.";
       await panel.getByText(error, { exact: true }).waitFor();

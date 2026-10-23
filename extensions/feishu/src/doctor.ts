@@ -76,18 +76,8 @@ type FeishuDoctorSessionEntry = {
 type FeishuDoctorInspection = Awaited<ReturnType<typeof inspectFeishuDoctorState>>;
 type FeishuDoctorRepairReport = Awaited<ReturnType<typeof repairFeishuDoctorState>>;
 
-function timestampForPath(now = new Date()): string {
+function timestampForPath(now: Date): string {
   return now.toISOString().replaceAll(":", "-");
-}
-
-function toFeishuSessionEntry(value: unknown): FeishuSessionEntry {
-  if (!isRecord(value)) {
-    return {};
-  }
-  return {
-    sessionId: value.sessionId,
-    sessionFile: value.sessionFile,
-  };
 }
 
 function countLabel(count: number, singular: string, plural = `${singular}s`): string {
@@ -532,19 +522,18 @@ async function inspectFeishuDoctorState(params: { cfg: OpenClawConfig; env?: Nod
           isFeishuSessionEntry(sessionKey, sessionEntry),
       )
       .toSorted((left, right) => left.sessionKey.localeCompare(right.sessionKey))) {
-      const sessionEntry = toFeishuSessionEntry(entry);
       sessionEntries.push({
         key,
         storePath: target.storePath,
         agentId: target.agentId,
-        entry: sessionEntry,
+        entry,
       });
       findings.push(
         ...(await collectFeishuSessionFindings({
           sessionKey: key,
           storePath: target.storePath,
           agentId: target.agentId,
-          entry: sessionEntry,
+          entry,
         })),
       );
     }
@@ -632,16 +621,8 @@ function archiveSessionArtifacts(params: {
   return archived;
 }
 
-async function repairFeishuDoctorState(params: {
-  cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  now?: Date;
-  inspection?: FeishuDoctorInspection;
-}) {
-  const env = params.env ?? process.env;
-  const now = params.now ?? new Date();
-  const inspection =
-    params.inspection ?? (await inspectFeishuDoctorState({ cfg: params.cfg, env }));
+async function repairFeishuDoctorState(inspection: FeishuDoctorInspection) {
+  const now = new Date();
   const backupDir = ensureBackupDir(inspection.stateDir, now);
   const archiveTimestamp = timestampForPath(now);
   const warnings: string[] = [];
@@ -799,11 +780,7 @@ async function runFeishuDoctorSequence(params: {
     };
   }
 
-  const report = await repairFeishuDoctorState({
-    cfg: params.cfg,
-    env: params.env,
-    inspection,
-  });
+  const report = await repairFeishuDoctorState(inspection);
   return {
     changeNotes: [formatRepairChange(report)],
     ...notes,

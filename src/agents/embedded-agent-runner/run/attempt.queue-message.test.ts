@@ -18,7 +18,10 @@ import {
   reportSteeringMessagePersistenceFailure,
   setSteeringMessageIdentity,
 } from "../../sessions/steering-message-identity.js";
-import { steerActiveSessionWithOptionalDeliveryWait } from "./attempt-queue-message.js";
+import {
+  claimEmbeddedPendingUserInputAnswer,
+  steerActiveSessionWithOptionalDeliveryWait,
+} from "./attempt-queue-message.js";
 
 type Session = Parameters<typeof steerActiveSessionWithOptionalDeliveryWait>[0];
 type Options = NonNullable<Parameters<typeof steerActiveSessionWithOptionalDeliveryWait>[2]>;
@@ -490,16 +493,65 @@ it("keeps an image steer pending across nonterminal retry and compaction events"
   const wait = f.wait("", { images: [image] });
   f.emit({ type: "agent_end", messages: [], willRetry: true });
   await vi.advanceTimersByTimeAsync(0);
-  f.emit({
-    type: "auto_retry_start",
-    attempt: 1,
-    maxAttempts: 3,
-    delayMs: 1_000,
-    errorMessage: "retryable failure",
-  });
+  f.emit({ type: "auto_retry_start" });
   f.emit({ type: "compaction_start", reason: "threshold" });
   await vi.advanceTimersByTimeAsync(0);
   expect(f.queue).toEqual([target]);
   f.emit({ type: "message_end", message: target });
   await expect(wait).resolves.toBeUndefined();
 });
+
+it.each(["claim", "text", "image"] as const)(
+  "keeps a live question available after a denied human %s input",
+  async (kind) => {
+    const sessionKey = `agent:main:question-permission-${kind}`;
+    const abort = new AbortController();
+    const pending = runAgentHarnessGatewayQuestion({
+      questions: [
+        { id: "answer", header: "Answer", question: "Continue?", isSecret: true, options: [] },
+      ],
+      sessionKey,
+      timeoutMs: 60_000,
+      signal: abort.signal,
+      gatewayCall: vi.fn<AgentHarnessQuestionGatewayCall>(),
+      delivery: { onBlockReply: vi.fn(async () => undefined) },
+    });
+    const steer = vi.fn(async () => undefined);
+    const session = { steer, subscribe: () => () => {} };
+    try {
+      const options = {
+        isInboundUserMessage: true,
+        allowPendingUserInputAnswer: false as const,
+        ...(kind === "image" ? { images: [image] } : {}),
+      };
+      if (kind === "claim") {
+        await expect(
+          claimEmbeddedPendingUserInputAnswer("status control", options, sessionKey),
+        ).resolves.toBe(false);
+      } else {
+        await steerActiveSessionWithOptionalDeliveryWait(
+          session,
+          "status control",
+          options,
+          sessionKey,
+        );
+      }
+      expect(steer).toHaveBeenCalledTimes(kind === "claim" ? 0 : 1);
+      // A later permitted answer must still consume the original pending question.
+      await steerActiveSessionWithOptionalDeliveryWait(
+        session,
+        "Continue",
+        { isInboundUserMessage: true },
+        sessionKey,
+      );
+      await expect(pending).resolves.toMatchObject({
+        status: "answered",
+        answers: { answers: { answer: ["Continue"] } },
+      });
+      expect(steer).toHaveBeenCalledTimes(kind === "claim" ? 0 : 1);
+    } finally {
+      abort.abort();
+      await pending;
+    }
+  },
+);

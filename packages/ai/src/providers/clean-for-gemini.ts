@@ -143,36 +143,6 @@ function tryResolveLocalRef(ref: string, defs: SchemaDefs | undefined): unknown 
   return defs[table].get(name);
 }
 
-function simplifyUnionVariants(params: { obj: Record<string, unknown>; variants: unknown[] }):
-  | {
-      kind: "simplified";
-      value: unknown;
-    }
-  | {
-      kind: "variants";
-      value: unknown[];
-    } {
-  const { obj, variants } = params;
-
-  const nonNullVariants = variants.filter((variant) => !isNullSchema(variant));
-  const stripped = nonNullVariants.length !== variants.length;
-
-  const flattened = tryFlattenLiteralAnyOf(nonNullVariants);
-  if (flattened) {
-    return { kind: "simplified", value: copySchemaMeta(obj, flattened) };
-  }
-
-  if (stripped && nonNullVariants.length === 1) {
-    const lone = nonNullVariants[0];
-    return {
-      kind: "simplified",
-      value: isRecord(lone) ? copySchemaMeta(obj, { ...lone }) : lone,
-    };
-  }
-
-  return { kind: "variants", value: stripped ? nonNullVariants : variants };
-}
-
 // Gemini rejects object schemas whose `required` entries do not exist in `properties`.
 function sanitizeRequiredFields(schema: Record<string, unknown>): Record<string, unknown> {
   if (!Array.isArray(schema.required)) {
@@ -254,11 +224,17 @@ function cleanSchemaForGeminiWithDefs(
     for (const key of ["anyOf", "oneOf"] as const) {
       const variants = unions[key];
       if (variants) {
-        const simplified = simplifyUnionVariants({ obj, variants });
-        if (simplified.kind === "simplified") {
-          return simplified.value;
+        const nonNullVariants = variants.filter((variant) => !isNullSchema(variant));
+        const stripped = nonNullVariants.length !== variants.length;
+        const flattened = tryFlattenLiteralAnyOf(nonNullVariants);
+        if (flattened) {
+          return copySchemaMeta(obj, flattened);
         }
-        unions[key] = simplified.value;
+        if (stripped && nonNullVariants.length === 1) {
+          const lone = nonNullVariants[0];
+          return isRecord(lone) ? copySchemaMeta(obj, { ...lone }) : lone;
+        }
+        unions[key] = stripped ? nonNullVariants : variants;
       }
     }
 
@@ -328,7 +304,7 @@ function cleanSchemaForGeminiWithDefs(
 
 /**
  * Last-resort flattening for anyOf/oneOf arrays that could not be simplified
- * by `simplifyUnionVariants`. Picks a representative type so the schema is
+ * by the initial union pass. Picks a representative type so the schema is
  * accepted by Google's restricted JSON Schema validation.
  */
 function flattenUnionFallback(

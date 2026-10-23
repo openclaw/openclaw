@@ -116,17 +116,21 @@ export function formatExecDeniedUserMessage(resultText: string): string | null {
     return null;
   }
 
-  const metadata = normalizeLowercaseStringOrEmpty(parsed.metadata);
-  if (metadata.includes("approval-timeout")) {
+  return formatExecDeniedReasonMessage(parsed.metadata);
+}
+
+export function formatExecDeniedReasonMessage(deniedReason: string): string {
+  const reason = normalizeLowercaseStringOrEmpty(deniedReason);
+  if (reason.includes("approval-timeout")) {
     return "Command did not run: approval timed out.";
   }
-  if (metadata.includes("user-denied")) {
-    return "Command did not run: approval was denied.";
+  if (reason.includes("user-denied")) {
+    return "Command did not run: an operator declined this execution approval.";
   }
-  if (metadata.includes("allowlist-miss")) {
+  if (reason.includes("allowlist-miss") || reason === "approval-required") {
     return "Command did not run: approval is required.";
   }
-  if (metadata.includes("approval-request-failed")) {
+  if (reason.includes("approval-request-failed") || reason === "request-failed") {
     return "Command did not run: approval request failed.";
   }
   return "Command did not run.";

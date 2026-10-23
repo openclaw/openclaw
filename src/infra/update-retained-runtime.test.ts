@@ -439,6 +439,57 @@ process.stdout.write(JSON.stringify({ generation, mode: JSON.parse(input).mode }
   });
 });
 
+it("warns and continues the update without binding a replaced retained runtime", async () => {
+  const base = await fs.realpath(tempDirs.make("retained-integrity-"));
+  const root = await fixture(base, "npm");
+  const replaced = path.join(root, "dist/shared-old-hash.mjs");
+  const wrapper = path.join(base, "replace-before-link.mjs");
+  await writeFile(
+    wrapper,
+    `import fs from "node:fs/promises";
+     import { pathToFileURL } from "node:url";
+     const link = fs.link;
+     fs.link = async (source, destination) => {
+       if (source === ${JSON.stringify(replaced)}) {
+         const bytes = await fs.readFile(source, "utf8");
+         await fs.rename(source, source + ".previous");
+         await fs.writeFile(source, bytes.replace("fixture", "foreign"));
+       }
+       return link(source, destination);
+     };
+     await import(pathToFileURL(process.argv.at(-1)).href);`,
+  );
+  const run = commands.runUtf8CommandWithTimeout;
+  vi.spyOn(commands, "runUtf8CommandWithTimeout").mockImplementation((argv, options) =>
+    run([argv[0]!, wrapper, ...argv.slice(1)], options),
+  );
+  const log = path.join(base, "retention.log");
+  const previousLoggerOverride = loggingState.overrideSettings;
+  try {
+    setLoggerOverride({ level: "warn", consoleLevel: "silent", file: log });
+    await withRetainedUpdateRuntime(moduleUrlFor(root).href, async (retain) => {
+      const options = {
+        ...retainOptions(root),
+        env: { ...process.env, HOME: base, OPENCLAW_STATE_DIR: path.join(base, "state") },
+      };
+      expect(await retain(options)).toBeUndefined();
+      expect(await retain(options)).toBeUndefined();
+      expect(captureRuntimeWorkerSource(moduleUrlFor(root)).runtimeGeneration).toBeUndefined();
+      await writeFile(path.join(root, "dist/updater.mjs"), "export const updated = true;\n");
+      expect(await import(moduleUrlFor(root).href)).toMatchObject({ updated: true });
+    });
+    await flushLogger();
+    const warnings = await readFile(log, "utf8");
+    expect(warnings).toContain(`Retained runtime verification failed (sha256): ${replaced}`);
+    expect(warnings).toContain("continuing update without a verified retained rollback runtime");
+    expect(
+      (await fs.readdir(base)).filter((name) => name.startsWith("openclaw-update-runtime-")),
+    ).toEqual([]);
+  } finally {
+    setLoggerOverride(previousLoggerOverride as Parameters<typeof setLoggerOverride>[0]);
+  }
+});
+
 it.for(["inventory", "materialization"])(
   "cancels stalled retention %s before removing its private runtime",
   async (phase, { signal }) => {

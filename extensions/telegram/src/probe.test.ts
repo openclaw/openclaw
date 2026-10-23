@@ -126,6 +126,36 @@ describe("probeTelegram retry logic", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves boolean diagnostics and reports non-boolean flags as unknown", async () => {
+    const fetchMock = installFetchMock();
+    mockResponse(fetchMock, {
+      id: 123,
+      is_bot: true,
+      can_join_groups: false,
+      can_read_all_group_messages: "false",
+      can_manage_bots: 0,
+      supports_inline_queries: null,
+      can_connect_to_business: true,
+      has_main_web_app: {},
+      has_topics_enabled: [],
+    });
+
+    expect(await probeTelegram(token, timeoutMs, { includeWebhookInfo: false })).toMatchObject({
+      ok: true,
+      bot: {
+        isBot: true,
+        canJoinGroups: false,
+        canReadAllGroupMessages: null,
+        canManageBots: null,
+        supportsInlineQueries: null,
+        canConnectToBusiness: true,
+        hasMainWebApp: null,
+        hasTopicsEnabled: null,
+        allowsUsersToCreateTopics: null,
+      },
+    });
+  });
+
   it("closes evicted cached probe transports", async () => {
     const fetchMock = installFetchMock();
     const closeSpies: Array<ReturnType<typeof vi.fn>> = [];

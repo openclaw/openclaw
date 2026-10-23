@@ -20,12 +20,8 @@ export async function waitForCompactionRetryWithAggregateTimeout(params: {
 }): Promise<{ timedOut: boolean }> {
   const timeoutMs = resolveTimerTimeoutMs(params.aggregateTimeoutMs, 1);
 
-  // Reflect the retry promise so late rejections after a timeout stay handled
-  // without masking failures that settle before the timeout path wins.
-  const waitPromise = params.waitForCompactionRetry().then(
-    () => ({ kind: "done" as const }),
-    (error: unknown) => ({ kind: "rejected" as const, error }),
-  );
+  // The race observes retry failures, including after timeout or caller abort.
+  const waitPromise = params.waitForCompactionRetry();
 
   while (true) {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -40,10 +36,7 @@ export async function waitForCompactionRetryWithAggregateTimeout(params: {
       );
 
       if (result !== "timeout") {
-        if (result.kind === "done") {
-          return { timedOut: false };
-        }
-        throw result.error;
+        return { timedOut: false };
       }
 
       // A post-compaction retry is a normal model run, so compaction itself is

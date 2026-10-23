@@ -9,6 +9,21 @@ import {
   getSessionCostUsageUpdatedAt,
   publishSessionCostUsageUpdated,
 } from "../infra/session-cost-usage-events.js";
+import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { selectCurrentPluginMetadataCache } from "../plugins/current-plugin-metadata-state.js";
+import * as manifestEligibility from "../plugins/manifest-contract-eligibility.js";
+import {
+  createPluginCache,
+  getProcessPluginCache,
+  withPluginCache,
+} from "../plugins/plugin-cache.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import {
   bumpSkillsSnapshotVersion,
   getSkillsSnapshotVersion,
@@ -248,6 +263,76 @@ it("retires model choices at its config commit before pending metadata settles",
   expect(broadcast).not.toHaveBeenCalled();
 });
 
+it("reuses gateway model metadata when agent creation publishes unchanged selection policies", async () => {
+  const previousCache = getProcessPluginCache();
+  const previousRegistry = captureActivePluginRegistrySnapshot();
+  await using cache = createPluginCache({ kind: "process" });
+  const metadata = withPluginCache(cache, () =>
+    createPluginMetadataSnapshotFixture({
+      plugins: [{ id: "fixture-provider", providers: ["fixture"] }],
+    }),
+  );
+  let committedConfig: OpenClawConfig = {
+    agents: {
+      defaults: {
+        model: { primary: "fixture/primary" },
+        modelPolicy: { allow: ["fixture/primary", "fixture/secondary"] },
+      },
+      entries: { main: {} },
+    },
+  };
+  const broadcast = vi.fn();
+  const ownedContext = {
+    ...context,
+    broadcast,
+    getCommittedRuntimeConfig: () => committedConfig,
+  };
+  const discovery = vi
+    .spyOn(manifestEligibility, "loadManifestMetadataSnapshot")
+    .mockReturnValue(metadata);
+  const { lifecycle: pendingLifecycle, sidecarOwner } = createLifecycle();
+  try {
+    setActivePluginRegistry(
+      createEmptyPluginRegistry(),
+      undefined,
+      "default",
+      "/fixture/workspace",
+    );
+    setGatewayPluginMetadataSnapshot(metadata, { config: committedConfig });
+    const lifecycle = await pendingLifecycle;
+    await lifecycle.attachContext(ownedContext, sidecarOwner.publish);
+    discovery.mockClear();
+
+    committedConfig = {
+      ...committedConfig,
+      agents: { ...committedConfig.agents, entries: { main: {}, "new-agent": {} } },
+    };
+    publishOperatorRoleConfigChange(ownedContext);
+    expect.soft(discovery.mock.calls.length).toBe(0);
+    expect(broadcast).not.toHaveBeenCalled();
+
+    committedConfig = {
+      ...committedConfig,
+      agents: {
+        ...committedConfig.agents,
+        entries: { main: {}, "new-agent": { modelPolicy: { allow: ["fixture/primary"] } } },
+      },
+    };
+    publishOperatorRoleConfigChange(ownedContext);
+    expect(broadcast).toHaveBeenCalledExactlyOnceWith(
+      "chat.metadata.changed",
+      { modelSelectionChanged: true, commandsChanged: false },
+      { dropIfSlow: true },
+    );
+    expect(discovery.mock.calls.length).toBe(0);
+  } finally {
+    await sidecarOwner.stop();
+    discovery.mockRestore();
+    restoreActivePluginRegistrySnapshot(previousRegistry);
+    selectCurrentPluginMetadataCache(previousCache);
+  }
+});
+
 async function createRealMetadataLifecycle(
   options: {
     attach?: boolean;
@@ -340,8 +425,7 @@ async function createRealMetadataLifecycle(
       skills: () => mocks.registerSkillsListener.mock.calls[0]![0]({ reason: "watch" }),
       auth: () => authEvent(),
       catalog: () => modelEvent({ phase: "catalog-published" }),
-      catalogFailure: () =>
-        modelEvent({ phase: "catalog-failed", error: new Error("catalog failed") }),
+      catalogFailure: () => modelEvent({ phase: "catalog-failed" }),
       owner: () => modelEvent({ phase: "invalidated" }),
     },
     async stop() {
@@ -746,7 +830,7 @@ describe("gateway chat metadata lifecycle", () => {
         if (startup === "owner invalidated") {
           modelListener({ phase: "invalidated" });
           modelListener({ phase: "catalog-published" });
-          modelListener({ phase: "catalog-failed", error: new Error("obsolete catalog failed") });
+          modelListener({ phase: "catalog-failed" });
           authListener();
           skillsListener({ reason: "watch" });
           expect(mocks.refresh).toHaveBeenCalledOnce();

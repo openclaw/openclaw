@@ -1,7 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
-import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 
 const fixture = createFixtureLifetime();
 afterEach(() => fixture.cleanup());
@@ -14,13 +13,7 @@ it("delivers critical memory pressure to a subscriber that joins after collectio
     runNodeScript(
       (workerArgv) => [
         "--expose-gc",
-        ...workerArgv(
-          resolveRuntimeWorkerUrl({
-            currentModuleUrl: import.meta.url,
-            sourceWorkerName: "diagnostic-channel-retention.test-support",
-            distWorkerPath: "infra/diagnostic-channel-retention.test-support.js",
-          }),
-        ),
+        ...workerArgv(new URL("./diagnostic-channel-retention.test-support.ts", import.meta.url)),
       ],
       { ...process.env, HOME: root, OPENCLAW_STATE_DIR: root, NODE_OPTIONS: "" },
       undefined,

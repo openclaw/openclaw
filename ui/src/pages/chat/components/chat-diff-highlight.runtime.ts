@@ -11,6 +11,21 @@ const MAX_HIGHLIGHT_CHARS = 120_000;
 
 export type DiffHighlightToken = { text: string; classes: string };
 
+// A retained disclosure marker is transparent only when its complete numbered context follows it.
+function isRevealedGap(lines: readonly DiffLine[], index: number): boolean {
+  const gap = lines[index]?.gap;
+  if (!gap || gap.count < 1 || gap.count > lines.length - index - 1) {
+    return false;
+  }
+  for (let offset = 0; offset < gap.count; offset++) {
+    const line = lines[index + offset + 1]!;
+    if (line.kind !== "ctx" || line.lineNo !== gap.newStart + offset) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export async function analyzeDiffSyntax(lines: readonly DiffLine[], path: string, oldPath = path) {
   const highlighted = new Map<DiffLine, DiffHighlightToken[]>();
   const folds: DiffSyntaxFold[] = [];
@@ -23,7 +38,11 @@ export async function analyzeDiffSyntax(lines: readonly DiffLine[], path: string
   }
   let section: { path: string; oldPath: string; lines: DiffLine[] } = { path, oldPath, lines: [] };
   const sections: (typeof section)[] = [];
-  for (const line of lines) {
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index]!;
+    if (line.kind === "skip" && isRevealedGap(lines, index)) {
+      continue;
+    }
     if (line.kind === "file" || line.kind === "skip") {
       sections.push(section);
       section =

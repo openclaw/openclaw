@@ -24,7 +24,6 @@ import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../internal-runtime-contex
 import {
   assembleHarnessContextEngine,
   bootstrapHarnessContextEngine,
-  finalizeHarnessContextEngineTurn,
   prepareHarnessContextEnginePrompt,
 } from "./context-engine-lifecycle.js";
 import {
@@ -33,6 +32,7 @@ import {
   textMessage,
 } from "./context-engine-lifecycle.test-support.js";
 import { createContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
+import { finalizeTurn } from "./context-engine-turn.test-support.js";
 
 const { sessionId, sessionIdUsed, sessionKey, sessionFile } = sessionParams;
 
@@ -83,9 +83,6 @@ const assemblySession = {
 };
 const unchangedMaintenance = { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
 const finalizationSession = {
-  promptError: false,
-  aborted: false,
-  yieldAborted: false,
   sessionIdUsed,
   sessionKey,
   sessionFile,
@@ -467,12 +464,11 @@ describe("harness context engine lifecycle", () => {
       messages: [textMessage("user", "visible ask", 1)],
     });
 
-    await finalizeHarnessContextEngineTurn({
+    await finalizeTurn({
       ...lifecycleParams,
       ...finalizationSession,
       sessionTarget,
       messagesSnapshot: [textMessage("assistant", "new answer", 4)],
-      prePromptMessageCount: 0,
     });
 
     const compactRuntimeSettings = buildContextEngineRuntimeSettings({
@@ -544,7 +540,7 @@ describe("harness context engine lifecycle", () => {
   });
 
   it.each(["batch", "message"] as const)(
-    "forwards heartbeat and visible turn messages to %s ingestion",
+    "preserves messages and session ownership through %s ingestion",
     async (mode) => {
       const turnUser = textMessage("user", "new ask", 4);
       const turnAssistant = textMessage("assistant", "new answer", 6);
@@ -553,7 +549,7 @@ describe("harness context engine lifecycle", () => {
         ingestedCount: 2,
       }));
 
-      await finalizeHarnessContextEngineTurn({
+      await finalizeTurn({
         contextEngine: createContextEngine({
           ingest,
           ingestBatch: mode === "batch" ? ingestBatch : undefined,
@@ -574,7 +570,6 @@ describe("harness context engine lifecycle", () => {
         tokenBudget: 2048,
         runtimeContext: {},
         runMaintenance: async () => undefined,
-        isHeartbeat: true,
       });
 
       if (mode === "batch") {
@@ -583,7 +578,7 @@ describe("harness context engine lifecycle", () => {
       const calls = mode === "batch" ? ingestBatch.mock.calls : ingest.mock.calls;
       expect(calls).toHaveLength(mode === "batch" ? 1 : 2);
       for (const [params] of calls) {
-        expect(params).toMatchObject({ isHeartbeat: true, sessionKey });
+        expect(params).toMatchObject({ sessionKey });
       }
     },
   );
@@ -600,11 +595,10 @@ describe("harness context engine lifecycle", () => {
         }),
       });
 
-      await finalizeHarnessContextEngineTurn({
+      await finalizeTurn({
         contextEngine,
         ...finalizationSession,
         messagesSnapshot: [textMessage("assistant", "done", 1)],
-        prePromptMessageCount: 0,
         runMaintenance,
       });
 
@@ -641,12 +635,11 @@ describe("harness context engine lifecycle", () => {
     const ingestBatch = vi.fn(async () => ({ ingestedCount: 0 }));
     const maintain = vi.fn(async () => unchangedMaintenance);
 
-    await finalizeHarnessContextEngineTurn({
+    await finalizeTurn({
       contextEngine: createContextEngine({ afterTurn, ingest, ingestBatch, maintain }),
       ...finalizationSession,
       yieldAborted: true,
       messagesSnapshot: [textMessage("user", "failed", 1)],
-      prePromptMessageCount: 0,
     });
 
     expect(afterTurn).not.toHaveBeenCalled();

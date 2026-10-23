@@ -13,7 +13,7 @@ import {
   withTrustedWebSearchEndpoint,
 } from "openclaw/plugin-sdk/provider-web-search";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { safeParseJson, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { executeParallelSearchRequest } from "./parallel-search-normalize.js";
 
 // Free hosted Search MCP. This keyless transport is used only after the user
@@ -49,12 +49,8 @@ function selectMcpEnvelope(text: string, requestId: string): JsonRpcMessage {
     return message.id === requestId;
   };
   const selectPayload = (json: string): boolean => {
-    try {
-      const payload: unknown = JSON.parse(json);
-      return Array.isArray(payload) ? payload.some(selectMessage) : selectMessage(payload);
-    } catch {
-      return false;
-    }
+    const payload = safeParseJson<unknown>(json);
+    return Array.isArray(payload) ? payload.some(selectMessage) : selectMessage(payload);
   };
 
   const body = text.trim();
@@ -111,13 +107,9 @@ function extractMcpToolPayload(envelope: JsonRpcMessage): Record<string, unknown
   const content = Array.isArray(result.content) ? result.content : [];
   for (const block of content) {
     if (isRecord(block) && block.type === "text" && typeof block.text === "string" && block.text) {
-      try {
-        const parsed: unknown = JSON.parse(block.text);
-        if (isRecord(parsed)) {
-          return parsed;
-        }
-      } catch {
-        // Try the next text block.
+      const parsed = safeParseJson<unknown>(block.text);
+      if (isRecord(parsed)) {
+        return parsed;
       }
     }
   }

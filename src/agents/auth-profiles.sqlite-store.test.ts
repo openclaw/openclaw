@@ -2,8 +2,10 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it as baseIt, vi } from "vitest";
-import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { openNodeSqliteDatabase, requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as databaseIdentity from "../infra/sqlite-worker-identity.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import {
@@ -16,6 +18,7 @@ import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { resolveAgentDir } from "./agent-scope.js";
@@ -23,6 +26,7 @@ import { refreshAuthProfileFileState } from "./auth-profiles/file-state.js";
 import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 import { loadPersistedAuthProfileStore } from "./auth-profiles/persisted.js";
 import { upsertAuthProfileAsync } from "./auth-profiles/profiles.js";
+import type { AuthProfileReadOwner } from "./auth-profiles/runtime-read.types.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
@@ -71,12 +75,6 @@ function sharedValue(database: DatabaseSync, key: string) {
   return database
     .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
     .get(key)?.value_json;
-}
-
-function updateShared(database: DatabaseSync, key: string, value: unknown) {
-  database
-    .prepare("UPDATE config_machine_state SET value_json = ? WHERE state_key = ?")
-    .run(JSON.stringify(value), key);
 }
 
 const noExternal = { syncExternalCli: false };
@@ -191,31 +189,90 @@ it("persists fresh shared auth through the shared adapter", async ({ auth: { age
     profiles: [{ profileId: "openai:default", credential: apiKeyCredential("sk-shared") }],
     order: { openai: ["openai:default"] },
   });
-  expect(ensureAuthProfileStore(undefined, noExternal)).toMatchObject({
+  await closeOpenClawStateDatabaseAsync();
+  {
+    using database = new DatabaseSync(resolveOpenClawStateSqlitePath());
+    expect(sharedValue(database, "authProfiles.store")).toEqual(expect.any(String));
+    expect(sharedValue(database, "authProfiles.state")).toEqual(expect.any(String));
+    expect(sharedValue(database, "auth.sharedStore")).toBe(
+      JSON.stringify({ location: "state-db" }),
+    );
+  }
+  let authReads = 0;
+  const observed = observeSqliteReadSql(
+    requireNodeSqlite().StatementSync.prototype,
+    (sql, bindings) => {
+      if (
+        /\bconfig_machine_state\b/u.test(sql) &&
+        bindings.some((value) => value === "authProfiles.store" || value === "authProfiles.state")
+      ) {
+        authReads += 1;
+      }
+    },
+  );
+  using _ = { [Symbol.dispose]: observed.restore };
+  let readStore: AuthProfileReadOwner["readStore"] | undefined;
+  expect(
+    loadRuntime(undefined, {
+      readOnly: true,
+      syncExternalCli: false,
+      onReadOwner: (owner) => {
+        readStore = owner.readStore;
+      },
+    }),
+  ).toMatchObject({
     profiles: { "openai:default": { key: "sk-shared" } },
     order: { openai: ["openai:default"] },
   });
-  using database = new DatabaseSync(resolveOpenClawStateSqlitePath());
-  expect(sharedValue(database, "authProfiles.store")).toEqual(expect.any(String));
-  expect(sharedValue(database, "authProfiles.state")).toEqual(expect.any(String));
-  expect(sharedValue(database, "auth.sharedStore")).toBe(JSON.stringify({ location: "state-db" }));
+  expect(authReads).toBe(1);
+  const readAgain = expectDefined<AuthProfileReadOwner["readStore"]>(
+    readStore,
+    "native shared auth read owner",
+  );
   for (const [key, lastUsed] of [
     ["synthetic-shared-first", 789],
     ["synthetic-shared-second", 790],
   ] as const) {
-    updateShared(database, "authProfiles.store", apiKeyStore(key));
-    updateShared(database, "authProfiles.state", {
-      version: 1,
-      usageStats: { "openai:default": { lastUsed } },
-    });
-    const loaded = loadRuntime(undefined, { readOnly: true });
+    saveAuthProfileStore(
+      { ...apiKeyStore(key), usageStats: { "openai:default": { lastUsed } } },
+      undefined,
+      { filterExternalAuthProfiles: false, syncExternalCli: false },
+    );
+    authReads = 0;
+    const loaded = readAgain();
     expect(loaded).toMatchObject({
       ...apiKeyStore(key),
       usageStats: { "openai:default": { lastUsed } },
     });
-    expect(loaded.order).toBeUndefined();
+    expect(loaded?.order).toBeUndefined();
+    expect(authReads).toBe(1);
   }
   expect(fs.existsSync(resolveAuthProfileDatabasePath(agentDir))).toBe(false);
+});
+
+it("keeps borrowed auth reads lazy and propagates native state errors", ({
+  auth: { agentDir },
+}) => {
+  const database = openOpenClawAgentDatabase({
+    agentId: "main",
+    path: resolveAuthProfileDatabasePath(agentDir),
+  });
+  database.db.exec("ALTER TABLE auth_profile_state RENAME COLUMN state_json TO broken_state_json");
+  const read = () =>
+    loadRuntime(agentDir, {
+      database,
+      inheritedAuthDir: agentDir,
+      readOnly: true,
+      syncExternalCli: false,
+    });
+  expect(read().profiles).toEqual({});
+  const write = database.db
+    .prepare(`INSERT INTO auth_profile_store (store_key, store_json, updated_at)
+    VALUES ('primary', ?, 1) ON CONFLICT(store_key) DO UPDATE SET store_json = excluded.store_json`);
+  write.run("{");
+  expect(read).toThrow("is unreadable");
+  write.run(JSON.stringify(apiKeyStore("synthetic-borrowed")));
+  expect(read).toThrow(/state_json/u);
 });
 
 it("tracks Doctor ownership", async ({ auth: { agentDir, stateDir } }) => {
@@ -325,6 +382,11 @@ it("rejects newer databases without the auth table", async ({ auth: { agentDir }
 
 it("refreshes schema classifications after owner changes", async ({ auth: { agentDir } }) => {
   using database = openNodeSqliteDatabase(resolveAuthProfileDatabasePath(agentDir));
+  database.exec(`CREATE TABLE auth_profile_state (
+    state_key TEXT NOT NULL PRIMARY KEY, state_json TEXT NOT NULL);`);
+  database
+    .prepare("INSERT INTO auth_profile_state VALUES ('primary', ?)")
+    .run(JSON.stringify({ lastGood: { openai: "openai:default" } }));
   const createView = () =>
     database.exec(
       "CREATE VIEW auth_profile_store AS SELECT 'primary' AS store_key, '{}' AS store_json;",
@@ -343,7 +405,17 @@ it("refreshes schema classifications after owner changes", async ({ auth: { agen
     database
       .prepare("INSERT INTO auth_profile_store VALUES ('primary', ?, 1)")
       .run(JSON.stringify(apiKeyStore(key)));
-    expect(loadRuntime(agentDir, { readOnly: true })).toMatchObject(apiKeyStore(key));
+    {
+      const observed = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+      using _ = { [Symbol.dispose]: observed.restore };
+      expect(loadRuntime(agentDir, { readOnly: true, inheritedAuthDir: agentDir })).toMatchObject({
+        ...apiKeyStore(key),
+        lastGood: { openai: "openai:default" },
+      });
+      expect(
+        observed.queries.filter((sql) => /\bfrom\s+"?auth_profile_(?:store|state)\b/iu.test(sql)),
+      ).toHaveLength(1);
+    }
     database.exec("DROP TABLE auth_profile_store;");
     expect(inspectStore(agentDir)).toEqual({ status: "missing", reason: "table" });
     expect(loadRuntime(agentDir, { readOnly: true }).profiles).toEqual({});
