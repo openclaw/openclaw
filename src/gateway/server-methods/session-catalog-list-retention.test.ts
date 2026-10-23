@@ -1,7 +1,12 @@
 import { getEventListeners } from "node:events";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import {
+  captureGatewayDeviceRevocation,
+  retainGatewayDeviceRevocation,
+} from "../device-revocation.js";
 import { catalogProvider as provider } from "./session-catalog.fixtures.test-support.js";
 import {
   hoisted,
@@ -99,30 +104,46 @@ it("expires delivery without releasing native work that ignores cancellation", a
   const owner = new GatewayConnectionWork();
   const lifetime = new SessionCatalogListLifetime([]);
   const release = createDeferredCore();
+  const connection = new AbortController();
+  const sourceReleased = vi.fn();
+  const caller = captureGatewayDeviceRevocation({}, {}, () => true, connection.signal, {
+    isCurrent: () => true,
+    subscribe: () => sourceReleased,
+  });
   let signal: AbortSignal | undefined;
   try {
     await owner.track(() =>
       root!.run(() =>
-        lifetime.runProvider(undefined, async (params) => {
-          signal = params.signal;
-          params.waitUntil(release.promise);
-        }),
+        withPluginRuntimeGatewayRequestScope(
+          { hasCurrentClientAuthority: caller.isCurrent, isWebchatConnect: () => false },
+          () =>
+            lifetime.runProvider(undefined, async (params) => {
+              signal = params.signal;
+              params.waitUntil(release.promise);
+            }),
+        ),
       ),
     );
     root!.release();
+    caller.release();
     lifetime.finishListing();
     await vi.advanceTimersByTimeAsync(60_000);
     expect(signal?.aborted).toBe(true);
     expect(getActiveGatewayRootWorkCount()).toBe(before + 1);
     expect(owner.hasPendingWork).toBe(true);
+    const releaseNativeCaller = retainGatewayDeviceRevocation(caller.isCurrent);
+    releaseNativeCaller?.();
     release.resolve();
     await owner.drain();
     expect(getActiveGatewayRootWorkCount()).toBe(before);
+    expect(sourceReleased).toHaveBeenCalledOnce();
+    expect(() => retainGatewayDeviceRevocation(caller.isCurrent)).toThrow("no longer active");
   } finally {
     release.resolve();
     lifetime.retire();
     lifetime.finishListing();
     root!.release();
+    caller.release();
     await owner.drain();
   }
 });
@@ -157,7 +178,7 @@ it("caps pending provider keys and refuses late pages from evicted operations", 
     await vi.advanceTimersByTimeAsync(1_000);
     await Promise.all(lists);
     expect(operations.pages.has("query-0")).toBe(false);
-    expect(operations.pages.get("query-1")).toEqual(page);
+    expect(operations.pages.get("query-1")).toEqual({ page });
     await vi.advanceTimersByTimeAsync(59_000);
     expect(operations.providers.size).toBe(0);
     releases[2]!.resolve(page);

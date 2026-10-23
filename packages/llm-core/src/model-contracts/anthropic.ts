@@ -3,10 +3,6 @@ type ClaudeModelRef = {
   params?: Record<string, unknown>;
 };
 
-type ClaudeEffortModelRef = ClaudeModelRef & {
-  thinkingLevelMap?: Record<string, string | null | undefined>;
-};
-
 /**
  * Capabilities the provider's model listing advertised for this row, carried as
  * `params.claudeCapabilities`. Each listed flag overrides the model-id rules
@@ -297,7 +293,9 @@ export function requiresClaudeDefaultSampling(ref: ClaudeModelRef): boolean {
  * narrower route-specific contract.
  */
 export function resolveClaudeNativeThinkingLevelMap(
-  ref: ClaudeEffortModelRef,
+  ref: ClaudeModelRef & {
+    thinkingLevelMap?: Record<string, string | null | undefined>;
+  },
 ): Record<string, string | null | undefined> | undefined {
   if (ref.thinkingLevelMap !== undefined) {
     return ref.thinkingLevelMap;

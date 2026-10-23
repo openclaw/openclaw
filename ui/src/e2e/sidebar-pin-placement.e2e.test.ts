@@ -14,7 +14,7 @@ import {
 } from "./session-management.test-support.ts";
 import { captureFrame } from "./sidebar-assertions.test-support.ts";
 
-const suite = createSessionManagementE2eSuite(true);
+const suite = createSessionManagementE2eSuite();
 const key = "agent:main:reliability";
 
 suite.define(() => {

@@ -56,10 +56,6 @@ const DEFAULT_MODE_HELP =
   "Agent consults OpenClaw, bidi uses direct realtime voice, and transcribe observes only.";
 const CHROME_NODE_HELP = "Node id/name/IP that owns Chrome and the native virtual-audio backend.";
 
-function resolveBoolean(value: unknown, fallback: boolean): boolean {
-  return typeof value === "boolean" ? value : fallback;
-}
-
 function resolveMode(value: unknown): MeetingPluginMode {
   const normalized = normalizeOptionalLowercaseString(value);
   return normalized === "agent" || normalized === "bidi" || normalized === "transcribe"
@@ -84,7 +80,7 @@ export function createMeetingPluginConfigSchema(options: MeetingPluginConfigOpti
     const chromeNode = asRecord(raw.chromeNode);
     const realtime = asRecord(raw.realtime);
     return {
-      enabled: resolveBoolean(raw.enabled, true),
+      enabled: typeof raw.enabled === "boolean" ? raw.enabled : true,
       defaultMode: resolveMode(raw.defaultMode),
       chrome: resolveMeetingChromeConfig(chrome, {
         resolveAudioFormat: () => resolveAudioFormat(chrome.audioFormat),

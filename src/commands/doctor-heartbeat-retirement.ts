@@ -7,9 +7,11 @@ import {
   readDefaultProactiveJobReceiptInDatabase,
   recordDefaultProactiveJobInDatabase,
 } from "../cron/proactive-job-receipt.js";
+import { cloneCronJobForMutation, finalizeUpdatedJob } from "../cron/service/jobs-mutation.js";
 import { publishCronJobsStoreMutation, resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { cronStoreKey } from "../cron/store/key.js";
-import { loadCronRows } from "../cron/store/row-codec.js";
+import { loadCronRows, upsertCronJobRow } from "../cron/store/row-codec.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
@@ -21,9 +23,11 @@ import {
   migrateHeartbeatPrompt,
   projectRetiredHeartbeatConfig,
   resolveLegacyHeartbeatConfig,
+  resolveLegacyHeartbeatIntervalMs,
   validateLegacyHeartbeatConfig,
 } from "./doctor-heartbeat-legacy.js";
 import { resolveHeartbeatAutomationModel } from "./doctor-heartbeat-model.js";
+import { resolveDoctorHeartbeatReceiptJob } from "./doctor-heartbeat-monitors.js";
 import { migrateHeartbeatOutcomes } from "./doctor-heartbeat-outcome-migration.js";
 import {
   collectHeartbeatScratchMigrationFindings,
@@ -41,10 +45,14 @@ import { migrateHeartbeatVisibility } from "./doctor/shared/channel-legacy-confi
 export async function retireHeartbeatWithDoctor(
   sourceConfig: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
+  onWarnings?: (warnings: readonly string[]) => void,
 ) {
   const cfg = inheritLegacyDefaultAgentId(sourceConfig, structuredClone(sourceConfig));
   migrateHeartbeatVisibility(cfg, []);
   validateLegacyHeartbeatConfig(cfg);
+  const heartbeatSources = new Map(
+    listAgentIds(cfg).map((agentId) => [agentId, resolveLegacyHeartbeatConfig(cfg, agentId)]),
+  );
   const next = projectRetiredHeartbeatConfig(cfg);
   const [cadenceFindings, scratchFindings] = await Promise.all([
     collectHeartbeatCadenceMigrationFindings(cfg, env),
@@ -77,11 +85,17 @@ export async function retireHeartbeatWithDoctor(
       resolveHeartbeatAutomationModel(cfg, agentId).fallback,
     ]),
   );
-  const { completedCutover, modelWarnings } = runOpenClawStateWriteTransaction(
+  const {
+    completedCutover,
+    modelWarnings,
+    recoveryWarnings: cutoverWarnings,
+  } = runOpenClawStateWriteTransaction(
     ({ db }) => {
       let completed = false;
       const warnings: string[] = [];
-      const jobs = decodeDoctorHeartbeatJobRows(loadCronRows(db, cronStoreKey(storePath)));
+      const recoveryWarnings: string[] = [];
+      const rows = loadCronRows(db, cronStoreKey(storePath));
+      const jobs = decodeDoctorHeartbeatJobRows(rows);
       if (jobs.some((job) => job.payload.kind === "heartbeat" || isHeartbeatTaskCronJob(job))) {
         throw new Error(
           "Legacy automation rows changed during cutover; config was retained. Stop the Gateway and rerun Doctor.",
@@ -92,24 +106,52 @@ export async function retireHeartbeatWithDoctor(
         if (!receipt || receipt.phase === "complete") {
           continue;
         }
-        if (!jobs.some((job) => job.id === receipt.jobId)) {
+        const job = resolveDoctorHeartbeatReceiptJob(cfg, jobs, agentId, receipt, undefined);
+        if (!job) {
           throw new Error(
             `Automation ${receipt.jobId} was deleted during cutover; legacy configuration was retained.`,
           );
         }
+        const heartbeat = heartbeatSources.get(agentId);
+        const disabled =
+          receipt.heartbeatEnabled === false ||
+          (heartbeat?.every !== undefined &&
+            resolveLegacyHeartbeatIntervalMs(cfg, undefined, heartbeat) === null);
+        if (job.enabled && disabled) {
+          const nextJob = cloneCronJobForMutation(job);
+          nextJob.enabled = false;
+          finalizeUpdatedJob({
+            job,
+            nextJob,
+            now: Date.now(),
+            schedulingInputsRequested: true,
+            scheduleChanged: false,
+          });
+          upsertCronJobRow(
+            db,
+            cronStoreKey(storePath),
+            nextJob,
+            rows.find((row) => row.job_id === job.id)!.sort_order,
+          );
+        } else if (job.enabled && !heartbeat && receipt.heartbeatEnabled === undefined) {
+          recoveryWarnings.push(
+            `Agent "${agentId}" automation "${job.id}" has an incomplete heartbeat migration without its original enabled setting. If the heartbeat was disabled, run "openclaw automations disable ${job.id}", then "openclaw doctor --fix". Otherwise enable it after disabling and completing Doctor. Its pending receipt and job were preserved.`,
+          );
+          continue;
+        }
         const fallback = modelFallbacks.get(agentId);
         if (fallback) {
           const migratedIds = new Set([receipt.jobId, ...(receipt.convertedJobIds ?? [])]);
-          for (const job of jobs) {
+          for (const migratedJob of jobs) {
             if (
-              migratedIds.has(job.id) &&
-              job.agentId === agentId &&
-              job.payload.kind === "agentTurn" &&
-              !job.payload.model
+              migratedIds.has(migratedJob.id) &&
+              migratedJob.agentId === agentId &&
+              migratedJob.payload.kind === "agentTurn" &&
+              !migratedJob.payload.model
             ) {
               warnings.push(
                 sanitizeDoctorNote(
-                  `Agent "${agentId}" automation "${job.id}": dropped heartbeat model "${fallback.model}" because it is outside the agent's allowed model policy. The automation uses normal model selection with configured default "${fallback.defaultModel}". Next step: pick an allowed model or add it to the agent's modelPolicy.allow (agents.entries.${agentId}.modelPolicy.allow) before selecting it.`,
+                  `Agent "${agentId}" automation "${migratedJob.id}": dropped heartbeat model "${fallback.model}" because it is outside the agent's allowed model policy. The automation uses normal model selection with configured default "${fallback.defaultModel}". Next step: pick an allowed model or add it to the agent's modelPolicy.allow (agents.entries.${agentId}.modelPolicy.allow) before selecting it.`,
                 ),
               );
             }
@@ -119,11 +161,15 @@ export async function retireHeartbeatWithDoctor(
         completed = true;
       }
       publishCronJobsStoreMutation(storePath, db);
-      return { completedCutover: completed, modelWarnings: warnings };
+      return { completedCutover: completed, modelWarnings: warnings, recoveryWarnings };
     },
     { env },
     { operationLabel: "doctor.heartbeat-cutover-complete" },
   );
+  if (cutoverWarnings.length) {
+    note(cutoverWarnings.map(sanitizeDoctorNote).join("\n"), "Doctor warnings");
+    onWarnings?.(cutoverWarnings);
+  }
   if (completedCutover) {
     note(
       "Migrated heartbeats now use standard Automations delivery. Heartbeat-specific duplicate suppression and no-route skipping were removed: repeated updates can be delivered, and a missing route no longer skips the run before execution. Delivery failures follow ordinary automation handling. Review the migrated jobs' delivery settings if you relied on either behavior.",
@@ -149,4 +195,38 @@ export async function retireHeartbeatWithDoctor(
     );
   }
   return next;
+}
+
+export async function maybeMigrateHeartbeatCadenceToCron(params: {
+  cfg: OpenClawConfig;
+  shouldRepair: boolean;
+  env?: NodeJS.ProcessEnv;
+}): Promise<{ changes: string[]; warnings: string[] }> {
+  const findings = (
+    await Promise.all([
+      collectHeartbeatCadenceMigrationFindings(params.cfg, params.env),
+      collectHeartbeatScratchMigrationFindings(params.cfg, params.env),
+    ])
+  ).flat();
+  if (!params.shouldRepair || !findings.length) {
+    return { changes: [], warnings: findings.map((finding) => finding.message) };
+  }
+  try {
+    const warnings: string[] = [];
+    await retireHeartbeatWithDoctor(params.cfg, params.env, (reported) =>
+      warnings.push(...reported),
+    );
+    if (warnings.length) {
+      return { changes: [], warnings };
+    }
+    const changes = [
+      "Converted legacy heartbeat cadence to ordinary editable automations; recorded one-way provisioning receipts.",
+    ];
+    note(changes.join("\n"), "Doctor changes");
+    return { changes, warnings: [] };
+  } catch (error) {
+    const warnings = [formatErrorMessage(error)];
+    note(warnings.join("\n"), "Doctor warnings");
+    return { changes: [], warnings };
+  }
 }

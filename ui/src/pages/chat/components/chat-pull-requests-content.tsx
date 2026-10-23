@@ -164,6 +164,7 @@ function WorkRow(props: {
                   target="_blank"
                   rel="noopener noreferrer"
                   aria-label={t("chat.pullRequests.createPrLabel", {
+                    label: t("chat.pullRequests.createPr"),
                     branch: props.branch?.branch ?? "",
                   })}
                 >

@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 315881,
-  "reason": "Creation transfer split preserves the stricter 315881 B startup baseline; matched 35637f41 builds measure 316324 to 316294 B startup, 1347441 B Chat and 822816 B New Session.",
+  "startupJsGzipBytes": 294961,
+  "reason": "Startup leaf icons, update classification, and lazy English: matched b5b24cf15c2 build 310773 to 294961 B gzip with 7 JS and 1 CSS request.",
   "updatedAt": "2026-10-23"
 }

@@ -265,6 +265,8 @@ export async function createBoundWorker(
 export function createBoundSpawnInvocation(
   bound: Awaited<ReturnType<typeof createSpawnBoundaryParent>>,
   request?: {
+    task?: string;
+    runTimeoutSeconds?: number;
     collect?: true;
     groupId?: string;
     context?: "isolated" | "fork";

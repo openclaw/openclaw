@@ -217,11 +217,11 @@ export function createPortaledHovercardOwner(
       );
     },
 
-    schedulePointerExit(bridgeMs = 220): void {
+    schedulePointerExit(): void {
       portal.pointerInside = false;
       // Portaled cards can be viewport-clamped diagonally from their trigger, so
       // exit coordinates cannot reliably tell whether the pointer is crossing the gap.
-      portal.scheduleClose(bridgeMs);
+      portal.scheduleClose(220);
     },
 
     focusables(): HTMLElement[] {

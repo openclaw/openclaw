@@ -24,7 +24,6 @@ import type {
 } from "../../../src/gateway/session-utils.types.js";
 import type {
   GatewayContextWindowOption,
-  GatewayThinkingLevelOption,
   SessionsListResultBase,
   SessionsPatchResultBase,
 } from "../../../src/shared/session-types.js";
@@ -91,8 +90,6 @@ export type ChannelStatus = Omit<ChannelAccountSnapshot, "accountId" | "probe"> 
   probe?: { ok?: boolean; status?: number | string | null; error?: string | null } | null;
 };
 
-type ConfigSnapshotIssue = { path: string; message: string };
-
 export type ConfigSnapshot = {
   writeError?: ErrorShape;
   path?: string | null;
@@ -107,13 +104,13 @@ export type ConfigSnapshot = {
   resolved?: Record<string, unknown> | null;
   runtimeConfig?: Record<string, unknown> | null;
   config?: Record<string, unknown> | null;
-  issues?: ConfigSnapshotIssue[] | null;
+  issues?: { path: string; message: string }[] | null;
 };
 
 export type { PresenceEntry } from "../../../packages/gateway-protocol/src/schema/snapshot.js";
 export type { GatewayWireSessionsDefaults as GatewaySessionsDefaults };
 export type { GatewayAgentRow } from "../../../src/shared/session-types.js";
-export type { GatewayContextWindowOption, GatewayThinkingLevelOption };
+export type { GatewayContextWindowOption };
 
 // The workspace view joins file results with separately fetched artifacts.
 export type SessionWorkspaceListResult = ProtocolSessionsFilesListResult & {

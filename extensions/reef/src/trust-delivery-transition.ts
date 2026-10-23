@@ -81,20 +81,18 @@ export function overdueReefDeliveries(
 export function pendingReefRejections(
   deliveries: ReturnType<typeof currentReefDeliveries>,
 ): Omit<ReefDeliveryRejection, "recovery">[] {
-  return deliveries
-    .flatMap(({ peer, id, delivery }) =>
-      delivery.rejection
-        ? [
-            {
-              peer,
-              id,
-              recipient: delivery.recipient,
-              ...(delivery.textHash ? { textHash: delivery.textHash } : {}),
-              ...(delivery.rejection.category ? { category: delivery.rejection.category } : {}),
-              ...(delivery.rejection.notice ? { reservedNotice: delivery.rejection.notice } : {}),
-            },
-          ]
-        : [],
-    )
-    .toSorted((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
+  return deliveries.flatMap(({ peer, id, delivery }) =>
+    delivery.rejection
+      ? [
+          {
+            peer,
+            id,
+            recipient: delivery.recipient,
+            ...(delivery.textHash ? { textHash: delivery.textHash } : {}),
+            ...(delivery.rejection.category ? { category: delivery.rejection.category } : {}),
+            ...(delivery.rejection.notice ? { reservedNotice: delivery.rejection.notice } : {}),
+          },
+        ]
+      : [],
+  );
 }

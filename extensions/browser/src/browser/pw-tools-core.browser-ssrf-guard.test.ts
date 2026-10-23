@@ -220,6 +220,7 @@ describe("pw-tools-core browser SSRF guards", () => {
       dialogs: { pending: [], recent: [] },
     });
     session.isBrowserObservedDialogBlockedError.mockReturnValueOnce(true);
+    session.isBrowserObservedDialogBlockedError.mockReturnValueOnce(true);
     const waitForFunction = vi.fn(async () => {});
     install({
       url: vi.fn(() => "https://example.com"),

@@ -24,11 +24,6 @@ type SessionMenuWorkParams = {
   execNode?: string;
 };
 
-type SessionMenuWorkResult = {
-  pullRequestUrl: string | null;
-  worktreePath: string | null;
-};
-
 async function loadPullRequestUrl(params: SessionMenuWorkParams): Promise<string | null> {
   try {
     const snapshot = await params.loadPullRequests?.();
@@ -61,9 +56,10 @@ async function loadWorktreePath(params: SessionMenuWorkParams): Promise<string |
   }
 }
 
-export async function fetchSessionMenuWork(
-  params: SessionMenuWorkParams,
-): Promise<SessionMenuWorkResult> {
+export async function fetchSessionMenuWork(params: SessionMenuWorkParams): Promise<{
+  pullRequestUrl: string | null;
+  worktreePath: string | null;
+}> {
   const [pullRequestUrl, worktreePath] = await Promise.all([
     loadPullRequestUrl(params),
     loadWorktreePath(params),

@@ -204,9 +204,8 @@ async function recordSmsDeliveryObservation(params: {
   }
 }
 
-export function createSmsDeliveryRecorder(
-  store: PluginStateKeyedStore<SmsDeliveryRecord> = openDeliveryStore(),
-) {
+export function createSmsDeliveryRecorder() {
+  const store = openDeliveryStore();
   return {
     async record({ account, form }: { account: ResolvedSmsAccount; form: Record<string, string> }) {
       const nowMs = Date.now();
@@ -239,8 +238,6 @@ export function createSmsDeliveryRecorder(
 export async function recordInitialSmsDeliveryResult(params: {
   account: ResolvedSmsAccount;
   result: SmsSendResult;
-  nowMs?: number;
-  store?: PluginStateKeyedStore<SmsDeliveryRecord>;
 }) {
   const messageSid = params.result.sid.trim();
   const status = normalizeDeliveryStatus(params.result.status ?? "");
@@ -258,20 +255,16 @@ export async function recordInitialSmsDeliveryResult(params: {
         status,
       }),
       status,
-      observedAt: params.nowMs ?? Date.now(),
+      observedAt: Date.now(),
     },
-    store: params.store ?? openDeliveryStore(),
+    store: openDeliveryStore(),
   });
 }
 
 export async function listRecentSmsDeliveryRecords(
   account: ResolvedSmsAccount,
-  limit = 1,
-  store: PluginStateKeyedStore<SmsDeliveryRecord> = openDeliveryStore(),
 ): Promise<SmsDeliveryRecord[]> {
-  if (limit <= 0) {
-    return [];
-  }
+  const store = openDeliveryStore();
   const accountSidHash = sha256Hex(account.accountSid);
   return (await store.entries())
     .map((entry) => entry.value)
@@ -280,5 +273,5 @@ export async function listRecentSmsDeliveryRecords(
         record.accountId === account.accountId && record.accountSidHash === accountSidHash,
     )
     .toSorted((left, right) => right.lastObservedAt - left.lastObservedAt)
-    .slice(0, limit);
+    .slice(0, 1);
 }

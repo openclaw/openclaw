@@ -592,8 +592,10 @@ result delivery remain separate facts.
 
 Once every native child has finished and its result has been captured, pending
 result delivery no longer prevents the parent from resuming. OpenClaw retains
-those results for delivery and retry. Running or interrupted children that can
-resume still protect the parent subscription.
+those results for delivery and retry. Running children still protect the parent
+subscription. Interrupted assignments remain resumable without pinning an idle
+parent. Admitted resumed execution reacquires protection before inference, even
+if its start notification is delayed.
 
 Retirement revokes captured requester authority immediately, then joins accepted
 native submission and assignment writes before releasing child subscriptions.

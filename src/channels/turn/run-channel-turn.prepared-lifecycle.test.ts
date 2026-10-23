@@ -2,6 +2,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { withPluginServiceScheduler } from "../../plugins/service-scheduler-binding.js";
 import { createPluginServiceScheduler } from "../../plugins/service-scheduler.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -11,6 +12,7 @@ import {
   recordAgentDatabaseAdmissions,
 } from "../../state/agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "../../state/agent-database-startup.js";
+import { withAgentInputRecoveryContext } from "../../state/agent-input-recovery-context.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { OpenClawDatabaseSchemaPreflight as Preflight } from "../../state/openclaw-database-preflight.types.js";
 import {
@@ -124,6 +126,73 @@ it("settles prepared resources when observe-only suppresses dispatch", async () 
   expect(hasFinalChannelTurnDispatch(result.dispatchResult)).toBe(false);
   expect(onFinalize).toHaveBeenCalledExactlyOnceWith(result);
 });
+
+it.each([
+  { outcome: "recovered", crossAgent: false },
+  { outcome: "failed", crossAgent: false },
+  { outcome: "stopped", crossAgent: false },
+  { outcome: "recovered", crossAgent: true },
+] as const)(
+  "holds fresh channel recording behind recovery: $outcome, cross-agent: $crossAgent",
+  async ({ outcome, crossAgent }) => {
+    const recovery = createDeferredCore();
+    const waiting = createDeferredCore();
+    const failure = new Error("Agent input recovery failed");
+    const gateway = createTestGatewayScheduler(createGatewaySchedulerClock(0).clock);
+    const { scheduler } = createPluginServiceScheduler(gateway);
+    const preDispatchFailure = vi.fn();
+    const pending = createTurn({
+      ctxPayload: createCtx({
+        AgentId: crossAgent ? "main" : "qa",
+        SessionKey: crossAgent ? "agent:main:command:peer" : "agent:qa:channel:peer",
+      }),
+      ...(crossAgent ? { record: { sessionKey: "agent:qa:channel:peer" } } : {}),
+      onPreDispatchFailure: preDispatchFailure,
+    });
+    const healthy = createTurn();
+    const withRecovery = <T>(run: () => T) =>
+      withAgentInputRecoveryContext(
+        () => ({
+          isPending: (agentId) => agentId === "qa",
+          waitForAgentInputRecovery: (agentId, options) => {
+            if (agentId !== "qa") {
+              return undefined;
+            }
+            waiting.resolve();
+            return racePromiseWithAbortSignal(recovery.promise, options?.signal);
+          },
+        }),
+        run,
+      );
+    const turn = withRecovery(() =>
+      withPluginServiceScheduler(scheduler, () => runPreparedChannelTurn(pending.turn)),
+    );
+    void turn.catch(() => {});
+    try {
+      expect(
+        await Promise.race([waiting.promise.then(() => "waiting"), turn.then(() => "dispatched")]),
+      ).toBe("waiting");
+      pending.expectIdle();
+      expect((await withRecovery(() => healthy.run())).dispatched).toBe(true);
+      if (outcome === "recovered") {
+        recovery.resolve();
+        expect((await turn).dispatched).toBe(true);
+      } else {
+        if (outcome === "failed") {
+          recovery.reject(failure);
+        } else {
+          await scheduler.stop();
+        }
+        await expect(turn).rejects.toBeInstanceOf(Error);
+        pending.expectIdle();
+        expect(preDispatchFailure).toHaveBeenCalledOnce();
+      }
+    } finally {
+      recovery.resolve();
+      await Promise.allSettled([turn, scheduler.stop(), gateway.stop()]);
+    }
+  },
+);
 
 it.for(["admitted", "failed", "account-stopped", "gateway-stopped"] as const)(
   "keeps replay behind its agent startup admission: %s",

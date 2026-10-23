@@ -68,6 +68,12 @@ const INTERNAL_TRACE_LINE_RE = new RegExp(
 const traceLineHeads = traceLineRules.flatMap(({ heads }) =>
   heads.flatMap((parts) => [parts, [">", ...parts]]),
 );
+const INTERNAL_TRACE_HEAD_RE = new RegExp(
+  `^[^\\S\\r\\n]*(?:${traceLineHeads
+    .map((parts) => parts.map(escapeRegExp).join("\\s*"))
+    .join("|")})`,
+  "im",
+);
 
 /**
  * Strip malformed Minimax tool invocations that leak into text content.
@@ -211,6 +217,10 @@ function stripRelevantMemoriesTags(text: string): string {
 }
 
 function stripAssistantInternalTraceLines(text: string): string {
+  // Every removable line contains a canonical head, even when whitespace precedes it.
+  if (!INTERNAL_TRACE_HEAD_RE.test(text)) {
+    return text;
+  }
   return stripLinesOutsideCode(text, (line) => INTERNAL_TRACE_LINE_RE.test(line.trim()));
 }
 

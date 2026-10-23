@@ -104,16 +104,12 @@ export function isStrictOpenAIJsonSchemaCompatible(schema: unknown): boolean {
   return compatible;
 }
 
-type OpenAIStrictToolSchemaDiagnostic = {
+/** Returns strict-schema diagnostics for an already materialized OpenAI tool projection. */
+export function findOpenAIStrictToolProjectionDiagnostics(projection: OpenAIToolProjection): {
   toolIndex: number;
   toolName?: string;
   violations: string[];
-};
-
-/** Returns strict-schema diagnostics for an already materialized OpenAI tool projection. */
-export function findOpenAIStrictToolProjectionDiagnostics(
-  projection: OpenAIToolProjection,
-): OpenAIStrictToolSchemaDiagnostic[] {
+}[] {
   return [
     ...projection.diagnostics.map((diagnostic) => ({
       toolIndex: diagnostic.toolIndex,

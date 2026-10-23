@@ -20,11 +20,11 @@ import { ChatImageLightbox } from "./components/chat-image-lightbox-view.tsx";
 import { PaneHeaderView } from "./components/chat-pane-header.tsx";
 import type { ChatPaneHeaderPresentation } from "./components/chat-pane-header.types.ts";
 import type { SidebarRegionViewProps } from "./components/chat-sidebar-region-types.ts";
+import { SubagentDesktopAvatar } from "./components/chat-subagent-avatar.tsx";
 import {
   ChatSubagentMobileHeader,
   type ChatSubagentMobileStop,
-} from "./components/chat-subagents-mobile.tsx";
-import { SubagentDesktopAvatar } from "./components/chat-subagents-panel-desktop.tsx";
+} from "./components/chat-subagent-mobile-header.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 

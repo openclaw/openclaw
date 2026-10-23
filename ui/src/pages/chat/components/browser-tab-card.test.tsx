@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { projectToolResultDetails } from "../../../../../src/gateway/chat-display-projection.canvas.js";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
@@ -13,7 +12,8 @@ import { latestBrowserTabCards } from "../../../lib/chat/browser-tab-preview.ts"
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { ApplicationProvider } from "../../../lib/reactive/context.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
-import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
+import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createInitializationContext } from "../chat-pane.test-support.ts";
 import { groupMessages } from "../chat-thread-grouping.ts";
@@ -22,7 +22,7 @@ import { ActivityGroup } from "./chat-message-group-view.tsx";
 
 const hosts: HTMLElement[] = [];
 type ActivityProps = Parameters<typeof ActivityGroup>[0];
-const activityGroups = new Map<HTMLElement, (props: ActivityProps) => void>();
+const activityGroups = new Map<HTMLElement, ReturnType<typeof mountSolid<ActivityProps>>>();
 type CardProps = Parameters<typeof BrowserTabCardHost>[0];
 const cards = new Map<
   HTMLElement,
@@ -34,26 +34,26 @@ const cards = new Map<
 >();
 
 function drawGroup(host: HTMLElement, props: ActivityProps, context?: ApplicationContext) {
-  const update = activityGroups.get(host);
-  if (update) {
-    update(props);
+  const view = activityGroups.get(host);
+  if (view) {
+    view.update(props);
   } else {
-    mountSolid(
-      () => {
-        const [current, setCurrent] = createSignal(props);
-        activityGroups.set(host, setCurrent);
-        return context ? (
-          <ApplicationProvider value={context}>
-            <ActivityGroup {...current()} />
-          </ApplicationProvider>
-        ) : (
-          <ActivityGroup {...current()} />
-        );
-      },
-      { container: host },
+    activityGroups.set(
+      host,
+      mountSolid(
+        (current: ActivityProps) =>
+          context ? (
+            <ApplicationProvider value={context}>
+              <ActivityGroup {...current} />
+            </ApplicationProvider>
+          ) : (
+            <ActivityGroup {...current} />
+          ),
+        props,
+        host,
+      ),
     );
   }
-  flush();
 }
 
 function updateCard(element: HTMLElement, patch: Partial<CardProps>) {
@@ -226,18 +226,13 @@ async function card(
     latest,
     context,
   } satisfies CardProps;
-  let update!: (props: CardProps) => void;
-  const view = mountSolid(
-    () => {
-      const [current, setCurrent] = createSignal<CardProps>(props);
-      update = setCurrent;
-      return <BrowserTabCardHost {...current()} />;
-    },
-    { container: container() },
-  );
-  flush();
+  const view = mountSolid<CardProps>(BrowserTabCardHost, props, container());
   const element = view.container.querySelector<HTMLElement>("openclaw-browser-tab-card")!;
-  cards.set(element, { props, update, unmount: view.unmount });
+  cards.set(element, {
+    props,
+    update: (next) => view.update(next),
+    unmount: () => view.dispose(),
+  });
   return element;
 }
 

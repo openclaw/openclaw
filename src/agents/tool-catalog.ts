@@ -37,16 +37,6 @@ type ToolProfilePolicy = {
   deny?: string[];
 };
 
-type CoreToolSection = {
-  id: string;
-  label: string;
-  tools: Array<{
-    id: string;
-    label: string;
-    description: string;
-  }>;
-};
-
 export type CoreToolFactoryFamily = "base-coding" | "shell" | "openclaw";
 
 type CoreToolFacts = {
@@ -410,7 +400,15 @@ export function resolveCoreToolProfilePolicy(profile?: string): ToolProfilePolic
 export function listCoreToolSections(params?: {
   swarmEnabled?: boolean;
   personalInstructionsEnabled?: boolean;
-}): CoreToolSection[] {
+}): Array<{
+  id: string;
+  label: string;
+  tools: Array<{
+    id: string;
+    label: string;
+    description: string;
+  }>;
+}> {
   // Callers resolve the swarm gate and pass the fact in; resolving config here
   // would couple this ui-shared module to the server graph.
   const swarmEnabled = params?.swarmEnabled === true;

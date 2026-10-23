@@ -10,11 +10,7 @@ import { acquireGatewayTestClient } from "../../test/helpers/gateway-client.js";
 import { GATEWAY_RESTART_TEST_KILL_MS } from "../../test/helpers/gateway-restart-budget.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { runQaGatewayTestFixture } from "../../test/helpers/qa-gateway-test-lifetime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { generateStoredDeviceIdentity } from "../infra/device-identity-store.js";
@@ -558,26 +554,20 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
           });
         }
         const startup = (restarting = gateway.startGateway());
-        const awaitWhileStarting = <T>(gate: PromiseLike<T>, message: string) =>
-          withinTest(awaitGateBeforeSettlement(gate, startup, message), signal);
+        const awaitRecovery = <T>(gate: PromiseLike<T>) =>
+          withinTest(Promise.race([gate, startup.then(() => gate)]), signal);
         try {
-          await awaitWhileStarting(
-            recoveredResponseReady.promise,
-            "Gateway startup settled before recovery reached the first chat input",
-          );
+          await awaitRecovery(recoveredResponseReady.promise);
         } catch (error) {
           throw new Error(
             `Recovery did not reach the first chat input: ${JSON.stringify({ observed, providerRequests })}\n${gateway.logs()}`,
             { cause: error },
           );
         }
-        // Both provider gates must be reached before `restarting` settles: readiness
-        // deliberately remains pending while the recovered response is held.
+        // Startup may settle before or after held model calls; only its failure aborts waiting.
+        // Require successful startup after releasing the provider responses below.
         // A held turn in one session must not keep other sessions from replaying.
-        await awaitWhileStarting(
-          parallelResponsesReady.promise,
-          "Gateway startup settled before parallel recovery reached every held response",
-        );
+        await awaitRecovery(parallelResponsesReady.promise);
         expect(parallelObserved).toEqual(
           parallelTargets.map((_, index) => [`PARALLEL_INPUT_${index}_1`]),
         );
@@ -586,9 +576,8 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
             .logs()
             .slice(beforeRestartLogs)
             .match(/startup (?:trace|phase): sidecars\.subagent-recovery ([0-9.]+)ms/u);
-        await awaitWhileStarting(
+        await awaitRecovery(
           vi.waitFor(() => expect(recoveryTrace()).not.toBeNull(), { timeout: 10_000 }),
-          "Gateway startup settled before recovery timing was recorded",
         );
         const recoveryMs = Number(recoveryTrace()![1]);
         for (const response of parallelResponses.values()) {

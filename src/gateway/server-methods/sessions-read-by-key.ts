@@ -5,7 +5,12 @@ import {
   errorShape,
   validateSessionsDescribeParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { withNativeSubagentsRead } from "../../agents/harness/native-subagents.js";
+import { lazyCompile } from "../../../packages/gateway-protocol/src/protocol-validator.js";
+import {
+  NativeSubagentsSnapshotSchema,
+  type NativeSubagentsSnapshot,
+} from "../../../packages/gateway-protocol/src/schema/native-subagents.js";
+import { captureAgentHarnessLifecycleHooks } from "../../agents/harness/registry-lifecycle.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { projectOperatorModelRead } from "../operator-model-presentation.js";
 import { hasOperatorBoundary } from "../operator-role-policy.js";
@@ -22,6 +27,8 @@ import { createVisibleActiveSessionRunProjector } from "./session-active-runs.js
 import { requireSessionKey } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
+
+const validateNativeSubagentsSnapshot = lazyCompile(NativeSubagentsSnapshotSchema);
 
 export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
   "sessions.describe": async ({
@@ -92,61 +99,101 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      await withNativeSubagentsRead(
-        {
-          agentId: selected.agentId,
-          sessionKey: selected.key,
-          sessionId: selected.entry.sessionId,
-          lifecycleRevision: selected.entry.lifecycleRevision,
-          storePath: selected.storeTarget.storePath,
-          assertCurrent: () => {
-            signal?.throwIfAborted();
-            sessionMutationAuthorization?.assertCurrent();
-            if (!projection.isCurrent(selected)) {
-              throw new Error("Session changed while reading native subagents");
-            }
-          },
-        },
-        async (nativeSubagents, assertCurrent) => {
-          await withReadySessionRows(projection, queries, (read) => {
+      const readParams = {
+        agentId: selected.agentId,
+        sessionKey: selected.key,
+        sessionId: selected.entry.sessionId,
+        lifecycleRevision: selected.entry.lifecycleRevision,
+        storePath: selected.storeTarget.storePath,
+      };
+      // Observe retained work even when its parent's selected runtime has since changed.
+      const owners = captureAgentHarnessLifecycleHooks("readNativeSubagents");
+      let active = true;
+      const assertCurrent = () => {
+        signal?.throwIfAborted();
+        sessionMutationAuthorization?.assertCurrent();
+        if (!projection.isCurrent(selected)) {
+          throw new Error("Session changed while reading native subagents");
+        }
+        if (!active || owners.some((owner) => !owner.isCurrent())) {
+          throw new Error("Native subagent observation owner changed");
+        }
+      };
+      try {
+        assertCurrent();
+        const snapshots = await Promise.all(
+          owners.map(async (owner) => {
+            const observed = await owner.prepare({ ...readParams, assertCurrent });
             assertCurrent();
-            sessionMutationAuthorization?.assertCurrent();
-            const presentation = prepareProjectedSessionPresentation(
-              read,
-              client,
-              Date.now(),
-              createVisibleActiveSessionRunProjector(
-                read.state.rowContext.projectedAgentRuns,
-                undefined,
-                context.resolveGatewayContext,
-                read.physicalPaths,
-              ),
+            if (observed !== undefined && !validateNativeSubagentsSnapshot(observed)) {
+              throw new Error("Invalid native subagent observation");
+            }
+            return (
+              observed && {
+                coverage: observed.coverage,
+                children: observed.children.map((child) => ({
+                  id: `${owner.registration.harness.id}:${child.id}`,
+                  label: child.label,
+                  status: child.status,
+                })),
+                truncated: observed.truncated,
+              }
             );
-            const query = { key, agentId: selected.agentId };
-            const denied = presentation.authorizeDescription(query);
-            if (denied) {
-              respond(false, undefined, denied);
-              return;
+          }),
+        );
+        const available = snapshots.filter((observed) => observed !== undefined);
+        const children = available.flatMap((observed) => observed.children);
+        const nativeSubagents: NativeSubagentsSnapshot | undefined = available.length
+          ? {
+              coverage: "live",
+              children: children.slice(0, 128),
+              truncated: children.length > 128 || available.some((observed) => observed.truncated),
             }
-            const current = read.describe(query, selected);
-            if (
-              !current ||
-              current.entry.sessionId !== selected.entry.sessionId ||
-              current.entry.lifecycleRevision !== selected.entry.lifecycleRevision ||
-              (hasOperatorBoundary(client, read.state.policyConfig) &&
-                presentation.sharing.entryFilter?.(current.key, current.entry) === false)
-            ) {
-              respond(true, { session: null });
-              return;
-            }
-            assertCurrent();
-            respond(true, {
-              session: presentation.present(current, params),
-              ...(nativeSubagents === undefined ? {} : { nativeSubagents }),
-            });
+          : undefined;
+        assertCurrent();
+        if (nativeSubagents !== undefined && !validateNativeSubagentsSnapshot(nativeSubagents)) {
+          throw new Error("Invalid combined native subagent observation");
+        }
+        await withReadySessionRows(projection, queries, (read) => {
+          assertCurrent();
+          sessionMutationAuthorization?.assertCurrent();
+          const presentation = prepareProjectedSessionPresentation(
+            read,
+            client,
+            Date.now(),
+            createVisibleActiveSessionRunProjector(
+              read.state.rowContext.projectedAgentRuns,
+              undefined,
+              context.resolveGatewayContext,
+              read.physicalPaths,
+            ),
+          );
+          const query = { key, agentId: selected.agentId };
+          const denied = presentation.authorizeDescription(query);
+          if (denied) {
+            respond(false, undefined, denied);
+            return;
+          }
+          const current = read.describe(query, selected);
+          if (
+            !current ||
+            current.entry.sessionId !== selected.entry.sessionId ||
+            current.entry.lifecycleRevision !== selected.entry.lifecycleRevision ||
+            (hasOperatorBoundary(client, read.state.policyConfig) &&
+              presentation.sharing.entryFilter?.(current.key, current.entry) === false)
+          ) {
+            respond(true, { session: null });
+            return;
+          }
+          assertCurrent();
+          respond(true, {
+            session: presentation.present(current, params),
+            ...(nativeSubagents === undefined ? {} : { nativeSubagents }),
           });
-        },
-      );
+        });
+      } finally {
+        active = false;
+      }
     } catch {
       respond(
         false,

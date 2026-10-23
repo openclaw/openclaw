@@ -678,6 +678,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/gateway/session-reset-acp.controller.test.ts",
   "src/auto-reply/reply/abort.test.ts",
   "src/auto-reply/reply/dispatch-from-config.pending-restart.test.ts",
+  "src/auto-reply/reply/dispatch-from-config.transcript-reset.integration.test.ts",
   "src/auto-reply/reply/session.acp-reset-routing.test.ts",
   "src/auto-reply/reply/session-fork.test.ts",
   "src/auto-reply/reply/dispatch-acp.test.ts",
@@ -805,7 +806,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/sessions/session-manager-metadata-runtime.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-phase-lifecycle.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-prompt-phase.admission.test.ts",
-  "src/agents/embedded-agent-runner/run/attempt-prompt-submit.steering.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-session-replay.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-session-replay-cohort.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-execution-settle.test.ts",
@@ -1374,6 +1374,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/gateway/server-cron.projection.test.ts",
   "src/infra/database-engine/plugin-lifecycle-lease.postgres.test.ts",
   "src/infra/database-engine/session-path-alias.conformance.test.ts",
+  "src/infra/database-engine/session-archive-alias.conformance.test.ts",
 ];
 
 const databaseWorkerCoreTestFileSet = new Set(databaseWorkerCoreTestFiles);

@@ -1,10 +1,11 @@
-import { createMemo, createSignal, For, latest, Loading, onCleanup, onSettled } from "solid-js";
+import { createMemo, createSignal, For, latest, Loading, onSettled } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/tooltip.ts";
 import { KeyboardShortcut, ShortcutText } from "../../components/solid/kbd.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../lib/keyboard-shortcut-contract.ts";
+import { elementRef } from "../../lib/reactive/element-ref.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
 import { resolvePaletteSessionSettings, type SettingsOptions } from "./palette-session-settings.ts";
@@ -39,15 +40,11 @@ export function PaletteSessionSettingsView(properties: {
   let focusTarget: FocusTarget | undefined;
   const focusTargets: Partial<Record<FocusTarget, HTMLElement>> = {};
   const focusControls = new Set<HTMLElement>();
-  const controlRef = () => {
-    let control: HTMLElement;
-    // Each conditional control owns its registration, including removal before the panel settles.
-    onCleanup(() => focusControls.delete(control));
-    return (element: HTMLElement) => {
-      focusControls.delete(control);
-      focusControls.add((control = element));
-    };
-  };
+  const controlRef = () =>
+    elementRef((element: HTMLElement) => {
+      focusControls.add(element);
+      return () => focusControls.delete(element);
+    });
   let readAgentControls: (() => readonly HTMLElement[]) | undefined;
   let popover!: PopoverHandle;
   const close = (preferences: SettingsOptions["preferences"]) => {
@@ -442,7 +439,7 @@ export function PaletteSessionSettingsView(properties: {
               >
                 <input
                   type="checkbox"
-                  ref={controlRef()}
+                  ref={[controlRef()]}
                   checked={properties.options.preferences.remember}
                   disabled={view().locked || !properties.options.preferences.available}
                   onChange={(event) =>

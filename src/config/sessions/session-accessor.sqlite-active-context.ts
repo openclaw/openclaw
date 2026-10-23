@@ -16,6 +16,8 @@ import type {
 import { iterateUnindexedActiveTranscriptNavigation } from "./session-accessor.sqlite-history-navigation.js";
 import {
   getActiveTranscriptKysely,
+  selectActiveTranscriptEventRows,
+  selectActiveTranscriptIdentityRows,
   type CurrentTranscriptProjection,
 } from "./session-accessor.sqlite-projection-read.js";
 import {
@@ -73,16 +75,9 @@ function readBoundedRetentionRanges(
   );
   if (missing.length > 0) {
     const lastSelectedSeq = rows.reduce((maximum, row) => Math.max(maximum, row.seq), -Infinity);
-    const db = getActiveTranscriptKysely(projection.database);
     const anchors = executeSqliteQuerySync(
       projection.database.db,
-      db
-        .selectFrom("transcript_event_identities as identity")
-        .innerJoin("session_transcript_active_events as active", (join) =>
-          join
-            .onRef("active.session_id", "=", "identity.session_id")
-            .onRef("active.event_seq", "=", "identity.seq"),
-        )
+      selectActiveTranscriptIdentityRows(projection.database)
         .select(["identity.event_id", "identity.seq"])
         .where("identity.session_id", "=", projection.resolved.sessionId)
         .where("identity.event_id", "in", missing)
@@ -370,13 +365,7 @@ export function readSessionTranscriptBoundedActiveContextCore(
           .slice(0, limits ? limits.maxEvents + 1 : undefined)
       : iterateSqliteQuerySync(
           projection.database.db,
-          db
-            .selectFrom("session_transcript_active_events as active")
-            .innerJoin("transcript_events as event", (join) =>
-              join
-                .onRef("event.session_id", "=", "active.session_id")
-                .onRef("event.seq", "=", "active.event_seq"),
-            )
+          selectActiveTranscriptEventRows(projection.database)
             .select([
               "active.event_seq",
               "active.active_position",
@@ -418,13 +407,7 @@ export function readSessionTranscriptBoundedActiveContextCore(
           projection.database.db,
           db
             .selectFrom(
-              db
-                .selectFrom("transcript_event_identities as identity")
-                .innerJoin("session_transcript_active_events as active", (join) =>
-                  join
-                    .onRef("active.session_id", "=", "identity.session_id")
-                    .onRef("active.event_seq", "=", "identity.seq"),
-                )
+              selectActiveTranscriptIdentityRows(projection.database)
                 .select((eb) => [
                   "active.active_position",
                   "identity.seq",

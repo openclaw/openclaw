@@ -127,13 +127,16 @@ async function fetchClaudeWebUsage(
     Accept: "application/json",
   };
 
-  const parsedOrgs = await fetchUsageJson({
-    provider: "anthropic",
-    url: "https://claude.ai/api/organizations",
-    init: { headers },
-    timeoutMs,
-    fetchFn,
-  });
+  const fetchWebUsage = (url: string) =>
+    fetchUsageJson({
+      provider: "anthropic",
+      url,
+      init: { headers },
+      timeoutMs,
+      fetchFn,
+    });
+
+  const parsedOrgs = await fetchWebUsage("https://claude.ai/api/organizations");
   if (!parsedOrgs.ok) {
     return null;
   }
@@ -143,13 +146,7 @@ async function fetchClaudeWebUsage(
     return null;
   }
 
-  const parsedUsage = await fetchUsageJson({
-    provider: "anthropic",
-    url: `https://claude.ai/api/organizations/${orgId}/usage`,
-    init: { headers },
-    timeoutMs,
-    fetchFn,
-  });
+  const parsedUsage = await fetchWebUsage(`https://claude.ai/api/organizations/${orgId}/usage`);
   if (!parsedUsage.ok) {
     return null;
   }

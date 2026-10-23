@@ -3,6 +3,7 @@ import { createMemo, createSignal, onSettled } from "solid-js";
 import { TERMINAL_UPLOAD_RETENTION_MS } from "../../../../packages/gateway-protocol/src/schema/terminal-constants.js";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import { t } from "../../i18n/index.ts";
+import { registerTerminalEnglish } from "../../i18n/locales/en-terminal.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import {
@@ -15,6 +16,8 @@ import {
   quoteTerminalUploadPath,
   uploadTerminalFile,
 } from "./terminal-file-upload.ts";
+
+registerTerminalEnglish();
 
 type TerminalUploadTab = {
   gatewaySessionId: string;

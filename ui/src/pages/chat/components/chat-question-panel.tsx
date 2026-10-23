@@ -9,6 +9,7 @@ import {
 } from "solid-js";
 import type { QuestionDraft } from "../../../app/question-prompt.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatQuestionsEnglish } from "../../../i18n/locales/en-chat-questions.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { EXTERNAL_LINK_TARGET, buildExternalLinkRel } from "../../../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
@@ -27,6 +28,8 @@ import type {
   QuestionPanelQuestion,
   QuestionPanelViewModel,
 } from "./chat-question-types.ts";
+
+registerEnglishCatalog(registerChatQuestionsEnglish);
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -362,6 +365,7 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
               role="group"
               aria-label={model().title}
               tabindex={0}
+              data-chat-autotype-shortcuts="active"
               onKeyDown={(event) => handleKeyDown(event, item())}
             >
               <div

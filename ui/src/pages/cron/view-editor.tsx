@@ -9,8 +9,9 @@ import { providerIdFromModelRef } from "../../components/provider-icon-data.ts";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
+import { registerPreferencesEnglish } from "../../i18n/locales/en-preferences.ts";
 import type { CronFormState } from "../../lib/cron/types.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { createCronEditorClearance } from "./editor-clearance.ts";
 import { CronScratchEditor } from "./scratch-editor.tsx";
 import { DeliverySection, Advanced } from "./view-delivery.tsx";
@@ -25,6 +26,9 @@ import {
 } from "./view-fields.tsx";
 import { ScheduleSection } from "./view-schedule.tsx";
 import type { CronProps, CronPanelMode } from "./view-types.ts";
+
+registerEnglishCatalog(registerPreferencesEnglish);
+
 export function Editor(
   props: CronProps & {
     mode: CronPanelMode;

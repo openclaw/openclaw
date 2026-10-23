@@ -134,7 +134,8 @@ const storeTarget = (key: string) => ({
   storePath: "/fixture/sessions.json",
   store: { [key]: key === delivery.source.sessionKey ? sourceEntry : targetEntry },
 });
-const recover = (signal = controller().signal) => recoverSessionSendDeliveries(context, signal);
+const recover = (signal = controller().signal) =>
+  recoverSessionSendDeliveries(context, signal).settled;
 async function recoverWithTimers(signal = controller().signal) {
   await Promise.all([recover(signal), vi.runAllTimersAsync()]);
 }
@@ -945,7 +946,7 @@ it.each(recoveryDiagnosticCases)(
     for (const retry of retries) {
       warn.mockImplementationOnce(() => retry.resolve());
     }
-    const recovery = recoverSessionSendDeliveries(context, controller().signal);
+    const recovery = recoverSessionSendDeliveries(context, controller().signal).settled;
     for (const retry of retries) {
       // A dynamic requester import can finish after an empty fake-timer drain.
       await Promise.race([retry.promise, recovery]);

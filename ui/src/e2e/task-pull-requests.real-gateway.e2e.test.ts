@@ -470,9 +470,7 @@ suite.define(() => {
                   .poll(() => row.locator(".session-row-badge--pull-request").count())
                   .toBe(1);
                 expect(
-                  await card
-                    .getByRole("link", { name: "Create a pull request for " + branch })
-                    .count(),
+                  await card.getByRole("link", { name: "Create PR for " + branch }).count(),
                 ).toBe(1);
                 for (const number of numbers) {
                   expect(

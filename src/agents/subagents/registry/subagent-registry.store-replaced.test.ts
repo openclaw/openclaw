@@ -63,7 +63,6 @@ import { observeRootWork } from "./subagent-registry.browser-cleanup.test-suppor
 import {
   activateSubagentRegistry,
   initSubagentRegistry,
-  leasePendingAgentSteeringItems,
   resetSubagentRegistryForTests,
 } from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -421,7 +420,7 @@ it.each(["same", "restore", "unknown retry", "failed", "pending acknowledgment"]
         await initSubagentRegistry();
         const context = createGatewayRequestContext(makeContextParams());
         context.resolveGatewayContext = () => context;
-        await activateSubagentRegistry(() => context);
+        await activateSubagentRegistry(() => context).settled;
         await settleRootWork(true);
       }
     } else {
@@ -433,7 +432,7 @@ it.each(["same", "restore", "unknown retry", "failed", "pending acknowledgment"]
     if (change === "unknown retry") {
       const context = createGatewayRequestContext(makeContextParams());
       context.resolveGatewayContext = () => context;
-      await activateSubagentRegistry(() => context);
+      await activateSubagentRegistry(() => context).settled;
       try {
         expect(retireNotifications).toHaveBeenCalled();
         await expect(retireNotifications.mock.results[0]?.value).rejects.toThrow(
@@ -477,15 +476,6 @@ it.each(["same", "restore", "unknown retry", "failed", "pending acknowledgment"]
       expect(persisted?.requesterSettleWake).toBeUndefined();
     }
     expect(hasSubagentControllerInput(subagent)).toBe(change === "same");
-    const lease = await leasePendingAgentSteeringItems({
-      requesterSessionKey: subagent.requesterSessionKey,
-      leaseId: "after-store-publication",
-    });
-    if (change === "same") {
-      expect(lease?.prompt).toContain("canonical result");
-    } else {
-      expect(lease).toBeUndefined();
-    }
   },
 );
 

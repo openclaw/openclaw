@@ -5,13 +5,14 @@ import { readNodePermissionRequest } from "../../../../../packages/gateway-proto
 import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display-call.js";
 import { browserTabKey } from "../../../components/browser/browser-target.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
 import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
 import { readToolApprovalReviews } from "../../../lib/chat/tool-approval-reviews.ts";
 import { resolveToolCallInput } from "../../../lib/chat/tool-call-input.ts";
 import { resolveToolCardDisplay, resolveToolCardOutcome } from "../../../lib/chat/tool-cards.ts";
 import { resolveToolDisplayIdentity } from "../../../lib/chat/tool-display-identity.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { PluginSurface } from "../../../plugins/control-ui-view.solid.tsx";
 import { BrowserTabCardHost } from "./browser-tab-card.tsx";
 import { DiffStatChips } from "./chat-diff-stat.solid.tsx";
@@ -24,6 +25,8 @@ import { ExpandedToolCardContent } from "./chat-tool-content.solid.tsx";
 import { ToolOutcomeSummary } from "./chat-tool-outcome-summary.solid.tsx";
 import { toolResultSurfaceProps } from "./chat-tool-render-model.ts";
 import { resolveToolRowVerb } from "./chat-tool-row-presentation.ts";
+
+registerEnglishCatalog(registerChatToolLabelsEnglish);
 
 const ToolCardRow = lazy(() => import("./chat-tool-card-row.solid.tsx"), { export: "ToolCardRow" });
 

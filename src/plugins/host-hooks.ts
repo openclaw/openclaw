@@ -129,6 +129,16 @@ export type PluginSessionActionContext = {
   client?: {
     connId?: string;
     scopes: string[];
+    /**
+     * Live check: whether the caller's current operator role allows this agent.
+     * Re-evaluated on every call, so check it right before reading agent data.
+     */
+    allowsAgent?: (agentId: string) => boolean;
+    /**
+     * Live check: whether several people currently share this Gateway, so admin
+     * scope distinguishes the owner. Re-evaluated on every call.
+     */
+    isSharedGateway?: () => boolean;
   };
 };
 

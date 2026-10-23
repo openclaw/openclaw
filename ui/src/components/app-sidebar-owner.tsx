@@ -13,10 +13,12 @@ import "./sidebar-attention.tsx";
 import "./tooltip.ts";
 import { renderAppSidebarOnline, sidebarOnlineOrder } from "./app-sidebar-online.tsx";
 import { hidePersonalSidebarCatalog } from "./app-sidebar-personal-navigation.ts";
-import { renderSidebarRail, renderSidebarPages } from "./app-sidebar-rail.tsx";
+import { renderSidebarRail } from "./app-sidebar-rail.tsx";
 import "../styles/sidebar-reorder.css";
 import "../styles/app-sidebar.css";
 import "../styles/sidebar-rail.css";
+import "../styles/sidebar-pinned-agents.css";
+import "../styles/sidebar-agent-roster.css";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.tsx";
 import type { CatalogSessionMenuRequest } from "./app-sidebar-session-catalogs.ts";
 import { renderSessionListToolbar } from "./app-sidebar-session-filter-summary.tsx";
@@ -36,7 +38,6 @@ import {
   type SidebarToolActivity,
 } from "./app-sidebar-session-types.ts";
 import { SessionOrganizer } from "./session-organizer.ts";
-import { SidebarAgentRoster, renderSidebarPinnedSession } from "./sidebar-agent-roster.tsx";
 import type { createSidebarScroll } from "./sidebar-context-controller.ts";
 import { createSidebarMenus } from "./sidebar-menus.tsx";
 import type { SidebarNavigationCatalog } from "./sidebar-navigation-catalog.ts";
@@ -48,10 +49,21 @@ import {
 } from "./sidebar-snapshot-capture.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 import { createSidebarSnapshot } from "./sidebar-snapshot.ts";
+import { SidebarViewBoundary } from "./sidebar-view-boundary.tsx";
 import { GatewayStatus } from "./solid/gateway-status.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { PanelRefreshStatus } from "./solid/panel-refresh-status.tsx";
 import { SidebarCommunityInvite } from "./solid/sidebar-community-invite.tsx";
+
+const SidebarAgentRoster = lazy(() => import("./sidebar-agent-roster.tsx"), {
+  export: "SidebarAgentRoster",
+});
+const SidebarPinnedSession = lazy(() => import("./sidebar-agent-roster.tsx"), {
+  export: "SidebarPinnedSession",
+});
+const SidebarPages = lazy(() => import("./app-sidebar-pages.tsx"), {
+  export: "SidebarPages",
+});
 
 export class AppSidebarOwner extends AppSidebarSessionNavigationElement implements SessionListHost {
   private readonly emptyNarrationLines = new Map<string, string>();
@@ -189,7 +201,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     return snapshot && Array.isArray(snapshot.gateways) ? snapshot : null;
   }
 
-  // Catalog rows retain their idle prewarm and only render at their keyed section.
+  // Catalog rows load when their keyed section needs them.
   private readonly Catalog = lazy(() => import("./app-sidebar-session-catalog-render.tsx"), {
     export: "renderSessionCatalogGroups",
   });
@@ -375,7 +387,9 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     const row = <SessionTree host={this} session={session()} listItem={false} />;
     return (
       <Show when={this.sidebarAgentsMode === "roster"} fallback={row}>
-        {renderSidebarPinnedSession(this, session)}
+        <SidebarViewBoundary fallback={row}>
+          <SidebarPinnedSession host={this} session={session()} />
+        </SidebarViewBoundary>
       </Show>
     );
   }
@@ -446,15 +460,17 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
           <LoadCatalogRenderer />
         </Show>
         <Show when={host().sidebarAgentsMode === "roster"} fallback={nativeList}>
-          <SidebarAgentRoster
-            host={host()}
-            active={
-              host().navigationVisible &&
-              host().navigationView === "sessions" &&
-              !host().contextualSidebar
-            }
-            sections={sections()}
-          />
+          <SidebarViewBoundary>
+            <SidebarAgentRoster
+              host={host()}
+              active={
+                host().navigationVisible &&
+                host().navigationView === "sessions" &&
+                !host().contextualSidebar
+              }
+              sections={sections()}
+            />
+          </SidebarViewBoundary>
         </Show>
       </>
     );
@@ -468,7 +484,11 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     const SidebarFrame = () => {
       const scrollRef = scroll.createRef();
       const rail = renderSidebarRail(this);
-      const Pages = () => renderSidebarPages(this);
+      const Pages = () => (
+        <SidebarViewBoundary>
+          <SidebarPages host={this} />
+        </SidebarViewBoundary>
+      );
       const toolbar = renderSessionListToolbar(this);
       const Online = () => renderAppSidebarOnline(this);
       const menus = this.sidebarMenus.render(this);

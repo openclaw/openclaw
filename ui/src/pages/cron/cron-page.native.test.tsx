@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { CronJob } from "../../api/types.ts";
 import { createApplicationRouter } from "../../app-routes.ts";
@@ -73,8 +73,12 @@ it.each([true, false])(
     const job = createCronViewJob("optimistic", { enabled: true });
     const update = createDeferred<CronJob>();
     let serverJob = job;
+    const otherJob = createCronViewJob("other");
+    const refreshed = createDeferred<ReturnType<typeof cronListResponse>>();
+    let reconciling = false;
     const request = cronRpc({
-      "cron.list": () => cronListResponse([{ ...serverJob }]),
+      "cron.list": () =>
+        reconciling ? refreshed.promise : cronListResponse([{ ...serverJob }, otherJob]),
       "cron.update": () => update.promise,
     });
     const { page } = mountCronPage(request);
@@ -86,6 +90,11 @@ it.each([true, false])(
       ).length;
       const row = page.querySelector('[data-test-id="cron-row-optimistic"]');
       const toggle = page.querySelector<HTMLInputElement>(selector)!;
+      const disabledChanges: MutationRecord[] = [];
+      const observer = new MutationObserver((records) => disabledChanges.push(...records));
+      observer.observe(toggle, { attributes: true, attributeFilter: ["disabled"] });
+      onTestFinished(() => observer.disconnect());
+      toggle.focus();
       toggle.checked = false;
       toggle.dispatchEvent(new Event("change", { bubbles: true }));
       await waitForSolid(() => {
@@ -99,11 +108,29 @@ it.each([true, false])(
           "true",
         );
       });
+      expect(toggle.disabled).toBe(false);
+      expect(document.activeElement).toBe(toggle);
+      expect(
+        page.querySelector<HTMLInputElement>('[data-test-id="cron-row-toggle-other"] input')
+          ?.disabled,
+      ).toBe(true);
+      toggle.click();
+      expect(request.mock.calls.filter(([method]) => method === "cron.update")).toHaveLength(1);
       // The visual expected value never becomes synchronous domain authority.
       expect(page.cron.cronJobs[0]?.enabled).toBe(true);
       if (accepted) {
         serverJob = { ...job, enabled: false, updatedAtMs: 2, configRevision: "paused" };
+        reconciling = true;
         update.resolve(serverJob);
+        await waitForSolid(() =>
+          expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(
+            readsBeforePause + 1,
+          ),
+        );
+        expect(toggle.disabled).toBe(false);
+        expect(toggle.getAttribute("aria-disabled")).toBe("true");
+        expect(document.activeElement).toBe(toggle);
+        refreshed.resolve(cronListResponse([serverJob, otherJob]));
       } else {
         update.reject(new Error("Gateway declined the pause"));
       }
@@ -114,6 +141,11 @@ it.each([true, false])(
         expect(page.querySelector<HTMLInputElement>(selector)?.checked).toBe(!accepted);
       });
       expect(page.querySelector('[data-test-id="cron-row-optimistic"]')).toBe(row);
+      expect(document.activeElement).toBe(toggle);
+      expect(toggle.disabled).toBe(false);
+      disabledChanges.push(...observer.takeRecords());
+      observer.disconnect();
+      expect(disabledChanges).toHaveLength(0);
       if (!accepted) {
         expect(page.textContent).toContain("Gateway declined the pause");
       }
@@ -122,6 +154,7 @@ it.each([true, false])(
       );
     } finally {
       update.resolve(job);
+      refreshed.resolve(cronListResponse([serverJob, otherJob]));
       page.remove();
     }
   },

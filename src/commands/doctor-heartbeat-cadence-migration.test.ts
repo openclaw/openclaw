@@ -34,6 +34,7 @@ import {
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { updateConfigMachineStateInDatabase } from "../state/config-machine-state-write.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import {
@@ -47,10 +48,12 @@ import { prepareAutomaticHeartbeatRepair } from "./doctor-automatic-heartbeat-re
 import {
   collectHeartbeatCadenceMigrationFindings,
   ensureHeartbeatMonitorJobs,
-  maybeMigrateHeartbeatCadenceToCron,
 } from "./doctor-heartbeat-cadence-migration.js";
 import type { DoctorCronJob } from "./doctor-heartbeat-jobs.js";
-import { retireHeartbeatWithDoctor } from "./doctor-heartbeat-retirement.js";
+import {
+  maybeMigrateHeartbeatCadenceToCron,
+  retireHeartbeatWithDoctor,
+} from "./doctor-heartbeat-retirement.js";
 import {
   resolveHeartbeatPhaseMs,
   resolveHeartbeatSchedulerSeed,
@@ -206,6 +209,59 @@ function seedLegacyMonitor(f: Fixture, overrides: Partial<Omit<DoctorCronJob, "p
 }
 
 describe("heartbeat cadence Doctor cutover", () => {
+  it("warns with the exact repair for old receipts without disabled provenance", async () => {
+    const f = fixture();
+    const monitors = await ensureHeartbeatMonitorJobs(f.cfg, f.storePath, f.env);
+    const job = monitors.get("main")!;
+    runOpenClawStateWriteTransaction(
+      ({ db }) =>
+        updateConfigMachineStateInDatabase(
+          db,
+          `automation-default:${f.storeKey}:main`,
+          () => ({ jobId: job.id, provisionedAtMs: NOW, phase: "pending" }),
+          NOW,
+        ),
+      { env: f.env },
+    );
+    delete f.cfg.agents!.defaults!.heartbeat;
+    const note = vi.spyOn(terminalNote, "note");
+    const result = await maybeMigrateHeartbeatCadenceToCron({
+      cfg: f.cfg,
+      env: f.env,
+      shouldRepair: true,
+    });
+    expect(result.changes).toEqual([]);
+    expect(result.warnings.join("\n")).toContain(`openclaw automations disable ${job.id}`);
+    expect(readState(f)!.receipt?.phase).toBe("pending");
+    expect(readState(f)!.jobs[0]?.enabled).toBe(true);
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(`openclaw automations disable ${job.id}`),
+      "Doctor warnings",
+    );
+    writeJob(f, { ...job, enabled: false });
+    await retireHeartbeatWithDoctor(f.cfg, f.env);
+    expect(readState(f)!.receipt?.phase).toBe("complete");
+  });
+
+  it.each([false, true])(
+    "repairs an interrupted disabled cutover (source retired: %s)",
+    async (sourceRetired) => {
+      const f = fixture({ every: "0m" });
+      const monitors = await ensureHeartbeatMonitorJobs(f.cfg, f.storePath, f.env);
+      const original = monitors.get("main")!;
+      writeJob(f, { ...original, enabled: true });
+      if (sourceRetired) {
+        delete f.cfg.agents!.defaults!.heartbeat;
+      }
+      await retireHeartbeatWithDoctor(f.cfg, f.env);
+      const repaired = readState(f)!;
+      expect(repaired.jobs[0]?.enabled).toBe(false);
+      expect(repaired.jobs[0]?.payload).toEqual(original.payload);
+      expect(repaired.jobs[0]?.schedule).toEqual(original.schedule);
+      expect(repaired.receipt).toMatchObject({ jobId: original.id, phase: "complete" });
+    },
+  );
+
   it("previews without creating state, identity, or changing the input config", async () => {
     const f = fixture();
     const input = structuredClone(f.cfg);

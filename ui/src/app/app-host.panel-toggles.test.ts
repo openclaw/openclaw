@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { createRoot } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
@@ -28,6 +29,17 @@ function listen(type: string, listener: EventListener) {
 
 function keyEvent(key: string, code: string, modifiers: KeyboardEventInit) {
   return new KeyboardEvent("keydown", { key, code, cancelable: true, ...modifiers });
+}
+
+function createChromeOwner(host: ShellChromeHost) {
+  return createRoot((dispose) => {
+    const owner = new ShellChromeOwner(host);
+    onTestFinished(() => {
+      owner.disconnect();
+      dispose();
+    });
+    return owner;
+  });
 }
 
 function configurePanelShell(kind: "terminal" | "browser" = "terminal", mounted = true) {
@@ -69,7 +81,7 @@ function configurePanelShell(kind: "terminal" | "browser" = "terminal", mounted 
   }
   document.body.append(shell.element);
   onTestFinished(() => shell.element.remove());
-  return { shell, panel, owner: new ShellChromeOwner(shell) };
+  return { shell, panel, owner: createChromeOwner(shell) };
 }
 
 afterEach(() => {
@@ -122,7 +134,7 @@ describe("OpenClaw shell panel toggles", () => {
     shell.routeState = { routeId: "chat" };
 
     const event = new CustomEvent(TERMINAL_PANEL_TOGGLE_EVENT, { detail: { open: true } });
-    new ShellChromeOwner(shell).panels.handleDeferredTerminalToggle(event);
+    createChromeOwner(shell).panels.handleDeferredTerminalToggle(event);
 
     expect(shell.queryRenderedElement(SHELL_COMPONENT_TAGS.terminal)).toBeNull();
     expect(takeSessionPanelToggle("terminal")).toBe(event);
@@ -151,7 +163,6 @@ describe("OpenClaw shell panel toggles", () => {
       const { shell, panel, owner } = configurePanelShell("terminal", false);
       expect(owner.terminalActivationReady).toBe(false);
       owner.connect();
-      onTestFinished(() => owner.disconnect());
       expect(owner.terminalActivationReady).toBe(true);
       const toggle = vi.fn();
       const event = new CustomEvent(eventType, { detail });

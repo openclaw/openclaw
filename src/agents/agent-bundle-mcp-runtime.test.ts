@@ -1510,13 +1510,12 @@ describe("session MCP runtime", () => {
     });
     const materialized = await materializeTools({ runtime });
     expect(runtime.activeLeases).toBe(1);
-    await expect(
-      retireSessionMcpRuntimeForSessionKey({
-        sessionKey,
-        reason: "subagent-run-cleanup",
-        preserveActiveLeases: true,
-      }),
-    ).resolves.toBe(true);
+    const retired = await retireSessionMcpRuntimeForSessionKey({
+      sessionKey,
+      reason: "subagent-run-cleanup",
+      preserveActiveLeases: true,
+    });
+    expect(retired).toBe(true);
     expect(currentManager().listSessionIds()).toContain(sessionId);
     const followUp = await materializeTools({ runtime });
     expect(runtime.activeLeases).toBe(2);

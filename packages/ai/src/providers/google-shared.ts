@@ -41,18 +41,14 @@ import { adjustMaxTokensForThinking } from "./simple-options.js";
 
 export type GoogleApiType = "google-generative-ai" | "google-vertex" | "google-interactions";
 
-type GoogleThinkingLevel = `${ThinkingLevel}`;
-
-type GoogleToolChoice = "auto" | "none" | "any";
-
 type GoogleThinkingOptions = {
   enabled: boolean;
   budgetTokens?: number;
-  level?: GoogleThinkingLevel;
+  level?: `${ThinkingLevel}`;
 };
 
 export type GoogleProviderOptions = StreamOptions & {
-  toolChoice?: GoogleToolChoice;
+  toolChoice?: "auto" | "none" | "any";
   thinking?: GoogleThinkingOptions;
 };
 
@@ -65,26 +61,6 @@ export type GoogleGenerateContentClient = {
 };
 
 type ClampedGoogleThinkingLevel = Exclude<AgentThinkingLevel, "xhigh" | "max">;
-
-function convertMessages<T extends GoogleApiType>(model: Model<T>, context: Context): Content[] {
-  return projectGoogleMessages({
-    model,
-    messages: transformMessages(context.messages, model, (id) =>
-      requiresGoogleToolCallId(model.id) ? id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64) : id,
-    ),
-    replay: "signed-parts",
-    requiresToolCallSignature:
-      model.provider !== "google-gemini-cli" && isGoogleGemini3ThinkingLevelModel(model.id),
-  });
-}
-
-function mapToolChoice(choice: string): FunctionCallingConfigMode {
-  return choice === "none"
-    ? FunctionCallingConfigMode.NONE
-    : choice === "any"
-      ? FunctionCallingConfigMode.ANY
-      : FunctionCallingConfigMode.AUTO;
-}
 
 export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>(params: {
   stream: AssistantMessageEventStream;
@@ -131,7 +107,15 @@ export function buildGoogleGenerateContentParams<T extends GoogleApiType>(
   context: Context,
   options: GoogleProviderOptions = {},
 ): Omit<GenerateContentParameters, "contents"> & { contents: Content[] } {
-  const contents = convertMessages(model, context);
+  const contents: Content[] = projectGoogleMessages({
+    model,
+    messages: transformMessages(context.messages, model, (id) =>
+      requiresGoogleToolCallId(model.id) ? id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64) : id,
+    ),
+    replay: "signed-parts",
+    requiresToolCallSignature:
+      model.provider !== "google-gemini-cli" && isGoogleGemini3ThinkingLevelModel(model.id),
+  });
 
   const config: GenerateContentConfig = {
     ...(options.temperature !== undefined && { temperature: options.temperature }),
@@ -144,9 +128,15 @@ export function buildGoogleGenerateContentParams<T extends GoogleApiType>(
   };
 
   if (context.tools && context.tools.length > 0 && options.toolChoice) {
+    const choice = options.toolChoice;
     config.toolConfig = {
       functionCallingConfig: {
-        mode: mapToolChoice(options.toolChoice),
+        mode:
+          choice === "none"
+            ? FunctionCallingConfigMode.NONE
+            : choice === "any"
+              ? FunctionCallingConfigMode.ANY
+              : FunctionCallingConfigMode.AUTO,
       },
     };
   } else {

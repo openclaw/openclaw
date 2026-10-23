@@ -109,6 +109,10 @@ Real-Gateway UI shards have a 30-minute whole-job budget on the normal Blacksmit
 path. Successful 16-class jobs reached 19:04, leaving too little margin under the
 former 20-minute limit. Hosted and retry paths retain their 40-minute budget;
 runner size, worker count, shard split, and individual test deadlines are unchanged.
+Current targets overlap desktop transport proof with the one-worker serial UI
+phase, then join both cleanup owners before running qualified fixtures with the
+existing two-worker ceiling. One-worker overrides, desktop-only selections, and
+frozen targets retain sequential execution.
 
 First-hop compatibility uses a 3,200-second container budget and a 3,500-second lane
 budget, based on hosted 4-vCPU measurements with a slow-host margin. The release

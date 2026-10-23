@@ -1,12 +1,4 @@
-import {
-  createMemo,
-  createSignal,
-  createUniqueId,
-  Errored,
-  latest,
-  Show,
-  useContext,
-} from "solid-js";
+import { createMemo, createSignal, createUniqueId, Show, useContext } from "solid-js";
 import type { ControlUiSessionPullRequest } from "../../../../../src/gateway/control-ui-contract.js";
 import { GitDiffValues } from "../../../components/session-git-diff.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -25,6 +17,7 @@ import { showToast } from "../../../lib/toast.ts";
 import { createPullRequestCopy } from "./chat-pull-request-copy.ts";
 import {
   ChecksRows,
+  PullRequestCopyError,
   StatusWarning,
   STATE_LABEL_KEYS,
   type ChatPullRequestsProps,
@@ -303,19 +296,7 @@ export function PullRequestActions(props: {
               {
                 kind: "content",
                 id: "copy-error",
-                content: (
-                  <Show when={!clipboard.copying()}>
-                    <Errored
-                      fallback={
-                        <p class="chat-pr-menu__error" role="alert">
-                          {t("chat.pullRequests.copyFailed")}
-                        </p>
-                      }
-                    >
-                      {latest(clipboard.outcome)}
-                    </Errored>
-                  </Show>
-                ),
+                content: <PullRequestCopyError clipboard={clipboard} />,
               },
             ],
           },

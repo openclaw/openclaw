@@ -382,11 +382,32 @@ const enSessionOrganization = {
     groupRowCount: "{count} sessions",
     groupRowCountOne: "{count} session",
   },
+  worktrees: {
+    adminRequired: "Browsing only. Worktree changes require operator.admin access.",
+    newWorktree: "New worktree",
+    ownerManual: "Manual",
+    ownerSession: "Session",
+    ownerWorkboard: "Workboard",
+    title: "Managed Worktrees",
+    subtitle: "Isolated repository checkouts owned by OpenClaw.",
+    cleanNow: "Clean up now",
+    name: "Name",
+    namePlaceholder: "auto",
+    baseBranch: "Base branch",
+    baseBranchPlaceholder: "Remote default",
+    repo: "Repository",
+    empty: "No managed worktrees.",
+    restorable: "Restorable",
+    restore: "Restore",
+    confirmDelete: "Snapshot and delete {name}?",
+    confirmForceDelete: "Snapshot failed: {error}\n\nDelete without a snapshot?",
+  },
 } satisfies TranslationMap;
 
 export const registerSessionOrganizationEnglish = Object.assign(
   () => {
     Object.assign(en.sessionsView, enSessionOrganization.sessionsView);
+    Object.assign(en.worktrees, enSessionOrganization.worktrees);
   },
   { catalog: enSessionOrganization },
 );

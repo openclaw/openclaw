@@ -5,7 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiSessionPullRequestCheckDetails } from "../../../../../src/gateway/control-ui-contract.js";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../../../api/gateway.ts";
-import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../../../app/gateway.ts";
+import { i18n } from "../../../i18n/index.ts";
+import { captureI18nStateForTesting } from "../../../i18n/lib/translate.test-support.ts";
+import { createApplicationGateway } from "../../../test-helpers/application-context-fixtures.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import type { ChatCiDetailsElement } from "./chat-ci-details.tsx";
@@ -389,6 +391,27 @@ describe("ChatPullRequests", () => {
     expect(onOpenSessionDiff).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    { locale: "en", label: "Create PR" },
+    { locale: "fr", label: "Créer une demande de fusion" },
+  ] as const)(
+    "names the Create PR link with its visible text and branch in $locale",
+    async ({ locale, label }) => {
+      const restoreI18n = captureI18nStateForTesting();
+      const branch = sessionBranch();
+      try {
+        await i18n.setLocale(locale);
+        paint({ pullRequests: [], branch });
+        const link = container.querySelector<HTMLAnchorElement>("a.chat-pr__create");
+        expect(link?.textContent).toBe(label);
+        expect(link?.getAttribute("aria-label")).toContain(label);
+        expect(link?.getAttribute("aria-label")).toContain(branch.branch);
+      } finally {
+        await restoreI18n();
+      }
+    },
+  );
+
   it("hides the Create PR link while the branch has no createUrl", () => {
     paint({
       pullRequests: [],
@@ -617,7 +640,7 @@ describe("CI job details", () => {
   function harness() {
     const client = new GatewayBrowserClient({ url: "ws://localhost:12345" });
     const request = vi.spyOn(client, "request").mockResolvedValue(details());
-    let snapshot: ApplicationGatewaySnapshot = {
+    const { gateway, publish } = createApplicationGateway({
       client,
       phase: "connected",
       offlineStable: false,
@@ -627,36 +650,7 @@ describe("CI job details", () => {
       sessionKey: "agent:main:main",
       lastError: null,
       lastErrorCode: null,
-    };
-    const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
-    const gateway: ApplicationGateway = {
-      get snapshot() {
-        return snapshot;
-      },
-      connection: {
-        gatewayUrl: "ws://localhost:12345",
-        token: "",
-        bootstrapToken: "",
-        password: "",
-      },
-      connectionRevision: 0,
-      eventLog: [],
-      eventLogRevision: 0,
-      loadSelfProfile: async () => null,
-      connect() {},
-      defer: () => false,
-      setSessionKey() {},
-      start() {},
-      stop() {},
-      subscribe(listener) {
-        listeners.add(listener);
-        return () => {
-          listeners.delete(listener);
-        };
-      },
-      subscribeEvents: () => () => {},
-      subscribeEventLog: () => () => {},
-    };
+    });
     const props = {
       pullRequests: [pullRequest({ headSha })],
       gateway,
@@ -673,10 +667,7 @@ describe("CI job details", () => {
       element,
       disclosure,
       disconnect() {
-        snapshot = { ...snapshot, phase: "offline" };
-        for (const listener of listeners) {
-          listener(snapshot);
-        }
+        publish({ ...gateway.snapshot, phase: "offline" });
       },
     };
   }

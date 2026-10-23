@@ -3,7 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { CloudProfileMenuItems, SessionMenuItem } from "./cloud-target-view.tsx";
-import type { CloudProfileMenuItemsOptions } from "./cloud-target.ts";
+
+type CloudProfileMenuItemsOptions = Parameters<typeof CloudProfileMenuItems>[0]["params"];
 
 function mountSessionItem(item: Parameters<typeof SessionMenuItem>[0]["item"]) {
   return mountSolid(() => createComponent(SessionMenuItem, { item, submitting: false }), {

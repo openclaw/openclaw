@@ -337,6 +337,7 @@ it.each([
     child.stderr = new PassThrough();
     const descendantOutput = new PassThrough();
     const closed = Promise.all([once(child.stdout, "close"), once(child.stderr, "close")]);
+    void closed.then(() => child.emit("close", exitCode, null));
     const observed = createDeferred();
     const job = {
       inspect: vi.fn(() => {

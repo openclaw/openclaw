@@ -1,12 +1,14 @@
 import type { ModelCatalogEntry } from "../../api/types.ts";
 import { normalizeChatFastModeInput } from "../../lib/chat/model-select-state.ts";
-import { resolveModelCatalogState } from "../../lib/model-catalog-store.ts";
 import type {
   ChatSessionCompanionModelSelection,
   ChatSessionCompanionThread,
 } from "./chat-session-companion.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { refreshChatModelCatalogOnDemand } from "./chat-state-refresh.ts";
+import {
+  readChatModelCatalogState,
+  refreshChatModelCatalogOnDemand,
+} from "./chat-state-refresh.ts";
 import type { ChatModelControlsProps } from "./components/chat-model-controls.tsx";
 
 const sideChatCatalogs = new WeakMap<ModelCatalogEntry[], ModelCatalogEntry[]>();
@@ -54,21 +56,7 @@ export function createSideChatModelControlProps(params: {
     gatewayAvailable: Boolean(state.client),
     loading: false,
     modelCatalog: catalog,
-    modelCatalogState: resolveModelCatalogState(
-      {
-        models: state.chatModelCatalog,
-        refreshFailed: state.chatModelCatalogRefreshFailed,
-        pendingProviders: state.chatModelCatalogPendingProviders,
-        modelSelectionPolicy: state.chatModelSelectionPolicy,
-      },
-      {
-        connected: state.connected,
-        loading: state.chatModelsLoading,
-        error: state.chatModelCatalogError,
-        retired: state.chatModelCatalogRetired,
-        initialized: state.chatModelCatalogInitialized,
-      },
-    ),
+    modelCatalogState: readChatModelCatalogState(state),
     modelOverrides: { [sessionKey]: selection.model ?? null },
     modelSwitching: false,
     sending: companion.turns.some((turn) => turn.status === "pending"),

@@ -21,7 +21,6 @@ import {
 } from "./delivery-context.js";
 import { dropAbortedFollowups, rememberFollowupDrainCallback } from "./drain.js";
 import { completeFollowupRunLifecycle, markFollowupRunEnqueued } from "./lifecycle.js";
-import { peekRecentQueueMessageId, recordRecentQueueMessageId } from "./recent-message-ids.js";
 import {
   followupSourceRunners,
   getExistingFollowupQueue,
@@ -37,6 +36,9 @@ import {
   type QueueSettings,
 } from "./types.js";
 
+const RECENT_MESSAGE_ID_TTL = 5 * 60 * 1000;
+const MAX_RECENT_MESSAGE_IDS = 10_000;
+
 function followupMessageRouteIdentityKey(run: FollowupRun): string {
   return JSON.stringify([
     channelRouteDedupeKey({
@@ -47,16 +49,6 @@ function followupMessageRouteIdentityKey(run: FollowupRun): string {
     }),
     normalizeChatType(run.originatingChatType) ?? "",
   ]);
-}
-
-function buildRecentMessageIdKey(run: FollowupRun, queueKey: string): string | undefined {
-  const messageId = normalizeOptionalString(run.messageId);
-  if (!messageId) {
-    return undefined;
-  }
-  // Use JSON tuple serialization to avoid delimiter-collision edge cases when
-  // channel/to/account values contain "|" characters.
-  return JSON.stringify(["queue", queueKey, followupMessageRouteIdentityKey(run), messageId]);
 }
 
 function isRunAlreadyQueued(run: FollowupRun, items: FollowupRun[]): boolean {
@@ -90,15 +82,22 @@ export function enqueueFollowupRun(
   // Peek before getFollowupQueue: rejecting a redelivery after the original
   // queue drained and self-deleted must not recreate an empty registry entry,
   // which nothing would ever delete again.
-  const recentMessageIdKey = dedupeMode !== "none" ? buildRecentMessageIdKey(run, key) : undefined;
-  if (
-    recentMessageIdKey &&
-    peekRecentQueueMessageId(
-      recentMessageIdKey,
-      findSessionControllerSourceMailbox(key, run, options.storePath),
-    )
-  ) {
-    return false;
+  const messageId = dedupeMode !== "none" ? normalizeOptionalString(run.messageId) : undefined;
+  // Use JSON tuple serialization to avoid delimiter-collision edge cases when
+  // channel/to/account values contain "|" characters.
+  const recentMessageIdKey = messageId
+    ? JSON.stringify(["queue", key, followupMessageRouteIdentityKey(run), messageId])
+    : undefined;
+  if (recentMessageIdKey) {
+    const mailbox = findSessionControllerSourceMailbox(key, run, options.storePath);
+    const now = Date.now();
+    const record = mailbox?.recentSources.get(recentMessageIdKey);
+    if (record) {
+      if (record.expires > now) {
+        return false;
+      }
+      mailbox?.recentSources.delete(recentMessageIdKey);
+    }
   }
   const input = submitSessionControllerInput(key, run, settings, { storePath: options.storePath });
   if (
@@ -169,7 +168,34 @@ export function enqueueFollowupRun(
       queue.priority = queuedInput;
     }
     if (recentMessageIdKey) {
-      recordRecentQueueMessageId(run, recentMessageIdKey);
+      const now = Date.now();
+      const recentInput = run.controllerInput;
+      if (!recentInput) {
+        throw new Error("Dedupe source was not submitted to its mailbox");
+      }
+      const mailbox = recentInput.mailbox;
+      for (const [alias, record] of mailbox.recentSources) {
+        if (record.expires <= now) {
+          mailbox.recentSources.delete(alias);
+        }
+      }
+      if (mailbox.recentSources.size >= MAX_RECENT_MESSAGE_IDS) {
+        mailbox.recentSources.delete(mailbox.recentSources.keys().next().value!);
+      }
+      mailbox.recentSources.set(recentMessageIdKey, {
+        input: recentInput,
+        expires: now + RECENT_MESSAGE_ID_TTL,
+      });
+      const lifecycle = run.turnAdoptionLifecycle;
+      if (lifecycle) {
+        const onAbandoned = lifecycle.onAbandoned;
+        lifecycle.onAbandoned = () => {
+          if (mailbox.recentSources.get(recentMessageIdKey)?.input === recentInput) {
+            mailbox.recentSources.delete(recentMessageIdKey);
+          }
+          return onAbandoned?.();
+        };
+      }
     }
     if (runFollowup) {
       if (!followupSourceRunners.has(queuedInput)) {

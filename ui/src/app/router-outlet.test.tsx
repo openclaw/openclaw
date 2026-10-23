@@ -1,31 +1,27 @@
-import { createRouter, definePage, type RouteMatch, type Router } from "@openclaw/uirouter";
-import type { JSX } from "@solidjs/web";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../../../src/shared/deferred.js";
 import type { SolidRouteProps } from "../app-route-types.tsx";
 import { registerMcpAppUnmountTarget } from "../components/mcp-app-unmount.ts";
 import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import { registerControlUiReloadGuard } from "./document-reload-guard.ts";
+import { routeFixtures, type OutletModule } from "./router-outlet-fixtures.test-support.tsx";
 import {
   disposeRouterOutlets,
   mountRouterOutlet,
-  settleRouterOutlet,
+  settleRouterOutlet as settleOutlet,
   type MountedRouterOutlet,
 } from "./router-outlet.test-support.tsx";
 
 type RouteId = "page" | "next";
 type TestContext = { label: string };
 type TestData = { label: string };
-type TestOwnerMatch = Pick<RouteMatch<string, unknown, TestData>, "data" | "location">;
-type TestModule = {
-  renderSolid: (props: SolidRouteProps<TestData>) => JSX.Element;
-  retainOnNavigate?: boolean;
-  renderOwnerKey?: (
-    match: TestOwnerMatch,
-    settled: TestOwnerMatch | undefined,
-  ) => string | undefined;
-};
-type TestRouter = Router<RouteId, TestContext, TestModule, TestData>;
+type TestModule = OutletModule<TestData>;
+const {
+  page,
+  router: testRouter,
+  dispose: disposeRouters,
+} = routeFixtures<RouteId, TestContext, TestData>();
+type TestRouter = ReturnType<typeof testRouter>;
 type RouterOutletElement = MountedRouterOutlet;
 
 function createOutlet(router: TestRouter, context: TestContext): RouterOutletElement {
@@ -34,14 +30,11 @@ function createOutlet(router: TestRouter, context: TestContext): RouterOutletEle
 
 afterEach(() => {
   disposeRouterOutlets();
+  disposeRouters();
   document.body.replaceChildren();
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
-
-async function settleOutlet(outlet: RouterOutletElement): Promise<void> {
-  await settleRouterOutlet(outlet);
-}
 
 describe("openclaw-router-outlet", () => {
   it("publishes native and Solid route hosts and retires their references with the route", async () => {
@@ -52,27 +45,17 @@ describe("openclaw-router-outlet", () => {
     );
     const native = new Bridge.Element();
     const context = { label: "page" };
-    const router = createRouter<RouteId, TestContext, TestModule, TestData>({
-      routes: [
-        definePage({
-          id: "page",
-          path: "/page",
-          component: () => ({
-            renderSolid: () => (
-              <>
-                {native}
-                <Bridge label="Solid" />
-              </>
-            ),
-          }),
-        }),
-        definePage({
-          id: "next",
-          path: "/next",
-          component: () => ({ renderSolid: () => <p>Next</p> }),
-        }),
-      ],
-    });
+    const router = testRouter(
+      page("page", {
+        renderSolid: () => (
+          <>
+            {native}
+            <Bridge label="Solid" />
+          </>
+        ),
+      }),
+      page("next", { renderSolid: () => <p>Next</p> }),
+    );
     const outlet = createOutlet(router, context);
     try {
       await router.navigate("page", context);
@@ -97,25 +80,18 @@ describe("openclaw-router-outlet", () => {
     const parked = document.createElement("test-parked-surface");
     const ParkedRoute = () => <section>{parked}</section>;
     const context = { label: "page" };
-    const router = createRouter<RouteId, TestContext, TestModule, TestData>({
-      routes: [
-        definePage({
-          id: "page",
-          path: "/page",
-          component: () => ({
-            retainOnNavigate: true,
-            renderOwnerKey: () => "retained-page",
-            renderSolid: () => <ParkedRoute />,
-          }),
-          loader: () => ({ label: "page" }),
-        }),
-        definePage({
-          id: "next",
-          path: "/next",
-          component: () => ({ renderSolid: () => <p>Current destination</p> }),
-        }),
-      ],
-    });
+    const router = testRouter(
+      page(
+        "page",
+        {
+          retainOnNavigate: true,
+          renderOwnerKey: () => "retained-page",
+          renderSolid: () => <ParkedRoute />,
+        },
+        () => ({ label: "page" }),
+      ),
+      page("next", { renderSolid: () => <p>Current destination</p> }),
+    );
     const outlet = createOutlet(router, context);
     const childUpdate = createDeferredCore<boolean>();
     // Background work observes its own failure independently of route presentation.
@@ -165,22 +141,10 @@ describe("openclaw-router-outlet", () => {
       renderSolid: renderOwnedRoute,
     };
     const context = { label: "page" };
-    const router = createRouter<RouteId, TestContext, TestModule, TestData>({
-      routes: [
-        definePage({
-          id: "page",
-          path: "/page",
-          component: () => ownedModule,
-          loader: () => ({ label: "page" }),
-        }),
-        definePage({
-          id: "next",
-          path: "/next",
-          component: () => ownedModule,
-          loader: () => nextData.promise,
-        }),
-      ],
-    });
+    const router = testRouter(
+      page("page", ownedModule, () => ({ label: "page" })),
+      page("next", ownedModule, nextData.promise),
+    );
     const outlet = createOutlet(router, context);
     await router.navigate("page", context);
     await settleOutlet(outlet);
@@ -206,16 +170,9 @@ describe("openclaw-router-outlet", () => {
   it("replaces the loading skeleton with the resolved route", async () => {
     const routeModule = createDeferredCore<TestModule>();
     const context = { label: "loaded" };
-    const router = createRouter<RouteId, TestContext, TestModule, TestData>({
-      routes: [
-        definePage({
-          id: "page",
-          path: "/page",
-          component: () => routeModule.promise,
-          loader: (loadContext) => ({ label: loadContext.label }),
-        }),
-      ],
-    });
+    const router = testRouter(
+      page("page", routeModule.promise, (loadContext) => ({ label: loadContext.label })),
+    );
     const outlet = createOutlet(router, context);
     const navigation = router.navigate("page", context);
 
@@ -261,26 +218,12 @@ describe("openclaw-router-outlet", () => {
       </>
     );
     const context = { label: "loaded" };
-    const router = createRouter<RouteId, TestContext, TestModule, TestData>({
-      routes: [
-        definePage({
-          id: "page",
-          path: "/page",
-          component: () => ({
-            renderSolid: () => <RetiringRoute />,
-          }),
-          loader: () => ({ label: "page" }),
-        }),
-        definePage({
-          id: "next",
-          path: "/next",
-          component: () => ({
-            renderSolid: () => <div data-testid="route-next">next</div>,
-          }),
-          loader: () => ({ label: "next" }),
-        }),
-      ],
-    });
+    const router = testRouter(
+      page("page", { renderSolid: () => <RetiringRoute /> }, () => ({ label: "page" })),
+      page("next", { renderSolid: () => <div data-testid="route-next">next</div> }, () => ({
+        label: "next",
+      })),
+    );
     const outlet = createOutlet(router, context);
     await router.navigate("page", context);
     await settleOutlet(outlet);
@@ -318,23 +261,20 @@ describe("openclaw-router-outlet", () => {
   it("keeps a loaded route visible with an error and retries through the latest context", async () => {
     const firstLoad = createDeferredCore<TestData>();
     let loadCount = 0;
-    const router = createRouter<RouteId, TestContext, TestModule, TestData>({
-      routes: [
-        definePage({
-          id: "page",
-          path: "/page",
-          component: () => ({
-            renderSolid: (props: SolidRouteProps<TestData>) => (
-              <div data-testid="route-page">{props.data?.label ?? "pending"}</div>
-            ),
-          }),
-          loader: (context) => {
-            loadCount += 1;
-            return loadCount === 1 ? firstLoad.promise : { label: context.label };
-          },
-        }),
-      ],
-    });
+    const router = testRouter(
+      page(
+        "page",
+        {
+          renderSolid: (props) => (
+            <div data-testid="route-page">{props.data?.label ?? "pending"}</div>
+          ),
+        },
+        (context) => {
+          loadCount += 1;
+          return loadCount === 1 ? firstLoad.promise : { label: context.label };
+        },
+      ),
+    );
     const initialContext = { label: "initial" };
     const retryContext = { label: "retried" };
     const outlet = createOutlet(router, initialContext);
@@ -350,10 +290,11 @@ describe("openclaw-router-outlet", () => {
     outlet.setInputs({ retryContext });
     await settleOutlet(outlet);
     outlet.querySelector<HTMLButtonElement>("button")?.click();
-    await settleOutlet(outlet);
+    await expect
+      .poll(() => outlet.querySelector('[data-testid="route-page"]')?.textContent)
+      .toBe("retried");
 
     expect(loadCount).toBe(2);
-    expect(outlet.querySelector('[data-testid="route-page"]')?.textContent).toBe("retried");
     expect(outlet.querySelector('[role="alert"]')).toBeNull();
     outlet.dispose();
     router.stop();
@@ -377,19 +318,16 @@ describe("openclaw-router-outlet", () => {
         }),
     );
     vi.stubGlobal("fetch", fetchMock);
-    const router = createRouter<RouteId, TestContext, TestModule, TestData>({
-      routes: [
-        definePage({
-          id: "page",
-          path: "/page",
-          component: () => Promise.reject(new Error("Importing a module script failed.")),
-          loader: (context) => {
-            loadCount += 1;
-            return { label: context.label };
-          },
-        }),
-      ],
-    });
+    const router = testRouter(
+      page(
+        "page",
+        () => Promise.reject(new Error("Importing a module script failed.")),
+        (context) => {
+          loadCount += 1;
+          return { label: context.label };
+        },
+      ),
+    );
     const context = { label: "stale" };
     const outlet = createOutlet(router, context);
 
@@ -445,24 +383,21 @@ describe("openclaw-router-outlet", () => {
     const fetchMock = vi.fn<typeof fetch>(async () => new Response(null, { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     let moduleLoads = 0;
-    const router = createRouter<RouteId, TestContext, TestModule, TestData>({
-      routes: [
-        definePage({
-          id: "page",
-          path: "/page",
-          component: () => {
-            moduleLoads += 1;
-            if (moduleLoads === 1) {
-              return Promise.reject(new Error("Unable to preload CSS for /assets/agents.css"));
-            }
-            // Vite remembers a failed CSS dependency as seen, so a repeated
-            // component import can succeed without the required stylesheet.
-            return { renderSolid: () => <div data-testid="unstyled-page">Agents</div> };
-          },
-          loader: (context) => ({ label: context.label }),
-        }),
-      ],
-    });
+    const router = testRouter(
+      page(
+        "page",
+        () => {
+          moduleLoads += 1;
+          if (moduleLoads === 1) {
+            return Promise.reject(new Error("Unable to preload CSS for /assets/agents.css"));
+          }
+          // Vite remembers a failed CSS dependency as seen, so a repeated
+          // component import can succeed without the required stylesheet.
+          return { renderSolid: () => <div data-testid="unstyled-page">Agents</div> };
+        },
+        (context) => ({ label: context.label }),
+      ),
+    );
     const context = { label: "offline" };
     const outlet = createOutlet(router, context);
     try {

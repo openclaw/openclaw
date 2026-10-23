@@ -113,7 +113,14 @@ export type MenuProps = {
   triggerClass?: JSX.ClassValue;
   triggerAttributes?: Pick<
     JSX.ButtonHTMLAttributes<HTMLButtonElement>,
-    "title" | "style" | "tabindex" | "aria-hidden" | "aria-keyshortcuts" | "aria-busy" | "value"
+    | "title"
+    | "style"
+    | "tabindex"
+    | "aria-hidden"
+    | "aria-disabled"
+    | "aria-keyshortcuts"
+    | "aria-busy"
+    | "value"
   > & {
     /** Stable for this mount, like the menu id. */
     id?: string;
@@ -529,6 +536,7 @@ export function Menu(props: BranchProps): JSX.Element {
                           value: item().attributes?.value ?? item().id,
                           "data-shortcut": item().attributes?.["data-shortcut"],
                           "aria-keyshortcuts": item().attributes?.["aria-keyshortcuts"],
+                          "aria-disabled": item().attributes?.["aria-disabled"],
                           title: item().attributes?.title,
                         }}
                         onSelect={props.onSelect}
@@ -573,6 +581,7 @@ export function Menu(props: BranchProps): JSX.Element {
         ]}
         role={initialIdentity.parent ? "menuitem" : undefined}
         aria-haspopup="menu"
+        aria-disabled={props.disabled ? "true" : props.triggerAttributes?.["aria-disabled"]}
         aria-controls={`${initialIdentity.id}:content`}
         aria-expanded={opened() ? "true" : "false"}
         data-highlighted={

@@ -51,7 +51,6 @@ const {
   prepareMock,
   closeSessionMock,
   closeLoopbackMock,
-  retireKeyMock,
   retireMock,
   authStoreMock,
   authFailureMock,
@@ -71,7 +70,6 @@ const {
   prepareMock: vi.fn(),
   closeSessionMock: vi.fn(),
   closeLoopbackMock: vi.fn(),
-  retireKeyMock: vi.fn(),
   retireMock: vi.fn(),
   authStoreMock: vi.fn(),
   authFailureMock: vi.fn(),
@@ -105,8 +103,8 @@ vi.mock("../gateway/mcp-http.js", () => ({
   closeMcpLoopbackServer: closeLoopbackMock,
 }));
 
-vi.mock("./agent-bundle-mcp-tools.js", () => ({
-  retireSessionMcpRuntimeForSessionKey: retireKeyMock,
+vi.mock("./agent-bundle-mcp-tools.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agent-bundle-mcp-tools.js")>()),
   retireSessionMcpRuntime: retireMock,
 }));
 
@@ -200,7 +198,6 @@ beforeEach(() => {
   prepareMock.mockImplementation(async (params) => await makeStubContext(params));
   closeSessionMock.mockReset();
   closeLoopbackMock.mockReset();
-  retireKeyMock.mockReset().mockResolvedValue(true);
   retireMock.mockReset().mockResolvedValue(true);
   authStoreMock.mockReset();
   authFailureMock.mockReset().mockResolvedValue(undefined);
@@ -784,7 +781,6 @@ describe("runCliAgent before_agent_reply seam", () => {
       workspaceDir: runParams.workspaceDir,
       cfg: unopenedMcpConfig,
     };
-    retireKeyMock.mockImplementation(mcpTools.retireSessionMcpRuntimeForSessionKey);
     retireMock.mockImplementation(mcpTools.retireSessionMcpRuntime);
     executeMock.mockResolvedValue({ text: "real reply" });
 
@@ -810,7 +806,6 @@ describe("runCliAgent before_agent_reply seam", () => {
         successorRuntime,
       );
       expect(mcpTools.peekSessionMcpRuntime({ sessionKey })).toBe(successorRuntime);
-      expect(retireKeyMock).not.toHaveBeenCalled();
       expect(closeLoopbackMock).not.toHaveBeenCalled();
     } finally {
       await mcpTools.retireSessionMcpRuntime({ sessionId: originalSessionId, reason: "test-end" });

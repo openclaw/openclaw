@@ -18,6 +18,8 @@ it("keeps shared copy eager and loads feature fallback copy at the Labs boundary
   const catalog = en.labsPage;
   const swarm = catalog.swarm;
   const { LAB_FEATURES } = await import("../pages/labs/labs-registry.ts");
+  expect(manager.t("labsPage.codeMode.description")).toBe("labsPage.codeMode.description");
+  await import("../pages/labs/labs-page.tsx");
   const { registerLabsEnglish } = await import("./locales/en-labs.ts");
   for (const [key, value] of flattenTranslations(registerLabsEnglish.catalog)) {
     expect(manager.t(key)).toBe(value);

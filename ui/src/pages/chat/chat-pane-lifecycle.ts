@@ -12,7 +12,7 @@ import {
   handleQuestionPromptEvent,
 } from "../../app/question-prompt.ts";
 import { readPresenceEntries } from "../../app/user-profile.ts";
-import { BROWSER_ANNOTATION_EVENT } from "../../components/browser/browser-annotation.ts";
+import { BROWSER_ANNOTATION_EVENT } from "../../components/browser/browser-annotation-event.ts";
 import { hasModalSurface } from "../../components/overlay-registry.ts";
 import { modelAuthEventInvalidates } from "../../lib/model-auth-request-state.ts";
 import { isSessionReactionEvent } from "../../lib/protocol-validators.generated/activity.js";
@@ -441,15 +441,16 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
           state.modelAuthStatusResult = null;
           void refreshChatModelAuthStatus(state);
         }
-        if (
-          state &&
-          event.event === "sessions.changed" &&
-          asNonArrayRecord(event.payload).reason === "sharing"
-        ) {
-          // Revoked readers receive only a redacted catalog invalidation. Retire
-          // preview admission before the roster refresh can publish access loss.
-          state.mediaPolicyEpoch = (state.mediaPolicyEpoch ?? 0) + 1;
-          this.invalidateSessionSharing(event.payload);
+        if (state && event.event === "sessions.changed") {
+          const reason = asNonArrayRecord(event.payload).reason;
+          if (reason === "sharing") {
+            // Revoked readers receive only a redacted catalog invalidation. Retire
+            // preview admission before the roster refresh can publish access loss.
+            state.mediaPolicyEpoch = (state.mediaPolicyEpoch ?? 0) + 1;
+          }
+          if (reason === "sharing" || reason === "profile-identity") {
+            this.invalidateSessionSharing(event.payload);
+          }
         }
         if (event.event === "sessions.changed" || event.event === "session.message") {
           return;
@@ -468,6 +469,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         }
         if (state) {
           if (event.event === "config.changed") {
+            this.invalidateSessionSharing(undefined);
             state.mediaPolicyEpoch = (state.mediaPolicyEpoch ?? 0) + 1;
           }
           if (event.event === "config.changed" || event.event === "agent.identity.changed") {

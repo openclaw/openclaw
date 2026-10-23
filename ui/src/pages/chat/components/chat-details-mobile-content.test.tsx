@@ -4,6 +4,7 @@ import { expect, it, vi } from "vitest";
 import "../chat-details-mobile-host-content.tsx";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { createChatMobileHostFixture } from "../chat-mobile-host.test-support.ts";
 import type { ChatMobileHost, MobileHostDestination } from "../chat-mobile-host.ts";
 import {
   ChatDetailsMobileContent,
@@ -169,25 +170,13 @@ it("retains Outputs demand across publications and returns navigation origins wi
 
 async function mountMobileHost(value: ChatDetailsProps) {
   const navigate = vi.fn<(destination: MobileHostDestination) => void>();
-  const host: ChatMobileHost = {
-    scopeKey: "mobile-pr-session",
+  const host: ChatMobileHost = createChatMobileHostFixture("mobile-pr-session", {
     open: true,
-    suspended: false,
-    mode: "dock",
     height: 280,
     reservedHeight: 280,
     destination: { area: "details" },
-    detailsMount: null,
-    setDetailsMount() {},
     navigate,
-    reveal() {},
-    close() {},
-    back() {},
-    toggleExpanded() {},
-    resize() {},
-    keyboardVisible: false,
-    onComposerEditingChange() {},
-  };
+  });
   const element = document.createElement("openclaw-chat-details-mobile-host-content");
   element.details = value;
   element.host = host;

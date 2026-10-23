@@ -127,38 +127,6 @@ function resolveInsertionDiff(args: Record<string, unknown> | null): ResolvedEdi
   return lines.length > 0 ? { diff: lines } : null;
 }
 
-function resolvePatchView(args: Record<string, unknown> | null): ToolCallView | null {
-  const patch = parsePatchView(args);
-  if (!patch) {
-    return null;
-  }
-  const view: ToolCallView = {
-    kind: "edit",
-    fileOperations: patch.fileOperations,
-    diff: patch.lines,
-    stat: patch.stat,
-  };
-  if (patch.paths.length > 1) {
-    return { ...view, target: `${patch.paths.length} files` };
-  }
-  if (patch.move) {
-    const from = splitPathForDisplay(patch.move.from);
-    const to = splitPathForDisplay(patch.move.to);
-    const commonDir = from.dir === to.dir ? from.dir : undefined;
-    return {
-      ...view,
-      target: commonDir ? `${from.base} → ${to.base}` : `${patch.move.from} → ${patch.move.to}`,
-      targetDetail: commonDir,
-    };
-  }
-  const pathParts = patch.paths[0] ? splitPathForDisplay(patch.paths[0]) : null;
-  return {
-    ...view,
-    target: pathParts?.base,
-    targetDetail: pathParts?.dir,
-  };
-}
-
 // Cache entries remember which details object they were built from: live tool
 // rows first render with args only and gain result `details` (e.g. the edit
 // diff) later on the same args identity, which must invalidate the cache.
@@ -208,7 +176,35 @@ function buildToolCallView(
   }
 
   if (kind === "edit" && PATCH_TOOL_NAMES.has(key)) {
-    return resolvePatchView(args) ?? { kind: "generic" };
+    const patch = parsePatchView(args);
+    if (!patch) {
+      return { kind: "generic" };
+    }
+    const view: ToolCallView = {
+      kind: "edit",
+      fileOperations: patch.fileOperations,
+      diff: patch.lines,
+      stat: patch.stat,
+    };
+    if (patch.paths.length > 1) {
+      return { ...view, target: `${patch.paths.length} files` };
+    }
+    if (patch.move) {
+      const from = splitPathForDisplay(patch.move.from);
+      const to = splitPathForDisplay(patch.move.to);
+      const commonDir = from.dir === to.dir ? from.dir : undefined;
+      return {
+        ...view,
+        target: commonDir ? `${from.base} → ${to.base}` : `${patch.move.from} → ${patch.move.to}`,
+        targetDetail: commonDir,
+      };
+    }
+    const pathParts = patch.paths[0] ? splitPathForDisplay(patch.paths[0]) : null;
+    return {
+      ...view,
+      target: pathParts?.base,
+      targetDetail: pathParts?.dir,
+    };
   }
 
   if (kind === "read" || kind === "edit" || kind === "write") {

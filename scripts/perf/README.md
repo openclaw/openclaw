@@ -1,5 +1,28 @@
 # Team-shaped synthetic state
 
+## Background result lifecycle wait
+
+`background-result-wait-measure.ts` holds a synthetic session turn open while
+committing an automation result through the real controller and transcript
+writer. Run baseline and candidate concurrently with separate state directories
+and the same `--start-at` epoch, then swap CPU sets for the second pair:
+
+```sh
+node --expose-gc --trace-gc-nvp --import ./scripts/tsx.mjs \
+  scripts/perf/background-result-wait-measure.ts \
+  --state-dir /path/to/new-state --samples 6 --hold-ms 2000 --start-at <epoch-ms> \
+  --gc-log /path/to/capture.log > /path/to/capture.log 2>&1
+```
+
+`result.json` records persistence latency, the existing `lifecycleQueueWaitMs`
+diagnostic, custody after commit, and whether the turn is still running. A
+1.1-second completion-publication fixture makes both versions emit their slow
+operation diagnostic; it is excluded from persistence latency. This measures
+the controller/storage boundary, not model or whole-Gateway latency. Acceptance:
+queue wait no longer tracks the held turn, results persist within one second,
+and commit completion leaves no mutation custody. CPU, GC pauses, and event-loop
+samples are supporting context; apply the campaign's sample-count rules.
+
 ## Plugin tool invocation scopes
 
 `plugin-gateway-scope-measure.ts` registers two synthetic plugins through the real
@@ -31,6 +54,38 @@ from turn latency. A separate, unprofiled probe counts async-store frame install
 for a synthetic turn and direct/nested calls to an owned plugin instance. Counts
 include the turn's outer Gateway scope. No instrumentation remains during the
 allocation or CPU passes. Raw allocation profiles accompany each result.
+
+## Subagent idle sweep
+
+`subagent-sweep-measure.ts` exercises the production sweeper with immutable synthetic
+registry rows. Run with `--runs 50` and `--runs 500`. The `settled` workload retains
+finished history; `mixed` uses 70% history, 10% live claimed runs, 10% pending
+deliveries, and 10% future archives. Unexpected effects fail the run, and exact
+records and their digest must remain unchanged.
+
+```sh
+node --expose-gc --trace-gc-nvp --import ./scripts/tsx.mjs \
+  scripts/perf/subagent-sweep-measure.ts \
+  --runs 500 --workload mixed --operations 4000 --yield-ms 1 \
+  --state-dir /path/to/new-state --start-at <future-epoch-ms> \
+  --gc-log /path/to/capture.log --output /path/to/result.json > /path/to/capture.log 2>&1
+```
+
+Run on the approved benchmark host with isolated state. Setup and warmup precede
+`SWEEP_READY`. Compare concurrent baseline/candidate pairs under one quiet lock
+and the shared guard, then swap interleaved CPU assignments. Discard interrupted
+pairs. The report includes sampled allocation per sweep, its projection at the
+60-second idle cadence, sweep duration, total GC/work, promotion, and event-loop
+tails. Total allocation includes timing and pacing overhead; registry allocation
+is reported separately. This is owner-level evidence, not whole-Gateway latency.
+
+Apply the campaign's paired-delta and sample-count rules. Report absolute deltas
+when signs disagree or baselines differ by more than 5×, and use a third pair for
+an inconclusive gating metric. p95 needs 200 samples per side, p99 needs 1,000;
+major GC is context below 50 collections. GC pause-percentile shifts below 1 ms
+are context, as are higher tails with at least 20% fewer collections and no rise
+in total GC. Always report both maximum pauses; the candidate maximum still
+gates above `max(50 ms, 2 × baseline maximum)`.
 
 ## Subagent maintenance capture
 
@@ -636,6 +691,47 @@ participate in normal recovery; their next attempt is delayed one day from the
 reference time. Generate a fresh fixture for each startup comparison. Cron jobs,
 heartbeats, channels, plugins, browser automation and network discovery are
 disabled so this workload does not call models or external integrations.
+
+## Measure idle Gateway allocation and timer work
+
+`idle-gateway-measure.ts` connects one real Control UI client to an owned Gateway,
+then sends no application requests during the measured window. Use a freshly
+generated, offline team-shape fixture for each side; omitting `--state-dir`
+retains the small empty-state workload. `--output` must name a new artifact
+directory. The fixture config is preserved and an isolated measurement config
+is written under the output directory.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/idle-gateway-measure.ts \
+  --state-dir /srv/perf-sandbox/<lane>/fixture-a \
+  --output /srv/perf-sandbox/<lane>/idle-a \
+  --entry src/entry.ts --port 41563 --minutes 3 --settle-seconds 60 \
+  --start-at <future-epoch-ms> --allocations
+```
+
+Run on the authorized benchmark host under its measurement lock, resource limits
+and production guard. Concurrent baseline/candidate runs need separate fixtures,
+output directories and loopback ports (40000 or higher), the same `--start-at`,
+and the host's interleaved CPU sets, swapped for the second pair. The start barrier
+follows readiness and settling; a missed barrier fails the run. Actual capture
+timestamps are recorded so placement and start skew remain visible.
+
+`result.json` records main-isolate CPU, GC durations and counts, event-loop p99 and
+sample count, and V8 promoted bytes for the capture only. `--allocations` uses the
+shared private IPC profiler to include objects collected by minor and major GC;
+the saved heap profile and summary include the top allocation sites and estimated
+bytes per minute and second. Worker allocations are excluded. `--profile` captures
+a main-isolate CPU profile and its diagnostics over the measured window; promotion
+accounting requires a run without `--profile`. Run CPU and allocation profiling
+separately. Neither profiling mode exposes an inspector listener or copies operator
+credentials.
+
+Use `--timers` in a separate attribution run to collect per-timer callback counts,
+CPU and worker snapshots. It instruments timer creation and adds periodic IPC
+samples, so leave it off for allocation/GC acceptance comparisons. Compare paired
+per-minute allocation, promotion and total GC time; retain counts and maximum
+pause alongside any tail percentile, applying the campaign's sample-count and
+absolute-delta rules rather than treating sparse tails as gates.
 
 ## Measure clean-close seals across app versions
 
@@ -2695,11 +2791,12 @@ equally configured comparisons.
 
 For session-projection comparisons from one installed checkout, add
 `--entry src/entry.ts --session-projection-source <directory>` to both arms.
-The directory must contain all four coherent owner files:
+The directory must contain all seven coherent owner files:
 `session-event-projection.ts`, `session-row-presentation.ts`,
-`session-sharing-read.ts`, and `session-utils-list.ts`. Put their original
+`session-sharing-read.ts`, `session-utils-list.ts`, `session-ancestor-references.ts`,
+`server-connection-state.ts`, and `server-methods/sessions-read.ts`. Put their original
 revision's files in a baseline directory and use `--session-projection-source
-src/gateway` for the candidate. The preload reads all four before Gateway startup
+src/gateway` for the candidate. The preload reads all seven before Gateway startup
 and fails on a missing file; it substitutes raw TypeScript while retaining canonical
 module URLs, relative imports, and source line numbers. The report records the
 resolved `sessionProjectionSource`. It also loads the canonical broadcaster as
@@ -2707,6 +2804,20 @@ native TypeScript so its function name remains visible in allocation profiles
 without installing the timer. Use separate fixtures and ports with matching
 workload flags. Collect allocation and broadcast-timing comparisons in separate
 passes so the timing observer's allocations do not enter the broadcast profile.
+
+Use a separate `--session-projection-counts --entry src/entry.ts` pass to count
+audience cache misses, payload cache misses, successful recipient projections,
+and distinct final wire payload objects per session publication. The report's
+`sessionProjectionCounts` includes both raw counts and per-publication means.
+These count projector results before socket submission, not acknowledged delivery.
+The observer rejects allocation, CPU, GC-trace, transport-count and timing modes
+to keep its instrumentation out of those measurements. Compare identical runs
+with and without `--list-interval-ms 30000 --poll-seed roster-polling` to isolate
+staggered roster reads; negotiate `--session-row-deltas --session-envelope-refs`
+for current Control UI clients. A growing wire-payload count with stable audience
+count identifies fragmented delivery histories rather than different permissions.
+The workload creates the main-session root before its synthetic parent and children;
+an incomplete ancestor chain omits ancestor envelopes and cannot prove this effect.
 
 The existing allocation diagnostics include per-kind GC pause `count`, `total`,
 `max`, `p95`, and `p99` under `allocation.diagnostics.gc`, plus event-loop sample

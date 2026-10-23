@@ -99,7 +99,7 @@ export function registerRequesterWakeSettlementBoundaryTests<Response>({
   const activate = async (context?: GatewayRequestContext) => {
     await registry.initSubagentRegistry();
     const activeContext = context ?? createGatewayContext();
-    await registry.activateSubagentRegistry(() => activeContext);
+    await registry.activateSubagentRegistry(() => activeContext).settled;
   };
   async function restoreChild(runId: string, overrides: Partial<SubagentRunRecord>) {
     const childSessionKey = `agent:main:subagent:${runId}`;
@@ -284,7 +284,9 @@ export function registerRequesterWakeSettlementBoundaryTests<Response>({
         try {
           await registry.initSubagentRegistry();
           const context = createGatewayContext();
-          activation = Promise.allSettled([registry.activateSubagentRegistry(() => context)]);
+          activation = Promise.allSettled([
+            registry.activateSubagentRegistry(() => context).settled,
+          ]);
           await advance(30_000, 0);
           expect(runIds.map(readWake)).toEqual(expectedWakes);
           if (restart) {
@@ -329,7 +331,7 @@ export function registerRequesterWakeSettlementBoundaryTests<Response>({
     vi.setSystemTime(100_000);
     const context = createGatewayContext();
     await registry.initSubagentRegistry();
-    await registry.activateSubagentRegistry(() => context);
+    await registry.activateSubagentRegistry(() => context).settled;
     const childSessionKey = "agent:main:subagent:self-yield-followup";
     const kickoffRunId = "run-self-yield-kickoff";
     const followupRunId = "run-self-yield-followup";
@@ -550,7 +552,7 @@ export function registerRequesterWakeSettlementBoundaryTests<Response>({
 
   it("wakes a yielded parent once after one running child is stopped", async () => {
     await registry.initSubagentRegistry();
-    await registry.activateSubagentRegistry(createGatewayContext);
+    await registry.activateSubagentRegistry(createGatewayContext).settled;
     const requesterTurnRunId = "requester-stopped-pair";
     const stopped = visibleChild("stopped");
     const finished = visibleChild("finished");

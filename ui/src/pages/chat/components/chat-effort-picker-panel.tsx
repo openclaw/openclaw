@@ -1,6 +1,7 @@
-import { For, createMemo, onSettled } from "solid-js";
+import { For, createMemo } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { ChatFastModeSelectValue } from "../../../lib/chat/model-select-state.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { liveValue } from "../../../lib/reactive/live-value.ts";
 import { formatEffortLabel, type ChatEffortPickerParams } from "./chat-effort-picker.tsx";
@@ -127,22 +128,18 @@ export function ChatEffortPickerPanel(props: ChatEffortPickerPanelProps) {
                 {view().reasoningValueText}
               </span>
               <For each={view().sliderStops} keyed={(stop) => stop.value}>
-                {(stop, index) => {
-                  let label: HTMLSpanElement;
-                  onSettled(() => () => previewLabels.delete(label));
-                  return (
-                    <span
-                      ref={(element) => {
-                        label = element;
-                        previewLabels.add(element);
-                      }}
-                      data-chat-thinking-preview-index={index()}
-                      hidden
-                    >
-                      {formatEffortLabel(stop().label)}
-                    </span>
-                  );
-                }}
+                {(stop, index) => (
+                  <span
+                    ref={elementRef<HTMLSpanElement>((element) => {
+                      previewLabels.add(element);
+                      return () => previewLabels.delete(element);
+                    })}
+                    data-chat-thinking-preview-index={index()}
+                    hidden
+                  >
+                    {formatEffortLabel(stop().label)}
+                  </span>
+                )}
               </For>
             </span>
           </div>
@@ -250,37 +247,33 @@ export function ChatEffortPickerPanel(props: ChatEffortPickerPanelProps) {
             onKeyDown={onSpeedKeyDown}
           >
             <For each={view().speedOptions} keyed={(option) => option.value}>
-              {(option, index) => {
-                let button: HTMLButtonElement;
-                onSettled(() => () => speedButtons.delete(button));
-                return (
-                  <button
-                    ref={(element) => {
-                      button = element;
-                      speedButtons.add(element);
-                    }}
-                    type="button"
-                    role="radio"
-                    class="chat-controls__speed-option"
-                    data-chat-speed-option={option().value}
-                    aria-checked={option().value === view().selectedSpeed ? "true" : "false"}
-                    tabindex={index() === view().tabbableSpeedIndex ? 0 : -1}
-                    disabled={props.fastMode.disabled || option().disabled}
-                    onClick={(event: MouseEvent) => {
-                      event.stopPropagation();
-                      if (
-                        !props.fastMode.disabled &&
-                        !option().disabled &&
-                        option().value !== props.fastMode.persistedOverride
-                      ) {
-                        void props.onFastModeSelect(option().value, props.sessionKey);
-                      }
-                    }}
-                  >
-                    {option().label}
-                  </button>
-                );
-              }}
+              {(option, index) => (
+                <button
+                  ref={elementRef<HTMLButtonElement>((element) => {
+                    speedButtons.add(element);
+                    return () => speedButtons.delete(element);
+                  })}
+                  type="button"
+                  role="radio"
+                  class="chat-controls__speed-option"
+                  data-chat-speed-option={option().value}
+                  aria-checked={option().value === view().selectedSpeed ? "true" : "false"}
+                  tabindex={index() === view().tabbableSpeedIndex ? 0 : -1}
+                  disabled={props.fastMode.disabled || option().disabled}
+                  onClick={(event: MouseEvent) => {
+                    event.stopPropagation();
+                    if (
+                      !props.fastMode.disabled &&
+                      !option().disabled &&
+                      option().value !== props.fastMode.persistedOverride
+                    ) {
+                      void props.onFastModeSelect(option().value, props.sessionKey);
+                    }
+                  }}
+                >
+                  {option().label}
+                </button>
+              )}
             </For>
           </div>
         </div>

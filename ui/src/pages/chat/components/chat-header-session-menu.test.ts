@@ -277,6 +277,29 @@ async function select(menu: HeaderMenuElement, value: string) {
 }
 
 describe("chat header session menu", () => {
+  it("focuses the current first row when reopening removes the parked first row", async () => {
+    const menu = await mountMenu({}, false);
+    await openMenu(menu);
+    const previousFirst = item(menu, "Command palette");
+    const trigger = menu.readTrigger()!;
+    const hidden = whenHidden(menu);
+    panel(menu).dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    flush();
+    await hidden;
+    await expectParked(menu, () => {
+      menu.mobile = false;
+    });
+    expect(previousFirst.isConnected).toBe(true);
+
+    trigger.focus();
+    expect(menu.openMenu()).toBe(true);
+    expect(document.activeElement).toBe(previousFirst);
+    await waitForSolid(() => {
+      expect(previousFirst.isConnected).toBe(false);
+      expect(document.activeElement).toBe(item(menu, "View"));
+    });
+  });
+
   it("keeps current session actions and their DOM identity across reopening", async () => {
     const menu = await mountMenu({}, false);
     expect(menu.querySelector(".chat-header-session-menu__trigger")).not.toBeNull();
@@ -712,7 +735,8 @@ describe("chat header session menu", () => {
   it("drills into session sharing only from the compact menu", async () => {
     const onOpen = vi.fn();
     const onVisibilityChange = vi.fn();
-    const sharing = {
+    const onMemberChange = vi.fn();
+    const sharing: ChatSessionSharingProps = {
       session: {
         key: "agent:main:shared",
         kind: "direct",
@@ -733,7 +757,7 @@ describe("chat header session menu", () => {
       },
       onOpen,
       onVisibilityChange,
-      onMemberChange: vi.fn(),
+      onMemberChange,
     } satisfies ChatSessionSharingProps;
 
     const desktop = await mountMenu({ sharing });
@@ -744,19 +768,69 @@ describe("chat header session menu", () => {
     await compact.updateComplete;
     expect(onOpen).toHaveBeenCalledOnce();
     expect(compact.querySelector(".chat-header-session-menu--compact-sharing") !== null).toBe(true);
-    expect(rootLabels(compact)).toEqual([
-      "Back",
-      "Publish draft",
-      "Read-only",
-      "Suggest",
-      "Draft",
-      "Vyctor",
-    ]);
+    expect(rootLabels(compact)).toEqual(["Back", "Publish draft", "Read-only", "Suggest", "Draft"]);
     expect(
       compact.querySelector(".chat-pane__publish-draft")?.classList.contains("session-menu__item"),
     ).toBe(true);
     await select(compact, "visibility:read-only");
     expect(onVisibilityChange).toHaveBeenCalledWith("read-only");
+    expect(compact.textContent).not.toContain("Vyctor");
+    compact.sharing = {
+      ...sharing,
+      session: { ...sharing.session!, visibility: "read-only" },
+      state: {
+        ...sharing.state!,
+        result: {
+          ...sharing.state!.result!,
+          permissions: [{ identityId: "vyctor", level: "read", options: ["read", "send"] }],
+        },
+      },
+    };
+    await compact.updateComplete;
+    await select(compact, "compact:open-sharing");
+    await select(compact, "permission:vyctor");
+    const permission = compact.querySelector<HTMLButtonElement>(
+      '[data-value="permission:vyctor"]',
+    )!;
+    const send = compact.querySelector<HTMLButtonElement>('[data-value="permission:send:vyctor"]')!;
+    await select(compact, "permission:send:vyctor");
+    send.focus();
+    expect(document.activeElement).toBe(send);
+    expect(onMemberChange).toHaveBeenCalledExactlyOnceWith("vyctor", true);
+    const publish = async (loading: boolean, level: "read" | "send", error?: string) => {
+      compact.sharing = {
+        ...compact.sharing!,
+        state: {
+          loading,
+          error,
+          result: {
+            ...compact.sharing!.state!.result!,
+            permissions: [{ identityId: "vyctor", level, options: ["read", "send"] }],
+          },
+        },
+      };
+      await compact.updateComplete;
+    };
+    await publish(true, "read");
+    expect(permission.isConnected).toBe(true);
+    expect(permission.getAttribute("aria-disabled")).toBe("true");
+    expect(document.activeElement).toBe(send);
+    send.click();
+    expect(onMemberChange).toHaveBeenCalledTimes(1);
+    await publish(false, "send");
+    expect(document.activeElement).toBe(send);
+    expect(send.getAttribute("aria-checked")).toBe("true");
+
+    const read = compact.querySelector<HTMLButtonElement>('[data-value="permission:read:vyctor"]')!;
+    read.focus();
+    read.click();
+    expect(onMemberChange).toHaveBeenLastCalledWith("vyctor", false);
+    await publish(true, "send");
+    expect(document.activeElement).toBe(read);
+    await publish(false, "send", "Permission changed");
+    expect(document.activeElement).toBe(read);
+    expect(send.getAttribute("aria-checked")).toBe("true");
+    expect(compact.textContent).toContain("Permission changed");
   });
 
   it.each([false, true])(

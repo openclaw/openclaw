@@ -5,6 +5,7 @@ import * as agentEn from "./en-agents.ts";
 
 export const en: TranslationMap & {
   agentChip: TranslationMap;
+  agentsHome: TranslationMap;
   logbook: TranslationMap;
   gatewayLogs: TranslationMap;
   standingGrants: TranslationMap;
@@ -71,7 +72,30 @@ export const en: TranslationMap & {
       sessionDiff: TranslationMap & Record<"title" | "show", string>;
       sessionSharing: TranslationMap & Record<"draft", string>;
       workspaceFiles: TranslationMap & Record<"copyPath", string>;
-      toolCards: TranslationMap;
+      toolCards: TranslationMap & Record<"activity" | "review" | "verbs", TranslationMap>;
+      systemNotice: TranslationMap &
+        Record<
+          | "guardian"
+          | "restartRecovery"
+          | "automationRecovery"
+          | "gatewayRestarted"
+          | "cliHarnessContext"
+          | "claudeCliTaskNotification"
+          | "pluginSteering",
+          TranslationMap
+        >;
+      mermaid: TranslationMap;
+      questions: TranslationMap;
+      imageLightbox: TranslationMap;
+      mediaPlayer: TranslationMap;
+      attachments: TranslationMap;
+      privateDraftReload: TranslationMap;
+      startupStatus: TranslationMap;
+      progressLabels: TranslationMap;
+      pendingInputs: TranslationMap & { agentUpdate: TranslationMap };
+      sessionSuggestions: TranslationMap & { state: TranslationMap };
+      catalog: TranslationMap;
+      sessionRoute: TranslationMap;
       codeBlock: TranslationMap;
       commandResults: TranslationMap & { fast: TranslationMap };
       commands: TranslationMap;
@@ -106,7 +130,15 @@ export const en: TranslationMap & {
       string
     >;
   dashboardsPage: TranslationMap;
-  configForm: TranslationMap & { sections: TranslationMap };
+  configForm: TranslationMap &
+    Record<"hideValue" | "revealValue" | "defaultValue", string> & { sections: TranslationMap };
+  quickSettings: TranslationMap & {
+    appearance: TranslationMap & Record<"lobsterVisits", string>;
+    personal: TranslationMap & Record<"browserOnly", string>;
+  };
+  activityFeed: TranslationMap & Record<"viewingNow" | "showing", string>;
+  terminal: TranslationMap &
+    Record<"title" | "open" | "toggle" | "unavailable" | "startCancelled", string>;
   configPage: TranslationMap;
   profilePage: TranslationMap & {
     personalInstructions: TranslationMap;
@@ -123,10 +155,29 @@ export const en: TranslationMap & {
         string
       >;
   };
-  connection: TranslationMap;
+  connection: TranslationMap & {
+    browserSignIn: TranslationMap;
+    switchGateway: TranslationMap;
+    help: TranslationMap;
+  };
   channels: TranslationMap;
   agents: TranslationMap & { overview: TranslationMap };
-  configView: TranslationMap;
+  configView: TranslationMap &
+    Record<
+      | "adminRequired"
+      | "recoveryNotRestored"
+      | "recoveryUnknown"
+      | "recoveryBackup"
+      | "discardUnconfirmed"
+      | "writeGatewayChanged"
+      | "writeUnconfirmed"
+      | "reloadBlocked"
+      | "rawDraftBlocksApply"
+      | "rawDraftBlocksFormEdit"
+      | "rawDraftUnverified"
+      | "fileOpenedOnGateway",
+      string
+    >;
   custodian: TranslationMap & { autoSetup: TranslationMap & { thisComputer: string } };
   debug: TranslationMap & {
     lanes: TranslationMap & Record<"lane" | "active" | "queued" | "blocked", string>;
@@ -151,6 +202,7 @@ export const en: TranslationMap & {
   devices: TranslationMap & { pairing: TranslationMap };
   desktop: TranslationMap &
     Record<"title" | "openWindow" | "unavailable" | "toggle" | "reconnect" | "connecting", string>;
+  worktrees: TranslationMap;
   sessionHovercard: TranslationMap & { states: TranslationMap; checks: TranslationMap } & Record<
       | "ariaLabel"
       | "linkedChannel"
@@ -169,7 +221,10 @@ export const en: TranslationMap & {
       string
     >;
   filePreview: TranslationMap;
-  updates: TranslationMap;
+  updates: TranslationMap &
+    Record<"confirm" | "dialog" | "triage" | "report", TranslationMap> & {
+      run: TranslationMap & Record<"restarting" | "progress", string> & { phase: TranslationMap };
+    };
   login: TranslationMap;
   labsPage: TranslationMap;
   mcpServers: TranslationMap;
@@ -278,7 +333,7 @@ export const en: TranslationMap & {
   skillWorkshop: TranslationMap;
   systems: TranslationMap;
   talkPage: TranslationMap;
-  usage: TranslationMap & { overview: TranslationMap };
+  usage: TranslationMap & { overview: TranslationMap; details: TranslationMap };
 } = {
   pluginUi: {
     sessionRecentMessages: "Recent messages",
@@ -307,7 +362,9 @@ export const en: TranslationMap & {
     unavailable: "Slot utilization unavailable",
     execHost: "Codex exec",
   },
-  agentsHome: {},
+  agentsHome: {
+    loadFailed: "Could not load agents. Try again.",
+  },
   outputs: {
     viewAll: "View all",
     dashboard: "Dashboard",
@@ -581,15 +638,7 @@ export const en: TranslationMap & {
     holdOneHour: "Hold 1 h",
     reviewUpdate: "Review update",
     run: {
-      title: "Update progress",
-      phases: "Update phases",
-      steps: "Installation steps",
-      details: "Step details",
-      noDetails: "No step details recorded yet.",
-      verification: "Verification checks",
-      report: "Update report",
       restarting: "Gateway restarting…",
-      reconnecting: "Reconnecting automatically. Update progress is saved on the gateway.",
       progress: "{completed} of {total} phases complete",
       phase: {
         requested: "Requested",
@@ -600,26 +649,6 @@ export const en: TranslationMap & {
         restarting: "Restarting",
         verifying: "Verifying",
         finished: "Finished",
-      },
-      step: {
-        completed: "Complete",
-        in_progress: "In progress",
-        pending: "Pending",
-        failed: "Failed",
-        skipped: "Skipped",
-      },
-      oracle: {
-        service: "Service",
-        version: "Version",
-        plugins: "Plugins",
-        channels: "Channels",
-        inference: "Inference",
-      },
-      oracleState: {
-        pass: "Passed",
-        warn: "Not verified",
-        fail: "Failed",
-        pending: "Pending",
       },
     },
     confirm: {
@@ -729,26 +758,7 @@ export const en: TranslationMap & {
     capabilities: {},
     execApprovals: {},
   },
-  worktrees: {
-    adminRequired: "Browsing only. Worktree changes require operator.admin access.",
-    newWorktree: "New worktree",
-    ownerManual: "Manual",
-    ownerSession: "Session",
-    ownerWorkboard: "Workboard",
-    title: "Managed Worktrees",
-    subtitle: "Isolated repository checkouts owned by OpenClaw.",
-    cleanNow: "Clean up now",
-    name: "Name",
-    namePlaceholder: "auto",
-    baseBranch: "Base branch",
-    baseBranchPlaceholder: "Remote default",
-    repo: "Repository",
-    empty: "No managed worktrees.",
-    restorable: "Restorable",
-    restore: "Restore",
-    confirmDelete: "Snapshot and delete {name}?",
-    confirmForceDelete: "Snapshot failed: {error}\n\nDelete without a snapshot?",
-  },
+  worktrees: {},
   agentChip: agentEn.agentChip,
   agentScope: agentEn.agentScope,
   newSession: {
@@ -922,121 +932,17 @@ export const en: TranslationMap & {
     },
   },
   configForm: {
-    redactedPlaceholder: "[redacted - click reveal to view]",
-    sectionHelp: "Help for {section}",
-    advancedDivider: "Advanced",
-    advancedSettings: "Advanced settings",
     hideValue: "Hide value",
     revealValue: "Reveal value",
-    disableStreamToReveal: "Disable stream mode to reveal value",
-    storedSecretNotRevealable: "This editor cannot reveal the stored value.",
-    unsupportedType: "Unsupported type: {type}. Use Raw mode.",
-    structuredSecretRaw: "Structured value (SecretRef) - use Raw mode to edit",
-    structuredSecretFile: "Structured value (SecretRef) - edit the config file directly",
     defaultValue: "Default: {value}",
-    select: "Select...",
-    enumOn: "On",
-    enumOff: "Off",
-    enumAuto: "Auto",
-    nullValue: "null",
-    jsonValue: "JSON value",
-    invalidJson: "Enter valid JSON before leaving this field.",
-    invalidString: "Enter a value that matches this setting's constraints.",
-    invalidNumber: "Enter a value within the allowed range and step.",
-    draftRejected: "This setting could not be saved. Your draft is still here.",
-    unsupportedArray: "Unsupported array schema. Use Raw mode.",
-    itemCountOne: "{count} item",
-    itemCount: "{count} items",
-    add: "Add",
-    noItems: 'No items yet. Click "Add" to create one.',
-    removeItem: "Remove item",
-    customEntries: "Custom entries",
-    addEntry: "Add Entry",
-    key: "Key",
-    removeEntry: "Remove entry",
-    removeEntryKey: "Remove entry: {key}",
-    renameRedactedBlocked:
-      "This entry holds a stored secret. Add the new key with its value, then remove this one.",
-    schemaUnavailable: "Schema unavailable.",
-    unsupportedSchema: "Unsupported schema. Use Raw.",
-    unsupportedNode: "Unsupported schema node. Use Raw mode.",
-    noSettingsMatch: 'No settings match "{query}"',
-    noSettingsInSection: "No settings in this section",
     sections: {},
   },
   // Historical namespace from the pre-restructure "quick settings" page; its
   // keys now serve Models, Privacy & Security, Appearance, and Profile.
   // Renaming would force retranslation of every key, so the name stays.
   quickSettings: {
-    language: "Language",
-    model: {
-      title: "Model & Thinking",
-      model: "Model",
-      thinking: "Thinking",
-      fastMode: "Fast Mode",
-      default: "Default",
-      modelPolicy: "Model policy",
-      thinkingLevels: {
-        off: "Off",
-        low: "Low",
-        medium: "Medium",
-        high: "High",
-      },
-      fastModes: {
-        auto: "Auto",
-        fast: "Fast",
-        standard: "Standard",
-        on: "On",
-        off: "Off",
-      },
-    },
-    channels: {
-      title: "Channels",
-      connect: "Connect →",
-    },
     appearance: {
       lobsterVisits: "Lobster visits",
-      lobsterVisitsOn: "Drops by occasionally",
-      lobsterVisitsThemeHidden:
-        "The lobster stays home while the {theme} theme is active. Other visitors still drop by.",
-      lobsterVisitsOff: "Never visits",
-      lobsterSounds: "Lobster sounds",
-      lobsterSoundsOn: "Tiny blubs when touched",
-      lobsterSoundsOff: "Silent",
-      lobsterdex: "Lobsterdex",
-      lobsterdexSeen: "{seen}/{total} visited",
-      lobsterdexFirstVisited: "{name} · first visited {date}",
-      lobsterdexCardFirstVisited: "First visited {date}",
-      lobsterdexCardShinySeen: "✦ Shiny spotted {date}",
-      lobsterdexCardCopyLink: "Copy link",
-      lobsterdexOpen: "Open Lobsterdex",
-      lobsterdexThemeHidden:
-        "This theme hides Lobsterdex. Your collection and preferences are preserved.",
-    },
-    security: {
-      intro: "Review gateway access, tool policy, device authentication, and approvals.",
-      title: "Security",
-      gatewayAuth: "Gateway auth",
-      execPolicy: "Exec policy",
-      browserEnabled: "Browser enabled",
-      toolProfile: "Available tools",
-      toolProfileDefault:
-        "Using core and default plugin tools. Choose Full to include available optional plugin tools.",
-    },
-    system: {
-      gatewayHost: "Gateway Host",
-      up: "Up {duration}",
-      cpu: "CPU",
-      memory: "Memory",
-      disk: "Disk",
-      usage: "{label} usage",
-      loadAverage: "Load average: {values}",
-      core: "{count} core",
-      cores: "{count} cores",
-      load: "load",
-      used: "used",
-      freeOf: "{free} free of {total}",
-      runtime: "Node {version} · PID {pid}",
     },
     personal: {
       browserOnly: "Stored in this browser only.",
@@ -1045,77 +951,34 @@ export const en: TranslationMap & {
   configPage: {},
   configView: {
     adminRequired: "Configuration changes require operator.admin access.",
-    channelSettings: "Channel settings",
     categories: {},
     sections: {},
     themes: {},
     textSizes: {},
-    profileSyncedHint: "Saved to your profile — follows you on every device.",
-    syncedHint: "Synced across your devices through the gateway.",
-    syncPendingHint: "Waiting to sync through the gateway.",
     notifications: {},
     appearance: {},
     chatPrefs: {},
     sidebarPrefs: {},
     sessionObserver: {},
     connection: {},
-    root: "<root>",
-    itemCount: "[{count} item]",
-    itemCountPlural: "[{count} items]",
-    open: "Open",
     fileOpenedOnGateway: "Configuration file opened on Gateway host.",
-    applying: "Applying…",
-    autoSaveSaving: "Saving…",
-    autoSaveSaved: "Saved",
-    autoSavePaused: "Autosave paused after reconnect",
-    saveNow: "Save",
-    autoSaveFailed: "Save failed",
-    autoSaveRejected: "Settings not applied",
-    autoSaveRejectedHint: "Current settings are unchanged.",
-    rejectionDetails: "Show reason",
     recoveryNotRestored:
       "Settings could not be restored. Your draft is kept. Check {path} before saving again.",
     recoveryUnknown:
       "Settings restoration could not be confirmed. Your draft is kept. Check {path} before saving again.",
     recoveryBackup: "Inspect the recovery backup at {path}.",
-    recoveryReload: "Discard draft and reload",
     discardUnconfirmed:
       "The last save could not be confirmed. Your draft is kept. Reload configuration before discarding this setting.",
     writeGatewayChanged:
       "This unsettled change belongs to a different Gateway. Reconnect to that Gateway to retry, or discard the draft.",
     writeUnconfirmed:
       "The last configuration change could not be confirmed. Your draft is kept. Retry before changing other settings.",
-    autoSaveConflict: "Settings changed elsewhere",
-    retry: "Retry",
-    applyChanges: "Apply changes",
     reloadBlocked: "Finish saving or discard pending config changes before reloading.",
     rawDraftBlocksApply: "Save or discard edits in the Raw editor before applying changes.",
     rawDraftBlocksFormEdit:
       "Unsaved raw config edits could not be parsed; resolve them in the Raw editor before changing settings.",
     rawDraftUnverified:
       "Cannot verify the raw draft against the saved configuration; reload and retry.",
-    invalidConfig: "Your configuration is invalid. Some settings may not work as expected.",
-    dismissWarning: "Don't remind again",
-    viewPendingChangesRaw: "View pending changes",
-    hideEnvValues: "Hide env values",
-    revealEnvValues: "Reveal env values",
-    peek: "Peek",
-    loadingSchema: "Loading schema…",
-    formUnsafeCount: "1 setting in this config can only be edited as text: {paths}",
-    formUnsafeCountPlural: "{count} settings in this config can only be edited as text: {paths}",
-    formUnsafeMore: "+{count} more",
-    openRawEditor: "Open Raw editor",
-    secretCount: "{count} secret",
-    secretCountPlural: "{count} secrets",
-    redacted: "redacted",
-    visible: "visible",
-    revealSensitive: "Reveal sensitive values",
-    hideSensitive: "Hide sensitive values",
-    toggleRawRedaction: "Toggle raw config redaction",
-    sensitiveHidden:
-      "{count} sensitive value hidden. Use the reveal button above to edit the raw config.",
-    sensitiveHiddenPlural:
-      "{count} sensitive values hidden. Use the reveal button above to edit the raw config.",
   },
   execApproval: {
     watcherApprovalScope:
@@ -1233,65 +1096,16 @@ export const en: TranslationMap & {
   },
   terminal: {
     title: "Terminal",
-    availableSessions: "Available sessions",
-    inputLabel: "Terminal input",
-    sendInput: "Send terminal input",
-    closeSessionMessage: "Close this terminal session? Its running process will end.",
-    sessionsLabel: "Sessions",
-    addFilesLabel: "Add files",
-    copiedToClipboard: "Copied to clipboard",
     toggle: "Toggle terminal",
     open: "Open terminal",
-    openWindow: "Open terminal in new window",
-    hide: "Hide terminal",
-    resize: "Resize terminal panel",
-    newSession: "New terminal session",
-    addFiles: "Add files to terminal",
-    dropFiles: "Drop files to add them",
-    uploadProgress: "Uploading {current} of {total}",
-    uploadFailed: "Upload failed",
-    retryUpload: "Retry",
-    insertUploadedPaths: "Insert uploaded paths",
-    uploadExpired: "Uploaded files may have expired. Cancel this batch and choose the files again.",
-    closeSession: "Close terminal session",
-    sessions: "Terminal sessions",
-    refreshSessions: "Refresh",
-    loadingSessions: "Loading sessions…",
-    noSessions: "No live terminal sessions",
-    currentSession: "current",
-    sessionAttached: "attached",
-    attachSession: "Attach session",
-    attachFailed: "Could not attach terminal session",
-    deliveryFailed: "Terminal delivery could not be confirmed. Reconnect before trying again.",
-    inputPaused: "Terminal input is paused until the Gateway reconnects.",
     startCancelled: "Terminal start was cancelled. Try again.",
-    connecting: "Connecting to session…",
-    connectionTimedOut: "Session did not connect within 30 seconds.",
-    refreshRequired: "Control UI updated. Reload this page to continue the terminal action.",
-    tabLabel: "shell {n}",
-    tabHint: "{agent} · {cwd}",
-    agentOwnedBadge: "agent",
-    exited: "exited",
-    exitedCode: "exited ({code})",
-    exitedSignal: "exited (signal {signal})",
-    detached: "detached",
-    dockBottom: "Dock to bottom",
-    dockRight: "Dock to right",
-    dockMain: "Fill main content area",
-    dockMode: "Terminal panel position",
     unavailable: "The terminal is not available on this gateway.",
-    unusableSession:
-      "The Gateway returned an unusable terminal session (missing {field}). The Gateway is likely older than this Control UI — update it, then retry.",
-    uploadTooLarge: "File exceeds the 16 MiB terminal upload limit: {file}",
-    uploadUnsafeCmdPath: "Cannot safely insert an uploaded path containing % or ! into cmd.exe",
-    uploadUnsupportedShell: "Cannot safely insert an uploaded path into unsupported shell: {shell}",
-    uploadInvalidNativePath: "Cannot safely insert the uploaded native file path",
   },
   browser: {
-    nativeTab: "App tab",
-    remoteTab: "Agent browser tab",
-    stop: "Stop loading",
-    profile: "Browser profile: {profile}",
+    nativeTab: {},
+    remoteTab: {},
+    stop: {},
+    profile: {},
     title: "Browser",
     open: "Open",
     openPanel: "Open browser panel",
@@ -1300,33 +1114,33 @@ export const en: TranslationMap & {
     openNewTab: "Open in new tab",
     openWithinOpenClaw: "Open in OpenClaw",
     toggle: "Toggle browser panel",
-    close: "Close browser panel",
-    resize: "Resize browser panel",
+    close: {},
+    resize: {},
     newTab: "New tab",
     closeTab: "Close tab",
-    untitledTab: "New tab",
+    untitledTab: {},
     tweetPost: "Post on X",
     openPost: "Open post",
-    back: "Back",
-    forward: "Forward",
-    reload: "Reload",
+    back: {},
+    forward: {},
+    reload: {},
     openExternal: "Open in your browser",
-    urlPlaceholder: "Enter a URL and press Enter",
-    dockBottom: "Dock to bottom",
-    dockRight: "Dock to right",
-    annotate: "Annotate page",
-    inspect: "Inspect element",
-    annotateSend: "Send to chat",
-    annotateUndo: "Undo",
-    annotateClear: "Clear",
-    annotateDone: "Exit annotate mode",
-    annotateHint: "Draw on the page, then send the markup to your chat.",
-    inspectName: "Name",
-    inspectRole: "Role",
-    inspectFocusable: "Focusable",
-    loading: "Loading page…",
-    notRunning: "The gateway browser is not running.",
-    start: "Start browser",
+    urlPlaceholder: {},
+    dockBottom: {},
+    dockRight: {},
+    annotate: {},
+    inspect: {},
+    annotateSend: {},
+    annotateUndo: {},
+    annotateClear: {},
+    annotateDone: {},
+    annotateHint: {},
+    inspectName: {},
+    inspectRole: {},
+    inspectFocusable: {},
+    loading: {},
+    notRunning: {},
+    start: {},
     errors: {},
     annotatePrompt: {},
   },
@@ -1676,51 +1490,8 @@ export const en: TranslationMap & {
     },
   },
   activityFeed: {
-    partialHistory:
-      "People and counts describe visible recorded session associations; retained history and this people list may be incomplete.",
-    sessionsMode: "Sessions",
-    searchPlaceholder: "Search session titles…",
-    time: "Time",
-    time24h: "Last 24 hours",
-    time7d: "Last 7 days",
-    time30d: "Last 30 days",
-    timeAll: "All time",
-    everyone: "Everyone",
-    peopleButtonLabel: "Filter sessions by person",
-    lastActive: "· {time}",
-    unresolvedIdentities: "Unresolved identities",
-    clearPersonFilter: "Clear person filter",
     showing: "Showing {shown} of {total}",
-    today: "Today",
-    yesterday: "Yesterday",
-    unknownDate: "Unknown date",
-    noSessions: "No sessions match these filters.",
-    automationGroup: "{count} automation sessions",
-    automation: "Automation",
-    inspectRun: "Inspect run",
-    recap: "Session recap",
-    recapMissing: "No recap yet",
-    recapUpdating: "Updating recap…",
-    recapStale: "New activity since this recap",
-    recapUnavailable: "Recap unavailable",
-    recapRefreshFailed: "Couldn’t refresh recap",
-    recapRetry: "Retry recap",
-    recapUpdated: "Recap updated {time}",
-    backToSessions: "Back to sessions",
-    channelLabel: "Channel: {value}",
-    agentLabel: "Agent: {value}",
-    online: "Online",
-    idle: "Idle",
-    offline: "Offline",
-    unknownConnection: "Unknown client",
-    connectionDetails: "Connection details · {count}",
-    connectionOne: "1 connection",
-    connectionMany: "{count} connections",
-    lastInput: "Last input {time} ago",
     viewingNow: "Viewing now",
-    notViewing: "Not viewing a session right now.",
-    notFoundTitle: "Person not found",
-    notFoundDescription: "No online presence or visible session association matches this identity.",
   },
   githubPublication: {
     newAction: "Choose a new publication",
@@ -1815,12 +1586,11 @@ export const en: TranslationMap & {
         "Your website sign-in has expired. Images and files cannot load until you sign in again. Your conversation and draft will stay open.",
       action: "Sign in",
       dismiss: "Not now",
-      returnHint:
-        "Finish signing in in the new tab, then return here. Visible attachments will retry automatically.",
-      checkAgain: "Check again",
-      checking: "Checking access…",
-      stillRequired: "Sign-in is still required. Finish signing in, then check again.",
-      unavailable: "Could not verify access. Check your connection and try again.",
+      returnHint: {},
+      checkAgain: {},
+      checking: {},
+      stillRequired: {},
+      unavailable: {},
     },
     connecting: "Connecting…",
     starting: "Starting…",
@@ -1850,23 +1620,13 @@ export const en: TranslationMap & {
     scopeUpgrade: {},
     // Settings → Gateway copy lives in the lazy en-settings catalog; the anchor keeps its merge target.
     access: {},
-    switchGateway: {
-      title: "Switch to a different Gateway?",
-      summary: "This link asks the browser to connect somewhere else.",
-      current: "Current",
-      next: "Link",
-      note: "Anything you enter after switching goes to that host.",
-      noteToken: "The link also carries a token for it.",
-      noteScoped: "Your saved credential for {host} stays here and is not sent.",
-      confirm: "Switch to {host}",
-      cancel: "Keep current Gateway",
-    },
+    switchGateway: {},
     help: {
-      title: "How to connect",
-      step1: "Start the gateway on your host machine:",
-      step2: "Get a tokenized dashboard URL:",
-      step3: "Paste the Gateway URL and secret above, or open that URL directly.",
-      docsLink: "Read the docs →",
+      title: {},
+      step1: {},
+      step2: {},
+      step3: {},
+      docsLink: {},
       copyCommand: "Copy command",
       copyCommandAria: "Copy command: {command}",
     },
@@ -1956,52 +1716,53 @@ export const en: TranslationMap & {
       title: "Usage Overview",
     },
     sessions: {},
+    // Sidebar collapse stays eager; Usage registers the remaining detail copy.
     details: {
-      noUsageData: "No usage data for this session.",
-      duration: "Duration",
-      modelMix: "Model Mix",
-      filtered: "(filtered)",
-      close: "Close session details",
-      noTimeline: "No timeline data",
-      loadFailed: "Could not load {detail}: {error}",
-      noDataInRange: "No data in range",
-      usageOverTime: "Usage Over Time",
-      rangeStart: "Range start",
-      rangeEnd: "Range end",
-      reset: "Reset",
-      perTurn: "Per Turn",
-      cumulative: "Cumulative",
-      turnRange: "Turns {start}–{end} of {total}",
-      assistantOutputTokens: "Assistant output tokens",
-      userToolInputTokens: "User + tool input tokens",
-      tokensWrittenToCache: "Tokens written to cache",
-      tokensReadFromCache: "Tokens read from cache",
-      noContextData: "No context data",
-      contextOutOfDate: "These context details are out of date. Refresh usage and try again.",
-      systemPromptBreakdown: "System Prompt Breakdown",
+      noUsageData: {},
+      duration: {},
+      modelMix: {},
+      filtered: {},
+      close: {},
+      noTimeline: {},
+      loadFailed: {},
+      noDataInRange: {},
+      usageOverTime: {},
+      rangeStart: {},
+      rangeEnd: {},
+      reset: {},
+      perTurn: {},
+      cumulative: {},
+      turnRange: {},
+      assistantOutputTokens: {},
+      userToolInputTokens: {},
+      tokensWrittenToCache: {},
+      tokensReadFromCache: {},
+      noContextData: {},
+      contextOutOfDate: {},
+      systemPromptBreakdown: {},
       collapse: "Collapse",
-      collapseAll: "Collapse All",
-      expandAll: "Expand All",
-      baseContextPerMessage: "Base context per message",
-      system: "System",
-      systemShort: "Sys",
-      skills: "Skills",
-      tools: "Tools",
-      files: "Files",
-      ofInput: "of input",
-      of: "of",
-      timelineFiltered: "timeline filtered",
-      loadedIntervalMessages: "Loaded conversation · selected interval",
-      conversation: "Conversation",
-      noMessages: "No messages",
-      tool: "Tool",
-      toolResult: "Tool result",
-      hasTools: "Has tools",
-      searchConversation: "Search conversation",
-      filterByRole: "Filter by role",
-      filterByTool: "Filter by tool",
-      you: "You",
-      noMessagesMatch: "No messages match the filters.",
+      collapseAll: {},
+      expandAll: {},
+      baseContextPerMessage: {},
+      system: {},
+      systemShort: {},
+      skills: {},
+      tools: {},
+      files: {},
+      ofInput: {},
+      of: {},
+      timelineFiltered: {},
+      loadedIntervalMessages: {},
+      conversation: {},
+      noMessages: {},
+      tool: {},
+      toolResult: {},
+      hasTools: {},
+      searchConversation: {},
+      filterByRole: {},
+      filterByTool: {},
+      you: {},
+      noMessagesMatch: {},
     },
     mosaic: {},
   },
@@ -2102,17 +1863,7 @@ export const en: TranslationMap & {
     parentSession: "the parent session",
     openParentSession: "Open parent session",
     parentSessionUnavailable: "Parent session information is unavailable.",
-    sessionRoute: {
-      chooseTitle: "Choose a session",
-      multipleMatches: "More than one session matches {shortId}.",
-      additionalMatches: "Search results remain. Use a longer id prefix.",
-      notFoundTitle: "Session not found",
-      notFoundExplanation: "The session may have been removed, or the link may be incorrect.",
-      goToMain: "Go to main session",
-      viewSessions: "View sessions",
-      catalogShareUnavailable: "This shared session route is unavailable.",
-      catalogShareInvalid: "This {catalog} share URL is invalid.",
-    },
+    sessionRoute: {},
     commandResults: {
       startingNewThread: "Starting new session...",
       resettingThread: "Resetting session...",
@@ -2149,45 +1900,11 @@ export const en: TranslationMap & {
     },
     reactions: {},
     sessionSuggestions: {
-      suggest: "Suggest",
-      suggestMessage: "Suggest message",
-      attachmentsUnsupported: "Remove attachments before submitting a text suggestion.",
-      sendNow: "Send {author}'s suggestion now",
-      queue: "Queue {author}'s suggestion",
-      edit: "Edit {author}'s suggestion",
-      dismiss: "Dismiss {author}'s suggestion",
-      typing: "{name} is typing…",
-      typingMany: "{names} are typing…",
-      typingSeveral: "Several people are typing…",
-      typingOthers: "{count} others",
-      otherCollaborators: "Other collaborators",
-      typingDraftState: "is typing...",
-      pausedDraftState: "Draft",
-      state: {
-        pending: "Pending",
-        accepted: "Accepted",
-        dismissed: "Dismissed",
-      },
+      state: {},
     },
     sessionHeader: {},
     board: {},
-    catalog: {
-      remoteViewOnly: "This session is on a paired device and is view-only.",
-      unsupportedViewOnly: "This external session source is view-only.",
-      sessionMenu: "External session actions",
-      openInOpenClaw: "Open in OpenClaw",
-      importToOpenClaw: "Import to OpenClaw",
-      importComplete: "Imported {count} transcript items.",
-      importUnchanged: "The imported transcript is up to date.",
-      importIncomplete:
-        "Imported {count} transcript items. Older history exceeded the import limit.",
-      openImportedSession: "Open imported session",
-      openInTerminal: "Open in terminal",
-      deleteSession: "Delete",
-      deleteSessionConfirm:
-        "Delete this external session from OpenClaw? Make sure no other runner is using it. Beamed sessions are deleted permanently. Sessions kept by another tool, such as Codex, are archived there and may be restorable.",
-      terminalUnavailable: "Terminal opening is unavailable for this session.",
-    },
+    catalog: {},
     taskSuggestions: {},
     pullRequests: {
       open: "Open",
@@ -2226,20 +1943,7 @@ export const en: TranslationMap & {
     markdown: {
       truncated: "… truncated ({total} chars, showing first {shown}).",
     },
-    mermaid: {
-      title: "Mermaid diagram",
-      options: "Diagram options",
-      diagram: "Show diagram",
-      source: "Show source",
-      copySource: "Copy source",
-      expand: "Expand diagram",
-      expandNamed: "Expand diagram: {title}",
-      rendering: "Rendering diagram…",
-      error: "This diagram could not be rendered. Check the source or simplify the diagram.",
-      rendererError:
-        "The Mermaid renderer could not load or finish. Reload the dashboard; if this continues, check proxy or authentication rules for its renderer asset URLs.",
-      imageError: "The diagram image could not be displayed. Reload the dashboard to try again.",
-    },
+    mermaid: {},
     codeBlock: {},
     workspaceConflict: {},
     compaction: {
@@ -2250,53 +1954,31 @@ export const en: TranslationMap & {
       label: "Session reset",
       description: "The earlier conversation was cleared.",
     },
-    outboxRecoveryReviewTitle: "Review in this chat?",
-    outboxRecoveryConfirm: "Add this saved copy to “{chat}” for review? Nothing will be sent.",
-    outboxRecoveryRestore: "Restore",
-    outboxRecoveryConflict:
-      "Keep or clear the draft and pending messages in this chat first, or open another non-Incognito chat. Your saved copy is unchanged.",
-    outboxRecoveryStorageFailed:
-      "We could not access your saved messages. Reload to try again. Do not clear browser site data if you want to keep them.",
-    outboxRecoveryFull:
-      "There are more saved messages than we can show. Review or delete the copies below to make room. The remaining messages are still saved in this browser.",
-    outboxRecoveryDraft: "Draft",
-    outboxRecoveryQueued: "Unsent",
-    outboxRecoverySource: "from {chat}",
-    outboxRecoveryUpdated: "Last updated {time}",
-    outboxRecoveryGoal: "Includes an unsent goal change",
-    outboxRecoveryReply: "Reply to: {text}",
-    outboxRecoveryAttachments: "Attachments: {files}",
-    outboxRecoveryUnconfirmedLabel: "may have been sent",
-    outboxRecoveryUnconfirmed:
-      "Delivery unconfirmed. This message may already have been sent. Check the original chat before sending it again.",
-    outboxRecoveryAttachmentMissing:
-      "An attachment could not be loaded. Review the message and reattach the file before sending.",
-    outboxRecoveryDelete: "Delete",
-    outboxRecoveryDeleteTitle: "Delete this saved copy?",
-    outboxRecoveryDeleteConfirm:
-      "This removes the draft and any saved messages or attachments shown with it from this browser. It cannot be undone. Messages already sent to a chat will not be deleted.",
-    outboxRecoveryDeleteConflict:
-      "This saved copy changed while you were reviewing it. Nothing was deleted. Reload and review it again.",
+    outboxRecoveryReviewTitle: {},
+    outboxRecoveryConfirm: {},
+    outboxRecoveryRestore: {},
+    outboxRecoveryConflict: {},
+    outboxRecoveryStorageFailed: {},
+    outboxRecoveryFull: {},
+    outboxRecoveryDraft: {},
+    outboxRecoveryQueued: {},
+    outboxRecoverySource: {},
+    outboxRecoveryUpdated: {},
+    outboxRecoveryGoal: {},
+    outboxRecoveryReply: {},
+    outboxRecoveryAttachments: {},
+    outboxRecoveryUnconfirmedLabel: {},
+    outboxRecoveryUnconfirmed: {},
+    outboxRecoveryAttachmentMissing: {},
+    outboxRecoveryDelete: {},
+    outboxRecoveryDeleteTitle: {},
+    outboxRecoveryDeleteConfirm: {},
+    outboxRecoveryDeleteConflict: {},
     privateDraftReload: {
       blocked: "An unsent Incognito draft is keeping this tab open. Review it before refreshing.",
       review: "Review private draft",
-      title: "Unsent Incognito draft",
-      description:
-        "This draft stays only in this tab. Copy its text or download its attachments before discarding it to refresh. Keeping this tab open leaves the draft unchanged.",
-      text: "Draft text",
-      copy: "Copy text",
-      goal: "This draft includes an unsent goal change.",
-      reading:
-        "Some attachments are still being read. Keep this tab open, then review the draft again when they finish.",
       changed:
         "The draft changed while you were reviewing it. It has not been discarded; review the current draft before refreshing.",
-      copyFailed:
-        "The text could not be copied. Select it in the draft field and copy it manually.",
-      attachmentUnavailable:
-        "This attachment is no longer available to download. Keep the draft open and recover the original file before discarding it.",
-      download: "Download {name}",
-      discard: "Discard this draft and refresh",
-      keep: "Keep in this tab",
       unavailable:
         "The private draft could not be opened. It remains in this tab; try Review private draft again.",
     },
@@ -2312,67 +1994,16 @@ export const en: TranslationMap & {
     resumeInNewSession: "Resume in new session",
     resumingSession: "Resuming…",
     systemNotice: {
-      event: "{count} system event",
-      events: "{count} system events",
-      updatesNotDelivered: "Updates not delivered",
-      guardian: {
-        approvedSummary: "Guardian approved {action}.",
-        deniedLabel: "Guardian denied",
-        deniedSummary: "{action} · risk: {risk}\n\n{rationale}",
-        warningLabel: "Guardian warning",
-        warningFallback: "Guardian stopped the requested action.",
-        strictReviewRequiredLabel: "Guardian review required",
-        strictReviewRequiredSummary: "Guardian is reviewing this action before it can continue.",
-        requestedAction: "Requested action",
-        unknownRisk: "unknown",
-        noRationale: "No rationale was provided.",
-      },
-      restartRecovery: {
-        label: "System · restart recovery",
-        interrupted:
-          "The Gateway restarted. Automatic recovery was interrupted before the agent could resume. Send a message to continue.",
-        cancelled:
-          "The Gateway restarted. Automatic recovery was cancelled before the agent could resume. Send a message to continue.",
-      },
-      automationRecovery: {
-        label: "System · automation recovery",
-        summary: "An automation failed — asked the agent to investigate and continue if needed.",
-      },
-      gatewayRestarted: {
-        label: "System · gateway restarted",
-      },
-      cliHarnessContext: {
-        label: "System · injected context",
-      },
-      claudeCliTaskNotification: {
-        label: "System · background task",
-      },
-      pluginSteering: {
-        label: "{plugin} guidance",
-      },
+      guardian: {},
+      restartRecovery: {},
+      automationRecovery: {},
+      gatewayRestarted: {},
+      cliHarnessContext: {},
+      claudeCliTaskNotification: {},
+      pluginSteering: {},
     },
     skillLearned: {},
-    progressLabels: {
-      shelling: "Shelling",
-      scuttling: "Scuttling",
-      clawing: "Clawing",
-      pinching: "Pinching",
-      molting: "Molting",
-      bubbling: "Bubbling",
-      tiding: "Tiding",
-      reefing: "Reefing",
-      cracking: "Cracking",
-      sifting: "Sifting",
-      brining: "Brining",
-      nautiling: "Nautiling",
-      krilling: "Krilling",
-      barnacling: "Barnacling",
-      lobstering: "Lobstering",
-      tidepooling: "Tidepooling",
-      pearling: "Pearling",
-      snapping: "Snapping",
-      surfacing: "Surfacing",
-    },
+    progressLabels: {},
     turnRecap: {
       doneIn: "Done in {duration}",
       tokens: "{count} output tokens",
@@ -2456,60 +2087,10 @@ export const en: TranslationMap & {
     questions: {
       showSecret: "Show secret",
       hideSecret: "Hide secret",
-      resourcePreview: "Preview resource",
-      addResources: "Add resources",
-      resourceUploadTooLarge: "Selected resources exceed the upload limits.",
-      other: "Type your own answer here",
-      multilineHint: "Enter adds a line · {shortcut} to continue",
       answer: "Answer",
-      answerPlaceholder: "{label}",
-      openLink: "Open link",
-      externalStepHint: "Complete the step in the new tab, then return here to submit your answer.",
-      submit: "Submit",
-      next: "Next",
-      back: "Back",
-      skip: "Skip",
-      skipping: "Skipping…",
-      skipped: "Skipped",
-      collapse: "Collapse question",
-      expand: "Expand question",
-      eyebrow: "Waiting for your answer",
-      summaryLabel: "Question outcome",
-      ownAnswerFor: "Your own answer for {header}",
-      storeRequestedBy: "Requested by {agent} · {session}",
-      storeEntry: "Stores {name} as {kind}",
-      storeReplacement: "Replaces {name} — last updated {updated}",
-      storeReplacementBy: "Replaces {name} — last updated {updated} by {updatedBy}",
-      submitting: "Submitting…",
-      submitFailed: "Could not submit: {error}",
-      answered: "Answered",
-      answeredElsewhere: "Answered elsewhere",
-      unavailable: "Unavailable",
-      expired: "Expired",
       disconnected: "Not connected. Try again after reconnecting.",
-      loadFailed: "Could not load this question. Try again.",
     },
-    imageLightbox: {
-      loadingDetail: "Loading sharper image…",
-      detailFailed: "Preview shown. Sharper image could not load.",
-      actions: "Image actions",
-      previous: "Previous image",
-      next: "Next image",
-      position: "{current} / {total}",
-      label: "Image preview: {title}",
-      open: "Open image {title}",
-      openOriginal: "Open in new tab",
-      copy: "Copy image",
-      download: "Download image",
-      copyFailed: "Could not copy this image. Check clipboard access and try again.",
-      downloadFailed: "Could not download this image. Try again.",
-      loadFailed: "Could not load this image. Try again.",
-      zoomIn: "Zoom in",
-      zoomOut: "Zoom out",
-      resetZoom: "Reset zoom",
-      close: "Close image preview",
-      untitled: "Image",
-    },
+    imageLightbox: {},
     externalImage: { notLoaded: "External image not loaded", open: "Open image" },
     messages: {
       copySelection: "Copy",
@@ -2522,19 +2103,7 @@ export const en: TranslationMap & {
       toolSender: "Tool",
       errorSender: "Error",
     },
-    mediaPlayer: {
-      play: "Play",
-      pause: "Pause",
-      seek: "Seek media",
-      mute: "Mute",
-      unmute: "Unmute",
-      volume: "Volume",
-      download: "Download {filename}",
-      preparing: "Preparing playback…",
-      openVideo: "Expand {filename} in the media overlay",
-      videoPreview: "Video preview: {title}",
-      closeVideoPreview: "Close video preview",
-    },
+    mediaPlayer: {},
     youtube: {},
     modelControls: {},
     nativeRuntimeRecovery: {},
@@ -2614,18 +2183,7 @@ export const en: TranslationMap & {
     },
     thread: {},
     pendingInputs: {
-      agentUpdate: {
-        cancelled: "This agent update was cancelled before delivery.",
-        interrupted: "Delivery interrupted. This saved agent update is not scheduled to retry.",
-      },
-      waitingForWorkspaceSync: "Received · waiting for workspace sync",
-      waitingForWorkerSetup: "Received · waiting for worker setup",
-      cancelled:
-        "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
-      interrupted:
-        "Interrupted before the agent started it. If it does not resume, copy it and send again.",
-      earlier: "Show earlier messages",
-      latest: "Show latest messages",
+      agentUpdate: {},
     },
     pairingQrExpired: {
       title: "Pairing QR expired",
@@ -2634,46 +2192,7 @@ export const en: TranslationMap & {
     },
     composer: {},
     attachments: {
-      allowImage: "Allow image",
-      attachedFile: "Attached file",
-      audio: "Audio",
-      download: "Download",
-      expand: "Open {filename} in the side panel",
-      open: "Open",
       previewUnavailable: "Preview unavailable",
-      textPreviewUnavailable:
-        "Could not preview this file. Text previews require UTF-8 files up to 256 KiB. Download it to read the full file.",
-      htmlPreviewUnavailable:
-        "Could not preview this HTML file. HTML previews require UTF-8 files up to 2 MiB. Download it to read the full file.",
-      readFailed: "Could not attach file. Try again.",
-      imagesOnly: "Side chat accepts image attachments only.",
-      tooLarge: "Too large to send: {names}{more}",
-      tooLargeToast: "File too large. Try a smaller file.",
-      openOriginal: "Open original",
-      compressToFit: "Compress to fit",
-      retryCompression: "Retry compression",
-      compressionHint:
-        "Video is too large. Compress a copy on this device; the original stays unchanged.",
-      compressing: "Compressing · {progress}%",
-      compressionUnsupported: "This browser cannot compress this video.",
-      compressionTooLarge: "Video is still too large. Try a smaller file.",
-      compressionFailed: "Could not compress video. Try again.",
-      showInTextField: "Show in text field",
-      pastedText: "Pasted text",
-      outsideAllowedFolders: "Outside allowed folders",
-      unavailable: "Unavailable",
-      failureDeliveryFailed: "Delivery failed. Try sending this file again.",
-      failureInvalidReference:
-        "Use a public HTTPS URL without credentials or attach a local file by a safe path.",
-      failureFileNotFound: "File not found. Check the path and try again.",
-      failureUnsupportedFormat:
-        "Rejected by the local attachment allowlist. Send a supported file type.",
-      history: "History",
-      image: "Image",
-      notSent: "Not sent",
-      omittedFromHistory: "Omitted from history",
-      omittedFromHistoryWithSize: "Omitted from history · {size}",
-      video: "Video",
     },
     voice: {},
     selectors: {
@@ -2688,96 +2207,9 @@ export const en: TranslationMap & {
     },
     permissions: {},
     toolCards: {
-      tool: "Tool",
-      canvas: "Canvas",
-      summary: "Summary",
-      toolInput: "Tool input",
-      toolOutput: "Tool output",
-      rawDetails: "Raw details",
-      activity: {
-        titleOne: "1 operation",
-        titleMany: "{count} operations",
-        commandsOne: "1 command",
-        commandsMany: "{count} commands",
-        readsOne: "1 read",
-        readsMany: "{count} reads",
-        editsOne: "1 edit",
-        editsMany: "{count} edits",
-        writesOne: "1 write",
-        writesMany: "{count} writes",
-        searchesOne: "1 search",
-        searchesMany: "{count} searches",
-        fetchesOne: "1 fetch",
-        fetchesMany: "{count} fetches",
-        otherOne: "1 other operation",
-        otherMany: "{count} other operations",
-        subagentsOne: "1 subagent",
-        subagentsMany: "{count} subagents",
-        failed: "{count} failed",
-        blocked: "{count} blocked",
-        unknown: "{count} unknown",
-      },
-      showRawDetails: "Show raw details",
-      hideRawDetails: "Hide raw details",
-      openFile: "Open file",
-      widgetActions: "Widget actions",
-      copyToClipboard: "Copy to clipboard",
-      downloadFile: "Download file",
-      copyAsImage: "Copy as image",
-      downloadAsImage: "Download as image",
-      widgetExportRerender: "This widget needs to be re-rendered to export as an image.",
-      widgetExportHtmlFallback: "Image unavailable. Downloaded the widget as HTML instead.",
-      widgetExportFailed: "Widget export failed. Try again.",
-      pinToDashboard: "Pin to dashboard",
-      pinToDashboardPending: "Pinning…",
-      pinToDashboardFailed: "Could not pin to dashboard. Try again.",
-      pinnedToDashboard: "Pinned",
-      fileChanges: "File changes",
-      attemptedChanges: "Attempted changes",
-      failed: "failed",
-      skipped: "Skipped",
-      skippedCount: "{count} skipped",
-      running: "Running",
-      subagentRunning: "running",
-      subagentStopped: "stopped",
-      openSubagent: "Open subagent session",
-      completed: "Completed",
-      blocked: "Blocked",
-      outcomeUnknown: "Outcome unknown",
-      exitCode: "Exit code {code}",
-      failureCount: "{count} failed",
-      noOutputSucceeded: "No output — tool completed successfully.",
-      noResult: "No result available.",
-      review: {
-        reviewing: "{reviewer} reviewing",
-        approved: "{reviewer} approved",
-        denied: "{reviewer} denied",
-        timedOut: "{reviewer} timed out",
-        aborted: "{reviewer} stopped",
-        risk: "{level} risk",
-        authorization: "{level} authorization",
-        noRationale: "No rationale was provided.",
-      },
-      verbs: {
-        read: "Read",
-        edit: "Edit",
-        editing: "Editing",
-        edited: "Edited",
-        create: "Create",
-        creating: "Creating",
-        created: "Created",
-        delete: "Delete",
-        deleting: "Deleting",
-        deleted: "Deleted",
-        change: "Change",
-        changing: "Changing",
-        changed: "Changed",
-        write: "Write",
-        writing: "Writing",
-        wrote: "Wrote",
-        searched: "Searched",
-        fetched: "Fetched",
-      },
+      activity: {},
+      review: {},
+      verbs: {},
     },
     workRun: {
       workedFor: "Worked for {duration}",

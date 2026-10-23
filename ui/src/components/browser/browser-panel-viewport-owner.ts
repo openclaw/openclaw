@@ -13,15 +13,6 @@ interface BrowserPanelViewportHost {
   runAction(action: (client: BrowserRequestClient) => Promise<void>): Promise<boolean>;
 }
 
-type ViewportResize = {
-  targetId: string;
-  width: number;
-  height: number;
-  remoteWidth: number | undefined;
-  remoteHeight: number | undefined;
-  acknowledged: boolean;
-};
-
 const VIEWPORT_RESIZE_DELAY_MS = 300;
 const MIN_VIEWPORT_DIMENSION = 100;
 const MAX_VIEWPORT_DIMENSION = 8192;
@@ -29,7 +20,14 @@ const MAX_VIEWPORT_DIMENSION = 8192;
 /** Synchronous resize admission and acknowledgment; rendering does not own in-flight requests. */
 export class BrowserPanelViewportOwner {
   observedViewportSize: { width: number; height: number } | null = null;
-  private lastResize: ViewportResize | null = null;
+  private lastResize: {
+    targetId: string;
+    width: number;
+    height: number;
+    remoteWidth: number | undefined;
+    remoteHeight: number | undefined;
+    acknowledged: boolean;
+  } | null = null;
   private resizing = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
 

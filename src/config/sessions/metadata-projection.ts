@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import {
   deliveryContextFromSession,
@@ -35,6 +36,7 @@ export type PreparedSessionMetaPatch = {
   origin: SessionOrigin | undefined;
   internalTurn: boolean;
   clearAvatar: boolean;
+  privateTelegramTopicName?: string;
 };
 
 function hasExternalOriginChange(
@@ -205,8 +207,33 @@ export function projectSessionMetaPatch(params: {
     }
   }
 
-  const patch: Partial<SessionEntry> = groupPatch ?? {};
-  const mergedOrigin = mergeSessionOrigin(existingOrigin, origin);
+  const patch: Partial<SessionEntry> = groupPatch ? { ...groupPatch } : {};
+  if (params.prepared.privateTelegramTopicName) {
+    // Use the same canonical topicName consumed by native group-topic display.
+    patch.topicName = params.prepared.privateTelegramTopicName;
+  }
+  const existingTelegramTopicName = normalizeOptionalString(params.existing?.topicName);
+  const keepExistingTelegramTopicOriginLabel =
+    origin?.threadId != null &&
+    !params.prepared.privateTelegramTopicName &&
+    existingTelegramTopicName !== undefined &&
+    existingOrigin?.provider === "telegram" &&
+    existingOrigin.chatType === "direct" &&
+    origin?.provider === "telegram" &&
+    origin.chatType === "direct" &&
+    normalizeOptionalString(existingOrigin.accountId) !== undefined &&
+    existingOrigin.accountId === origin.accountId &&
+    normalizeOptionalString(existingOrigin.from) !== undefined &&
+    normalizeOptionalString(existingOrigin.from) === normalizeOptionalString(origin.from) &&
+    normalizeOptionalString(existingOrigin.to) !== undefined &&
+    normalizeOptionalString(existingOrigin.to) === normalizeOptionalString(origin.to) &&
+    String(existingOrigin.threadId ?? "") === String(origin?.threadId) &&
+    normalizeOptionalString(existingOrigin.label) === existingTelegramTopicName;
+  const mergedOrigin = mergeSessionOrigin(
+    existingOrigin,
+    keepExistingTelegramTopicOriginLabel && origin ? { ...origin, label: undefined } : origin,
+  );
+
   if (origin && mergedOrigin && params.prepared.clearAvatar) {
     delete mergedOrigin.avatar;
   }

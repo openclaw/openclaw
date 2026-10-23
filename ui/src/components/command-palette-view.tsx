@@ -233,6 +233,23 @@ function PaletteHint(props: { shortcut: SolidJSX.Element; label: string }) {
   );
 }
 
+function PaletteNewlineHint() {
+  return (
+    <PaletteHint
+      shortcut={
+        <KeyboardShortcut
+          combo={
+            isMobileBrowserPlatform()
+              ? KEYBOARD_SHORTCUT_COMBOS.sendMessage
+              : KEYBOARD_SHORTCUT_COMBOS.newline
+          }
+        />
+      }
+      label={t("palette.footer.newline")}
+    />
+  );
+}
+
 function PaletteSearch(props: {
   readProps: () => CommandPaletteProps;
   sessionRead: Accessor<void | undefined>;
@@ -417,18 +434,7 @@ function PaletteSearch(props: {
             <PaletteHint shortcut={<Kbd keys="↵" />} label={t("palette.footer.select")} />
           </Show>
         </Show>
-        <PaletteHint
-          shortcut={
-            <KeyboardShortcut
-              combo={
-                isMobileBrowserPlatform()
-                  ? KEYBOARD_SHORTCUT_COMBOS.sendMessage
-                  : KEYBOARD_SHORTCUT_COMBOS.newline
-              }
-            />
-          }
-          label={t("palette.footer.newline")}
-        />
+        <PaletteNewlineHint />
       </div>
     </>
   );
@@ -517,7 +523,7 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
             onCompositionStart={current().onCompositionStart}
             onCompositionEnd={current().onCompositionEnd}
             onPaste={(event) => current().draft.pasteImages(event)}
-            disabled={current().draft.submitting}
+            busy={current().draft.submitting}
             readOnly={current().draft.messageLocked}
             controls={
               current().mentionMenu.open
@@ -637,18 +643,7 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
                   label={t("palette.startSession")}
                 />
               </Show>
-              <PaletteHint
-                shortcut={
-                  <KeyboardShortcut
-                    combo={
-                      isMobileBrowserPlatform()
-                        ? KEYBOARD_SHORTCUT_COMBOS.sendMessage
-                        : KEYBOARD_SHORTCUT_COMBOS.newline
-                    }
-                  />
-                }
-                label={t("palette.footer.newline")}
-              />
+              <PaletteNewlineHint />
             </div>
           </Show>
           <Show when={error()}>

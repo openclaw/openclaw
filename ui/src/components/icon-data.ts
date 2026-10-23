@@ -1,4 +1,5 @@
 import { brandIconData } from "./icon-data-brand.ts";
+import { statusIconPaths } from "./icon-data-status.ts";
 import { keyboardIconData, toolIconData } from "./icon-data-tools.ts";
 import { strokeIconData, strokePathData, type IconData } from "./icon-data-types.ts";
 
@@ -330,7 +331,7 @@ export const iconData = {
     ["line", { x1: "4", x2: "20", y1: "6", y2: "6" }],
     ["line", { x1: "4", x2: "20", y1: "18", y2: "18" }],
   ]),
-  x: strokePathData("M18 6 6 18", "m6 6 12 12"),
+  x: strokePathData(...statusIconPaths.x),
   // Lucide circle-dashed (ISC).
   circleDashed: strokePathData(
     "M10.1 2.182a10 10 0 0 1 3.8 0",
@@ -376,11 +377,7 @@ export const iconData = {
     ["path", { d: "m9 15 3-3 3 3" }],
     ["path", { d: "M12 12v6" }],
   ]),
-  alertTriangle: strokePathData(
-    "m21.73 18-8-14a2 2 0 0 0-3.46 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3",
-    "M12 9v4",
-    "M12 17h.01",
-  ),
+  alertTriangle: strokePathData(...statusIconPaths.alertTriangle),
   globeOff: strokePathData(
     "M10.114 4.462A14.5 14.5 0 0 1 12 2a10 10 0 0 1 9.313 13.643",
     "M15.557 15.556A14.5 14.5 0 0 1 12 22 10 10 0 0 1 4.929 4.929",

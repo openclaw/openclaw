@@ -66,10 +66,18 @@ if (isMainThread) {
   const broadcastTiming = process.env.OPENCLAW_BENCH_BROADCAST_TIMING === "1";
   const workerAttribution = process.env.OPENCLAW_BENCH_WORKER_ATTRIBUTION === "1";
   const workerAttributionSourceHooks = new Set<string>();
+  const sessionProjectionCounts = process.env.OPENCLAW_BENCH_SESSION_PROJECTION_COUNTS === "1";
   const sessionProjectionSource = process.env.OPENCLAW_BENCH_SESSION_PROJECTION_SOURCE;
   const historySource = process.env.OPENCLAW_BENCH_HISTORY_SOURCE;
   let broadcastTimingInstalled = false;
-  if (broadcastTiming || sessionProjectionSource || workerAttribution || historySource) {
+  let sessionProjectionCountsInstalled = false;
+  if (
+    broadcastTiming ||
+    sessionProjectionCounts ||
+    sessionProjectionSource ||
+    workerAttribution ||
+    historySource
+  ) {
     const entry = new URL("../../src/entry.ts", import.meta.url);
     if (!process.argv[1] || realpathSync(process.argv[1]) !== realpathSync(entry)) {
       throw new Error("Benchmark source instrumentation requires --entry src/entry.ts");
@@ -81,6 +89,9 @@ if (isMainThread) {
         "session-row-presentation.ts",
         "session-sharing-read.ts",
         "session-utils-list.ts",
+        "session-ancestor-references.ts",
+        "server-connection-state.ts",
+        "server-methods/sessions-read.ts",
       ]) {
         projectionSources.set(
           new URL(`../../src/gateway/${file}`, import.meta.url).href,
@@ -109,6 +120,11 @@ if (isMainThread) {
     const transformWorkerSource = workerAttribution
       ? (await import("esbuild")).transformSync
       : undefined;
+    const projectionOwner = new URL(
+      "../../src/gateway/session-event-projection.ts",
+      import.meta.url,
+    ).href;
+
     registerHooks({
       load(url, context, nextLoad) {
         const loaded = nextLoad(url, context);
@@ -140,6 +156,51 @@ if (isMainThread) {
           };
         }
         const projectionSource = projectionSources.get(url);
+        if (sessionProjectionCounts && url === projectionOwner) {
+          let source = projectionSource ?? readFileSync(new URL(url), "utf8");
+          const replacements = [
+            [
+              "    const audiences = new Map<",
+              `    const benchmarkProjectionPayloads = new Set<object>();
+    benchmarkSessionProjectionChannel.publish({ operation: event, publications: 1 });
+    const audiences = new Map<`,
+            ],
+            [
+              "      if (!audience) {",
+              `      if (!audience) {
+        benchmarkSessionProjectionChannel.publish({ operation: event, audienceCacheMisses: 1 });`,
+            ],
+            [
+              "      if (!projected) {",
+              `      if (!projected) {
+        benchmarkSessionProjectionChannel.publish({ operation: event, payloadCacheMisses: 1 });`,
+            ],
+            [
+              "      return {\n        payload: wirePayload,",
+              `      benchmarkSessionProjectionChannel.publish({
+        operation: event,
+        projectedRecipients: 1,
+        wirePayloads: benchmarkProjectionPayloads.has(wirePayload) ? 0 : 1,
+      });
+      benchmarkProjectionPayloads.add(wirePayload);
+      return {
+        payload: wirePayload,`,
+            ],
+          ] as const;
+          for (const [anchor, replacement] of replacements) {
+            if (source.split(anchor).length !== 2) {
+              throw new Error(
+                "Session projection count anchors changed; update the benchmark observer",
+              );
+            }
+            source = source.replace(anchor, replacement);
+          }
+          source = `import { channel as benchmarkProjectionDiagnosticChannel } from "node:diagnostics_channel";
+const benchmarkSessionProjectionChannel = benchmarkProjectionDiagnosticChannel("openclaw.benchmark.session-projection");
+${source}`;
+          sessionProjectionCountsInstalled = true;
+          return { ...loaded, format: "module-typescript", source };
+        }
         if (projectionSource !== undefined) {
           // Preserve canonical imports and original TypeScript lines in sampled stacks.
           return { ...loaded, format: "module-typescript", source: projectionSource };
@@ -397,6 +458,14 @@ ${source}`;
     };
     if (broadcastTiming && !broadcastTimingInstalled && message.action === "start") {
       reply("Broadcast timing owner was not loaded; source attribution is unavailable");
+      return;
+    }
+    if (
+      sessionProjectionCounts &&
+      !sessionProjectionCountsInstalled &&
+      message.action === "start"
+    ) {
+      reply("Session projection owner was not loaded; count attribution is unavailable");
       return;
     }
     if (message.kind === "diagnostics") {

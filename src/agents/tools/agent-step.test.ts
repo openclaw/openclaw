@@ -49,14 +49,6 @@ vi.mock("../../sessions/session-participant-recording.js", async (importOriginal
 
 const agentWaitMock = vi.hoisted(() => vi.fn());
 
-const bundleMcpRuntimeMocks = vi.hoisted(() => ({
-  retireSessionMcpRuntimeForSessionKey: vi.fn(async () => true),
-}));
-
-vi.mock("../agent-bundle-mcp-tools.js", () => ({
-  retireSessionMcpRuntimeForSessionKey: bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey,
-}));
-
 afterEach(() => {
   agentWaitMock.mockReset();
   peer.config = undefined;
@@ -243,7 +235,6 @@ it.each([false, true])(
         ],
       ]);
     }
-    expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).not.toHaveBeenCalled();
   },
 );
 

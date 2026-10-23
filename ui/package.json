@@ -62,6 +62,7 @@
     "@vitest/browser-playwright": "5.0.3",
     "fake-indexeddb": "6.2.5",
     "jsdom": "30.1.2",
+    "libdeflate": "0.1.0",
     "openclaw": "workspace:*",
     "pako": "3.0.2",
     "playwright": "1.64.0",

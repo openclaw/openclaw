@@ -1,6 +1,9 @@
+import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
 import type { ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
 import type { ToolCallView } from "../../../lib/chat/tool-call-view.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+
+registerChatToolLabelsEnglish();
 
 const TOOL_ROW_VERB_KEYS: Partial<Record<ToolCallView["kind"], string>> = {
   read: "chat.toolCards.verbs.read",

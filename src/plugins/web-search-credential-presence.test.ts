@@ -24,7 +24,6 @@ describe("hasConfiguredWebSearchCredential", () => {
       hasConfiguredWebSearchCredential({
         config: {} as OpenClawConfig,
         env: {},
-        origin: "bundled",
       }),
     ).toBe(false);
   });
@@ -36,7 +35,6 @@ describe("hasConfiguredWebSearchCredential", () => {
           tools: { web: { search: { apiKey: "brave-key" } } },
         } as OpenClawConfig,
         env: {},
-        origin: "bundled",
       }),
     ).toBe(true);
   });

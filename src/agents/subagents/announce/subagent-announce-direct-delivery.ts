@@ -9,7 +9,6 @@ import {
   INTERNAL_PROVENANCE_SOURCE_CHANNEL,
   isAgentMediatedCompletionSourceTool,
 } from "../../../sessions/input-provenance.js";
-import { retireSessionControllerInput } from "../../../sessions/session-controller.mailbox.js";
 import {
   submitSessionControllerSteer,
   type SessionControllerSteerResult,
@@ -370,34 +369,6 @@ async function sendSubagentAnnounceDirectlyBound(
       }
       if (!isCompletionAdmissionAllowed()) {
         return sourceOwnerChangedResult();
-      }
-      if (
-        steer.reason === "injection_unavailable" &&
-        requesterAbandonment === "recovering_timeout" &&
-        !params.controllerInput.custody.rpcAdopted &&
-        resolveEmbeddedRunAbandonment({
-          sessionKey: canonicalRequesterSessionKey,
-          sessionId: requesterActivity.sessionId,
-          target: requesterActivity.target,
-        }) === "recovering_timeout"
-      ) {
-        // The recovery retry leases the durable outbox. Settle this rejected,
-        // unadopted reservation first so it cannot dispatch the completion again.
-        retireSessionControllerInput(params.controllerInput);
-        await params.controllerInput.settlement.promise;
-        if (!isCompletionDeliveryAllowed()) {
-          return sourceOwnerChangedResult();
-        }
-        if (params.signal?.aborted) {
-          return { delivered: false, path: "none" };
-        }
-        return {
-          delivered: false,
-          path: "none",
-          reason: "completion_handoff_pending",
-          error: "requester timeout recovery is still settling",
-          disposition: "retryable",
-        };
       }
     }
     if (

@@ -56,7 +56,7 @@
   environment caveat in step 2.
 - `ui/src/e2e/chat-stream-runtime-budgets.e2e.test.ts`: stream and idle budgets.
 - `ui/src/e2e/cron-search.e2e.test.ts`: interaction-scoped tracing.
-- `ui/src/e2e/chat-model-controls.e2e.test.ts`: large-catalog input measurements.
+- `scripts/bench-control-ui-interactions.ts`: large-catalog input and sidebar measurements; `ui/src/e2e/chat-model-controls.e2e.test.ts` retains the behavior assertions.
 - `ui/src/e2e/new-session-page.input-latency.e2e.test.ts`: input-latency proof.
 
 Preserve the relevant behavior assertions and structural budgets in these tests.

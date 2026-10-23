@@ -1,5 +1,4 @@
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   createSmsDeliveryRecorder,
@@ -8,9 +7,14 @@ import {
   recordInitialSmsDeliveryResult,
   type SmsDeliveryRecord,
 } from "./delivery-observations.js";
-import { setSmsRuntime } from "./runtime.js";
 import type { ResolvedSmsAccount } from "./types.js";
 import { createSmsTestAccount } from "./webhook.test-support.js";
+
+const getSmsRuntime = vi.hoisted(() => vi.fn());
+vi.mock("./runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./runtime.js")>()),
+  getSmsRuntime,
+}));
 
 function createAccount(
   accountId = "default",
@@ -25,7 +29,7 @@ function createStore(): PluginStateKeyedStore<SmsDeliveryRecord> {
     value: structuredClone(values.get(key)),
     comparison: JSON.stringify(values.get(key)) ?? "missing",
   });
-  return {
+  const store: PluginStateKeyedStore<SmsDeliveryRecord> = {
     register: async (key, value) => void values.set(key, value),
     async registerIfAbsent(key, value) {
       if (values.has(key)) {
@@ -60,12 +64,12 @@ function createStore(): PluginStateKeyedStore<SmsDeliveryRecord> {
       [...values].map(([key, value]) => ({ key, value, createdAt: value.lastObservedAt })),
     clear: async () => values.clear(),
   };
+  getSmsRuntime.mockReturnValue({ state: { openKeyedStore: () => store } });
+  return store;
 }
 
-async function latestRecord(
-  store: PluginStateKeyedStore<SmsDeliveryRecord>,
-): Promise<SmsDeliveryRecord> {
-  const record = (await listRecentSmsDeliveryRecords(createAccount(), 1, store))[0];
+async function latestRecord(): Promise<SmsDeliveryRecord> {
+  const record = (await listRecentSmsDeliveryRecords(createAccount()))[0];
   if (!record) {
     throw new Error("test invariant: expected an SMS delivery record");
   }
@@ -73,33 +77,28 @@ async function latestRecord(
 }
 
 async function recordApiStatus(
-  store: PluginStateKeyedStore<SmsDeliveryRecord>,
   status: string,
   observedAt: number,
   sid = "SM123",
 ): Promise<SmsDeliveryRecord> {
+  using now = vi.spyOn(Date, "now");
+  now.mockReturnValue(observedAt);
   await recordInitialSmsDeliveryResult({
     account: createAccount(),
     result: { sid, to: "+15551234567", status },
-    nowMs: observedAt,
-    store,
   });
-  return await latestRecord(store);
+  return await latestRecord();
 }
 
 function statusForm(status: string, fields: Record<string, string> = {}) {
   return { MessageSid: "SM123", MessageStatus: status, ...fields };
 }
 
-async function recordCallback(
-  store: PluginStateKeyedStore<SmsDeliveryRecord>,
-  form: Record<string, string>,
-  observedAt?: number,
-) {
+async function recordCallback(form: Record<string, string>, observedAt?: number) {
   const now =
     observedAt === undefined ? undefined : vi.spyOn(Date, "now").mockReturnValue(observedAt);
   try {
-    return await createSmsDeliveryRecorder(store).record({ account: createAccount(), form });
+    return await createSmsDeliveryRecorder().record({ account: createAccount(), form });
   } finally {
     now?.mockRestore();
   }
@@ -107,7 +106,7 @@ async function recordCallback(
 
 describe("SMS delivery observations", () => {
   it("parses current and legacy status fields without retaining message content", async () => {
-    const store = createStore();
+    createStore();
     const privateFields = {
       AccountSid: "AC123",
       From: "+15557654321",
@@ -116,9 +115,8 @@ describe("SMS delivery observations", () => {
       ErrorCode: "30005",
       RawDlrDoneDate: "2608021200",
     };
-    const current = await recordCallback(store, statusForm("undelivered", privateFields), 100);
+    const current = await recordCallback(statusForm("undelivered", privateFields), 100);
     const legacy = await recordCallback(
-      store,
       {
         ...privateFields,
         From: "+15550000000",
@@ -156,25 +154,24 @@ describe("SMS delivery observations", () => {
   });
 
   it("rejects legacy inbound status observations", async () => {
+    createStore();
     const form = { MessageSid: "SM123", SmsStatus: "receiving" };
 
     expect(isTwilioDeliveryStatusForm(form)).toBe(false);
-    await expect(recordCallback(createStore(), form)).rejects.toThrow(
-      "Invalid Twilio delivery status callback.",
-    );
+    await expect(recordCallback(form)).rejects.toThrow("Invalid Twilio delivery status callback.");
   });
 
   it.each(["accepted", "scheduled"])(
     "advances a message from its %s initial state through sent",
     async (initialStatus) => {
-      const store = createStore();
+      createStore();
       for (const [index, status] of [initialStatus, "queued", "sending", "sent"].entries()) {
-        const current = await recordApiStatus(store, status, index + 1);
+        const current = await recordApiStatus(status, index + 1);
         expect(current.status).toBe(status);
       }
 
-      await recordCallback(store, { MessageSid: "SM123", MessageStatus: "queued" }, 10);
-      expect((await latestRecord(store)).status).toBe("sent");
+      await recordCallback({ MessageSid: "SM123", MessageStatus: "queued" }, 10);
+      expect((await latestRecord()).status).toBe("sent");
     },
   );
 
@@ -193,25 +190,25 @@ describe("SMS delivery observations", () => {
       },
     ],
   ] as const)("reduces API transition %s → %s", async (first, next, start, end, expected) => {
-    const store = createStore();
-    await recordApiStatus(store, first, start);
-    expect(await recordApiStatus(store, next, end)).toMatchObject(expected);
+    createStore();
+    await recordApiStatus(first, start);
+    expect(await recordApiStatus(next, end)).toMatchObject(expected);
   });
 
   it.each([
     ["failed", { status: "failed", errorCode: "30006", lastObservedAt: 200 }],
     ["delivered", { status: "conflicted", conflict: true, errorCode: "30006" }],
   ] as const)("reduces a failed callback after %s", async (first, expected) => {
-    const store = createStore();
-    await recordCallback(store, statusForm(first), 100);
+    createStore();
+    await recordCallback(statusForm(first), 100);
     expect(
-      (await recordCallback(store, statusForm("failed", { ErrorCode: "30006" }), 200)).record,
+      (await recordCallback(statusForm("failed", { ErrorCode: "30006" }), 200)).record,
     ).toMatchObject(expected);
   });
 
   it("deduplicates semantic retries despite unrelated form differences", async () => {
-    const store = createStore();
-    const recorder = createSmsDeliveryRecorder(store);
+    createStore();
+    const recorder = createSmsDeliveryRecorder();
     const first = {
       AccountSid: "AC123",
       From: "+15557654321",
@@ -260,20 +257,20 @@ describe("SMS delivery observations", () => {
       ],
     },
   ])("retains concurrent $secondStatus observations", async (expected) => {
-    const store = createStore();
+    createStore();
+    using now = vi.spyOn(Date, "now");
+    now.mockReturnValueOnce(100).mockReturnValueOnce(101);
     const results = await Promise.all(
-      ["delivered", expected.secondStatus].map((status, index) =>
+      ["delivered", expected.secondStatus].map((status) =>
         recordInitialSmsDeliveryResult({
           account: createAccount(),
           result: { sid: "SM123", to: "+15551234567", status },
-          nowMs: 100 + index,
-          store,
         }),
       ),
     );
 
     expect(results.map((result) => result?.duplicate)).toEqual(expected.duplicates);
-    const record = await latestRecord(store);
+    const record = await latestRecord();
     expect(record).toMatchObject({
       status: expected.status,
       firstObservedAt: 100,
@@ -283,33 +280,28 @@ describe("SMS delivery observations", () => {
   });
 
   it("isolates records by local account and account SID but survives token rotation", async () => {
-    const store = createStore();
-    await recordCallback(store, statusForm("delivered"));
+    createStore();
+    await recordCallback(statusForm("delivered"));
 
     for (const account of [
       createAccount("support"),
       createAccount("default", { accountSid: "AC-other" }),
     ]) {
-      await expect(listRecentSmsDeliveryRecords(account, 5, store)).resolves.toEqual([]);
+      await expect(listRecentSmsDeliveryRecords(account)).resolves.toEqual([]);
     }
     await expect(
-      listRecentSmsDeliveryRecords(
-        createAccount("default", { authToken: "rotated-secret" }),
-        5,
-        store,
-      ),
+      listRecentSmsDeliveryRecords(createAccount("default", { authToken: "rotated-secret" })),
     ).resolves.toMatchObject([{ accountId: "default", messageSid: "SM123", status: "delivered" }]);
   });
 
   it("records each successful API response and lets callbacks advance it", async () => {
     const store = createStore();
-    const account = createAccount();
     for (const [index, status] of ["accepted", "scheduled", "queued"].entries()) {
-      await recordApiStatus(store, status, index + 1, `SM-${status}`);
+      await recordApiStatus(status, index + 1, `SM-${status}`);
     }
-    await recordCallback(store, statusForm("sent", { MessageSid: "SM-queued" }));
+    await recordCallback(statusForm("sent", { MessageSid: "SM-queued" }));
 
-    await expect(listRecentSmsDeliveryRecords(account, 5, store)).resolves.toEqual(
+    expect((await store.entries()).map(({ value }) => value)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ messageSid: "SM-accepted", status: "accepted" }),
         expect.objectContaining({ messageSid: "SM-scheduled", status: "scheduled" }),
@@ -326,22 +318,22 @@ describe("SMS delivery observations", () => {
   });
 
   it("skips API responses without an initial status", async () => {
+    createStore();
     await expect(
       recordInitialSmsDeliveryResult({
         account: createAccount(),
         result: { sid: "SM123", to: "+15551234567" },
-        store: createStore(),
       }),
     ).resolves.toBeNull();
   });
 
   it("bounds retained observations per message", async () => {
-    const store = createStore();
+    createStore();
     for (let index = 0; index < 25; index += 1) {
-      await recordCallback(store, statusForm("queued", { RawDlrDoneDate: String(index) }), index);
+      await recordCallback(statusForm("queued", { RawDlrDoneDate: String(index) }), index);
     }
 
-    const current = await latestRecord(store);
+    const current = await latestRecord();
     expect(current.observations).toHaveLength(20);
     expect(current.observations[0]?.rawDlrDoneDate).toBe("5");
   });
@@ -353,9 +345,9 @@ describe("SMS delivery observations", () => {
     const secondOpen = vi.fn(() => secondStore);
     const account = createAccount();
 
-    setSmsRuntime(createPluginRuntimeMock({ state: { openKeyedStore: firstOpen as never } }));
+    getSmsRuntime.mockReturnValue({ state: { openKeyedStore: firstOpen } });
     await listRecentSmsDeliveryRecords(account);
-    setSmsRuntime(createPluginRuntimeMock({ state: { openKeyedStore: secondOpen as never } }));
+    getSmsRuntime.mockReturnValue({ state: { openKeyedStore: secondOpen } });
     await listRecentSmsDeliveryRecords(account);
 
     const expectedOptions = {

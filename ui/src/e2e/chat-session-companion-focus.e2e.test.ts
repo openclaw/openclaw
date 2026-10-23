@@ -145,6 +145,35 @@ suite.define(() => {
     await expectFocus(side);
     expect(await main.inputValue()).toBe("");
   });
+  it("opens Side chat when the slash catalog refreshes during selection", async () => {
+    const { page, gateway, main, side } = await openChat({
+      scenario: { deferredMethods: ["commands.list"] },
+    });
+    await main.fill("/bt");
+    await page.locator(".chat-send-btn--send:enabled").waitFor({ state: "visible" });
+    await gateway.waitForRequest("commands.list");
+    const option = page.getByRole("option").filter({ hasText: "/btw" });
+    await option.hover();
+    await page.mouse.down();
+    await gateway.resolveDeferred("commands.list", {
+      commands: [
+        {
+          name: "btcheck",
+          textAliases: ["/btcheck"],
+          description: "Catalog refresh arrived.",
+          source: "plugin",
+          scope: "text",
+          acceptsArgs: false,
+        },
+      ],
+    });
+    await page.getByRole("option").filter({ hasText: "/btcheck" }).waitFor();
+    // Keep the release on the pressed option after the menu grows upward.
+    await option.hover();
+    await page.mouse.up();
+    await expectFocus(side);
+    expect(await main.inputValue()).toBe("");
+  });
   it.each([false, true])("focuses side questions with panel open=%s", async (open) => {
     const { page, gateway, main, side } = await openChat({ scenario: pendingAsk });
     if (open) {

@@ -125,7 +125,7 @@ describe("official external plugin catalog", () => {
     [{ FIRECRAWL_API_KEY: "firecrawl-key" }, ["firecrawl"]],
     [{ EXA_API_KEY: "exa-key" }, []],
   ])("maps web-fetch credentials %j to %j", (env, expected) => {
-    expect(webEnvOwners({ contract: "webFetchProviders", env })).toEqual(expected);
+    expect(webEnvOwners({ env })).toEqual(expected);
   });
 
   it("maps configured provider ids and aliases even without an auth choice", () => {

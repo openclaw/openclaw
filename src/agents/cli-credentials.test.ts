@@ -4,7 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const execSyncMock = vi.fn();
+const execSyncMock = vi.hoisted(() => vi.fn());
+
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+  execSync: execSyncMock,
+}));
 const CLI_CREDENTIALS_CACHE_TTL_MS = 15 * 60 * 1000;
 let readCodexCliActiveApiKey: typeof import("./cli-credentials.js").readCodexCliActiveApiKey;
 let hasCodexCliAuthFile: typeof import("./cli-credentials.js").hasCodexCliAuthFile;
@@ -49,11 +54,15 @@ describe("cli credentials", () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
+    execSyncMock.mockImplementation(() => {
+      throw Object.assign(new Error("Keychain item not found"), { status: 44 });
+    });
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     vi.useRealTimers();
-    execSyncMock.mockClear().mockImplementation(() => undefined);
+    execSyncMock.mockReset();
     delete process.env.CODEX_HOME;
     vi.unstubAllEnvs();
   });
@@ -261,6 +270,7 @@ describe("cli credentials", () => {
 
   it("prefers active Codex OAuth over a stale file API key", () => {
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-keychain-oauth-"));
+    vi.stubGlobal("process", { ...process, platform: "darwin" });
     fs.writeFileSync(
       path.join(tempHome, "auth.json"),
       JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "stale-file-api-key" }),
@@ -268,18 +278,13 @@ describe("cli credentials", () => {
     );
     execSyncMock.mockReturnValue("Logged in using ChatGPT");
 
-    expect(
-      readCodexCliActiveApiKey({
-        codexHome: tempHome,
-        platform: "darwin",
-        execSync: execSyncMock,
-      }),
-    ).toBeNull();
+    expect(readCodexCliActiveApiKey({ codexHome: tempHome })).toBeNull();
     expect(execSyncMock).toHaveBeenCalledTimes(1);
   });
 
   it("uses the API key that Codex reports active instead of a stale Keychain record", () => {
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-default-file-"));
+    vi.stubGlobal("process", { ...process, platform: "darwin" });
     fs.writeFileSync(
       path.join(tempHome, "auth.json"),
       JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "active-file-api-key" }),
@@ -291,13 +296,11 @@ describe("cli credentials", () => {
         : JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "stale-keychain-api-key" }),
     );
 
-    expect(
-      readCodexCliActiveApiKey({
-        codexHome: tempHome,
-        platform: "darwin",
-        execSync: execSyncMock,
-      }),
-    ).toEqual({ type: "api_key", provider: "openai", key: "active-file-api-key" });
+    expect(readCodexCliActiveApiKey({ codexHome: tempHome })).toEqual({
+      type: "api_key",
+      provider: "openai",
+      key: "active-file-api-key",
+    });
     expect(execSyncMock).toHaveBeenCalledTimes(2);
   });
 

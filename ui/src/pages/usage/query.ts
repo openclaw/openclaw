@@ -84,16 +84,14 @@ const buildDailyCsv = (daily: CostDailyEntry[]): string =>
     totalCost: (day) => usageCsvValue(day.totalCost, day.usageReport),
   });
 
-type QuerySuggestion = {
-  label: string;
-  value: string;
-};
-
 const buildQuerySuggestions = (
   query: string,
   terms: ReturnType<typeof extractQueryTerms>,
   options: SessionsUsageOverview["filterOptions"],
-): QuerySuggestion[] => {
+): {
+  label: string;
+  value: string;
+}[] => {
   if (!query.trim()) {
     return [];
   }

@@ -278,6 +278,29 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
     });
   });
 
+  it("retries a rejected session startup before dispatching tools", async () => {
+    let starts = 0;
+    const endpoint = await createFakeEndpoint((request, fake) => {
+      if (request.method === "initialize") {
+        fake.respond(request, { protocolVersion: "2025-06-18" });
+      } else if (request.params?.name === "start_session") {
+        fake.respond(
+          request,
+          starts++ === 0
+            ? { isError: true, content: [{ type: "text", text: "fixture startup failed" }] }
+            : sessionState("desktop"),
+        );
+      } else if (request.method === "tools/call") {
+        fake.respond(request, toolResult({ windows: [] }));
+      }
+    });
+    const driver = managedDriver(endpoint);
+    await expect(driver.callTool("list_windows", {})).rejects.toThrow("fixture startup failed");
+    await expect(driver.callTool("list_windows", {})).resolves.toMatchObject({ isError: false });
+    expect(toolCalls(endpoint, "start_session")).toHaveLength(2);
+    expect(toolCalls(endpoint, "list_windows")).toHaveLength(1);
+  });
+
   it("preserves UTF-8 and routes multiple out-of-order responses", async () => {
     const held: RpcRequest[] = [];
     const endpoint = await createSessionEndpoint((request, fake) => {

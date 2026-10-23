@@ -587,7 +587,10 @@ it.for(["cold start", "hot enable"] as const)(
         await fixture.startServices();
         await installGatewaySubagentModuleLoad(
           async () => {},
-          async () => {},
+          () => {
+            const settled = Promise.resolve();
+            return { initial: settled, pending: new Map(), settled };
+          },
           startupModuleRestorers,
         );
         const sentinel = vi

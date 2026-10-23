@@ -29,10 +29,10 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
   "ui/src/e2e/agent-switch-roster.e2e.test.ts",
   "ui/src/e2e/approval-bootstrap.e2e.test.ts",
+  "ui/src/e2e/approval-lookup.real-gateway.e2e.test.ts",
   "ui/src/e2e/background-work.real-gateway.e2e.test.ts",
   "ui/src/e2e/boot-module-boundaries.e2e.test.ts",
   "ui/src/e2e/browser-auth-recovery.e2e.test.ts",
-  "ui/src/e2e/browser-capabilities.e2e.test.ts",
   "ui/src/e2e/build-info-unicode.e2e.test.ts",
   "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-code-block-fences.e2e.test.ts",
@@ -89,7 +89,6 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/shell-module-loading.e2e.test.ts",
   "ui/src/e2e/sidebar-account-footer.e2e.test.ts",
   "ui/src/e2e/sidebar-boot-imports.e2e.test.ts",
-  "ui/src/e2e/sidebar-pin-placement.e2e.test.ts",
   "ui/src/e2e/terminal-fonts.e2e.test.ts",
   "ui/src/e2e/terminal-runtime.e2e.test.ts",
   "ui/src/pages/agents-home/claws-catalog.e2e.test.ts",
@@ -101,23 +100,24 @@ export const uiE2eRuntimeBudgetTestFile = resolveUiTypeScriptPath(
   "ui/src/e2e/chat-stream-runtime-budgets.e2e.test.ts",
 );
 
-// Real Gateways never overlap the parallel phase when the CI skip is absent.
-export const uiE2eSerialTestFiles = [
-  ...new Set([
-    ...uiE2ePrivateServerTestFiles,
-    ...uiE2eRealGatewayTestFiles,
-    uiE2eRuntimeBudgetTestFile,
-  ]),
-].toSorted();
-
 // These independent fixture/build owners do not share the source optimizer cache.
 // New files stay bundled unless they own every UI server they use.
 const uiE2eStandaloneTestFiles = [
   "ui/src/e2e/board-fixture.e2e.test.ts",
+  "ui/src/e2e/boot-module-boundaries.e2e.test.ts",
   "ui/src/e2e/control-ui-build-publication.e2e.test.ts",
   "ui/src/e2e/control-ui-stale-build-reload.e2e.test.ts",
   "ui/src/e2e/service-worker-update.e2e.test.ts",
 ].map((file) => resolveUiTypeScriptPath(file));
+
+// Real Gateways never overlap the parallel phase when the CI skip is absent.
+export const uiE2eSerialTestFiles = [
+  ...new Set([
+    ...uiE2ePrivateServerTestFiles.filter((file) => !uiE2eStandaloneTestFiles.includes(file)),
+    ...uiE2eRealGatewayTestFiles,
+    uiE2eRuntimeBudgetTestFile,
+  ]),
+].toSorted();
 
 export function createUiE2eVitestConfig(
   env: Record<string, string | undefined> = process.env,

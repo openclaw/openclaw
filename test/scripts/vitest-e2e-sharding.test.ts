@@ -7,11 +7,14 @@ import type { TestSpecification } from "vitest/node";
 import { createE2EVitestConfig } from "../vitest/vitest.e2e.config.ts";
 import { RepoE2eSequencer } from "../vitest/vitest.e2e.sequencer.ts";
 import { createUiE2eVitestConfig } from "../vitest/vitest.ui-e2e.config.ts";
+import { UiE2eSequencer } from "../vitest/vitest.ui-e2e.sequencer.ts";
 import { selectWeightedShard } from "../vitest/vitest.weighted-sharding.ts";
 
 const { timings } = vi.hoisted(() => ({ timings: {} as Record<string, number> }));
-vi.mock("../../scripts/lib/ci-test-timings.mts", () => ({
+vi.mock("../../scripts/lib/ci-test-timings.mts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../scripts/lib/ci-test-timings.mts")>()),
   readRepoE2eFileTimings: () => timings,
+  readUiE2eFileTimings: () => ({ fileSeconds: timings, perFileOverheadSeconds: 0 }),
 }));
 
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
@@ -94,4 +97,86 @@ it("keeps shared UI/Gateway partition ties deterministic without collapsing spec
   expect(shards.map((shard) => shard.length)).toEqual([2, 2]);
   expect(shards.flat()).toHaveLength(discovered.length);
   expect(new Set(shards.flat())).toEqual(new Set(discovered));
+});
+
+it("starts expensive standalone UI work early without crossing serial phase barriers", async () => {
+  const sizes = [400, 300, 200, 100, 50, 60, 70];
+  const files = testFiles(sizes);
+  const durations = [10, 10, 10, 30, 100, 200, 300];
+  const projects = [
+    "ui-e2e-bundled",
+    "ui-e2e-bundled",
+    "ui-e2e-bundled",
+    "ui-e2e-standalone",
+    "ui-e2e-serial",
+    "ui-e2e-serial",
+    "ui-e2e-real-gateway",
+  ];
+  const specs = files.map((file, index) => {
+    timings[path.relative(repoRoot, file.moduleId).replaceAll("\\", "/")] = durations[index]!;
+    return Object.assign(file, {
+      project: {
+        name: projects[index]!,
+        config: { isolate: true, sequence: { groupOrder: index < 4 ? 0 : index < 6 ? 1 : 2 } },
+      },
+    });
+  });
+  const stats = new Map(
+    specs.map((file, index) => [
+      `${file.project.name}:${path.relative(repoRoot, file.moduleId).replaceAll("\\", "/")}`,
+      { size: sizes[index]! },
+    ]),
+  );
+  const context = {
+    config: { root: repoRoot },
+    cache: { getFileTestResults: () => undefined, getFileStats: (key: string) => stats.get(key) },
+  };
+  const sequencer = new UiE2eSequencer(
+    context as unknown as ConstructorParameters<typeof UiE2eSequencer>[0],
+  );
+  // eslint-disable-next-line unicorn/no-array-sort -- TestSequencer.sort is Vitest's ordering API.
+  const ordered = await sequencer.sort(specs);
+  expect(new Set(ordered)).toEqual(new Set(specs));
+  expect(ordered).toHaveLength(specs.length);
+  expect(ordered.map((file) => file.project.config.sequence.groupOrder)).toEqual([
+    0, 0, 0, 0, 1, 1, 2,
+  ]);
+  expect(ordered.slice(4)).toEqual([specs[5], specs[4], specs[6]]);
+  const workers = [0, 0, 0];
+  for (const file of ordered.filter((spec) => spec.project.config.sequence.groupOrder === 0)) {
+    const index = workers.indexOf(Math.min(...workers));
+    workers[index]! += durations[specs.indexOf(file)]!;
+  }
+  // Three 10s bundled files before the 30s standalone would leave a 40s tail.
+  expect(Math.max(...workers)).toBe(30);
+  // eslint-disable-next-line unicorn/no-array-sort -- TestSequencer.sort is Vitest's ordering API.
+  expect(await sequencer.sort(specs.toReversed())).toEqual(ordered);
+});
+
+it("keeps native failed-first and observed-duration ordering for warm UI runs", async () => {
+  const files = testFiles([100, 80, 20]);
+  const specs = files.map((file, index) => {
+    timings[path.relative(repoRoot, file.moduleId).replaceAll("\\", "/")] = [100, 1, 50][index]!;
+    return Object.assign(file, {
+      project: {
+        name: "ui-e2e-bundled",
+        config: { isolate: true, sequence: { groupOrder: 0 } },
+      },
+    });
+  });
+  const results = new Map(
+    specs.map((file, index) => [
+      `${file.project.name}:${path.relative(repoRoot, file.moduleId).replaceAll("\\", "/")}`,
+      { failed: index === 1, duration: [500, 1, 90][index]! },
+    ]),
+  );
+  const context = {
+    config: { root: repoRoot },
+    cache: { getFileTestResults: (key: string) => results.get(key), getFileStats: () => undefined },
+  };
+  const sequencer = new UiE2eSequencer(
+    context as unknown as ConstructorParameters<typeof UiE2eSequencer>[0],
+  );
+  // eslint-disable-next-line unicorn/no-array-sort -- TestSequencer.sort is Vitest's ordering API.
+  expect(await sequencer.sort(specs)).toEqual([specs[1], specs[0], specs[2]]);
 });

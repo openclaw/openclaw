@@ -10,8 +10,6 @@ import { Icon } from "./solid/icon.tsx";
 import { Picker } from "./solid/select-picker.tsx";
 import { renderSessionOwnerAvatar } from "./solid/session-presentation.tsx";
 
-type SessionFilterHost = Pick<SessionListHost, "sessionsStatusFilter">;
-
 /** The Sessions title owns the sidebar owner choice. */
 function SidebarOwnerPicker(props: { host: SessionListHost }) {
   const owners = createMemo(() => {
@@ -104,7 +102,7 @@ function SidebarOwnerPicker(props: { host: SessionListHost }) {
 }
 
 /** Only the panel's Status choice contributes to its filter indicator. */
-export function countSidebarSessionFilters(host: SessionFilterHost) {
+export function countSidebarSessionFilters(host: Pick<SessionListHost, "sessionsStatusFilter">) {
   return Number(host.sessionsStatusFilter !== "active");
 }
 

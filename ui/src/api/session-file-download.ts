@@ -7,19 +7,17 @@ import { hasSameOriginGatewayTransport } from "../dev-gateway.ts";
 import { isHttpArtifactDownloadUrl } from "./artifact-download.ts";
 import type { GatewayBrowserClient } from "./gateway.ts";
 
-type FileDownloadHost = {
-  client: GatewayBrowserClient | null;
-  connected: boolean;
-  connectionEpoch: number;
-  sessionKey: string;
-  resourceBasePath?: string;
-};
-
 export type SessionFileDownload = Pick<SessionsFilesDownloadResult, "url" | "filename">;
 
 /** Files chooses and authorizes the bytes; the browser never converts a preview into a download. */
 export async function downloadSessionFile(
-  state: FileDownloadHost,
+  state: {
+    client: GatewayBrowserClient | null;
+    connected: boolean;
+    connectionEpoch: number;
+    sessionKey: string;
+    resourceBasePath?: string;
+  },
   params: SessionsFilesDownloadParams,
   signal: AbortSignal,
 ): Promise<SessionFileDownload | null> {

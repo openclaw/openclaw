@@ -27,16 +27,6 @@ export function formatCountdown(deadlineMs: number, nowMs: number, padMinutes = 
   return `${padMinutes ? minutes.padStart(2, "0") : minutes}:${String(totalSeconds % 60).padStart(2, "0")}`;
 }
 
-type FormatTimeAgoOptions = {
-  suffix?: boolean;
-  fallback?: string;
-};
-
-type FormatRelativeTimestampOptions = {
-  fallback?: string;
-  suffix?: boolean;
-};
-
 let localeFormatters:
   | {
       locale: string;
@@ -80,7 +70,7 @@ function formatRelative(value: number, unit: RelativeTimeUnit): string {
 
 export function formatTimeAgo(
   durationMs: number | null | undefined,
-  options: FormatTimeAgoOptions = {},
+  options: { suffix?: boolean; fallback?: string } = {},
 ): string {
   const fallback = options.fallback ?? t("common.unknown");
   if (durationMs == null || !Number.isFinite(durationMs) || durationMs < 0) {
@@ -96,7 +86,7 @@ export function formatTimeAgo(
 
 export function formatRelativeTimestamp(
   timestampMs: number | null | undefined,
-  options: FormatRelativeTimestampOptions = {},
+  options: { fallback?: string; suffix?: boolean } = {},
 ): string {
   const fallback = options.fallback ?? t("common.na");
   if (timestampMs == null || !Number.isFinite(timestampMs)) {
@@ -237,11 +227,8 @@ export function toNumber(value: string, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
-export function formatCost(cost: number | null | undefined, fallback = "$0.00"): string {
-  if (cost == null || !Number.isFinite(cost)) {
-    return fallback;
-  }
-  if (cost === 0) {
+export function formatCost(cost: number | null | undefined): string {
+  if (cost == null || !Number.isFinite(cost) || cost === 0) {
     return "$0.00";
   }
   return `$${cost.toFixed(cost < 0.01 ? 4 : cost < 1 ? 3 : 2)}`;

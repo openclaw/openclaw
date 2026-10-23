@@ -1,15 +1,6 @@
 import { getObserver } from "@solidjs/signals";
-import { insert, type JSX } from "@solidjs/web";
-import {
-  createEffect,
-  createMemo,
-  createRoot,
-  getOwner,
-  onCleanup,
-  onSettled,
-  runWithOwner,
-  Show,
-} from "solid-js";
+import type { JSX } from "@solidjs/web";
+import { createEffect, createMemo, onCleanup, onSettled } from "solid-js";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import { useApplication, useOptionalApplication } from "../lib/reactive/context.ts";
 import { listen } from "../lib/reactive/listener.ts";
@@ -17,7 +8,7 @@ import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
 import { projectOwner, projectSource } from "../lib/reactive/projection.ts";
 import { createTimeout } from "../lib/reactive/timers.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
-import { PluginView } from "../plugins/control-ui-view.solid.tsx";
+import { PluginSurface } from "../plugins/control-ui-view.solid.tsx";
 import { appSidebarProperties, type AppSidebarProps } from "./app-sidebar-base.ts";
 import { AppSidebarOwner } from "./app-sidebar-owner.tsx";
 import { createSessionPullRequestIndicators } from "./app-sidebar-session-pr-indicators.ts";
@@ -92,7 +83,6 @@ function AppSidebarContent(
   const projection = projectSource(owner, {
     read: (current) => current,
     subscribe: (current, notify) => {
-      current.catalogRendererImport.schedule();
       const stops = [
         current.subscribe(notify),
         context.chatSubmissions.subscribeCreate(notify),
@@ -227,34 +217,18 @@ function AppSidebarContent(
     getGateway: () => prepared().sessionDataContext?.gateway,
     getSessions: () => prepared().sessionDataContext?.sessions,
   });
-  const solidOwner = getOwner();
-  const mountDefaultView = (target: HTMLElement) =>
-    runWithOwner(solidOwner, () =>
-      createRoot((dispose) => {
-        insert(target, hostView.renderSessionsBody());
-        return () => {
-          dispose();
-          target.replaceChildren();
-        };
-      }),
-    );
   const SessionBody = () => hostView.renderSessionsBody();
   const Sessions = () => (
-    <Show
-      when={Boolean(hostView.sessionDataContext?.plugins.selectedReplacement("session-list"))}
-      fallback={<SessionBody />}
-    >
-      <PluginView
-        surface="session-list"
-        props={{
-          sessionKey: hostView.sessionKey,
-          agentId: hostView.getSessionNavigationState().selectedAgentId,
-          sessions: hostView.sessionDataContext?.sessions.state.result?.sessions ?? [],
-        }}
-        presented={hostView.navigationVisible}
-        mountDefaultView={mountDefaultView}
-      />
-    </Show>
+    <PluginSurface
+      surface="session-list"
+      props={{
+        sessionKey: hostView.sessionKey,
+        agentId: hostView.getSessionNavigationState().selectedAgentId,
+        sessions: hostView.sessionDataContext?.sessions.state.result?.sessions ?? [],
+      }}
+      presented={hostView.navigationVisible}
+      renderDefault={() => <SessionBody />}
+    />
   );
   const content = hostView.renderSidebar(Sessions, scroll, {
     pending: snapshotPending,

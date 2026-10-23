@@ -14,19 +14,6 @@ import type { ToolSummaryTrace } from "./embedded-agent-runner/types.js";
 
 export type CliUsage = CliBackendJsonlUsage;
 
-type CliProcessDiagnostics = {
-  backendId: string;
-  processReason: string;
-  exitCode: number | null;
-  exitSignal: NodeJS.Signals | number | null;
-  durationMs: number;
-  stdoutBytes: number;
-  stdoutHash: string;
-  stderrBytes: number;
-  stderrHash: string;
-  useResume: boolean;
-};
-
 export type CliTerminalFailure =
   | {
       reason: "max_turns";
@@ -69,7 +56,18 @@ export type CliOutput = {
   /** A caller interruption that ended the turn after usable assistant text was streamed. */
   terminalInterruption?: CliTerminalInterruption;
   diagnostics?: {
-    process?: CliProcessDiagnostics;
+    process?: {
+      backendId: string;
+      processReason: string;
+      exitCode: number | null;
+      exitSignal: NodeJS.Signals | number | null;
+      durationMs: number;
+      stdoutBytes: number;
+      stdoutHash: string;
+      stderrBytes: number;
+      stderrHash: string;
+      useResume: boolean;
+    };
   };
   finalPromptText?: string;
   didSendViaMessagingTool?: boolean;

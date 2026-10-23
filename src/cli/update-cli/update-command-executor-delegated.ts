@@ -1,5 +1,7 @@
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { requestCliParentTermination } from "../../../cli-parent-lifetime.mjs";
+import { GATEWAY_OWNER_HEARTBEAT_MS } from "../../infra/gateway-lock-payload.js";
 import { readControlPlaneUpdateSentinelMeta } from "../../infra/update-control-plane-sentinel.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import type { ManagedCommandProcessAuthority } from "../../infra/update-managed-command-custody.js";
@@ -186,6 +188,36 @@ export async function withDelegatedUpdateCommandExecutor<T>(
       childOwners.set(fence, (childRoot, childOperation, purpose) =>
         owner.run(childRoot, childOperation, purpose),
       );
+      const parents = [
+        original,
+        parent,
+        spawner,
+        retained,
+        slot?.parent,
+        slot?.spawner,
+        slot?.reserver,
+      ];
+      const processes = new Map(
+        parents.flatMap((lease) =>
+          lease
+            ? [lease.helper, lease.executor].map(
+                (identity) => [`${identity.pid}:${identity.startIdentity}`, identity] as const,
+              )
+            : [],
+        ),
+      );
+      // A stalled await cannot recheck its fence. End orphaned maintenance through
+      // the normal bounded shutdown; peers still wait for this process to exit.
+      const parentWatch = setInterval(() => {
+        for (const identity of processes.values()) {
+          const state = store.inspectProcessIdentity(identity);
+          if (state === "dead" || state === "mismatch") {
+            requestCliParentTermination();
+            break;
+          }
+        }
+      }, GATEWAY_OWNER_HEARTBEAT_MS);
+      parentWatch.unref();
       try {
         const operationOutcome = await withUpdateCommandExecutorOperation(
           {
@@ -232,6 +264,7 @@ export async function withDelegatedUpdateCommandExecutor<T>(
         }
         return outcome.result;
       } finally {
+        clearInterval(parentWatch);
         identityWarnings.flush();
         active = false;
         childOwners.delete(fence);

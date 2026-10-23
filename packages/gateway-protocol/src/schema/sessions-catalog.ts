@@ -99,6 +99,7 @@ export const SessionCatalogSchema = closedObject({
   ...SessionCatalogDescriptorSchema.properties,
   shareRoute: Type.Optional(SessionCatalogShareRouteSchema),
   hosts: Type.Array(SessionCatalogHostSchema),
+  pending: Type.Optional(Type.Boolean()),
   error: Type.Optional(SessionCatalogErrorSchema),
 });
 

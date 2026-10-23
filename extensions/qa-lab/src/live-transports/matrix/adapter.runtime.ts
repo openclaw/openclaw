@@ -69,7 +69,6 @@ export async function waitForMatrixQaObserverEvent(params: {
   observer: MatrixQaRoomObserver;
   predicate: (event: MatrixQaObservedEvent) => boolean;
   roomId: string;
-  timeoutMs: number;
 }): Promise<MatrixQaRoomEventWaitResult> {
   for (;;) {
     const expectedInterruptionAtStart = params.isExpectedInterruption();
@@ -77,7 +76,7 @@ export async function waitForMatrixQaObserverEvent(params: {
       return await params.observer.waitForOptionalRoomEvent({
         predicate: params.predicate,
         roomId: params.roomId,
-        timeoutMs: params.timeoutMs,
+        timeoutMs: 1_000,
       });
     } catch (error) {
       // A poll spanning the entire restart may fail visibly; rerun that scenario.
@@ -222,7 +221,6 @@ export async function createMatrixQaTransportAdapter(
           observer,
           predicate: (event) => event.sender === provisioning.sut.userId && Boolean(event.body),
           roomId,
-          timeoutMs: 1_000,
         });
         if (!observed.matched) {
           continue;
