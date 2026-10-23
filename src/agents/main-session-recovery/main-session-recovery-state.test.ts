@@ -87,6 +87,12 @@ function projectLifecycle(
 }
 
 describe("main session recovery state", () => {
+  it("admits an interrupted tool-timeout checkpoint", () => {
+    const entry = interruptedEntry({ status: "interrupted" });
+
+    expect(observe(entry, "generation-1")).toMatchObject({ status: "recoverable" });
+  });
+
   it("allows rollover until the tombstone records its successor", () => {
     expect(
       inspectMainRestartRecoveryRolloverEligibility(

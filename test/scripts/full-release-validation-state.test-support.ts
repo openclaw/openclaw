@@ -7,6 +7,7 @@ import {
   createPublicationSourceFact,
   publicationDispatchEnvelope,
   publicationSourceRequest,
+  type PublicationSelection,
   type PublicationSourceRequest,
 } from "../../scripts/full-release-publication-contract.mjs";
 import {
@@ -19,6 +20,16 @@ export const SCRIPT = resolve("scripts/full-release-validation-state.mjs");
 export const SHA = "a".repeat(40);
 export const TARGET_SHA = "b".repeat(40);
 export const TRUSTED_MAIN = { fullRef: "refs/heads/main", ref: "main", sha: SHA };
+
+export function publicationSelectionFixture(): PublicationSelection {
+  return {
+    route: "normal",
+    npmDistTag: "latest",
+    publishOpenclawNpm: true,
+    pluginPublishScope: "all-publishable",
+    plugins: [],
+  };
+}
 
 export function collectorEnv(overrides: NodeJS.ProcessEnv) {
   return {

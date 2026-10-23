@@ -1,3 +1,4 @@
+import type { ConnectParams } from "@openclaw/gateway-client/browser";
 import { vi } from "vitest";
 import type { createStorageMock } from "../test-helpers/storage.ts";
 
@@ -61,6 +62,25 @@ export class MockWebSocket {
       handler({ data: payload });
     }
   }
+}
+
+export type ConnectFrame = {
+  id?: string;
+  method?: string;
+  params?: {
+    auth?: { token?: string; bootstrapToken?: string; password?: string; deviceToken?: string };
+    client: { buildId?: string; platform?: string; deviceFamily?: string };
+    maxProtocol?: number;
+    minProtocol?: number;
+    caps?: string[];
+    scopes?: string[];
+    modelCatalog?: ConnectParams["modelCatalog"];
+    device?: { id?: string; signedAt?: number };
+  };
+};
+
+export function parseLatestConnectFrame(ws: MockWebSocket): ConnectFrame {
+  return JSON.parse(ws.sent.at(-1) ?? "{}") as ConnectFrame;
 }
 
 export function stubWindowGlobals(storage?: ReturnType<typeof createStorageMock>) {

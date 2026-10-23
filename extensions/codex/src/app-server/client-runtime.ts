@@ -1,11 +1,11 @@
 /** Client-scoped Codex auth and account observers. */
-import { createHash } from "node:crypto";
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { readCodexSessionMeta } from "../session-catalog-provenance.js";
 import { refreshCodexAppServerAuthTokens, type CodexAppServerAuthHandoff } from "./auth-bridge.js";
 import { fingerprintTokenAuthProfileCacheKey } from "./auth-cache-key.js";
 import type { CodexAppServerAuthProfileLookup } from "./auth-profile.js";
+import * as threadClosure from "./client-thread-closure.js";
 import {
   createThreadOwnerToken,
   forgetThreadOwnership,
@@ -20,6 +20,7 @@ import {
   type ThreadOwnerToken,
   type ThreadReleaseTransition,
 } from "./client-thread-owner.js";
+import { prepareCodexWorkspaceReference } from "./client-workspace-references.js";
 import type { CodexAppServerClient } from "./client.js";
 import { isJsonObject, type CodexServiceTier, type JsonObject } from "./protocol.js";
 import { mergeCodexRateLimitsUpdate } from "./rate-limit-cache.js";
@@ -85,23 +86,7 @@ export function prepareCodexWorkspaceReferences(
   threadId: string,
   reference: string | undefined,
 ) {
-  const runtime = configuredClients.get(client);
-  const digest = createHash("sha256")
-    .update(reference ?? "")
-    .digest("hex");
-  const previous = runtime?.workspaceReferences.get(threadId) ?? { needsReintroduction: true };
-  if (runtime && !runtime.closed) {
-    runtime.workspaceReferences.set(threadId, previous);
-  }
-  return {
-    include: previous.needsReintroduction || previous.digest !== digest,
-    accepted: () => {
-      if (!runtime || runtime.closed || runtime.workspaceReferences.get(threadId) !== previous) {
-        return;
-      }
-      runtime.workspaceReferences.set(threadId, { digest, needsReintroduction: false });
-    },
-  };
+  return prepareCodexWorkspaceReference(configuredClients.get(client), threadId, reference);
 }
 
 /** Immutable declarations are data owned by this physical client, never retained executors. */
@@ -169,6 +154,7 @@ export function ensureCodexAppServerClientRuntime(
     workspaceReferences: new Map(),
   };
   configuredClients.set(client, runtime);
+  threadClosure.ensureCodexAppServerThreadClosureTracking(client);
   client.addCloseHandler(() => {
     // Pending releases may settle after close; their continuations must never
     // resurrect subscriptions or eviction timers on a dead physical client.
@@ -441,6 +427,7 @@ export async function retainCodexAppServerLiveThread(
     return false;
   }
   const previousOwner = runtime.retainedThreads.get(threadId)?.ownerToken;
+  threadClosure.clearCodexAppServerThreadClosed(client, threadId);
   runtime.retainedThreads.delete(threadId);
   const retained: RetainedLiveThread = {
     ownerToken,

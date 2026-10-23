@@ -32,6 +32,7 @@ import {
   normalizeCronRunErrorText,
   resolveCronAbortReasonText,
 } from "../service/execution-errors.js";
+import { isCronOneShotContinuationJob } from "../service/one-shot-schedule.js";
 import type { CronAgentExecutionPhaseUpdate } from "../types.js";
 import { finalizeCronRun } from "./run-finalize.js";
 import type { RunCronAgentTurnParams } from "./run-prepare-runtime.js";
@@ -222,7 +223,13 @@ export async function runCronIsolatedAgentTurn(
                 sessionId: initialSessionId,
                 lifecycleGeneration: runLifecycleGeneration,
                 cronRunsByJobId: new Map([
-                  [params.job.id, { pacingEnabled: params.job.pacing !== undefined }],
+                  [
+                    params.job.id,
+                    {
+                      nextCheckEnabled:
+                        params.job.pacing !== undefined || isCronOneShotContinuationJob(params.job),
+                    },
+                  ],
                 ]),
               },
               {

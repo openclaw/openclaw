@@ -27,6 +27,7 @@ import {
   getMainSessionRecoveryRetryCount,
   isMainRestartRecoveryAggregateTerminalOnly,
   isMainRestartRecoveryCandidate,
+  isMainSessionRecoveryInterrupted,
 } from "./main-session-recovery-state.js";
 import {
   commitMainSessionRecovery,
@@ -42,7 +43,10 @@ import {
   reconcileInvalidHarnessCompletion,
 } from "./main-session-restart-recovery-checkpoint.js";
 import { tombstoneMainRestartRecoveryWithNotice } from "./main-session-restart-recovery-failure.js";
-import { readMainSessionRecoveryCheckpoint } from "./main-session-restart-recovery-replay-safety.js";
+import {
+  readMainSessionRecoveryCheckpoint,
+  shouldRetainRestartSafeTools,
+} from "./main-session-restart-recovery-replay-safety.js";
 import {
   hasReplaySafeCodeModeCheckpointInCurrentTurn,
   resolveMainSessionResumePolicy,
@@ -156,8 +160,7 @@ export function loadExpectedRestartRecoveryTarget(params: {
   });
   const entry = exact?.sessionKey === params.expected.sessionKey ? exact.entry : undefined;
   return entry?.sessionId === params.expected.sessionId &&
-    entry.status === "running" &&
-    entry.abortedLastRun === true &&
+    isMainSessionRecoveryInterrupted(entry) &&
     (params.expected.claim
       ? normalizeOptionalString(entry.restartRecoveryDeliveryRunId) ===
           params.expected.claim.runId &&
@@ -206,7 +209,7 @@ export async function recoverStore(params: {
     } else {
       entries = listSessionEntriesByStatus(
         { agentId: params.storeAgentId, storePath: params.storePath },
-        ["running"],
+        ["running", "interrupted"],
       );
     }
   } catch (err) {
@@ -223,8 +226,8 @@ export async function recoverStore(params: {
     }
     let entry = loadedEntry;
     if (
-      entry.status !== "running" ||
-      (entry.abortedLastRun !== true && !isMainRestartRecoveryAggregateTerminalOnly(entry))
+      !isMainSessionRecoveryInterrupted(entry) &&
+      !isMainRestartRecoveryAggregateTerminalOnly(entry)
     ) {
       continue;
     }
@@ -477,6 +480,7 @@ export async function recoverStore(params: {
       entry.restartRecoveryDisableMessageTool !== true &&
       entry.restartRecoverySuppressTextDelivery !== true;
     let replaySafeCheckpoint: boolean;
+    let humanTurnAfterRecovery: boolean;
     let source: Awaited<ReturnType<typeof readMainSessionRecoveryCheckpoint>>["source"];
     let messages: unknown[];
     try {
@@ -492,6 +496,7 @@ export async function recoverStore(params: {
       });
       const checkpoint = await readMainSessionRecoveryCheckpoint(transcriptScope);
       source = checkpoint.source;
+      humanTurnAfterRecovery = checkpoint.humanTurnAfterRecovery;
       replaySafeCheckpoint = fullAccess && !entry.pendingFinalDelivery && checkpoint.replaySafe;
     } catch (err) {
       if (stopped()) {
@@ -539,6 +544,7 @@ export async function recoverStore(params: {
             : {}),
           forceRestartSafeTools:
             pendingAction === "fail" ||
+            entry.mainRestartRecovery?.safeToolsRequired === true ||
             entry.restartRecoveryForceSafeTools === true ||
             hasReplaySafeCodeModeCheckpointInCurrentTurn(messages),
         }))
@@ -548,8 +554,12 @@ export async function recoverStore(params: {
       continue;
     }
 
-    const retainedSafeTools =
-      replaySafeCheckpoint || (entry.restartRecoveryForceSafeTools === true && !fullAccess);
+    const retainedSafeTools = shouldRetainRestartSafeTools({
+      entry,
+      fullAccess,
+      humanTurnAfterRecovery,
+      replaySafeCheckpoint,
+    });
     const resumePolicy = resolveMainSessionResumePolicy(
       messages,
       retainedSafeTools,

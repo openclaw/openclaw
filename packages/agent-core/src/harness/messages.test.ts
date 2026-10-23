@@ -65,14 +65,14 @@ describe("convertToLlm message ownership", () => {
       role: "user",
       content: blocks,
       timestamp: Date.parse(timestamp),
-      ...(carrier ? { runtimeContextCarrier: true } : {}),
+      ...(carrier ? { runtimeContextCarrier: true } : { synthetic: true }),
     });
     expect(text).not.toBe(textMessage);
     expect(text).toEqual({
       role: "user",
       content: [{ type: "text", text: "text content" }],
       timestamp: Date.parse(timestamp),
-      ...(carrier ? { runtimeContextCarrier: true } : {}),
+      ...(carrier ? { runtimeContextCarrier: true } : { synthetic: true }),
     });
     expect(text?.content).not.toBe(repeatedText?.content);
   });

@@ -204,6 +204,7 @@ export async function buildBrowserGatewayConnectPlan({
           "session-scoped-events",
           "inline-widgets",
           "model-selection-policy",
+          "ui-agent-github-settings",
           "ui-commands",
           "usage-refreshing",
         ],

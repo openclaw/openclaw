@@ -109,7 +109,7 @@ function validateRecoveryAdmission(
   if (entry.sessionId !== command.sessionId) {
     return "session_replaced";
   }
-  if (entry.status !== "running" || entry.abortedLastRun !== true || !state) {
+  if (!isMainSessionRecoveryInterrupted(entry) || !state) {
     return "not_interrupted";
   }
   if (
@@ -153,11 +153,16 @@ export function isMainRestartRecoveryCandidate(entry: SessionEntry, sessionKey: 
   );
 }
 
+export function isMainSessionRecoveryInterrupted(entry: SessionEntry): boolean {
+  return (
+    (entry.status === "running" || entry.status === "interrupted") && entry.abortedLastRun === true
+  );
+}
+
 export function isMainSessionRecoveryPending(entry: SessionEntry, sessionKey: string): boolean {
   const state = entry.mainRestartRecovery;
   return (
-    entry.status === "running" &&
-    entry.abortedLastRun === true &&
+    isMainSessionRecoveryInterrupted(entry) &&
     isMainRestartRecoveryCandidate(entry, sessionKey) &&
     !state?.foregroundClaims &&
     !state?.reservation &&
@@ -275,8 +280,7 @@ function inspectMainSessionRecovery(params: {
     return { status: "blocked" };
   }
   if (
-    entry.status !== "running" ||
-    entry.abortedLastRun !== true ||
+    !isMainSessionRecoveryInterrupted(entry) ||
     !isMainRestartRecoveryCandidate(entry, params.sessionKey) ||
     !state
   ) {
@@ -326,8 +330,7 @@ function inspectMainSessionRecoveryForAdmission(params: {
     return { status: "blocked" };
   }
   if (
-    params.entry.status === "running" &&
-    params.entry.abortedLastRun === true &&
+    isMainSessionRecoveryInterrupted(params.entry) &&
     isMainRestartRecoveryCandidate(params.entry, params.sessionKey) &&
     !params.entry.mainRestartRecovery
   ) {
@@ -383,8 +386,7 @@ export function transitionMainSessionRecovery(
     }
     case "observe": {
       if (
-        entry.status === "running" &&
-        entry.abortedLastRun === true &&
+        isMainSessionRecoveryInterrupted(entry) &&
         isMainRestartRecoveryCandidate(entry, command.sessionKey) &&
         !entry.mainRestartRecovery
       ) {
@@ -434,7 +436,7 @@ export function transitionMainSessionRecovery(
         return { kind: "rejected", reason: conflict };
       }
       const state = entry.mainRestartRecovery!;
-      if (entry.status !== "running" || entry.abortedLastRun !== true) {
+      if (!isMainSessionRecoveryInterrupted(entry)) {
         return { kind: "rejected", reason: "not_interrupted" };
       }
       if (state.tombstone) {
@@ -548,6 +550,7 @@ export function transitionMainSessionRecovery(
         reservation: undefined,
         foregroundClaims: undefined,
       });
+      entry.status = "running";
       entry.abortedLastRun = false;
       entry.lifecycleRunId = command.runId;
       entry.lastRunId = undefined;
@@ -586,8 +589,7 @@ export function transitionMainSessionRecovery(
       }
       if (
         entry.sessionId !== command.sessionId ||
-        entry.status !== "running" ||
-        entry.abortedLastRun !== true ||
+        !isMainSessionRecoveryInterrupted(entry) ||
         !isMainRestartRecoveryCandidate(entry, command.sessionKey)
       ) {
         return { kind: "no_change" };

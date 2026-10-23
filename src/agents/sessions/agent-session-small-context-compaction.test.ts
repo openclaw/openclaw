@@ -23,6 +23,102 @@ import { SettingsManager } from "./settings-manager.js";
 registerAgentSessionLoopTestLifecycle();
 
 describe("AgentSession small-context compaction", () => {
+  it.each(["human", "keyed-human", "internal", "queued"] as const)(
+    "persists only the admitted run's unresolved human ask (%s)",
+    async (origin) => {
+      const model = { ...testModel, contextWindow: 32_768 };
+      const sessionManager = SessionManager.inMemory();
+      sessionManager.appendMessage(makeUserMessage("Completed earlier human task", 1));
+      sessionManager.appendMessage(
+        createAssistant(model, [{ type: "text", text: "Completed." }], "stop"),
+      );
+      const request = "Review the patch; do not deploy it.";
+      const requestId =
+        origin === "queued"
+          ? undefined
+          : sessionManager.appendMessage(
+              Object.assign(
+                makeUserMessage(request, 3),
+                origin === "internal" ? { provenance: { kind: "internal_system" } } : {},
+                { idempotencyKey: "current-run-input" },
+              ),
+            );
+      if (origin !== "queued") {
+        sessionManager.appendMessage(
+          Object.assign(makeUserMessage("Worker update", 4), {
+            provenance: { kind: "inter_session" },
+          }),
+        );
+        sessionManager.appendMessage(
+          createAssistant(model, [{ type: "text", text: "Work continues." }], "stop"),
+        );
+      }
+      const settingsManager = SettingsManager.inMemory({
+        compaction: { keepRecentTokens: 1, reserveTokens: 1_024 },
+      });
+      let observedRequestState: unknown;
+      const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>();
+      if (origin === "queued") {
+        handlers.set("session_before_compact", [
+          async (event) => {
+            const preparation =
+              event && typeof event === "object" ? Reflect.get(event, "preparation") : undefined;
+            observedRequestState =
+              preparation && typeof preparation === "object"
+                ? Reflect.get(preparation, "requestState")
+                : undefined;
+          },
+        ]);
+      }
+      const { session } = await createTestSession({
+        model,
+        sessionManager,
+        settingsManager,
+        resourceLoader: createResourceLoader(handlers),
+      });
+      streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
+        createAssistantResultStream(
+          createAssistant(activeModel, [{ type: "text", text: "Earlier work summary." }]),
+        ),
+      );
+      const outcome = await session[agentSessionAutomaticCompaction](
+        undefined,
+        "unresolved",
+        "none",
+        {
+          requestFromEntryId: origin === "keyed-human" ? undefined : requestId,
+          ...(origin === "queued" || origin === "keyed-human"
+            ? {
+                requestBudget: createCompactionRequestBudget({
+                  contextWindow: model.contextWindow,
+                  reserveTokens: 1_024,
+                  pendingPrompt: request,
+                  pendingUserIdempotencyKey:
+                    origin === "queued" ? "not-persisted-yet" : "current-run-input",
+                }),
+              }
+            : {}),
+        },
+      );
+      if (outcome.status !== "completed") {
+        throw new Error("expected completed compaction");
+      }
+      if (origin === "human" || origin === "keyed-human") {
+        expect(outcome.result.details).toMatchObject({ latestUnresolvedUserRequest: request });
+      } else {
+        expect(outcome.result.details).not.toHaveProperty("latestUnresolvedUserRequest");
+      }
+      if (origin === "queued") {
+        expect(observedRequestState).toBe("none");
+      }
+      expect(sessionManager.getBranch().at(-1)).toMatchObject({
+        type: "compaction",
+        details: outcome.result.details,
+      });
+      expect(streamMocks.streamSimple).toHaveBeenCalled();
+    },
+  );
+
   it("defers a one-archive retention no-op until the foreground request budget is prepared", async () => {
     const model = { ...testModel, contextWindow: 32_768, maxTokens: 8_192 };
     const settingsManager = SettingsManager.inMemory({ retry: { enabled: false } });

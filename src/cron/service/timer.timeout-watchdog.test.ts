@@ -199,10 +199,16 @@ describe("cron service timer regressions", () => {
       let abortWallMs: number | undefined;
       let abortReason: unknown;
       const started = createDeferred();
+      const finishedContext = vi.fn();
 
       const state = createCronRegressionState({
         storePath: store.storePath,
         nowMs: () => now,
+        onEvent: (event, context) => {
+          if (event.action === "finished") {
+            finishedContext(context);
+          }
+        },
         runIsolatedAgentJob: vi.fn(
           async ({
             abortSignal,
@@ -259,6 +265,9 @@ describe("cron service timer regressions", () => {
       const job = state.store?.jobs.find((entry) => entry.id === "timeout-fraction-29774");
       expect(job?.state.lastStatus).toBe("error");
       expect(job?.state.lastError).toContain("timed out");
+      expect(finishedContext).toHaveBeenCalledExactlyOnceWith({
+        failureNotificationDetail: { kind: "agent-watchdog", reason: "execution_deadline" },
+      });
     } finally {
       vi.useRealTimers();
     }

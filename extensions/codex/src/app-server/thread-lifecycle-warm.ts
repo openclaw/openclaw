@@ -14,6 +14,7 @@ import {
   isCodexAppServerLiveThreadProtected,
   releaseCodexAppServerLiveThread,
 } from "./client-runtime.js";
+import { wasCodexAppServerThreadClosed } from "./client-thread-closure.js";
 import type { CodexAppServerClient } from "./client.js";
 import {
   assertCodexInferenceRouteConfig,
@@ -27,7 +28,7 @@ import {
   mergeCodexThreadConfigs,
   type CodexPluginThreadConfig,
 } from "./plugin-thread-config.js";
-import type { CodexThread } from "./protocol.js";
+import { isJsonObject, type CodexThread } from "./protocol.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import { retainSharedCodexAppServerClientByInstanceId } from "./shared-client.js";
 import { fingerprintCodexThreadConfig } from "./thread-fingerprints.js";
@@ -154,6 +155,25 @@ export async function releaseCodexBoundLiveThread(
     return false;
   }
   const client = previous?.client ?? options.client;
+  let threadClosed: Promise<void> | undefined;
+  let stopWatching: (() => void) | undefined;
+  if (previous) {
+    threadClosed = new Promise<void>((resolve) => {
+      stopWatching = client.addNotificationHandler((notification) => {
+        const threadId = isJsonObject(notification.params)
+          ? notification.params.threadId
+          : undefined;
+        if (notification.method === "thread/closed" && threadId === options.threadId) {
+          resolve();
+        }
+      });
+    });
+    // Runtime tracking closes the subscribe-after-notification race. A later
+    // retain clears this exact thread receipt before publishing new ownership.
+    if (wasCodexAppServerThreadClosed(client, options.threadId)) {
+      threadClosed = Promise.resolve();
+    }
+  }
   try {
     if (
       isCodexAppServerLiveThreadClaimed(client, options.threadId) ||
@@ -176,11 +196,20 @@ export async function releaseCodexBoundLiveThread(
         : undefined,
     });
   } finally {
-    // Rejection must free the lane so the claimed run can still be stopped.
-    await previous?.release(
-      !isCodexAppServerLiveThreadClaimed(client, options.threadId) &&
-        !isCodexAppServerLiveThreadProtected(client, options.threadId),
-    );
+    try {
+      // Rejection must free the lane so the claimed run can still be stopped.
+      const retiredExit = previous?.release(
+        !isCodexAppServerLiveThreadClaimed(client, options.threadId) &&
+          !isCodexAppServerLiveThreadProtected(client, options.threadId),
+      );
+      if (retiredExit) {
+        await options.lifecycleTiming.measure("retired-thread-runtime-release", () =>
+          threadClosed ? Promise.race([retiredExit, threadClosed]) : retiredExit,
+        );
+      }
+    } finally {
+      stopWatching?.();
+    }
   }
 }
 

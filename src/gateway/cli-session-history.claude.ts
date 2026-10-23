@@ -27,10 +27,23 @@ import {
   getCliSessionBinding,
   normalizeCliSessionReseedReceipt,
 } from "../config/sessions/cli-session-binding.js";
+import { MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL } from "../sessions/input-provenance.js";
+import { formatSystemTurnPrompt } from "../sessions/system-turn-prompt.js";
 import { attachOpenClawTranscriptMeta } from "./session-transcript-readers.js";
 
 export const CLAUDE_CLI_PROVIDER = "claude-cli";
 const CLAUDE_PROJECTS_RELATIVE_DIR = path.join(".claude", "projects");
+
+function isClaudeCliRestartRecoveryPrompt(text: string): boolean {
+  const undatedBody = text.replace(
+    /^\[[A-Z][a-z]{2} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]\n]*\] /u,
+    "",
+  );
+  return [
+    "Your previous turn was interrupted while OpenClaw was waiting on tool/model work. ",
+    "Your previous turn was interrupted by a gateway restart while OpenClaw was waiting on tool/model work. ",
+  ].some((opening) => undatedBody.startsWith(formatSystemTurnPrompt(opening)));
+}
 
 export type ClaudeCliProjectEntry = {
   type?: unknown;
@@ -399,6 +412,11 @@ export function parseClaudeCliHistoryEntry(
         }
       }
     }
+    const internalSourceTool =
+      promptTextCandidates.length === 1 &&
+      isClaudeCliRestartRecoveryPrompt(promptTextCandidates[0]!.text)
+        ? MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL
+        : undefined;
     const cliImageTurnKey =
       typeof content === "string" ? readCliImageTurnContext(content) : undefined;
     if (cliImageTurnKey && typeof content === "string") {
@@ -410,7 +428,7 @@ export function parseClaudeCliHistoryEntry(
       ? "claude_cli_task_notification"
       : isClaudeCliVisibleHarnessContext(entry)
         ? "cli_harness_context"
-        : undefined;
+        : internalSourceTool;
     return attachOpenClawTranscriptMeta(
       {
         role: "user",

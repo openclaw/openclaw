@@ -19,7 +19,11 @@ import {
   CRON_AGENT_SETUP_WATCHDOG_MS,
   settleTimedOutCronRun,
 } from "./agent-watchdog.js";
-import { abortErrorMessage, isSetupTimeoutErrorText } from "./execution-errors.js";
+import {
+  abortErrorMessage,
+  isSetupTimeoutErrorText,
+  timeoutErrorMessage,
+} from "./execution-errors.js";
 import {
   assertServiceCronRunReceiptCurrent,
   trackServiceCronRunReceiptSettlement,
@@ -210,6 +214,15 @@ async function executeJobCoreWithTimeoutUnfinalized(
     const result: CronCoreRunOutcome = {
       status: "error",
       error,
+      ...(interruption !== "cancelled" && error === timeoutErrorMessage(execution)
+        ? {
+            errorClassification: { kind: "permanent" as const },
+            failureNotificationDetail: {
+              kind: "agent-watchdog" as const,
+              reason: "execution_deadline" as const,
+            },
+          }
+        : {}),
       // The abort race must retain attribution already reported by the runner.
       ...(execution && {
         provider: execution.provider,

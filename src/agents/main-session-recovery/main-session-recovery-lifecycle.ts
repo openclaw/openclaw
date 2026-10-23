@@ -1,7 +1,10 @@
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { mergeRestartRecoveryTerminalRunIds } from "../../config/sessions/restart-recovery-state.js";
 import { retryAsync } from "../../infra/retry.js";
-import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agent-run-terminal-outcome.js";
+import {
+  buildAgentRunTerminalOutcomeFromLifecycleEvent,
+  isAgentRunResumableToolTimeout,
+} from "../agent-run-terminal-outcome.js";
 import {
   buildMainSessionRecoveryClearPatch,
   removeMainSessionRecoveryForegroundClaim,
@@ -63,13 +66,16 @@ function lifecyclePhase(event: MainRecoveryLifecycleEvent): "start" | "end" | "e
   return phase === "start" || phase === "end" || phase === "error" ? phase : null;
 }
 
-function isRestartCancellation(event: MainRecoveryLifecycleEvent): boolean {
+function isRecoveryInterruption(event: MainRecoveryLifecycleEvent): boolean {
   const phase = lifecyclePhase(event);
   if (phase !== "end" && phase !== "error") {
     return false;
   }
   const outcome = buildAgentRunTerminalOutcomeFromLifecycleEvent({ phase, data: event.data });
-  return outcome.reason === "cancelled" && outcome.stopReason === "restart";
+  return (
+    (outcome.reason === "cancelled" && outcome.stopReason === "restart") ||
+    isAgentRunResumableToolTimeout(outcome)
+  );
 }
 
 export function isMainSessionRecoveryLifecycleEvent(params: {
@@ -79,7 +85,7 @@ export function isMainSessionRecoveryLifecycleEvent(params: {
   const runId = params.event.runId?.trim();
   const lifecycleGeneration = params.event.lifecycleGeneration?.trim();
   const phase = lifecyclePhase(params.event);
-  const interrupted = isRestartCancellation(params.event);
+  const interrupted = isRecoveryInterruption(params.event);
   const matchesFence = Boolean(
     runId &&
     lifecycleGeneration &&
@@ -148,7 +154,7 @@ export function projectMainSessionRecoveryLifecycle(params: {
   }
   const phase = lifecyclePhase(params.event);
   const settlesRecovery =
-    (phase === "end" || phase === "error") && !isRestartCancellation(params.event);
+    (phase === "end" || phase === "error") && !isRecoveryInterruption(params.event);
   const patch = { ...params.snapshotPatch };
   const runId = params.event.runId?.trim();
   const lifecycleGeneration = params.event.lifecycleGeneration?.trim();

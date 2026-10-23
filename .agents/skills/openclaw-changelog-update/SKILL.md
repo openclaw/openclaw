@@ -78,6 +78,7 @@ of this skill; initial generation must never overwrite them.
    node --import tsx .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \
      --base <base-tag> \
      --target <target-ref> \
+     --release-branch <canonical-release-branch> \
      --main-ref origin/main \
      --version <YYYY.M.PATCH> \
      --manifest /tmp/openclaw-release-<YYYY.M.PATCH>.json \
@@ -92,7 +93,7 @@ of this skill; initial generation must never overwrite them.
    exact base/target SHA snapshot under the worktree's git metadata. Iterative
    rewrites at the same target avoid repeated network discovery. Use
    `--refresh-github-snapshot` after suspect API data, `--github-snapshot
-<path>` for an explicit artifact, or `--no-github-snapshot` for a live-only
+   <path>` for an explicit artifact, or `--no-github-snapshot` for a live-only
    audit. GitHub release bodies are always read live.
    Explicit `CI #`, `CI run #`, `Actions run #`, and `workflow run #` references
    in active source are classified separately only when issue/PR resolution
@@ -292,7 +293,9 @@ of this skill; initial generation must never overwrite them.
   ```
 - add one `--release-tag` for every beta, stable, and extended-stable page in
   the train; a `### Release verification` tail is permitted, but any other
-  body drift fails the check
+  body drift fails the check. Extended-stable verification also requires
+  `--regular-stable-version <current-regular-stable-version>` so its canonical
+  release notice is checked against immutable regular-stable context
 - `scripts/render-github-release-notes.mts` is the canonical release-body
   renderer used by candidate validation, publish, and verification. When the
   complete `## YYYY.M.PATCH` section fits GitHub's 125,000-character limit and

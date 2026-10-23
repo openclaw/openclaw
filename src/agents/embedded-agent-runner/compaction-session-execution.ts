@@ -549,6 +549,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                   resolveEffectiveCompactionMode(params.config) === "default" ? undefined : "none",
                   {
                     requestBudget: accountingRecorder?.requestBudget,
+                    requestFromEntryId: accountingRecorder?.requestFromEntryId,
                     pendingUserEntryId: accountingRecorder?.pendingUserEntryId,
                   },
                 );

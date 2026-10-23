@@ -28,5 +28,12 @@ export function buildRestartRecoverySuccessorEntry(params: {
     ...(source.execNode ? { execNode: source.execNode } : {}),
     ...(source.execCwd ? { execCwd: source.execCwd } : {}),
   });
-  return { ...entry, ...buildMainSessionRecoveryClearPatch(entry), sessionId: params.sessionId };
+  return {
+    ...entry,
+    ...buildMainSessionRecoveryClearPatch(entry),
+    ...(source.restartRecoveryForceSafeTools === true
+      ? { restartRecoveryForceSafeTools: true }
+      : {}),
+    sessionId: params.sessionId,
+  };
 }

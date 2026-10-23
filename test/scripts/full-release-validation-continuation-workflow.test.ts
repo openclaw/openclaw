@@ -520,25 +520,46 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:'main',event:
     }
   });
 
-  it("validates final manifest attempts against the diagnostic drain", () => {
-    expect(step("summary", "Validate release validation manifest").env).toMatchObject({
-      DIAGNOSTIC_DRAIN_PATH:
-        "${{ runner.temp }}/full-release-diagnostics/full-release-diagnostic-manifest.json",
-    });
+  it("waits for installation quota before candidate dispatch", () => {
+    const candidateSteps = workflow.jobs.candidate_acquisition?.steps ?? [];
+    const quotaIndex = candidateSteps.findIndex(
+      (candidate) => candidate?.name === "Wait for candidate acquisition GitHub API quota",
+    );
+    const dispatchIndex = candidateSteps.findIndex(
+      (candidate) => candidate?.name === "Dispatch immutable validation candidate producer",
+    );
+    expect(quotaIndex).toBeGreaterThan(-1);
+    expect(dispatchIndex).toBeGreaterThan(quotaIndex);
+    expect(String(candidateSteps[quotaIndex]?.if)).toContain("github.run_attempt == 1");
+    expect(String(candidateSteps[quotaIndex]?.run)).toContain(
+      "wait-for-github-api-quota.mjs --minimum-remaining 6 --max-wait-seconds 18000",
+    );
+  });
+
+  it.each([
+    {
+      job: "summary",
+      name: "Validate release validation manifest",
+      env: {
+        DIAGNOSTIC_DRAIN_PATH:
+          "${{ runner.temp }}/full-release-diagnostics/full-release-diagnostic-manifest.json",
+      },
+    },
+    {
+      job: "release_decision",
+      name: "Evaluate release decision",
+      env: { FAIL_FAST: "${{ inputs.fail_fast }}", FULL_RELEASE_STATE_MODE: "decision" },
+    },
+    {
+      job: "diagnostic_drain",
+      name: "Drain child diagnostics",
+      env: { FAIL_FAST: "false", FULL_RELEASE_STATE_MODE: "drain" },
+    },
+  ])("supplies $job with its evidence and cancellation contract", ({ job, name, env }) => {
+    expect(step(job, name).env).toMatchObject(env);
   });
 
   it("gives final candidate verification enough time for its bounded API retries", () => {
     expect(workflow.jobs.summary?.["timeout-minutes"]).toBe(10);
-  });
-
-  it("keeps failure cancellation explicit while diagnostic drain never cancels", () => {
-    expect(step("release_decision", "Evaluate release decision").env).toMatchObject({
-      FAIL_FAST: "${{ inputs.fail_fast }}",
-      FULL_RELEASE_STATE_MODE: "decision",
-    });
-    expect(step("diagnostic_drain", "Drain child diagnostics").env).toMatchObject({
-      FAIL_FAST: "false",
-      FULL_RELEASE_STATE_MODE: "drain",
-    });
   });
 });

@@ -12,6 +12,9 @@ import {
 } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
 import {
   computeFileLists,
+  extractCurrentCompactionUserRequest,
+  extractCompactionMessageText as extractMessageText,
+  formatCompactionUserLabel,
   formatFileOperations,
   MAX_FILE_OPS_LIST_CHARS,
   MAX_FILE_OPS_SECTION_CHARS,
@@ -556,22 +559,6 @@ function resolveSummaryReserveTokens(
   return Math.max(1, Math.min(requested, Math.floor(modelMaxTokens)));
 }
 
-function extractMessageText(message: AgentMessage): string {
-  const content = (message as { content?: unknown }).content;
-  if (typeof content === "string") {
-    return content.trim();
-  }
-  return Array.isArray(content)
-    ? content
-        .flatMap((block) => {
-          const text =
-            block && typeof block === "object" ? (block as { text?: unknown }).text : undefined;
-          return typeof text === "string" && text.trim() ? [text.trim()] : [];
-        })
-        .join("\n")
-    : "";
-}
-
 function formatNonTextPlaceholder(content: unknown): string | null {
   if (content == null || typeof content === "string") {
     return null;
@@ -674,7 +661,7 @@ function formatContextMessage(message: AgentMessage): string | null {
   if (message.role === "assistant") {
     roleLabel = "Assistant";
   } else if (message.role === "user") {
-    roleLabel = "User";
+    roleLabel = formatCompactionUserLabel(message);
   } else if (message.role === "toolResult") {
     const toolName = (message as { toolName?: unknown }).toolName;
     const safeToolName = typeof toolName === "string" && toolName.trim() ? toolName : "tool";
@@ -813,18 +800,6 @@ function formatRequiredAskContext(rawAsk: string): string {
   const headBudget = Math.floor(contentBudget / 2);
   const tailBudget = contentBudget - headBudget;
   return `${truncateUtf16Safe(source, headBudget)}${REQUIRED_ASK_CONTEXT_TRUNCATED_MARKER}${sliceUtf16Safe(source, -tailBudget)}`;
-}
-
-function extractLatestUserAsk(messages: AgentMessage[]): string | null {
-  for (const message of messages.toReversed()) {
-    if (message.role === "user") {
-      const ask = extractMessageText(message);
-      if (ask) {
-        return ask;
-      }
-    }
-  }
-  return null;
 }
 
 /**
@@ -1216,9 +1191,13 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 
       const oracleMessages = [...messagesToSummarize, ...turnPrefixMessages];
       const splitUserAsk = preparation.isSplitTurn
-        ? extractLatestUserAsk(turnPrefixMessages)
+        ? extractCurrentCompactionUserRequest(turnPrefixMessages, extractMessageText)
         : null;
-      const latestUserAsk = splitUserAsk ?? extractLatestUserAsk(messagesToSummarize);
+      const latestUserAsk =
+        preparation.requestState !== undefined
+          ? (latestUnresolvedUserRequest ?? null)
+          : extractCurrentCompactionUserRequest(oracleMessages, extractMessageText);
+      const latestAskInRetainedTurn = splitUserAsk !== null && splitUserAsk === latestUserAsk;
       const identifiers = extractOpaqueIdentifiers(
         oracleMessages.slice(-10).map(extractMessageText).filter(Boolean).join("\n"),
       );
@@ -1230,7 +1209,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         recentTurnsPreserve,
       });
       const preservedTurnsSectionLocal = buildPreservedTurnsSection(preservedRecentMessages);
-      const latestPreparedAsk = extractLatestUserAsk(messagesToSummarize);
+      const latestPreparedAsk = extractCurrentCompactionUserRequest(
+        messagesToSummarize,
+        extractMessageText,
+      );
       const requiredAskContext = formatRequiredAskContext(latestUserAsk ?? "");
       const includePreservedContext =
         !latestUnresolvedUserRequest &&
@@ -1337,7 +1319,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                 auditSummary: unbudgetedSummary,
                 identifiers,
                 latestAsk: latestUserAsk,
-                latestAskInRetainedTurn: splitUserAsk !== null,
+                latestAskInRetainedTurn,
                 latestUnresolvedUserRequest: latestUnresolvedUserRequest ?? undefined,
                 requiredAskContext,
                 identifierPolicy,
@@ -1369,7 +1351,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           identifiers,
           latestAsk: latestUserAsk,
           latestUnresolvedUserRequest: latestUnresolvedUserRequest ?? undefined,
-          retainedTurnSummary: splitUserAsk !== null ? splitTurnSummaryLocal : undefined,
+          retainedTurnSummary: latestAskInRetainedTurn ? splitTurnSummaryLocal : undefined,
           identifierPolicy,
         });
         if (quality.ok) {

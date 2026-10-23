@@ -8103,6 +8103,18 @@ test "$package_manager" = "pnpm@12.1.0"
       workflowJob(OPENCLAW_NPM_PREFLIGHT_WORKFLOW, "check_sdk_npm"),
       "Verify Plugin SDK API changes",
     );
+    expect(sdkStep.run).toContain(
+      '--summary "${GITHUB_WORKSPACE}/.artifacts/npm-sdk-proof/plugin-sdk-api-release-diff.md"',
+    );
+    expect(sdkStep.run).toContain(
+      'cat "${GITHUB_WORKSPACE}/.artifacts/npm-sdk-proof/plugin-sdk-api-release-diff.md" >> "$GITHUB_STEP_SUMMARY"',
+    );
+    expect(
+      workflowStep(
+        workflowJob(OPENCLAW_NPM_PREFLIGHT_WORKFLOW, "verify_openclaw_npm"),
+        "Upload Plugin SDK API release diff",
+      ).with?.path,
+    ).toContain("plugin-sdk-api-release-diff.md");
     const sdkCommandBlock = (sdkStep.run ?? "").match(
       /\(\n\s+cd "\$tooling_dir"\n\s+pnpm install --frozen-lockfile --ignore-scripts --filter openclaw\n\s+pnpm run plugin-sdk:api:diff -- "\$\{diff_args\[@\]\}"\n\s*\)/u,
     )?.[0];
@@ -10433,6 +10445,24 @@ describe("package artifact reuse", () => {
     expect(result.stderr).toContain(
       `live_suite_filter '${suiteId}' does not match any runnable suite`,
     );
+  });
+
+  it("uploads native live reports and sanitized owned evidence after failures", () => {
+    const job = workflowJob(LIVE_E2E_WORKFLOW, "validate_live_provider_suites");
+    const run = workflowStep(job, "Run ${{ matrix.label }}");
+    expect(run.run).toContain('tee ".artifacts/live-shards/${{ matrix.suite_id }}.log"');
+    const upload = workflowStep(job, "Upload native live diagnostics");
+    expect(upload).toMatchObject({
+      if: "always() && steps.selection.outputs.run == 'true'",
+      uses: "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+      with: {
+        name: "native-live-${{ matrix.suite_id }}-${{ needs.validate_selected_ref.outputs.selected_sha }}-${{ github.run_id }}-${{ github.run_attempt }}",
+        "retention-days": 14,
+        "if-no-files-found": "warn",
+      },
+    });
+    expect(upload.with?.path).toContain(".artifacts/live-shards/");
+    expect(upload.with?.path).toContain(".artifacts/qa-e2e/");
   });
 
   it("shards broad native live tests instead of one serial live-all job", () => {

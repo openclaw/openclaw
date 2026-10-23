@@ -2,6 +2,7 @@ import type { AssistantMessage, Message } from "@openclaw/llm-core";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentMessage } from "../../types.js";
+import { hasRuntimeContextMarker } from "../messages.js";
 import type { FileOperations } from "../types.js";
 
 export type { FileOperations } from "../types.js";
@@ -291,16 +292,99 @@ function readPersistedSender(message: PersistedSenderCarrier): PersistedSender |
  * conversation label. Keep this shared with token accounting: adding a label
  * to the prompt without charging it can make bounded compaction overflow.
  */
-export function formatPersistedSenderSuffix(message: PersistedSenderCarrier): string {
+function formatPersistedSenderSuffix(message: PersistedSenderCarrier): string {
   const sender = readPersistedSender(message);
   return sender ? ` sender=${JSON.stringify(sender)}` : "";
+}
+
+function compactionUserRole(message: PersistedSenderCarrier): string {
+  if (hasRuntimeContextMarker(message)) {
+    return "Runtime context";
+  }
+  if (Reflect.get(message, "synthetic") === true) {
+    return "Synthetic input";
+  }
+  if (Reflect.get(message, "operatorMessage") !== undefined) {
+    return "Operator input";
+  }
+  const metadata = asRecord(Reflect.get(message, "__openclaw"));
+  if (metadata?.beforeAgentRunBlocked !== undefined) {
+    return "Internal system input";
+  }
+  const rawProvenance = Reflect.get(message, "provenance");
+  // Unmarked external turns are a shipped transcript contract. An explicit
+  // unrecognized record must not acquire that legacy meaning by normalization.
+  if (rawProvenance === undefined) {
+    return "User";
+  }
+  const provenance = asRecord(rawProvenance);
+  switch (provenance?.kind) {
+    case "external_user":
+      return "User";
+    case "realtime_voice":
+      // Talk persists actual spoken user text outside the foreground turn.
+      return provenance.sourceChannel === "talk" ? "User" : "Unknown-origin input";
+    case "inter_session":
+      return "Inter-session input";
+    case "internal_system":
+      return "Internal system input";
+    default:
+      return "Unknown-origin input";
+  }
+}
+
+/** Compaction request attribution only; admitted internal inputs still start runtime turns. */
+function isCompactionUserRequest(message: PersistedSenderCarrier): boolean {
+  return message.role === "user" && compactionUserRole(message) === "User";
+}
+
+/** Callers retain their text projection; request attribution has one owner. */
+export function findLatestCompactionUserMessage(
+  messages: readonly AgentMessage[],
+  getText: (message: Extract<AgentMessage, { role: "user" }>) => string,
+): Extract<AgentMessage, { role: "user" }> | undefined {
+  return messages.findLast(
+    (message): message is Extract<AgentMessage, { role: "user" }> =>
+      message.role === "user" &&
+      isCompactionUserRequest(message) &&
+      Boolean(getText(message).trim()),
+  );
+}
+
+export function extractCompactionMessageText(message: AgentMessage): string {
+  const content = Reflect.get(message, "content");
+  if (typeof content === "string") {
+    return content.trim();
+  }
+  return Array.isArray(content)
+    ? content
+        .flatMap((block) => {
+          const text = block && typeof block === "object" ? Reflect.get(block, "text") : undefined;
+          return typeof text === "string" && text.trim() ? [text.trim()] : [];
+        })
+        .join("\n")
+    : "";
+}
+
+/** Legacy producers cannot search past an independent input for a pending ask. */
+export function extractCurrentCompactionUserRequest(
+  messages: readonly AgentMessage[],
+  getText: (message: Extract<AgentMessage, { role: "user" }>) => string,
+): string | null {
+  const message = messages.findLast((item) => item.role === "user");
+  return message && isCompactionUserRequest(message) ? getText(message) : null;
+}
+
+/** Shared by summary input, preserved excerpts, and their token accounting. */
+export function formatCompactionUserLabel(message: PersistedSenderCarrier): string {
+  return `${compactionUserRole(message)}${formatPersistedSenderSuffix(message)}`;
 }
 
 function formatConversationSpeaker(message: Message): string {
   if (message.role !== "user") {
     return message.role === "toolResult" ? "Tool result" : "User";
   }
-  return `User${formatPersistedSenderSuffix(message)}`;
+  return formatCompactionUserLabel(message);
 }
 
 /** Serialize LLM messages to plain text for summarization prompts. */

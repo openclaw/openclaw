@@ -10,6 +10,7 @@ import {
   resolveJobErrorBackoffUntilMs,
   resolveJobLastRunStatus,
 } from "./jobs-scheduling.js";
+import { isCronOneShotContinuationJob } from "./one-shot-schedule.js";
 import type { CronServiceState } from "./state.js";
 import { isScheduledTerminalOneShotRetry } from "./timer-trigger.js";
 import { hasPendingCronTriggerInterval } from "./trigger-interval.js";
@@ -102,7 +103,8 @@ export function isRunnableJob(params: {
       typeof lastRun === "number" &&
       typeof nextRun === "number" &&
       nextRun > lastRun &&
-      parseAbsoluteTimeMs(job.schedule.at) === nextRun
+      (parseAbsoluteTimeMs(job.schedule.at) === nextRun ||
+        (isCronOneShotContinuationJob(job) && job.state.pacedNextRunAtMs === nextRun))
     ) {
       return nowMs >= nextRun;
     }
