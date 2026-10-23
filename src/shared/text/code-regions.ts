@@ -117,7 +117,6 @@ export function canReuseMarkdownOwnership(
   if (
     /[`~\t|]| {4}/u.test(boundaryContext) ||
     (/-{3,}/u.test(boundaryContext) && !/-{3,}/u.test(previousBoundary)) ||
-    completesBlankLine(previousText, appended) ||
     completesTableAlignment ||
     completesShortTableAlignment ||
     invalidatesGfmTableDelimiter(previousText, appended)
@@ -181,7 +180,8 @@ export function canReuseMarkdownOwnership(
   return !unresolvedCandidate;
 }
 
-function completesBlankLine(previousText: string, appended: string): boolean {
+/** Whether an append completes a blank line that settles the current Markdown paragraph. */
+export function completesBlankLine(previousText: string, appended: string): boolean {
   const lastLineStart =
     Math.max(previousText.lastIndexOf("\n"), previousText.lastIndexOf("\r")) + 1;
   let currentLineBlank = /^[ \t]*$/u.test(previousText.slice(lastLineStart));

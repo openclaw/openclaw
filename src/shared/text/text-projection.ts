@@ -5,7 +5,12 @@ import {
   createProtectionScanState,
 } from "../../../packages/tool-call-repair/src/protection-fast-path.js";
 import { escapeRegExp } from "../regexp.js";
-import { canReuseMarkdownOwnership, findCodeOwnership, findCodeRegions } from "./code-regions.js";
+import {
+  canReuseMarkdownOwnership,
+  completesBlankLine,
+  findCodeOwnership,
+  findCodeRegions,
+} from "./code-regions.js";
 
 export type TextProjection = { text: string; delta: string | null };
 type TextProjector = (input: TextProjection) => TextProjection;
@@ -126,7 +131,11 @@ function createCheckpointTransform(
   let ownershipSource = "";
   let ownership: ReturnType<typeof findCodeOwnership> | undefined;
   const resolveOwnership = (text: string) => {
-    if (ownership && canReuseMarkdownOwnership(ownershipSource, text, ownership)) {
+    if (
+      ownership &&
+      !completesBlankLine(ownershipSource, text.slice(ownershipSource.length)) &&
+      canReuseMarkdownOwnership(ownershipSource, text, ownership)
+    ) {
       ownershipSource = text;
       return ownership;
     }
