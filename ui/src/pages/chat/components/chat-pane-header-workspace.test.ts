@@ -62,18 +62,22 @@ it.each<WorkspaceCase>([
   expect(resolveSessionWorkspace({ session: row(session), ...options })).toEqual(expected);
 });
 
-it("does not expose a new agent's storage ID in the workspace breadcrumb tooltip", () => {
-  const containers: HTMLElement[] = [];
-  const { container } = mountChatPaneHeader(containers, {
-    session: row({ key: "agent:bot-stable-id:main" }),
-    workspaceRoot: "/local/workspace/bot-stable-id",
-    workspaceLabel: "Workspace",
-  });
-  onTestFinished(() => containers.forEach((mounted) => mounted.remove()));
-  const crumb = container.querySelector<HTMLElement>(".chat-pane__workspace-chip");
-  expect(crumb?.textContent).toContain("Workspace");
-  expect(crumb?.getAttribute("title")).toBe("Workspace");
-});
+it.each(["Workspace", "openclaw"])(
+  "keeps the %s workspace breadcrumb free of a tooltip",
+  (workspaceLabel) => {
+    const containers: HTMLElement[] = [];
+    const { container } = mountChatPaneHeader(containers, {
+      session: row({ key: "agent:bot-stable-id:main" }),
+      workspaceRoot: "/local/workspace/bot-stable-id",
+      workspaceLabel,
+    });
+    onTestFinished(() => containers.forEach((mounted) => mounted.remove()));
+    const crumb = container.querySelector<HTMLElement>(".chat-pane__workspace-chip");
+    expect(crumb?.textContent).toContain(workspaceLabel);
+    expect(crumb?.getAttribute("aria-label")).toContain(workspaceLabel);
+    expect(crumb?.hasAttribute("title")).toBe(false);
+  },
+);
 
 it.each<Partial<Parameters<typeof resolveChatPaneWorkspace>[0]>>([
   {

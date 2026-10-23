@@ -58,16 +58,3 @@ export async function publishDoctorUpdateResult(params: {
     },
   });
 }
-
-/** Publish only after maintenance custody has settled successfully. */
-export async function finishDoctorMaintenance(
-  params: Omit<Parameters<typeof publishDoctorUpdateResult>[0], "updateResult"> & {
-    release: () => Promise<void>;
-    updateResult?: Parameters<typeof publishDoctorUpdateResult>[0]["updateResult"];
-  },
-): Promise<void> {
-  await params.release();
-  if (params.updateResult) {
-    await publishDoctorUpdateResult({ ...params, updateResult: params.updateResult });
-  }
-}

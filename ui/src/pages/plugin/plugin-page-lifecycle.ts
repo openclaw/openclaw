@@ -224,7 +224,7 @@ export class PluginPageOwner {
           clearTimeout(timeout);
         }
         stopMessage();
-        signal.removeEventListener("abort", handleAbort);
+        stopAbort();
         frame.remove();
         resolve(result);
       };
@@ -239,7 +239,7 @@ export class PluginPageOwner {
       };
       const handleAbort = () => finish(false);
       const stopMessage = listen(window, "message", handleMessage);
-      signal.addEventListener("abort", handleAbort, { once: true });
+      const stopAbort = listen(signal, "abort", handleAbort, { once: true });
       timeout = setTimeout(() => finish(false), EXTERNAL_AUTH_PROBE_TIMEOUT_MS);
       frame.src = url.toString();
       document.body.append(frame);

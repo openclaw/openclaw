@@ -69,6 +69,28 @@ function expectOwnerChanged(response: Awaited<ReturnType<typeof receive>>) {
   expect(response).toHaveBeenCalledWith(false, undefined, ownerChangedError);
 }
 
+it("rejects non-decimal --bytes forms instead of coercing them", async () => {
+  const { runtime } = await fixture();
+  for (const bytes of ["0x10", "1e3", "0b101", "0o17", "0.5", "12abc", ""]) {
+    await expect(
+      backupRecordCommand(runtime, { status: "ok", target: "hex", bytes, json: true }),
+    ).rejects.toThrow("--bytes must be a nonnegative integer.");
+  }
+  expect(await readBackupRuns(process.env)).toEqual([]);
+  expect(runtime.error).not.toHaveBeenCalled();
+});
+
+it("accepts decimal integer --bytes values", async () => {
+  const { runtime } = await fixture();
+  await backupRecordCommand(runtime, {
+    status: "ok",
+    target: "decimal",
+    bytes: "42",
+    json: true,
+  });
+  expect(await readBackupRuns(process.env)).toMatchObject([{ target: "decimal", bytes: 42 }]);
+});
+
 it("records offline under exclusive custody and leaves an absent database absent", async () => {
   const { databasePath, runtime } = await fixture(false);
   await backupRecordCommand(runtime, { status: "ok", target: "missing", json: true });

@@ -34,6 +34,45 @@ async function openAgentPicker(page: Page) {
 }
 
 suite.define(() => {
+  it.each(["chat", "new"])(
+    "centers %s composer keyboard focus on its action glyphs",
+    async (route) => {
+      await suite.withPage(
+        { viewport: { width: 1280, height: 900 }, reducedMotion: "reduce" },
+        async ({ page }) => {
+          await installMockGateway(page);
+          await page.goto(suite.server.baseUrl + route);
+          const composer = page.locator(".agent-chat__input");
+          await composer.locator("textarea").waitFor();
+          await page.keyboard.press("Tab");
+          for (const label of ["Add attachment", "Microphone input"]) {
+            const control = composer.getByRole("button", { name: label, exact: true });
+            await control.focus();
+            await expect
+              .poll(() => control.evaluate((element) => element.matches(":focus-visible")))
+              .toBe(true);
+            await expect
+              .poll(
+                async () => {
+                  const button = await control.boundingBox();
+                  const icon = await control.locator("svg").boundingBox();
+                  if (!button || !icon) {
+                    return Number.POSITIVE_INFINITY;
+                  }
+                  return Math.max(
+                    Math.abs(button.x + button.width / 2 - icon.x - icon.width / 2),
+                    Math.abs(button.y + button.height / 2 - icon.y - icon.height / 2),
+                  );
+                },
+                { message: label + " glyph must share the focused hit area's center" },
+              )
+              .toBeLessThanOrEqual(0.5);
+          }
+        },
+      );
+    },
+  );
+
   it("routes agent-menu letters and selection keys to their owners", async () => {
     await suite.withPage({}, async ({ page }) => {
       const { picker, trigger, option, composer } = await openAgentPicker(page);

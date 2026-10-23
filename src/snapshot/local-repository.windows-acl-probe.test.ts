@@ -20,7 +20,9 @@ import { assertTrustedStagingRoot } from "./local-repository-directory-policy.js
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const CURRENT_USER_SID = "s-1-5-21-1000";
-type Security = Extract<OwnerAndDaclResult, { status: "supported" }>;
+type Security = Extract<OwnerAndDaclResult, { status: "supported" }> & {
+  isVolumeRoot?: boolean;
+};
 
 function access(
   sid: string,
@@ -93,6 +95,33 @@ it("reports failed Windows ACL inspection and preserves its diagnostic cause", a
 it.each([
   ["root synchronize", null, grant(0x100000)],
   ["ancestor read", null, {}, grant(0x000001)],
+  ["verified volume root DELETE-self", null, {}, { ...grant(0x1301bf), isVolumeRoot: true }],
+  [
+    "ordinary ancestor DELETE-self",
+    accessFailure("ancestor"),
+    {},
+    { ...grant(0x1301bf), isVolumeRoot: false },
+  ],
+  ["unverified ancestor DELETE-self", accessFailure("ancestor"), {}, grant(0x1301bf)],
+  [
+    "private volume root DELETE-self",
+    accessFailure("repository root"),
+    { ...grant(0x010000), isVolumeRoot: true },
+  ],
+  ...[0x000040, 0x040000, 0x080000, 0x02000000, 0x10000000, 0x000200].map(
+    (right): [string, RegExp, Partial<Security>, Partial<Security>] => [
+      `verified volume root unsafe right ${right.toString(16)}`,
+      accessFailure("ancestor"),
+      {},
+      { ...grant(0x1301bf | right), isVolumeRoot: true },
+    ],
+  ),
+  [
+    "remote volume root",
+    inspectionFailure,
+    {},
+    { ...grant(0x1301bf), isVolumeRoot: true, isLocal: false },
+  ],
   ["ancestor write DACL", accessFailure("ancestor"), {}, grant(0x040000)],
   ["ancestor inherit-only write DACL", null, {}, grant(0x040000, true)],
   ["root inherit-only write DACL", accessFailure("repository root"), grant(0x040000, true)],

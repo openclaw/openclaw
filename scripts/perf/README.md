@@ -34,6 +34,27 @@ SQL must hold or fall; warmed-turn SQL and requests must not increase.
 Migrations, credential custody, admission, and required integrity checks remain
 before the operations they protect.
 
+## Model prompt statistics
+
+`model-prompt-stats-measure.ts` measures the diagnostic size owner with synthetic
+history containing quotes, controls, Unicode, and lone surrogates. It verifies
+the exact pre-provider JSON character counts independently of the cache.
+
+```sh
+node --expose-gc --trace-gc-nvp --import ./scripts/tsx.mjs \
+  scripts/perf/model-prompt-stats-measure.ts --messages 500 --calls 1000
+```
+
+Run at least five serial interleaved baseline/candidate samples on the approved
+benchmark host. The driver counts new large-text size records outside profiling,
+warms 50 calls, then samples allocations including objects collected by both GCs.
+A second pass reports sampled surviving allocations after GC, amortized per call;
+this is retained churn, not total resident memory or whole-turn retention. GC trace
+lines between `PROFILE_START allocation` and `PROFILE_END` belong to the allocation
+window; exclude setup and forced profiler-stop collections. Report promotion,
+collection counts, and maximum pauses with allocation. Profiled timing is context,
+not a Gateway latency measurement. Do not infer tail percentiles from five runs.
+
 ## Diagnostic heap profile sanitization
 
 `diagnostic-profile-measure.ts` measures the production diagnostics owners on an
@@ -2159,8 +2180,8 @@ reject, outside the measured window.
 
 Use at least five simultaneous baseline/candidate pairs on the approved
 benchmark host, with one `--scenario` and the same future `--start-at <epoch-ms>`
-per pair. Alternate the assigned CPU halves under the exclusive measurement
-lock. Compare median paired differences with spread; warm both sides identically.
+per pair. Alternate the assigned interleaved even/odd CPU sets under the exclusive
+measurement lock. Compare the mean paired differences with spread; warm both sides identically.
 Builds belong outside the measurement window. The source can also be bundled
 with esbuild for the host, preserving Node built-ins and installed dependencies;
 use the same bundler options and dependency tree for both revisions.
@@ -2207,6 +2228,48 @@ sampled bytes divided by policy assertions; this includes normal turn work and
 counter hooks, and is not isolated bytes allocated by one assertion. Use matched
 instrumentation and the same paired host procedure for comparisons. The tiny
 fixture proves the path, not deployment capacity or production recheck rates.
+
+Add `--session-event-wake` to route the same synthetic tool turn through the
+public `system-event` RPC with `wake: true`. The driver waits for the subscribed
+session's lifecycle start and passes its actual run ID to `agent.wait`. This
+exercises the session-event handoff and delivery-generation owners; ordinary
+`chat.send` does not. Report these workloads separately: the internal event uses
+session authority while ordinary chat carries the operator run authority.
+
+Add `--authority-counts --entry src/entry.ts` in a separate count pass to observe
+main-isolate named authority assertion closures, source-composition guards,
+identity-owner `statSync` and `realpathSync.native` calls, all main-isolate `statSync` calls, tool-override
+intersections, and stable-stringify call sites in the auth-policy and tool-override
+owners. A generated benchmark-only source loader inserts counters; it does not
+alter the checkout or add production hooks. Each round records `host.counts` and
+`host.installed` under `operatorAccessPolicy`: the latter names every instrumented
+site, including zero-call sites. Divide counts by the completed turn count. These
+are nested invocations, not distinct permission decisions, and the named closures
+do not include every anonymous callback. The mode rejects allocation, CPU, GC,
+and diagnostics profiling; its timing is not acceptance evidence.
+
+Matched `--allocations` runs without `--authority-counts` additionally report
+`allocation.authority`: sampled bytes and sample records attributed to the
+outermost authority owner in each eight-frame allocation stack, matching the
+production profile attribution. The four disjoint families are
+`session-source-authority`, `admitted-run-context`, `operator-run-authority`, and
+`session-event-handoff`. `estimatedBytesPerTurn` is authority-family allocation;
+`estimatedAllocatedBytesPerOperation` remains the whole-turn denominator. Both
+include objects collected by major and minor GC. Use at least five interleaved
+baseline/candidate runs, identical fixtures and reset boundaries, and report
+promotion separately. Sampling records are not invocation counts.
+
+For matched source snapshots without a second checkout, `--authority-source-preload
+/path/to/overlay.mjs` imports a benchmark-owned loader in the Gateway child before
+the count and profiler loaders. Use the same module list and loader on both sides,
+changing only the snapshot contents. The loader can publish its revision, Gateway
+PID, file hashes, and applied module counts at
+`globalThis[Symbol.for("openclaw.benchmark.sourceOverlay")]`; the policy IPC report
+preserves that attestation per round, and the final report hashes the preload.
+Verify every expected module was applied in the reported Gateway PID. Overlays
+return `module-typescript` with a string or byte source; counts use those exact
+TypeScript contents. A controller-only preload is insufficient: the
+isolated Gateway environment deliberately excludes inherited `NODE_OPTIONS`.
 
 ## State and agent database path resolution
 

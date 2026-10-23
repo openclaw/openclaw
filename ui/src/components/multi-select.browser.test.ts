@@ -86,7 +86,7 @@ it("does not commit a disabled choice but keeps available choices usable", async
   expect(props.onChange).not.toHaveBeenCalled();
   expect(blocked?.getAttribute("aria-disabled")).toBe("true");
   await pressKey(element, "Enter");
-  expect(props.onChange).toHaveBeenCalledWith(["fixture/ready"]);
+  await waitForSolid(() => expect(props.onChange).toHaveBeenCalledWith(["fixture/ready"]));
 });
 it.each(["content", "trigger"])(
   "keeps the highlighted %s value distinct from listbox structure",
