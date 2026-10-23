@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { expect, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
@@ -531,4 +532,47 @@ test("captures the physical source after its queued creation", async ({ state: {
     create.resolve();
     await Promise.allSettled([read, writer]);
   }
+});
+
+test("keeps default singular reads mutable without exposing retained nested facts", async ({
+  state: { env },
+}) => {
+  const database = openOpenClawAgentDatabase({ agentId: "main", env });
+  const scope = {
+    agentId: "main",
+    storePath: database.path,
+    sessionKey: "agent:main:mutable-read",
+    env,
+  };
+  runOpenClawAgentWriteTransaction(
+    (writer) => {
+      writeSessionEntry(writer, scope.sessionKey, {
+        sessionId: "mutable-read",
+        updatedAt: 1,
+        skillsSnapshot: { prompt: "saved", skills: [{ name: "original" }] },
+      });
+    },
+    { agentId: database.agentId, path: database.path, env },
+  );
+  // Creation now publishes a complete postimage. Retire only this fixture's facts
+  // through the native invalidation boundary before exercising the cold read.
+  sessionChanges.invalidate({ ...scope, factsInvalidated: true });
+  expect(
+    readRetainedSessionEntryFacts(database, {
+      sessionKeys: [scope.sessionKey],
+      projection: "full",
+    }),
+  ).toBeUndefined();
+  for (const label of ["cold", "warm"]) {
+    const entry = await readSessionEntryReadOnlyInWorker(scope);
+    expect(entry?.skillsSnapshot?.skills[0]?.name).toBe("original");
+    entry!.skillsSnapshot!.skills[0]!.name = label;
+  }
+  const borrowed = await readSessionEntryReadOnlyInWorker({ ...scope, clone: false });
+  expect(borrowed?.skillsSnapshot?.skills[0]?.name).toBe("original");
+  expect(Object.isFrozen(borrowed?.skillsSnapshot?.skills[0])).toBe(true);
+  expect(await readSessionEntryReadOnlyInWorker({ ...scope, clone: false })).toBe(borrowed);
+  expect((await readSessionEntryReadOnlyInWorker(scope))?.skillsSnapshot?.skills[0]?.name).toBe(
+    "original",
+  );
 });

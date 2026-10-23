@@ -35,7 +35,7 @@ export function prepareSessionRowSharedFacts({
       prepared.acpMeta = null;
     }
     if (prepared.acpMeta === undefined) {
-      const published = readPublishedAcpSessionRows(databasePath, [
+      const published = readPublishedAcpSessionRows(databasePath, shared.admission.identity, [
         {
           keys: [buildAcpDatabaseSessionKey(normalizeStoreSessionKey(row.key), row.agentId)],
           entry: prepared.entry,
@@ -56,7 +56,6 @@ export function prepareSessionRowSharedFacts({
     return undefined;
   }
   return {
-    assertCurrent: () => shared.admission.assertCurrent(),
     reply: executeExistingOpenClawStateRead(
       { env, path: databasePath },
       {

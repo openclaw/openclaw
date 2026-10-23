@@ -11,6 +11,7 @@ export function pathForSession(
   details: {
     displayName?: string | null;
     exactKey?: boolean;
+    literalKey?: boolean;
     mainKey?: string | null;
     shortIdLength?: number;
   } = {},
@@ -22,6 +23,7 @@ export function pathForSession(
     basePath,
     displayName: details.displayName ?? undefined,
     exactKey: details.exactKey,
+    literalKey: details.literalKey,
     mainKey: details.mainKey ?? undefined,
     shortIdLength: details.shortIdLength ?? 32,
   });

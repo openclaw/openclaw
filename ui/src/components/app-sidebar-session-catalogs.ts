@@ -151,7 +151,10 @@ export function catalogErrorMessages(catalog: SessionCatalog): string[] {
   return [...messages];
 }
 
-export type SidebarSessionCatalog = SessionCatalog & { visibleHosts: SessionCatalogHost[] };
+export type SidebarSessionCatalog = SessionCatalog & {
+  visibleHosts: SessionCatalogHost[];
+  retryable?: boolean;
+};
 
 type SessionVisibilityRow = Pick<GatewaySessionRow, "key" | "archived" | "snoozedUntil">;
 
@@ -162,6 +165,7 @@ export function projectSidebarSessionCatalogs(
   liveRows: readonly GatewaySessionRow[],
   isSessionHidden?: (row: SessionVisibilityRow) => boolean,
   involvingSessionKeys?: ReadonlySet<string>,
+  canRetry?: (catalog: SessionCatalog) => boolean,
 ): SidebarSessionCatalog[] {
   // The current list wins over cached agent lists, including an unset live owner.
   const liveRowsByKey = new Map(liveRows.toReversed().map((row) => [row.key, row]));
@@ -193,11 +197,13 @@ export function projectSidebarSessionCatalogs(
         visibleHosts.push(sessions.length === host.sessions.length ? host : { ...host, sessions });
       }
     }
+    const retryable = canRetry?.(catalog) === true;
     // Discovery failures may expose an empty catalog, not sessions excluded by the user's filter.
-    return visibleHosts.length > 0 ||
-      (catalog.hosts.every((host) => host.sessions.length === 0) &&
-        catalogErrorMessages(catalog).length > 0)
-      ? [{ ...catalog, visibleHosts }]
+    const discoveryFailed =
+      catalog.hosts.every((host) => host.sessions.length === 0) &&
+      catalogErrorMessages(catalog).length > 0;
+    return visibleHosts.length > 0 || retryable || discoveryFailed
+      ? [{ ...catalog, visibleHosts, ...(retryable ? { retryable } : {}) }]
       : [];
   });
 }
@@ -226,6 +232,7 @@ export type CatalogSessionMenuRequest = {
   canDelete: boolean;
   name: string;
   displayName?: string;
+  originalUrl?: string;
   meta: string;
 };
 

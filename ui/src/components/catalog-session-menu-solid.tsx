@@ -1,14 +1,14 @@
 import { createMemo, createUniqueId, onSettled, Show } from "solid-js";
-import { registerSessionNavigationEnglish } from "../i18n/locales/en-session-navigation.ts";
-import { t, registerEnglishCatalog } from "../lib/reactive/i18n.ts";
+import { registerCatalogMenuEnglish } from "../i18n/locales/en-catalog-menu.ts";
+import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { Icon, type IconName } from "./solid/icon.tsx";
 import { pointMenuTriggerAttributes } from "./solid/menu-trigger.tsx";
 import { Menu, type MenuHandle, type MenuItem } from "./solid/menu.tsx";
 
-registerEnglishCatalog(registerSessionNavigationEnglish);
+registerEnglishCatalog(registerCatalogMenuEnglish);
 
-type CatalogSessionMenuAction = "viewer" | "import" | "terminal" | "delete";
+type CatalogSessionMenuAction = "viewer" | "import" | "original" | "terminal" | "delete";
 type Props = {
   x: number;
   y: number;
@@ -17,12 +17,14 @@ type Props = {
   terminalDisabled: boolean;
   canDelete: boolean;
   canImport: boolean;
+  canOpenOriginal: boolean;
   onAction: (action: CatalogSessionMenuAction) => void;
   onClose: () => void;
 };
 const actions: readonly [CatalogSessionMenuAction, string, IconName][] = [
   ["viewer", "chat.catalog.openInOpenClaw", "messageSquare"],
   ["import", "chat.catalog.importToOpenClaw", "download"],
+  ["original", "chat.catalog.openOriginal", "externalLink"],
   ["terminal", "chat.catalog.openInTerminal", "terminal"],
   ["delete", "chat.catalog.deleteSession", "trash"],
 ];
@@ -38,7 +40,13 @@ export const CatalogSessionMenu = defineSolidBridge<Props>(
     const items = createMemo<MenuItem[]>(() =>
       actions
         .filter(([action]) =>
-          action === "import" ? props.canImport : action === "delete" ? props.canDelete : true,
+          action === "import"
+            ? props.canImport
+            : action === "original"
+              ? props.canOpenOriginal
+              : action === "delete"
+                ? props.canDelete
+                : true,
         )
         .map(([action, key, icon]) => ({
           id: action,
@@ -96,7 +104,11 @@ export const CatalogSessionMenu = defineSolidBridge<Props>(
             8,
             Math.min(
               props.y,
-              window.innerHeight - 148 - (props.canDelete ? 40 : 0) - (props.canImport ? 40 : 0),
+              window.innerHeight -
+                148 -
+                (props.canDelete ? 40 : 0) -
+                (props.canImport ? 40 : 0) -
+                (props.canOpenOriginal ? 40 : 0),
             ),
           ),
         })}
@@ -123,6 +135,7 @@ export const CatalogSessionMenu = defineSolidBridge<Props>(
       terminalDisabled: { default: false, attribute: false },
       canDelete: { default: false, attribute: false },
       canImport: { default: false, attribute: false },
+      canOpenOriginal: { default: false, attribute: false },
       onAction: { default: () => {}, attribute: false },
       onClose: { default: () => {}, attribute: false },
     },

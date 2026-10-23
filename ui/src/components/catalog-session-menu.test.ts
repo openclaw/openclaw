@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, expect, it, vi } from "vitest";
+import { i18n, t } from "../i18n/index.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import "./catalog-session-menu-solid.tsx";
 
@@ -18,12 +19,13 @@ async function mountMenu(
   return menu;
 }
 
-afterEach(() => {
+afterEach(async () => {
+  await i18n.setLocale("en");
   document.body.replaceChildren();
   vi.restoreAllMocks();
 });
 
-it.each(["terminal", "viewer"] as const)(
+it.each(["terminal", "viewer", "original"] as const)(
   "dispatches %s before closing, including synchronous removal",
   async (action) => {
     const warnings = vi.spyOn(console, "warn");
@@ -34,6 +36,7 @@ it.each(["terminal", "viewer"] as const)(
       order.push("close");
     });
     const menu = await mountMenu({
+      canOpenOriginal: true,
       onAction: (selected) => {
         order.push(backingState ? selected : "cleared");
         if (action === "viewer") {
@@ -99,4 +102,43 @@ it.each([false, true])("returns focus on Escape (replacement trigger: %s)", asyn
   expect(document.activeElement).toBe(returnTarget);
   expect(item(menu, "viewer")).toBe(viewer);
   expect(panel(menu).matches(":popover-open")).toBe(false);
+});
+
+it("updates original-link visibility and edge placement on the retained native menu", async () => {
+  const menu = document.createElement("openclaw-catalog-session-menu");
+  Object.assign(menu, { x: window.innerWidth, y: window.innerHeight });
+  document.body.append(menu);
+  await menu.updateComplete;
+  const trigger = menu.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')!;
+  const topWithoutOriginal = Number.parseFloat(trigger.style.top);
+  expect(menu.querySelector('[data-value="original"]')).toBeNull();
+  menu.canOpenOriginal = true;
+  await waitForSolid(() => {
+    expect(
+      [...menu.querySelectorAll<HTMLElement>('[role="menuitem"]')].map(
+        (menuItem) => menuItem.dataset.value,
+      ),
+    ).toEqual(["viewer", "original", "terminal"]);
+    expect(Number.parseFloat(trigger.style.top)).toBeLessThan(topWithoutOriginal);
+  });
+  expect(Number.parseFloat(trigger.style.left)).toBeGreaterThanOrEqual(8);
+  menu.canOpenOriginal = false;
+  await waitForSolid(() => {
+    expect(menu.querySelector('[data-value="original"]')).toBeNull();
+    expect(Number.parseFloat(trigger.style.top)).toBe(topWithoutOriginal);
+  });
+});
+
+it("reactively translates the retained native menu without a caller property change", async () => {
+  const menu = document.createElement("openclaw-catalog-session-menu");
+  menu.lastActive = "57d";
+  document.body.append(menu);
+  await menu.updateComplete;
+  const info = menu.querySelector(".session-menu__info")!;
+  const english = info.textContent;
+  await i18n.setLocale("de");
+  await waitForSolid(() =>
+    expect(info.textContent?.trim()).toBe(t("sessionsView.lastActive", { time: "57d" })),
+  );
+  expect(info.textContent).not.toBe(english);
 });

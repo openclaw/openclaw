@@ -28,6 +28,7 @@ import type { SidebarSessionMutationScope } from "./app-sidebar-session-types.ts
 import { createPanelRefreshStatus, type PanelRefreshStatus } from "./panel-refresh-status-state.ts";
 import {
   applySessionCatalogContinuation,
+  clearSessionCatalogRows,
   archiveSessionCatalog as archiveSessionCatalogData,
   importSessionCatalog as importSessionCatalogData,
   applySessionCatalogHostEvent as applySessionCatalogHostEventToData,
@@ -94,7 +95,10 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
   sessionScopeGeneration = 0;
   sessionCatalogAgentId: string | null = null;
   sessionCatalogRevision = 0;
-  readonly sessionCatalogPageDepths = new Map<string, number>();
+  get sessionCatalogPageDepths(): ReadonlyMap<string, number> {
+    return this.sessionCatalogLive.pageDepths;
+  }
+  readonly sessionCatalogRevisions = new Map<string, number>();
   private sessionScopeAgentId: string | null = null;
   private agentSelectionSource: ApplicationContext["agentSelection"] | undefined;
   private agentSelectionIntentRevision: number | undefined;
@@ -393,8 +397,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
 
     if (agentChanged || catalogAgentChanged) {
       // Catalog cursors and rows belong to the selected agent, not just its host.
-      this.sessionCatalogs = [];
-      this.sessionCatalogPageDepths.clear();
+      clearSessionCatalogRows(this);
     }
     if (agentChanged && !ownsCurrentCanonicalList) {
       // A replacement capability may publish its new-agent list before selection synchronizes.

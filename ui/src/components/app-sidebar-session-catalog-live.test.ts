@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionCatalog } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { SessionCatalogLiveState } from "./app-sidebar-session-catalog-live.ts";
@@ -22,19 +22,19 @@ function catalog(id: string, hostCount: number): SessionCatalog {
   };
 }
 
-let live: SessionCatalogLiveState;
-let progressId: string;
+let currentLive: SessionCatalogLiveState;
+let currentProgressId: string;
 beforeEach(() => {
-  live = new SessionCatalogLiveState();
-  progressId = live.beginRequest(1).progressId;
+  currentLive = new SessionCatalogLiveState();
+  currentProgressId = currentLive.beginRequest(1).progressId;
 });
 function apply(
   incoming: SessionCatalog,
   catalogs: SessionCatalog[],
   pages = new Map<string, number>(),
 ) {
-  return live.applyHost({
-    payload: { progressId, agentId: "main", catalog: incoming },
+  return currentLive.applyHost({
+    payload: { progressId: currentProgressId, agentId: "main", catalog: incoming },
     agentId: "main",
     catalogs,
     pageDepths: pages,
@@ -71,7 +71,7 @@ it.each(["final", "incremental"] as const)(
     const incoming = { ...current, hosts: [pending] };
     const catalogs =
       publication === "final"
-        ? live.mergeFinal([incoming], [current])
+        ? currentLive.mergeFinal([incoming], [current])
         : apply(incoming, [current])!.catalogs;
     expect(catalogs[0]?.hosts[0]).toMatchObject({
       pending: true,
@@ -100,7 +100,7 @@ it("does not replace a settled progressive host with its pending final response"
   const current = catalog("codex", 1);
   const pending = { ...current.hosts[0]!, pending: true, sessions: [] };
   const published = apply(current, [{ ...current, hosts: [pending] }])!;
-  expect(live.mergeFinal([{ ...current, hosts: [pending] }], published.catalogs)).toEqual([
+  expect(currentLive.mergeFinal([{ ...current, hosts: [pending] }], published.catalogs)).toEqual([
     current,
   ]);
 });
@@ -142,6 +142,7 @@ it("compares a host event only with the catalog and host it can replace", () => 
 });
 
 it("retains catalog-level pending hosts and failure until settled enumeration withdraws them", async () => {
+  const live = currentLive;
   const current = catalog("codex", 2);
   current.error = { code: "catalog_stale", message: "Last enumeration failed" };
   current.hosts[0]!.nextCursor = "expanded";
@@ -197,6 +198,145 @@ it.each([
     );
     expect(update?.catalogs).toEqual([fresh]);
     const pendingFinal = { ...fresh, hosts: [{ ...fresh.hosts[0]!, pending: true, sessions: [] }] };
-    expect(live.mergeFinal([pendingFinal], update!.catalogs)).toEqual([fresh]);
+    expect(currentLive.mergeFinal([pendingFinal], update!.catalogs)).toEqual([fresh]);
   },
 );
+
+it.each(["pending", "error", "fresh"] as const)(
+  "does not retain prior source-authorized rows in %s final or incremental snapshots",
+  async (state) => {
+    const live = new SessionCatalogLiveState();
+    const { progressId } = live.beginRequest(1);
+    const current = { ...catalog("source-authorized", 1), requiresFreshList: true as const };
+    current.hosts[0]!.nextCursor = "old-cursor";
+    const { nextCursor: _cursor, ...host } = current.hosts[0]!;
+    const fresh = {
+      ...current,
+      hosts: [
+        {
+          ...host,
+          sessions: [],
+          ...(state === "pending" ? { pending: true } : {}),
+          ...(state === "error"
+            ? { error: { code: "UNAVAILABLE", message: "Source offline" } }
+            : {}),
+        },
+      ],
+    };
+    const depths = new Map([[sessionCatalogHostKey(current.id, host.hostId), 1]]);
+    const final = live.mergeFinal([fresh], [current]);
+    const incremental = live.applyHost({
+      payload: { progressId, agentId: "main", catalog: fresh },
+      agentId: "main",
+      catalogs: [current],
+      pageDepths: depths,
+    });
+    expect(incremental?.catalogs[0]?.hosts[0]?.sessions).toEqual([]);
+    const expanded = await refetchExpandedSessionCatalogPages({
+      catalogs: final,
+      previousCatalogs: [current],
+      client: { request: vi.fn() } as unknown as GatewayBrowserClient,
+      agentId: "main",
+      pageDepths: depths,
+      isCurrent: () => true,
+      canRequestPage: () => true,
+    });
+    expect(expanded[0]?.hosts[0]?.sessions).toEqual([]);
+    expect(expanded[0]?.hosts[0]?.nextCursor).toBeUndefined();
+  },
+);
+
+it("rejects earlier source-authorized progress after a new refresh starts", () => {
+  const live = new SessionCatalogLiveState();
+  const previous = live.beginRequest(1);
+  const current = { ...catalog("source-authorized", 1), requiresFreshList: true as const };
+  const next = live.beginRequest(1);
+  const withdrawn = {
+    ...current,
+    hosts: current.hosts.map((host) => Object.assign({}, host, { sessions: [] })),
+  };
+  expect(
+    live.applyHost({
+      payload: { progressId: previous.progressId, agentId: "main", catalog: current },
+      agentId: "main",
+      catalogs: [withdrawn],
+      pageDepths: new Map(),
+    }),
+  ).toBeNull();
+  const fresh = live.applyHost({
+    payload: { progressId: next.progressId, agentId: "main", catalog: current },
+    agentId: "main",
+    catalogs: [withdrawn],
+    pageDepths: new Map(),
+  });
+  expect(fresh?.catalogs).toEqual([current]);
+  expect(
+    live.mergeFinal(
+      [
+        {
+          ...withdrawn,
+          hosts: withdrawn.hosts.map((host) => Object.assign({}, host, { pending: true })),
+        },
+      ],
+      fresh!.catalogs,
+    ),
+  ).toEqual([current]);
+});
+
+describe("root window settlement", () => {
+  it("leaves a rejected host intent untouched during a sibling provider failure", () => {
+    const live = new SessionCatalogLiveState();
+    const fresh = { ...catalog("source", 2), requiresFreshList: true as const };
+    fresh.hosts[1]!.error = { code: "UNAVAILABLE", message: "Sibling unavailable" };
+    const rejected = fresh.hosts[0]!.hostId;
+    const key = sessionCatalogHostKey(fresh.id, rejected);
+    const intent = { depth: 2, request: { depth: 3, status: "available" as const } };
+    live.windows.set(key, intent);
+
+    live.settleRootWindows([fresh], undefined, (_catalogId, hostId) => hostId !== rejected);
+
+    expect(live.windows.get(key)).toEqual(intent);
+    expect(live.requestedDepth(fresh.id, fresh.hosts[1]!.hostId)).toBe(0);
+    expect(live.canRetry(fresh)).toBe(true);
+  });
+
+  it.each([false, true])("preserves any rejection for aliased keys, reverse=%s", (reverse) => {
+    const live = new SessionCatalogLiveState();
+    const rejected = catalog("source", 1);
+    rejected.hosts[0]!.hostId = "group\u0000leaf";
+    const accepted = catalog("source\u0000group", 1);
+    accepted.hosts[0]!.hostId = "leaf";
+    const key = sessionCatalogHostKey(rejected.id, rejected.hosts[0]!.hostId);
+    const intent = { depth: 2, request: { depth: 3, status: "available" as const } };
+    live.windows.set(key, intent);
+
+    live.settleRootWindows(
+      reverse ? [accepted, rejected] : [rejected, accepted],
+      undefined,
+      (catalogId) => catalogId !== rejected.id,
+    );
+
+    expect(live.requestedDepth(accepted.id, "leaf")).toBe(3);
+    expect(live.windows.get(key)).toEqual(intent);
+  });
+
+  it.each([false, true])(
+    "finalizes every aliased host in catalog order, failureLast=%s",
+    (failureLast) => {
+      const live = new SessionCatalogLiveState();
+      const failed: SessionCatalog = { ...catalog("source", 1), requiresFreshList: true as const };
+      failed.hosts[0]!.hostId = "group\u0000leaf";
+      failed.error = { code: "UNAVAILABLE", message: "Provider unavailable" };
+      const completed = { ...catalog("source\u0000group", 1), requiresFreshList: true as const };
+      completed.hosts[0]!.hostId = "leaf";
+      const key = sessionCatalogHostKey(failed.id, failed.hosts[0]!.hostId);
+      live.windows.set(key, { depth: 2, request: { depth: 5, status: "retry" } });
+
+      live.settleRootWindows(failureLast ? [completed, failed] : [failed, completed]);
+
+      expect(live.windows.get(key)).toEqual(
+        failureLast ? { depth: 2, request: { depth: 2, status: "retry" } } : { depth: 2 },
+      );
+    },
+  );
+});

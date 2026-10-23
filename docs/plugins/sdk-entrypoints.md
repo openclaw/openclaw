@@ -347,6 +347,23 @@ available from `native-command-registry`. Their synchronous compatibility APIs
 remain deprecated through 2026-12-31. See
 [session and command preparation](/plugins/sdk-migration#session-and-command-preparation).
 
+For descriptive metadata, use `listSessionEntriesAsync`. For bounded disclosure
+after awaited preparation, use
+`runtime.agent.session.withSessionEntriesAsync` (also exported by
+`session-store-runtime`) with `stores: [{ agentId, storePath, sessionKeys }]`.
+It retains all selected physical sources until its synchronous callback returns.
+An optional `involvingProfileId` matches exact canonical owners or direct profile
+participants, including merge aliases; it never matches mentions or display
+prefixes. Profile preparation runs off-thread and is released on success or failure.
+Revalidate current configuration, selected groups, exact session IDs and any other
+caller-owned policy inside the callback, then serialize without awaiting. Returning
+a Promise is rejected. Returned metadata is not retained authority.
+
+When awaiting further preparation after `readSessionTranscriptCatalogPage`, its
+optional second argument captures an actor-currentness assertion. Call it at final
+serialization along with the caller's session/source checks. It does not grant
+access to the transcript or extend the session reader's lifetime.
+
 ## Stateful CLI commands
 
 `openclaw/plugin-sdk/cli-state-owner` exports `runWithLocalStateOwner`. Supply the

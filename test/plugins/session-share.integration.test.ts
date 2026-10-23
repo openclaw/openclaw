@@ -28,6 +28,7 @@ import {
   upsertSessionEntryCore,
 } from "../../src/config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../src/config/sessions/types.js";
+import { AgentsSchema } from "../../src/config/zod-schema.agents.js";
 import { createPluginRuntime } from "../../src/plugins/runtime/index.js";
 import { createDeferredCore } from "../../src/shared/deferred.js";
 import {
@@ -243,6 +244,12 @@ function catalogFixture(stateDir: string) {
     catalog,
     list,
     invoke,
+    read: async (query: Parameters<typeof catalog.list>[0] = {}) => {
+      const page = catalog.list(query);
+      void page.catch(() => {});
+      await vi.advanceTimersByTimeAsync(2);
+      return page;
+    },
     hydrate: async () => {
       const publications: Promise<void>[] = [];
       await catalog.list({
@@ -316,6 +323,71 @@ describe("session-share node commands", () => {
     });
   });
 
+  it("keeps global source agents distinct through catalog links and transcript reads", async () => {
+    await withCatalogFixture(async (receiver) => {
+      const source = commandFixture();
+      source.config.agents = { ownership: "explicit", entries: { research: {}, ops: {} } };
+      AgentsSchema.parse(source.config.agents);
+      receiver.setConfig({
+        agents: { entries: { receiver: {} } },
+        plugins: {
+          entries: {
+            "session-share": {
+              config: { nodes: { alpha: { controlUiOrigin: "https://team.example.com" } } },
+            },
+          },
+        },
+      });
+      receiver.invoke.mockImplementation(async ({ command, params }) => {
+        const handler = source.commands.find((candidate) => candidate.command === command)!;
+        return { payloadJSON: await handler.handle(JSON.stringify(params)) };
+      });
+      const cases = [
+        { agentId: "research", sessionKey: "global", path: "/chat/research/~global" },
+        { agentId: "ops", sessionKey: "global", path: "/chat/ops/~global" },
+        {
+          agentId: "research",
+          sessionKey: "agent:research:global",
+          path: "/chat/research/~key/global",
+        },
+        {
+          agentId: "research",
+          sessionKey: "agent:research:shared",
+          path: "/chat/research/~key/shared",
+        },
+      ];
+      for (const [index, { agentId, sessionKey }] of cases.entries()) {
+        const scope = { agentId, sessionKey, sessionId: `source-${index}` };
+        await replaceSessionEntry(scope, {
+          sessionId: scope.sessionId,
+          updatedAt: Date.now(),
+          category: "Team",
+          label: scope.sessionId,
+        });
+        await appendSessionTranscriptMessageByIdentity({
+          ...scope,
+          message: { role: "user", content: `Message from ${scope.sessionId}` },
+        });
+      }
+      const rows = (await receiver.read({}))[0]?.sessions ?? [];
+      expect(rows).toHaveLength(cases.length);
+      expect(new Set(rows.map(({ threadId }) => threadId)).size).toBe(cases.length);
+      for (const [index, { path }] of cases.entries()) {
+        const row = rows.find(({ name }) => name === `source-${index}`)!;
+        expect(row.originalUrl).toBe(`https://team.example.com${path}`);
+        expect(row.canContinue).toBe(false);
+        const transcript = await receiver.catalog.read({
+          hostId: "node:alpha",
+          threadId: row.threadId,
+        });
+        expect(transcript.threadId).toBe(row.threadId);
+        expect(transcript.items).toEqual([
+          expect.objectContaining({ type: "userMessage", text: `Message from source-${index}` }),
+        ]);
+      }
+    });
+  });
+
   it("derives titles only for the requested page while preserving transcript-title search", async () => {
     await withCatalogFixture(async (receiver) => {
       const source = commandFixture();
@@ -356,27 +428,28 @@ describe("session-share node commands", () => {
       const response = JSON.stringify(await source.list({ limit: 100 }));
       expect(JSON.stringify(await source.list({ limit: 100 }))).toBe(response);
       await receiver.hydrate();
-      const first = await receiver.catalog.list({ limitPerHost: 1 });
+      const first = await receiver.read({ limitPerHost: 1 });
       expectSingleItem(first[0]?.sessions, named);
       expect(first[0]?.nextCursor).toBeDefined();
-      const second = await receiver.catalog.list({
+      const second = await receiver.read({
         limitPerHost: 2,
         cursors: { "node:alpha": first[0]!.nextCursor! },
       });
       expect(second[0]?.sessions.map(({ threadId, name }) => ({ threadId, name }))).toEqual(
         derived.slice(0, 2),
       );
-      const last = await receiver.catalog.list({
+      const last = await receiver.read({
         limitPerHost: 2,
         cursors: { "node:alpha": second[0]!.nextCursor! },
       });
       expectSingleItem(last[0]?.sessions, derived[2]);
       expect(last[0]?.nextCursor).toBeUndefined();
       for (const search of ["Derived title 2", "MAIN:DERIVED-2"]) {
-        const found = await receiver.catalog.list({ search, limitPerHost: 1 });
+        const found = await receiver.read({ search, limitPerHost: 1 });
         expectSingleItem(found[0]?.sessions, derived[2]);
       }
-      expect(receiver.invoke).toHaveBeenCalledTimes(1);
+      // Every list/search/page reauthorizes the source; inventory reuse remains source-owned.
+      expect(receiver.invoke).toHaveBeenCalledTimes(6);
       db.prepare("UPDATE transcript_events SET event_json = ? WHERE session_id = ?").run(
         "invalid-json",
         "derived-0",
@@ -423,7 +496,9 @@ describe("session-share node commands", () => {
 
         const pendingRead = fixture.read(scope.sessionKey);
         fixture.config.session = { store: defaultStorePath };
-        await expect(pendingRead).rejects.toThrow("no longer shared");
+        await expect(pendingRead).rejects.toThrow(
+          "Session sharing configuration changed. Refresh the session catalog.",
+        );
 
         fixture.config.session = { store };
         await upsertSessionEntryCore(
@@ -760,7 +835,7 @@ describe("session-share receiver identity integration", () => {
       const namespacedHuman = remoteHuman(human.threadId, "4242", hostId);
       const namespacedUnmatched = remoteHuman(unmatched.threadId, "9999", hostId);
       await fixture.hydrate();
-      expect((await fixture.catalog.list({}))[0]?.sessions).toEqual([
+      expect((await fixture.read({}))[0]?.sessions).toEqual([
         namespacedHuman,
         agent,
         namespacedUnmatched,
@@ -781,7 +856,7 @@ describe("session-share receiver identity integration", () => {
         if (linksHumans) {
           identityReads.mockClear();
         }
-        const rows = (await fixture.catalog.list({}))[0]!.sessions;
+        const rows = (await fixture.read({}))[0]!.sessions;
         expect(rows[linksHumans ? 0 : 1]?.createdActor).toMatchObject(linkedActor(profile.id));
         expect(rows[linksHumans ? 1 : 0]).toEqual(linksHumans ? agent : namespacedHuman);
         expect(rows[2]).toEqual(namespacedUnmatched);

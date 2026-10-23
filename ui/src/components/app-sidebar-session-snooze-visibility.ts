@@ -54,6 +54,7 @@ export function projectSidebarSnoozeCatalogs(
     host.sessionInvolvingMeFilterActive
       ? new Set(host.sessionData.sessionsResult?.sessions.map((row) => row.key))
       : undefined,
+    (catalog) => host.sessionData.sessionCatalogLive.canRetry(catalog),
   );
 }
 

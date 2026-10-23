@@ -11,6 +11,7 @@ import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import {
   getOrLoadSqliteDatabaseAdmissionForPath,
   getSqliteDatabaseAdmission,
+  getSqliteDatabaseAdmissionIdentityForPath,
   publishSqliteDatabaseAdmission,
   type SqliteDatabaseAdmissionKey,
 } from "../../infra/sqlite-database-admission.js";
@@ -19,6 +20,7 @@ import {
   getSqliteReadOperationRevision,
   publishSqliteReadOperationFacts,
 } from "../../infra/sqlite-schema-facts.js";
+import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import type {
@@ -92,8 +94,18 @@ function publishAcpMetadataRows(
 /** Host readers consume admitted rows and committed postimages; uncovered keys use the worker. */
 export function readPublishedAcpSessionRows(
   databasePath: string,
+  identity: DatabaseFileIdentity,
   entries: readonly AcpSessionReadInput[],
 ): Array<AcpSessionRow | null> | undefined {
+  // A closed source can be replaced before a worker opens the pathname again.
+  // Only postimages from the reader's captured physical source can skip that read.
+  const publishedIdentity = getSqliteDatabaseAdmissionIdentityForPath(databasePath);
+  if (
+    publishedIdentity?.key !== identity.key ||
+    publishedIdentity.birthtime !== identity.birthtime
+  ) {
+    return undefined;
+  }
   const rows = getOrLoadSqliteDatabaseAdmissionForPath(
     databasePath,
     metadataReceipt,

@@ -113,7 +113,8 @@ type EnglishCatalog = TranslationMap & {
       progressLabels: TranslationMap;
       pendingInputs: TranslationMap & { agentUpdate: TranslationMap };
       sessionSuggestions: TranslationMap & { state: TranslationMap };
-      catalog: TranslationMap;
+      catalog: TranslationMap &
+        Record<"remoteViewOnly" | "unsupportedViewOnly" | "openOriginal", string>;
       sessionRoute: TranslationMap;
       codeBlock: TranslationMap;
       commandResults: TranslationMap & { fast: TranslationMap };
@@ -1708,7 +1709,11 @@ const startupEnglish = {
     },
     sessionHeader: {},
     board: {},
-    catalog: {},
+    catalog: {
+      remoteViewOnly: "This session is on a paired device and is view-only.",
+      unsupportedViewOnly: "This external session source is view-only.",
+      openOriginal: "Open original",
+    },
     taskSuggestions: {},
     pullRequests: {
       open: "Open",

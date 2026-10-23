@@ -215,14 +215,15 @@ function expectMainWorkspace(requests: MockModelRequest[]) {
 }
 
 it.each(["cron", "subagent"] as const)(
-  "prepares distinct selected and fallback providers for %s under per-agent defaults",
+  "prepares selected and fallback model runtimes for %s under per-agent defaults",
   async (route) => {
     const fixtureDir = await mkdtemp(path.join(tmpdir(), "openclaw-cron-selection-e2e-"));
     cleanupDirs.push(fixtureDir);
     const bundledRoot = path.join(fixtureDir, "bundled");
     const provider = "selected-cron";
-    const fallbackProvider = "selected-fallback";
-    const pluginIds = [provider, fallbackProvider];
+    // Cron remains bound to its recorded provider; ordinary turns may change providers.
+    const fallbackProvider = route === "cron" ? provider : "selected-fallback";
+    const pluginIds = [...new Set([provider, fallbackProvider])];
     for (const pluginId of pluginIds) {
       await writePlugin(
         bundledRoot,
@@ -237,7 +238,6 @@ it.each(["cron", "subagent"] as const)(
         register(api) {
           api.registerProvider({
             id: ${JSON.stringify(pluginId)}, label: "Selected provider", auth: [],
-            resolveSyntheticAuth: () => ({ apiKey: "cron-fixture", source: "fixture", mode: "api-key" }),
             transformSystemPrompt: ({ systemPrompt }) => systemPrompt + "\\n" + ${JSON.stringify(`PROVIDER_HOOK_${pluginId}`)},
           });
         },
@@ -272,13 +272,35 @@ it.each(["cron", "subagent"] as const)(
             ...providerConfig(server, ["default", "agent-default"], false),
             apiKey: TEST_API_KEY,
           },
-          // Cron admission needs explicit key auth before the provider runtime loads.
-          [provider]: providerConfig(server, ["unavailable"], route === "cron"),
-          [fallbackProvider]: providerConfig(server, ["available"], route === "cron"),
+          ...Object.fromEntries(
+            pluginIds.map((id) => [
+              id,
+              {
+                ...providerConfig(
+                  server,
+                  [
+                    ...(id === provider ? ["unavailable"] : []),
+                    ...(id === fallbackProvider ? ["available"] : []),
+                  ],
+                  route === "cron",
+                ),
+                apiKey: `${id}:fixture`,
+              },
+            ]),
+          ),
         },
       },
     };
     const instance = await createInstance("cron-selected-provider", bundledRoot, config);
+    await instance.state.writeAuthProfiles({
+      version: 1,
+      profiles: Object.fromEntries(
+        pluginIds.map((id) => [
+          `${id}:fixture`,
+          { type: "api_key" as const, provider: id, key: TEST_API_KEY },
+        ]),
+      ),
+    });
     const sessionKey = "agent:main:subagent:provider-fallback";
     if (route === "subagent") {
       instance.state.applyEnv();
@@ -440,6 +462,12 @@ it(
       config,
       claim.port,
     );
+    await instance.state.writeAuthProfiles({
+      version: 1,
+      profiles: {
+        "cron-owner:fixture": { type: "api_key", provider: "cron-owner", key: TEST_API_KEY },
+      },
+    });
     await instance.startGateway();
     expect(instance.port).toBe(claim.port);
 
@@ -457,6 +485,14 @@ it(
       const result = await client.request<ScheduleResult>(SCHEDULE_METHOD, params);
       const id = requireHandle(result, { pluginId: PLUGIN_ID, sessionKey, kind: "session-turn" });
       scheduledIds.push(id);
+      // Scheduling owns registry lifetime; the operator explicitly authorizes inference.
+      await client.request("cron.update", {
+        id,
+        patch: {
+          agentId: "main",
+          payload: { kind: "agentTurn", model: `${modelRef}@cron-owner:fixture` },
+        },
+      });
       return id;
     };
     const activate = async (agent: string, message: string) => {

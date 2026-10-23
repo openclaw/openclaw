@@ -115,6 +115,7 @@ export function navigateChatPage(
     sessionKey,
     agentId: targetAgentId ?? data?.agentId,
     shortIdLength: data?.sessionKey === sessionKey ? data.shortId?.length : undefined,
+    literalKey: sameSession && data.sessionKey === sessionKey ? data.literalKey : undefined,
   }).options;
   const location =
     replace && sameSession && (data.draft || data.focusComposer)

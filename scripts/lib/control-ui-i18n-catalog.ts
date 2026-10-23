@@ -15,6 +15,7 @@ import { registerBoardDocumentEnglish } from "../../ui/src/i18n/locales/en-board
 import { registerBoardWebsiteEnglish } from "../../ui/src/i18n/locales/en-board-website.ts";
 import { registerBoardEnglish } from "../../ui/src/i18n/locales/en-board.ts";
 import { registerBrowserEnglish } from "../../ui/src/i18n/locales/en-browser.ts";
+import { registerCatalogMenuEnglish } from "../../ui/src/i18n/locales/en-catalog-menu.ts";
 import { registerChatCameraEnglish } from "../../ui/src/i18n/locales/en-chat-camera.ts";
 import { registerChatCiEnglish } from "../../ui/src/i18n/locales/en-chat-ci.ts";
 import { registerChatCommandResultsEnglish } from "../../ui/src/i18n/locales/en-chat-command-results.ts";
@@ -119,6 +120,7 @@ const sourceFiles = [
   "en-board-website.ts",
   "en-board.ts",
   "en-browser.ts",
+  "en-catalog-menu.ts",
   "en-chat-camera.ts",
   "en-chat-ci.ts",
   "en-chat-command-results.ts",
@@ -264,6 +266,16 @@ export function loadControlUiSourceCatalog(): TranslationMap {
       Object.assign(boardWidget, registerBoardWebsiteEnglish.catalog.board.widget);
     }
   }
+  const catalog: TranslationMap = {
+    remoteViewOnly: en.chat.catalog.remoteViewOnly,
+    unsupportedViewOnly: en.chat.catalog.unsupportedViewOnly,
+  };
+  for (const [key, value] of Object.entries(registerCatalogMenuEnglish.catalog.chat.catalog)) {
+    catalog[key] = value;
+    if (key === "openImportedSession") {
+      catalog.openOriginal = en.chat.catalog.openOriginal;
+    }
+  }
   const chat: TranslationMap = {};
   for (const [key, value] of Object.entries(en.chat)) {
     const sourceKeys: Array<Exclude<keyof typeof registerSettingsEnglish.catalog.chat, "sidebar">> =
@@ -348,6 +360,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
           ...registerSessionNavigationEnglish.catalog.chat.sessionSuggestions,
           ...registerChatSessionEnglish.catalog.chat.sessionSuggestions,
         },
+        catalog,
         commands: registerCommandPaletteEnglish.catalog.chat.commands,
         welcome: registerCommandPaletteEnglish.catalog.chat.welcome,
         messages: registerChatMessageMetadataEnglish.catalog.chat.messages,

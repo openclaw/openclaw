@@ -216,7 +216,12 @@ async function checkAccessiblePins(page: Page, width: number) {
   await row.click({ button: "right" });
   const pin = sidebar.getByRole("menuitem", { name: "Pin", exact: true });
   await pin.waitFor();
-  expect(await pin.locator("svg").evaluate((icon) => getComputedStyle(icon).fill)).toBe("none");
+  expect(
+    await pin.evaluate((element) => {
+      const icon = element.querySelector("svg");
+      return icon ? getComputedStyle(icon).fill : null;
+    }),
+  ).toBe("none");
   if (width === 1440) {
     await captureSidebarUiProof(suite, page, "agent-roster-pin-menu-after.png", sidebar);
   }

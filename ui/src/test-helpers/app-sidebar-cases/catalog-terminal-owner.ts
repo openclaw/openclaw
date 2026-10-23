@@ -174,6 +174,7 @@ describe("AppSidebar catalog deletion", () => {
     "confirms catalog deletion and refreshes rows (open: %s)",
     async (open) => {
       const { sidebar, request } = await mountWithCatalog();
+      const archive = vi.spyOn(sidebar.sessionData, "archiveSessionCatalog");
       sidebar.sessionKey = open
         ? "agent:main:catalog:codex:gateway%3Alocal:thread-1"
         : "agent:main:main";
@@ -190,6 +191,9 @@ describe("AppSidebar catalog deletion", () => {
       const actions = await selectCatalogDelete(sidebar);
       answerConfirmDialog(actions, "confirm");
       await vi.advanceTimersByTimeAsync(0);
+      expect(archive).toHaveBeenCalledOnce();
+      await archive.mock.results[0]!.value;
+      await sidebar.updateComplete;
       expect(request).toHaveBeenCalledWith("sessions.catalog.archive", {
         catalogId: "codex",
         hostId: "gateway:local",

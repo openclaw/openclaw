@@ -59,6 +59,38 @@ export default definePluginEntry({
   `onHost(host)` callback as each host settles; the returned host array remains
   required as the final compatibility snapshot.
 
+  A session may include `originalUrl` for **Open original** in its shared menu and
+  view-only transcript. Supply an explicit receiver-approved absolute HTTP(S)
+  URL without credentials, query, or fragment; never trust a remote row to choose
+  the destination. This navigation opens a separate tab and grants no local
+  continuation, archive, or terminal capability. For OpenClaw source sessions,
+  use `buildControlUiSessionPath` with `exactKey: true` and `literalKey: true` from
+  `openclaw/plugin-sdk/session-discussion`. `exactKey: true` alone retains the
+  established home routing for a main-session key; Open original needs its literal
+  source session route, which stays pinned through canonicalization and reload even
+  when any configured home key changes. For the unqualified stored `global` transcript,
+  supply its source `fallbackAgentId` with `literalKey: true`; this uses an explicit
+  global route instead of selecting that agent's configured home session. When
+  rebuilding a parsed explicit route, retain its `literalKey` intent in the shared
+  path builder so navigation cannot turn it back into a configurable home alias.
+
+  Providers whose rows depend on current source-side authorization must declare
+  `requiresFreshList: true`. The Gateway projects this declaration to clients and
+  never replays a cached page while the source refresh is pending or failed. Clients
+  withdraw prior rows when a request starts and do not retain them on pending/error
+  publications. Expanded windows, including Load More, are rebuilt from fresh pages;
+  progress from an older request cannot restore a withdrawn row. Late host completion
+  restores the requested expanded window even while other hosts are still loading.
+  A transient page failure keeps an explicit retry action, not old rows or cursor
+  authority; retry starts at the current authorized head. A targeted retry owns only
+  its requested hosts; the final root response still reconciles current siblings
+  when a best-effort progress frame is absent. Reject discovery failures
+  with a safe provider error instead of returning successful empty results; only
+  successful discovery with no eligible sources represents absence. Return empty pending
+  hosts and reauthorize each list/read at the source. Receiver visibility checks do
+  not establish source authority. This optional declaration adds no user setting;
+  catalogs without it keep the stale-row behavior described below.
+
   The optional `allowPartialResults` flag is true only when a connected caller
   explicitly opts in while receiving host progress on a list without host selection
   or cursors. When true, a provider may return retained host snapshots or mark a

@@ -290,7 +290,7 @@ final class ChatSessionSidebarCatalogs {
                     } else {
                         advanced.insert(host.hostid)
                         let depth = (sweep?.depth ?? self.pageDepths[catalogID]?[host.hostid] ?? 0) + 1
-                        // session-data-controller-catalog.ts:452 keeps wholly empty discovery pages out of replay depth.
+                        // session-data-catalog.ts:452 keeps wholly empty discovery pages out of replay depth.
                         self.discovery[catalogID]?[host.hostid] = nil
                         if discovering, host.sessions.isEmpty, next.sessions.isEmpty,
                            self.pageDepths[catalogID]?[host.hostid] == nil

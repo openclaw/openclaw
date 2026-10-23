@@ -43,6 +43,7 @@ export function captureSessionEntryWorkerRequest(input: SessionEntryWorkerRead) 
     snapshotFields: input.snapshotFields,
     lifecycleSessionKey: input.lifecycleSessionKey,
     includeMembers: input.includeMembers,
+    includeParticipants: input.includeParticipants,
     includeParticipantRecords: input.includeParticipantRecords,
     includeAuthorization: input.includeAuthorization,
     transcript: input.transcript && structuredClone(input.transcript),

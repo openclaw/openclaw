@@ -63,7 +63,11 @@ export async function readAcpSessionMetaForEntries(
       ? captureOpenClawStateReadWorkerContext(database)
       : undefined;
   if (context) {
-    const published = readPublishedAcpSessionRows(database.path, entries);
+    const published = readPublishedAcpSessionRows(
+      database.path,
+      context.admission.identity,
+      entries,
+    );
     if (published) {
       options.signal?.throwIfAborted();
       context.maintenanceScope?.assertAdmission();

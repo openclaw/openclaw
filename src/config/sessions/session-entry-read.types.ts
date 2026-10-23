@@ -133,6 +133,8 @@ export type SessionExactEntriesWorkerRequest = (
   /** Reply initialization reads the current row's model parent in this same snapshot. */
   replyInitializationSessionKey?: string;
   includeMembers?: boolean;
+  /** Hydrate direct participants on selected list entries. */
+  includeParticipants?: boolean;
   includeParticipantRecords?: boolean;
   includeAuthorization?: boolean;
   replacementSelection?: SessionEntryReplacementSelection;
@@ -151,6 +153,7 @@ export type SessionEntryCohortRequest = Pick<
   | "snapshotFields"
   | "replyInitializationSessionKey"
   | "includeMembers"
+  | "includeParticipants"
   | "includeParticipantRecords"
   | "lifecycleSessionKey"
   | "transcript"

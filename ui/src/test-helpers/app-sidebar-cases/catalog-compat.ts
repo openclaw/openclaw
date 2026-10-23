@@ -197,6 +197,7 @@ describe("AppSidebar session catalog pagination", () => {
       sessions.state.result!.owners = [ada, bob];
       const { sidebar } = await mountSidebar(gateway.gateway, sessions);
       const dom = domProbe(sidebar);
+      const refresh = vi.spyOn(sidebar.sessionData, "refreshSessionCatalogs");
       sidebar.setSessionOwnerFilter(ada.id);
       await sidebar.updateComplete;
       await startCatalog(sidebar);
@@ -210,7 +211,9 @@ describe("AppSidebar session catalog pagination", () => {
         cursors: { "gateway:local": "page-2" },
       });
       pending.resolve(laterPage);
-      await settleCatalog(sidebar);
+      expect(refresh).toHaveBeenCalledOnce();
+      await refresh.mock.results[0]!.value;
+      await sidebar.updateComplete;
       expect(sidebar.textContent).toContain("Later session");
       await sidebar.sessionData.refreshSessionCatalogs();
       await sidebar.updateComplete;

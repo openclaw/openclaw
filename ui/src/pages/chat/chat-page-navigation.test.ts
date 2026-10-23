@@ -67,4 +67,21 @@ describe("chat page navigation", () => {
       });
     },
   );
+  it("keeps a pinned transcript during same-session history and face navigation", () => {
+    const { context: initial, replace, navigate } = createChatPageNavigationContext();
+    const context = { ...initial, basePath: "/control" };
+    const data = {
+      sessionKey: "agent:research:main",
+      face: "chat" as const,
+      literalKey: true as const,
+    };
+    navigateChatPage(context, data, data.sessionKey, true, "dashboard");
+    expect(replace).toHaveBeenCalledExactlyOnceWith("dashboard", {
+      pathname: "/control/dashboard/research/~key/main",
+    });
+    navigateChatPage(context, data, "agent:research:other", false, "chat");
+    expect(navigate).toHaveBeenCalledExactlyOnceWith("chat", {
+      pathname: "/control/chat/research/other",
+    });
+  });
 });

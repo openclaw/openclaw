@@ -26,6 +26,7 @@ import { isPostgresSqlConnection, type PostgresSqlConnection } from "../sql-conn
 import { readSqliteDatabaseWriteRevision } from "../sqlite-database-admission.js";
 import { admitSqliteSchema } from "../sqlite-schema-facts.js";
 import { runSqliteReadSnapshotSync } from "../sqlite-transaction.js";
+import { readDatabasePathIdentitySync } from "../sqlite-worker-identity.js";
 import { usePostgresTestHarness } from "./postgres.test-support.js";
 import { failAfterStatement } from "./sql.test-support.js";
 
@@ -132,12 +133,13 @@ function expectRows(rows: unknown, ...names: (string | null)[]) {
 function acpReader(store: StoreFixture, ...names: string[]) {
   const input = commandFor(...names);
   const reader = store.open();
+  const identity = readDatabasePathIdentitySync(store.pathname);
   const read = () => readAcpSessionCommand(reader, input).rows;
   return {
     reader,
     read,
     snapshot: (body: () => unknown = read) => runSqliteReadSnapshotSync(reader, body),
-    published: () => readPublishedAcpSessionRows(store.pathname, input.entries),
+    published: () => readPublishedAcpSessionRows(store.pathname, identity, input.entries),
   };
 }
 

@@ -126,13 +126,13 @@ export function createSidebarMenus(deps: {
   const MenuRenderer = lazy(
     async () => {
       // A visible Create action can enter its pending chat synchronously.
-      const [{ SidebarMenusRenderer, CatalogSessionMenu, createSessionMenuWork }] =
+      const [{ SidebarMenusRenderer, SidebarCatalogMenuView, createSessionMenuWork }] =
         await Promise.all([import("./sidebar-menus-render.tsx"), PendingSessionCreate.preload()]);
-      return { SidebarMenusRenderer, CatalogSessionMenu, createSessionMenuWork };
+      return { SidebarMenusRenderer, SidebarCatalogMenuView, createSessionMenuWork };
     },
     { export: "SidebarMenusRenderer" },
   );
-  const LazyCatalogMenu = lazy(MenuRenderer.preload, { export: "CatalogSessionMenu" });
+  const LazyCatalogMenu = lazy(MenuRenderer.preload, { export: "SidebarCatalogMenuView" });
   const menuRendererImport = createSidebarRendererLoader(async () => {
     const renderer = await MenuRenderer.preload();
     if (!disposed) {

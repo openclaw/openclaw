@@ -14,6 +14,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import { settleReplyDispatcher } from "../dispatch-dispatcher.js";
 import type { ReplyPayload } from "../types.js";
 import { createPluginBindingRecord } from "./conversation-binding.test-fixtures.js";
 import {
@@ -646,9 +647,9 @@ export const noAbortResult = { handled: false, aborted: false } as const;
 export const emptyConfig = {} as OpenClawConfig;
 
 const fixtureDispatchers = new Set<ReplyDispatcher>();
-afterEach(() => {
+afterEach(async () => {
   for (const dispatcher of fixtureDispatchers) {
-    dispatcher.markComplete();
+    await settleReplyDispatcher({ dispatcher });
   }
   fixtureDispatchers.clear();
 });

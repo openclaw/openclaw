@@ -54,7 +54,7 @@ import type { SidebarMenusOwner } from "./sidebar-menus-types.ts";
 import type { SidebarMenus } from "./sidebar-menus.tsx";
 import type { MenuEntry } from "./solid/menu.tsx";
 
-export { CatalogSessionMenu } from "./catalog-session-menu-solid.tsx";
+export { SidebarCatalogMenuView } from "./app-sidebar-catalog-menu-view.tsx";
 export { createSessionMenuWork } from "./session-menu-work.ts";
 
 const AgentCreateDialog = lazy(() => import("./agent-create-dialog.tsx"), {

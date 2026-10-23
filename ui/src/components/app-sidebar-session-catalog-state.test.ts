@@ -4,10 +4,8 @@ import type {
   SessionCatalogHost,
 } from "../../../packages/gateway-protocol/src/index.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
-import {
-  mergeSessionCatalogPage,
-  refetchExpandedSessionCatalogPages,
-} from "./app-sidebar-session-catalog-state.ts";
+import { mergeSessionCatalogPage } from "./app-sidebar-session-catalog-pages.runtime.ts";
+import { refetchExpandedSessionCatalogPages } from "./app-sidebar-session-catalog-state.ts";
 import { sessionCatalogHostKey } from "./app-sidebar-session-types.ts";
 
 function catalog(ids: string[], details: Partial<SessionCatalogHost> = {}): SessionCatalog {

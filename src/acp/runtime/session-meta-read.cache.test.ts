@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { admitSqliteSchema, runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema } from "../../infra/sqlite-schema-sql.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import {
   closeRetainedOpenClawStateReadConnections,
   withOpenClawStateReadOnlyLocation,
@@ -97,7 +98,14 @@ it("keeps a pinned ACP snapshot and refreshes after it closes", () => {
       expectName(readPinned().rows[0], "before");
       insert(writer, "after");
       expectName(readPinned().rows[0], "before");
-      expectName(readPublishedAcpSessionRows(pathname, command.entries)?.[0], "after");
+      expectName(
+        readPublishedAcpSessionRows(
+          pathname,
+          readDatabasePathIdentitySync(pathname),
+          command.entries,
+        )?.[0],
+        "after",
+      );
     } finally {
       db.exec("COMMIT");
     }
@@ -169,5 +177,7 @@ it("publishes decoded set and clear postimages without rereading metadata after 
   expect(mutate({ kind: "clear" })).toEqual({ ...result, acp: null });
   expect(counter.counts).toEqual({ read: 0, write: 2 });
   expect(read().rows).toEqual([null]);
-  expect(readPublishedAcpSessionRows(pathname, command.entries)).toEqual([null]);
+  expect(
+    readPublishedAcpSessionRows(pathname, readDatabasePathIdentitySync(pathname), command.entries),
+  ).toEqual([null]);
 });

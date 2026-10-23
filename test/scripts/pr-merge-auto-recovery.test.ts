@@ -266,9 +266,10 @@ describePosix("native auto-merge recovery", () => {
         },
         { mergeStateStatus: "CLEAN" },
       );
-      expectStatus(f.run(false, f.repo, "squash", retired, replacement));
+      const recovered = f.run(false, f.repo, "squash", retired, replacement);
+      expectStatus(recovered);
       expectEffects(f, 2, absent ? 0 : 1, 1);
-      expect(f.record()).toMatchObject({
+      expect(f.record(), recovered.output).toMatchObject({
         phase: "complete",
         head: replacement,
         recovery: { outcome: retired, replacementHead: replacement },
