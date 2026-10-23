@@ -61,12 +61,9 @@ function isBundledSourceCheckoutPluginRoot(pluginRootDir: string): boolean {
   }
 }
 
-export async function runPostUpgradeProbes(params: {
-  stateDir?: string;
-  updateChannel?: UpdateChannel;
-}): Promise<PostUpgradeReport> {
+export async function runPostUpgradeProbes(updateChannel?: UpdateChannel) {
   const findings: PostUpgradeFinding[] = [];
-  const installs = await readPersistedInstalledPluginIndex(params);
+  const installs = await readPersistedInstalledPluginIndex();
   if (!installs) {
     findings.push({
       level: "error",
@@ -93,7 +90,7 @@ export async function runPostUpgradeProbes(params: {
     detectPluginVersionDrift({
       gatewayVersion: VERSION,
       installRecords,
-      config: { update: { channel: params.updateChannel } },
+      config: { update: { channel: updateChannel } },
     }),
   );
   for (const entry of drift.drifts) {

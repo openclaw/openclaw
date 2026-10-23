@@ -26,28 +26,29 @@ import {
 import { renderSessionSection as SessionSection } from "./app-sidebar-session-section-render.tsx";
 import { areSessionCatalogsSettled } from "./session-data-catalog.ts";
 
-function renderRosterLoadMore(
-  host: SidebarSessionListHost,
-  hasMore: boolean | undefined,
-  loading: boolean,
-) {
-  if (!hasMore) {
-    return undefined;
-  }
+function RosterLoadMore(props: {
+  host: SidebarSessionListHost;
+  hasMore: boolean;
+  loading: boolean;
+}) {
   return (
-    <div class="sidebar-session-pagination sidebar-session-pagination--roster">
-      <button
-        type="button"
-        class="sidebar-session-pagination__button"
-        aria-label={loading ? t("common.loading") : t("chat.selectors.loadMoreRosterSessions")}
-        disabled={loading}
-        aria-busy={loading ? "true" : "false"}
-        onClick={() => void host.loadMoreSidebarSessions()}
-      >
-        {loading ? <span class="session-run-spinner" aria-hidden="true" /> : undefined}
-        {loading ? t("common.loading") : t("chat.selectors.loadMoreRosterSessions")}
-      </button>
-    </div>
+    <Show when={props.hasMore}>
+      <div class="sidebar-session-pagination sidebar-session-pagination--roster">
+        <button
+          type="button"
+          class="sidebar-session-pagination__button"
+          aria-label={
+            props.loading ? t("common.loading") : t("chat.selectors.loadMoreRosterSessions")
+          }
+          disabled={props.loading}
+          aria-busy={props.loading ? "true" : "false"}
+          onClick={() => void props.host.loadMoreSidebarSessions()}
+        >
+          {props.loading ? <span class="session-run-spinner" aria-hidden="true" /> : undefined}
+          {props.loading ? t("common.loading") : t("chat.selectors.loadMoreRosterSessions")}
+        </button>
+      </div>
+    </Show>
   );
 }
 
@@ -147,7 +148,11 @@ export function renderSessionList(params: {
     <div class="sidebar-recent-sessions">
       {renderPendingSessionCreateRow(unplacedCreate)}
       {renderSessionListBody(params)}
-      {renderRosterLoadMore(host(), params.nativeSessionsHaveMore, params.nativeSessionsLoading)}
+      <RosterLoadMore
+        host={host()}
+        hasMore={params.nativeSessionsHaveMore}
+        loading={params.nativeSessionsLoading}
+      />
       {renderPersonalSessionEmpty(
         host(),
         params.empty && params.sections.every((section) => section.totalRowCount === 0),

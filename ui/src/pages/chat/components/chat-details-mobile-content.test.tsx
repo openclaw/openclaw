@@ -63,12 +63,12 @@ it("shows a real worker without legacy fields and lets the environment owner dec
       runner: { kind: "device", status: "available" },
     },
   };
-  const [value, setValue] = createSignal(details({ selectedSession: active }));
   const [presented, setPresented] = createSignal(true);
   const request = vi.fn();
   const openMachine = vi.fn();
+  const environment = { onRequestUncommitted: request, onOpenMachine: openMachine };
+  const [value, setValue] = createSignal(details({ selectedSession: active, environment }));
   const content = rootContent();
-  content.environment = { onRequestUncommitted: request, onOpenMachine: openMachine };
   const view = mountSolid(() => (
     <ChatDetailsMobileContent
       details={value()}
@@ -82,12 +82,13 @@ it("shows a real worker without legacy fields and lets the environment owner dec
   setValue(
     details({
       selectedSession: { key: "agent:main:details", kind: "direct", execNode: "Local Gateway" },
+      environment,
     }),
   );
   flush();
   expect(view.queryByRole("region", { name: "Environment" })).toBeNull();
   expect(request).toHaveBeenCalledOnce();
-  setValue(details());
+  setValue(details({ environment }));
   flush();
   expect(view.queryByRole("region", { name: "Environment" })).toBeNull();
   expect(request).toHaveBeenCalledOnce();

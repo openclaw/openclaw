@@ -1,25 +1,18 @@
 import type { GatewayControlUiPluginWidgetKind } from "../../../api/gateway.ts";
-import type { OptionalCustomElement } from "../../../app/lazy-custom-element.ts";
 import { t } from "../../../i18n/index.ts";
 import type { BoardWidget } from "../types.ts";
 
-type CoreBoardWidgetElement = OptionalCustomElement & {
-  kind: string;
-  previewSafe: boolean;
-};
-
 /**
- * Core renderers register trusted custom elements. Preview-safe elements consume
+ * Core widget metadata stays independent of the lazy renderers. Preview-safe widgets consume
  * only saved data; they never acquire live subscriptions or invoke Gateway methods.
  */
-export const CORE_BOARD_WIDGET_ELEMENTS: readonly CoreBoardWidgetElement[] = [
+const CORE_BOARD_WIDGET_ELEMENTS = [
   {
     kind: "session:progress",
     tagName: "openclaw-session-progress-widget",
     get label() {
       return t("sessionProgressCard.widgetLabel");
     },
-    loadModule: () => import("./session-progress.tsx"),
     previewSafe: false,
   },
   {
@@ -28,7 +21,6 @@ export const CORE_BOARD_WIDGET_ELEMENTS: readonly CoreBoardWidgetElement[] = [
     get label() {
       return t("board.widget.kindReport");
     },
-    loadModule: () => import("./report.tsx"),
     previewSafe: true,
   },
   {
@@ -37,7 +29,6 @@ export const CORE_BOARD_WIDGET_ELEMENTS: readonly CoreBoardWidgetElement[] = [
     get label() {
       return t("board.widget.kindWebsite");
     },
-    loadModule: () => import("./website.tsx"),
     previewSafe: false,
   },
   {
@@ -46,10 +37,11 @@ export const CORE_BOARD_WIDGET_ELEMENTS: readonly CoreBoardWidgetElement[] = [
     get label() {
       return t("board.widget.kindBrowserDashboard");
     },
-    loadModule: () => import("./browser.tsx"),
     previewSafe: false,
   },
-];
+] as const;
+
+type CoreBoardWidgetElement = (typeof CORE_BOARD_WIDGET_ELEMENTS)[number];
 
 export function pluginIdForWidgetKind(kind: string | undefined): string {
   return kind?.split(":", 1)[0]?.trim() || "unknown";

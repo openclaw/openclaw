@@ -4,12 +4,31 @@ import type { ApplicationContext } from "../../app/context.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
-import { CORE_BOARD_WIDGET_ELEMENTS } from "../../lib/board/widgets/index.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { BoardWidgetCellCallbacks } from "./board-widget-cell-options.ts";
 import "./board-widget-cell.solid.tsx";
+
+const reportLoad = vi.hoisted(() => ({
+  promise: Promise.resolve(),
+  requested: vi.fn(),
+  fail: false,
+}));
+vi.mock("../../lib/board/widgets/report.tsx", async (importOriginal) => {
+  reportLoad.requested();
+  await reportLoad.promise;
+  const actual = await importOriginal<typeof import("../../lib/board/widgets/report.tsx")>();
+  return {
+    ...actual,
+    ReportWidget: (props: Parameters<typeof actual.ReportWidget>[0]) => {
+      if (reportLoad.fail) {
+        throw new Error("Report temporarily unavailable");
+      }
+      return actual.ReportWidget(props);
+    },
+  };
+});
 
 const disposers: Array<() => void> = [];
 function mount(element: HTMLElement): void {
@@ -150,17 +169,13 @@ describe("plugin board widget cells", () => {
     },
   );
 
-  it("reveals a lazily registered report independently of optional plugin UI", async () => {
-    const report = CORE_BOARD_WIDGET_ELEMENTS.find((entry) => entry.kind === "session:report")!;
-    const loadModule = report.loadModule;
+  it("loads and retries an active report independently, retaining it while hidden", async () => {
     const loadGate = Promise.withResolvers<void>();
-    const load = vi.spyOn(report, "loadModule").mockImplementation(async () => {
-      await loadGate.promise;
-      return loadModule();
-    });
+    reportLoad.promise = loadGate.promise;
+    reportLoad.fail = true;
     onTestFinished(() => {
+      reportLoad.fail = false;
       loadGate.resolve();
-      load.mockRestore();
     });
     const request = vi.fn();
     const registrations = vi.fn(() => []);
@@ -193,15 +208,33 @@ describe("plugin board widget cells", () => {
     };
     cell.rect = { name: "summary", x: 0, y: 0, w: 6, h: 4 };
     cell.sessionKey = "agent:main:dashboard";
+    cell.active = false;
     cell.callbacks = callbacks();
     provider.append(cell);
     mount(provider);
+    await cell.updateComplete;
+    expect(reportLoad.requested).not.toHaveBeenCalled();
+    cell.active = true;
     await waitForSolid(() => {
-      expect(load).toHaveBeenCalledOnce();
+      expect(reportLoad.requested).toHaveBeenCalledOnce();
       expect(cell.querySelector(".board-widget__plugin-loading")).not.toBeNull();
     });
     expect(cell.querySelector("openclaw-report-widget")).toBeNull();
     loadGate.resolve();
+    await vi.waitFor(
+      () =>
+        expect(cell.querySelector(".lazy-view-error")?.textContent).toContain(
+          "Report temporarily unavailable",
+        ),
+      CHUNK_LOAD_WAIT,
+    );
+    reportLoad.fail = false;
+    cell.active = false;
+    await cell.updateComplete;
+    cell.active = true;
+    await cell.updateComplete;
+    expect(cell.querySelector(".lazy-view-error")).not.toBeNull();
+    cell.querySelector<HTMLButtonElement>(".lazy-view-error__action")!.click();
     await vi.waitFor(
       () =>
         expect(cell.querySelector("openclaw-report-widget")?.textContent).toContain(
@@ -212,6 +245,20 @@ describe("plugin board widget cells", () => {
     expect(cell.querySelector("iframe")).toBeNull();
     expect(request).not.toHaveBeenCalled();
     expect(registrations).not.toHaveBeenCalled();
+    const report = cell.querySelector("openclaw-report-widget");
+    cell.active = false;
+    await cell.updateComplete;
+    await waitForSolid(() => expect(cell.querySelector("openclaw-report-widget")).toBe(report));
+    cell.active = true;
+    cell.widget = {
+      ...cell.widget!,
+      props: { blocks: [{ type: "text", text: "Updated saved report" }] },
+    };
+    await waitForSolid(() => {
+      expect(cell.querySelector("openclaw-report-widget")).toBe(report);
+      expect(report?.textContent).toContain("Updated saved report");
+      expect(reportLoad.requested).toHaveBeenCalledOnce();
+    });
   });
 
   it("renders an advertised session progress card and its empty state", async () => {

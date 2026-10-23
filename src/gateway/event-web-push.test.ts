@@ -144,8 +144,8 @@ function pairedOperator(deviceId: string, scopes = ["operator.read"], revokedAtM
   return { deviceId, roles: ["operator"], approvedScopes: scopes, tokens: { operator } };
 }
 
-function createDelivery(params: Partial<Parameters<typeof createEventWebPushDelivery>[0]> = {}) {
-  return createEventWebPushDelivery({ getRuntimeConfig: () => ({}), ...params });
+function createDelivery(getRuntimeConfig: () => OpenClawConfig = () => ({})) {
+  return createEventWebPushDelivery(getRuntimeConfig);
 }
 
 function finishAgent(delivery = createDelivery(), data: object = {}, opts?: GatewayBroadcastOpts) {
@@ -222,7 +222,7 @@ describe("event Web Push classification", () => {
     const cfg: OpenClawConfig = { agents: { entries: { research: { identity: { avatar } } } } };
 
     finishAgent(
-      createDelivery({ getRuntimeConfig: () => cfg }),
+      createDelivery(() => cfg),
       { runId: "avatar-run" },
       researchContext,
     );
@@ -253,7 +253,7 @@ describe("event Web Push classification", () => {
     });
 
     finishAgent(
-      createDelivery({ getRuntimeConfig: () => cfg }),
+      createDelivery(() => cfg),
       { runId: "changed-avatar-run" },
       researchContext,
     );
@@ -342,7 +342,7 @@ describe("event Web Push classification", () => {
     ],
   ] as const)("routes %s to its originating Gateway", async (event, payload, path) => {
     setPaired(pairedOperator("browser-device", ["operator.read", "operator.questions"]));
-    const delivery = createDelivery({ getRuntimeConfig: gatewayConfig });
+    const delivery = createDelivery(gatewayConfig);
     delivery.handleEvent(event, payload, researchContext);
     await expectPayload({
       url: `${path}#gatewayUrl=wss%3A%2F%2Fgateway.example.test%2Foperator`,
@@ -404,7 +404,7 @@ describe("event Web Push classification", () => {
     const preparation = prepareSender();
     setRecipients(stale);
     const getRuntimeConfig = vi.fn(() => ({}));
-    const delivery = createDelivery({ getRuntimeConfig });
+    const delivery = createDelivery(getRuntimeConfig);
     finishAgent(delivery);
     await vi.waitFor(() => expect(mocks.sender).toHaveBeenCalledOnce());
     expect(getRuntimeConfig).not.toHaveBeenCalled();
@@ -629,7 +629,7 @@ describe("event Web Push classification", () => {
           setPaired(pairedOperator("admin-browser", ["operator.admin"]));
           const preparation = prepareSender();
           const getRuntimeConfig = vi.fn(() => cfg);
-          const delivery = createDelivery({ getRuntimeConfig });
+          const delivery = createDelivery(getRuntimeConfig);
           if (scenario === "generic event") {
             finishAgent(
               delivery,
@@ -681,7 +681,7 @@ describe("event Web Push classification", () => {
       async (detailLevel) => {
         const subscription = makeSubscription("browser-device", "bob", { detailLevel });
         setSubscriptions(subscription);
-        createDelivery({ getRuntimeConfig: gatewayConfig }).deliverMention(
+        createDelivery(gatewayConfig).deliverMention(
           humanMention({ senderLabel: "Al\nice", sessionTitle: "Review\u202E" }),
         );
         await vi.waitFor(() => expect(mocks.send).toHaveBeenCalledOnce());
@@ -712,7 +712,7 @@ describe("event Web Push classification", () => {
     ] as const)("rechecks %s after sender preparation", async (_name, revoke) => {
       const preparation = prepareSender();
       const getRuntimeConfig = vi.fn(() => ({}));
-      createDelivery({ getRuntimeConfig }).deliverMention(humanMention());
+      createDelivery(getRuntimeConfig).deliverMention(humanMention());
       await vi.waitFor(() => expect(mocks.sender).toHaveBeenCalledOnce());
       expect(getRuntimeConfig).not.toHaveBeenCalled();
       revoke();

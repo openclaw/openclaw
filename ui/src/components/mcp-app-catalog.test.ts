@@ -26,6 +26,19 @@ import { McpAppCatalog } from "./mcp-app-catalog.tsx";
 import { MCP_APP_OPEN_EVENT, type McpAppOpenDetail } from "./mcp-app-launch.ts";
 import { McpAppResources } from "./mcp-app-resources.tsx";
 
+// mock-isolation: Exercise the Apps launch boundary without starting the chat runtime.
+vi.mock("../pages/chat/chat-pane.tsx", async () => {
+  const { defineSolidBridge } = await import("../lib/solid-bridge.ts");
+  const { chatPaneProperties } = await import("../pages/chat/chat-pane-inputs.ts");
+  return {
+    ChatPaneView: defineSolidBridge("openclaw-chat-pane", () => null, {
+      properties: chatPaneProperties,
+    }),
+  };
+});
+// mock-isolation: This suite supplies only the catalog and launch capabilities.
+vi.mock("../pages/chat/route-entry.ts", () => ({}));
+
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
@@ -309,11 +322,6 @@ describe("app launch catalog", () => {
   );
 
   it("waits for the new session's discovery before retaining an Apps page launch", async () => {
-    // Observe the page-to-conversation contract without loading the conversation runtime.
-    const lookup = customElements.get.bind(customElements);
-    vi.spyOn(customElements, "get").mockImplementation((name) =>
-      name === "openclaw-chat-pane" ? HTMLElement : lookup(name),
-    );
     const first = createDeferred<McpAppDiscoverResult>();
     const second = createDeferred<McpAppDiscoverResult>();
     const request = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);

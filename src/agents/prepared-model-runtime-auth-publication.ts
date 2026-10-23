@@ -371,7 +371,7 @@ export class PreparedModelRuntimeAuthPublicationOwner {
             : error;
           if (
             transaction &&
-            this.rejectComponentOwners(transaction, componentOwners, failure, retrying) > 0
+            this.rejectComponentOwners(transaction, componentOwners, failure, true) > 0
           ) {
             params.onOwnerFailure?.(failure);
           }
@@ -415,8 +415,20 @@ export class PreparedModelRuntimeAuthPublicationOwner {
       }
       if (owner.pending === gate.promise) {
         owner.pending = undefined;
-        if (recordRefreshError && owner.needsRefresh) {
+        if (
+          recordRefreshError &&
+          !(error instanceof PreparedModelRuntimePublicationSupersededError)
+        ) {
           owner.refreshError = toStringifiedError(error);
+          owner.needsRefresh = true;
+          if (owner.provenance === "configured") {
+            owner.catalogRecovery ??= {
+              error: owner.refreshError,
+              scheduledAttempted: false,
+              retryAfter: 0,
+            };
+            owner.catalogRecovery.error = owner.refreshError;
+          }
         }
       }
       transaction.ownerGates.delete(owner);

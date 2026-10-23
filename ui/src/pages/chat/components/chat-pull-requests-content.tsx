@@ -36,8 +36,8 @@ import {
   retainedPublication,
   showWorkRow,
 } from "./chat-pull-requests.ts";
-import "./chat-ci-details.ts";
-import "./chat-ci-automation-control.ts";
+import "./chat-ci-details.tsx";
+import "./chat-ci-automation-control.tsx";
 import "./chat-pull-request-presenters.css";
 
 registerGitHubEnglish();

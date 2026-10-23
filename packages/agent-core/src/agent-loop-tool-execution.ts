@@ -100,17 +100,6 @@ export async function prepareToolCallExecution(
     closeUpdates();
     await Promise.all(updateEvents);
   };
-  const immediateError = async (error: unknown): Promise<PreparedToolCallExecution> => {
-    await finishUpdates();
-    return {
-      kind: "immediate",
-      outcome: {
-        result: createToolExecutionErrorResult(error),
-        isError: true,
-        executionStarted: false,
-      },
-    };
-  };
   const readyExecution = (
     args: unknown,
     run: (onImplementationStart: () => void) => Promise<AgentToolResult<unknown>>,
@@ -204,7 +193,15 @@ export async function prepareToolCallExecution(
       }),
     );
   } catch (error) {
-    return await immediateError(error);
+    await finishUpdates();
+    return {
+      kind: "immediate",
+      outcome: {
+        result: createToolExecutionErrorResult(error),
+        isError: true,
+        executionStarted: false,
+      },
+    };
   }
 
   if (internalPreparation.kind === "immediate") {

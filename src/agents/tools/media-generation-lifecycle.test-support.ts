@@ -29,8 +29,15 @@ export function createMediaRequesterReadMock(
     sessionId: "media-requester",
     updatedAt: 1,
   }),
-): Pick<typeof SessionEntryRuntime, "withSessionEntryReadOnlyInWorker"> {
+): Pick<
+  typeof SessionEntryRuntime,
+  "withSessionEntryReadOnlyInWorker" | "readSessionEntryReadOnlyInWorker"
+> {
   return {
+    readSessionEntryReadOnlyInWorker: async (_scope, assertCurrent) => {
+      assertCurrent?.();
+      return readEntry();
+    },
     withSessionEntryReadOnlyInWorker: async (_scope, assertCurrent, consume) => {
       assertCurrent();
       return consume({ ok: true, value: readEntry() }, { kind: "file", assertCurrent });

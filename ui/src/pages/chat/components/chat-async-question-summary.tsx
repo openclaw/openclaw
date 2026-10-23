@@ -177,7 +177,9 @@ export function AsyncQuestionSummary(props: {
           type="button"
           class="btn btn--sm"
           disabled={state().reopening}
-          onClick={() => props.presentation.reopen(props.questions.itemId)}
+          onClick={() => {
+            void props.presentation.reopen(props.questions.itemId);
+          }}
         >
           {t("chat.questions.answer")}
         </button>

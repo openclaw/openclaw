@@ -432,7 +432,7 @@ export function createProcessTool(
             while (
               !scopedSession.exited &&
               !hasPendingPollDelivery(scopedSession) &&
-              scopedSession.pendingOutput.length === 0 &&
+              scopedSession.pendingStdoutChars + scopedSession.pendingStderrChars === 0 &&
               !scopedSession.pendingOutputDropped &&
               performance.now() < deadline
             ) {

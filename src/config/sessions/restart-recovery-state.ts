@@ -11,7 +11,10 @@ import {
   normalizeDeliveryContext,
   type DeliveryContext,
 } from "../../utils/delivery-context.shared.js";
-import { isDeliverableMessageChannel } from "../../utils/message-channel.js";
+import {
+  isDeliverableMessageChannel,
+  normalizeMessageChannel,
+} from "../../utils/message-channel.js";
 import type {
   HarnessCompletionRecovery,
   RestartRecoveryTerminalDeliveryEvidence,
@@ -500,6 +503,12 @@ export function normalizeRestartRecoveryEntryFields(
       : undefined,
   );
   assign(
+    "restartRecoverySourceMessageChannel",
+    entry.restartRecoverySourceMessageChannel === null
+      ? null
+      : normalizeMessageChannel(entry.restartRecoverySourceMessageChannel),
+  );
+  assign(
     "restartRecoverySourceReplyDeliveryMode",
     entry.restartRecoverySourceReplyDeliveryMode === "automatic" ||
       entry.restartRecoverySourceReplyDeliveryMode === "message_tool_only"
@@ -712,6 +721,7 @@ export function buildRestartRecoveryClaimCleanupPatch(params: {
     restartRecoveryRequesterSenderId: undefined,
     restartRecoverySameChannelThreadRequired: undefined,
     restartRecoverySourceIngress: undefined,
+    restartRecoverySourceMessageChannel: undefined,
     restartRecoverySourceReplyDeliveryMode: undefined,
     restartRecoveryForceSafeTools: undefined,
     ...(terminalDeliveryEvidence

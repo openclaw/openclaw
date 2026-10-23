@@ -2348,7 +2348,7 @@ html[dir="rtl"] .chat-attachment-loading > span {
   white-space: nowrap;
 }
 
-.chat-controls__model-menu .chat-controls__auth-meta [aria-hidden] svg {
+.chat-controls__model-menu .chat-controls__auth-meta svg[aria-hidden] {
   width: 13px;
   height: 13px;
   color: inherit;
@@ -2981,11 +2981,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
   color: var(--accent);
 }
 
-.chat-controls__speed-option:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
 .chat-controls__speed-option:disabled {
   opacity: 0.55;
 }
@@ -3533,7 +3528,8 @@ html[dir="rtl"] .chat-attachment-loading > span {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .agent-chat__welcome-secondary {
+  .agent-chat__welcome-secondary,
+  .sidebar-markdown-reader {
     transition: none;
   }
 }

@@ -83,6 +83,7 @@ export type ConfigRead = {
   connectionEpoch: number;
   completion: Deferred<Result<void, string>>;
   invalidated: Deferred<Result<void, string>>;
+  settled: Promise<Result<void, string>>;
 };
 const configReadsByState = new WeakMap<object, ConfigRead>();
 
@@ -100,12 +101,16 @@ export function beginConfigRead(
   state: RuntimeConfigState,
   client: GatewayBrowserClient,
 ): ConfigRead {
+  const completion = createDeferredCore<Result<void, string>>();
+  const invalidated = createDeferredCore<Result<void, string>>();
   const read: ConfigRead = {
     version: nextRequestVersion(state),
     client,
     connectionEpoch: currentConfigConnectionEpoch(state),
-    completion: createDeferredCore(),
-    invalidated: createDeferredCore(),
+    completion,
+    invalidated,
+    // Share the race: per-view races retain disposed views on the losing promise.
+    settled: Promise.race([completion.promise, invalidated.promise]),
   };
   // Register before request dispatch can synchronously start a successor read.
   configReadsByState.set(state, read);
