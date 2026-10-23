@@ -12,7 +12,11 @@ import {
   usageCostPartitionKey,
 } from "../session-cost-usage-partitions.js";
 import { loadAgentPortDescriptor } from "./agent-port-descriptor.js";
-import { inspectDatabasePort, migrateDatabasePortSource } from "./port.worker.js";
+import {
+  inspectDatabasePort,
+  inspectSqlitePortSchema,
+  migrateDatabasePortSource,
+} from "./port.worker.js";
 import { admitStoreSearch } from "./search-admission.js";
 import { loadSqliteVecExtension } from "./sqlite-vec.js";
 
@@ -78,6 +82,49 @@ it.each([21, currentVersion])(
     expect(await fs.readFile(source)).toEqual(before);
   },
 );
+
+it("completes absent first-use columns in the private current-schema copy", async () => {
+  const root = tempDirs.make("agent-port-first-use-");
+  const source = path.join(root, "source.sqlite"),
+    copy = path.join(root, "private.sqlite");
+  const descriptor = await loadAgentPortDescriptor();
+  {
+    using db = openNodeSqliteDatabase(source);
+    db.exec(
+      descriptor.sqlite +
+        `
+      PRAGMA user_version = ${currentVersion};
+      INSERT INTO schema_meta VALUES ('primary', 'agent', ${currentVersion}, 'main', NULL, 1, 1);
+      ALTER TABLE session_nodes DROP COLUMN legacy_acp_migration_json;
+      ALTER TABLE session_key_contract DROP COLUMN canonical_ready;
+    `,
+    );
+    const { pendingColumns } = descriptor.inspectSqliteSource!(db);
+    expect(pendingColumns).toEqual({
+      session_nodes: ["legacy_acp_migration_json"],
+      session_key_contract: ["canonical_ready"],
+    });
+    expect(() => inspectSqlitePortSchema(db, descriptor, pendingColumns)).not.toThrow();
+    // Strict coverage still refuses columns outside the first-use contract.
+    for (const change of ["ADD COLUMN unported_data TEXT", "DROP COLUMN project_id"]) {
+      db.exec(`BEGIN; ALTER TABLE session_nodes ${change}`);
+      try {
+        expect(descriptor.inspectSqliteSource!(db).pendingColumns).toEqual(pendingColumns);
+        expect(() => inspectSqlitePortSchema(db, descriptor, pendingColumns)).toThrow(
+          "Unknown or missing columns in session_nodes",
+        );
+      } finally {
+        db.exec("ROLLBACK");
+      }
+    }
+  }
+  const before = await fs.readFile(source);
+  await fs.copyFile(source, copy);
+  await migrateDatabasePortSource(copy, descriptor, currentVersion, () => {});
+  using migrated = openNodeSqliteDatabase(copy);
+  expect(descriptor.inspectSqliteSource!(migrated).pendingColumns).toEqual({});
+  expect(await fs.readFile(source)).toEqual(before);
+});
 
 it.each(["vector", "text"])("omits rebuildable %s indexes", async (kind) => {
   const descriptor = await loadAgentPortDescriptor();

@@ -112,6 +112,21 @@ export async function admitDatabasePortDescriptor(
   }
   return admitted;
 }
+/** First-use columns are valid absent; porting completes them in its private copy. */
+export function readPendingFirstUseColumns(
+  db: DatabaseSync,
+  definitions: readonly { tableName: string; columnName: string }[],
+): Record<string, string[]> {
+  const pending: Record<string, string[]> = {};
+  for (const { tableName, columnName } of definitions) {
+    const columns = readTableColumns(db, tableName);
+    if (columns.size && !columns.has(columnName)) {
+      (pending[tableName] ??= []).push(columnName);
+    }
+  }
+  return pending;
+}
+
 /** Validate the canonical SQLite surface before scanning or owner migration. */
 export function inspectSqlitePortSchema(
   db: DatabaseSync,

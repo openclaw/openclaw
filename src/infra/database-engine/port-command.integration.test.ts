@@ -191,7 +191,7 @@ describe("database port command custody and inspection", () => {
 });
 
 describe.skipIf(!connection)("database port command PostgreSQL conformance", () => {
-  it("privately adds the first-use deletion phase when porting a current-schema journal", async () => {
+  it("privately adds absent first-use columns when porting a current-schema shared state", async () => {
     await fixture(async ({ state, client }) => {
       assert(client);
       openOpenClawStateDatabase({ env: state.env });
@@ -201,6 +201,7 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
         using db = openNodeSqliteDatabase(shared);
         db.exec(`
           ALTER TABLE agent_deletion_journal DROP COLUMN phase;
+          ALTER TABLE worker_workspace_pending_results DROP COLUMN repository_workspace_id;
           ALTER TABLE agent_database_leases ADD COLUMN unported_data TEXT;
           INSERT INTO agent_deletion_journal (agent_id, agent_dir, workspace_dir, sessions_dir, created_at)
           VALUES ('retired', '/retired/agent', '/retired/workspace', '/retired/sessions', 17);
@@ -241,6 +242,15 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
           )
         ).rows,
       ).toEqual([{ agent_id: "retired", phase: null, created_at: "17" }]);
+      expect(
+        (
+          await client.query(
+            `SELECT column_name FROM information_schema.columns
+             WHERE table_schema = $1 AND table_name = 'worker_workspace_pending_results'`,
+            [anchor.namespace],
+          )
+        ).rows,
+      ).toContainEqual({ column_name: "repository_workspace_id" });
       assert("manifest" in ported && typeof ported.manifest === "string");
       const saved = JSON.parse(
         fs.readFileSync(ported.manifest, "utf8"),
@@ -256,6 +266,12 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
           .all()
           .map((column) => column.name),
       ).not.toContain("phase");
+      expect(
+        originalDb
+          .prepare("PRAGMA table_info(worker_workspace_pending_results)")
+          .all()
+          .map((column) => column.name),
+      ).not.toContain("repository_workspace_id");
       expect(
         originalDb.prepare("SELECT agent_id, created_at FROM agent_deletion_journal").all(),
       ).toEqual([{ agent_id: "retired", created_at: 17 }]);

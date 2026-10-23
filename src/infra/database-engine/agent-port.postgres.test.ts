@@ -1,5 +1,6 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import "./backup-worker.test-support.js";
+import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -107,7 +108,7 @@ describe.skipIf(!connection)("agent database port", () => {
     expect(await rows("SELECT 1 FROM pg_namespace WHERE nspname = $1", [namespace])).toEqual([]);
   });
 
-  it("ports lazy raw and compressed predicates through the verified command into readable PostgreSQL history", async () => {
+  it("ports lazy raw and compressed predicates and absent first-use columns through the verified command into readable PostgreSQL history", async () => {
     await withOpenClawTestState(
       { scenario: "minimal", prefix: "agent-port-lazy-" },
       async (state) => {
@@ -144,7 +145,9 @@ describe.skipIf(!connection)("agent database port", () => {
               VALUES ('agent:main:main', 'lazy-session', '{"sessionId":"lazy-session"}', 1);
             INSERT INTO session_windows (session_id, session_key, created_at, updated_at, transcript_updated_at)
               VALUES ('lazy-session', 'agent:main:main', 1, 1, 1);
-            INSERT INTO transcript_rewrite_watermarks VALUES ('lazy-session', 'lazy-generation', 1);`);
+            INSERT INTO transcript_rewrite_watermarks VALUES ('lazy-session', 'lazy-generation', 1);
+            ALTER TABLE session_nodes DROP COLUMN legacy_acp_migration_json;
+            ALTER TABLE session_key_contract DROP COLUMN canonical_ready;`);
           admitSqliteSchema(source);
           for (const [seq, event] of events.entries()) {
             const payload = prepareTranscriptPayload(source, JSON.stringify(event));
@@ -193,6 +196,30 @@ describe.skipIf(!connection)("agent database port", () => {
           expect(manifest).toMatchObject({ state: "complete", outcome: "ported" });
           expect(manifest.targets[0]?.verification).toMatchObject({ ownerAdmitted: true });
           expect(manifest.targets[0]?.verification?.contentHash).toMatch(/^[a-f0-9]{64}$/);
+          const target = manifest.targets[0]!;
+          assert(target.intended.engine === "postgres");
+          expect(
+            await rows(
+              `SELECT table_name, column_name FROM information_schema.columns
+               WHERE table_schema = $1 AND column_name IN ('legacy_acp_migration_json', 'canonical_ready')
+               ORDER BY table_name`,
+              [target.intended.namespace],
+            ),
+          ).toEqual([
+            { table_name: "session_key_contract", column_name: "canonical_ready" },
+            { table_name: "session_nodes", column_name: "legacy_acp_migration_json" },
+          ]);
+          {
+            using original = openNodeSqliteDatabase(target.originalCapture.path, {
+              readOnly: true,
+            });
+            expect(
+              original
+                .prepare("SELECT name FROM pragma_table_info('session_nodes')")
+                .all()
+                .map((column) => column.name),
+            ).not.toContain("legacy_acp_migration_json");
+          }
           const config = JSON.parse(fs.readFileSync(state.configPath, "utf8")) as OpenClawConfig;
           withDatabaseEngineSelection(
             {

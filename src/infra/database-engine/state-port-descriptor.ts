@@ -1,3 +1,4 @@
+import { CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS } from "../../state/openclaw-state-db-additive-columns.js";
 import {
   DOCTOR_OWNED_STATE_TABLES,
   OPENCLAW_STATE_SCHEMA_VERSION,
@@ -8,8 +9,7 @@ import {
   stateEngineSchema,
 } from "../../state/openclaw-state-db-engine.js";
 import { assertOpenClawStateDatabaseForMaintenance } from "../../state/openclaw-state-db-maintenance.js";
-import { ensureAgentDeletionJournalPhaseSchema } from "../../state/openclaw-state-db-schema-additive.js";
-import { tableHasColumn } from "../../state/openclaw-state-db-schema-helpers.js";
+import { ensureFirstUseAdditiveStateColumnsForStrictMigration } from "../../state/openclaw-state-db-schema-additive.js";
 import { withLegacyStateHeadLayout } from "../../state/openclaw-state-db-schema-v26-layout.js";
 import { withLegacyStateWriteIndexes } from "../../state/openclaw-state-db-schema-v27-indexes.js";
 import { withLegacyPublicationDraft } from "../../state/openclaw-state-db-schema-v28-publication.js";
@@ -25,7 +25,12 @@ import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../sqlite-schem
 import { extractSqliteTableSchema } from "../sqlite-schema-sql.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import { openEngineStore } from "./open.js";
-import { DatabasePortDataError, type PortDescriptor, type PortTable } from "./port-descriptor.js";
+import {
+  DatabasePortDataError,
+  readPendingFirstUseColumns,
+  type PortDescriptor,
+  type PortTable,
+} from "./port-descriptor.js";
 
 export async function loadStatePortDescriptor(
   sourceVersion = OPENCLAW_STATE_SCHEMA_VERSION,
@@ -149,22 +154,20 @@ export async function loadStatePortDescriptor(
         );
       }
       assertOpenClawStateDatabaseForMaintenance(db, { pathname: "shared-state port source" });
-      const needsPhaseColumn =
-        tableHasColumn(db, "agent_deletion_journal", "agent_id") &&
-        !tableHasColumn(db, "agent_deletion_journal", "phase");
-      const pendingColumns: Record<string, readonly string[]> = needsPhaseColumn
-        ? { agent_deletion_journal: ["phase"] }
-        : {};
-      // First-use columns are valid absent; porting completes them in its private copy.
-      return { version, migrationRequired: false, pendingColumns };
+      return {
+        version,
+        migrationRequired: false,
+        pendingColumns: readPendingFirstUseColumns(
+          db,
+          CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS,
+        ),
+      };
     },
     migrateSqliteSource(file, _version, assertCurrent) {
       using db = openNodeSqliteDatabase(file);
       admitSqliteSchema(db);
-      if (tableHasColumn(db, "agent_deletion_journal", "agent_id")) {
-        assertCurrent();
-        ensureAgentDeletionJournalPhaseSchema(db);
-      }
+      assertCurrent();
+      ensureFirstUseAdditiveStateColumnsForStrictMigration(db);
     },
     async admit(file, input) {
       // Historical SQLite images use their descriptor; restored PG anchors still

@@ -199,11 +199,12 @@ export function ensurePersonalGitHubPublicationSchema(db: EngineConnection): voi
  *
  * These columns normally stay absent until their owning feature first writes
  * them, and the persistent schema contract accepts that shape. The STRICT
- * table rebuild is the one caller that cannot: it recreates each table from
- * canonical SQL, which already declares these columns, so a database missing
- * them fails the canonical column check and rolls the entire repair back.
- * Ensuring them immediately before that rebuild matches the shape the rebuild
- * produces anyway, and stays scoped to databases old enough to need it.
+ * table rebuild cannot: it recreates each table from canonical SQL, which
+ * already declares these columns, so a database missing them fails the
+ * canonical column check and rolls the entire repair back. Ensuring them
+ * immediately before that rebuild matches the shape the rebuild produces
+ * anyway, and stays scoped to databases old enough to need it. The database
+ * port also calls this on its private copy, never on the live store.
  */
 export function ensureFirstUseAdditiveStateColumnsForStrictMigration(db: DatabaseSync): void {
   for (const {
