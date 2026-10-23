@@ -54,7 +54,6 @@ type RequesterToolPolicyResolution = {
   inheritedToolPolicyForSpawn?: SandboxToolPolicy;
   delegatedToolPolicy?: DelegatedToolPolicy;
   inheritedToolPolicySource?: "sender";
-  subagentStore?: SessionCapabilityStore;
 };
 
 type SenderPolicyMode = "always" | "when-sender-id" | "never";
@@ -405,7 +404,6 @@ export function resolveRequesterToolPolicies(
         toolPolicyRestrictsTools(groupPolicy) || toolPolicyRestrictsTools(senderPolicy)
           ? "sender"
           : delegatedPolicy.inheritedToolPolicySource,
-      subagentStore,
     };
   }
   const inheritedEnvelope = resolvePersistedSubagentToolPolicyEnvelope(subagentSessionKey, {
@@ -428,6 +426,5 @@ export function resolveRequesterToolPolicies(
     inheritedToolPolicy: resolveInheritedToolPolicyForSession(params.config, subagentSessionKey, {
       store: subagentStore,
     }),
-    subagentStore,
   };
 }
