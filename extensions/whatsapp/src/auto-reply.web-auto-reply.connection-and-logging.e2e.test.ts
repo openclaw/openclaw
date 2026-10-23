@@ -29,6 +29,7 @@ import {
   createWhatsAppReplyTransportContext,
   deliverWebReply,
 } from "./auto-reply/deliver-reply.js";
+import { whatsappLog } from "./auto-reply/loggers.js";
 import { buildInboundLine } from "./auto-reply/monitor/message-line.js";
 import type { WebChannelStatus } from "./auto-reply/types.js";
 import { createTestWebInboundMessage } from "./inbound/test-message.test-helper.js";
@@ -201,6 +202,36 @@ function expectStatus(statuses: Partial<WebChannelStatus>[], expected: Partial<W
 function blockedStatus(healthState: WebChannelStatus["healthState"]) {
   return { running: false, connected: false, healthState, lifecycle: "blocked" };
 }
+
+it.each([
+  ["open", false, "all groups; no group allowlist configured", undefined],
+  ["disabled", true, "groups disabled by groupPolicy", undefined],
+  ["allowlist", false, "group inbound blocked by empty groupPolicy allowlist", undefined],
+  ["allowlist", true, "all groups; sender allowlist configured", undefined],
+  ["allowlist", true, "all groups; wildcard configured", { "123@g.us": {}, "*": {} }],
+  ["allowlist", true, "2 configured groups", { "123@g.us": {}, "456@g.us": {} }],
+] as const)(
+  "logs listener scope for %s policy: %s, %s",
+  async (groupPolicy, hasGroupAllowFrom, scope, groups) => {
+    setLoadConfigMock({
+      channels: {
+        whatsapp: {
+          groupPolicy,
+          allowFrom: [],
+          groupAllowFrom: hasGroupAllowFrom ? ["+111"] : [],
+          groups,
+        },
+      },
+    });
+    const info = vi.spyOn(whatsappLog, "info").mockImplementation(() => {});
+    try {
+      await openOnce();
+      expect(info).toHaveBeenCalledWith(`Listening for WhatsApp inbound messages (DM + ${scope}).`);
+    } finally {
+      info.mockRestore();
+    }
+  },
+);
 
 it("handles helper envelope timestamps with trimmed timezones (regression)", () => {
   const d = new Date("2025-01-01T00:00:00.000Z");

@@ -7,7 +7,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTestWebInboundMessage } from "../inbound/test-message.test-helper.js";
 import type { AdmittedWebInboundMessage } from "../inbound/types.js";
 import { runGroupGatingTestMessage as runGroupGating } from "./monitor/group-gating.test-harness.js";
-import { formatWhatsAppInboundListeningLog } from "./monitor/listener-log.js";
 import { buildInboundLine } from "./monitor/message-line.js";
 
 let sessionDir: string | undefined;
@@ -131,26 +130,6 @@ function createReplyToBot(overrides: TestMessageOverrides) {
     ...overrides,
   });
 }
-
-describe("WhatsApp listener diagnostics", () => {
-  it("describes WhatsApp inbound listener scope without implying DM-only routing", () => {
-    const expectScope = (
-      groupPolicy: Parameters<typeof formatWhatsAppInboundListeningLog>[0]["groupPolicy"],
-      hasGroupAllowFrom: boolean,
-      scope: string,
-      groups?: Record<string, unknown>,
-    ) =>
-      expect(formatWhatsAppInboundListeningLog({ groupPolicy, hasGroupAllowFrom, groups })).toBe(
-        `Listening for WhatsApp inbound messages (DM + ${scope}).`,
-      );
-    expectScope("open", false, "all groups; no group allowlist configured");
-    expectScope("disabled", true, "groups disabled by groupPolicy");
-    expectScope("allowlist", false, "group inbound blocked by empty groupPolicy allowlist");
-    expectScope("allowlist", true, "all groups; sender allowlist configured");
-    expectScope("allowlist", true, "all groups; wildcard configured", { "123@g.us": {}, "*": {} });
-    expectScope("allowlist", true, "2 configured groups", { "123@g.us": {}, "456@g.us": {} });
-  });
-});
 
 describe("applyGroupGating", () => {
   it("does not treat self-number quoted replies as implicit mention in selfChatMode groups", async () => {

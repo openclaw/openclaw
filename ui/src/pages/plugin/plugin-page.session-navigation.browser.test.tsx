@@ -18,7 +18,7 @@ import {
   createSolidApplicationContextProvider,
 } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
-import type { ControlUiPluginSessionOpenMessage } from "./plugin-frame-session-navigation.ts";
+import type { ControlUiPluginSessionOpenMessage } from "./plugin-page-lifecycle.ts";
 import { PluginPage } from "./plugin-page.tsx";
 
 const pluginPath = "/plugins/example/panel";
