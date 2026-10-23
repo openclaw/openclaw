@@ -38,7 +38,6 @@ function resolveDecision(
   return resolveIMessageInboundDecision(
     createInboundDecisionParams({
       selfChatCache,
-      isKnownFromMeMessageId: undefined,
       ...overrides,
       message: { id: 100, sender: SELF_CHAT_HANDLE, text: "Hello", ...overrides.message },
     }),

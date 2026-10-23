@@ -8,7 +8,7 @@ import {
   type Element as SolidElement,
 } from "solid-js";
 import { findOverlayParent } from "../../../components/overlay-lifecycle.ts";
-import { hasProviderBrandIcon } from "../../../components/provider-icon.ts";
+import { hasProviderBrandIcon } from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../../components/solid/provider-icon.tsx";
 import "../../../components/tooltip.ts";

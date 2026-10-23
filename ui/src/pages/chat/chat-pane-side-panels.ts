@@ -1,6 +1,6 @@
 import type { SessionsCompanionStateResult } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
-import { shellViewport, type ShellViewportSnapshot } from "../../app/shell-viewport.ts";
+import { shellViewport } from "../../app/shell-viewport.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { showToast } from "../../lib/toast.ts";
@@ -153,16 +153,12 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
           return;
         }
         this.mobilePresentation.height = height;
-        if (mode) {
-          this.mobilePresentation.mode = mode;
-        }
-        if (reservedHeight !== undefined) {
-          this.mobilePresentation.reservedHeight = reservedHeight;
-        }
+        this.mobilePresentation.mode = mode;
+        this.mobilePresentation.reservedHeight = reservedHeight;
       },
-      keyboardVisible: shellViewport.snapshot?.keyboardVisible,
+      keyboardVisible:
+        this.mobilePresentation.publishedKeyboard ?? shellViewport.snapshot?.keyboardVisible,
       onComposerEditingChange: this.onMobileComposerEditingChange,
-      onViewportChange: this.onMobileViewportChange,
     };
   }
 
@@ -197,10 +193,11 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
     if (previousSuspended !== this.mobilePresentation.suspended) {
       this.syncMobileObserverVisibility();
     }
-    this.onMobileViewportChange(viewport);
+    this.onMobileViewportChange();
   };
 
-  private readonly onMobileViewportChange = (viewport: ShellViewportSnapshot | undefined): void => {
+  private readonly onMobileViewportChange = (): void => {
+    const viewport = shellViewport.snapshot;
     const recovery = this.mobilePresentation.viewportRecovery;
     const previousSuspended = this.mobilePresentation.suspended;
     if (viewport && recovery && this.mobilePresentation.suspended && viewport.nativeScale) {
@@ -233,6 +230,11 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
       this.mobilePresentation.publishedKeyboard = viewport?.keyboardVisible;
     }
   };
+
+  observeMobileViewport(): () => void {
+    this.onMobileViewportChange();
+    return shellViewport.subscribe(this.onMobileViewportChange);
+  }
 
   protected navigateMobileHost(destination: MobileHostDestination, source?: HTMLElement): void {
     if (!this.usesMobileHost) {

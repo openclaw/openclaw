@@ -198,7 +198,6 @@ describe("statusJsonCommand", () => {
       sourceConfig: {},
       deep: false,
       includeFilesystem: true,
-      includeChannelSecurity: true,
       loadPluginSecurityCollectors: false,
     });
     expect(logs).toStrictEqual([expect.any(String)]);

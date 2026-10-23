@@ -18,10 +18,10 @@ For async reads, mutations, keyed projections, lazy components, or coordinated l
 1. **Domain owners stay plain TypeScript.** The Gateway store, capabilities, `lib/sessions/*`, caches, persistence, and mutation authority keep synchronous mutate-then-read semantics. Solid 2 writes become visible only after a microtask flush, so authoritative state never lives in a signal. → [state and ownership](references/state-and-ownership.md)
 2. **Components consume projections** from `ui/src/lib/reactive/` (one per owner and scope, never a second store) and `useApplication()` for the application context. Add a thin adapter only with its first production caller; subscribe to ordered events directly.
 3. **Host tags and classes survive.** A component renders its existing `openclaw-*` tag as a plain host element in light DOM; CSS and E2E select it. Never rename a tag or a class. → [components](references/components.md)
-4. **One implementation per registered tag.** Native custom elements and Solid callers share one renderer through `defineSolidBridge` in `ui/src/lib/solid-bridge.ts`. Use its returned component in JSX so the host has one lifecycle owner. → [components](references/components.md)
+4. **One implementation per registered tag.** Solid-rendered native hosts share their renderer through `defineSolidBridge` in `ui/src/lib/solid-bridge.ts`; use its returned component in JSX. Specialized native hosts such as Tooltip keep their existing wrapper and lifecycle owner. → [components](references/components.md)
 5. **One renderer per DOM region**, and one lifecycle owner per overlay surface. → [overlays](references/overlays.md)
 6. **Derive, don't synchronize.** `createMemo` before `createSignal`; no copies of owner state; no defensive guards for states the owner already excludes. Prefer smaller code with fewer owners.
-7. **Replace controller lifecycles at their owner.** Follow the [controller-to-Solid recipe](references/idioms.md#replace-rendering-controllers), including its worked example. Delete the class and host adapter wiring together; do not wrap a controller in revision signals as the final design.
+7. **Keep rendering controller lifecycles out.** Production Control UI rendering controllers and host-update contracts have been removed and are guarded. The [controller-to-Solid recipe](references/idioms.md#replace-rendering-controllers) explains the boundary for new integrations: plain domain owners retain authority; Solid owns presentation and lifecycle.
 
 ## Component skeleton
 

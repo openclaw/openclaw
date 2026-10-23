@@ -108,6 +108,8 @@ export async function prepareCliSessionHistoryReader(
       offset: params.offset,
       readOnly: true,
       deferProfileDisplay: true,
+      // Eligibility only needs local rows; the response owner prepares cron names.
+      resolveCronJobName: () => undefined,
     });
     if (tail.rawMessages.length) {
       return undefined;

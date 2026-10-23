@@ -14,10 +14,8 @@ import { createStoredChatOutboxReader } from "../lib/chat/outbox-store-projectio
 import { captureChatOutboxAdmission } from "../lib/chat/outbox-store.ts";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
 import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
-import {
-  admitStoredChatComposerQueueItem,
-  persistChatComposerState,
-} from "../pages/chat/composer-persistence.ts";
+import { persistChatComposerState } from "../pages/chat/composer-draft-storage.ts";
+import { admitStoredChatComposerQueueItemResult } from "../pages/chat/composer-queue-persistence.ts";
 import * as pairingView from "../pages/devices/view-pairing.tsx";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import {
@@ -245,13 +243,17 @@ describe("application shell pairing access", () => {
     };
     expect(persistChatComposerState(host)).toBe(true);
     expect(
-      admitStoredChatComposerQueueItem(host, captureChatOutboxAdmission(host, host.sessionKey), {
-        id: "failed",
-        text: "private queued input",
-        createdAt: 1,
-        sendState: "failed",
-      }),
-    ).toBe(true);
+      admitStoredChatComposerQueueItemResult(
+        host,
+        captureChatOutboxAdmission(host, host.sessionKey),
+        {
+          id: "failed",
+          text: "private queued input",
+          createdAt: 1,
+          sendState: "failed",
+        },
+      ),
+    ).toBe("admitted");
     shell.outboxStoreRuntime = createStoredChatOutboxReader();
     const first = (await renderSidebar()).storedOutboxes!;
     expect(first.total).toBe(1);
@@ -384,7 +386,9 @@ describe("application shell pairing access", () => {
     replacement.context.navigation.update = update;
     replacement.context.overlays.subscribe = vi.fn(() => stopOverlays);
     shell.runtime = { ...shell.runtime!, context: replacement.context };
-    const openNewSession = vi.spyOn(shell, "openNewSession").mockImplementation(() => undefined);
+    const openNewSession = vi
+      .spyOn(shell.shellNavigation, "openNewSession")
+      .mockImplementation(() => undefined);
 
     onPairMobile?.();
     onRetryConnect?.();

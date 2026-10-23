@@ -1,10 +1,8 @@
-import { writeFileSync } from "node:fs";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { withBrowserPage } from "../test-helpers/browser-page.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { readStyles, styleFixture } from "./style-fixture.test-support.ts";
 
 const fixture = styleFixture("forced-colors-indicators-", { ignoreCloseErrors: true });
@@ -99,10 +97,10 @@ fixture.describe("Control UI forced-colors indicators", () => {
               };
             }),
           );
-          const frame = await takeControlUiScreenshotFrame(page, page.locator("main"), [button], {
+          await page.screenshot({
             animations: "disabled",
+            path: path.join(artifactDir, `${name}.png`),
           });
-          writeFileSync(path.join(artifactDir, `${name}.png`), frame.png);
         }
         expect(indicators).toEqual(
           classes.map(() => ({ style: "solid", width: "2px", shadow: "none" })),

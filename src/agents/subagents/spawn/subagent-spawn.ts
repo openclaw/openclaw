@@ -10,7 +10,11 @@ import { getCanonicalGatewayContextResolver } from "../../../plugins/runtime/gat
 import { hasDeliveryTargetFields } from "../../../utils/delivery-context.shared.js";
 import { runWithAgentToolSourceExecutionScope } from "../../agent-tool-source-execution-guard.js";
 import { prepareNativeDelegatedToolPolicy } from "../../delegated-tool-policy.js";
-import { runSpawnPipeline, type SpawnBackendAdapter } from "../../spawn-pipeline.js";
+import {
+  runSpawnPipeline,
+  summarizeSpawnError,
+  type SpawnBackendAdapter,
+} from "../../spawn-pipeline.js";
 import { withGatewayToolOperatorContinuation } from "../../tools/gateway-caller-context.js";
 import { cleanupMaterializedSubagentAttachments } from "../subagent-attachment-cleanup.js";
 import { activateSwarmRun } from "../swarm/swarm-scheduler.js";
@@ -54,7 +58,6 @@ import {
   recordSubagentSessionSetup,
 } from "./subagent-spawn-lifecycle.js";
 import { resolveSubagentSpawnRequest } from "./subagent-spawn-request.js";
-import { buildSubagentSpawnFailureResult } from "./subagent-spawn-result.js";
 import { createInitialSubagentSession } from "./subagent-spawn-session-patch.js";
 import { bindThreadForSubagentSpawn } from "./subagent-spawn-thread-binding.js";
 import { emitSessionLifecycleEvent, mergeDeliveryContext } from "./subagent-spawn.runtime.js";
@@ -239,7 +242,6 @@ export async function spawnSubagentDirect(
     const cleanupCreatedSession = (emitLifecycleHooks = false) =>
       cleanupProvisionalSession(childSessionKey, {
         emitLifecycleHooks,
-        deleteTranscript: true,
         ...provisionalSessionIdentity,
         isCurrent: isCleanupCurrent,
         ...(cleanupOwner ? { callGateway: cleanupOwner.callGateway } : {}),
@@ -448,7 +450,6 @@ export async function spawnSubagentDirect(
         ...childTarget,
         attachmentId,
         emitLifecycleHooks: threadBindingReady,
-        deleteTranscript: true,
         ...provisionalSessionIdentity,
         ...options,
         isCurrent: isCleanupCurrent,
@@ -588,11 +589,24 @@ export async function spawnSubagentDirect(
       },
     });
     if (!pipelineResult.ok) {
-      return buildSubagentSpawnFailureResult(pipelineResult, {
+      const { phase, error } = pipelineResult;
+      const spawnStatus =
+        error && typeof error === "object" && "spawnStatus" in error
+          ? error.spawnStatus
+          : undefined;
+      return {
+        status: spawnStatus === "forbidden" ? "forbidden" : "error",
+        error: [
+          phase === "register" && spawnStatus !== "forbidden"
+            ? `Failed to register subagent run: ${summarizeSpawnError(error)}`
+            : summarizeSpawnError(error),
+          acceptedRunCleanupError,
+        ]
+          .filter(Boolean)
+          .join(" "),
         childSessionKey,
-        fallbackRunId: childIdem,
-        acceptedRunCleanupError,
-      });
+        ...(phase === "initialize" ? {} : { runId: pipelineResult.runId ?? childIdem }),
+      };
     }
     const childRunId = pipelineResult.runId;
     let collectorSessionKey: string | undefined;

@@ -153,7 +153,10 @@ it.each([
         },
       };
       await expect(
-        resolveCronModelSelection({ ...selection, payload: job.payload }),
+        resolveCronModelSelection({
+          ...selection,
+          payloadModel: job.payload.kind === "agentTurn" ? job.payload.model : undefined,
+        }),
       ).resolves.toMatchObject({
         ok: true,
         provider: "openai",
@@ -165,11 +168,7 @@ it.each([
         await expect(
           resolveCronModelSelection({
             ...selection,
-            payload: {
-              kind: "agentTurn",
-              message: "Ordinary override",
-              model: "openai/gpt-4o-mini",
-            },
+            payloadModel: "openai/gpt-4o-mini",
           }),
         ).resolves.toMatchObject({
           ok: false,

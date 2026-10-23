@@ -270,14 +270,7 @@ export function createChatSendReplyDispatch(params: {
             const answer = hasTools
               ? extractAssistantTextForPhase(message, { phase: "final_answer" })
               : extractAssistantPhaseText(message);
-            // Delivery selection only checks visible text; forwarded labels are
-            // resolved later by the response owner.
-            if (
-              !answer ||
-              !extractAssistantPhaseText(
-                projectChatDisplayMessage(message, { resolveCronJobName: () => undefined }),
-              )
-            ) {
+            if (!answer || !extractAssistantPhaseText(projectChatDisplayMessage(message))) {
               continue;
             }
             const selected = resolveChatReplyDeliveryFromAnchors({

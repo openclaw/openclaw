@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.10.5",
+  "version": "2026.10.6",
   "openclaw": {
     "updateAdmissionProtocol": 1,
     "databaseEngines": [
@@ -1795,7 +1795,7 @@
     "check:browser-inspect-script:swift": "node --import ./scripts/tsx.mjs scripts/generate-browser-inspect-script-swift.mts --check",
     "check:host-env-policy:swift": "node --import ./scripts/tsx.mjs scripts/generate-host-env-security-policy-swift.mts --check",
     "check:import-cycles": "node --import ./scripts/tsx.mjs scripts/check-import-cycles.ts",
-    "check:line-cap-ratchet": "node --import ./scripts/tsx.mjs scripts/check-line-cap-ratchet.mts",
+    "check:line-cap-ratchet": "node scripts/check-line-cap-ratchet.mjs",
     "check:max-lines-ratchet": "node --import ./scripts/tsx.mjs scripts/check-max-lines-ratchet.mts",
     "check:madge-import-cycles": "node --import ./scripts/tsx.mjs scripts/check-madge-import-cycles.ts",
     "check:media-download-helpers": "node --import ./scripts/tsx.mjs scripts/check-media-download-helper-roundtrip.mts",

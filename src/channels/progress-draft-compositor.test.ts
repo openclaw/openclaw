@@ -310,9 +310,10 @@ it("merges reasoning deltas within a burst and separates bursts across tools", a
 });
 
 it.each([
-  ["buffers tags", ["<thin", "k>Check</think>Answer"], "Check", true],
-  ["literal code", ["```html\n<think>x</think>\n```"], "```html <think>x</think> ```", false],
-  ["snapshots", ["Thinking\n\n_A_", "Thinking\n\n_AB_"], "AB", false],
+  ["buffers tags", ["<thin", "k>Check</think>Answer"], "_Check_", true],
+  ["literal code", ["```html\n<think>x</think>\n```"], "_```html <think>x</think> ```_", false],
+  ["tilde code ownership", ["~~~html\n<think>x</think>\n~~~"], "x", false],
+  ["snapshots", ["Thinking\n\n_A_", "Thinking\n\n_AB_"], "_AB_", false],
 ] as const)("reasoning %s", async (_name, chunks, expected, firstIsBuffered) => {
   const { progress, update, rendered } = createProgress(undefined, {
     reasoningLinePrefix: "🧠 ",
@@ -325,7 +326,7 @@ it.each([
       expect(update).toHaveBeenCalledTimes(calls);
     }
   }
-  rendered().toBe(`Shelling\n\n• Exec\n🧠 _${expected}_`);
+  rendered().toBe(`Shelling\n\n• Exec\n🧠 ${expected}`);
 });
 
 it("keeps tool lines under narration while deduplicating and clearing the headline", async () => {

@@ -20,6 +20,7 @@ import {
   createPendingUsageRouteData,
   focusDocument,
   refreshButton,
+  showRecentSessions,
   queryUsagePage,
   selectUsageSession,
   settleUsagePage,
@@ -131,6 +132,7 @@ describe("UsagePage detail requests", () => {
         : { providers: [], points: [], logs: [] },
     );
     const { page } = await loadUsagePage(request);
+    await showRecentSessions(page);
     const settle = () => settleUsagePage(page);
     const changePage = async (label: string) => {
       usageButton(page, label, ".data-table-pagination button").click();
@@ -413,7 +415,7 @@ describe("UsagePage detail requests", () => {
         "agent:main:second",
       ]);
     second.reject(new Error("Selected timeline unavailable"));
-    await waitForFast(() => expect(page.read().detail.timeSeriesLoading).toBe(false));
+    await page.read().detail.timeSeriesRead;
     first.reject(new Error("Retired timeline unavailable"));
     await first.promise.catch(() => {});
     expect(usageCalls(request, "sessions.usage.timeseries")).toHaveLength(2);

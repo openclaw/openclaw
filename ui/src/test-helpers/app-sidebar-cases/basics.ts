@@ -18,7 +18,7 @@ import { agentList, sessionList } from "./compact.test-support.ts";
 import { settleRoster } from "./roster.test-support.ts";
 import "../../components/app-sidebar.tsx";
 
-await import("../../components/viewer-facepile.ts");
+await import("../../components/solid/viewer-facepile.tsx");
 
 const MAIN = "agent:main:main";
 const RESEARCH = "agent:research:main";

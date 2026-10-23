@@ -194,27 +194,34 @@ export async function changeSessionPlacement(params: {
     ? retry.abandonSource === true
     : movingPlacement?.runner?.kind === "device" && movingPlacement.runner.status === "offline";
   let target: SessionMoveTarget | null;
-  if (abandonSource) {
-    const confirmed = await showConfirmDialog({
-      message: t("sessionsView.continueOnGatewayConfirm", {
-        session: params.row.label || params.row.key,
-      }),
-      confirmLabel: t("sessionsView.continueOnGatewayAction"),
-      danger: true,
-    });
-    target = confirmed ? (retry ? { ...retry.target } : { kind: "gateway" }) : null;
-  } else if (retry) {
-    target = { ...retry.target };
-  } else {
-    target = await selectSessionPlacementTarget({
-      client,
-      gatewaySnapshot: params.gatewaySnapshot,
-      mode: movingPlacement ? "move" : restartPlacement ? "restart" : "dispatch",
-      row: params.row,
-      requiredProfile: params.requiredProfile(),
-      presentation: params.presentation,
-      source: params.source,
-    });
+  try {
+    if (abandonSource) {
+      const confirmed = await showConfirmDialog({
+        message: t("sessionsView.continueOnGatewayConfirm", {
+          session: params.row.label || params.row.key,
+        }),
+        confirmLabel: t("sessionsView.continueOnGatewayAction"),
+        danger: true,
+      });
+      target = confirmed ? (retry ? { ...retry.target } : { kind: "gateway" }) : null;
+    } else if (retry) {
+      target = { ...retry.target };
+    } else {
+      target = await selectSessionPlacementTarget({
+        client,
+        gatewaySnapshot: params.gatewaySnapshot,
+        mode: movingPlacement ? "move" : restartPlacement ? "restart" : "dispatch",
+        row: params.row,
+        requiredProfile: params.requiredProfile(),
+        presentation: params.presentation,
+        source: params.source,
+      });
+    }
+  } catch (error) {
+    if (params.isCurrent()) {
+      params.publishError(error);
+    }
+    return;
   }
   if (!target) {
     return;

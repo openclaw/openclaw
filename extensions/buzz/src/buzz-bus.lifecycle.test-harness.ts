@@ -166,7 +166,7 @@ function subscriptionIncludesKind(
   return subscription.filters.some((filter) => filter.kinds?.includes(kind));
 }
 
-export const buzzTestData = {
+const buzzTestData = {
   PRIVATE_KEY,
   ACCOUNT_ID,
   CHANNEL_ID,

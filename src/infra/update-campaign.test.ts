@@ -4,8 +4,8 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
-import type { GatewayActiveWorkInspectors } from "./gateway-active-work.js";
 import type { GatewayScheduler } from "./gateway-scheduler.js";
+import { inspectors } from "./gateway-suspend-coordinator.test-support.js";
 import { UpdateCampaignController } from "./update-campaign.js";
 
 const randomUUIDMock = vi.hoisted(() => vi.fn());
@@ -17,30 +17,6 @@ vi.mock("node:crypto", async () => {
     randomUUID: () => randomUUIDMock(),
   };
 });
-
-function createInspectors(
-  readBusy: () => number,
-  overrides: Partial<GatewayActiveWorkInspectors> = {},
-): GatewayActiveWorkInspectors {
-  return {
-    getQueueSize: readBusy,
-    getPendingReplies: () => 0,
-    getEmbeddedRuns: () => 0,
-    getBackgroundExecSessions: () => 0,
-    getCronRuns: () => 0,
-    getAgentRuns: () => 0,
-    getAcpRuns: () => 0,
-    getMediaRuns: () => 0,
-    getRootRequests: () => 0,
-    getSessionAdmissions: () => 0,
-    getSessionMutations: () => 0,
-    getChatRuns: () => 0,
-    getQueuedTurns: () => 0,
-    getTerminalPersistence: () => 0,
-    getTerminalSessions: () => 0,
-    ...overrides,
-  };
-}
 
 describe("UpdateCampaignController", () => {
   let clock: ReturnType<typeof createGatewaySchedulerClock>;
@@ -69,7 +45,7 @@ describe("UpdateCampaignController", () => {
 
     controller.announce({
       target: { kind: "package", version: "2.0.0" },
-      inspect: createInspectors(() => 0),
+      inspect: inspectors({ getQueueSize: () => 0 }),
       apply,
       onChange,
     });
@@ -101,7 +77,8 @@ describe("UpdateCampaignController", () => {
 
     controller.announce({
       target: { kind: "package", version: "2.0.0" },
-      inspect: createInspectors(() => queueSize, {
+      inspect: inspectors({
+        getQueueSize: () => queueSize,
         getTerminalPersistence: () => terminalPersistence,
         getTerminalSessions: () => 2,
       }),
@@ -134,7 +111,7 @@ describe("UpdateCampaignController", () => {
 
     controller.announce({
       target: { kind: "git", upstreamRef: "origin/main", upstreamSha: "one", commitsBehind: 1 },
-      inspect: createInspectors(() => busy),
+      inspect: inspectors({ getQueueSize: () => busy }),
       apply,
       onChange: vi.fn(),
     });
@@ -154,7 +131,7 @@ describe("UpdateCampaignController", () => {
   it("starts a fresh campaign for a newer target and clears availability", () => {
     const controller = createController();
     const onChange = vi.fn();
-    const inspect = createInspectors(() => 1);
+    const inspect = inspectors({ getQueueSize: () => 1 });
     const apply = vi.fn(async () => "applied" as const);
 
     controller.announce({
@@ -190,7 +167,7 @@ describe("UpdateCampaignController", () => {
     expect(controller.adopt()).toEqual({ status: "absent" });
     controller.announce({
       target: { kind: "package", version: "2.0.0" },
-      inspect: createInspectors(() => 0),
+      inspect: inspectors({ getQueueSize: () => 0 }),
       apply,
       onChange: vi.fn(),
     });
@@ -229,7 +206,12 @@ describe("UpdateCampaignController", () => {
     const controller = createController();
     const apply = vi.fn(async () => "applied" as const);
     const onChange = vi.fn();
-    controller.announce({ target, inspect: createInspectors(() => 1), apply, onChange });
+    controller.announce({
+      target,
+      inspect: inspectors({ getQueueSize: () => 1 }),
+      apply,
+      onChange,
+    });
 
     expect(controller.adopt(requested)).toEqual({ status: "mismatch" });
     expect(controller.getState()).toMatchObject({ id: "campaign-1", state: "waiting-for-idle" });
@@ -255,7 +237,7 @@ describe("UpdateCampaignController", () => {
         upstreamSha: "frozen-sha",
         commitsBehind: 3,
       },
-      inspect: createInspectors(() => 0),
+      inspect: inspectors({ getQueueSize: () => 0 }),
       apply,
       onChange,
     });
@@ -279,7 +261,7 @@ describe("UpdateCampaignController", () => {
 
     controller.announce({
       target: { kind: "package", version: "2.0.0" },
-      inspect: createInspectors(() => 1),
+      inspect: inspectors({ getQueueSize: () => 1 }),
       apply,
       onChange: vi.fn(),
     });
@@ -316,7 +298,7 @@ describe("UpdateCampaignController", () => {
 
     controller.announce({
       target: { kind: "package", version: "2.0.0" },
-      inspect: createInspectors(() => 0),
+      inspect: inspectors({ getQueueSize: () => 0 }),
       apply,
       onChange: vi.fn(),
     });
@@ -349,7 +331,7 @@ describe("UpdateCampaignController", () => {
 
     controller.announce({
       target: { kind: "package", version: "2.0.0" },
-      inspect: createInspectors(() => 0),
+      inspect: inspectors({ getQueueSize: () => 0 }),
       apply,
       onChange: vi.fn(),
     });
@@ -371,7 +353,7 @@ describe("UpdateCampaignController", () => {
     const onChange = vi.fn();
     const announcement = {
       target: { kind: "package" as const, version: "2.0.0" },
-      inspect: createInspectors(() => 0),
+      inspect: inspectors({ getQueueSize: () => 0 }),
       apply: vi.fn(async () => "failed" as const),
       onChange,
     };
@@ -391,7 +373,7 @@ describe("UpdateCampaignController", () => {
     const firstApply = vi.fn(async () => "handoff" as const);
     const nextApply = vi.fn(async () => "handoff" as const);
     const onChange = vi.fn();
-    const inspect = createInspectors(() => 0);
+    const inspect = inspectors({ getQueueSize: () => 0 });
     controller.announce({
       target: { kind: "package", version: "2.0.0" },
       inspect,
@@ -428,7 +410,7 @@ describe("UpdateCampaignController", () => {
 
     controller.announce({
       target: { kind: "package", version: "2.0.0" },
-      inspect: createInspectors(() => 0),
+      inspect: inspectors({ getQueueSize: () => 0 }),
       apply,
       onChange: vi.fn(),
     });
@@ -440,7 +422,7 @@ describe("UpdateCampaignController", () => {
       controller.clear();
       controller.announce({
         target: { kind: "package", version: "3.0.0" },
-        inspect: createInspectors(() => 0),
+        inspect: inspectors({ getQueueSize: () => 0 }),
         apply: vi.fn(async () => "applied" as const),
         onChange: vi.fn(),
       });

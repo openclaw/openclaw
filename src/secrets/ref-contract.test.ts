@@ -11,7 +11,6 @@ import {
   isValidFileSecretRefId,
   isValidSecretRef,
   resolveDefaultSecretProviderAlias,
-  validateExecSecretRefId,
 } from "./ref-contract.js";
 
 describe("file secret ref id validation", () => {
@@ -32,14 +31,12 @@ describe("exec secret ref id validation", () => {
   it("accepts valid exec secret ref ids", () => {
     for (const id of VALID_EXEC_SECRET_REF_IDS) {
       expect(isValidExecSecretRefId(id), `expected valid id: ${id}`).toBe(true);
-      expect(validateExecSecretRefId(id)).toEqual({ ok: true });
     }
   });
 
   it("rejects invalid exec secret ref ids", () => {
     for (const id of INVALID_EXEC_SECRET_REF_IDS) {
       expect(isValidExecSecretRefId(id), `expected invalid id: ${id}`).toBe(false);
-      expect(validateExecSecretRefId(id).ok).toBe(false);
     }
   });
 });

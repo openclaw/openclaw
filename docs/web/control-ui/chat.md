@@ -155,6 +155,17 @@ In the macOS Web experience and Tauri desktop app on macOS, Linux, and Windows, 
 Collapsing the panel leaves only expand-sidebar beside the rail, which keeps New session and search; the content header still starts with back/forward.
 Drag an empty area of the titlebar row to move the window; its buttons keep their normal actions.
 
+## Mobile message input
+
+On iPhone, iPad (including desktop mode), and Android, Return adds a line break;
+use the **Send**, **Start**, **Ask**, or queued-edit save button to submit.
+Keyboard modifiers do not submit either, including while suggestion menus are open.
+
+**Settings → Appearance → Chat → Send shortcut** stays visible and synced on all
+devices, but only controls desktop submission. Narrow windows and touchscreen
+computers retain desktop shortcuts. Android browsers identifying as desktop Linux
+also retain desktop behavior; touch and window size alone cannot distinguish them.
+
 ## Context breakdown
 
 Open **Details → Context** to see the current usage and an estimated breakdown
@@ -238,13 +249,15 @@ When the agent's primary model runs on a CLI runtime such as `claude-cli`, no ut
 
 Restoring the Side chat thread checks current session visibility without waiting for unrelated session writes. Opening Side chat, reopening its panel, or selecting its tab focuses the question box. If you focus another input or keep typing while Side chat loads or answers, that newer input keeps focus.
 
-Confirming text with an input method does not send the Side chat question. Finish composition, then use your configured send shortcut or the Ask button.
+Confirming text with an input method does not send the Side chat question. Finish composition, then use the Ask button (or your configured send shortcut on desktop).
 
 Editing a Side chat draft does not interrupt loading its earlier answers. On desktop, closing the Side chat tab waits for the Gateway to confirm the reset; a failed reset leaves the tab and its content open. Hiding the panel or switching tabs preserves the thread and draft. When Side chat occupies the main panel, or on mobile, **Clear side chat** remains available. It removes the earlier content after the Gateway confirms it; drafts, images, and questions added after the click remain.
 
+Side chat cancels a question after 60 seconds. Once the canceled model run has finished cleanup, the failed question offers **Retry**. Earlier answers stay intact, and a late answer from the canceled run is not added to the thread.
+
 The Control UI keeps the latest 24 Side chat turns, including failed questions. Sending a follow-up keeps earlier failures in order; **Retry** resends that question in place. Failed questions stay in the current pane through a reconnect, but are not persisted across a page reload.
 
-The question box wraps and grows like the main composer; Enter (or your configured send shortcut) asks the question, and Shift+Enter adds a line. Its toolbar matches the main composer where the control applies to a read-only question: **+** attaches images, `:shortcode:` suggests emoji, the microphone dictates, and the model and effort pickers choose the model, reasoning level, and speed for Side chat's own answers. **Default** is the agent's utility model with its fallbacks; a chosen model answers alone, must be allowed for the agent and your operator role, and never changes the main session's model. Side chat choices apply to that agent's sessions for as long as the page stays open. Slash commands, permissions, and Talk stay in the main composer. Highlighting text in a chat message offers **Ask in side chat**. Add an optional comment in the selection editor, then save it to stage an editable comment in Side chat. An empty question box starts with a short quote; an existing Side chat draft and the main composer stay unchanged. The full selection and comment accompany that question as bounded, temporary context. After the answer, the restored thread keeps the question text, including its quote, but not the attached context. Reselect the passage for a later question.
+The question box wraps and grows like the main composer. On desktop, Enter (or your configured send shortcut) asks the question, and Shift+Enter adds a line. On mobile, Return adds a line and the Ask button sends. Its toolbar matches the main composer where the control applies to a read-only question: **+** attaches images, `:shortcode:` suggests emoji, the microphone dictates, and the model and effort pickers choose the model, reasoning level, and speed for Side chat's own answers. **Default** is the agent's utility model with its fallbacks; a chosen model answers alone, must be allowed for the agent and your operator role, and never changes the main session's model. Side chat choices apply to that agent's sessions for as long as the page stays open. Slash commands, permissions, and Talk stay in the main composer. Highlighting text in a chat message offers **Ask in side chat**. Add an optional comment in the selection editor, then save it to stage an editable comment in Side chat. An empty question box starts with a short quote; an existing Side chat draft and the main composer stay unchanged. The full selection and comment accompany that question as bounded, temporary context. After the answer, the restored thread keeps the question text, including its quote, but not the attached context. Reselect the passage for a later question.
 
 If the selection alone exceeds the context limit, Side chat opens without adding the selection and shows a notification. An empty question box still gets a short quote; an existing draft stays intact. If a comment or the combined selections exceed the limit, the editor stays open so you can shorten the comment or adjust the pending selections.
 
@@ -334,6 +347,12 @@ select a registered project or enter the correct repository path. Select
 **Start in a new worktree** again to continue; no child session is started for
 an invalid source folder.
 
+## Mobile composer
+
+On phones, tapping the compact composer focuses the text field and opens the
+keyboard in the same gesture. The expanded editor keeps your draft and selection
+while you use its controls.
+
 ## Composer predictions
 
 Enable **Settings → Labs → Composer predictions** to try optional next-message
@@ -369,7 +388,7 @@ model configuration, provider credentials, and session access rules still apply.
 Select **+** beside the chat composer to open attachments and session capabilities in one menu:
 
 - **Skills** enables or disables individual skills for this session.
-- **Connectors** enables or disables configured MCP servers for this session. A **session** tag marks values that differ from the inherited configuration.
+- **Plugins** enables or disables configured MCP servers for this session. A **session** tag marks values that differ from the inherited configuration.
 - **Web search** enables or disables managed web search plus native OpenAI and Codex search for this session.
 - **Manage plugins** opens the Plugins page.
 
@@ -395,9 +414,11 @@ must fit the advertised per-file and batch limits; if the browser cannot decode
 or encode the video with its audio, or a smaller copy still cannot fit, the slot
 shows an error. Choose a smaller file, trim the video, or try another browser.
 
-In **Connectors**, administrators can select **Add MCP server…** and choose a scope. **This session** saves the server definition globally but disabled by default, then enables it only for the current session. **Everywhere** saves the definition enabled globally. Transport, authentication, and other server-definition fields are always global. Session policy can override server enablement and deny individual tools through **Tool access**.
+In **Plugins**, administrators can select **Add MCP server…** and choose a scope. **This session** saves the server definition globally but disabled by default, then enables it only for the current session. **Everywhere** saves the definition enabled globally. Transport, authentication, and other server-definition fields are always global. Session policy can override server enablement and deny individual tools through **Tool access**.
 
-**Tool access** lists a connector's tools once a run has discovered them. Before that, it explains why the list is empty rather than reporting zero tools: a newly added server has not connected yet, a connected server has not finished listing its tools, or the runtime catalog predates a config change. Sessions that run on the Codex harness keep their MCP connections inside Codex, so their tools do not appear here.
+**Tool access** lists an MCP server's tools once a run has discovered them. Before that, it explains why the list is empty rather than reporting zero tools: a newly added server has not connected yet, a connected server has not finished listing its tools, or the runtime catalog predates a config change. Sessions that run on the Codex harness keep their MCP connections inside Codex, so their tools do not appear here.
+
+If **Tool access** is already open, it refreshes when the current session's run finishes; you do not need to close and reopen it to see newly discovered tools.
 
 Capability toggles stay disabled until the Gateway, session, and runtime config are loaded, and read-only operators cannot change them. Adding a server requires administrator access. See [Connect MCP servers](/tools/mcp) for the Settings, CLI, and config paths.
 
@@ -618,7 +639,7 @@ Run-error banners offer **Refresh** to reload the conversation without resending
     - The active split pane drives the sidebar selection and URL. Selecting another pane or closing the active pane uses the surviving conversation's Chat or Dashboard preference; it does not copy the previous pane's view. Closing a pane that holds keyboard focus returns focus to the surviving pane's header, which is labeled with the session title for assistive technology. Its title bar adds split and close controls; dividers resize columns and stacked panes, and the browser stores the layout locally across reloads.
     - On narrow screens, split view keeps the layout but renders only the active pane at the full available width and height, including its header with the close control. Widening the window restores the saved column and row proportions without losing drafts.
     - If you send a message while a model picker change for the same session is still saving, the composer waits for that session patch before calling `chat.send` so the send uses the selected model.
-    - On the New Session page, submitting opens the created conversation automatically. **Cmd+Enter** on macOS or **Ctrl+Enter** elsewhere is ordinary submit with either send preference. Use **Cmd/Ctrl+Shift+Enter** to explicitly start in the background without leaving the page; a completion notice offers to open that session. The selected local, cloud-profile, or paired-device placement is preserved. Explicit Draft visibility keeps its create-only behavior.
+    - On the New Session page, submitting opens the created conversation automatically. On desktop, **Cmd+Enter** on macOS or **Ctrl+Enter** elsewhere is ordinary submit with either send preference. Use **Cmd/Ctrl+Shift+Enter** to explicitly start in the background without leaving the page; a completion notice offers to open that session. The selected local, cloud-profile, or paired-device placement is preserved. Explicit Draft visibility keeps its create-only behavior.
     - Typing `/new` creates and switches to the same fresh dashboard session as New Chat, except when `session.dmScope: "main"` is configured and the current parent is the agent's main session; then it resets the main session in place. Typing `/reset` keeps the Gateway's explicit in-place reset for the current session.
     - The chat model picker requests the Gateway's configured model view. If `agents.defaults.modelPolicy.allow` is non-empty, that policy drives the picker, including `provider/*` entries that keep provider-scoped catalogs dynamic. Otherwise the picker shows configured entries plus providers with usable auth; aliases and settings under `agents.defaults.models` do not restrict it. The full catalog stays available through the debug `models.list` RPC with `view: "all"`.
     - Expand the **Account** category in the model menu to choose a saved account for the selected provider in Chat or **New Session**, even when **Automatic** has no eligible models. A New Session choice previews eligible models and is attached when the session is created; it does not change the personal new-chat default or saved model preference. See [Per-person model accounts](/concepts/multi-user#per-person-model-accounts).
@@ -649,7 +670,7 @@ Run-error banners offer **Refresh** to reload the conversation without resending
     - If Stop reports incomplete descendant cancellation, inspect the remaining native subagent runs with `/subagents list` and ask the agent to retry their cancellation with `subagents`. Do not treat the parent's stopped state as confirmation that every child stopped or that runtime cleanup was instantaneous. See [Sub-agent stopping](/tools/subagents#stopping) for scope details.
     - While a run is active, normal follow-ups use the Gateway's effective `messages.queue` mode. `steer` injects into the running turn; other modes keep the browser's durable queued delivery. If the Gateway queues an input instead of steering it, the message appears above the composer until consumed or canceled. Reconnecting also recovers queued inputs from older history pages without changing the page you are viewing. Once the Gateway accepts input for an existing session, its database owns the approved input until it reaches the transcript. Collected messages are retired together with their combined transcript entry. Unconsumed input survives a Gateway restart as interrupted input requiring an explicit resend. Click **Steer** on a browser-owned queued message to inject it manually; removing a server-owned queued message requests its cancellation. A message you steer moves once from the queue to the bottom of the transcript when delivery starts. It stays there while acknowledgment and history catch up, until its saved copy replaces it. Accepted messages keep their saved transcript positions: earlier saved output stays above the steer and later output appears below it. This order survives history refreshes, reconnects, and reloading a finished run. Unsaved assistant text remains a single live tail after saved rows until its own transcript entries arrive.
     - Type `/steer <message>` to steer explicitly. Once consumed, the message belongs in the transcript, with no separate command chip waiting for the entire run to finish. If the Gateway defers the input, its queued message remains above the composer until consumed or canceled.
-    - With **Settings → Appearance → Send shortcut** set to **Enter**, **Cmd/Ctrl+Enter** submits the opposite follow-up action while connected to an active run: queue when Enter steers, or steer when Enter queues (including inherited `collect` and `followup` modes). The send button tooltip shows both actions for the current follow-up setting. This affects only that message, not your saved preference. With the **Cmd/Ctrl+Enter** send shortcut selected, modified Enter remains the normal send action and plain Enter inserts a newline. Interrupt mode keeps its normal behavior.
+    - On desktop, with **Settings → Appearance → Send shortcut** set to **Enter**, **Cmd/Ctrl+Enter** submits the opposite follow-up action while connected to an active run: queue when Enter steers, or steer when Enter queues (including inherited `collect` and `followup` modes). The send button tooltip shows both actions for the current follow-up setting. This affects only that message, not your saved preference. With the **Cmd/Ctrl+Enter** send shortcut selected, modified Enter remains the normal send action and plain Enter inserts a newline. Interrupt mode keeps its normal behavior.
     - Reorder the queue from the handle on the left of a queued message: drag it, or focus it and press the up and down arrow keys. The position is stored with the message, so it survives a reload and decides delivery order, not just what the list looks like. Rows already handed to a run — sending, steering, running a command, awaiting settings, or waiting on an uncertain delivery — hold their place and split the queue: a message moves only among the rows between two of them, so it can never reach the Gateway ahead of work already handed over.
     - Edit a queued message with the pencil on its row, or by double-clicking the row. The row becomes its own textarea and stays in place while the main composer remains independent, including any separate draft and attachments. Submit replaces the row in the same slot and preserves its attachments and delivery choice, even when the composer currently defaults to Steer or Interrupt; Cancel or Escape discards the row-local draft and restores the queued message. A normal composer send remains a separate queued item even while a row edit is open. The queue behind an edited row waits rather than delivering a message you are still rewriting, so that row splits the queue for reordering the same way an in-flight row does. Queued slash commands keep the discard-and-retype flow.
     - **Settings → Appearance → Chat → Follow-ups while the agent is working** can override that server default for the current browser. The page marks an override explicitly and offers **Reset to server default**. `Steer into the active run` sends follow-ups immediately, while `Queue until the run ends` holds them until the run finishes.
@@ -848,10 +869,29 @@ automatically:
 ````markdown
 ```mermaid
 flowchart LR
+  accTitle: Message delivery
+  accDescr {
+    The Gateway sends each accepted message to a Worker.
+    The Worker saves the result in State before delivering the reply.
+  }
   Gateway --> Worker
   Worker --> State
 ```
 ````
+
+When writing diagrams, including agent-authored replies, include a short `accTitle`
+and a plain-language `accDescr` explaining the relationships or outcome. Mermaid
+supports both `accDescr: A one-line description` and the multiline form above.
+The Control UI uses the title as image alternative text and associates the
+longer description with both the inline image and expanded image through an
+invisible text alternative. No caption is added below the diagram. Metadata is
+treated as text, not HTML.
+
+Describe the meaning, not just the shapes. Source code is not a substitute for a
+text equivalent. Without `accDescr`, the image keeps its title without an added
+notice. For diagram types that do not support Mermaid
+accessibility metadata, include the equivalent explanation in the surrounding
+message as well.
 
 Click or tap the diagram to open the image viewer with zoom. With keyboard
 focus on the diagram, press **Enter** or **Space**. The **Diagram options** menu
@@ -940,7 +980,8 @@ The dedicated card recognizes YouTube video URLs independently of
 iframes in `show_widget`. With `gateway.controlUi.embedSandbox: "strict"`, the card
 offers the watch link without loading a player. Other chat surfaces should use a
 regular YouTube link; the card is a Control UI feature, separate from native inline
-widgets.
+widgets. [Public conversation links](/web/urls#public-session-transcripts) show the
+video as a plain link without loading the player or thumbnail.
 
 Thumbnails load from `i.ytimg.com`, which contacts Google before playback. After
 activation, the player loads from `www.youtube-nocookie.com`. Its frame sends only
@@ -979,7 +1020,9 @@ accounts with session-only access do not request that inventory.
 Running and scheduled states update from automation events. If an inventory
 refresh is already running, later changes share one follow-up refresh.
 Compact activity controls can open related details without duplicating the full
-lists above the composer.
+lists above the composer. The mobile **Publish PR** control appears only for an
+undismissed branch with publishable work or a retained publication result or
+recovery state. An empty workspace or account discovery alone does not show it.
 
 The progress header shows the current step, not a completed-step total. On desktop,
 its options menu stays available when the card is expanded or collapsed and contains

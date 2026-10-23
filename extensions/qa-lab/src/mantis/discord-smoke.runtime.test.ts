@@ -107,6 +107,7 @@ describe("mantis discord smoke runtime", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     await fs.rm(repoRoot, { recursive: true, force: true });
   });
 
@@ -131,9 +132,14 @@ describe("mantis discord smoke runtime", () => {
   });
 
   it("redacts Discord target metadata in public artifacts", async () => {
-    const result = await runSmoke({ redactPublicMetadata: true });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-05-04T12:00:00.000Z"));
+    const result = await runSmoke({ outputDir: undefined, redactPublicMetadata: true });
 
     expect(result.status).toBe("pass");
+    expect(result.outputDir).toBe(
+      path.join(repoRoot, ".artifacts/qa-e2e/mantis/discord-smoke-2026-05-04T12-00-00-000Z"),
+    );
     const summaryText = await readText(result.summaryPath);
     const reportText = await readText(result.reportPath);
     for (const line of [

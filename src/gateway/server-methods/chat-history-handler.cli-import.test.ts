@@ -282,6 +282,36 @@ it.each([false, true])(
   },
 );
 
+it("reads forwarded cron history after switching away from Claude CLI", async () => {
+  await withCliHistory(async ({ scope, timestamp, append, native, write }) => {
+    await upsertSessionEntryCore(scope, {
+      providerOverride: "openai",
+      modelOverride: "gpt-4.1",
+    });
+    await saveCronJobsStore(resolveCronJobsStorePath(), {
+      version: 1,
+      jobs: [makeCronJob({ id: "daily-report", name: "Daily report" })],
+    });
+    await append("user", "Report ready", timestamp, {
+      provenance: {
+        kind: "inter_session",
+        sourceTool: "sessions_send",
+        sourceSessionKey: "agent:main:cron:daily-report:run:completed-run",
+      },
+    });
+    await write([native("native-only", "assistant", "Native only", timestamp + 1)]);
+    const read = await historyReader(scope.sessionKey);
+    const page = await read({ limit: 10 });
+    expect(page.messages).toMatchObject([
+      {
+        role: "assistant",
+        content: "Report ready",
+        senderSession: { label: "Daily report" },
+      },
+    ]);
+  });
+});
+
 it("shares archive visibility across CLI previews and full messages", async () => {
   await withImportedHistory(1, "seed", async ({ read, sourcePath, sessionsDir, scope }) => {
     await upsertSessionEntryCore(scope, { sessionStartedAt: 2000 });

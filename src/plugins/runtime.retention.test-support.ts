@@ -269,7 +269,7 @@ async function recoverOwner(root: string, kind: "source" | "bundled-cjs" | "bund
   await instance.dispose();
   const current = new PluginInstance(record.id);
   recovery.bind(current);
-  recovery.dispose();
+  await recovery.dispose();
   return { current, source, owner, registry };
 }
 

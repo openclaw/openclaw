@@ -93,6 +93,7 @@ const unchanged = { changes: [], warnings: [] };
 const storeSpecs = {
   keys: [state.REEF_KEYS_NAMESPACE, state.REEF_KEYS_MAX_ENTRIES],
   identity: [state.REEF_KEYS_MIGRATION_NAMESPACE, state.REEF_KEYS_MIGRATION_MAX_ENTRIES],
+  durable: [state.REEF_DURABLE_MIGRATION_NAMESPACE, state.REEF_DURABLE_MIGRATION_MAX_ENTRIES],
   registration: [state.REEF_REGISTRATION_NAMESPACE, state.REEF_REGISTRATION_MAX_ENTRIES],
   audit: [state.REEF_AUDIT_NAMESPACE, state.REEF_AUDIT_STORE_MAX_ENTRIES],
   head: [state.REEF_AUDIT_HEAD_NAMESPACE, state.REEF_AUDIT_HEAD_MAX_ENTRIES],
@@ -229,6 +230,67 @@ describe("Reef doctor contract", () => {
     return { entries, source, filePath: writeLegacy("audit.jsonl", source) };
   }
 
+  it.each([
+    ["keys.json", "keys-json", "keys"],
+    ["identity.json", "registration-json", "registration"],
+    ["setup-session.json", "registration-json", "registration"],
+    ["audit.jsonl", "audit-jsonl", "audit"],
+    ["replay.jsonl", "runtime-files", "replay"],
+    ["reviews.json", "runtime-files", "reviews"],
+    ["delivered.json", "runtime-files", "delivered"],
+  ] as const)("retains malformed UTF-8 in %s before importing", async (filename, owner, target) => {
+    const review = reviewRequest();
+    const { entries } = await auditFixture();
+    fs.rmSync(path.join(createLegacyDir(), "audit.jsonl"));
+    const values: Record<string, unknown> = {
+      "keys.json": { ...reefKeys(), note: "utf8-marker" },
+      "identity.json": { ...identityBinding, handle: "utf8-marker" },
+      "setup-session.json": {
+        session: "utf8-marker",
+        relayUrl: identityBinding.relayUrl,
+        email: "owner@example.com",
+      },
+      "audit.jsonl": jsonLines(
+        entries.map((entry) => Object.assign({}, entry, { note: "utf8-marker" })),
+      ),
+      "replay.jsonl": jsonLines([
+        { op: "claim", peer: "utf8-marker", id: "replay-id", envelopeHash: "a".repeat(64) },
+      ]),
+      "reviews.json": {
+        [review.approvalDigest]: {
+          review: { ...review, verdict: { ...review.verdict, reason: "utf8-marker" } },
+        },
+      },
+      "delivered.json": ["utf8-marker"],
+    };
+    const filePath = writeLegacy(filename, values[filename]);
+    const bytes = fs.readFileSync(filePath);
+    bytes[bytes.indexOf("utf8-marker")] = 0xff;
+    fs.writeFileSync(filePath, bytes);
+    const result = await migrate(owner);
+    expect(result.warningDisposition).toBe("recoverable");
+    expect(result.warnings.join("\n")).toContain("valid UTF-8");
+    expect(fs.readFileSync(filePath)).toEqual(bytes);
+    expect(fs.existsSync(`${filePath}.migrated`)).toBe(false);
+    expect(await openStore(target).entries()).toEqual([]);
+    const params = migrationParams();
+    let warningCount = 0;
+    for (const migration of stateMigrations) {
+      if (await migration.detectLegacyState(params)) {
+        const migrationResult = await migration.migrateLegacyState(params);
+        if (migrationResult.warnings.length > 0) {
+          expect(migrationResult.warningDisposition).toBe("recoverable");
+          warningCount += result.warnings.length;
+        }
+      }
+    }
+    expect(warningCount).toBeGreaterThan(0);
+    expect(fs.readFileSync(filePath)).toEqual(bytes);
+    expect(await openStore("durable").lookup(state.REEF_DURABLE_MIGRATION_KEY)).toEqual({
+      pending: true,
+    });
+  });
+
   function isolatedIdentity() {
     const homeDir = path.join(stateDir, "home");
     const isolatedStateDir = path.join(stateDir, "isolated");
@@ -320,6 +382,7 @@ describe("Reef doctor contract", () => {
     fs.rmSync(filePath);
     const missingSourceResult = await migrate("keys-json");
     expectWarnings(missingSourceResult, "migration is incomplete and keys.json is missing");
+    expect(missingSourceResult.warningDisposition).toBeUndefined();
     await expectBlocked("generate");
   });
 
@@ -582,7 +645,8 @@ describe("Reef doctor contract", () => {
     );
 
     expect(result.warnings).toContainEqual(expect.stringContaining(`Failed importing ${label}`));
-    expect(result.warnings).toContainEqual(
+    expect(result.warningDisposition).toBeUndefined();
+    expect(result.notices).toContainEqual(
       expect.stringContaining("left migration blocker in place"),
     );
     for (const [name, source] of Object.entries(sources)) {
@@ -618,7 +682,10 @@ describe("Reef doctor contract", () => {
       result,
       `${replay.REEF_REPLAY_MAX_ENTRIES + 1} replay bindings exceed plugin-state capacity`,
       `${state.REEF_DELIVERED_MAX_ENTRIES + 1} delivered markers exceed plugin-state capacity`,
-      "Reef durable state migration is incomplete",
+    );
+    expect(result.warningDisposition).toBeUndefined();
+    expect(result.notices).toContainEqual(
+      expect.stringContaining("Reef durable state migration is incomplete"),
     );
     for (const filePath of [replayPath, deliveredPath]) {
       expectArchive(filePath, false);

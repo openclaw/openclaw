@@ -161,7 +161,6 @@ export function registerAgentRunContext(
     "projectSessionActive",
     "projectSessionLifecycle",
     "projectSessionMessages",
-    "isHeartbeat",
   ] as const) {
     if (context[key] !== undefined) {
       existing[key] = context[key];

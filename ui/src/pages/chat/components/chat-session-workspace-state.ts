@@ -629,16 +629,16 @@ export async function requestCloseSessionWorkspacePreview(
         return false;
       }
     } else {
-      const choice = await showConfirmChoiceDialog({
-        message: t("chat.sidePanel.closeFileChanges", { file: preview.label }),
-        confirmLabel: t("common.save"),
-        alternativeLabel: t("chat.detailPanel.discard"),
-        cancelLabel: t("common.cancel"),
-      });
-      if (!choice || !current()) {
-        return false;
-      }
       try {
+        const choice = await showConfirmChoiceDialog({
+          message: t("chat.sidePanel.closeFileChanges", { file: preview.label }),
+          confirmLabel: t("common.save"),
+          alternativeLabel: t("chat.detailPanel.discard"),
+          cancelLabel: t("common.cancel"),
+        });
+        if (!choice || !current()) {
+          return false;
+        }
         const settled = choice === "confirm" ? await draft.save() : draft.discard();
         if (!current()) {
           return false;

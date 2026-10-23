@@ -1,9 +1,10 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show } from "solid-js";
+import { Errored, For, Loading, Show, createMemo, createSignal } from "solid-js";
 import { showConfirmDialog } from "../../../components/confirm-dialog.ts";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { formatUiError } from "../../../lib/format-error.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import "./chat-subagents-mobile.css";
@@ -13,6 +14,8 @@ import type { SubagentStopControl } from "./chat-subagents-presentation.ts";
 registerEnglishCatalog(registerChatSessionEnglish);
 
 export type ChatSubagentMobileStop = {
+  /** Stable session/run identity; preparation feedback must not follow a successor. */
+  target: string;
   label: string;
   accessibleLabel: string;
   disabled: boolean;
@@ -34,12 +37,8 @@ export type ChatSubagentMobileItem = {
   title: string;
   status: "running" | "waiting" | "queued" | "finished" | "failed" | "stopped";
   statusLabel: string;
-  activity?: string;
-  /** Localized native count, including the lower-bound marker when not exact. */
-  calls?: string;
   /** The native elapsed-time element or formatted duration; no presenter timer. */
   elapsed?: JSX.Element;
-  elapsedLabel?: string;
   /** Omitted when the native owner does not offer Stop for this run. */
   stop?: ChatSubagentMobileStop;
 };
@@ -83,6 +82,12 @@ const statusIcons: Record<Exclude<ChatSubagentMobileItem["status"], "running">, 
 };
 
 function MobileStop(props: { action: ChatSubagentMobileStop; control?: SubagentStopControl }) {
+  const [completion, setCompletion] = createSignal<{ target: string; result: Promise<void> }>();
+  const currentCompletion = () => {
+    const receipt = completion();
+    return receipt?.target === props.action.target ? receipt.result : undefined;
+  };
+  const completed = createMemo(() => currentCompletion()?.then(() => null) ?? null);
   const pending = () => Boolean(props.control?.stopping()) || props.action.pending;
   const confirmStop = async () => {
     const action = props.action;
@@ -96,17 +101,35 @@ function MobileStop(props: { action: ChatSubagentMobileStop; control?: SubagentS
     }
   };
   return (
-    <button
-      class="chat-subagents-mobile__stop"
-      type="button"
-      disabled={props.action.disabled || pending()}
-      aria-busy={pending() ? "true" : "false"}
-      aria-label={pending() ? t("chat.subagentsPanel.stopping") : props.action.accessibleLabel}
-      onClick={() => void confirmStop()}
-    >
-      <Icon name="stop" />
-      <span>{pending() ? t("chat.subagentsPanel.stopping") : props.action.label}</span>
-    </button>
+    <>
+      <button
+        class="chat-subagents-mobile__stop"
+        type="button"
+        disabled={props.action.disabled || pending()}
+        aria-busy={pending() ? "true" : "false"}
+        aria-label={pending() ? t("chat.subagentsPanel.stopping") : props.action.accessibleLabel}
+        onClick={() => {
+          const target = props.action.target;
+          const result = confirmStop();
+          setCompletion({ target, result });
+          void result.catch(() => {});
+        }}
+      >
+        <Icon name="stop" />
+        <span>{pending() ? t("chat.subagentsPanel.stopping") : props.action.label}</span>
+      </button>
+      <Loading on={currentCompletion()}>
+        <Errored
+          fallback={(error) => (
+            <span class="chat-subagents-mobile__error" role="alert">
+              {formatUiError(error())}
+            </span>
+          )}
+        >
+          {completed()}
+        </Errored>
+      </Loading>
+    </>
   );
 }
 

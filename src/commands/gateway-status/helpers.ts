@@ -7,7 +7,7 @@ import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { resolveGatewayProbeSurfaceAuth } from "../../gateway/auth-surface-resolution.js";
 import { isLoopbackHost } from "../../gateway/net.js";
 import type { GatewayProbeCapability, GatewayProbeResult } from "../../gateway/probe.js";
-import { inspectBestEffortPrimaryTailnetIPv4 } from "../../infra/network-discovery-display.js";
+import { pickBestEffortPrimaryTailnetIPv4 } from "../../infra/network-discovery-display.js";
 
 const LEGACY_MISSING_SCOPE_PATTERN = /\bmissing scope:\s*[a-z0-9._-]+/i;
 
@@ -218,7 +218,7 @@ export function extractConfigSummary(snapshotUnknown: unknown) {
 }
 
 export function buildNetworkHints(cfg: OpenClawConfig, localPortOverride?: number) {
-  const { tailnetIPv4 } = inspectBestEffortPrimaryTailnetIPv4();
+  const tailnetIPv4 = pickBestEffortPrimaryTailnetIPv4();
   const port = localPortOverride ?? resolveGatewayPort(cfg);
   const localScheme = cfg.gateway?.tls?.enabled === true ? "wss" : "ws";
   return {

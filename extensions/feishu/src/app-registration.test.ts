@@ -182,12 +182,12 @@ describe("Feishu app registration", () => {
   });
 
   it("rejects Feishu API responses that exceed the 16 MiB JSON body cap", async () => {
-    let streamState: ReturnType<typeof writeOversizedJson> | undefined;
+    let clientClosed: Promise<void> | undefined;
     await withRegistrationServer(
       (_req, res) => {
-        streamState = writeOversizedJson(
+        clientClosed = writeOversizedJson(
           res,
-          FEISHU_JSON_MAX_BYTES * 2,
+          FEISHU_JSON_MAX_BYTES,
           '{"device_code":"dev","padding":"',
         );
       },
@@ -195,11 +195,9 @@ describe("Feishu app registration", () => {
         await expect(beginAppRegistration("feishu")).rejects.toThrow(
           /feishu\.api: JSON response exceeds \d+ bytes/,
         );
+        await expect(clientClosed).resolves.toBeUndefined();
       },
     );
-
-    expect(streamState?.canceled()).toBe(true);
-    expect(streamState?.bytesPulled()).toBeLessThan(FEISHU_JSON_MAX_BYTES * 2);
   });
 
   it("sends bound reads through the real SSRF guard before local socket redirect", async () => {

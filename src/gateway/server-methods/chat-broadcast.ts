@@ -146,11 +146,7 @@ function broadcastChatFrame(
       : params.state !== "error"
         ? {
             state: params.state,
-            // Live frames cannot await cron-name preparation; authoritative labels
-            // are resolved by the history reads the client performs next.
-            message: projectChatDisplayMessage(params.message, {
-              resolveCronJobName: () => undefined,
-            }),
+            message: projectChatDisplayMessage(params.message),
             ...(params.stopReason ? { stopReason: params.stopReason } : {}),
           }
         : {

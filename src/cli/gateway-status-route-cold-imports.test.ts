@@ -42,7 +42,7 @@ vi.mock("../gateway/desktop/host-source.js", () => ({
 
 // mock-isolation: Network discovery is outside the config-import boundary being measured.
 vi.mock("../infra/network-discovery-display.js", () => ({
-  inspectBestEffortPrimaryTailnetIPv4: () => ({ tailnetIPv4: undefined }),
+  pickBestEffortPrimaryTailnetIPv4: () => undefined,
   resolveBestEffortGatewayBindHostForDisplay: async () => ({ bindHost: "127.0.0.1" }),
 }));
 

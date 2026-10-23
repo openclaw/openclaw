@@ -132,7 +132,7 @@ extensions/codex/src/command-rpc.ts	1
 extensions/codex/src/migration/apply.ts	2
 extensions/codex/src/migration/auth.ts	3
 extensions/codex/src/migration/plan.ts	4
-extensions/codex/src/migration/session-binding-sidecars.ts	4
+extensions/codex/src/migration/session-binding-sidecars.ts	3
 extensions/codex/src/session-catalog-node-continue.ts	1
 extensions/codex/src/session-catalog-parsing.ts	2
 extensions/codex/src/session-catalog-transcript-item.ts	1
@@ -197,7 +197,6 @@ extensions/discord/src/internal/api.guild.ts	2
 extensions/discord/src/internal/api.messages.ts	5
 extensions/discord/src/internal/api.reactions.ts	1
 extensions/discord/src/internal/api.users.ts	3
-extensions/discord/src/internal/api.webhooks.ts	1
 extensions/discord/src/internal/command-comparison.ts	1
 extensions/discord/src/internal/command-deploy.ts	1
 extensions/discord/src/internal/commands.ts	1
@@ -372,7 +371,7 @@ extensions/logbook/src/analyze.ts	5
 extensions/logbook/src/service.ts	5
 extensions/matrix/src/actions.ts	2
 extensions/matrix/src/approval-handler.runtime.ts	3
-extensions/matrix/src/approval-native.ts	5
+extensions/matrix/src/approval-native.ts	4
 extensions/matrix/src/approval-reactions.ts	1
 extensions/matrix/src/auth-precedence.ts	1
 extensions/matrix/src/channel.ts	4
@@ -709,7 +708,7 @@ extensions/slack/src/approval-handler.runtime.ts	1
 extensions/slack/src/blocks-input.ts	2
 extensions/slack/src/channel-actions.ts	1
 extensions/slack/src/channel-type.ts	1
-extensions/slack/src/channel.ts	4
+extensions/slack/src/channel.ts	1
 extensions/slack/src/client-delivery.ts	1
 extensions/slack/src/client-options.ts	2
 extensions/slack/src/doctor.ts	1
@@ -1043,7 +1042,7 @@ src/agents/agent-bundle-mcp-materialize.ts	3
 src/agents/agent-bundle-mcp-runtime-shared.ts	2
 src/agents/agent-command.ts	1
 src/agents/agent-hooks/compaction-safeguard.ts	9
-src/agents/agent-project-settings-snapshot.ts	4
+src/agents/agent-project-settings-snapshot.ts	3
 src/agents/agent-run-terminal-delivery.ts	1
 src/agents/agent-run-terminal-receipt.ts	1
 src/agents/agent-runtime-config.ts	1
@@ -1178,7 +1177,6 @@ src/agents/embedded-agent-subscribe.handlers.messages.stream.ts	1
 src/agents/embedded-agent-subscribe.handlers.messages.update.ts	2
 src/agents/embedded-agent-subscribe.handlers.tools.results.ts	1
 src/agents/embedded-agent-subscribe.handlers.tools.start.ts	2
-src/agents/embedded-agent-subscribe.tool-text-diagnostics.ts	6
 src/agents/embedded-agent-tool-media.ts	5
 src/agents/embedded-agent-tool-results.ts	6
 src/agents/embedded-agent-utils.ts	3
@@ -1224,7 +1222,6 @@ src/agents/models-config.merge.ts	1
 src/agents/models-config.plan.ts	2
 src/agents/models-config.providers.policy.lookup.ts	1
 src/agents/modes/interactive/theme/theme.ts	11
-src/agents/node-plugin-tools.ts	1
 src/agents/openai-model-routes.ts	2
 src/agents/openclaw-tools.requester-yield.ts	2
 src/agents/plugin-model-catalog.ts	3
@@ -1550,7 +1547,6 @@ src/commands/channels/list.ts	1
 src/commands/channels/status.runtime.ts	8
 src/commands/configure.wizard.ts	1
 src/commands/daemon-install-helpers.ts	3
-src/commands/docs.ts	2
 src/commands/doctor-agent-memory-schema.ts	1
 src/commands/doctor-auth-migration-receipts.ts	3
 src/commands/doctor-auth-profile-config.ts	2
@@ -1891,7 +1887,7 @@ src/infra/approval-errors.ts	5
 src/infra/approval-gateway-resolver.ts	5
 src/infra/approval-handler-runtime.ts	9
 src/infra/approval-presentation.ts	3
-src/infra/backup-archive-publication.ts	5
+src/infra/backup-archive-publication.ts	4
 src/infra/backup-create-stream.ts	3
 src/infra/backup-create.ts	1
 src/infra/backup-tar-retry.ts	2
@@ -1923,7 +1919,6 @@ src/infra/fs-safe-remove.ts	4
 src/infra/gateway-lock.ts	2
 src/infra/gateway-processes.ts	1
 src/infra/git-commit.ts	1
-src/infra/heartbeat-visibility.ts	1
 src/infra/install-package-dir.ts	2
 src/infra/json-utf8-bytes.ts	4
 src/infra/kysely-sync.ts	7
@@ -1945,7 +1940,6 @@ src/infra/outbound/deliver-channel.ts	3
 src/infra/outbound/deliver-payload.ts	1
 src/infra/outbound/deliver-prepare.ts	1
 src/infra/outbound/delivery-queue-storage.ts	3
-src/infra/outbound/format.ts	1
 src/infra/outbound/message-account-selection.ts	1
 src/infra/outbound/message-action-execution.ts	3
 src/infra/outbound/message-action-runner.ts	1
@@ -1980,7 +1974,7 @@ src/infra/sqlite-index-schema.ts	1
 src/infra/sqlite-integrity.ts	1
 src/infra/sqlite-readonly-location.ts	3
 src/infra/sqlite-schema-contract.ts	3
-src/infra/sqlite-snapshot.ts	2
+src/infra/sqlite-snapshot.ts	1
 src/infra/sqlite-strict.ts	6
 src/infra/sqlite-wal.ts	3
 src/infra/state-migrations.audit-backup.ts	1
@@ -2287,7 +2281,7 @@ src/shared/config-eval.ts	1
 src/shared/deferred.ts	1
 src/shared/frontmatter.ts	1
 src/shared/global-singleton.ts	4
-src/shared/json-schema-defaults.ts	16
+src/shared/json-schema-defaults.ts	11
 src/shared/node-list-parse.ts	3
 src/shared/node-presence.ts	1
 src/shared/node-resolve.ts	1

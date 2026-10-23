@@ -29,10 +29,7 @@ import {
   type LiveEditDiffProgressState,
 } from "./embedded-agent-live-edit-diff.js";
 
-type PendingToolUse = {
-  toolCallId: string;
-  name: string;
-  kind: CliToolUseStartDelta["kind"];
+type PendingToolUse = Pick<CliToolUseStartDelta, "toolCallId" | "name" | "kind"> & {
   inputJsonParts: string[];
   inputJsonLength: number;
   /**
@@ -538,14 +535,9 @@ export function dispatchClaudeCliThinking(params: {
   }
 }
 
-export function dispatchGeminiCliStreamingToolEvent(params: {
-  backend: CliBackendConfig;
-  providerId: string;
-  parsed: Record<string, unknown>;
-  tracker: ToolUseTracker;
-  onToolUseStart?: (delta: CliToolUseStartDelta) => void;
-  onToolResult?: (delta: CliToolResultDelta) => void;
-}): void {
+export function dispatchGeminiCliStreamingToolEvent(
+  params: Omit<Parameters<typeof dispatchClaudeCliStreamingToolEvent>[0], "onToolInputDelta">,
+): void {
   if (!isGeminiStreamJsonDialect(params)) {
     return;
   }

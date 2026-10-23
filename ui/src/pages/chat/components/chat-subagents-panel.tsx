@@ -65,10 +65,6 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
     const readiness = createSubagentsPresentation(data);
     const createMobileStop = (key: () => string) =>
       readiness.createStop(() => data().rows.find((row) => row.session.key === key()));
-    const consumeRead = () => {
-      latest(readiness.read);
-      return null;
-    };
     const FallbackShell = (fallbackProps: { loading?: boolean; children: JSX.Element }) => (
       <div
         class={
@@ -119,7 +115,7 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
             </FallbackShell>
           }
         >
-          {consumeRead()}
+          {(latest(readiness.read), null)}
           {readProps.children}
         </Loading>
       </Errored>
@@ -259,28 +255,15 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
         title,
         status,
         statusLabel,
-        activity:
-          status === "queued" || status === "waiting"
-            ? statusLabel
-            : active
-              ? row.activity || row.toolDisplayName
-              : undefined,
-        calls:
-          row.callCount === undefined
-            ? undefined
-            : t(
-                !row.callCount.exact
-                  ? "chat.subagentsPanel.callsAtLeast"
-                  : row.callCount.count === 1
-                    ? "chat.subagentsPanel.callsOne"
-                    : "chat.subagentsPanel.callsMany",
-                { count: String(row.callCount.count) },
-              ),
         elapsed: renderElapsed(row),
-        elapsedLabel: t(active ? "chat.subagentsPanel.elapsed" : "chat.subagentsPanel.duration"),
         stop:
           active && row.session.activeRunIds?.length === 1
             ? {
+                target: JSON.stringify([
+                  row.session.key,
+                  row.session.sessionId,
+                  row.session.activeRunIds,
+                ]),
                 label: t(row.stopping ? "chat.subagentsPanel.stopping" : "chat.runControls.stop"),
                 accessibleLabel: row.stopping
                   ? t("chat.subagentsPanel.stopping")

@@ -243,7 +243,6 @@ it.each([
     typingSignals: createTypingSignaler({
       typing: createTypingController({}),
       mode: "never",
-      isHeartbeat: false,
     }),
     blockStreamingEnabled,
     reasoningPayloadsEnabled: row.reasoning === true,
@@ -393,7 +392,6 @@ it.each([
     blockStreamingEnabled,
     blockReplyPipeline: pipeline,
     replyToMode: "off",
-    isHeartbeat: false,
   });
   expect([...sent, ...replyPayloads.map(show)]).toEqual(delivered);
   if (row.reply) {

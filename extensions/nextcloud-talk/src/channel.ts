@@ -1,4 +1,5 @@
 import { describeWebhookAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { createChannelApprovalAuth } from "openclaw/plugin-sdk/approval-auth-runtime";
 import {
   adaptScopedAccountAccessor,
@@ -20,6 +21,7 @@ import {
   createLoggedPairingApprovalNotifier,
   createPairingPrefixStripper,
 } from "openclaw/plugin-sdk/channel-pairing";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-plugin-common";
 import {
   createAllowlistProviderRouteAllowlistWarningCollector,
   createConditionalWarningCollector,
@@ -44,7 +46,6 @@ import {
   resolveNextcloudTalkAccount,
 } from "./accounts.js";
 import { probeNextcloudTalkBotResponseFeature } from "./bot-preflight.js";
-import { DEFAULT_ACCOUNT_ID, type ChannelPlugin } from "./channel-api.js";
 import { NextcloudTalkChannelConfigSchema } from "./config-schema.js";
 import { nextcloudTalkDoctor } from "./doctor.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";

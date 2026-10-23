@@ -16,7 +16,10 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { CronAuthenticatedChannelRequester } from "../gateway/cron-creator-authority-grant.types.js";
 import type { HookExternalContentSource } from "../security/external-content.js";
 import type { CronCompletionStatus } from "./completion-status.js";
-import type { PluginCommandSchedule } from "./plugin-command-schedule.types.js";
+import type {
+  PluginCommandSchedule,
+  PluginCommandScheduleBinding,
+} from "./plugin-command-schedule.types.js";
 import type { CronRuntimeAuthority } from "./runtime-authority.js";
 import type {
   CronScheduledToolCallerOrigin,
@@ -221,6 +224,15 @@ export type CronRunOutcome = {
   sessionId?: string;
   sessionKey?: string;
   diagnostics?: CronRunDiagnostics;
+  /** Transient: the run was skipped because its parent conversation is gone; pause the job. */
+  parentUnavailable?: CronParentUnavailable;
+};
+
+/** Why a parent-linked job pauses before any session is created. */
+export type CronParentUnavailable = {
+  reason: "removed" | "archived" | "worktree-missing";
+  parentSessionKey: string;
+  worktreePath?: string;
 };
 
 export type CronRunDeliveryResult = {
@@ -325,6 +337,8 @@ export type CronJobState = Omit<
   forcePreservedNextRunAtMs?: number;
   /** Store-private, monotonic launch attempts for a requester-admitted plugin command. */
   pluginCommandRuns?: number;
+  /** Store-private restart continuity for a plugin command schedule; see its type. */
+  pluginCommandBinding?: PluginCommandScheduleBinding;
   /** Durable pre-admission reservation. Cleared on restart without recording a run. */
   queuedAtMs?: number;
   /** Exact receipt awaiting scheduler reconciliation, even after execution authority closes. */
@@ -390,6 +404,11 @@ export type CronJob = CronJobBase<
   displayName?: string;
   /** Read-only execution placement derived from the stored stream target. */
   streamExecutionHost?: "gateway" | "sandbox";
+  /**
+   * Read-only stored payload kind when `payload` is a compatibility placeholder. A plugin command
+   * schedule keeps its reserved agentTurn sentinel in `payload` for existing readers.
+   */
+  payloadSource?: { kind: "pluginCommand"; pluginId: string; command: string };
   owner?: {
     agentId?: string;
     sessionKey?: string;
@@ -427,7 +446,7 @@ export type CronToolsAllowProvenance =
     ));
 
 /** Persisted row shape; public Gateway and wire contracts use CronJob. */
-export type CronStoredJob = Omit<CronJob, "streamExecutionHost"> & {
+export type CronStoredJob = Omit<CronJob, "streamExecutionHost" | "payloadSource"> & {
   /** Immutable host-captured scheduled command invocation; never public create/patch input. */
   pluginCommand?: PluginCommandSchedule;
   /** Original authenticated source for a same-conversation continuation, never a public grant. */
@@ -475,13 +494,20 @@ type CronJobStateInput = Partial<
     | "runningReceiptId"
     | "runningScheduleChangeId"
     | "pluginCommandRuns"
+    | "pluginCommandBinding"
   >
 >;
 
 /** Create input accepted by cron APIs before id/timestamps/state are assigned. */
 export type CronJobCreate = Omit<
   CronJob,
-  "id" | "createdAtMs" | "updatedAtMs" | "state" | "scheduledToolPolicy" | "streamExecutionHost"
+  | "id"
+  | "createdAtMs"
+  | "updatedAtMs"
+  | "state"
+  | "scheduledToolPolicy"
+  | "streamExecutionHost"
+  | "payloadSource"
 > & {
   /** Internal callers can reserve a durable id before creation; public cron.add omits this. */
   id?: string;
@@ -503,6 +529,7 @@ export type CronJobPatch = Partial<
     | "owner"
     | "scheduledToolPolicy"
     | "streamExecutionHost"
+    | "payloadSource"
     | "pacing"
     | "activeHours"
     | "idleOnly"

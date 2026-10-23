@@ -121,9 +121,7 @@ export async function discoverManagedGatewayBindings(
     }
   }
   try {
-    const { services, errors } = await listManagedOpenClawGatewayServices(env, {
-      requireComplete: true,
-    });
+    const { services, errors } = await listManagedOpenClawGatewayServices(env);
     if (options.requireComplete && errors.length > 0) {
       throw new Error("Managed Gateway inventory could not be completely inspected.");
     }

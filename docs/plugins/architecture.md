@@ -226,6 +226,8 @@ A later reload can retry after pending cleanup completes successfully, without c
 
 Missing captured source files produce a replacement warning instead of preventing a fresh plugin load. Recovery snapshots must contain every previously captured input, including companion files. If replacement then fails, recovery restores only plugins with available captured code; it does not substitute changed installed files for a missing snapshot. Existing call-drain and resource-cleanup requirements still apply.
 
+At the end of a reload, the Gateway awaits disposal of unused recovery snapshots without blocking the event loop on their preparation workers. Cleanup attempts every snapshot before reporting failures, so one failed disposal does not strand unrelated captured source.
+
 Gateway shutdown also joins actual harness, MCP, LSP, embedding, and media cleanup after their initial grace periods. When clearing the active registry, plugin host cleanup can advance to later hooks after a timeout, but registry resets and shared database closure wait for its actual completion. These waits preserve resources for cleanup; they do not restore a retired plugin's runtime authority.
 
 Shutdown closes admission before waiting for config reloads to settle. Those reloads can still defer cleanup held by existing consumers. Final Gateway close releases those consumers, joins retained cleanup, and reports its failures before another Gateway can start.
@@ -254,9 +256,21 @@ runtime-store slots. Non-bundled instances also own a captured source artifact.
 Package plugins capture their package inputs when the instance is created.
 Standalone files capture their entry and statically known inputs
 without copying the surrounding workspace. Bundled runtime and setup modules,
-including TypeScript source entries, share the host's code identity; each inventory
-still owns its registered callbacks and cleanup. Loading edited bundled code requires
-a Gateway restart; rebuild first when the installation loads compiled output.
+including TypeScript source entries, share the host's code identity during ordinary
+inventory loading; each inventory owns its registered callbacks and cleanup.
+Explicit reload captures the selected plugin's code and plugin-only build chunks
+while retaining canonical host and SDK modules. Captured Workers reach shared
+host modules through links in their captured namespace, so their native imports
+preserve the same host selection without inheriting the parent's resolver hooks.
+If the filesystem denies file symlinks, ordinary parent resolution remains
+available; captured Workers that need these shared imports retain that limitation.
+Rebuild before reload when the
+installation loads compiled output. Changes to host or SDK code require a Gateway restart.
+
+Source preparation workers wake synchronous host readers after posting results,
+callback requests, and consumption acknowledgements. The shared sequence is a
+progress hint only: the host still services the transport and checks the actual
+task receipt and deadline. Readers retain bounded polling for worker failures.
 
 Doctor retains an unexecuted source snapshot across its maintenance phases.
 Each phase admits fresh callback instances with private module files and settles

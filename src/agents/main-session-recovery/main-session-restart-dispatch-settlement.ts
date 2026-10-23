@@ -3,7 +3,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { hasRestartRecoveryTerminalRun } from "../../config/sessions/restart-recovery-state.js";
 import { applySessionEntryReplacements } from "../../config/sessions/session-accessor.js";
-import { GatewayOperatorRecoveryAuthorizationError } from "../../infra/restart-recovery-errors.js";
+import {
+  GatewayOperatorRecoveryAuthorizationError,
+  GatewayOperatorRecoveryOwnershipError,
+} from "../../infra/restart-recovery-errors.js";
 import { buildMainSessionRecoverySettlementPatch } from "./main-session-recovery-clear.js";
 import type { MainSessionRecoveryReservation } from "./main-session-recovery-state.js";
 import {
@@ -41,7 +44,8 @@ export async function settleRejectedRestartRecovery(
   const { error, rollback } = params;
   const entry = rollback?.entry;
   if (
-    !(error instanceof GatewayOperatorRecoveryAuthorizationError) ||
+    (!(error instanceof GatewayOperatorRecoveryAuthorizationError) &&
+      !(error instanceof GatewayOperatorRecoveryOwnershipError)) ||
     params.dispatchAccepted ||
     rollback?.transition.kind !== "applied" ||
     !entry?.mainRestartRecovery

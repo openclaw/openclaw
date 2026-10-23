@@ -19,6 +19,7 @@ import {
   type RouteId,
 } from "../app-route-paths.ts";
 import { registerCommandPaletteEnglish } from "../i18n/locales/en-command-palette.ts";
+import { isMobileBrowserPlatform, keepMobileReturnNative } from "../lib/browser-platform.ts";
 import { MAX_HUMAN_MENTIONS } from "../lib/chat/human-mentions.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
@@ -36,6 +37,7 @@ import {
   PaletteSessionAuxiliary,
   PaletteSessionRecovery,
 } from "../pages/new-session/palette-session-draft-view.tsx";
+import { PaletteSessionDraft } from "../pages/new-session/palette-session-draft.ts";
 import { createSubmissionAction } from "../pages/new-session/submission-action.ts";
 import "../styles/command-palette.css";
 import {
@@ -128,6 +130,9 @@ function handleKeydown(
     !(event.target instanceof HTMLTextAreaElement) ||
     event.target.id !== COMMAND_PALETTE_INPUT_ID
   ) {
+    return;
+  }
+  if (keepMobileReturnNative(event)) {
     return;
   }
   if (event.key === "Enter" && event.repeat) {
@@ -238,14 +243,11 @@ function PaletteSearch(props: {
 }) {
   const current = () => props.readProps();
   const sessionSearchPending = () => isPending(props.sessionRead);
-  const readSessionSearch = () => {
-    latest(props.sessionRead);
-    return null;
-  };
+  // A cold receipt can suspend a pending probe; owner facts keep filtering live.
   const catalogSearchPending = () =>
     Boolean(current().searchQuery.trim()) &&
     !current().promptMode &&
-    (isPending(props.catalogRead) || isPending(props.modelRead));
+    current().catalogSearchPending;
   const readCatalog = () => {
     latest(props.catalogRead);
     latest(props.modelRead);
@@ -280,7 +282,7 @@ function PaletteSearch(props: {
     current().archivedTranscriptsExcluded === 0;
   return (
     <>
-      {readSessionSearch()}
+      {(latest(props.sessionRead), null)}
       {/* A cold catalog read must not hide already available commands. */}
       <Loading>{readCatalog()}</Loading>
       <Show when={current().searchQuery.trim() && current().onSelectSession}>
@@ -395,23 +397,35 @@ function PaletteSearch(props: {
             <Icon name="messageSquarePlus" />
           </span>
           <h2>{t("palette.noResults")}</h2>
-          <p>
-            <ShortcutText
-              text={t("palette.noResultsStart", { shortcut: "{shortcut}" })}
-              shortcut={() => (
-                <KeyboardShortcut combo={KEYBOARD_SHORTCUT_COMBOS.modifiedEnter} inline />
-              )}
-            />
-          </p>
+          <Show when={!isMobileBrowserPlatform()}>
+            <p>
+              <ShortcutText
+                text={t("palette.noResultsStart", { shortcut: "{shortcut}" })}
+                shortcut={() => (
+                  <KeyboardShortcut combo={KEYBOARD_SHORTCUT_COMBOS.modifiedEnter} inline />
+                )}
+              />
+            </p>
+          </Show>
         </div>
       </Show>
       <div id="cmd-palette-keys" class="cmd-palette__footer">
         <Show when={results().items.length > 0 && !current().query.includes("\n")}>
           <PaletteHint shortcut={<Kbd keys={["↑", "↓"]} />} label={t("palette.footer.navigate")} />
-          <PaletteHint shortcut={<Kbd keys="↵" />} label={t("palette.footer.select")} />
+          <Show when={!isMobileBrowserPlatform()}>
+            <PaletteHint shortcut={<Kbd keys="↵" />} label={t("palette.footer.select")} />
+          </Show>
         </Show>
         <PaletteHint
-          shortcut={<KeyboardShortcut combo={KEYBOARD_SHORTCUT_COMBOS.newline} />}
+          shortcut={
+            <KeyboardShortcut
+              combo={
+                isMobileBrowserPlatform()
+                  ? KEYBOARD_SHORTCUT_COMBOS.sendMessage
+                  : KEYBOARD_SHORTCUT_COMBOS.newline
+              }
+            />
+          }
           label={t("palette.footer.newline")}
         />
       </div>
@@ -422,6 +436,7 @@ function PaletteSearch(props: {
 export function CommandPaletteView(props: { readProps: () => CommandPaletteProps }) {
   let initialInput!: HTMLTextAreaElement;
   const current = () => props.readProps();
+  const drop = PaletteSessionDraft.createDropHandlers(() => current().draft);
   const error = createMemo(() => current().draft.error);
   const saving = createSubmissionAction(
     () => current().draft,
@@ -478,13 +493,22 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
           class={["cmd-palette", { "cmd-palette--prompt": hideSearch() }]}
           onClick={(event) => event.stopPropagation()}
           onKeyDown={(event) => handleKeydown(event, current, activeElement)}
+          onDragEnter={drop.onDragenter}
+          onDragLeave={drop.onDragleave}
+          onDragOver={drop.onDragover}
+          onDrop={drop.onDrop}
         >
+          <Show when={current().draft.attachmentMode}>
+            <div class="cmd-palette__session-heading">{t("palette.startSession")}</div>
+          </Show>
           <CommandPaletteInput
             onAutofocusRef={(element) => {
               initialInput = element;
             }}
             value={current().query}
-            placeholder={t("palette.placeholder")}
+            placeholder={t(
+              current().draft.attachmentMode ? "palette.attachmentPrompt" : "palette.placeholder",
+            )}
             onInputRef={current().onInputRef}
             onValueChange={current().onQueryChange}
             onBeforeInput={current().onBeforeInput}
@@ -506,7 +530,9 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
                 ? current().draft.mentions.length < MAX_HUMAN_MENTIONS
                   ? (current().mentionMenu.activeId(current().mentionHost.paneId) ?? undefined)
                   : undefined
-                : !current().searchDebouncing && results().items[results().activeIndex]
+                : !hideSearch() &&
+                    !current().searchDebouncing &&
+                    results().items[results().activeIndex]
                   ? getOptionId(results().activeIndex)
                   : undefined
             }
@@ -537,7 +563,9 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
                         ? "palette.startingSession"
                         : "palette.startSession",
                     )}
-                    <KeyboardShortcut combo={KEYBOARD_SHORTCUT_COMBOS.modifiedEnter} />
+                    <Show when={!isMobileBrowserPlatform()}>
+                      <KeyboardShortcut combo={KEYBOARD_SHORTCUT_COMBOS.modifiedEnter} />
+                    </Show>
                   </button>
                 </openclaw-tooltip>
                 <PaletteSessionControls draft={current().draft} revision={current()} />
@@ -600,6 +628,28 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
               </Errored>
             </div>
           </div>
+          <Show when={current().draft.attachmentMode}>
+            <div class="cmd-palette__footer">
+              <Show when={!isMobileBrowserPlatform()}>
+                <PaletteHint
+                  shortcut={<KeyboardShortcut combo={KEYBOARD_SHORTCUT_COMBOS.modifiedEnter} />}
+                  label={t("palette.startSession")}
+                />
+              </Show>
+              <PaletteHint
+                shortcut={
+                  <KeyboardShortcut
+                    combo={
+                      isMobileBrowserPlatform()
+                        ? KEYBOARD_SHORTCUT_COMBOS.sendMessage
+                        : KEYBOARD_SHORTCUT_COMBOS.newline
+                    }
+                  />
+                }
+                label={t("palette.footer.newline")}
+              />
+            </div>
+          </Show>
           <Show when={error()}>
             <div class="cmd-palette__creation-error" role="alert">
               {error()}

@@ -1,4 +1,13 @@
-import { action, createMemo, createOptimistic, createSignal, onSettled, Show } from "solid-js";
+import type { JSX } from "@solidjs/web";
+import {
+  action,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  Errored,
+  onSettled,
+  Show,
+} from "solid-js";
 import { SESSION_VISIBILITY_VALUES } from "../../../../../packages/gateway-protocol/src/schema/sessions-sharing-constants.js";
 import type {
   GatewaySessionRow,
@@ -148,8 +157,12 @@ export function createChatSessionSharingPresentation(
     },
   );
   const read = createMemo(() => source()?.state?.read);
-  const [saving, setSaving] = createOptimistic<ReturnType<typeof scope> | null>(null);
-  const [error, setError] = createSignal<string | undefined>(() => {
+  const activity = createMemo(() => {
+    const target = scope();
+    const [saving, setSaving] = createOptimistic(false);
+    return { target, saving, setSaving };
+  });
+  const [completion, setCompletion] = createSignal<Promise<void> | undefined>(() => {
     scope();
     return undefined;
   });
@@ -157,13 +170,14 @@ export function createChatSessionSharingPresentation(
   onSettled(() => () => disposed.resolve());
 
   const present = action(function* (
-    target: ReturnType<typeof scope>,
+    view: ReturnType<typeof activity>,
     pending: Promise<void | ChatSessionSharingOutcome>,
   ): Generator<
     Promise<void | ChatSessionSharingOutcome>,
     void | ChatSessionSharingOutcome,
     void | ChatSessionSharingOutcome
   > {
+    const { target } = view;
     const retired = Promise.withResolvers<void>();
     const stop = target.signal
       ? listen(target.signal, "abort", () => retired.resolve(), { once: true })
@@ -171,7 +185,7 @@ export function createChatSessionSharingPresentation(
     if (target.signal?.aborted) {
       retired.resolve();
     } else if (scope() === target) {
-      setSaving(target);
+      view.setSaving(true);
     }
     try {
       return yield Promise.race([pending, retired.promise, disposed.promise]);
@@ -185,27 +199,68 @@ export function createChatSessionSharingPresentation(
     if (!props) {
       return;
     }
-    const target = scope();
-    setError(undefined);
-    try {
+    const view = activity();
+    const { target } = view;
+    const pending = (async () => {
       // Admission and its synchronous publication precede the presentation transaction.
-      const pending = selectChatSessionSharingItem(props, value);
-      if (!(pending instanceof Promise)) {
-        return pending;
+      const selected = selectChatSessionSharingItem(props, value);
+      if (!(selected instanceof Promise)) {
+        return selected;
       }
       await Promise.resolve();
-      return await present(target, pending);
-    } catch (cause) {
-      if (target.signal?.aborted || scope() !== target) {
-        return;
+      return await present(view, selected);
+    })().catch((cause: unknown) => {
+      if (!target.signal?.aborted && scope() === target) {
+        throw cause;
       }
-      const message = formatUiError(cause);
-      setError(message);
-      return { status: "failed", error: message } satisfies ChatSessionSharingOutcome;
-    }
+    });
+    const completed = pending.then(() => undefined);
+    void setCompletion(completed);
+    // The view may retire before its error slot observes this operation.
+    void completed.catch(() => undefined);
+    return pending.catch(
+      (cause: unknown) =>
+        ({
+          status: "failed",
+          error: formatUiError(cause),
+        }) satisfies ChatSessionSharingOutcome,
+    );
   }
 
-  return { read, scope, select, error, busy: () => saving() === scope() };
+  return { read, scope, select, completion, busy: () => activity().saving() };
+}
+
+export function ChatSessionSharingError(props: {
+  error?: string;
+  completion?: Promise<void>;
+  pending?: boolean;
+  children: (message: string) => JSX.Element;
+}) {
+  // Keep the promise inside a receipt: a bare Promise used as Show's condition is awaited.
+  const attempt = createMemo(() => props.completion && { result: props.completion });
+  return (
+    <Show
+      when={props.error}
+      fallback={
+        <Show when={!props.pending}>
+          <Show when={attempt()} keyed>
+            {(receipt) => {
+              const outcome = createMemo(() => receipt.result.then(() => null), {
+                loadingValue: null,
+              });
+              return (
+                <Errored fallback={(error) => <>{props.children(formatUiError(error()))}</>}>
+                  {outcome()}
+                </Errored>
+              );
+            }}
+          </Show>
+        </Show>
+      }
+    >
+      {(error) => <>{props.children(error())}</>}
+    </Show>
+  );
 }
 
 export function canManageChatSessionSharing(

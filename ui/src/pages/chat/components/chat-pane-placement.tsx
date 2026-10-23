@@ -8,7 +8,7 @@ import {
   repositorySessionNeedsWorker,
   sessionPlacementRetry,
 } from "../../../components/session-placement-action.ts";
-import { isCloudWorkerPlacementState } from "../../../components/session-row-badges.ts";
+import { isCloudWorkerPlacementState } from "../../../components/session-row-badge-presentation.ts";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { Menu, type MenuEntry } from "../../../components/solid/menu.tsx";
 import { registerSessionMachineEnglish } from "../../../i18n/locales/en-session-machine.ts";

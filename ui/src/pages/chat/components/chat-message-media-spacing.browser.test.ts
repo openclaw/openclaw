@@ -112,6 +112,11 @@ function expectRhythm(container: HTMLElement, count: number) {
   expect(bubbleRect.bottom - rects.at(-1)!.bottom).toBeCloseTo(bottomInset, 1);
 }
 
+async function expectReadyRhythm(container: HTMLElement, count: number) {
+  await vi.dynamicImportSettled();
+  await vi.waitFor(() => expectRhythm(container, count));
+}
+
 it.each(
   viewports.flatMap(({ theme, width }) =>
     [false, true].map((streaming) => ({ theme, width, streaming })),
@@ -133,7 +138,7 @@ it.each(
       image,
     ];
     draw(content, streaming);
-    await vi.waitFor(() => expectRhythm(container, 11));
+    await expectReadyRhythm(container, 11);
     const images = all<HTMLImageElement>(container, "img.chat-message-image");
     // The last lazy image can be below Chromium's loading margin.
     for (const element of images) {
@@ -159,10 +164,10 @@ it.each(["light", "dark"])("keeps attachment-only edges flush in %s", async (the
   const { container, draw } = mount(390, theme);
   for (const role of ["assistant", "user"]) {
     draw([file, fileAttachment("second")], false, role);
-    await vi.waitFor(() => expectRhythm(container, 2));
+    await expectReadyRhythm(container, 2);
   }
   draw([image, { ...image, url: `${imageUrl}#second` }]);
-  expectRhythm(container, 2);
+  await expectReadyRhythm(container, 2);
 });
 
 it("reserves the image and both gaps while a streamed image loads", async () => {
@@ -177,7 +182,7 @@ it("reserves the image and both gaps while a streamed image loads", async () => 
     [text("Before the image."), { ...image, url: managedSource() }, text("After the image.")],
     true,
   );
-  expectRhythm(container, 3);
+  await expectReadyRhythm(container, 3);
   const before = geometry(container);
   response.resolve(new Response(imageBlob));
   await vi.waitFor(() => expect(container.querySelector("img")).not.toBeNull());

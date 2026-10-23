@@ -10,7 +10,11 @@ import {
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 
 // mock-isolation: Exercise runtime commit cadence without initializing the full pane renderer.
-vi.mock("./chat-pane-layout-view.tsx", () => import("./chat-pane-layout.test-support.tsx"));
+vi.mock("./chat-pane-layout-view.tsx", async (importOriginal) => {
+  const { PaneLayout } = await importOriginal<typeof import("./chat-pane-layout-view.tsx")>();
+  const { createPaneLayoutFixture } = await import("./chat-pane-layout.test-support.tsx");
+  return createPaneLayoutFixture(PaneLayout);
+});
 
 function FrameLayout(props: { label?: string; id?: string; stream?: string | null }) {
   return (

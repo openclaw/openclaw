@@ -89,6 +89,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/shell-module-loading.e2e.test.ts",
   "ui/src/e2e/sidebar-account-footer.e2e.test.ts",
   "ui/src/e2e/sidebar-boot-imports.e2e.test.ts",
+  "ui/src/e2e/sidebar-pin-placement.e2e.test.ts",
   "ui/src/e2e/terminal-fonts.e2e.test.ts",
   "ui/src/e2e/terminal-runtime.e2e.test.ts",
   "ui/src/pages/agents-home/claws-catalog.e2e.test.ts",

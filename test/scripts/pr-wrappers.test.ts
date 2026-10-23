@@ -1,6 +1,7 @@
 // PR wrapper tests cover maintainer helper command delegation.
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { once } from "node:events";
 import {
   chmodSync,
   constants as fsConstants,
@@ -25,6 +26,7 @@ import {
 } from "../../scripts/pr-lib/gh-api-preflight.mjs";
 import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
+import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   REVIEWED_HEAD,
@@ -556,7 +558,7 @@ exit "$status"
   });
 
   itPosix("requires a separate operator confirmation for merge recovery", () => {
-    const fixture = makeMismatchedWrapperRepo();
+    const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
     const recovery = (...args: string[]) => [
       "123",
       outcomeOid,
@@ -974,15 +976,32 @@ exit "$status"
     expect(matchingEntries(fixture.root, "openclaw-pr-git.")).toEqual(adapters);
   });
 
-  function materializeAnchor(fixture: ReturnType<typeof makeMismatchedWrapperRepo>) {
-    const materialized = runWrapper(fixture, ["unknown-command"]);
-    expect(materialized.status, materialized.stderr).toBe(2);
+  function materializeAnchor(
+    fixture: ReturnType<typeof makeMismatchedWrapperRepo>,
+    env: NodeJS.ProcessEnv = fixture.env,
+  ) {
+    const node = join(fixture.bin, "node");
+    // Crash the creator at its supervisor exec, after extraction and dependency
+    // verification. This retains a real crash leftover without an orphan child.
+    writeExecutable(
+      node,
+      '#!/bin/sh\ncase "$1" in\n  */process-group-runner.mjs) kill -KILL "$$" ;;\nesac\nexec "$PR_TEST_REAL_NODE" "$@"\n',
+    );
+    let materialized;
+    try {
+      materialized = runWrapper(fixture, ["ci-dispatch", "123"], "linked", {
+        env: { ...env, PR_TEST_REAL_NODE: requireNodeTool("node") },
+      });
+    } finally {
+      rmSync(node);
+    }
+    expect(materialized.signal, materialized.stderr).toBe("SIGKILL");
     expect(materialized.stderr).toContain("running wrapper code materialized from");
     const anchors = matchingEntries(fixture.root, "openclaw-pr-anchor.");
     expect(anchors).toHaveLength(1);
     const anchor = join(fixture.root, anchors[0]!);
     expect(statSync(anchor).mode & 0o777).toBe(0o700);
-    return anchor;
+    return { anchor, result: materialized };
   }
 
   function advanceAnchorReviewDependency(fixture: ReturnType<typeof makeMismatchedWrapperRepo>) {
@@ -1053,7 +1072,7 @@ exit "$status"
     );
     expect(runtime.status, runtime.stderr).toBe(0);
     parkCanonicalOffAnchor(fixture);
-    const anchor = materializeAnchor(fixture);
+    const { anchor } = materializeAnchor(fixture);
     fixture.git(fixture.canonical, ["checkout", "main"]);
     const modules = join(anchor, "node_modules");
     const donor = join(fixture.root, "isolated-tooling");
@@ -1300,15 +1319,13 @@ exit "$status"
         "openclaw.pr.toolingRoot",
         join(fixture.root, "invalid-config-root"),
       ]);
-      const result = fixture.run({ OPENCLAW_PR_TOOLING_ROOT: fixture.tooling });
-      expect(result.status, result.stdout + result.stderr).toBe(2);
+      const { anchor, result } = materializeAnchor(fixture, {
+        ...fixture.env,
+        OPENCLAW_PR_TOOLING_ROOT: fixture.tooling,
+      });
       expect(result.stderr).toContain(`scripts/pr tooling root: ${fixture.tooling}`);
       expect(result.stderr).toContain("running wrapper code materialized from");
-      const anchor = readdirSync(fixture.root).find((name) =>
-        name.startsWith("openclaw-pr-anchor."),
-      );
-      expect(anchor).toBeDefined();
-      expect(realpathSync(join(fixture.root, anchor!, "node_modules/tsx"))).toBe(
+      expect(realpathSync(join(anchor, "node_modules/tsx"))).toBe(
         realpathSync(join(fixture.tooling, "node_modules/tsx")),
       );
       expect(fixture.git(fixture.canonical, ["rev-parse", "HEAD"]).stdout).toBe(canonicalHead);
@@ -1502,6 +1519,98 @@ echo "canonical wrapper executed";`,
     expect(anchors).toHaveLength(0);
   });
 
+  itPosix.for([
+    { outcome: "success", args: ["ci-dispatch", "123"], exitCode: 0, interrupt: false },
+    { outcome: "failure", args: ["ci-dispatch", "123"], exitCode: 17, interrupt: false },
+    { outcome: "SIGTERM", args: ["ci-dispatch", "123"], exitCode: 143, interrupt: true },
+    { outcome: "unsupervised usage", args: ["unknown-command"], exitCode: 2, interrupt: false },
+  ])(
+    "retires the materialized anchor after $outcome",
+    async ({ args, exitCode, interrupt }, { signal }) => {
+      const fixture = makeMismatchedWrapperRepo({
+        toolingOnly: true,
+        dispatchBody: `mark_pr_operation_side_effects_started || return;
+node -e '
+const { renameSync, writeFileSync } = require("node:fs");
+if (process.env.PR_TEST_INTERRUPT === "1") process.stdin.resume();
+writeFileSync(process.env.PR_TEST_STARTED + ".pending", "operation started\\n");
+renameSync(process.env.PR_TEST_STARTED + ".pending", process.env.PR_TEST_STARTED);
+console.log("operation started");
+if (process.env.PR_TEST_INTERRUPT !== "1") process.exit(Number(process.env.PR_TEST_EXIT));
+';`,
+      });
+      parkCanonicalOffAnchor(fixture);
+      const started = join(fixture.root, "operation-started");
+      const env = {
+        ...fixture.env,
+        PR_TEST_STARTED: started,
+        PR_TEST_EXIT: String(exitCode),
+        PR_TEST_INTERRUPT: interrupt ? "1" : "0",
+      };
+      let result;
+      if (interrupt) {
+        const ready = createDeferred();
+        const child = spawn(join(fixture.linked, "scripts/pr"), args, {
+          cwd: fixture.linked,
+          env,
+          stdio: ["pipe", "pipe", "pipe"],
+        });
+        const completed = once(child, "close");
+        let stdout = "";
+        let stderr = "";
+        child.stdout.setEncoding("utf8").on("data", (data) => {
+          stdout += data;
+          if (existsSync(started)) {
+            ready.resolve();
+          }
+        });
+        child.stderr.setEncoding("utf8").on("data", (data) => {
+          stderr += data;
+        });
+        try {
+          await withinTest(
+            awaitGateBeforeSettlement(ready.promise, completed, "operation did not start"),
+            signal,
+          );
+          expect(readScript(started)).toBe("operation started\n");
+          expect(child.kill("SIGTERM")).toBe(true);
+          const [status, childSignal] = await withinTest(completed, signal);
+          expect(childSignal).toBeNull();
+          result = { status, stdout, stderr };
+        } finally {
+          child.stdin.end();
+          if (child.exitCode === null && child.signalCode === null) {
+            child.kill("SIGTERM");
+            await completed;
+          }
+        }
+      } else {
+        result = runWrapper(fixture, args, "linked", { env });
+      }
+      expect(result.status, result.stdout + result.stderr).toBe(exitCode);
+      expect(result.stderr).toContain("running wrapper code materialized from");
+      if (args[0] === "ci-dispatch") {
+        expect(readScript(started)).toBe("operation started\n");
+      }
+      expect(matchingEntries(fixture.root, "openclaw-pr-anchor.")).toEqual([]);
+    },
+  );
+
+  itPosix("retires the materialized anchor when its wrapper exec fails", () => {
+    const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
+    parkCanonicalOffAnchor(fixture);
+    writeExecutable(
+      join(fixture.bin, "tar"),
+      '#!/bin/sh\n"$PR_TEST_REAL_TAR" "$@" || exit\nchmod -x "$4/scripts/pr"\n',
+    );
+    const result = runWrapper(fixture, ["unknown-command"], "linked", {
+      env: { ...fixture.env, PR_TEST_REAL_TAR: resolveCommand("tar") },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(matchingEntries(fixture.root, "openclaw-pr-anchor.")).toEqual([]);
+    expect(result.stderr).toContain("Unable to execute the materialized scripts/pr wrapper.");
+  });
+
   itPosix("materializes the anchor when tar stops before the producer's trailing padding", () => {
     const fixture = makeMismatchedWrapperRepo();
     parkCanonicalOffAnchor(fixture);
@@ -1692,7 +1801,7 @@ exit 99
         "scripts/lib/anchor-review-record.mjs",
         "throw new Error('unreviewed dependency');\n",
       );
-      const anchor = materializeAnchor(fixture);
+      const { anchor } = materializeAnchor(fixture);
       fixture.write("gh", "#!/bin/sh\necho forbidden-gh >&2\nexit 99\n", fixture.bin);
       writeReviewArtifacts(fixture.linked, validReview());
       const result = runCommand(
@@ -1727,7 +1836,7 @@ exit 99
     () => {
       const fixture = makeMismatchedWrapperRepo({ realModules: true });
       parkCanonicalOffAnchor(fixture);
-      const anchor = materializeAnchor(fixture);
+      const { anchor } = materializeAnchor(fixture);
       fixture.write("gh", "#!/bin/sh\necho forbidden-gh >&2\nexit 99\n", fixture.bin);
       const nodeExecPath = requireNodeTool("node");
       const run = (args: string[]) => runCommand(nodeExecPath, args, fixture.env, anchor);

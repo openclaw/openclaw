@@ -15,7 +15,7 @@ function recover(overrides: Partial<Parameters<typeof resolveStrandedReplyRecove
     sourceReplyDeliveryMode: "message_tool_only",
     sendPolicyDenied: false,
     successfulSourceReplyDelivery: false,
-    isHeartbeat: false,
+
     isRoomEvent: false,
     ...overrides,
   });
@@ -138,7 +138,7 @@ describe("resolveStrandedReplyRecovery", () => {
 
   it.each([
     { label: "room events", isRoomEvent: true },
-    { label: "heartbeats", isHeartbeat: true },
+
     { label: "send-policy denial", sendPolicyDenied: true },
     { label: "completed delivery", successfulSourceReplyDelivery: true },
   ])("does not recover $label", (override) => {

@@ -131,6 +131,7 @@ export async function add(
         : undefined,
       options: {
         pluginCommand: opts?.pluginCommand,
+        pluginCommandSourceDigest: opts?.pluginCommandSourceDigest,
         streamSandbox: opts?.streamSandbox,
         enabledExplicit: opts?.enabledExplicit,
         systemOwned: opts?.systemOwned,
@@ -276,6 +277,8 @@ async function updateLoadedJob(params: {
     patch,
     options: {
       streamSandbox: opts?.streamSandbox,
+      operatorSource: opts?.operatorSource,
+      operatorSourceExecutionRevision: opts?.operatorSourceExecutionRevision,
       inferenceBinding: opts?.inferenceBinding,
       scheduledToolPolicy: opts?.scheduledToolPolicy,
       toolsAllowProvenance: opts?.toolsAllowProvenance,

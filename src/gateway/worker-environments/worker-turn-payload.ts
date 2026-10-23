@@ -20,7 +20,6 @@ import {
   normalizeOptionalAgentRuntimeId,
   OPENCLAW_AGENT_RUNTIME_ID,
 } from "../../agents/agent-runtime-id.js";
-import { isHeartbeatLifecycleRunKind } from "../../agents/bootstrap-mode.js";
 import { bindActiveOperatorTurnAuthority } from "../../agents/cron-creator-authority-context.js";
 import {
   buildUsageAgentMetaFields,
@@ -485,7 +484,6 @@ export async function finalizeWorkerTurnResult(
       promptError: workerTurnFailed,
       aborted,
       yieldAborted: false,
-      isHeartbeat: isHeartbeatLifecycleRunKind(turn.bootstrapContextRunKind),
       messagesSnapshot: [
         ...promptContext.history,
         ...(userEntry?.type === "message" && userEntry.message.role === "user"

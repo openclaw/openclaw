@@ -180,7 +180,6 @@ describe("runReplyAgent final MEDIA replies", () => {
       const normalizeMediaPaths = params.replyMediaContext?.normalizePayload;
       assert(normalizeMediaPaths, "runReplyAgent must pass replyMediaContext to the agent turn");
       const commonParams = {
-        isHeartbeat: false,
         blockStreamingEnabled: false,
         blockReplyPipeline: null,
         replyToMode: "all" as const,

@@ -122,7 +122,10 @@ export class CommandPaletteState {
   readonly draft: PaletteSessionDraft;
 
   private searchQuery = "";
-  private promptMode = false;
+  private textPromptMode = false;
+  private get promptMode(): boolean {
+    return this.textPromptMode || this.draft.attachmentMode;
+  }
   private activeId: string | null = null;
   private sessionItems: readonly CommandPaletteItem[] = [];
   private catalogItems: readonly CommandPaletteItem[] = [];
@@ -174,14 +177,15 @@ export class CommandPaletteState {
         changed: this.changed,
         updateComplete: rendered,
         onClose: () => this.closePalette(),
+        onAttachmentModeChange: () => this.scheduleSessionSearch(this.draft.message),
         onMessageChange: (query) => {
           const text = query.trim();
           const length = Array.from(text).length;
           // Separate entry/exit thresholds keep edits near the boundary from
           // repeatedly collapsing and reopening search. Draft resets pass here too.
-          this.promptMode =
+          this.textPromptMode =
             text.includes("\n") ||
-            (this.promptMode ? length > PROMPT_EXIT_CHARS : length >= PROMPT_ENTER_CHARS);
+            (this.textPromptMode ? length > PROMPT_EXIT_CHARS : length >= PROMPT_ENTER_CHARS);
           if (!text) {
             this.filter = "all";
           }
@@ -385,8 +389,8 @@ export class CommandPaletteState {
       this.mentionMenu.syncDirectory(this.draft.mentionDirectory);
       this.mentionMenu.update(element, "trigger");
     }
-    if (input.imageFiles?.length) {
-      this.draft.adoptImageFiles(input.imageFiles, input.submitRequested);
+    if (input.attachmentFiles?.length) {
+      this.draft.adoptAttachmentFiles(input.attachmentFiles, input.submitRequested);
     } else if (input.submitRequested) {
       this.draft.submitCold();
     }
@@ -709,6 +713,9 @@ export class CommandPaletteState {
       sessionSearchRead: this.sessionSearchRead,
       catalogSearchRead: this.catalogLoad,
       modelSearchRead: this.modelSearchRead,
+      catalogSearchPending:
+        Boolean(this.catalogLoad && this.catalogLoad.loadedAt === undefined) ||
+        this.modelReader.pending,
       sessionSearchFailed: this.sessionSearchFailed,
       sessionSearchPartial: this.sessionSearchPartial,
       sessionSearchIndexing: this.sessionSearchIndexing,

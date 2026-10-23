@@ -11,6 +11,8 @@ import type { MatrixAuth } from "../client.js";
 import type { MatrixClient } from "../sdk.js";
 import type { MatrixVerificationSummary } from "../sdk/verification-manager.js";
 import { registerMatrixMonitorEvents } from "./events.js";
+import { shouldPromoteRecentInviteRoom } from "./recent-invite.js";
+import { createMatrixRoomInfoResolver } from "./room-info.js";
 import type { MatrixRawEvent } from "./types.js";
 import { EventType } from "./types.js";
 
@@ -101,6 +103,8 @@ function createHarness(params?: {
   joinedMembersByRoom?: Record<string, string[]>;
   getJoinedRoomsError?: Error;
   memberStateByRoomUser?: Record<string, Record<string, { is_direct?: boolean }>>;
+  /** Homeserver m.room.name state; when set, the monitor gets the real room info resolver. */
+  roomNameByRoom?: Map<string, string>;
   verifications?: VerificationFixture[];
   sasNoticeRetryDelayMs?: number;
 }) {
@@ -159,14 +163,16 @@ function createHarness(params?: {
           : ["!room:example.org"],
     ),
     getAccountData: vi.fn(async () => undefined),
-    getRoomStateEvent: vi.fn(
-      async (roomId: string, _eventType: string, stateKey: string) =>
-        params?.memberStateByRoomUser?.[roomId]?.[stateKey] ?? {},
+    getRoomStateEvent: vi.fn(async (roomId: string, eventType: string, stateKey: string) =>
+      eventType === "m.room.name" && params?.roomNameByRoom?.has(roomId)
+        ? { name: params.roomNameByRoom.get(roomId) }
+        : (params?.memberStateByRoomUser?.[roomId]?.[stateKey] ?? {}),
     ),
     ...(params?.cryptoAvailable === false
       ? {}
       : { crypto: { listVerifications, ensureVerificationDmTracked: vi.fn(async () => null) } }),
   } as unknown as MatrixClient;
+  const roomInfo = params?.roomNameByRoom ? createMatrixRoomInfoResolver(client) : undefined;
 
   const dmPolicy = params?.dmPolicy ?? "open";
   const allowFrom = params?.allowFrom ?? (dmPolicy === "open" ? ["*"] : []);
@@ -185,8 +191,11 @@ function createHarness(params?: {
     directTracker: { invalidateRoom, rememberInvite, isDirectMessage: vi.fn(async () => false) },
     groupPolicy: "allowlist",
     needsRoomAliasesForConfig: false,
-    getRoomInfo: vi.fn(async () => ({ altAliases: [], nameResolved: true, aliasesResolved: true })),
+    getRoomInfo:
+      roomInfo?.getRoomInfo ??
+      vi.fn(async () => ({ altAliases: [], nameResolved: true, aliasesResolved: true })),
     invalidateMemberDisplayName,
+    invalidateRoomName: roomInfo?.invalidateRoomName,
     logVerboseMessage,
     warnedEncryptedRooms: new Set<string>(),
     warnedCryptoMissingRooms: new Set<string>(),
@@ -213,6 +222,7 @@ function createHarness(params?: {
     sendMessage,
     invalidateRoom,
     invalidateMemberDisplayName,
+    roomInfo,
     rememberInvite,
     roomEventListener: eventListener("room.event"),
     listVerifications,
@@ -331,6 +341,89 @@ describe("registerMatrixMonitorEvents verification routing", () => {
       }
     },
   );
+
+  it("serves a room's current name after an m.room.name event, including a cleared name", async () => {
+    const roomNameByRoom = new Map([
+      ["!room:example.org", "Room Alpha"],
+      ["!other:example.org", "Room Other"],
+    ]);
+    const { roomInfo, roomEventListener } = createHarness({ roomNameByRoom });
+    const { getRoomInfo } = expectDefined(roomInfo, "room info resolver");
+    const currentInfo = (roomId: string) => getRoomInfo(roomId, { currentName: true });
+    const nameEvent = (roomId: string, name: string) =>
+      roomEventListener(roomId, {
+        event_id: `$name-${name}`,
+        type: "m.room.name",
+        state_key: "",
+        content: { name },
+      });
+
+    await expect(currentInfo("!room:example.org")).resolves.toMatchObject({ name: "Room Alpha" });
+    await expect(currentInfo("!other:example.org")).resolves.toMatchObject({ name: "Room Other" });
+
+    // The homeserver state changes; the cached name is kept until the room's name event arrives.
+    roomNameByRoom.set("!room:example.org", "Room Beta");
+    roomNameByRoom.set("!other:example.org", "Room Other Two");
+    await expect(currentInfo("!room:example.org")).resolves.toMatchObject({ name: "Room Alpha" });
+
+    nameEvent("!room:example.org", "Room Beta");
+    await expect(currentInfo("!room:example.org")).resolves.toMatchObject({
+      name: "Room Beta",
+      nameResolved: true,
+    });
+    await expect(currentInfo("!other:example.org")).resolves.toMatchObject({ name: "Room Other" });
+
+    roomNameByRoom.set("!room:example.org", "");
+    nameEvent("!room:example.org", "");
+    await expect(currentInfo("!room:example.org")).resolves.toMatchObject({
+      name: "",
+      nameResolved: true,
+    });
+  });
+
+  it("keeps DM promotion on the first room name it resolved after a rename", async () => {
+    const roomNameByRoom = new Map([["!named:example.org", "Room Alpha"]]);
+    const { roomInfo, roomEventListener } = createHarness({ roomNameByRoom });
+    const { getRoomInfo } = expectDefined(roomInfo, "room info resolver");
+    // The lookup and check the monitor's direct-room tracker runs before promoting a room.
+    const promotionView = async (roomId: string) => {
+      const info = await getRoomInfo(roomId, { includeAliases: true });
+      return {
+        name: info.name,
+        promotable: shouldPromoteRecentInviteRoom({ roomId, roomInfo: info }),
+      };
+    };
+    const nameEvent = (roomId: string, name: string) =>
+      roomEventListener(roomId, {
+        event_id: `$name-${roomId}-${name}`,
+        type: "m.room.name",
+        state_key: "",
+        content: { name },
+      });
+
+    await expect(promotionView("!named:example.org")).resolves.toEqual({
+      name: "Room Alpha",
+      promotable: false,
+    });
+    await expect(promotionView("!unnamed:example.org")).resolves.toEqual({
+      name: undefined,
+      promotable: true,
+    });
+
+    roomNameByRoom.set("!named:example.org", "");
+    nameEvent("!named:example.org", "");
+    roomNameByRoom.set("!unnamed:example.org", "Room Bravo");
+    nameEvent("!unnamed:example.org", "Room Bravo");
+
+    await expect(promotionView("!named:example.org")).resolves.toEqual({
+      name: "Room Alpha",
+      promotable: false,
+    });
+    await expect(promotionView("!unnamed:example.org")).resolves.toEqual({
+      name: undefined,
+      promotable: true,
+    });
+  });
 
   it.each(["@bot:example.org", "@alice:example.org"])(
     "tracks invite provenance from %s",

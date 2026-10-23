@@ -308,6 +308,50 @@ describe("nodes camera helpers", () => {
     });
   });
 
+  it.each([false, true])(
+    "preserves output on URL write failure when cancellation rejects=%s",
+    async (cancelFails) => {
+      let canceled = false;
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(Buffer.from("partial-camera"));
+        },
+        cancel() {
+          canceled = true;
+          if (cancelFails) {
+            throw new Error("injected cancel failure");
+          }
+        },
+      });
+      stubFetchResponse(new Response(stream, { status: 200 }));
+      await withCameraTempDir(async (dir) => {
+        const out = path.join(dir, "failed-write.bin");
+        await fs.writeFile(out, "existing-camera");
+        await fs.chmod(out, 0o640);
+        const originalOpen = fsMocks.actualOpen;
+        if (!originalOpen) {
+          throw new Error("expected actual fs.open implementation");
+        }
+        let stagingHandle: Awaited<ReturnType<FsOpen>> | undefined;
+        fsMocks.open.mockImplementationOnce(async (...args) => {
+          stagingHandle = await originalOpen(...args);
+          vi.spyOn(stagingHandle, "writeFile").mockRejectedValue(
+            new Error("injected write failure"),
+          );
+          return stagingHandle;
+        });
+
+        await expect(writeUrl(out, "failed-write.bin")).rejects.toThrow(
+          /injected (write|cancel) failure/,
+        );
+        expect(canceled).toBe(true);
+        expect(stream.locked).toBe(false);
+        expect(stagingHandle?.fd).toBe(-1);
+        await expectOutput(dir, out, "existing-camera");
+      });
+    },
+  );
+
   it("rejects an empty URL response body", async () => {
     stubFetchResponse(new Response(null, { status: 200 }));
     await expect(writeUrl("/tmp/ignored", "empty.bin")).rejects.toThrow(/empty response body/i);

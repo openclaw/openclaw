@@ -218,10 +218,7 @@ export async function sendMessageMattermost(
     props = buildButtonProps({
       callbackUrl: resolveInteractionCallbackUrl(accountId, {
         gateway: cfg.gateway,
-        interactions: resolveMattermostAccount({
-          cfg,
-          accountId,
-        }).config?.interactions,
+        interactions: account.config.interactions,
       }),
       accountId,
       channelId,

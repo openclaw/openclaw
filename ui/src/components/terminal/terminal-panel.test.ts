@@ -443,93 +443,72 @@ describe("OpenClawTerminalPanel", () => {
     });
   });
 
-  it("keeps a persisted session exited when it disappears during attach", async () => {
-    sessionStorage.setItem("openclaw.terminal.sessions.v1", JSON.stringify(["gone-1"]));
-    const controller = createTerminalController();
-    createGhosttyTerminalMock.mockResolvedValue(controller);
-    const requests: Array<{ method: string; params: unknown }> = [];
-    let listCalls = 0;
-    const client: TerminalGatewayClient = {
-      forceReconnect: () => {},
-      request: async <T>(method: string, params?: unknown) => {
-        requests.push({ method, params });
-        if (method === "terminal.list") {
-          listCalls += 1;
-          return {
-            sessions:
-              listCalls === 1
-                ? [{ ...terminalOpenResult("gone-1"), attached: false, createdAtMs: 1 }]
-                : [],
-          } as T;
-        }
-        if (method === "terminal.attach") {
-          throw new Error('unknown terminal session "gone-1"');
-        }
-        if (method === "terminal.open") {
-          return terminalOpenResult("replacement-1") as T;
-        }
-        return { ok: true } as T;
-      },
-      addEventListener: () => () => {},
-    };
-    const panel = mountTerminalPanel(client);
+  it.each(["missing", "transient"] as const)(
+    "reconciles a persisted session after a %s attach failure",
+    async (failure) => {
+      const sessionId = failure === "missing" ? "gone-1" : "live-1";
+      sessionStorage.setItem("openclaw.terminal.sessions.v1", JSON.stringify([sessionId]));
+      const controller = createTerminalController();
+      if (failure === "missing") {
+        createGhosttyTerminalMock.mockResolvedValue(controller);
+      } else {
+        createGhosttyTerminalMock.mockResolvedValueOnce(controller);
+      }
+      const requests: Array<{ method: string; params: unknown }> = [];
+      let listCalls = 0;
+      const client: TerminalGatewayClient = {
+        forceReconnect: () => {},
+        request: async <T>(method: string, params?: unknown) => {
+          requests.push({ method, params });
+          if (method === "terminal.list") {
+            listCalls += 1;
+            return {
+              sessions:
+                failure === "transient" || listCalls === 1
+                  ? [{ ...terminalOpenResult(sessionId), attached: false, createdAtMs: 1 }]
+                  : [],
+            } as T;
+          }
+          if (method === "terminal.attach") {
+            throw new Error(
+              failure === "missing"
+                ? `unknown terminal session "${sessionId}"`
+                : "gateway temporarily unavailable",
+            );
+          }
+          if (method === "terminal.open") {
+            return terminalOpenResult("replacement-1") as T;
+          }
+          return { ok: true } as T;
+        },
+        addEventListener: () => () => {},
+      };
+      const panel = mountTerminalPanel(client);
 
-    panel.toggle();
+      panel.toggle();
 
-    await waitForFast(() => {
-      expect(panel.querySelector(".tabstrip-tab__status")?.textContent).toBe("exited");
-    });
-    expect(requests.filter((entry) => entry.method === "terminal.attach")).toHaveLength(1);
-    // Restoration and attach reconciliation are independent of dock catalog discovery.
-    expect(requests.filter((entry) => entry.method === "terminal.list")).toHaveLength(3);
-    expect(requests.some((entry) => entry.method === "terminal.open")).toBe(false);
-    expect(controller.write).not.toHaveBeenCalled();
-    expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe("[]");
-  });
-
-  it("does not mark a live persisted session exited after a transient attach failure", async () => {
-    sessionStorage.setItem("openclaw.terminal.sessions.v1", JSON.stringify(["live-1"]));
-    const controller = createTerminalController();
-    createGhosttyTerminalMock.mockResolvedValueOnce(controller);
-    const requests: Array<{ method: string; params: unknown }> = [];
-    const client: TerminalGatewayClient = {
-      forceReconnect: () => {},
-      request: async <T>(method: string, params?: unknown) => {
-        requests.push({ method, params });
-        if (method === "terminal.list") {
-          return {
-            sessions: [{ ...terminalOpenResult("live-1"), attached: false, createdAtMs: 1 }],
-          } as T;
-        }
-        if (method === "terminal.attach") {
-          throw new Error("gateway temporarily unavailable");
-        }
-        if (method === "terminal.open") {
-          return terminalOpenResult("replacement-1") as T;
-        }
-        return { ok: true } as T;
-      },
-      addEventListener: () => () => {},
-    };
-    const panel = mountTerminalPanel(client);
-
-    panel.toggle();
-
-    await waitForFast(() => {
-      expect(panel.querySelector('.tp-error[role="alert"]')?.textContent).toContain(
-        "Could not attach terminal session",
+      if (failure === "missing") {
+        await waitForFast(() => {
+          expect(panel.querySelector(".tabstrip-tab__status")?.textContent).toBe("exited");
+        });
+      } else {
+        await waitForFast(() => {
+          expect(panel.querySelector('.tp-error[role="alert"]')?.textContent).toContain(
+            "Could not attach terminal session",
+          );
+        });
+        expect(panel.querySelector(".tabstrip-tab__status")?.textContent).not.toBe("exited");
+      }
+      expect(requests.filter((entry) => entry.method === "terminal.open")).toHaveLength(0);
+      // Restoration and attach reconciliation are independent of dock catalog discovery.
+      expect(requests.filter((entry) => entry.method === "terminal.list")).toHaveLength(3);
+      expect(requests.filter((entry) => entry.method === "terminal.attach")).toHaveLength(1);
+      expect(controller.write).not.toHaveBeenCalled();
+      expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe(
+        JSON.stringify(failure === "missing" ? [] : [sessionId]),
       );
-    });
-    expect(requests.filter((entry) => entry.method === "terminal.open")).toHaveLength(0);
-    // Restoration and attach reconciliation are independent of dock catalog discovery.
-    expect(requests.filter((entry) => entry.method === "terminal.list")).toHaveLength(3);
-    expect(requests.filter((entry) => entry.method === "terminal.attach")).toHaveLength(1);
-    expect(panel.querySelector(".tabstrip-tab__status")?.textContent).not.toBe("exited");
-    expect(controller.write).not.toHaveBeenCalled();
-    expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe(
-      JSON.stringify(["live-1"]),
-    );
-  });
+    },
+  );
 
   it("shows a session picker list failure without retiring the active terminal", async () => {
     createGhosttyTerminalMock.mockResolvedValue(createTerminalController());

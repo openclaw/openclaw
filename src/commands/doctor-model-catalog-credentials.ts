@@ -27,6 +27,7 @@ import { resolveStateDir } from "../config/paths.js";
 import { resolveConfiguredAgentDatabaseCandidatePaths } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
+import { decodeUtf8Input } from "../infra/utf8-input.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { listAgentModelsJsonPaths } from "../secrets/storage-scan.js";
 import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
@@ -246,7 +247,9 @@ function collectAgentCatalogs(agentDir: string, warnings: string[], findings: He
   const providers: Record<string, unknown>[] = [];
   const rootPath = path.join(agentDir, "models.json");
   try {
-    const root = parseModelCatalogJson(fs.readFileSync(rootPath, "utf8"));
+    const root = parseModelCatalogJson(
+      decodeUtf8Input(fs.readFileSync(rootPath), `Model catalog ${rootPath}`),
+    );
     if (isRecord(root) && isRecord(root.providers)) {
       providers.push(root.providers);
     }

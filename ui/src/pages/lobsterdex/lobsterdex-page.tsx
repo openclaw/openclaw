@@ -11,7 +11,7 @@ import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { copyToClipboard } from "../../lib/clipboard.ts";
-import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectLobsterdex } from "../../lib/reactive/events-browser.ts";
 import { t, getLocale } from "../../lib/reactive/i18n.ts";
@@ -227,12 +227,9 @@ export function LobsterdexPage() {
             <a
               class="btn btn--sm"
               href={pathForRoute("appearance", context.basePath)}
-              onClick={(event) => {
-                if (shouldHandleNavigationClick(event)) {
-                  event.preventDefault();
-                  context.navigate("appearance");
-                }
-              }}
+              onClick={(event) =>
+                handleNavigationClick(event, () => context.navigate("appearance"))
+              }
             >
               {t("tabs.appearance")}
             </a>

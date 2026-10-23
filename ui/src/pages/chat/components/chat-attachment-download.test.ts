@@ -46,16 +46,19 @@ it("shows pending and failure, then delivers the retried attachment", async () =
     .mockReturnValueOnce(first.promise)
     .mockReturnValueOnce(second.promise);
   const panel = await mountDownload(download);
-  downloadButton(panel).click();
+  const button = downloadButton(panel);
+  button.click();
   expect(download).toHaveBeenCalledOnce();
   await waitForSolid(() => expect(downloadButton(panel).disabled).toBe(true));
   first.reject(new Error("Download unavailable"));
   await waitForSolid(() => {
+    expect(downloadButton(panel)).toBe(button);
     expect(downloadButton(panel).disabled).toBe(false);
     expect(panel.querySelector('[role="alert"]')?.textContent).toContain("Download unavailable");
   });
   downloadButton(panel).click();
   await waitForSolid(() => {
+    expect(downloadButton(panel)).toBe(button);
     expect(downloadButton(panel).disabled).toBe(true);
     expect(panel.querySelector('[role="alert"]')).toBeNull();
   });
@@ -99,31 +102,39 @@ it.each(["content", "connection", "disconnect"] as const)(
   },
 );
 
-it("keeps the replacement download pending when a retired request settles", async () => {
-  const retired = Promise.withResolvers<Blob | null>();
-  const replacement = Promise.withResolvers<Blob | null>();
-  const download = vi
-    .fn<NonNullable<AttachmentSidebarContent["download"]>>()
-    .mockReturnValueOnce(retired.promise)
-    .mockReturnValueOnce(replacement.promise);
-  const panel = await mountDownload(download);
-  downloadButton(panel).click();
-  await waitForSolid(() => expect(downloadButton(panel).disabled).toBe(true));
+it.each(["resolves", "rejects"] as const)(
+  "keeps the replacement download pending when a retired request %s",
+  async (settlement) => {
+    const retired = Promise.withResolvers<Blob | null>();
+    const replacement = Promise.withResolvers<Blob | null>();
+    const download = vi
+      .fn<NonNullable<AttachmentSidebarContent["download"]>>()
+      .mockReturnValueOnce(retired.promise)
+      .mockReturnValueOnce(replacement.promise);
+    const panel = await mountDownload(download);
+    downloadButton(panel).click();
+    await waitForSolid(() => expect(downloadButton(panel).disabled).toBe(true));
 
-  panel.content = { ...(panel.content as AttachmentSidebarContent), title: "replacement.zip" };
-  await panel.updateComplete;
-  await waitForSolid(() => expect(downloadButton(panel).disabled).toBe(false));
-  downloadButton(panel).click();
-  await waitForSolid(() => expect(downloadButton(panel).disabled).toBe(true));
-  expect(download).toHaveBeenCalledTimes(2);
+    panel.content = { ...(panel.content as AttachmentSidebarContent), title: "replacement.zip" };
+    await panel.updateComplete;
+    await waitForSolid(() => expect(downloadButton(panel).disabled).toBe(false));
+    downloadButton(panel).click();
+    await waitForSolid(() => expect(downloadButton(panel).disabled).toBe(true));
+    expect(download).toHaveBeenCalledTimes(2);
 
-  retired.resolve(new Blob(["retired archive"]));
-  await retired.promise;
-  await waitForSolid(() => expect(downloadButton(panel).disabled).toBe(true));
-  expect(downloadBlobFile).not.toHaveBeenCalled();
+    if (settlement === "resolves") {
+      retired.resolve(new Blob(["retired archive"]));
+    } else {
+      retired.reject(new Error("Retired download failed"));
+    }
+    await retired.promise.catch(() => {});
+    await waitForSolid(() => expect(downloadButton(panel).disabled).toBe(true));
+    expect(panel.querySelector('[role="alert"]')).toBeNull();
+    expect(downloadBlobFile).not.toHaveBeenCalled();
 
-  const blob = new Blob(["replacement archive"]);
-  replacement.resolve(blob);
-  await waitForSolid(() => expect(downloadButton(panel).disabled).toBe(false));
-  expect(downloadBlobFile).toHaveBeenCalledExactlyOnceWith("replacement.zip", blob);
-});
+    const blob = new Blob(["replacement archive"]);
+    replacement.resolve(blob);
+    await waitForSolid(() => expect(downloadButton(panel).disabled).toBe(false));
+    expect(downloadBlobFile).toHaveBeenCalledExactlyOnceWith("replacement.zip", blob);
+  },
+);

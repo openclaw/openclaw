@@ -10,6 +10,7 @@ import {
   PluginInstallRuntimeBatch,
   type PluginInstallBatchReload,
 } from "../plugins/install-runtime-batch.js";
+import * as index from "../plugins/installed-plugin-index-records.js";
 import type { uninstallPluginWithPolicy } from "../plugins/management-uninstall.js";
 import { preflightPluginInstall } from "../plugins/plugin-install-preflight.js";
 import {
@@ -57,12 +58,12 @@ async function runtimeEnv(prefix: string, extra: NodeJS.ProcessEnv = {}) {
   return { root, env };
 }
 
-function packageDeps(
-  root: string,
-  loadInstallRecords: () => Promise<Record<string, PluginInstallRecord>>,
-) {
+function packageDeps(root: string, load: () => Promise<Record<string, PluginInstallRecord>>) {
   return {
-    preflightPlugin: (params) => realPreflightPluginInstall({ ...params, loadInstallRecords }),
+    preflightPlugin: async (params) => {
+      using _ = vi.spyOn(index, "loadInstalledPluginIndexInstallRecords").mockImplementation(load);
+      return await realPreflightPluginInstall(params);
+    },
     probePlugin: async (request) => {
       const { spec } = request;
       const pluginId = spec.slice(spec.lastIndexOf("/") + 1).split("@")[0]!;

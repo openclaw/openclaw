@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { collectTwitchStatusIssues } from "./status.js";
+import { twitchPlugin } from "./plugin.js";
 import type { ChannelAccountSnapshot } from "./types.js";
+
+const collectTwitchStatusIssues = twitchPlugin.status!.collectStatusIssues!;
 
 function collect(overrides: Partial<ChannelAccountSnapshot>) {
   return collectTwitchStatusIssues([

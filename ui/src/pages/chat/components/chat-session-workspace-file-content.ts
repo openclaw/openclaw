@@ -1,12 +1,90 @@
 import { formatInlineCodeSpan } from "../../../../../src/shared/markdown-code.js";
 import { isHttpArtifactDownloadUrl } from "../../../api/artifact-download.ts";
+import { GatewayRequestError } from "../../../api/gateway.ts";
 import type { SessionFileDownload } from "../../../api/session-file-download.ts";
 import type { ArtifactDownloadResult, SessionWorkspaceGetResult } from "../../../api/types.ts";
 import { readBlobAsDataUrl } from "../../../lib/blob-data-url.ts";
 import { base64ToBytes } from "../../../lib/bytes-base64.ts";
 import { isTextAttachment } from "../../../lib/media-file-extension.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
+import type { SessionWorkspaceHost } from "./chat-session-workspace-types.ts";
 import type { FilePreviewSource, SidebarContent } from "./chat-sidebar-content-types.ts";
+
+export function workspaceBrowserFilePath(root: string | undefined, filePath: string): string {
+  if (!root || /^(?:\/|[a-z]:[\\/]|\\\\)/i.test(filePath)) {
+    return filePath;
+  }
+  const separator = root.includes("\\") && !root.includes("/") ? "\\" : "/";
+  const base = root.replace(/[\\/]+$/, "");
+  const relative = filePath.replace(/^[\\/]+/, "").replaceAll(/[\\/]/g, separator);
+  return base ? `${base}${separator}${relative}` : `${separator}${relative}`;
+}
+
+export async function readSessionFileReference(
+  state: SessionWorkspaceHost,
+  sessionKey: string,
+  agentId: string | undefined,
+  path: string,
+  messageEntryId?: string,
+): Promise<{ result: SessionWorkspaceGetResult; actionPath: string } | null> {
+  const options = { agentId, ...(messageEntryId ? { messageEntryId } : {}) };
+  const read = async (actionPath: string) => {
+    try {
+      const result = await state.sessions.getFile(sessionKey, actionPath, options);
+      return result ? { result, actionPath } : null;
+    } catch (error) {
+      const details = error instanceof GatewayRequestError ? error.details : null;
+      if (
+        details &&
+        typeof details === "object" &&
+        "type" in details &&
+        details.type === "session_file_too_large" &&
+        "size" in details &&
+        typeof details.size === "number"
+      ) {
+        const result: SessionWorkspaceGetResult = {
+          sessionKey,
+          file: {
+            path: actionPath,
+            name: pathDisplayName(actionPath),
+            size: details.size,
+            kind: "read",
+            missing: false,
+            previewKind: "unsupported",
+          },
+        };
+        return { result, actionPath };
+      }
+      throw error;
+    }
+  };
+  try {
+    return await read(path);
+  } catch (error) {
+    const details = error instanceof GatewayRequestError ? error.details : null;
+    if (
+      !details ||
+      typeof details !== "object" ||
+      !("type" in details) ||
+      details.type !== "session_file_not_found" ||
+      !/^[^\\/]+$/u.test(path)
+    ) {
+      throw error;
+    }
+    const listing = await state.sessions.listFiles(sessionKey, { agentId, path: "", search: path });
+    const browser = listing?.browser;
+    if (!listing?.root || !browser || browser.truncated) {
+      throw error;
+    }
+    const matches = browser.entries.filter((entry) => entry.kind === "file" && entry.name === path);
+    const [match] = matches;
+    if (matches.length !== 1 || !match) {
+      throw error;
+    }
+    // Search paths are root-relative, unlike a session's potentially nested cwd.
+    return await read(workspaceBrowserFilePath(listing.root, match.path));
+  }
+}
 
 function formatMarkdownCodeSpan(value: string): string {
   // Markdown finds block boundaries before inline spans, so filenames must

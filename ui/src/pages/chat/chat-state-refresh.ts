@@ -11,6 +11,10 @@ import {
   loadChatMetadataRefresh,
   retireChatMetadataRefresh,
 } from "../../lib/chat/chat-metadata-store.ts";
+import {
+  applyRemoteSlashCommandsResult,
+  refreshSlashCommands,
+} from "../../lib/chat/slash-command-catalog.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
 import { hasUnrestrictedModelCatalogSnapshot } from "../../lib/model-catalog-cache.ts";
@@ -23,7 +27,6 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { isPersistedSessionRow } from "../../lib/sessions/session-row-reconcile.ts";
 import { refreshChatAvatar, resolveAgentIdForSession } from "./chat-avatar.ts";
-import { applyRemoteSlashCommandsResult, refreshSlashCommands } from "./chat-commands.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
 import type { ObservedChatHistoryResult } from "./chat-history-snapshot.ts";

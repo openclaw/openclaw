@@ -234,6 +234,44 @@ describe("generateConversationLabelWithFallback", () => {
     expect(attemptedModels()).toEqual(["gpt-mini", "gpt-main"]);
   });
 
+  it("re-runs the regular model with the session runtime override after a utility attempt without it", async () => {
+    runIsolatedCompletion.mockImplementation(
+      async (request: { model?: string; agentHarnessRuntimeOverride?: string }) => {
+        if (request.model === "gpt-main" && request.agentHarnessRuntimeOverride === "codex") {
+          return { text: "Runtime recovery label" };
+        }
+        throw new FailoverError("Fixture server unavailable", { reason: "server_error" });
+      },
+    );
+    await expect(
+      generateConversationLabelWithFallback({
+        ...params,
+        cfg: {
+          agents: {
+            defaults: {
+              utilityModel: {
+                primary: "openai/gpt-mini",
+                fallbacks: ["openai/gpt-main"],
+              },
+            },
+          },
+          plugins: { enabled: false },
+        },
+        agentHarnessRuntimeOverride: "codex",
+      }),
+    ).resolves.toBe("Runtime recovery label");
+    expect(
+      runIsolatedCompletion.mock.calls.map(([request]) => [
+        request.model,
+        request.agentHarnessRuntimeOverride,
+      ]),
+    ).toEqual([
+      ["gpt-mini", "codex"],
+      ["gpt-main", undefined],
+      ["gpt-main", "codex"],
+    ]);
+  });
+
   it.each(["utility backup", "regular model", "exhausted"] as const)(
     "uses the utility chain before the existing label recovery: %s",
     async (outcome) => {

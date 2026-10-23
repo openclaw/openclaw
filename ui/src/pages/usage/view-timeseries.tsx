@@ -618,7 +618,7 @@ function TimeSeriesChart(props: {
       {model().breakdownByType ? (
         <div class="timeseries-breakdown">
           <div class="card-title usage-section-title">{t("usage.breakdown.tokensByType")}</div>
-          <div class="cost-breakdown-bar cost-breakdown-bar--compact">
+          <div class="cost-breakdown-bar">
             <For each={USAGE_TOKEN_CATEGORIES}>
               {({ key, className }) => (
                 <div

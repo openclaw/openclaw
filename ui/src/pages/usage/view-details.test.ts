@@ -2,7 +2,7 @@ import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
 import type { SessionUsageTimePoint } from "../../../../src/shared/session-usage-timeseries-types.js";
-import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
+import type { PanelRefreshStatus } from "../../components/panel-refresh-status-state.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -83,7 +83,7 @@ function log(timestamp: number, role: SessionLogEntry["role"], content: string):
 function toolRows(root: ParentNode) {
   return [...root.querySelectorAll(".usage-list-item")].map((item) => [
     item.firstElementChild?.textContent,
-    text(item, ".usage-list-value > span"),
+    text(item, ".usage-list-value"),
   ]);
 }
 
@@ -160,7 +160,7 @@ function mount(
           sessionLogs: errors.sessionLogsData === undefined ? [] : errors.sessionLogsData,
           sessionLogsStatus: status(errors.sessionLogs, errors.sessionLogsHasLoaded),
           logFilters: errors.logFilters ?? defaults.detail.logFilters,
-          context: { weight: errors.contextWeight, loading: false, read: null, status: status() },
+          context: { weight: errors.contextWeight, read: null, status: status() },
         },
         callbacks: {
           ...defaults.callbacks.details,

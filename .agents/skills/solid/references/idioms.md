@@ -118,17 +118,15 @@ using it to mirror owner state. Gateway decisions and synchronous domain state
 remain in their existing TypeScript owners.
 
 Split effects into tracked preparation and imperative application. For example,
-`components/solid/tabs.tsx` collects options and items in compute, then calls the
-plain tabs controller's `sync()` after DOM bindings. That controller integration
-is an effect; calculating which tab is selected is a derivation.
+`lib/reactive/shadow-styles.ts` tracks the style list, binds it to the external
+shadow root in apply, and returns the binding's disposal. That DOM integration
+is an effect; calculating the style list is a derivation.
 
 ```ts
-createEffect(
-  () => props.title,
-  (title) => {
-    element.title = title;
-  },
-);
+createEffect(getStyles, (styles) => {
+  const binding = bindShadowStyles(getElement(), styles);
+  return () => binding.dispose();
+});
 ```
 
 An apply callback is untracked and unowned. Capture all reactive facts in
@@ -177,8 +175,9 @@ inside a stable callback when the parent may replace the handler:
 A local lifetime-stable function can be bound directly. Dynamic elements use
 runtime prop spreads, which can update handlers; do not add wrappers solely for
 that case. Native capture/options and events stopped by an enclosing native
-boundary still need the owned listener/ref pattern. Dashed events use
-`onWa-select`, not `onWaSelect`. Prefer the existing owned primitive to `wa-*`.
+boundary still need the owned listener/ref pattern. Dashed events keep their
+exact names, such as `onOverlay-after-show` in
+[Menu](../../../../ui/src/components/solid/menu.tsx).
 
 Commit-on-change inputs need special care: unrelated props refreshes must not
 rewrite the DOM draft. Memoize the committed owner value and bind it through the

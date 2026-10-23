@@ -376,10 +376,6 @@ function DetailsProcesses(
     </Show>
   );
   const retry = () => void props.processes()?.refresh();
-  const consumeRead = () => {
-    latest(presentation.read);
-    return null;
-  };
   return (
     <Errored
       fallback={(_error, reset) => (
@@ -392,7 +388,7 @@ function DetailsProcesses(
       )}
     >
       <Loading on={presentation.scope()} fallback={<Content retry={retry} />}>
-        {consumeRead()}
+        {(latest(presentation.read), null)}
         <Content retry={retry} />
       </Loading>
     </Errored>
