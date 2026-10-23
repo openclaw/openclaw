@@ -60,14 +60,19 @@ import {
   testing,
 } from "./subagent-registry.test-helpers.js";
 
-// mock-isolation: Keep restart selection, authority, transcript policy and recovery service real;
-// the fixed continuation replaces provider execution with the native registry admission.
-vi.mock("../../../gateway/server-methods/session-recovery-continuation.js", () => ({
-  launchSessionRecoveryContinuation:
-    vi.fn<
-      typeof import("../../../gateway/server-methods/session-recovery-continuation.js").launchSessionRecoveryContinuation
-    >(),
-}));
+// Replace provider execution with native registry admission; keep recovery policy real.
+vi.mock(
+  "../../../gateway/server-methods/session-recovery-continuation.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../../../gateway/server-methods/session-recovery-continuation.js")
+    >()),
+    launchSessionRecoveryContinuation:
+      vi.fn<
+        typeof import("../../../gateway/server-methods/session-recovery-continuation.js").launchSessionRecoveryContinuation
+      >(),
+  }),
+);
 
 describe("detached subagent restart recovery", () => {
   const fixture = useSubagentRestartRecoveryFixture({ reuseDatabaseWorkers: true });
