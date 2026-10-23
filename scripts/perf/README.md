@@ -1991,8 +1991,11 @@ reversing the paths on its peer. Each side publishes completion after its worker
 and whole-workload timing windows, then waits for its peer before collecting or
 snapshotting. Never reuse marker files from an earlier pair.
 For source-runtime comparisons in one checkout, `--worker-baseline-dir` selects
-mirrored baseline TypeScript files while retaining their original module URLs;
-the worker replies record which replacements were loaded. Use `--entry
+mirrored TypeScript files while retaining their original module URLs; the worker
+replies record which replacements were loaded. Pass this flag on both sides with
+the same relative-file manifest and each side's source revision, so both register
+the same loading hook. Comparing a hooked baseline against an unhooked candidate
+confounds source changes with loader behavior. Use `--entry
 src/entry.ts`, identical fixtures, fixed `--soak-rounds` and `--duration-ms`, and
 the campaign's concurrent swapped CPU pairs and production guard. Source-runtime
 results include its loaders and are not packaged-worker absolute heap estimates.
