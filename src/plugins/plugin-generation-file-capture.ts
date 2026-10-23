@@ -103,6 +103,7 @@ export function createPluginGenerationFileCapture({
   directory,
   outputRoot,
   capturedPaths,
+  hostModuleLinks,
   originalSources,
   hardlinkedSources,
   sourceCapture,
@@ -119,6 +120,7 @@ export function createPluginGenerationFileCapture({
   directory: string;
   outputRoot?: string;
   capturedPaths: Map<string, string>;
+  hostModuleLinks: ReadonlySet<string>;
   originalSources: Map<string, string>;
   hardlinkedSources: Set<string>;
   sourceCapture: Pick<ReturnType<typeof createPluginSourceCapture>, "additions">;
@@ -139,7 +141,7 @@ export function createPluginGenerationFileCapture({
     openFile: RootFileOpenBatchSync["openFile"],
   ) => {
     // Metadata can precede its package body; promotion never replaces those captured bytes.
-    if (capturedPaths.get(path.resolve(source)) === target) {
+    if (capturedPaths.get(path.resolve(source)) === target || hostModuleLinks.has(target)) {
       return;
     }
     const prepared = nativeAdmission.resolvePreparedSource(source);

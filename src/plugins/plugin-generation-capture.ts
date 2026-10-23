@@ -83,6 +83,7 @@ function createPluginGenerationArtifact(
   const packageForFile = (filename: string) =>
     findPluginCapturedPackage(packages, filename, directory)?.owner;
   const capturedPaths = new Map<string, string>();
+  const hostModuleLinks = new Set<string>();
   const originalSources = new Map<string, string>();
   const hardlinkedSources = new Set<string>();
   const nativeAdmission = createPluginNativeAdmission(
@@ -192,6 +193,7 @@ function createPluginGenerationArtifact(
       directory,
       outputRoot,
       capturedPaths,
+      hostModuleLinks,
       originalSources,
       hardlinkedSources,
       sourceCapture,
@@ -270,6 +272,9 @@ function createPluginGenerationArtifact(
         return;
       }
       const target = existingSource ?? path.join(destination, path.relative(root, source));
+      if (hostModuleLinks.has(target)) {
+        return;
+      }
       if (!existingSource) {
         const prepared = nativeAdmission.resolvePreparedSource(source);
         const real = fs.realpathSync(prepared?.path ?? source);
@@ -427,6 +432,10 @@ function createPluginGenerationArtifact(
             const sharedLink = path.join(destination, path.relative(boundary, local));
             if (linkPluginGenerationHostModule(sharedLink, shared)) {
               additions.add(sharedLink);
+            }
+            // Recovery can already contain the link; denied links still allow asset capture.
+            if (fs.lstatSync(sharedLink, { throwIfNoEntry: false })?.isSymbolicLink()) {
+              hostModuleLinks.add(sharedLink);
             }
           }
           return undefined;
