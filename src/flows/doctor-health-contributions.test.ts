@@ -534,7 +534,8 @@ vi.mock("../commands/doctor-disk-space.js", () => ({
   collectDiskSpaceHealthFindings: mocks.collectDiskSpaceHealthFindings,
 }));
 
-vi.mock("../commands/doctor-heartbeat-cadence-migration.js", () => ({
+vi.mock("../commands/doctor-heartbeat-cadence-migration.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/doctor-heartbeat-cadence-migration.js")>()),
   collectHeartbeatCadenceMigrationFindings: mocks.collectHeartbeatCadenceMigrationFindings,
 }));
 
@@ -543,7 +544,8 @@ vi.mock("../commands/doctor-heartbeat-retirement.js", async (importOriginal) => 
   maybeMigrateHeartbeatCadenceToCron: mocks.maybeMigrateHeartbeatCadenceToCron,
 }));
 
-vi.mock("../commands/doctor-heartbeat-scratch-migration.js", () => ({
+vi.mock("../commands/doctor-heartbeat-scratch-migration.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/doctor-heartbeat-scratch-migration.js")>()),
   collectHeartbeatScratchMigrationFindings: mocks.collectHeartbeatScratchMigrationFindings,
 }));
 
@@ -589,13 +591,10 @@ vi.mock("../channels/plugins/package-state-probes.js", async (importOriginal) =>
     mocks.collectBundledChannelPackageStateLoadFailures,
 }));
 
-vi.mock("./doctor-startup-channel-maintenance.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./doctor-startup-channel-maintenance.js")>();
-  return {
-    ...actual,
-    collectChannelPreviewWarningHealthFindings: mocks.collectChannelPreviewWarningHealthFindings,
-  };
-});
+vi.mock("./doctor-startup-channel-maintenance.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./doctor-startup-channel-maintenance.js")>()),
+  collectChannelPreviewWarningHealthFindings: mocks.collectChannelPreviewWarningHealthFindings,
+}));
 
 vi.mock("../commands/onboard-helpers.js", () => ({
   applyWizardMetadata: mocks.applyWizardMetadata,
