@@ -26,6 +26,19 @@ import {
 } from "./session-key.ts";
 export type SessionArchivedFilter = "active" | "snoozed" | "archived" | "all";
 
+type SessionNavigationInput = {
+  result: SessionsListResult | null;
+  activeSession?: GatewaySessionRow | null;
+  resultAgentId?: string | null;
+  sessionKey: string;
+  assistantAgentId?: string | null;
+  hello?: GatewayHelloOk | null;
+  showCron?: boolean;
+  showSystem?: boolean;
+  archivedFilter?: SessionArchivedFilter;
+  compareSessions?: (a: GatewaySessionRow, b: GatewaySessionRow) => number;
+};
+
 export type SessionScopeHost = {
   assistantAgentId?: string | null;
   agentsList?: {
@@ -198,18 +211,7 @@ export function compareSessionRowsByUpdatedAt(a: GatewaySessionRow, b: GatewaySe
   return updatedDiff !== 0 ? updatedDiff : a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
 }
 
-export function resolveSessionNavigation(input: {
-  result: SessionsListResult | null;
-  activeSession?: GatewaySessionRow | null;
-  resultAgentId?: string | null;
-  sessionKey: string;
-  assistantAgentId?: string | null;
-  hello?: GatewayHelloOk | null;
-  showCron?: boolean;
-  showSystem?: boolean;
-  archivedFilter?: SessionArchivedFilter;
-  compareSessions?: (a: GatewaySessionRow, b: GatewaySessionRow) => number;
-}) {
+export function resolveSessionNavigation(input: SessionNavigationInput) {
   const currentSessionKey = resolveSessionKey(input.sessionKey, input.hello);
   const defaultAgentId = resolveUiSelectedGlobalAgentId({
     assistantAgentId: input.assistantAgentId,

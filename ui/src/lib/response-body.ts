@@ -1,6 +1,12 @@
 // Control UI response helpers own bounded browser body consumption.
 import { consumeResponseBytes } from "@openclaw/normalization-core";
 
+type ResponseTextLimitOptions = {
+  maxBytes: number;
+  tooLargeMessage: string;
+  missingBodyMessage?: string;
+};
+
 function parseContentLength(headers: Headers): number | null {
   const raw = headers.get("content-length");
   if (!raw || !/^\d+$/u.test(raw)) {
@@ -12,11 +18,7 @@ function parseContentLength(headers: Headers): number | null {
 
 export async function readResponseTextWithLimit(
   response: Response,
-  options: {
-    maxBytes: number;
-    tooLargeMessage: string;
-    missingBodyMessage?: string;
-  },
+  options: ResponseTextLimitOptions,
 ): Promise<string> {
   const contentLength = parseContentLength(response.headers);
   if (contentLength !== null && contentLength > options.maxBytes) {

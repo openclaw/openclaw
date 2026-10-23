@@ -1,9 +1,11 @@
 import type { SessionRunStatus } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 
-export function isSessionRunStateActive(state: {
+type SessionRunState = {
   hasActiveRun?: boolean;
   status?: SessionRunStatus;
-}): boolean {
+};
+
+export function isSessionRunStateActive(state: SessionRunState): boolean {
   if (state.status && state.status !== "queued" && state.status !== "running") {
     return false;
   }

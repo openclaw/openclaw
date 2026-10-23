@@ -9,6 +9,11 @@ import { createDefaultUsageDateRange, DEFAULT_USAGE_SESSION_SORT } from "./helpe
 import { requestUsageSnapshot } from "./request-usage-snapshot.ts";
 import type { UsageRouteData } from "./types.ts";
 
+type UsageRouteSnapshot = Pick<UsageRouteData, "gateway" | "gatewaySnapshot"> & {
+  agentId: string | null;
+  date: Date;
+};
+
 function errorMessage(error: unknown): string {
   return isMissingOperatorReadScopeError(error)
     ? formatMissingOperatorReadScopeMessage("usage")
@@ -18,10 +23,7 @@ function errorMessage(error: unknown): string {
 export async function loadUsageRouteData(
   context: Pick<ApplicationContext, "gateway" | "agentSelection">,
   options: RouteLoaderOptions,
-  snapshot: Pick<UsageRouteData, "gateway" | "gatewaySnapshot"> & {
-    agentId: string | null;
-    date: Date;
-  },
+  snapshot: UsageRouteSnapshot,
 ): Promise<UsageRouteData> {
   const { gateway, gatewaySnapshot, agentId, date } = snapshot;
   const query: UsageRouteData["query"] = {

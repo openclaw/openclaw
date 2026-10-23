@@ -1,14 +1,16 @@
 import { encodeResumeHandoff } from "../../../../src/shared/resume-handoff.js";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 
+type ContinueInTerminalCommandResult =
+  | { ok: true; command: string; qualifiedSessionKey: string }
+  | { ok: false; reason: "query-routed" | "unavailable" };
+
 export function buildContinueInTerminalCommand(params: {
   gatewayUrl: string;
   sessionKey: string;
   rowAgentId?: string;
   selectedAgentId?: string;
-}):
-  | { ok: true; command: string; qualifiedSessionKey: string }
-  | { ok: false; reason: "query-routed" | "unavailable" } {
+}): ContinueInTerminalCommandResult {
   const { gatewayUrl, sessionKey } = params;
   try {
     const parsedGatewayUrl = new URL(gatewayUrl);

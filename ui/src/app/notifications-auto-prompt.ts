@@ -4,19 +4,23 @@ const NOTIFICATIONS_AUTO_PROMPT_KEY = "openclaw.control.notificationsAutoPrompt.
 
 type NotificationsContext = Pick<ApplicationContext, "nativeNotifications" | "webPush">;
 
+type NotificationsAutoPromptCandidate = {
+  connected: boolean;
+  directComposerSend: boolean;
+  message: string;
+  hasAttachments: boolean;
+  isCommand: boolean;
+};
+
 export function hasActiveNotificationPromptGesture(): boolean {
   // User activation can survive awaited work. window.event exists only while
   // the originating input event is dispatching, so deferred sends stay out.
   return typeof window !== "undefined" && window.event !== undefined;
 }
 
-export function shouldAutoPromptNotificationsOnSend(candidate: {
-  connected: boolean;
-  directComposerSend: boolean;
-  message: string;
-  hasAttachments: boolean;
-  isCommand: boolean;
-}): boolean {
+export function shouldAutoPromptNotificationsOnSend(
+  candidate: NotificationsAutoPromptCandidate,
+): boolean {
   return (
     candidate.connected &&
     candidate.directComposerSend &&
