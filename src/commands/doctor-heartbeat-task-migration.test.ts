@@ -14,17 +14,24 @@ import {
   saveCronJobsStore,
   resolveCronJobsStorePathFromConfig,
 } from "../cron/store.js";
+import { cronStoreKey } from "../cron/store/key.js";
+import { updateCronRuntimeRow } from "../cron/store/row-codec.js";
 import type { CronStoredJob as CronJob } from "../cron/types.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
+  runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureEnv } from "../test-utils/env.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import { ensureHeartbeatMonitorJobs } from "./doctor-heartbeat-cadence-migration.js";
+import {
+  ensureHeartbeatMonitorJobs,
+  collectHeartbeatCadenceMigrationFindings,
+} from "./doctor-heartbeat-cadence-migration.js";
+import { retireHeartbeatWithDoctor } from "./doctor-heartbeat-retirement.js";
 import { resolveLegacyHeartbeatSession } from "./doctor-heartbeat-session.js";
 import { heartbeatTaskDeclarationKey } from "./doctor-heartbeat-task-identity.js";
 import {
@@ -167,6 +174,77 @@ function readScratch(fixture: Fixture) {
 }
 
 describe("heartbeat scratch task cron migration", () => {
+  it.each(["pending", "complete"])(
+    "repairs %s task definitions after runs without changing edits",
+    async (phase) => {
+      const fixture = await createFixture(2_000_000_000_000);
+      await migrate(fixture);
+      const retired =
+        phase === "complete"
+          ? await retireHeartbeatWithDoctor(fixture.cfg, fixture.env)
+          : fixture.cfg;
+      const store = await loadCronJobsStore(fixture.storePath);
+      const inbox = store.jobs.find((job) => job.name === "inbox")!;
+      const calendar = store.jobs.find((job) => job.name === "calendar")!;
+      // Reproduce the bytes written before task prompts used the silence migration.
+      inbox.payload = { ...inbox.payload, kind: "agentTurn", message: "Inbox: HEARTBEAT_OK." };
+      calendar.payload = {
+        ...calendar.payload,
+        kind: "agentTurn",
+        message: "Edited: HEARTBEAT_OK.",
+      };
+      calendar.updatedAtMs += 1;
+      const unrelated = { ...structuredClone(inbox), id: "unrelated" };
+      await saveCronJobsStore(fixture.storePath, { ...store, jobs: [...store.jobs, unrelated] });
+      inbox.updatedAtMs += 1_000;
+      inbox.state.lastRunAtMs = inbox.updatedAtMs;
+      inbox.state.lastRunStatus = "ok";
+      runOpenClawStateWriteTransaction(
+        ({ db }) => updateCronRuntimeRow(db, cronStoreKey(fixture.storePath), inbox),
+        { env: fixture.env },
+      );
+
+      expect(await collectHeartbeatCadenceMigrationFindings(retired, fixture.env)).toHaveLength(1);
+      const next = await retireHeartbeatWithDoctor(retired, fixture.env);
+      const jobs = (await loadCronJobsStore(fixture.storePath)).jobs;
+      expect(jobs.find((job) => job.id === inbox.id)?.payload).toMatchObject({
+        message: "Inbox: NO_REPLY.",
+      });
+      expect(jobs.find((job) => job.id === inbox.id)?.state).toEqual(inbox.state);
+      expect(jobs.find((job) => job.id === calendar.id)).toEqual(calendar);
+      expect(jobs.find((job) => job.id === unrelated.id)).toEqual(unrelated);
+      expect(await collectHeartbeatCadenceMigrationFindings(next, fixture.env)).toEqual([]);
+      await retireHeartbeatWithDoctor(next, fixture.env);
+      expect((await loadCronJobsStore(fixture.storePath)).jobs).toEqual(jobs);
+    },
+  );
+
+  it("translates quiet replies for new and stored heartbeat tasks", async () => {
+    const fixture = await createFixture(
+      2_000_000_000_000,
+      "tasks:\n  - name: queue\n    interval: 1h\n    prompt: Check queue; reply HEARTBEAT_OK. Keep HEARTBEAT_OK_LOG.\n",
+    );
+    const previous = await createExistingInboxJob(fixture);
+    previous.payload = { kind: "systemEvent", text: "Check inbox; reply HEARTBEAT_OK." };
+    const store = await loadCronJobsStore(fixture.storePath);
+    await saveCronJobsStore(fixture.storePath, {
+      ...store,
+      jobs: store.jobs.map((job) => (job.id === previous.id ? previous : job)),
+    });
+
+    expect((await migrate(fixture)).warnings).toEqual([]);
+    expect(await migrateStoredHeartbeatTaskJobs(fixture.cfg, fixture.env)).toBe(1);
+    const jobs = (await loadCronJobsStore(fixture.storePath)).jobs;
+    expect(jobs.find((job) => job.name === "queue")?.payload).toMatchObject({
+      kind: "agentTurn",
+      message: "Check queue; reply NO_REPLY. Keep HEARTBEAT_OK_LOG.",
+    });
+    expect(jobs.find((job) => job.id === previous.id)?.payload).toMatchObject({
+      kind: "agentTurn",
+      message: "Check inbox; reply NO_REPLY.",
+    });
+  });
+
   it("keeps migrated secondary-agent tasks editable as ordinary jobs", async () => {
     const fixture = await createFixture(2_000_000_000_000, undefined, "research");
     await expect(migrate(fixture)).resolves.toMatchObject({ warnings: [] });

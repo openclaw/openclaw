@@ -2599,6 +2599,7 @@ src/chat/canvas-render.ts
 src/chat/tool-content.ts
 src/gateway/chat-display-projection.canvas.ts
 src/gateway/chat-display-projection.commentary.ts
+src/gateway/chat-display-projection.inline-view.ts
 src/gateway/chat-display-projection.sanitize.ts
 src/gateway/worker-environments/workspace-conflicts.ts
 src/infra/sibling-temp-file.ts
@@ -2609,6 +2610,7 @@ src/media/store.ts
 src/sessions/session-run-error-presentation.ts
 src/sessions/user-turn-media.ts
 src/shared/channel-read-authority.ts
+src/shared/plugin-inline-view.ts
 src/shared/tool-approval-reviews.ts
 src/agents/agent-lifecycle-parent-state.ts
 src/agents/agent-run-terminal-error.ts
@@ -2658,6 +2660,7 @@ src/plugins/api-lifecycle.ts
 src/plugins/cli-backend-registration.ts
 src/plugins/cli-backends.runtime.ts
 src/plugins/cli-callback-binding.ts
+src/plugins/inline-view.ts
 src/plugins/service-scheduler-binding.ts
 src/plugins/setup-registry.ts
 src/shared/map-nested-strings.ts

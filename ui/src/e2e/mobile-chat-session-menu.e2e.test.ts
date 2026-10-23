@@ -81,7 +81,7 @@ async function withMobilePage(run: (page: Page) => Promise<void>, colorScheme?: 
 
 async function openMobilePanelLauncher(page: Page) {
   await nativePane(page).locator(".agent-chat__header--mobile").waitFor();
-  const trigger = await openChatPanels(page);
+  const trigger = await openChatPanels(page, "mobile");
   const host = page.locator(".chat-mobile-host").filter({ visible: true });
   await host
     .locator(".chat-mobile-host__header")

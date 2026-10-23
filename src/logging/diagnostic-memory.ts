@@ -7,6 +7,7 @@ import {
   type DiagnosticMemoryPressureEvent,
   type DiagnosticMemoryUsage,
 } from "../infra/diagnostic-events.js";
+import { getSessionRowSelectionMetrics } from "../infra/gateway-work-metrics.js";
 import { getOldGenerationAfterGcBytes } from "../infra/gc-observer.js";
 import { sampleTrackedWorkerMemory } from "../infra/worker-cpu.js";
 import { getWorkerMessageMetrics } from "../infra/worker-message-metrics.js";
@@ -132,7 +133,11 @@ function normalizeMemoryUsage(
     externalBytes: memory.external,
     arrayBuffersBytes: memory.arrayBuffers,
     ...(collectDiagnostics
-      ? { ...sampleTrackedWorkerMemory(), workerMessages: getWorkerMessageMetrics() }
+      ? {
+          ...sampleTrackedWorkerMemory(),
+          workerMessages: getWorkerMessageMetrics(),
+          sessionRowSelections: getSessionRowSelectionMetrics(),
+        }
       : {}),
   };
 }

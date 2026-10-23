@@ -1,11 +1,8 @@
 import { Show } from "solid-js";
 import { pathForRoute } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { registerPluginManagementEnglish } from "../i18n/locales/en-plugin-management.ts";
 import { handleNavigationClick } from "../lib/navigation-click.ts";
-import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
-
-registerEnglishCatalog(registerPluginManagementEnglish);
+import { t } from "../lib/reactive/i18n.ts";
 
 export type CustomPluginUiDisabledContext = Pick<
   ApplicationContext<"labs">,

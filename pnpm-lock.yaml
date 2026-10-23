@@ -633,6 +633,15 @@ importers:
         specifier: workspace:*
         version: link:../../packages/ai
 
+  examples/inline-incident:
+    devDependencies:
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/a2a:
     dependencies:
       zod:

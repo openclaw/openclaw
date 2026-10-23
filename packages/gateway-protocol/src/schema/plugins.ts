@@ -78,6 +78,7 @@ export const PluginControlUiDescriptorSchema = closedObject({
     "tab",
     "widget",
     "link-reader",
+    "inline",
   ]),
   linkReader: Type.Optional(ControlUiLinkReaderMetadataSchema),
   label: NonEmptyString,
@@ -87,6 +88,7 @@ export const PluginControlUiDescriptorSchema = closedObject({
   placement: Type.Optional(Type.String()),
   group: Type.Optional(stringLiteralUnion(["control", "agent"])),
   order: Type.Optional(Type.Number()),
+  version: Type.Optional(Type.Integer({ minimum: 1, maximum: 65535 })),
   schema: Type.Optional(PluginJsonValueSchema),
   requiredScopes: Type.Optional(Type.Array(NonEmptyString)),
 });
@@ -159,6 +161,16 @@ export const PluginsControlUiReloadParamsSchema = closedObject({
 export const PluginsControlUiCatalogSchema = closedObject({
   revision: NonEmptyString,
   plugins: Type.Array(PluginControlUiModuleSchema, { maxItems: 64 }),
+  inlineViews: Type.Optional(
+    Type.Array(
+      closedObject({
+        pluginId: NonEmptyString,
+        id: NonEmptyString,
+        label: NonEmptyString,
+        version: Type.Integer({ minimum: 1, maximum: 65535 }),
+      }),
+    ),
+  ),
   diagnostics: Type.Array(PluginControlUiDiagnosticSchema, { maxItems: 64 }),
 });
 export const PluginsControlUiChangedEventSchema = closedObject({ revision: NonEmptyString });

@@ -90,6 +90,48 @@ const pluginDescriptor = (revision = "one", entryUrl = "/review.js") => ({
   styles: [],
 });
 
+it("dispatches only explicitly advertised inline versions and restores saved version eligibility", async () => {
+  const first = { pluginId: "review", id: "incident", version: 1, label: "Incident" };
+  let inlineViews = [first, { ...first, version: 2 }];
+  const mounts = [vi.fn(() => undefined), vi.fn(() => undefined)];
+  const client = {
+    gatewayUrl: localGateway(),
+    request: async () => ({ ...catalog([pluginDescriptor()]), inlineViews }),
+  };
+  const context = connectedContext(client, configForRuntime());
+  vi.mocked(controlUiLoader.initializeControlUiPlugin).mockImplementation(
+    async (getContext, runtime, owner) => {
+      const host = createControlUiPluginHost(getContext, runtime, owner);
+      host.ui.registerInlineView({ id: "incident", version: 1, mount: mounts[0]! });
+      host.ui.registerInlineView({ id: "incident", version: 2, mount: mounts[1]! });
+      expect(() =>
+        host.ui.registerInlineView({ id: "incident", version: 1, mount: mounts[0]! }),
+      ).toThrow("duplicate");
+      expect(() =>
+        host.ui.registerInlineView({ id: "invalid", version: 0, mount: mounts[0]! }),
+      ).toThrow("version");
+      return Object.assign(owner, { host });
+    },
+  );
+  const runtime = runtimeFor(context);
+  runtime.start();
+  await runtime.refresh();
+  expect(
+    runtime.registrations("inlineViews").map((entry) => [entry.key, entry.value.mount]),
+  ).toEqual([
+    ["review/incident@1", mounts[0]],
+    ["review/incident@2", mounts[1]],
+  ]);
+  inlineViews = [{ ...first, version: 3 }];
+  await runtime.refresh();
+  expect(runtime.registrations("inlineViews")).toEqual([]);
+  inlineViews = [first];
+  await runtime.refresh();
+  expect(runtime.registrations("inlineViews").map((entry) => entry.key)).toEqual([
+    "review/incident@1",
+  ]);
+});
+
 it.each([false, true])(
   "reports one completed catalog without delaying healthy plugins (superseded: %s)",
   async (superseded) => {

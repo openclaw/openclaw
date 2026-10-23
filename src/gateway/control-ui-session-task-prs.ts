@@ -44,7 +44,7 @@ export function selectTaskPublicationSessions(
     const children = revision ? getOrCreateWeakOwnerMap(childrenByRevision, revision) : undefined;
     let selected = children?.get(row.key);
     if (!selected) {
-      selected = projection.selectEntries({ parentSessionKey: row.key });
+      selected = projection.selectEntries({ parentSessionKey: row });
       // Acquisition may advance the revision; never label earlier candidates with its successor.
       children?.set(row.key, selected);
     }

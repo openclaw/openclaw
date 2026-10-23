@@ -33,7 +33,10 @@ import {
   collectHeartbeatScratchMigrationFindings,
   maybeMigrateHeartbeatFilesToScratch,
 } from "./doctor-heartbeat-scratch-migration.js";
-import { isHeartbeatTaskCronJob } from "./doctor-heartbeat-task-identity.js";
+import {
+  isHeartbeatTaskCronJob,
+  resolveHeartbeatTaskPromptRepair,
+} from "./doctor-heartbeat-task-identity.js";
 import {
   maybeMigrateHeartbeatTasksToCron,
   migrateStoredHeartbeatTaskJobs,
@@ -87,11 +90,13 @@ export async function retireHeartbeatWithDoctor(
   );
   const {
     completedCutover,
+    repairedPrompts: repairedTaskPrompts,
     modelWarnings,
     recoveryWarnings: cutoverWarnings,
   } = runOpenClawStateWriteTransaction(
     ({ db }) => {
       let completed = false;
+      let repairedPrompts = 0;
       const warnings: string[] = [];
       const recoveryWarnings: string[] = [];
       const rows = loadCronRows(db, cronStoreKey(storePath));
@@ -103,6 +108,23 @@ export async function retireHeartbeatWithDoctor(
       }
       for (const agentId of new Set([...listAgentIds(cfg), ...monitors.keys()])) {
         const receipt = readDefaultProactiveJobReceiptInDatabase(db, storePath, agentId);
+        for (const job of jobs) {
+          const row = rows.find((candidate) => candidate.job_id === job.id)!;
+          const message =
+            job.agentId === agentId
+              ? resolveHeartbeatTaskPromptRepair(job, receipt, row.updated_at)
+              : undefined;
+          if (message === undefined || job.payload.kind !== "agentTurn") {
+            continue;
+          }
+          const nextJob = cloneCronJobForMutation({ ...job, payload: job.payload });
+          nextJob.payload = { ...job.payload, message };
+          nextJob.updatedAtMs = Date.now();
+          upsertCronJobRow(db, cronStoreKey(storePath), nextJob, row.sort_order, {
+            preserveRuntimeState: true,
+          });
+          repairedPrompts += 1;
+        }
         if (!receipt || receipt.phase === "complete") {
           continue;
         }
@@ -161,7 +183,12 @@ export async function retireHeartbeatWithDoctor(
         completed = true;
       }
       publishCronJobsStoreMutation(storePath, db);
-      return { completedCutover: completed, modelWarnings: warnings, recoveryWarnings };
+      return {
+        completedCutover: completed,
+        repairedPrompts,
+        modelWarnings: warnings,
+        recoveryWarnings,
+      };
     },
     { env },
     { operationLabel: "doctor.heartbeat-cutover-complete" },
@@ -169,6 +196,12 @@ export async function retireHeartbeatWithDoctor(
   if (cutoverWarnings.length) {
     note(cutoverWarnings.map(sanitizeDoctorNote).join("\n"), "Doctor warnings");
     onWarnings?.(cutoverWarnings);
+  }
+  if (repairedTaskPrompts) {
+    note(
+      `Updated migrated heartbeat task quiet replies: ${repairedTaskPrompts}.`,
+      "Doctor changes",
+    );
   }
   if (completedCutover) {
     note(

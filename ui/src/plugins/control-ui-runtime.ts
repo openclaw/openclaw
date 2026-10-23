@@ -59,6 +59,7 @@ const UI_CAPABILITY_BY_CONTRIBUTION = {
   actions: "action",
   accessories: "accessory",
   widgets: "widget",
+  inlineViews: "inline",
   replacements: "replacement",
 } as const satisfies Record<
   keyof ControlUiContributions,
@@ -69,6 +70,7 @@ const CONTRIBUTION_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
 const ACTIVATION_TIMEOUT_MS = 15_000;
 
 export class ControlUiPluginRuntime implements ControlUiPluginCapability {
+  private readonly inlineLabels = new Map<string, string>();
   private readonly owners = new Map<string, ControlUiPluginOwner>();
   private readonly preloads = new ControlUiPluginAssetPreloads();
   private readonly selected = new Map<ControlUiSurface, { key: string; signal: AbortSignal }>();
@@ -144,6 +146,10 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
       : "pending";
   }
 
+  inlineViewLabel(key: string): string | undefined {
+    return this.inlineLabels.get(key);
+  }
+
   isLoading(pluginId: string): boolean {
     return (
       this.loadingCatalog === "pending" ||
@@ -216,6 +222,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
       return;
     }
     this.retireOwners();
+    this.inlineLabels.clear();
     this.client = client;
     this.connectionId = connectionId;
     this.diagnostics = [];
@@ -246,6 +253,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
     this.loadingOwners.clear();
     this.catalogStatus = "pending";
     this.loadingCatalog = "pending";
+    this.inlineLabels.clear();
     this.publish();
     const current = () =>
       !this.disposed && this.client === client && this.refreshGeneration === generation;
@@ -262,6 +270,12 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
       ]);
       if (!current()) {
         return;
+      }
+      for (const descriptor of catalog.inlineViews ?? []) {
+        this.inlineLabels.set(
+          descriptor.pluginId + "/" + descriptor.id + "@" + descriptor.version,
+          descriptor.label,
+        );
       }
       this.diagnostics = catalog.diagnostics;
       this.catalogStatus = "complete";
@@ -393,6 +407,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
         replacements: new Map(),
         accessories: new Map(),
         widgets: new Map(),
+        inlineViews: new Map(),
       },
       selections: new Map<ControlUiSurface, string | null>(),
     };
@@ -503,14 +518,15 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
     owner: Omit<ControlUiPluginOwner, "host">,
     kind: K,
     value: ControlUiContributions[K],
+    registrationId = value.id,
   ): ControlUiDisposer {
     if (!this.isCurrent(owner)) {
       throw new Error("This plugin UI activation has ended.");
     }
     const entries = owner.contributions[kind];
     // A disposer owns the registered ID even if the plugin later mutates its definition.
-    const id = value.id;
-    if (!CONTRIBUTION_ID.test(id) || entries.has(id)) {
+    const id = registrationId;
+    if (!CONTRIBUTION_ID.test(value.id) || entries.has(id)) {
       throw new Error(`Invalid or duplicate plugin UI contribution: ${id}`);
     }
     const abort = new AbortController();
@@ -546,6 +562,12 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
     const values: ControlUiRegistration<ControlUiContributions[K]>[] = [];
     for (const owner of this.owners.values()) {
       for (const [id, entry] of owner.contributions[kind]) {
+        if (
+          kind === "inlineViews" &&
+          !this.inlineLabels.has(owner.descriptor.pluginId + "/" + id)
+        ) {
+          continue;
+        }
         values.push({
           key: `${owner.descriptor.pluginId}/${id}`,
           pluginId: owner.descriptor.pluginId,

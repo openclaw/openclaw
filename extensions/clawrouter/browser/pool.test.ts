@@ -86,6 +86,7 @@ async function fixture() {
       registerAction: unused,
       registerAccessory: unused,
       registerWidget: unused,
+      registerInlineView: unused,
       registerReplacement: unused,
       selectReplacement: unused,
     },
