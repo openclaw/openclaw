@@ -91,6 +91,7 @@ if (isMainThread) {
         "session-row-presentation.ts",
         "session-sharing-read.ts",
         "session-utils-list.ts",
+        "session-row-placement-projection.ts",
         "session-ancestor-references.ts",
         "server-connection-state.ts",
         "server-methods/sessions-read.ts",
