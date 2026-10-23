@@ -266,3 +266,29 @@ describe("toolCallXmlTextFilter streamed projection work", () => {
     expect(deltas.join("")).not.toContain('{"path":"a.ts"}');
   });
 });
+
+it("bounds work after unfenced XML while continuing the visible reply", () => {
+  const lead =
+    'Here is the call:\n<function_calls><invoke name="read"><parameter name="path">a.md</parameter></invoke></function_calls>\n';
+  const source = lead + "The next step keeps the visible answer moving.\n".repeat(200);
+  const filter = toolCallXmlTextFilter({ stripFunctionResponseAfterPluralToolCalls: true }, true);
+  const projection = createTextProjection([filter]);
+  let testedCharacters: number;
+  const probe = vi.spyOn(RegExp.prototype, "test");
+  try {
+    for (let offset = 0; offset < source.length; offset += CHUNK) {
+      projection.append(source.slice(offset, offset + CHUNK));
+    }
+  } finally {
+    testedCharacters = probe.mock.calls.reduce(
+      (total, [text]) => total + (typeof text === "string" ? text.length : 0),
+      0,
+    );
+    probe.mockRestore();
+  }
+  expect(projection.text).toBe(filter.transform(source));
+  expect(projection.text).toContain("The next step");
+  expect(projection.text).not.toContain("<invoke");
+  // Includes bounded Markdown tail checks, but never a growing whole-reply scan per delta.
+  expect(testedCharacters).toBeLessThan(source.length * 64);
+});

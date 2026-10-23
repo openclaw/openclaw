@@ -95,6 +95,7 @@ const RERUN_GROUPS = new Set([
   "plugin-prerelease",
   "install-smoke",
   "cross-os",
+  "windows-node",
   "live-e2e",
   "package",
   "qa-parity",
