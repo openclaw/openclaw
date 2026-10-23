@@ -4,9 +4,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import type { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { readTableColumns } from "../../state/openclaw-state-db-schema-helpers.js";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../kysely-sync.js";
 import { assertSqliteIntegrity } from "../sqlite-integrity.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../sqlite-schema-facts.js";
-import { normalizeSchemaSql, quoteSqliteIdentifier } from "../sqlite-schema-sql.js";
+import { normalizeSchemaSql } from "../sqlite-schema-sql.js";
 import type { PortDescriptor, PortEndpoint } from "./port-types.js";
 import { postgresCatalogQuery, readPostgresCatalog } from "./postgres-catalog.js";
 import { DatabasePortDataError } from "./postgres-store-metadata.js";
@@ -124,7 +125,11 @@ export function inspectSqlitePortSchema(
   const descriptor = facts ? selectFragments(baseDescriptor, facts.tables) : baseDescriptor;
   const retained = descriptor.retainedSqliteTables?.filter((name) => facts?.tables.has(name)) ?? [];
   for (const table of retained) {
-    if (db.prepare(`SELECT 1 FROM ${quoteSqliteIdentifier(table)} LIMIT 1`).get()) {
+    const query = getNodeSqliteKysely<Record<string, Record<string, never>>>(db)
+      .selectFrom(table)
+      .select((eb) => eb.val(1).as("present"))
+      .limit(1);
+    if (executeSqliteQueryTakeFirstSync(db, query)) {
       throw new DatabasePortDataError(
         `Retained table ${table} contains rows; preserve this store on SQLite and archive the retired data through its owner before retrying the port`,
       );
