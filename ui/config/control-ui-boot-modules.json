@@ -1333,6 +1333,7 @@
   "ui/src/components/skill-file-hovercard.tsx",
   "ui/src/components/solid/markdown-html.tsx",
   "ui/src/components/solid/mcp-app-context-strip.tsx",
+  "ui/src/components/solid/mcp-app-operation-error.tsx",
   "ui/src/components/solid/panel-loading-skeleton.tsx",
   "ui/src/components/solid/person-reference.tsx",
   "ui/src/components/solid/sanitized-html.tsx",
