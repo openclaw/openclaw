@@ -567,7 +567,9 @@ describe("generateSummary thinking options", () => {
         name: "CompactionError",
         code: "summarization_failed",
         message: exhausted
-          ? expect.stringContaining("output budget (800 tokens) was exhausted")
+          ? expect.stringContaining(
+              'output budget (800 tokens) was exhausted without visible text for test-provider/summary-model (model maxTokens: 8000); set agents.defaults.compaction.thinkingLevel to "off" if supported',
+            )
           : "Summarization failed: model returned no summary text",
       });
     },
