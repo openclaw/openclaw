@@ -47,5 +47,5 @@ export function mergeChannelPlugins(
     messaging: mergeChannelPluginSection(runtimePlugin.messaging, setupPlugin.messaging),
     actions: mergeChannelPluginSection(runtimePlugin.actions, setupPlugin.actions),
     secrets: mergeChannelPluginSection(runtimePlugin.secrets, setupPlugin.secrets),
-  } as ChannelPlugin;
+  } as ChannelPlugin; // SAFETY: Both inputs satisfy the same channel section types.
 }

@@ -3104,8 +3104,6 @@
 ["src/cli/gateway-cli.coverage.test.ts","../daemon/program-args.js","d4123f37dccce5ed34875277d9c78905d8d496bddfa255dfade4ec568e07d4b1",1]
 ["src/cli/gateway-cli.coverage.test.ts","../daemon/service.js","513d815d3928f246773642468d08bf0d38924affb04dc00f0ce23fa753629e30",1]
 ["src/cli/gateway-cli.coverage.test.ts","../globals.js","24a274914cd73db78b0e1cfe00ea1ca9ec8303d1cf990ffcd0ec213e63554741",1]
-["src/cli/gateway-cli/health-route.test.ts","../../commands/health.js","d725902b9bd589e80b03ceccb0b3ce49c4145f73b6980458abe4a4de7bccdcbc",1]
-["src/cli/gateway-cli/health-route.test.ts","../../gateway/call.js","2107e03c87d937fac11130c21c8b8bb15f2eb670eb132d35516055835a9d87a5",1]
 ["src/cli/gateway-cli/health-route.test.ts","../gateway-rpc.js","cda98c2cbe1a10549ddb641675360119c7e14217723e093da04799bb38390b7f",1]
 ["src/cli/gateway-cli/host-lifecycle.test.ts","../../daemon/hosted-stop.js","eb720e45c4444aef3828e1a61f92db22fdf8031204af55cc7ac9e25e3a92e969",1]
 ["src/cli/gateway-cli/host-lifecycle.test.ts","../../infra/restart-coordinator.js","0a94072b1b43e20b12f76b30163c73be361e1257cf78c2e27bf56a706ccfb47b",1]
