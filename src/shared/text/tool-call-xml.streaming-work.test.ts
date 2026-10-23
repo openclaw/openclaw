@@ -122,7 +122,7 @@ describe("toolCallXmlTextFilter streamed projection work", () => {
       }
       expect(projection.text).toBe(stripToolCallXmlTags(source));
       const rejected = reuse.mock.results.filter(
-        (result) => result.type === "return" && result.value === false,
+        (result) => result.type === "return" && !result.value,
       ).length;
       expect(rejected).toBeLessThan(16);
     } finally {
