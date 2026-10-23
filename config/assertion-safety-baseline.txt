@@ -182,7 +182,6 @@ extensions/discord/src/actions/runtime.guild.ts	1
 extensions/discord/src/actions/runtime.messaging.send.ts	2
 extensions/discord/src/actions/runtime.messaging.shared.ts	4
 extensions/discord/src/actions/runtime.shared.ts	1
-extensions/discord/src/activities/discord-api.ts	1
 extensions/discord/src/activities/register.ts	1
 extensions/discord/src/api.ts	3
 extensions/discord/src/approval-handler.runtime.ts	2
