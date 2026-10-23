@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, vi } from "vitest";
+import { filterMemorySearchHitsBySessionVisibility } from "../../../extensions/memory-core/session-search-visibility-api.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
@@ -138,6 +139,80 @@ vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => {
     },
   };
 });
+
+it.for([false, true])(
+  "reads only hit identities and required aliases (recall=%s)",
+  async (recall, { state: _state }) => {
+    const anchor = "agent:main:telegram:direct:owner";
+    const visible = "agent:main:telegram:direct:friend";
+    const shared = "agent:main:telegram:group:team";
+    const legacyArchive = "agent:main:telegram:direct:legacy";
+    seed("main", anchor, "current", { chatType: "direct" });
+    seed("main", visible, "candidate", {
+      chatType: "direct",
+      parentSessionKey: "agent:retired:parent",
+    });
+    seed("main", shared, "\tcandidate\u00a0", { chatType: "group" });
+    seed("main", legacyArchive, "after-reset", { chatType: "direct" });
+    seed("main", "agent:main:unrelated", "unrelated");
+    seed("other", "agent:other:unrelated", "other");
+    seed("retired", "agent:retired:parent", "parent");
+    const hit = {
+      path: "sessions/main/candidate.jsonl",
+      source: "sessions" as const,
+      snippet: "private context",
+      score: 1,
+      startLine: 1,
+      endLine: 2,
+    };
+    const archiveHit = {
+      ...hit,
+      path: "sessions/main/telegram:direct:legacy.jsonl.reset.2026-08-11T08-00-00.000Z",
+    };
+    const readKeys: unknown[] = [];
+    boundary.beforeRequest = (request) => {
+      if (isRecord(request) && request.kind === "session-entry-read" && isRecord(request.scope)) {
+        readKeys.push(request.scope.sessionKey);
+      }
+    };
+    boundary.afterReply = async (reply) => {
+      if (
+        isRecord(reply) &&
+        reply.ok === true &&
+        isRecord(reply.value) &&
+        Array.isArray(reply.value.entries)
+      ) {
+        readKeys.push(
+          ...reply.value.entries.map((row) => (isRecord(row) ? row.sessionKey : undefined)),
+        );
+      }
+    };
+    try {
+      const hits = [hit, { ...hit, startLine: 3, endLine: 4 }];
+      const filtered = await filterMemorySearchHitsBySessionVisibility({
+        cfg: { ...fleet(["main", "other"]), tools: { sessions: { visibility: "self" } } },
+        agentId: "main",
+        requesterSessionKey: recall ? anchor : visible,
+        sandboxed: false,
+        hits: [...hits, archiveHit],
+        conversationRecall: recall
+          ? {
+              anchorSessionKey: anchor,
+              scope: "same-agent-private",
+              corpus: "sessions",
+            }
+          : undefined,
+      });
+      expect(filtered).toEqual(recall ? [archiveHit] : hits);
+      expect(readKeys.toSorted()).toEqual(
+        [...(recall ? [anchor] : []), visible, shared, legacyArchive].toSorted(),
+      );
+    } finally {
+      boundary.beforeRequest = undefined;
+      boundary.afterReply = undefined;
+    }
+  },
+);
 
 it.for([
   ["separate", "before-read"],
