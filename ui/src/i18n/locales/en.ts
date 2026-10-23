@@ -926,7 +926,8 @@ export const en: TranslationMap & {
     renameRejected: "Rename not applied. The original key was kept. {reason}",
     renameDuplicateKey: "This key is already in use.",
     renameInvalidKey: "Choose a key that matches this setting's constraints.",
-    renameChangeRejected: "This setting could not be changed.",
+    renameChangeRejected:
+      "The containing setting did not accept this rename. Review its documentation and constraints before trying another name.",
     sections: {},
   },
   // Historical namespace from the pre-restructure "quick settings" page; its

@@ -74,7 +74,7 @@ describe("config form map key ownership", () => {
     { kind: "schema", attempt: "bad/key", reason: "matches this setting's constraints" },
     { kind: "redacted", attempt: "renamed", reason: "stored secret" },
     { kind: "empty", attempt: "  ", reason: "matches this setting's constraints" },
-    { kind: "parent", attempt: "renamed", reason: "could not be changed" },
+    { kind: "parent", attempt: "renamed", reason: "Review its documentation and constraints" },
   ])(
     "explains a rejected $kind rename after restoring the valid key",
     ({ kind, attempt, reason }) => {
