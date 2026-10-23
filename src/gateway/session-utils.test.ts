@@ -1588,7 +1588,7 @@ describe("gateway session utils", () => {
   test("listAgentsForGateway never overstates global sandbox all", async () => {
     const cfg: OpenClawConfig = { agents: { defaults: { sandbox: { mode: "all" } } } };
     await withAgentPermissionState(async () => {
-      execApprovalsStore.updateExecApprovalsForMaintenance({ update: () => ({ version: 1 }) });
+      execApprovalsStore.updateExecApprovalsForMaintenance(() => ({ version: 1 }));
       const agent = (await listAgentsForGateway(cfg)).agents.find((entry) => entry.id === "main");
       expect(agent).toBeDefined();
       expect(agent).not.toHaveProperty("defaultPermissionMode");
