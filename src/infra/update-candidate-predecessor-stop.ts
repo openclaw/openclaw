@@ -225,7 +225,6 @@ export async function adoptCandidateManagedServiceStop(params: {
   shouldRestart: boolean;
   mode: UpdateRunResult["mode"];
   status: UpdateRunResult["status"];
-  windowsTaskAutoStartSuspended?: boolean;
   runId: string;
   ledger: UpdateRunLedgerOptions;
   root: string;
