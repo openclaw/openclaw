@@ -126,7 +126,6 @@ async function dispatch(
       trajectoryRecorder: null,
       transcriptLeafId: null,
       onFinalPromptText: () => {},
-      onSteeringAcknowledged: () => {},
       persistToolResultProjections: async () => {},
       promptActiveSession: async () => {
         const context = await agent.transformContext!(messages, new AbortController().signal);

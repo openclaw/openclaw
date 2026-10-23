@@ -1,6 +1,9 @@
 import { t } from "../../i18n/index.ts";
+import { registerTerminalEnglish } from "../../i18n/locales/en-terminal.ts";
 import type { PanelHostedTab } from "../panel-hosted-tabs.ts";
 import { StrokeIcon } from "../solid/stroke-icon.tsx";
+
+registerTerminalEnglish();
 
 export type TerminalPanelTab = {
   id: string;

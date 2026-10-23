@@ -517,7 +517,7 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
             onCompositionStart={current().onCompositionStart}
             onCompositionEnd={current().onCompositionEnd}
             onPaste={(event) => current().draft.pasteImages(event)}
-            disabled={current().draft.submitting}
+            busy={current().draft.submitting}
             readOnly={current().draft.messageLocked}
             controls={
               current().mentionMenu.open

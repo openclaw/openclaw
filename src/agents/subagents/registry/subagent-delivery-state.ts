@@ -187,6 +187,10 @@ export function normalizeSubagentRunState(entry: SubagentRunRecord): SubagentRun
       suppressTaskDelivery: killIntent.suppressTaskDelivery === true ? true : undefined,
     };
   }
+  // Only the durable session queue can retain in-progress delivery across restart.
+  if (entry.delivery?.status === "in_progress" && !entry.delivery.queueId) {
+    entry.delivery = { ...entry.delivery, status: "pending" };
+  }
   // cleanupHandled is an in-process lock; after restart, unfinished cleanup must
   // retry unless durable cleanup completion was recorded.
   if (

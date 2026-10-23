@@ -4,8 +4,11 @@ import {
   SettingsDefaultDescription,
   SettingsToggleRow,
 } from "../../components/solid/settings-ui.tsx";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerPreferencesEnglish } from "../../i18n/locales/en-preferences.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import type { ConfigProps } from "./view-types.ts";
+
+registerEnglishCatalog(registerPreferencesEnglish);
 
 type LocalToggle =
   | "chatShowTaskProgress"

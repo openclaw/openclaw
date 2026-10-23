@@ -135,6 +135,16 @@ it.each(["keyboard", "last", "pointer", "external", "closed", "reopened"] as con
             : view.getByRole("menuitem", { name: "Take photo", hidden: true }),
         ),
       );
+      if (mode === "keyboard") {
+        document.activeElement!.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "End", bubbles: true, cancelable: true }),
+        );
+        await waitForSolid(() =>
+          expect(document.activeElement).toBe(
+            view.getByRole("menuitemcheckbox", { name: "Updated toggle", hidden: true }),
+          ),
+        );
+      }
       view.getByRole("menuitemcheckbox", { name: "Updated toggle", hidden: true }).click();
       expect(latestChange).toHaveBeenCalledExactlyOnceWith(false);
       expect(view.onChange).not.toHaveBeenCalled();

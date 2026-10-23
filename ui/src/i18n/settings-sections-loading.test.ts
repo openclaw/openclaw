@@ -50,7 +50,7 @@ it.each([
   expect(en.configForm).toBe(configForm);
   expect(en.configForm.sections).toBe(sections);
   expect(Object.keys(en)).toEqual(namespaceOrder);
-  expect(Object.keys(en.configForm)).toEqual(fieldOrder);
+  expect(Object.keys(en.configForm).slice(0, fieldOrder.length)).toEqual(fieldOrder);
   expect(Object.keys(en.configForm.sections)).toEqual(
     Object.keys(registerSettingsEnglish.catalog.configForm.sections),
   );

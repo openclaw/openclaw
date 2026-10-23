@@ -6,6 +6,37 @@ import { en } from "./en.ts";
 const enUpdateActions = {
   updates: {
     run: {
+      title: "Update progress",
+      phases: "Update phases",
+      steps: "Installation steps",
+      details: "Step details",
+      noDetails: "No step details recorded yet.",
+      verification: "Verification checks",
+      report: "Update report",
+      restarting: en.updates.run.restarting,
+      reconnecting: "Reconnecting automatically. Update progress is saved on the gateway.",
+      progress: en.updates.run.progress,
+      phase: en.updates.run.phase,
+      step: {
+        completed: "Complete",
+        in_progress: "In progress",
+        pending: "Pending",
+        failed: "Failed",
+        skipped: "Skipped",
+      },
+      oracle: {
+        service: "Service",
+        version: "Version",
+        plugins: "Plugins",
+        channels: "Channels",
+        inference: "Inference",
+      },
+      oracleState: {
+        pass: "Passed",
+        warn: "Not verified",
+        fail: "Failed",
+        pending: "Pending",
+      },
       stepWarning: "Warning: {step}",
       prepareUpdaterDetails:
         "Keeping a copy of the current updater so it can finish safely while OpenClaw is replaced.",
@@ -66,10 +97,8 @@ const enUpdateActions = {
 export const registerUpdateActionsEnglish = Object.assign(
   () => {
     const sections = ["run", "confirm", "dialog", "triage", "report"] as const;
-    // SAFETY: The canonical English catalog defines these sections as objects.
-    const updates = en.updates as Record<(typeof sections)[number], TranslationMap>;
     for (const section of sections) {
-      Object.assign(updates[section], enUpdateActions.updates[section]);
+      Object.assign(en.updates[section], enUpdateActions.updates[section]);
     }
   },
   { catalog: enUpdateActions },

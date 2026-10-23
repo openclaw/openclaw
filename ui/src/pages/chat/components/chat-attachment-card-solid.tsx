@@ -28,6 +28,7 @@ export function CompactAttachmentCard(
   props: AttachmentCardHeaderOptions & {
     elementRef?: (element: Element | undefined) => void;
     onFocus?: () => void;
+    downloadRef?: (element: HTMLAnchorElement) => void;
   },
 ) {
   const ref = attachmentAdmissionRef(() => props.elementRef);
@@ -114,7 +115,10 @@ export function AttachmentStateCard(
 }
 
 export function AttachmentCardHeader(
-  props: AttachmentCardHeaderOptions & { expandRef?: (element: HTMLButtonElement) => void },
+  props: AttachmentCardHeaderOptions & {
+    expandRef?: (element: HTMLButtonElement) => void;
+    downloadRef?: (element: HTMLAnchorElement) => void;
+  },
 ) {
   const view = createMemo(() => prepareAttachmentCardHeader(props, t));
   return (
@@ -177,6 +181,7 @@ export function AttachmentCardHeader(
         ) : props.downloadHref || props.downloadPending ? (
           <a
             class={view().downloadClass}
+            ref={(element) => props.downloadRef?.(element)}
             href={props.downloadPending ? undefined : props.downloadHref}
             aria-disabled={props.downloadPending ? "true" : undefined}
             tabindex={props.downloadPending && props.downloadPendingFocusable ? 0 : undefined}

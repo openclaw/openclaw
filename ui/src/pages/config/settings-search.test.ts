@@ -47,9 +47,10 @@ it("loads Settings English only when cold search opens, before the config page",
   const configView = en.configView;
   const updates = en.updates;
   const campaign = (updates as Record<string, unknown>).campaign;
-  const sharedKeys = ["configView.autoSaveSaving", "updates.confirm.message"];
+  const sharedKeys = ["configView.adminRequired", "updates.confirm.message"];
   const sharedCopy = sharedKeys.map((key) => runtime.t(key));
   const lazyKeys = [
+    "configView.autoSaveSaving",
     "configPage.themeImported",
     "configView.chatPrefs.title",
     "updates.page.intro",

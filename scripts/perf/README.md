@@ -1,5 +1,28 @@
 # Team-shaped synthetic state
 
+## Background result lifecycle wait
+
+`background-result-wait-measure.ts` holds a synthetic session turn open while
+committing an automation result through the real controller and transcript
+writer. Run baseline and candidate concurrently with separate state directories
+and the same `--start-at` epoch, then swap CPU sets for the second pair:
+
+```sh
+node --expose-gc --trace-gc-nvp --import ./scripts/tsx.mjs \
+  scripts/perf/background-result-wait-measure.ts \
+  --state-dir /path/to/new-state --samples 6 --hold-ms 2000 --start-at <epoch-ms> \
+  --gc-log /path/to/capture.log > /path/to/capture.log 2>&1
+```
+
+`result.json` records persistence latency, the existing `lifecycleQueueWaitMs`
+diagnostic, custody after commit, and whether the turn is still running. A
+1.1-second completion-publication fixture makes both versions emit their slow
+operation diagnostic; it is excluded from persistence latency. This measures
+the controller/storage boundary, not model or whole-Gateway latency. Acceptance:
+queue wait no longer tracks the held turn, results persist within one second,
+and commit completion leaves no mutation custody. CPU, GC pauses, and event-loop
+samples are supporting context; apply the campaign's sample-count rules.
+
 ## Plugin tool invocation scopes
 
 `plugin-gateway-scope-measure.ts` registers two synthetic plugins through the real

@@ -277,6 +277,29 @@ async function select(menu: HeaderMenuElement, value: string) {
 }
 
 describe("chat header session menu", () => {
+  it("focuses the current first row when reopening removes the parked first row", async () => {
+    const menu = await mountMenu({}, false);
+    await openMenu(menu);
+    const previousFirst = item(menu, "Command palette");
+    const trigger = menu.readTrigger()!;
+    const hidden = whenHidden(menu);
+    panel(menu).dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    flush();
+    await hidden;
+    await expectParked(menu, () => {
+      menu.mobile = false;
+    });
+    expect(previousFirst.isConnected).toBe(true);
+
+    trigger.focus();
+    expect(menu.openMenu()).toBe(true);
+    expect(document.activeElement).toBe(previousFirst);
+    await waitForSolid(() => {
+      expect(previousFirst.isConnected).toBe(false);
+      expect(document.activeElement).toBe(item(menu, "View"));
+    });
+  });
+
   it("keeps current session actions and their DOM identity across reopening", async () => {
     const menu = await mountMenu({}, false);
     expect(menu.querySelector(".chat-header-session-menu__trigger")).not.toBeNull();

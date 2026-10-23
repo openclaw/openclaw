@@ -1,9 +1,8 @@
 import { dynamic, type JSX as SolidJSX } from "@solidjs/web";
-import { Match, Show, Switch, createMemo, createSignal, lazy } from "solid-js";
+import { Match, Show, Switch, createSignal, lazy } from "solid-js";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
 import { EMPTY_LINK_READERS } from "../../components/link-reader-target.ts";
-import { Icon } from "../../components/solid/icon.tsx";
 import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { elementRef } from "../../lib/reactive/element-ref.ts";
@@ -356,61 +355,6 @@ function LinkReaderPanel(props: Props) {
       tabsInHeader={props.linkReaderTabsInHeader ?? true}
       onClose={props.onCloseLinkReader}
     />
-  );
-}
-
-export function ExternalPanelLink(props: {
-  href: string;
-  label: string;
-  actionRef?: (element: HTMLAnchorElement) => void;
-}) {
-  return (
-    <a
-      ref={props.actionRef}
-      class="rail-header__action"
-      href={props.href}
-      target="_blank"
-      rel="noopener"
-      aria-label={props.label}
-      title={props.label}
-    >
-      <Icon name="externalLink" />
-    </a>
-  );
-}
-
-/** Snapshot mutable native state so menu diffing can compare the previous action. */
-export function companionClearAction(
-  input: Pick<Props, "connected" | "companion" | "onClearCompanion">,
-) {
-  return {
-    id: "clear-side-chat",
-    label: t("chat.rail.clear"),
-    icon: "trash" as const,
-    disabled: !input.connected || input.companion.turns.some((turn) => turn.status === "pending"),
-    onActivate: () => {
-      void input.onClearCompanion();
-    },
-  };
-}
-
-export function ClearCompanion(
-  props: Props & { actionRef?: (element: HTMLButtonElement) => void },
-) {
-  const action = createMemo(() => companionClearAction(props));
-  return (
-    <openclaw-tooltip prop:content={action().label}>
-      <button
-        ref={props.actionRef}
-        class="rail-header__action chat-session-rail__clear"
-        type="button"
-        aria-label={action().label}
-        disabled={action().disabled}
-        onClick={() => action().onActivate()}
-      >
-        <Icon name="trash" />
-      </button>
-    </openclaw-tooltip>
   );
 }
 

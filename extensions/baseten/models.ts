@@ -77,18 +77,6 @@ function readPerTokenPrice(value: unknown): number | undefined {
     : undefined;
 }
 
-function applyLiveReasoningEffortCompat(
-  fallbackCompat: ModelCompatConfig,
-  supportsReasoningEffort: boolean,
-): ModelCompatConfig {
-  const compat = { ...fallbackCompat, supportsReasoningEffort };
-  if (!supportsReasoningEffort) {
-    delete compat.supportedReasoningEfforts;
-    delete compat.reasoningEffortMap;
-  }
-  return compat;
-}
-
 function projectLiveModel(
   row: Record<string, unknown>,
   fallback: ModelDefinitionConfig | undefined,
@@ -117,9 +105,14 @@ function projectLiveModel(
   const supportsReasoningEffort =
     features.has("reasoning_effort") ||
     (hasDocumentedSparseFeatures && fallbackCompat.supportsReasoningEffort === true);
-  const compat = hasLiveFeatures
-    ? applyLiveReasoningEffortCompat(fallbackCompat, supportsReasoningEffort)
-    : fallbackCompat;
+  let compat = fallbackCompat;
+  if (hasLiveFeatures) {
+    compat = { ...fallbackCompat, supportsReasoningEffort };
+    if (!supportsReasoningEffort) {
+      delete compat.supportedReasoningEfforts;
+      delete compat.reasoningEffortMap;
+    }
+  }
 
   return {
     id,

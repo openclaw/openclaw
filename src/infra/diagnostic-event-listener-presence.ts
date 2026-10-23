@@ -11,24 +11,19 @@ type DiagnosticEventInterestCounts = {
   eventInterestDeltas: Map<string, number>;
 };
 
-type DiagnosticEventListenerPresence = {
+const listenerPresence = resolveGlobalSingleton<{
   untrustedInterest: DiagnosticEventInterestCounts;
   trustedInterest: DiagnosticEventInterestCounts;
   interestListeners: Map<string, Set<() => void>>;
   internalCount: number;
   trustedCount: number;
-};
-
-const listenerPresence = resolveGlobalSingleton<DiagnosticEventListenerPresence>(
-  DIAGNOSTIC_EVENT_LISTENER_PRESENCE_KEY,
-  () => ({
-    untrustedInterest: { broadInterestCount: 0, eventInterestDeltas: new Map() },
-    trustedInterest: { broadInterestCount: 0, eventInterestDeltas: new Map() },
-    interestListeners: new Map(),
-    internalCount: 0,
-    trustedCount: 0,
-  }),
-);
+}>(DIAGNOSTIC_EVENT_LISTENER_PRESENCE_KEY, () => ({
+  untrustedInterest: { broadInterestCount: 0, eventInterestDeltas: new Map() },
+  trustedInterest: { broadInterestCount: 0, eventInterestDeltas: new Map() },
+  interestListeners: new Map(),
+  internalCount: 0,
+  trustedCount: 0,
+}));
 
 export type InternalDiagnosticEventInterest<EventType extends string = string> = Readonly<{
   include?: readonly EventType[];

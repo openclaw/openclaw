@@ -10,8 +10,13 @@ import "../styles.css";
 
 let controller: AbortController;
 let trigger: HTMLButtonElement;
+async function setViewport(width: number, height: number) {
+  await page.viewport(width, height);
+  // The parent viewport command can finish before the test iframe resizes.
+  await expect.poll(() => window.innerWidth).toBe(width);
+}
 beforeEach(async () => {
-  await page.viewport(1280, 720);
+  await setViewport(1280, 720);
   controller = new AbortController();
   trigger = document.body.appendChild(document.createElement("button"));
   trigger.textContent = "Edit synthetic session";
@@ -88,7 +93,7 @@ describe("promise dialog native focus and dismissal", () => {
         signal: controller.signal,
       };
       if (kind === "alternative") {
-        await page.viewport(390, 844);
+        await setViewport(390, 844);
       }
       const result =
         kind === "alternative"
@@ -130,7 +135,7 @@ describe("promise dialog native focus and dismissal", () => {
   );
 
   it("keeps grouped mobile choices in visual DOM order without losing keyboard focus", async () => {
-    await page.viewport(390, 844);
+    await setViewport(390, 844);
     const secondary = "Archive only this session";
     const primary = "Archive all (3)";
     const result = showConfirmChoiceDialog({
@@ -148,11 +153,20 @@ describe("promise dialog native focus and dismissal", () => {
     await expect.poll(order).toEqual([secondary, primary, "Cancel"]);
     expect(document.activeElement).toBe(button("Cancel"));
     for (const name of [secondary, primary, "Cancel"]) {
-      await userEvent.tab();
+      // macOS WebKit uses Option-Tab to visit each control inside the dialog.
+      if (
+        navigator.platform.includes("Mac") &&
+        navigator.userAgent.includes("AppleWebKit") &&
+        !navigator.userAgent.includes("Chrome")
+      ) {
+        await userEvent.keyboard("{Alt>}{Tab}{/Alt}");
+      } else {
+        await userEvent.tab();
+      }
       expect(document.activeElement).toBe(button(name));
     }
     for (const width of [1280, 390, 320, 390]) {
-      await page.viewport(width, 844);
+      await setViewport(width, 844);
       await expect
         .poll(order)
         .toEqual(width === 1280 ? ["Cancel", secondary, primary] : [secondary, primary, "Cancel"]);
@@ -160,7 +174,7 @@ describe("promise dialog native focus and dismissal", () => {
     }
     button(primary).focus();
     for (const width of [1280, 390]) {
-      await page.viewport(width, 844);
+      await setViewport(width, 844);
       await expect
         .poll(order)
         .toEqual(width === 1280 ? ["Cancel", secondary, primary] : [secondary, primary, "Cancel"]);

@@ -3144,7 +3144,8 @@ openclaw-chat-ci-details {
     height: var(--chat-mobile-row-icon-size);
   }
 
-  .agent-chat__input--chat .chat-send-btn--stop {
+  /* Stop keeps its smaller target regardless of lazy composer stylesheet order. */
+  .agent-chat__input--chat .chat-send-btn.chat-send-btn--stop {
     width: var(--chat-mobile-row-target-size);
     min-width: var(--chat-mobile-row-target-size);
     height: var(--chat-mobile-row-target-size);

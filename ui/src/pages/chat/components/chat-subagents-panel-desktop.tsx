@@ -4,7 +4,6 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
-import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../../lib/reactive/pending-focus.ts";
@@ -15,6 +14,7 @@ import "../../../styles/session-panel-rail.css";
 import "./chat-subagents-working.css";
 import "./chat-subagents-panel-desktop.css";
 import type { SubagentsPanelData, SubagentsPanelRow } from "../subagents-panel-data.ts";
+import { SubagentDesktopAvatar } from "./chat-subagent-avatar.tsx";
 import { ChatSubagentsNative } from "./chat-subagents-native.tsx";
 import type { createSubagentsPresentation } from "./chat-subagents-presentation.ts";
 
@@ -61,21 +61,6 @@ function groupFor(row: SubagentsPanelRow): Group {
     : isUnfinishedSubagent(row.session)
       ? "waiting"
       : (endedWithoutFinishing(row.session) ?? "done");
-}
-
-export function SubagentDesktopAvatar(props: { sessionKey: string; working?: boolean }) {
-  return (
-    <span
-      class="subagents-desktop__avatar"
-      style={{ "--subagent-hue": fnv1aUtf16(props.sessionKey) % 360 }}
-      aria-hidden="true"
-    >
-      <Icon name="bot" />
-      <Show when={props.working}>
-        <span class="subagents-desktop__spinner" />
-      </Show>
-    </span>
-  );
 }
 
 function DesktopRow(props: {

@@ -1,10 +1,11 @@
-import { createEffect, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
+import { createEffect, createMemo, createSignal, onSettled } from "solid-js";
 import {
   isStaleChunkImportError,
   retryControlUiImport,
   retryStaleChunkReloadWhenReachable,
 } from "../../app/stale-chunk-reload.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { elementRef } from "../../lib/reactive/element-ref.ts";
 import type { Overlay } from "../overlay-lifecycle.ts";
 import { containsComposed } from "../overlay-registry.ts";
 import { MENU_FORM_CONTROL_SELECTOR } from "./menu-form-controls.ts";
@@ -23,18 +24,10 @@ export function createMenuControls(): MenuControls {
   return {
     elements,
     ref() {
-      let current: HTMLElement | undefined;
-      onCleanup(() => {
-        if (current) {
-          elements.delete(current);
-        }
+      return elementRef((element: HTMLElement) => {
+        elements.add(element);
+        return () => elements.delete(element);
       });
-      return (element) => {
-        if (current) {
-          elements.delete(current);
-        }
-        elements.add((current = element));
-      };
     },
   };
 }

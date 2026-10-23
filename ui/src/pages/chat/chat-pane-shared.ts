@@ -169,12 +169,23 @@ const CHAT_DROPDOWN_KEYS = new Set([
   "ArrowUp",
   "Escape",
 ]);
+
 export const NEW_SESSION_ACTIVE_RUN_MESSAGE =
   "Start a new session after the active run or queued messages finish.";
 export const NEW_SESSION_LIST_LOADING_MESSAGE =
   "Session list is still refreshing. Try New Chat again in a moment.";
 export const NEW_SESSION_CREATE_FAILED_MESSAGE =
   "New Chat could not create a new thread. Try again in a moment.";
+
+// Expanded questions own only their advertised, enabled numeric shortcuts.
+function questionOwnsNumericShortcut(target: HTMLElement, key: string): boolean {
+  return (
+    /^[1-9]$/u.test(key) &&
+    target.matches(
+      `[data-chat-autotype-shortcuts="active"]:has([data-shortcut="${key}"]:not(:disabled))`,
+    )
+  );
+}
 
 function keyboardEventPathHasInteractiveTarget(event: KeyboardEvent): boolean {
   return event
@@ -185,6 +196,8 @@ function keyboardEventPathHasInteractiveTarget(event: KeyboardEvent): boolean {
         (target.matches("dialog[open], [aria-modal='true']") ||
           target.matches(CHAT_PRINTABLE_KEY_TARGET_SELECTOR) ||
           menuOwnsShortcut(target, event.key) ||
+          (!(event.target instanceof HTMLAnchorElement) &&
+            questionOwnsNumericShortcut(target, event.key)) ||
           (event.key === " " && target.matches(CHAT_SPACE_ACTIVATION_SELECTOR))),
     );
 }

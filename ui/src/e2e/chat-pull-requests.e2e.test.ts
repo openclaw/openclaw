@@ -773,7 +773,9 @@ suite.define(() => {
     await pollText(page.locator("[data-publication-account]")).toContain("Publish as @system-bot");
     expect(
       await page
-        .getByRole("link", { name: "Create a pull request for openclaw/rejected-publication" })
+        .locator(
+          'a[href="https://github.com/openclaw/openclaw/pull/new/openclaw/rejected-publication"]',
+        )
         .count(),
     ).toBe(0);
     await capturePublication(page, "03-publication-failed.png");

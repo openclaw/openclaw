@@ -26,6 +26,7 @@ import {
   toolsForServer,
   isToolDenied,
   MCP_DISCOVERY_NOTICE_IDS,
+  menuRenderInputs,
 } from "./chat-composer-menu-inputs.ts";
 import {
   renderBackRow,
@@ -35,6 +36,7 @@ import {
 } from "./chat-composer-menu-rows.tsx";
 import type {
   ChatComposerMenuSkill,
+  ChatComposerPlusMenuBodyProps,
   ChatComposerPlusMenuContentProps,
   ChatComposerPlusMenuView,
 } from "./chat-composer-plus-menu.types.ts";
@@ -370,7 +372,7 @@ function toolItems(menu: ChatComposerPlusMenuContentProps, serverName: string): 
   return entries;
 }
 
-export function handleMenuSelection(
+function handleMenuSelection(
   { id: value }: MenuItem,
   event: CustomEvent<MenuItem>,
   menu: MenuHandle,
@@ -523,9 +525,7 @@ export function handleMenuSelection(
   }
 }
 
-export { menuRenderInputs } from "./chat-composer-menu-inputs.ts";
-
-export function menuItems(
+function menuItems(
   menu: ChatComposerPlusMenuContentProps,
   view: ChatComposerPlusMenuView,
   readMenu: () => ChatComposerPlusMenuContentProps,
@@ -539,4 +539,36 @@ export function menuItems(
         : view.startsWith("library:")
           ? composerLibraryMenuItems(menu.library, view.slice("library:".length))
           : rootItems(menu);
+}
+
+export function ChatComposerPlusMenuContent(props: ChatComposerPlusMenuBodyProps) {
+  const inputs = createMemo(
+    () => {
+      const view = props.view;
+      const menu = props.menu;
+      return { view, menu, values: menuRenderInputs(menu, view) };
+    },
+    {
+      lazy: true,
+      equals: (previous, next) =>
+        previous.view === next.view &&
+        previous.values.length === next.values.length &&
+        previous.values.every((value, index) => Object.is(value, next.values[index])),
+    },
+  );
+  const items = createMemo(
+    () => {
+      const { view, menu } = inputs();
+      return menuItems(menu, view, () => inputs().menu);
+    },
+    { lazy: true },
+  );
+  onSettled(() => {
+    props.onReady({
+      items,
+      select: (item, event) => handleMenuSelection(item, event, props.readMenu(), props),
+    });
+    return () => props.onReady(undefined);
+  });
+  return <>{props.renderItems(items)}</>;
 }

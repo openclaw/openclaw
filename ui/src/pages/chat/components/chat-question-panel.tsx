@@ -362,6 +362,7 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
               role="group"
               aria-label={model().title}
               tabindex={0}
+              data-chat-autotype-shortcuts="active"
               onKeyDown={(event) => handleKeyDown(event, item())}
             >
               <div

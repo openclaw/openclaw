@@ -66,7 +66,7 @@ const enGitHub = {
     pullRequests: {
       linkLabel: "Pull request {reference}: {title}",
       createPr: "Create PR",
-      createPrLabel: "Create a pull request for {branch}",
+      createPrLabel: "{label} for {branch}",
       publishPr: "Publish PR",
       publishing: "Publishing…",
       creating: "Creating…",

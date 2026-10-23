@@ -1,13 +1,6 @@
 import Panzoom, { type PanzoomObject } from "@panzoom/panzoom";
-import {
-  createEffect,
-  createMemo,
-  createSignal,
-  onCleanup,
-  onSettled,
-  Show,
-  useContext,
-} from "solid-js";
+import { createEffect, createMemo, createSignal, onSettled, Show, useContext } from "solid-js";
+import { elementRef } from "../lib/reactive/element-ref.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
@@ -54,11 +47,11 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
   const [scale, setScale] = createSignal(1, { ownedWrite: true });
   const [canZoom, setCanZoom] = createSignal(false, { ownedWrite: true });
   const focusables = new Set<HTMLElement>();
-  const focusableRef = () => {
-    let element: HTMLElement;
-    onCleanup(() => focusables.delete(element));
-    return (node: HTMLElement) => focusables.add((element = node));
-  };
+  const focusableRef = () =>
+    elementRef((element: HTMLElement) => {
+      focusables.add(element);
+      return () => focusables.delete(element);
+    });
   let imageElement: HTMLImageElement | undefined;
   let stageElement: HTMLDivElement | undefined;
   let slideElement: HTMLDivElement | undefined;

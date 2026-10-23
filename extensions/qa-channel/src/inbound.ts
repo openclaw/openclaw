@@ -107,15 +107,6 @@ async function resolveQaInboundMediaFacts(
   return { media: await toInboundMediaFactsWithMetadata(mediaList), unavailableCount };
 }
 
-function resolveQaGroupConfig(params: {
-  account: ResolvedQaChannelAccount;
-  conversationId: string;
-  target: string;
-}) {
-  const groups = params.account.config.groups;
-  return groups?.[params.conversationId] ?? groups?.[params.target] ?? groups?.["*"];
-}
-
 function formatQaErrorForLog(error: unknown): string {
   let escaped = "";
   const message = formatErrorMessage(error) || Object.prototype.toString.call(error);
@@ -302,13 +293,8 @@ export async function handleQaInbound(params: {
         channelRuntime.mentions.buildMentionRegexes(params.config, route.agentId),
       )
     : undefined;
-  const groupConfig = isGroup
-    ? resolveQaGroupConfig({
-        account: params.account,
-        conversationId: inbound.conversation.id,
-        target,
-      })
-    : undefined;
+  const groups = isGroup ? params.account.config.groups : undefined;
+  const groupConfig = groups?.[inbound.conversation.id] ?? groups?.[target] ?? groups?.["*"];
   const nativeCommand = inbound.nativeCommand;
   const commandTargets = nativeCommand
     ? resolveNativeCommandSessionTargets({

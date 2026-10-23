@@ -189,7 +189,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     return snapshot && Array.isArray(snapshot.gateways) ? snapshot : null;
   }
 
-  // Catalog rows retain their idle prewarm and only render at their keyed section.
+  // Catalog rows load when their keyed section needs them.
   private readonly Catalog = lazy(() => import("./app-sidebar-session-catalog-render.tsx"), {
     export: "renderSessionCatalogGroups",
   });

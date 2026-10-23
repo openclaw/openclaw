@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createProjection, createSignal, Errored, flush, lazy, Loading, onSettled } from "solid-js";
+import { createProjection, createSignal, Errored, lazy, Loading, onSettled } from "solid-js";
 import type { UiSettings } from "../../../app/settings.ts";
 import type { BoardWidgetPageMenu } from "../../../components/board/board-widget-cell-options.ts";
 import type {
@@ -128,11 +128,12 @@ function ChatHeaderSessionMenuShell(
   const mobile = () => props.mobile === true && Boolean(props.mobileHost) && !props.boardWidgetMenu;
   const focusReady = () => {
     const active = host.ownerDocument.activeElement;
+    // Reopening can remove the focused parked row while the trigger stays connected.
     if (
       menu?.overlay.open &&
       (active === openingFocus ||
         active === menu.overlay.surface ||
-        (active === host.ownerDocument.body && openingFocus && !openingFocus.isConnected))
+        active === host.ownerDocument.body)
     ) {
       const last = focusLast ? menu.itemElements().at(-1) : undefined;
       if (last) {
@@ -245,8 +246,8 @@ function ChatHeaderSessionMenuShell(
       onBeforeShow={() => {
         openingFocus = host.ownerDocument.activeElement;
         setOpen(true);
-        // The native menu validates and focuses current entries synchronously.
-        flush();
+        // Refresh parked entries before completing the opening focus handoff.
+        onSettled(focusReady);
       }}
       onOpenChange={(isOpen) => {
         setOpen(isOpen);
