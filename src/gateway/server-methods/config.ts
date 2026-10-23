@@ -63,7 +63,6 @@ import {
   summarizeChangedPaths,
 } from "../control-plane-audit.js";
 import { resolveBaseHashParam } from "./base-hash.js";
-import { listPatchedAgentRosterRemovals } from "./config-agent-roster.js";
 import {
   diffConfigLeafPaths,
   hasHashlessPatchLwwStructure,
@@ -521,7 +520,6 @@ async function commitConfigRestartWrite(params: {
   respond: RespondFn;
   uiHints: ConfigRedactionHints;
   preparedSecretsSnapshot: PreparedSecretsRuntimeSnapshot;
-  allowedAgentRosterRemovals?: string[];
   summary?: boolean;
 }): Promise<void> {
   const { snapshot, writeOptions } = params.writeSnapshot;
@@ -543,10 +541,7 @@ async function commitConfigRestartWrite(params: {
     });
   const writeResult = await commitGatewayConfigWriteOrRespond({
     snapshot,
-    writeOptions:
-      params.allowedAgentRosterRemovals === undefined
-        ? writeOptions
-        : { ...writeOptions, allowedAgentRosterRemovals: params.allowedAgentRosterRemovals },
+    writeOptions,
     nextConfig: params.writeConfig,
     context: params.context,
     disconnectSharedAuthClients,
@@ -952,6 +947,17 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!preparedSecretsSnapshot) {
       return;
     }
+    // Only explicit keyed nulls authorize removal; omissions and parent removal do not.
+    const allowedAgentRosterRemovals: string[] = [];
+    const sourceEntries = sourceConfig.agents?.entries;
+    const patchEntries = normalizedPatch.agents?.entries;
+    if (!hashlessPatch && sourceEntries && patchEntries) {
+      for (const [id, entry] of Object.entries(patchEntries)) {
+        if (entry === null && Object.hasOwn(sourceEntries, id)) {
+          allowedAgentRosterRemovals.push(id);
+        }
+      }
+    }
     await commitConfigRestartWrite({
       requestParams: params,
       mode: "config.patch",
@@ -959,6 +965,7 @@ export const configHandlers: GatewayRequestHandlers = {
         ...writeSnapshot,
         writeOptions: {
           ...writeOptions,
+          allowedAgentRosterRemovals,
           // The committed policy may revoke this requester before canonical reread.
           // Admit publication synchronously; retain the writer's own guards through completion.
           assertBeforePublish: () => {
@@ -969,9 +976,6 @@ export const configHandlers: GatewayRequestHandlers = {
       },
       writeConfig,
       nextConfig: validatedConfig,
-      allowedAgentRosterRemovals: hashlessPatch
-        ? []
-        : listPatchedAgentRosterRemovals(sourceConfig, normalizedPatch),
       actor,
       context,
       respond,

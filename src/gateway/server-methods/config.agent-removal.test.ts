@@ -1,17 +1,22 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type * as ConfigIoModule from "../../config/io.js";
 import { resolvePersistCandidateForWrite } from "../../config/io.write-prepare.js";
+import type * as RuntimeSchemaModule from "../../config/runtime-schema.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type * as ConfigValidationModule from "../../config/validation.js";
+import type * as SecretsRuntimeModule from "../../secrets/runtime.js";
+import type * as ConfigWriteFlowModule from "./config-write-flow.js";
 import { configHandlers } from "./config.js";
 import { createConfigHandlerHarness, createConfigWriteSnapshot } from "./config.test-helpers.js";
 
 const mocks = vi.hoisted(() => ({ read: vi.fn(), commit: vi.fn() }));
 vi.mock("../../config/io.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../config/io.js")>()),
+  ...(await importOriginal<typeof ConfigIoModule>()),
   readConfigFileSnapshotForWrite: mocks.read,
 }));
 vi.mock("../../config/validation.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../config/validation.js")>()),
+  ...(await importOriginal<typeof ConfigValidationModule>()),
   validateConfigObjectRawWithPlugins: (config: OpenClawConfig) => ({
     ok: true,
     config,
@@ -19,14 +24,16 @@ vi.mock("../../config/validation.js", async (importOriginal) => ({
   }),
   validateConfigObjectWithPlugins: (config: OpenClawConfig) => ({ ok: true, config, warnings: [] }),
 }));
-vi.mock("../../config/runtime-schema.js", () => ({
-  loadGatewayRuntimeConfigSchema: () => ({ schema: { type: "object" }, version: "test-schema" }),
+vi.mock("../../config/runtime-schema.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof RuntimeSchemaModule>()),
+  loadGatewayConfigRedactionHints: () => ({}),
 }));
-vi.mock("../../secrets/runtime.js", () => ({
+vi.mock("../../secrets/runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof SecretsRuntimeModule>()),
   prepareSecretsRuntimeSnapshot: async ({ config }: { config: OpenClawConfig }) => ({ config }),
 }));
 vi.mock("./config-write-flow.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./config-write-flow.js")>()),
+  ...(await importOriginal<typeof ConfigWriteFlowModule>()),
   commitGatewayConfigWrite: mocks.commit,
   resolveGatewayConfigRestartWriteResult: async () => ({
     payload: { kind: "config-patch", mode: "config.patch", configPath: "/tmp/openclaw.json" },
@@ -64,9 +71,7 @@ beforeEach(() => {
   // Keep handler isolation, but exercise the real persistence roster guard rather
   // than accepting any nextConfig that reaches the mocked commit boundary.
   mocks.commit.mockImplementation(
-    async (
-      params: Parameters<typeof import("./config-write-flow.js").commitGatewayConfigWrite>[0],
-    ) => {
+    async (params: Parameters<typeof ConfigWriteFlowModule.commitGatewayConfigWrite>[0]) => {
       persisted = resolvePersistCandidateForWrite({
         inputBasis: { kind: "source", config: params.snapshot.sourceConfig },
         runtimeConfig: params.snapshot.config,
@@ -151,12 +156,18 @@ describe("config.patch explicit agent removal", () => {
   it.each([{ agents: null }, { agents: { entries: null } }])(
     "does not authorize dropping a parent container: %j",
     async (raw) => {
-      await invoke(raw, { baseHash: "base-hash", replacePaths });
+      const respond = await invoke(raw, { baseHash: "base-hash", replacePaths });
       expect(mocks.commit).toHaveBeenCalledWith(
         expect.objectContaining({
           writeOptions: expect.objectContaining({ allowedAgentRosterRemovals: [] }),
         }),
       );
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ message: expect.stringContaining("agent roster") }),
+      );
+      expect(persisted).toBeUndefined();
     },
   );
 });
