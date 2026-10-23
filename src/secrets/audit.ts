@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import os from "node:os";
-import { stripMatchingQuotes } from "@openclaw/normalization-core/string-normalization";
 import {
   listLegacyAuthProfileArchives,
   listLegacyAuthProfileSources,
@@ -42,7 +41,7 @@ import {
   type SecretRefResolveCache,
 } from "./resolve.js";
 import { isExpectedResolvedSecretValue } from "./secret-value.js";
-import { isNonEmptyString, isRecord } from "./shared.js";
+import { isNonEmptyString, isRecord, parseEnvValue } from "./shared.js";
 import { listAgentModelsJsonPaths, listSecretsDotEnvPaths } from "./storage-scan.js";
 import { discoverConfigSecretTargets } from "./target-registry.js";
 
@@ -606,7 +605,7 @@ export async function runSecretsAudit(
         continue;
       }
       const key = match[1] ?? "";
-      if (!knownKeys.has(key) || !stripMatchingQuotes(match[2] ?? "")) {
+      if (!knownKeys.has(key) || !parseEnvValue(match[2] ?? "")) {
         continue;
       }
       collector.findings.push({

@@ -259,7 +259,7 @@ describe("secrets apply", () => {
   it("preflights and applies one-way scrub without plaintext backups", async () => {
     await fs.appendFile(
       fixture.envPath,
-      'GH_TOKEN=sk-openai-plaintext\nGH_TOKEN=\'sk-openai-plaintext\'\nGH_TOKEN="sk-openai-plaintext"\nGH_TOKEN="sk-openai-plaintext\'\nGH_TOKEN=" sk-openai-plaintext "\nGITHUB_TOKEN=unmigrated-github-token\n', // pragma: allowlist secret
+      "GH_TOKEN=sk-openai-plaintext\nGITHUB_TOKEN=unmigrated-github-token\n", // pragma: allowlist secret
     );
     fixture.env.OPENAI_KEY_NEXT = fixture.env.OPENAI_API_KEY;
     const plan = createPlan({
@@ -312,7 +312,7 @@ describe("secrets apply", () => {
     expect((await readJsonFile(fixture.authJsonPath)).openai).toBeDefined();
 
     expect(await readText(fixture.envPath)).toBe(
-      'UNRELATED=value\nGH_TOKEN="sk-openai-plaintext\'\nGH_TOKEN=" sk-openai-plaintext "\nGITHUB_TOKEN=unmigrated-github-token\n',
+      "UNRELATED=value\nGITHUB_TOKEN=unmigrated-github-token\n",
     );
   });
 

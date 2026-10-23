@@ -1,17 +1,5 @@
 import { normalizeOptionalLowercaseString, normalizeOptionalString } from "./string-coerce.js";
 
-/** Trims whitespace and removes one matching single- or double-quote pair. */
-export function stripMatchingQuotes(value: string): string {
-  const trimmed = value.trim();
-  if (
-    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
-    (trimmed.startsWith("'") && trimmed.endsWith("'"))
-  ) {
-    return trimmed.slice(1, -1);
-  }
-  return trimmed;
-}
-
 /** Counts matching leading UTF-16 code units without normalizing either string. */
 export function commonPrefixLength(left: string, right: string): number {
   const limit = Math.min(left.length, right.length);

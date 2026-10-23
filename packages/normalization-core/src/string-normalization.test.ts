@@ -16,26 +16,9 @@ import {
   normalizeUniqueStringEntriesLower,
   normalizeUniqueTrimmedStringList,
   sortUniqueStrings,
-  stripMatchingQuotes,
 } from "./string-normalization.js";
 
 describe("normalization-core/string-normalization", () => {
-  it.each([
-    ["  value  ", "value"],
-    ['  " value "  ', " value "],
-    ["  'value'  ", "value"],
-    ["\"'value'\"", "'value'"],
-    ['"a\\b"', "a\\b"],
-    ["'mismatched\"", "'mismatched\""],
-    ["", ""],
-    ['""', ""],
-    ["''", ""],
-    ['"', ""],
-    ["'", ""],
-  ])("strips only the matching outer quotes from %j", (value, expected) => {
-    expect(stripMatchingQuotes(value)).toBe(expected);
-  });
-
   it.each([
     ["", "value", 0],
     ["value", "", 0],

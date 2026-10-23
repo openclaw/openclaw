@@ -245,28 +245,6 @@ describe("secrets audit", () => {
     });
   });
 
-  it("distinguishes empty quotes from literal dotenv values without changing the file", async () => {
-    const raw = [
-      "OPENAI_API_KEY=",
-      "OPENAI_API_KEY=''",
-      'OPENAI_API_KEY="',
-      "OPENAI_API_KEY='value'",
-      'OPENAI_API_KEY=" value "',
-      "OPENAI_API_KEY=\"value'",
-      "OPENAI_API_KEY=\"'value'\"",
-      "UNRELATED=value",
-      "",
-    ].join("\n");
-    await fs.writeFile(fixture.envPath, raw);
-    const report = await audit();
-    expect(
-      report.findings
-        .filter((entry) => entry.file === fixture.envPath && entry.code === "PLAINTEXT_FOUND")
-        .map((entry) => entry.jsonPath),
-    ).toEqual(Array<string>(4).fill("$env.OPENAI_API_KEY"));
-    await expect(fs.readFile(fixture.envPath, "utf8")).resolves.toBe(raw);
-  });
-
   it("reports plaintext + shadowing findings", async () => {
     await seedAuditFixture(fixture);
     const report = await audit();
