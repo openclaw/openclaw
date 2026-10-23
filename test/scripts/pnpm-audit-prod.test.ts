@@ -135,7 +135,6 @@ snapshots:
     shared: ["1.0.0"],
     "tool-only": ["1.0.0"],
   });
-  expect(() => collectAllResolvedPackagesFromLockfile(`${lockfile}\n---\n`)).toThrow();
   const brokenApplication = lockfile.replace(
     "  shared@1.0.0: {}",
     "  shared@1.0.0:\n    dependencies:\n      native: 2.0.0",

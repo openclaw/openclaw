@@ -182,6 +182,10 @@ configuration; rerun LM Studio setup to regenerate them from current server meta
 
 ### Model instances and context
 
+Native discovery and preload support the same credentials as inference, including
+store-backed SecretRefs and explicit `Authorization` headers. You do not need to
+copy a store-backed API key into an auth profile to enable preload.
+
 With preload enabled, OpenClaw routes chat requests to a loaded instance with
 enough context for the selected model budget. A newly loaded instance is addressed by the
 identifier returned by LM Studio. Your configured model reference and conversation model identity

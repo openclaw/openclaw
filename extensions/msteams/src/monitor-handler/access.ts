@@ -427,7 +427,6 @@ export async function admitMSTeamsMessage(params: {
     allowTextCommands,
     isControlCommand,
     commandAuthorized: commandAccess.requested ? commandAccess.authorized : undefined,
-    effectiveDmAllowFrom,
     effectiveGroupAllowFrom,
     isChannel: params.isChannel,
   };

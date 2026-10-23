@@ -357,6 +357,9 @@ export function createAgentsWaitTool(opts: {
     outputSchema: AgentsWaitOutputSchema,
     execute: async (toolCallId, args, signal) => {
       const params = args as Static<typeof AgentsWaitToolSchema>;
+      if (!Array.isArray(params?.ids) || params.ids.some((id) => typeof id !== "string")) {
+        throw new ToolInputError("agents_wait ids must be an array of run id strings.");
+      }
       const scope = nativeCollectorOwner.getStore();
       return jsonResult(
         await collectNativeSubagentResults({

@@ -8,6 +8,7 @@ import {
   emitSideband,
   FakeSocket,
   parseSent,
+  reserveSession as reserveBrowserSession,
 } from "./realtime-quicksilver.test-helpers.js";
 
 const LIVE_URL = "https://api.openai.com/v1/live/sessions";
@@ -62,25 +63,18 @@ function liveFetch(create = () => Promise.resolve(liveResponse()), hangup = () =
   );
 }
 
-async function reserveSession(
+function reserveSession(
   fixture: Broker,
   gatewayControl?: Pick<RealtimeVoiceGatewayControl, "onTranscript" | "onClose" | "onError">,
 ) {
-  const reservation = await fixture.realtime.broker.createBrowserSession(
-    {
-      providerConfig: {},
-      model: "gpt-live-1",
-      instructions: "Answer briefly.",
-      initialItems: [{ role: "user", text: "The room is the kitchen." }],
-      runAgentConsult: fixture.runAgentConsult,
-      ...(gatewayControl ? { gatewayControl: { bindBridge: vi.fn(), ...gatewayControl } } : {}),
-    },
-    { type: "api-key", token: "platform-key" },
-  );
-  if (reservation.transport !== "webrtc") {
-    throw new Error("Expected WebRTC reservation");
-  }
-  return reservation;
+  return reserveBrowserSession(fixture.realtime, {
+    providerConfig: {},
+    model: "gpt-live-1",
+    instructions: "Answer briefly.",
+    initialItems: [{ role: "user", text: "The room is the kitchen." }],
+    runAgentConsult: fixture.runAgentConsult,
+    ...(gatewayControl ? { gatewayControl: { bindBridge: vi.fn(), ...gatewayControl } } : {}),
+  });
 }
 
 function handleOffer(fixture: Broker, token: string, body = SDP) {

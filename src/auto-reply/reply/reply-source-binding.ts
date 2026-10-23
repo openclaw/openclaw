@@ -92,9 +92,9 @@ export function prepareReplySourceInput(
     resolveExplicitSessionStorePathForScope({ agentId, sessionKey }) ??
     resolveSessionStorePathCore(cfg.session?.store, { agentId });
   const policy = resolveQueueSettingsCore({ cfg, channel: ctx.Provider ?? ctx.Surface });
-  // Ambient events and heartbeats may not preempt a user turn. Full directive
+  // Ambient events may not preempt a user turn. Full directive
   // resolution refines policy on this same input before queue publication.
-  if (options?.isHeartbeat || ctx.InboundEventKind === "room_event") {
+  if (ctx.InboundEventKind === "room_event") {
     policy.mode = "followup";
   }
   const signals = [options?.abortSignal, options?.turnAdoptionLifecycle?.abortSignal].filter(

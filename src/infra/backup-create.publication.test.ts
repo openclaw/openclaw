@@ -1,14 +1,15 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { PassThrough } from "node:stream";
 import { expect, it, vi, afterEach, describe } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { backupRestoreCommand } from "../commands/backup-restore.js";
 import { backupCreateCommand } from "../commands/backup.js";
 import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { writeArchiveStreamToFile } from "./backup-create-stream.js";
+import {
+  createVerifiedBackup,
+  isolateBackupScratch,
+  restoreBackup,
+  withBackupFixture,
+} from "./backup-create-family.test-support.js";
 import { createBackupArchive } from "./backup-create.js";
 import { listArchiveEntryDetails } from "./backup-create.test-support.js";
 import {
@@ -19,114 +20,95 @@ import {
 import * as directoryDurability from "./directory-durability.js";
 
 it("reclaims an interrupted archive's scratch on the next backup run", async () => {
-  await withOpenClawTestState(
-    { layout: "state-only", prefix: "backup-scratch-next-run-", scenario: "minimal" },
-    async (state) => {
-      const scratchRoot = state.path("scratch");
-      await fs.mkdir(scratchRoot);
-      vi.stubEnv("TMPDIR", scratchRoot);
-      vi.stubEnv("TMP", scratchRoot);
-      vi.stubEnv("TEMP", scratchRoot);
-      const stale = await createBackupScratchDirectory(scratchRoot);
-      const live = await createBackupScratchDirectory(scratchRoot);
-      stale.release();
-      try {
-        await fs.writeFile(path.join(stale.directory, "config-0"), "abandoned");
-        await fs.writeFile(path.join(live.directory, "config-0"), "active");
-        const result = await createBackupArchive({
-          output: state.path("backup.tar.gz"),
-          onlyConfig: true,
-        });
-        expect(result.warnings ?? []).toEqual([]);
-        await expect(fs.stat(stale.directory)).rejects.toMatchObject({ code: "ENOENT" });
-        await expect(fs.readdir(scratchRoot)).resolves.toEqual([path.basename(live.directory)]);
-        await expect(fs.readFile(path.join(live.directory, "config-0"), "utf8")).resolves.toBe(
-          "active",
-        );
-      } finally {
-        await finishBackupScratch(live);
-        vi.unstubAllEnvs();
-      }
-    },
-  );
+  await withBackupFixture({ prefix: "backup-scratch-next-run-" }, async (state) => {
+    await isolateBackupScratch(state);
+    const scratchRoot = state.path("scratch");
+    const stale = await createBackupScratchDirectory(scratchRoot);
+    const live = await createBackupScratchDirectory(scratchRoot);
+    stale.release();
+    try {
+      await fs.writeFile(path.join(stale.directory, "config-0"), "abandoned");
+      await fs.writeFile(path.join(live.directory, "config-0"), "active");
+      const result = await createBackupArchive({
+        output: state.path("backup.tar.gz"),
+        onlyConfig: true,
+      });
+      expect(result.warnings ?? []).toEqual([]);
+      await expect(fs.stat(stale.directory)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.readdir(scratchRoot)).resolves.toEqual([path.basename(live.directory)]);
+      await expect(fs.readFile(path.join(live.directory, "config-0"), "utf8")).resolves.toBe(
+        "active",
+      );
+    } finally {
+      await finishBackupScratch(live);
+      vi.unstubAllEnvs();
+    }
+  });
 });
 
 it("records failed scratch cleanup without failing the published backup", async () => {
-  await withOpenClawTestState(
-    { layout: "state-only", prefix: "backup-scratch-cleanup-", scenario: "minimal" },
-    async (state) => {
-      const scratchRoot = state.path("scratch");
-      await fs.mkdir(scratchRoot);
-      vi.stubEnv("TMPDIR", scratchRoot);
-      vi.stubEnv("TMP", scratchRoot);
-      vi.stubEnv("TEMP", scratchRoot);
-      const remove = fs.rmdir.bind(fs);
-      const removal = vi.spyOn(fs, "rmdir").mockImplementation(async (target) => {
-        if (path.dirname(String(target)) === scratchRoot) {
-          throw Object.assign(new Error("synthetic cleanup denied"), { code: "EACCES" });
-        }
-        return remove(target);
-      });
-      try {
-        const log = vi.fn();
-        const result = await createBackupArchive({
-          output: state.path("backup.tar.gz"),
-          onlyConfig: true,
-          log,
-        });
-        const [scratch] = await fs.readdir(scratchRoot);
-        expect(scratch).toMatch(/^openclaw-backup-/u);
-        const warning = expect.stringContaining(path.join(scratchRoot, scratch!));
-        expect(result.warnings).toEqual(expect.arrayContaining([warning]));
-        expect(log).toHaveBeenCalledWith(warning);
-        await expect(fs.stat(result.archivePath)).resolves.toMatchObject({
-          size: expect.any(Number),
-        });
-        await expect(
-          fs.stat(path.join(scratchRoot, scratch!, "owner.sqlite")),
-        ).rejects.toMatchObject({
-          code: "ENOENT",
-        });
-        removal.mockRestore();
-        const repaired = await maintainBackupScratch({ roots: [scratchRoot], repair: true });
-        expect(repaired.reclaimed).toEqual([path.join(scratchRoot, scratch!)]);
-        await expect(fs.readdir(scratchRoot)).resolves.toEqual([]);
-      } finally {
-        removal.mockRestore();
-        vi.unstubAllEnvs();
+  await withBackupFixture({ prefix: "backup-scratch-cleanup-" }, async (state) => {
+    await isolateBackupScratch(state);
+    const scratchRoot = state.path("scratch");
+    const remove = fs.rmdir.bind(fs);
+    const removal = vi.spyOn(fs, "rmdir").mockImplementation(async (target) => {
+      if (path.dirname(String(target)) === scratchRoot) {
+        throw Object.assign(new Error("synthetic cleanup denied"), { code: "EACCES" });
       }
-    },
-  );
+      return remove(target);
+    });
+    try {
+      const log = vi.fn();
+      const result = await createBackupArchive({
+        output: state.path("backup.tar.gz"),
+        onlyConfig: true,
+        log,
+      });
+      const [scratch] = await fs.readdir(scratchRoot);
+      expect(scratch).toMatch(/^openclaw-backup-/u);
+      const warning = expect.stringContaining(path.join(scratchRoot, scratch!));
+      expect(result.warnings).toEqual(expect.arrayContaining([warning]));
+      expect(log).toHaveBeenCalledWith(warning);
+      await expect(fs.stat(result.archivePath)).resolves.toMatchObject({
+        size: expect.any(Number),
+      });
+      await expect(fs.stat(path.join(scratchRoot, scratch!, "owner.sqlite"))).rejects.toMatchObject(
+        {
+          code: "ENOENT",
+        },
+      );
+      removal.mockRestore();
+      const repaired = await maintainBackupScratch({ roots: [scratchRoot], repair: true });
+      expect(repaired.reclaimed).toEqual([path.join(scratchRoot, scratch!)]);
+      await expect(fs.readdir(scratchRoot)).resolves.toEqual([]);
+    } finally {
+      removal.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
 });
 
-it("fails closed when the backup destination does not support hard links", async () => {
+it.each(["EPERM", "EXDEV"])("fails closed without hard-link support (%s)", async (code) => {
   const publicationSpy = vi
     .spyOn(directoryDurability, "publishFileExclusive")
-    .mockRejectedValue(Object.assign(new Error("hard links unsupported"), { code: "EPERM" }));
+    .mockRejectedValue(Object.assign(new Error("hard links unsupported"), { code }));
   try {
-    await withOpenClawTestState(
-      {
-        layout: "state-only",
-        prefix: "openclaw-backup-no-hardlinks-",
-        scenario: "minimal",
-      },
-      async (state) => {
-        const outputDir = state.path("backups");
-        await fs.mkdir(outputDir, { recursive: true });
+    await withBackupFixture({ prefix: "openclaw-backup-no-hardlinks-" }, async (state) => {
+      const outputDir = state.path("backups");
+      await fs.mkdir(outputDir, { recursive: true });
 
-        await expect(
-          createBackupArchive({
-            output: outputDir,
-            includeWorkspace: false,
-            nowMs: Date.UTC(2026, 4, 9, 12, 0, 0),
-          }),
-        ).rejects.toThrow(/requires hard-link support/iu);
-        expect(publicationSpy).toHaveBeenCalledWith(
-          expect.objectContaining({ strategy: "link-required" }),
-        );
-        await expect(fs.readdir(outputDir)).resolves.toEqual([]);
-      },
-    );
+      await expect(
+        createBackupArchive({
+          output: outputDir,
+          includeWorkspace: false,
+          nowMs: Date.UTC(2026, 4, 9, 12, 0, 0),
+        }),
+      ).rejects.toThrow(/requires hard-link support/iu);
+      expect(publicationSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ strategy: "link-required" }),
+      );
+      await expect(fs.readdir(outputDir)).resolves.toEqual([]);
+    });
   } finally {
     publicationSpy.mockRestore();
   }
@@ -138,7 +120,7 @@ describe("backup traversal", () => {
   it.each(["lstat", "open"] as const)(
     "records a file vanishing before %s and restores survivors",
     async (operation) => {
-      await withOpenClawTestState({ layout: "split", scenario: "minimal" }, async (state) => {
+      await withBackupFixture({ layout: "split" }, async (state) => {
         await state.writeConfig({
           agents: { entries: { main: { workspace: state.workspaceDir } } },
         });
@@ -178,10 +160,7 @@ describe("backup traversal", () => {
           });
         }
         const runtime = createTestRuntime();
-        const result = await backupCreateCommand(runtime, {
-          output: state.path("backup.tar.gz"),
-          verify: true,
-        });
+        const result = await createVerifiedBackup(state, { includeWorkspace: true }, runtime);
         expect(removed).toBe(true);
         expect(result.skipped).toContainEqual(
           expect.objectContaining({ sourcePath: vanished, reason: "vanished" }),
@@ -194,10 +173,7 @@ describe("backup traversal", () => {
         expect(entries.some((entry) => entry.path.endsWith("/racing.json"))).toBe(false);
         const keep = entries.find((entry) => entry.path.endsWith("/keep.txt"));
         expect(keep).toBeDefined();
-        const restored = await backupRestoreCommand(runtime, {
-          archive: result.archivePath,
-          target: state.path("restored"),
-        });
+        const restored = await restoreBackup(state, result, runtime);
         expect(await fs.readFile(path.join(restored.targetPath, keep!.path), "utf8")).toBe(
           "durable contents",
         );
@@ -206,7 +182,7 @@ describe("backup traversal", () => {
   );
 
   it("reports transient files in a second workspace and preserves its dangling absolute link", async () => {
-    await withOpenClawTestState({ layout: "split", scenario: "minimal" }, async (state) => {
+    await withBackupFixture({ layout: "split" }, async (state) => {
       const second = state.path("second-workspace");
       await fs.mkdir(second);
       await state.writeConfig({
@@ -222,11 +198,7 @@ describe("backup traversal", () => {
       const sourceLink = path.join(second, "dangling-link");
       await fs.symlink(dangling, sourceLink, process.platform === "win32" ? "junction" : "file");
       const linkpath = (await fs.readlink(sourceLink)).replaceAll(path.sep, "/");
-      const result = await backupCreateCommand(createTestRuntime(), {
-        output: state.path("backup.tar.gz"),
-        verify: true,
-        json: true,
-      });
+      const result = await createVerifiedBackup(state, { includeWorkspace: true, json: true });
       const entries = await listArchiveEntryDetails(result.archivePath);
       expect(entries.some((entry) => entry.path.endsWith("/second-workspace/keep.txt"))).toBe(true);
       for (const name of transient) {
@@ -252,12 +224,9 @@ describe("backup traversal", () => {
     "unlink-after-open",
     ...(fsSync.constants.O_NOFOLLOW ? ["replace-around-open" as const] : []),
   ] as const)("archives a complete regular file through %s", async (mutation) => {
-    await withOpenClawTestState({ layout: "split", scenario: "minimal" }, async (state) => {
+    await withBackupFixture({ layout: "split" }, async (state) => {
       // Keep concurrent backups out of this fixture's warning inventory.
-      const scratchRoot = state.path("scratch");
-      await fs.mkdir(scratchRoot);
-      Object.assign(state.envVars, { TMPDIR: scratchRoot, TMP: scratchRoot, TEMP: scratchRoot });
-      state.applyEnv();
+      await isolateBackupScratch(state);
       await state.writeConfig({ agents: { entries: { main: { workspace: state.workspaceDir } } } });
       const source = path.join(state.workspaceDir, "current.txt");
       const replacement = state.path("replacement");
@@ -284,14 +253,8 @@ describe("backup traversal", () => {
         return handle;
       });
       const runtime = createTestRuntime();
-      const archive = await backupCreateCommand(runtime, {
-        output: state.path("backup.tar.gz"),
-        verify: true,
-      });
-      const restored = await backupRestoreCommand(runtime, {
-        archive: archive.archivePath,
-        target: state.path("restored"),
-      });
+      const archive = await createVerifiedBackup(state, { includeWorkspace: true }, runtime);
+      const restored = await restoreBackup(state, archive, runtime);
       const archivedEntry = (await listArchiveEntryDetails(archive.archivePath)).find((entry) =>
         entry.path.endsWith("/current.txt"),
       );
@@ -306,7 +269,7 @@ describe("backup traversal", () => {
   it.each(["ENOENT", "EACCES"])(
     "refuses missing required config or source I/O errors: %s",
     async (code) => {
-      await withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) => {
+      await withBackupFixture({}, async (state) => {
         await state.writeConfig({});
         const source =
           code === "ENOENT" ? state.configPath : await state.writeText("keep.txt", "data");
@@ -329,7 +292,7 @@ describe("backup traversal", () => {
   );
 
   it("reports many volatile paths without overflowing the restore manifest", async () => {
-    await withOpenClawTestState({ layout: "split", scenario: "minimal" }, async (state) => {
+    await withBackupFixture({ layout: "split" }, async (state) => {
       await state.writeConfig({ agents: { entries: { main: { workspace: state.workspaceDir } } } });
       const files = Array.from({ length: 9_000 }, (_, index) =>
         path.join(state.workspaceDir, `pending-${index}.tmp.123`),
@@ -337,11 +300,7 @@ describe("backup traversal", () => {
       for (let offset = 0; offset < files.length; offset += 64) {
         await Promise.all(files.slice(offset, offset + 64).map((file) => fs.writeFile(file, "")));
       }
-      const result = await backupCreateCommand(createTestRuntime(), {
-        output: state.path("backup.tar.gz"),
-        verify: true,
-        json: true,
-      });
+      const result = await createVerifiedBackup(state, { includeWorkspace: true, json: true });
       expect(result.verified).toBe(true);
       expect(result.skippedVolatileCount).toBe(files.length);
       expect(
@@ -351,116 +310,5 @@ describe("backup traversal", () => {
           .toSorted(),
       ).toEqual(files.toSorted());
     });
-  });
-});
-
-describe("backup stream lifecycle", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-  type ReportBackupProgress = Parameters<
-    Parameters<typeof writeArchiveStreamToFile>[0]["createArchiveStream"]
-  >[0];
-
-  function startArchive(label: string, name = "partial.tar.gz") {
-    const archivePath = path.join(tempDirs.make(`openclaw-backup-stream-${label}-`), name);
-    const archiveStream = new PassThrough();
-    let progress: ReportBackupProgress | undefined;
-    const writePromise = writeArchiveStreamToFile({
-      archivePath,
-      createArchiveStream: (report) => {
-        progress = report;
-        return archiveStream;
-      },
-      onPartialArchive: vi.fn(),
-    });
-    return {
-      archivePath,
-      archiveStream,
-      writePromise,
-      reportProgress: (...args: Parameters<ReportBackupProgress>) => progress?.(...args),
-    };
-  }
-
-  describe("writeArchiveStreamToFile", () => {
-    it("removes the exclusive partial archive when its initial descriptor stat fails", async () => {
-      const fstatSpy = vi.spyOn(fsSync, "fstatSync").mockImplementationOnce(() => {
-        throw Object.assign(new Error("fstat failed"), { code: "EIO" });
-      });
-      try {
-        const { archivePath, archiveStream, writePromise } = startArchive("fstat");
-        archiveStream.end("partial archive");
-
-        await expect(writePromise).rejects.toThrow("fstat failed");
-        await expect(fs.lstat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
-      } finally {
-        fstatSpy.mockRestore();
-      }
-    });
-
-    it("aborts and closes a partial archive when the source stops producing data", async () => {
-      vi.useFakeTimers();
-      try {
-        const { archivePath, archiveStream, writePromise } = startArchive("timeout");
-        archiveStream.write("partial archive");
-
-        const rejection = expect(writePromise).rejects.toThrow(
-          "Backup archive write stalled: no progress observed for 300000ms",
-        );
-        await vi.advanceTimersByTimeAsync(300_001);
-        await rejection;
-        expect(archiveStream.destroyed).toBe(true);
-        await expect(fs.lstat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-
-    it("keeps the archive alive through more than five minutes of one entry's raw bytes", async () => {
-      vi.useFakeTimers();
-      try {
-        const { archivePath, archiveStream, writePromise, reportProgress } = startArchive(
-          "entry-progress",
-          "complete.tar.gz",
-        );
-        for (let elapsed = 0; elapsed < 360_000; elapsed += 60_000) {
-          await vi.advanceTimersByTimeAsync(60_000);
-          reportProgress({ phase: "raw", entryPath: "/source/large.pack", bytes: 16 });
-        }
-        archiveStream.end("archive after one large entry");
-
-        await expect(writePromise).resolves.toMatchObject({ archivePath });
-        await expect(fs.readFile(archivePath, "utf8")).resolves.toBe(
-          "archive after one large entry",
-        );
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-
-    it.each([
-      {
-        entryPath: `/source/🤖${"a".repeat(170)}/${"b".repeat(170)}/${"c".repeat(169)}`,
-        expectedPath: `${"a".repeat(170)}/${"b".repeat(170)}/${"c".repeat(169)}`,
-      },
-    ])(
-      "cleans a stalled archive and preserves its entry suffix: $entryPath",
-      async ({ entryPath, expectedPath }) => {
-        vi.useFakeTimers();
-        try {
-          const { archivePath, archiveStream, writePromise, reportProgress } =
-            startArchive("entry-timeout");
-          reportProgress({ phase: "raw", entryPath, bytes: 16 });
-          archiveStream.write("partial archive");
-
-          const rejection = expect(writePromise).rejects.toThrow(
-            `Backup archive write stalled: no progress observed for 300000ms (phase=output, entry=${JSON.stringify(expectedPath)}, rawBytes=16, outputBytes=15)`,
-          );
-          await vi.advanceTimersByTimeAsync(300_001);
-          await rejection;
-          await expect(fs.lstat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
-        } finally {
-          vi.useRealTimers();
-        }
-      },
-    );
   });
 });

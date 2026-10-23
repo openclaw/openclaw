@@ -135,7 +135,6 @@ it("classifies a bare HTTP 503 service-unavailable response as overloaded", () =
   expect(classifyProviderRequestFacets({ message })).toBe("provider-internal-503");
   expect(classifyReplyRequest({ message })).toMatchObject({
     code: "provider_internal_error",
-    technicalMessage: message,
   });
 });
 

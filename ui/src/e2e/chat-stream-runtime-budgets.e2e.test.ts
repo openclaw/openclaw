@@ -690,7 +690,9 @@ suite.define(() => {
         invalidationsInsideFrame: probe.invalidationsInsideFrame,
       });
 
-      expect(probe.commits).toBeGreaterThan(0);
+      // Text updates reach the transcript without re-preparing its page or pane.
+      // The visible tail and mutation batches above prove the stream rendered.
+      expect(probe.commits).toBe(0);
       expect(probe.mutationBatches).toBeGreaterThanOrEqual(MIN_BURST_MUTATION_BATCHES);
       expect(probe.mutationBatches).toBeLessThanOrEqual(MAX_BURST_MUTATION_BATCHES);
     });

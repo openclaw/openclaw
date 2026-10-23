@@ -99,12 +99,9 @@ export function createSessionControllerWatchdog(params: {
     effect: SessionWatchdogEffect,
   ) => SessionWatchdogEffectResult | Promise<SessionWatchdogEffectResult>;
   onWarning?: (decision: SessionWatchdogDecision) => void;
-  warningMs?: number;
-  now?: () => number;
 }): SessionControllerWatchdog {
-  const now = params.now ?? Date.now;
-  const warningMs = resolveTimerTimeoutMs(params.warningMs, SESSION_WATCHDOG_WARNING_MS, 1);
-  const abortMs = Math.max(SESSION_WATCHDOG_ABORT_FLOOR_MS, 3 * warningMs);
+  const now = Date.now;
+  const abortMs = Math.max(SESSION_WATCHDOG_ABORT_FLOOR_MS, 3 * SESSION_WATCHDOG_WARNING_MS);
   let closed = false;
   let semanticAt = params.startedAtMs;
   let transportAt = params.startedAtMs;
@@ -214,7 +211,7 @@ export function createSessionControllerWatchdog(params: {
       hasActiveAttempt: attempt?.isCurrent() === true,
       semanticProgressAtMs: progressOrigin(at),
       lastProgressReason: stagnationCurrent(at) ? "tool_loop:argument_churn" : reason,
-      warningMs,
+      warningMs: SESSION_WATCHDOG_WARNING_MS,
       semanticDeadlineAtMs: semanticDeadline(at),
       executionDeadlineAtMs: [executionAt, ...[...executions].map(executionDeadline)]
         .filter((deadline): deadline is number => deadline !== undefined)

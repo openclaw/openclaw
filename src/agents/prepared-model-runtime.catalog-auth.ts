@@ -167,9 +167,9 @@ export function createPreparedAccountCatalogAccess(
         }
       }
     },
-    readServiceTierObservation(params) {
+    readServiceTierObservations(params) {
       if (!ownerIsCurrent()) {
-        return undefined;
+        return [];
       }
       const route = {
         ...params,
@@ -179,12 +179,12 @@ export function createPreparedAccountCatalogAccess(
       if (account?.source === "direct") {
         account = readAccount(params.identityKey, readDirectBinding(config, account.provider));
       }
-      const observation = account?.serviceTierObservations?.find((candidate) =>
-        matchesServiceTierRoute(candidate, route),
-      );
-      return observation && observation.expiresAt > Date.now()
-        ? { requestedTier: observation.requestedTier, responseTier: observation.responseTier }
-        : undefined;
+      const now = Date.now();
+      return (account?.serviceTierObservations ?? [])
+        .filter(
+          (candidate) => candidate.expiresAt > now && matchesServiceTierRoute(candidate, route),
+        )
+        .map(({ requestedTier, responseTier }) => ({ requestedTier, responseTier }));
     },
     prepareServiceTierObserver(params) {
       const selected = params.selectedCredential;
@@ -223,9 +223,12 @@ export function createPreparedAccountCatalogAccess(
           ...observation,
           baseUrl: normalizeCatalogRouteBaseUrl(observation.baseUrl) ?? observation.baseUrl,
         };
+        const matchesRequest = (candidate: ModelServiceTierObservation) =>
+          matchesServiceTierRoute(candidate, route) &&
+          candidate.requestedTier === route.requestedTier;
         const now = Date.now();
         const previous = captured.serviceTierObservations?.find(
-          (candidate) => candidate.expiresAt > now && matchesServiceTierRoute(candidate, route),
+          (candidate) => candidate.expiresAt > now && matchesRequest(candidate),
         );
         let changed = false;
         captured.serviceTierObservations = (captured.serviceTierObservations ?? []).filter(
@@ -234,7 +237,7 @@ export function createPreparedAccountCatalogAccess(
               changed = true;
               return false;
             }
-            return !matchesServiceTierRoute(candidate, route);
+            return !matchesRequest(candidate);
           },
         );
         const matched = observation.requestedTier === observation.responseTier;
@@ -246,8 +249,7 @@ export function createPreparedAccountCatalogAccess(
         }
         changed ||= matched
           ? Boolean(previous)
-          : previous?.requestedTier !== observation.requestedTier ||
-            previous?.responseTier !== observation.responseTier;
+          : !previous || previous.responseTier !== observation.responseTier;
         scheduleExpiry();
         if (changed) {
           onChanged?.();

@@ -15,11 +15,6 @@ it("isolates a session attachment projection from sibling agent-scoped sessions"
   const workspaceDir = path.join(stateDir, "workspace");
   const attachedSessionKey = "agent:main:subagent:attached";
   const siblingSessionKey = "agent:main:subagent:sibling";
-  const attachmentRoot = resolveSubagentSessionAttachmentRootDir({
-    agentId: "main",
-    childSessionKey: attachedSessionKey,
-    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-  });
   const backendFactory = vi.fn(async (params) => ({
     id: "attachment-scope-backend",
     runtimeId: `runtime-${params.scopeKey}`,
@@ -57,6 +52,10 @@ it("isolates a session attachment projection from sibling agent-scoped sessions"
   try {
     await fs.mkdir(workspaceDir, { recursive: true });
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const attachmentRoot = resolveSubagentSessionAttachmentRootDir({
+        agentId: "main",
+        childSessionKey: attachedSessionKey,
+      });
       const beforeAttachment = await resolveSandboxContext({
         config: cfg,
         sessionKey: attachedSessionKey,

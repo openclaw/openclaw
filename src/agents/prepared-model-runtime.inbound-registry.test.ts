@@ -25,6 +25,7 @@ import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import type { DiscoverAuthStorageOptions } from "./agent-auth-discovery.js";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
+import { harnessRegistry } from "./model-catalog-fixtures.test-support.js";
 import {
   scopePreparedModelRuntimeLease,
   withPreparedModelRuntimePluginGenerationScope,
@@ -243,19 +244,12 @@ describe("prepared reply dispatch runtime", () => {
     const config = { agents: { defaults: { model: "custom/model" } } };
     const registries = new Map(
       ["first-harness", "second-harness"].map((runtime) => {
-        const registry = createEmptyPluginRegistry();
-        registry.agentHarnesses.push({
-          pluginId: runtime,
-          source: "test",
-          harness: {
-            id: runtime,
-            label: runtime,
-            supports: () => ({ supported: true }),
-            runAttempt: async () => {
-              throw new Error("unused");
-            },
+        const registry = harnessRegistry(runtime, {
+          runAttempt: async () => {
+            throw new Error("unused");
           },
         });
+        registry.agentHarnesses[0]!.source = "test";
         return [runtime, registry] as const;
       }),
     );
@@ -612,10 +606,10 @@ describe("prepared reply dispatch runtime", () => {
     expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
     const finishAuthRefreshGate = createDeferred();
     let finishAuthRefresh: (() => void) | undefined;
-    mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, agentDir) => {
+    mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, _agentDir) => {
       finishAuthRefresh = () => finishAuthRefreshGate.resolve();
       await finishAuthRefreshGate.promise;
-      return { agentDir: String(agentDir), wrote: false };
+      return {};
     });
 
     let admission: ReturnType<typeof acquireAgentRunPreparedModelRuntime> | undefined;

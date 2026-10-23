@@ -1,18 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
-import readline from "node:readline";
 import * as fileReads from "@openclaw/fs-safe/advanced";
 import { afterEach, expect, test, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
-import { isVisibleTranscriptRecord } from "../sessions/transcript-visible-record.js";
 import { ArchivedTranscriptReader } from "./session-transcript-archive-reader.js";
 import {
   readIndexedTranscriptEntries,
   readSessionTranscriptIndex,
-  selectArchiveTranscriptEntries,
 } from "./session-transcript-index.fs.js";
 import type {
   SessionTranscriptSourceCursor,
@@ -67,33 +64,24 @@ function imageMessage(id: string, bytes: number) {
 }
 
 test("keeps exact physical ranges across newline dialects and malformed UTF8", async () => {
+  const valid = [
+    message("first", "α🦞".repeat(18000)),
+    message("invalid", "\ufffd"),
+    message("", "blank raw id"),
+    message(undefined, "no id"),
+  ];
   const file = await fixture(
     Buffer.concat([
-      Buffer.from(` \r\n${message("first", "α🦞".repeat(18000))}\r`),
+      Buffer.from(` \r\n${valid[0]}\r`),
       Buffer.from('{"type":"message","id":"invalid","message":{"role":"user","content":"'),
       Buffer.from([0xff]),
-      Buffer.from(
-        `"}}\n{malformed\r\n${message("", "blank raw id")}\n${message(undefined, "no id")}`,
-      ),
+      Buffer.from(`"}}\n{malformed\r\n${valid[2]}\n${valid[3]}`),
     ]),
   );
-  const records: recordParser.TranscriptRecord[] = [];
-  const lines = readline.createInterface({
-    input: fs.createReadStream(file, { encoding: "utf8" }),
-    crlfDelay: Infinity,
-  });
-  for await (const line of lines) {
-    const parsed = recordParser.parseTranscriptRecord(line);
-    if (parsed) {
-      records.push(parsed);
-    }
-  }
-  const expected = selectArchiveTranscriptEntries(records).filter((entry) =>
-    isVisibleTranscriptRecord(entry.record),
-  );
   const { index, read } = await openIndex(file);
-  const payload = (e: recordParser.TranscriptRecord) => [e.record, e.byteLength, e.id];
-  expect((await read()).map(payload)).toEqual(expected.map(payload));
+  expect((await read()).map(({ record, byteLength, id }) => [record, byteLength, id])).toEqual(
+    valid.map((line, i) => [JSON.parse(line), Buffer.byteLength(line), ["first", "invalid"][i]]),
+  );
   expect(index.entries.map((entry) => entry.rawId)).toEqual(["first", "invalid", "", undefined]);
 });
 

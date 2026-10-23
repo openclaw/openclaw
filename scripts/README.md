@@ -43,6 +43,74 @@ new directory taxonomy.
 | Commits         | `git add <files...>` then `git commit -m "<message>"`                          | Stage only the intended files for each commit.                                                                      |
 | Remote proof    | `node scripts/crabbox-wrapper.mjs ...`                                         | Use when the current host lacks the required isolation, OS, device, or capacity; sync each run and reuse the lease. |
 
+## Control UI warm interactions
+
+Build with `pnpm ui:build`, then collect the production renderer's desktop and
+mobile interactions against the synthetic Gateway:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-interactions.ts --trace
+```
+
+The report links each asserted step to its screenshot, explicit-mark trace,
+source-mapped CPU profile, and interval RPC counts. It covers 1,000 sessions,
+two 400-message transcripts, 1,000 models, and 500 Cron jobs. Sessions retains
+its supported pagination; text search uses the command palette, not the sidebar.
+Navigation setup is outside the measured interval. Native clocks and animations
+remain enabled; profiling overhead is included and no live provider is called.
+Cron search pastes one complete query so both builds perform the same Gateway
+request; model and session searches use sequential key input. The separate
+`cron-search-typing` scenario exposes burst-input request coalescing; compare its
+request counts before interpreting latency differences as equal work.
+
+Compare saved production builds serially with at least ten interleaved pairs:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-interactions.ts \
+  --bundle-dir <baseline> --compare-bundle-dir <candidate> --pairs 10 \
+  --steps model-picker-open-search
+```
+
+Use `--viewport desktop` or `mobile` to narrow a diagnosis. Comparisons omit
+profiling and report median, p95, and min–max; every cell over 20% worse is marked
+for review. These are report-only measurements, not timing gates. Wall time is
+automation-to-assertion time, not INP. Keep failed attempts alongside successful
+captures and compare only runs with the same fixture, viewport, and collection mode.
+
+## Control UI development benchmark
+
+Measure CLI-to-listening readiness without a browser or source edits:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-dev-loop.mts \
+  --root <checkout> --mode warm --samples 5 --startup-only \
+  --label candidate --out-dir <proof-dir>
+```
+
+For before/after comparisons, alternate checkouts with `--samples 1`, run serially,
+and report the samples, median, p95, range, and recorded host load. `--mode cold`
+passes Vite's `--force` to rebuild optimizer inputs; it does not clear OS caches.
+`--mode warm` omits `--force` and assumes an existing valid optimizer cache.
+Startup-only mode stops at Vite's listening banner and cannot prime an empty cache:
+load the UI first, then check the retained server logs for re-optimization.
+Readiness is separate from a loaded application's boot time.
+
+Omit `--startup-only` to render the real chat loading component, change its first
+skeleton width from 82% to 42%, and measure the visible update after the Vite
+WebSocket connects. The benchmark rejects full-page reloads, saves synthetic
+screenshots and logs, and restores its own source edit and temporary fixtures,
+including on SIGINT/SIGTERM. Use a task-owned checkout without concurrent edits.
+
+If file edits produce no Vite update, try the existing watcher opt-in:
+
+```sh
+CHOKIDAR_USEPOLLING=1 pnpm ui:dev
+```
+
+The same environment setting applies to the benchmark. Polling uses more CPU;
+leave it opt-in for hosts where native directory events are unavailable. On macOS,
+the Vite config resolves this setting before Chokidar selects its native backend.
+
 ## Formatting and lint selection
 
 `lib/dev-tool.mts` selects the pinned Bun fork for local formatting, with an

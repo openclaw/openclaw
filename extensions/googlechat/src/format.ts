@@ -39,7 +39,6 @@ const GOOGLE_CHAT_LITERAL_FALLBACKS = new Map([
 type GoogleChatMarkers = ReturnType<typeof createGoogleChatMarkers>;
 
 function createGoogleChatMarkers(text: string) {
-  const used = new Set<string>();
   let candidate = 0;
   const rangeSize = 0x1900;
   const nextMarker = () => {
@@ -49,8 +48,7 @@ function createGoogleChatMarkers(text: string) {
         0xe000 + (candidate % rangeSize),
       );
       candidate += 1;
-      if (!used.has(marker) && !text.includes(marker)) {
-        used.add(marker);
+      if (!text.includes(marker)) {
         return marker;
       }
     }

@@ -185,15 +185,8 @@ export type DurableMessageSendContext = MessageSendContext<
 export async function withDurableMessageSendContextCore<T>(
   params: DurableMessageSendContextParams,
   run: (ctx: DurableMessageSendContext) => Promise<T>,
-  conversationDeliveryTarget?: ConversationDeliveryTarget,
-  queueContext?: DeliveryQueueStateContext,
 ): Promise<T> {
-  return await withMessageSendContext(
-    params,
-    run,
-    (delivery) => deliverOutboundPayloadsInternal(delivery, queueContext),
-    conversationDeliveryTarget,
-  );
+  return await withMessageSendContext(params, run, deliverOutboundPayloadsInternal);
 }
 
 async function withMessageSendContext<T>(
@@ -371,10 +364,16 @@ export async function sendDurableMessageBatchCore(
   conversationDeliveryTarget?: ConversationDeliveryTarget,
   queueContext?: DeliveryQueueStateContext,
   sessionGeneration?: SessionDeliveryGeneration,
+  admittedReasoning?: true,
 ): Promise<DurableMessageBatchSendResult> {
   return await sendMessageBatch(
     params,
-    (delivery) => deliverOutboundPayloadsInternal({ ...delivery, sessionGeneration }, queueContext),
+    (delivery) =>
+      deliverOutboundPayloadsInternal(
+        { ...delivery, sessionGeneration },
+        queueContext,
+        admittedReasoning,
+      ),
     conversationDeliveryTarget,
   );
 }
@@ -383,14 +382,12 @@ export async function sendStructuredDurableMessageBatchCore(
   input: Omit<DurableMessageSendContextParams, "payloads"> & {
     plan: readonly OutboundPayloadPlan[];
   },
-  conversationDeliveryTarget?: ConversationDeliveryTarget,
 ): Promise<DurableMessageBatchSendResult> {
   const { plan, ...params } = input;
   return await sendMessageBatch(
     { ...params, payloads: plan.map((entry) => entry.payload) },
     ({ payloads: _payloads, ...delivery }) =>
       deliverStructuredOutboundPayloadsInternal({ ...delivery, plan }),
-    conversationDeliveryTarget,
   );
 }
 

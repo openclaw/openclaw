@@ -338,25 +338,26 @@ async function readApprovalStore<T>(
     guard?.assertCurrent();
     assertCurrent?.();
   };
-  // Preserve creating/writable admission, then use the existing read-only owner.
-  return runApprovalStoreOperation(
+  // Wait for earlier mutations and preserve writable/open admission. Historical
+  // snapshots do not hold the mutation FIFO while the read worker scans rows.
+  await runApprovalStoreOperation(
     context,
     captured,
     async (_scope, preparation) => {
       preparation.assertCurrent();
       assertOperationCurrent();
-      preparation.release();
-      const result = await readApprovalStoreCommand(context, captured);
-      assertOperationCurrent();
-      const value = project(result);
-      if (value !== undefined) {
-        return value;
-      }
-      throw new Error("Operator approval database became unavailable");
     },
     undefined,
     assertOperationCurrent,
   );
+  assertOperationCurrent();
+  const result = await readApprovalStoreCommand(context, captured);
+  assertOperationCurrent();
+  const value = project(result);
+  if (value !== undefined) {
+    return value;
+  }
+  throw new Error("Operator approval database became unavailable");
 }
 
 export async function listTerminalOperatorApprovals(

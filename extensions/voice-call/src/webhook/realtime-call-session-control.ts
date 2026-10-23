@@ -101,10 +101,8 @@ export function createOutboundGreetingController(params: {
   let readySession: RealtimeVoiceBridgeSession | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const clearTimer = () => {
-    if (timer) {
-      clearTimeout(timer);
-      timer = undefined;
-    }
+    clearTimeout(timer);
+    timer = undefined;
   };
   const triggerOpening = () => {
     if (!closed && readySession && params.instructions && claim()) {
@@ -218,16 +216,12 @@ export function createRealtimeCallActivityController(params: {
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
   let mediaTimer: ReturnType<typeof setTimeout> | undefined;
   const clearIdle = () => {
-    if (idleTimer) {
-      clearTimeout(idleTimer);
-      idleTimer = undefined;
-    }
+    clearTimeout(idleTimer);
+    idleTimer = undefined;
   };
   const clearMedia = () => {
-    if (mediaTimer) {
-      clearTimeout(mediaTimer);
-      mediaTimer = undefined;
-    }
+    clearTimeout(mediaTimer);
+    mediaTimer = undefined;
   };
   const resetIdle = () => {
     clearIdle();

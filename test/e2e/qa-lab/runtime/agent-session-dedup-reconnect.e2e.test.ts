@@ -50,12 +50,14 @@ describe("agent session deduplication across reconnect", () => {
       cleanups.push(async () => provider.release());
       const clientA = await connectOperator(gateway, "Session dedup client A");
       cleanups.push(() => clientA.stopAndWait({ timeoutMs: 1_000 }));
-      const acceptedA = await clientA.request<AgentResult>("agent", {
-        sessionKey: SESSION_KEY,
-        message: ORIGINAL_MESSAGE,
-        deliver: false,
-        idempotencyKey: IDEMPOTENCY_KEY,
-      });
+      const replay = (client: typeof clientA, message = ORIGINAL_MESSAGE) =>
+        client.request<AgentResult>("agent", {
+          sessionKey: SESSION_KEY,
+          message,
+          deliver: false,
+          idempotencyKey: IDEMPOTENCY_KEY,
+        });
+      const acceptedA = await replay(clientA);
       expect(acceptedA).toMatchObject({
         status: "accepted",
         runId: IDEMPOTENCY_KEY,
@@ -68,12 +70,7 @@ describe("agent session deduplication across reconnect", () => {
 
       const clientB = await connectOperator(gateway, "Session dedup client B");
       cleanups.push(() => clientB.stopAndWait({ timeoutMs: 1_000 }));
-      const acceptedB = await clientB.request<AgentResult>("agent", {
-        sessionKey: SESSION_KEY,
-        message: ORIGINAL_MESSAGE,
-        deliver: false,
-        idempotencyKey: IDEMPOTENCY_KEY,
-      });
+      const acceptedB = await replay(clientB);
       expect(acceptedB).toMatchObject({
         status: "in_flight",
         runId: acceptedA.runId,
@@ -92,12 +89,7 @@ describe("agent session deduplication across reconnect", () => {
         runId: IDEMPOTENCY_KEY,
       });
 
-      const cachedTerminal = await clientB.request<AgentResult>("agent", {
-        sessionKey: SESSION_KEY,
-        message: ORIGINAL_MESSAGE,
-        deliver: false,
-        idempotencyKey: IDEMPOTENCY_KEY,
-      });
+      const cachedTerminal = await replay(clientB);
       expect(cachedTerminal).toMatchObject({
         status: terminal.status,
         runId: terminal.runId,
@@ -105,12 +97,7 @@ describe("agent session deduplication across reconnect", () => {
           payloads: [{ text: TERMINAL_TEXT }],
         },
       });
-      const changedReplay = await clientB.request<AgentResult>("agent", {
-        sessionKey: SESSION_KEY,
-        message: CHANGED_MESSAGE,
-        deliver: false,
-        idempotencyKey: IDEMPOTENCY_KEY,
-      });
+      const changedReplay = await replay(clientB, CHANGED_MESSAGE);
       expect(changedReplay).toEqual(cachedTerminal);
       expect(provider.requests).toHaveLength(1);
 

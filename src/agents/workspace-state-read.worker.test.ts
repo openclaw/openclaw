@@ -92,12 +92,16 @@ it("reuses unchanged workspace facts and refreshes them after each owning write"
   expect(execute).not.toHaveBeenCalled();
 
   await merge(dir, milestone);
+  execute.mockClear();
   expect((await read(dir)).setup.setupCompletedAt).toBe(completedAt);
+  expect(execute).not.toHaveBeenCalled();
   await attest(attestation(2_000, "TOOLS.md", "b"));
+  execute.mockClear();
   expect((await read(dir)).attestation).toEqual({
     attestedAtMs: 2_000,
     generatedHashes: new Map([["TOOLS.md", "b".repeat(64)]]),
   });
+  expect(execute).not.toHaveBeenCalled();
   await remove(deletionPlan(dir));
   expect(await read(dir)).toMatchObject({ setupExists: false, setup: { version: 1 } });
 });

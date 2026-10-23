@@ -14,10 +14,11 @@ describe("Nostr durable cursor", () => {
   });
 
   it("caps progress so a transiently rejected event remains inside replay overlap", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(1_200_000);
     const cursor = createNostrDurableCursor({
       since: 800,
       replayOverlapSec: 120,
-      nowSec: () => 1_200,
     });
 
     cursor.recordDurableAppend(event(1_100));
@@ -27,10 +28,11 @@ describe("Nostr durable cursor", () => {
   });
 
   it("ignores rejected events older than the active relay filter", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(1_200_000);
     const cursor = createNostrDurableCursor({
       since: 800,
       replayOverlapSec: 120,
-      nowSec: () => 1_200,
     });
 
     cursor.recordDurableAppend(event(1_100));

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   emitDiagnosticEvent,
+  emitInternalDiagnosticEvent,
   emitTrustedDiagnosticEvent,
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
@@ -18,12 +19,12 @@ import {
 } from "./diagnostic-stability.js";
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
-  if (!value || typeof value !== "object") {
-    throw new Error("expected fields object");
-  }
-  const record = value as Record<string, unknown>;
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    expect(record[key], key).toEqual(expectedValue);
+  expect(value).toEqual(expect.objectContaining(expected));
+}
+
+function expectAbsent(value: unknown, ...keys: string[]) {
+  for (const key of keys) {
+    expect(value).not.toHaveProperty(key);
   }
 }
 
@@ -51,6 +52,8 @@ function recordExporter(
 }
 const exporterEvents = () =>
   getDiagnosticStabilitySnapshot({ type: "telemetry.exporter", limit: 1000 }).events;
+const startExporter = (update: Partial<DiagnosticExporterHealthUpdate> = {}) =>
+  recordExporter({ status: "started", reason: "configured", ...update });
 
 function expectQueryError(
   params: Parameters<typeof normalizeDiagnosticStabilityQuery>[0],
@@ -167,10 +170,7 @@ describe("diagnostic stability recorder", () => {
       { type: "session.turn.created", channel: "signal", source: "main", outcome: "user" },
     ]);
     for (const event of snapshot.events) {
-      expect(event).not.toHaveProperty("messageId");
-      expect(event).not.toHaveProperty("chatId");
-      expect(event).not.toHaveProperty("sessionId");
-      expect(event).not.toHaveProperty("sessionKey");
+      expectAbsent(event, "messageId", "chatId", "sessionId", "sessionKey");
     }
   });
 
@@ -207,10 +207,7 @@ describe("diagnostic stability recorder", () => {
       count: 4,
       context: { limit: 200_000 },
     });
-    expect(snapshot.events[0]).not.toHaveProperty("runId");
-    expect(snapshot.events[0]).not.toHaveProperty("sessionId");
-    expect(snapshot.events[0]).not.toHaveProperty("promptChars");
-    expect(snapshot.events[0]).not.toHaveProperty("systemPromptChars");
+    expectAbsent(snapshot.events[0], "runId", "sessionId", "promptChars", "systemPromptChars");
   });
 
   it("projects run.execution_phase into the dedicated phase fields", async () => {
@@ -352,7 +349,7 @@ describe("diagnostic stability recorder", () => {
       status: "failure",
       reason: "emit_failed",
     });
-    recordExporter({ endpointMode: "default_endpoint", status: "started", reason: "configured" });
+    startExporter({ endpointMode: "default_endpoint" });
     recordExporter({
       endpointMode: "default_endpoint",
       status: "failure",
@@ -391,12 +388,7 @@ describe("diagnostic stability recorder", () => {
   });
 
   it("retains exporter ownership through recovery", async () => {
-    recordExporter({
-      signal: "metrics",
-      endpointMode: "configured",
-      status: "started",
-      reason: "configured",
-    });
+    startExporter({ signal: "metrics", endpointMode: "configured" });
     recordExporter({ signal: "metrics", status: "failure", reason: "export_failed" });
     recordExporter({ signal: "metrics", status: "recovered", reason: "export_failed" });
     await waitForDiagnosticEventsDrained();
@@ -503,8 +495,7 @@ describe("diagnostic stability recorder", () => {
         errorCategory: "TypeError",
       },
     ]);
-    expect(snapshot.events[1]).not.toHaveProperty("transport");
-    expect(snapshot.events[1]).not.toHaveProperty("mode");
+    expectAbsent(snapshot.events[1], "transport", "mode");
     expect(JSON.stringify(snapshot)).not.toContain("collector.internal");
     expect(JSON.stringify(snapshot)).not.toContain("private.example");
     expect(JSON.stringify(snapshot)).not.toContain("private-signal");
@@ -512,9 +503,9 @@ describe("diagnostic stability recorder", () => {
   });
 
   it("replaces retired routes while retaining every current logs both route", async () => {
-    recordExporter({ status: "started", reason: "configured" });
+    startExporter();
     recordExporter({ status: "dropped" });
-    recordExporter({ transport: "external-sdk", status: "started", reason: "configured" });
+    startExporter({ transport: "external-sdk" });
     await waitForDiagnosticEventsDrained();
 
     expect(exporterEvents()).toMatchObject([
@@ -527,13 +518,8 @@ describe("diagnostic stability recorder", () => {
 
     recordExporter({ transport: "external-sdk", status: "dropped" });
     recordExporter({ status: "failure", reason: "unsupported_protocol" });
-    recordExporter({ signal: "logs", status: "started", reason: "configured" });
-    recordExporter({
-      signal: "logs",
-      transport: "stdout",
-      status: "started",
-      reason: "configured",
-    });
+    startExporter({ signal: "logs" });
+    startExporter({ signal: "logs", transport: "stdout" });
     await waitForDiagnosticEventsDrained();
 
     let events = exporterEvents();
@@ -550,7 +536,7 @@ describe("diagnostic stability recorder", () => {
     ]);
 
     recordExporter({ status: "dropped" });
-    recordExporter({ status: "started", reason: "configured" });
+    startExporter();
     await waitForDiagnosticEventsDrained();
 
     expect(exporterEvents().filter((event) => event.target === "traces")).toMatchObject([
@@ -559,12 +545,7 @@ describe("diagnostic stability recorder", () => {
 
     recordExporter({ signal: "logs", status: "dropped" });
     recordExporter({ signal: "logs", transport: "stdout", status: "dropped" });
-    recordExporter({
-      signal: "logs",
-      transport: "stdout",
-      status: "started",
-      reason: "configured",
-    });
+    startExporter({ signal: "logs", transport: "stdout" });
     await waitForDiagnosticEventsDrained();
 
     events = exporterEvents();
@@ -573,13 +554,8 @@ describe("diagnostic stability recorder", () => {
     ]);
 
     recordExporter({ signal: "logs", transport: "stdout", status: "dropped" });
-    recordExporter({ signal: "logs", status: "started", reason: "configured" });
-    recordExporter({
-      signal: "logs",
-      transport: "stdout",
-      status: "started",
-      reason: "configured",
-    });
+    startExporter({ signal: "logs" });
+    startExporter({ signal: "logs", transport: "stdout" });
     await waitForDiagnosticEventsDrained();
 
     events = exporterEvents();
@@ -763,5 +739,87 @@ describe("diagnostic stability recorder", () => {
     expectQueryError({ limit: safe }, "limit must be between 1 and 1000");
     expectQueryError({ limit: unsafe }, "limit must be a non-negative integer");
     expectQueryError({ limit: String(unsafe) }, "limit must be a non-negative integer");
+  });
+
+  it("records a bounded payload-free projection of diagnostic events", async () => {
+    const tool = {
+      type: "tool.loop",
+      toolName: "poll",
+      level: "warning",
+      action: "warn",
+      detector: "known_poll_no_progress",
+      count: 3,
+    } as const;
+    const talk = {
+      type: "talk.event",
+      talkEventType: "latency.metrics",
+      mode: "realtime",
+      transport: "gateway-relay",
+      brain: "agent-consult",
+      provider: "openai",
+      final: true,
+      durationMs: 12,
+    } as const;
+    emitDiagnosticEvent({
+      type: "webhook.error",
+      channel: "telegram",
+      chatId: "chat-secret",
+      error: "raw upstream error with content",
+    });
+    emitDiagnosticEvent({
+      ...tool,
+      sessionId: "session-1",
+      message: "message that should not be stored",
+    });
+    emitDiagnosticEvent({
+      ...talk,
+      sessionId: "talk-session-secret",
+      turnId: "talk-turn-secret",
+      captureId: "talk-capture-secret",
+      byteLength: 345,
+    });
+    emitInternalDiagnosticEvent({
+      type: "diagnostic.child_process.spawn",
+      family: "node",
+      count: 2,
+      intervalMs: 60_000,
+    });
+    emitInternalDiagnosticEvent({ type: "gateway.http.cancelled", source: "client" });
+    emitDiagnosticEvent({
+      type: "worker.request",
+      kind: "sessionTranscript",
+      requestClass: "task",
+      phase: "queued",
+      queueDepth: 1,
+    });
+    emitDiagnosticEvent({ type: "secret.egress", outcome: "forwarded", substituted: false });
+    emitDiagnosticEvent({
+      type: "tool.catalog",
+      source: "builtin",
+      mode: "code-mode",
+      toolCount: 12,
+    });
+    await waitForDiagnosticEventsDrained();
+
+    const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
+
+    expect(snapshot).toMatchObject({
+      count: 3,
+      summary: {
+        byType: {
+          "webhook.error": 1,
+          "tool.loop": 1,
+          "talk.event": 1,
+        },
+      },
+      events: [{ type: "webhook.error", channel: "telegram" }, tool, { ...talk, bytes: 345 }],
+    });
+    for (const [index, keys] of [
+      ["error", "chatId"],
+      ["message", "sessionId", "sessionKey"],
+      ["sessionId", "turnId", "captureId"],
+    ].entries()) {
+      expectAbsent(snapshot.events[index], ...keys);
+    }
   });
 });

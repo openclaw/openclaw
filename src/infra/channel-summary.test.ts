@@ -112,43 +112,31 @@ it("preserves Slack HTTP signing-secret unavailable state from source config", a
   );
 });
 
-it.each([
-  {
-    name: "includes linked metadata and truncates allow-from details",
-    includeAllowFrom: true,
-    params: {
-      linked: true,
-      authAgeMs: 300_000,
-      allowFrom: ["+12133734253", "bot-token", "ignored"],
-    },
-    expected: [
+it.each<[string, Parameters<typeof linkedPlugin>[0], boolean, string[]]>([
+  [
+    "includes linked metadata and truncates allow-from details",
+    { linked: true, authAgeMs: 300_000, allowFrom: ["+12133734253", "bot-token", "ignored"] },
+    true,
+    [
       "Telegram: linked +15551234567 auth 5m ago",
       "  - primary (Main Bot) (dm:mutuals, token:env, allow:+12133734253,bot-token)",
     ],
-  },
-  {
-    name: "shows not-linked status when linked metadata is explicitly false",
-    includeAllowFrom: false,
-    params: { linked: false },
-    expected: [
-      "Telegram: not linked +15551234567",
-      "  - primary (Main Bot) (dm:mutuals, token:env)",
-    ],
-  },
-  {
-    name: "prefers plugin statusState when provided",
-    includeAllowFrom: false,
-    params: { statusState: "unstable" },
-    expected: ["Telegram: auth stabilizing +15551234567"],
-  },
-])("$name", async ({ params, includeAllowFrom, expected }) => {
+  ],
+  [
+    "shows not-linked status when linked metadata is explicitly false",
+    { linked: false },
+    false,
+    ["Telegram: not linked +15551234567", "  - primary (Main Bot) (dm:mutuals, token:env)"],
+  ],
+  [
+    "prefers plugin statusState when provided",
+    { statusState: "unstable" },
+    false,
+    ["Telegram: auth stabilizing +15551234567"],
+  ],
+])("%s", async (_name, params, includeAllowFrom, expected) => {
   vi.mocked(listReadOnlyChannelPluginsForConfigAsync).mockResolvedValueOnce([linkedPlugin(params)]);
-  const lines = await buildChannelSummary(
-    { channels: {} },
-    {
-      includeAllowFrom,
-    },
-  );
+  const lines = await buildChannelSummary({ channels: {} }, { includeAllowFrom });
   expect(lines).toEqual(expect.arrayContaining(expected));
 });
 

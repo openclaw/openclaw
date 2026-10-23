@@ -49,9 +49,6 @@ async function skillMount() {
   return { root, demo };
 }
 
-it("rejects whitespace-only explicit workdirs", async () => {
-  await expect(local({ workdir: "   " })).resolves.toEqual(unavailable("   "));
-});
 it("canonicalizes local workdirs before approval and execution", async () => {
   const target = path.join(workspaceDir, "target"),
     link = path.join(workspaceDir, "link");

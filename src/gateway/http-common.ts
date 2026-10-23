@@ -172,6 +172,15 @@ export function sendMissingScopeForbidden(res: ServerResponse, missingScope: str
   });
 }
 
+/** The session exists but is not visible to the authenticated profile. */
+export function sendSessionReadForbidden(res: ServerResponse) {
+  res.setHeader("cache-control", "no-store");
+  sendJson(res, 403, {
+    ok: false,
+    error: { type: "forbidden", message: "session access required" },
+  });
+}
+
 export async function readJsonBodyOrError(
   req: IncomingMessage,
   res: ServerResponse,

@@ -4,8 +4,20 @@ import { zoomMeetingStatusCall } from "./zoom-meetings-status-call-source.js";
 import { zoomMeetingStatusPrelude } from "./zoom-meetings-status-prejoin-source.js";
 import { normalizeZoomMeetingUrlForReuse } from "./zoom-meetings-urls.js";
 
-function pageIdentityFunctionSource(): string {
-  return `const meetingIdentity = (rawUrl) => {
+export const zoomMeetingPageScripts = MeetingPlatformAdapter.createPageScripts({
+  platform: {
+    audioOutputElementIdPrefix: "openclaw-zoom-audio-output-",
+    manualActionReasonPrefix: "zoom",
+    displayName: "Zoom",
+    globals: {
+      audioOutputs: "__openclawZoomAudioOutputs",
+      captionArchive: "__openclawZoomCaptionArchive",
+      captions: "__openclawZoomCaptions",
+      meeting: "__openclawZoomMeeting",
+    },
+  },
+  normalizeUrl: normalizeZoomMeetingUrlForReuse,
+  pageIdentitySource: () => `const meetingIdentity = (rawUrl) => {
     try {
       const parsed = new URL(rawUrl);
       const host = parsed.hostname.toLowerCase();
@@ -19,11 +31,9 @@ function pageIdentityFunctionSource(): string {
       return meetingId ? "zoom:" + meetingId : undefined;
     } catch { /* Invalid external URLs do not identify a meeting. */ }
     return undefined;
-  };`;
-}
-
-function zoomMeetingToggleStateFunctionSource(): string {
-  return `(input) => {
+  };`,
+  selectors: ZOOM_MEETING_SELECTORS,
+  toggleStateFunction: () => `(input) => {
     const pressed = String(input?.ariaPressed || "").toLowerCase();
     if (pressed === "true") return "on";
     if (pressed === "false") return "off";
@@ -47,25 +57,7 @@ function zoomMeetingToggleStateFunctionSource(): string {
     if (/\\b(?:microphone|mic) (?:is |currently )?(?:off|muted|disabled)\\b/.test(value)) return "off";
     if (/\\b(?:microphone|mic) (?:is |currently )?(?:on|unmuted|enabled)\\b/.test(value)) return "on";
     return undefined;
-  }`;
-}
-
-export const zoomMeetingPageScripts = MeetingPlatformAdapter.createPageScripts({
-  platform: {
-    audioOutputElementIdPrefix: "openclaw-zoom-audio-output-",
-    manualActionReasonPrefix: "zoom",
-    displayName: "Zoom",
-    globals: {
-      audioOutputs: "__openclawZoomAudioOutputs",
-      captionArchive: "__openclawZoomCaptionArchive",
-      captions: "__openclawZoomCaptions",
-      meeting: "__openclawZoomMeeting",
-    },
-  },
-  normalizeUrl: normalizeZoomMeetingUrlForReuse,
-  pageIdentitySource: pageIdentityFunctionSource,
-  selectors: ZOOM_MEETING_SELECTORS,
-  toggleStateFunction: zoomMeetingToggleStateFunctionSource,
+  }`,
   statusPrelude: zoomMeetingStatusPrelude,
   statusCall: zoomMeetingStatusCall,
   leave: {

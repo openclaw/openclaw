@@ -318,24 +318,26 @@ describe("tailscale helpers", () => {
     ["http://127.0.0.1:18789", false, false],
   ] as const)("validates Funnel proxy %s (allowed: %s)", async (proxy, allowed, expected) => {
     const host = "device.tailnet.ts.net:443";
-    const exec = vi.fn().mockResolvedValue({
+    vi.spyOn(processExec, "runExec").mockResolvedValue({
       stdout: `warning: stale state\n${JSON.stringify({
         AllowFunnel: { [host]: allowed },
         Web: { [host]: { Handlers: { "/": { Proxy: proxy } } } },
       })}\n`,
+      stderr: "",
     });
 
-    await expect(hasTailscaleFunnelRouteForPort(18789, exec)).resolves.toBe(expected);
+    await expect(hasTailscaleFunnelRouteForPort(18789)).resolves.toBe(expected);
   });
 
   it("hasTailscaleFunnelRouteForPort preserves malformed status parse failures", async () => {
-    const exec = vi.fn().mockResolvedValue({ stdout: "warning: stale state\n{not json}\n" });
-    await expect(hasTailscaleFunnelRouteForPort(18789, exec)).rejects.toThrow(SyntaxError);
+    const stdout = "warning: stale state\n{not json}\n";
+    vi.spyOn(processExec, "runExec").mockResolvedValue({ stdout, stderr: "" });
+    await expect(hasTailscaleFunnelRouteForPort(18789)).rejects.toThrow(SyntaxError);
   });
 
   it("hasTailscaleFunnelRouteForPort preserves status command failures", async () => {
     const failure = new Error("tailscale status unavailable");
-    const exec = vi.fn().mockRejectedValue(failure);
-    await expect(hasTailscaleFunnelRouteForPort(18789, exec)).rejects.toBe(failure);
+    vi.spyOn(processExec, "runExec").mockRejectedValue(failure);
+    await expect(hasTailscaleFunnelRouteForPort(18789)).rejects.toBe(failure);
   });
 });

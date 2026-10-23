@@ -52,13 +52,16 @@ function threadView(props: ChatThreadProps, transcript = createTestTranscript())
 const inlineReply = ".chat-reply-attribution--inline button";
 const replyName = ".chat-reply-attribution__name";
 const replyTarget = "chat-bubble--reply-target";
+function expectEntryText(container: HTMLElement, id: string, text: string) {
+  expect(requireElement(container, `[data-entry-id="${id}"]`).textContent).toContain(text);
+}
 function replyAccess(
   read: () => unknown = () => undefined,
 ): NonNullable<ChatThreadProps["replyMessageAccess"]> {
   return { revision: 0, navigationId: null, read, open: vi.fn() };
 }
 function replyProps(messages: ChatThreadProps["messages"], changes: Partial<ChatThreadProps> = {}) {
-  return { ...threadProps("replies", "agent:main:main", messages), ...changes };
+  return threadProps("replies", "agent:main:main", messages, changes);
 }
 
 beforeEach(installTranscriptDomMocks);
@@ -236,6 +239,64 @@ it.each([false, true])(
   },
 );
 
+it.each([true, false])(
+  "keeps answers and independent automation deliveries visible (foreground run identity: %s)",
+  (keyed) => {
+    const runId = "approval-question-run";
+    const run = keyed ? { runId } : {};
+    const prompt = keyed ? { idempotencyKey: `${runId}:user` } : {};
+    const props = threadProps("pane-automation-replies", "agent:main:dashboard:approval", [
+      turn("question", "user", "How was that approved?", prompt, 1_000),
+      {
+        ...turn("commentary", "assistant", "Checking the saved approval.", run, 2_000),
+        phase: "commentary",
+      },
+      {
+        ...turn("answer", "assistant", "An operator approved it.", run, 3_000),
+        stopReason: "stop",
+      },
+    ]);
+    const { container, rerender } = threadView(props);
+    rerender(true);
+    expectEntryText(container, "answer", "An operator approved it.");
+    expect(container.querySelector('[data-entry-id="commentary"]')).toBeNull();
+    for (const index of [1, 2]) {
+      props.messages = [
+        ...props.messages,
+        {
+          role: "assistant",
+          api: "openclaw-transcript",
+          provider: "openclaw",
+          model: "automation-result",
+          stopReason: "stop",
+          content: `New application error ${index}.`,
+          timestamp: (3 + index) * 1_000,
+          openclawAutomation: { kind: "cron", jobId: "saved-watcher", runId: `cron-${index}` },
+          __openclaw: { id: `alert-${index}` },
+        },
+      ];
+      rerender();
+      expectEntryText(container, "answer", "An operator approved it.");
+      for (let alert = 1; alert <= index; alert++) {
+        expectEntryText(container, `alert-${alert}`, `New application error ${alert}.`);
+      }
+      expect(container.querySelector('[data-entry-id="commentary"]')).toBeNull();
+    }
+    props.messages = structuredClone(props.messages);
+    rerender();
+    expectEntryText(container, "answer", "An operator approved it.");
+    props.runId = "next-foreground-run";
+    props.runActive = true;
+    props.runWorking = true;
+    props.streamStartedAt = 6_000;
+    rerender();
+    const alert = requireElement(container, '[data-entry-id="alert-2"]');
+    const progress = requireElement(container, ".chat-working-indicator");
+    expect(alert.closest(".chat-group")?.contains(progress)).toBe(false);
+    expect(alert.closest(".chat-agent-run-frame")?.contains(progress) ?? false).toBe(false);
+  },
+);
+
 const person = (id: string, name: string) => ({
   senderId: id,
   senderName: name,
@@ -272,7 +333,6 @@ const answer = (metadata: object = {}) => ({
 });
 const linkedAnswer = answer({ runId: "run-a" });
 const olderPrompt = turn("p3", "user", "Unrelated", alice);
-const unkeyedPrompt = turn("p2", "user", "hey hey", alice);
 const duplicatePrompt = turn("p1", "user", "Earlier", { ...alice, idempotencyKey: "run-a:user" });
 const mirroredAnswer = answer({ mirrorOrigin: "discord", idempotencyKey: "run-a" });
 const searchedSpeakers = [
@@ -313,7 +373,7 @@ it.each<ReplyContext>([
   ["1:1 current prompt", [prompt, linkedAnswer], []],
   ["1:1 older prompt", [prompt, olderPrompt, linkedAnswer], ["Alice"]],
   ["legacy reply", [prompt, unrelated, answer()], []],
-  ["unkeyed prompt", [unkeyedPrompt, unrelated, linkedAnswer], []],
+  ["unkeyed prompt", [turn("p2", "user", "hey hey", alice), unrelated, linkedAnswer], []],
   ["another run", [keyedPrompt("run-b"), unrelated, linkedAnswer], []],
   ["ambiguous owners", [duplicatePrompt, prompt, unrelated, linkedAnswer], []],
   ["channel mirror", [prompt, unrelated, mirroredAnswer], []],

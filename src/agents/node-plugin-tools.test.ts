@@ -2,9 +2,10 @@
 
 import { CallToolResultSchema } from "@modelcontextprotocol/core";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runWithAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/index.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   listConnectedNodePluginTools,
   removeConnectedNodePluginTools,
@@ -19,7 +20,7 @@ import {
 } from "./code-mode.js";
 import { testing } from "./code-mode.test-support.js";
 import { consumeMcpCodeModeGuestResult } from "./mcp-content.js";
-import { createNodePluginTools } from "./node-plugin-tools.js";
+import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 import { isToolResultError } from "./tool-result-error.js";
 import { compactToolSearchCatalogEntry } from "./tool-search-catalog.js";
@@ -38,6 +39,35 @@ const remoteEcho: NodePluginToolDescriptor = {
   description: "Echo through a remote node",
   command: "remote.echo",
 };
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let workspaceDir: string;
+beforeEach(() => {
+  workspaceDir = tempDirs.make("node-plugin-tools-");
+});
+
+function materializeNodeTools(
+  params: {
+    existingToolNames?: Set<string>;
+    toolAllowlist?: string[];
+    toolDenylist?: string[];
+    agentSessionKey?: string;
+  } = {},
+) {
+  const config = { plugins: { enabled: false } };
+  return resolveOpenClawPluginToolsForOptions({
+    resolvedConfig: config,
+    existingToolNames: params.existingToolNames,
+    options: {
+      config,
+      workspaceDir,
+      senderIsOwner: true,
+      agentSessionKey: params.agentSessionKey,
+      pluginToolAllowlist: params.toolAllowlist,
+      pluginToolDenylist: params.toolDenylist,
+    },
+  });
+}
 
 function connectTool(
   descriptor: NodePluginToolDescriptor = remoteEcho,
@@ -70,13 +100,19 @@ function docsTool(
   };
 }
 
-function firstTool(params: Parameters<typeof createNodePluginTools>[0] = {}) {
-  return expectDefined(createNodePluginTools(params)[0], "node tool");
+function firstTool(params: Parameters<typeof materializeNodeTools>[0] = {}) {
+  return expectDefined(materializeNodeTools(params)[0], "node tool");
 }
 
-function toolNames(params: Parameters<typeof createNodePluginTools>[0] = {}) {
-  return createNodePluginTools(params).map((tool) => tool.name);
+function toolNames(params: Parameters<typeof materializeNodeTools>[0] = {}) {
+  return materializeNodeTools(params).map((tool) => tool.name);
 }
+
+function respond(payload: unknown) {
+  vi.mocked(callGatewayTool).mockResolvedValueOnce({ payload });
+}
+
+const textBlock = (text: string) => ({ type: "text", text });
 
 function richMcpContent() {
   return [
@@ -185,43 +221,40 @@ afterEach(() => {
   testing.resumingRunIds.clear();
 });
 
-describe("createNodePluginTools", () => {
-  it.each(["turnId"] as const)(
-    "scopes reused call IDs by %s and preserves replay keys",
-    async (identityField) => {
-      connectTool();
-      vi.mocked(callGatewayTool).mockResolvedValue({ payload: { ok: true } });
-      const tool = firstTool();
-      const calls = ["first", "second"].map((text, index) => {
-        const toolCall = {
-          type: "toolCall" as const,
-          id: "exec_0",
-          name: tool.name,
-          arguments: { text },
-        };
-        return {
-          toolCall,
-          assistantMessage: makeAssistantMessageFixture({
-            [identityField]: `turn-${index + 1}`,
-            stopReason: "toolUse",
-            content: [toolCall],
-          }),
-        };
-      });
-      const first = expectDefined(calls[0], "first assistant turn");
-      for (const context of [...calls, first]) {
-        await runWithAgentToolExecutionContext(context, () =>
-          tool.execute(context.toolCall.id, context.toolCall.arguments),
-        );
-      }
+describe("materializeNodeTools", () => {
+  it("scopes reused call IDs by turnId and preserves replay keys", async () => {
+    connectTool();
+    vi.mocked(callGatewayTool).mockResolvedValue({ payload: { ok: true } });
+    const tool = firstTool();
+    const calls = ["first", "second"].map((text, index) => {
+      const toolCall = {
+        type: "toolCall" as const,
+        id: "exec_0",
+        name: tool.name,
+        arguments: { text },
+      };
+      return {
+        toolCall,
+        assistantMessage: makeAssistantMessageFixture({
+          turnId: `turn-${index + 1}`,
+          stopReason: "toolUse",
+          content: [toolCall],
+        }),
+      };
+    });
+    const first = expectDefined(calls[0], "first assistant turn");
+    for (const context of [...calls, first]) {
+      await runWithAgentToolExecutionContext(context, () =>
+        tool.execute(context.toolCall.id, context.toolCall.arguments),
+      );
+    }
 
-      expect(vi.mocked(callGatewayTool).mock.calls.map((call) => call[2])).toMatchObject([
-        { idempotencyKey: "turn-1:exec_0", params: { text: "first" } },
-        { idempotencyKey: "turn-2:exec_0", params: { text: "second" } },
-        { idempotencyKey: "turn-1:exec_0", params: { text: "first" } },
-      ]);
-    },
-  );
+    expect(vi.mocked(callGatewayTool).mock.calls.map((call) => call[2])).toMatchObject([
+      { idempotencyKey: "turn-1:exec_0", params: { text: "first" } },
+      { idempotencyKey: "turn-2:exec_0", params: { text: "second" } },
+      { idempotencyKey: "turn-1:exec_0", params: { text: "first" } },
+    ]);
+  });
 
   it("materializes connected node plugin tools and invokes their node command", async () => {
     connectTool(
@@ -238,21 +271,14 @@ describe("createNodePluginTools", () => {
       },
       { nodeId: "node-1", displayName: "Studio Node" },
     );
-    vi.mocked(callGatewayTool).mockResolvedValueOnce({
-      payload: {
-        content: [{ type: "text", text: "pong" }],
-        details: { ok: true },
-      },
-    });
+    respond({ content: [textBlock("pong")], details: { ok: true } });
 
-    const tools = createNodePluginTools({
+    const tools = materializeNodeTools({
       existingToolNames: new Set(["read"]),
       agentSessionKey: "agent:main:canvas",
     });
     const tool = expectDefined(tools[0], "remote echo tool");
-    const result = await tool.execute("call-1", {
-      text: "ping",
-    });
+    const result = await tool.execute("call-1", { text: "ping" });
 
     expect(tools.map((entry) => entry.name)).toEqual(["remote_echo"]);
     expect(tool.resultContentSource).toBeUndefined();
@@ -273,29 +299,23 @@ describe("createNodePluginTools", () => {
       idempotencyKey: "call-1",
       sessionKey: "agent:main:canvas",
     });
-    expect(result.content).toEqual([{ type: "text", text: "pong" }]);
-
-    vi.mocked(callGatewayTool)
-      .mockResolvedValueOnce({
-        payload: {
-          content: [{ type: "text", text: "pong from Code Mode" }],
-          details: { ok: true, privateState: "must-not-leak" },
-        },
-      })
-      .mockResolvedValueOnce({
-        payload: {
-          content: [{ type: "text", text: "remote command failed" }],
-          details: { status: "error", privateState: "must-not-leak" },
-        },
-      });
+    expect(result.content).toEqual([textBlock("pong")]);
+    respond({
+      content: [textBlock("pong from Code Mode")],
+      details: { ok: true, privateState: "must-not-leak" },
+    });
+    respond({
+      content: [textBlock("remote command failed")],
+      details: { status: "error", privateState: "must-not-leak" },
+    });
     const { codeModeTools } = createCodeModeHarness(tools);
     const guest = await runCodeMode(
       codeModeTools,
       'return { success: await MCP.remoteDemo.echo({ text: "ping" }), failure: await MCP.remoteDemo.echo({ text: "fail" }) };',
     );
     expect(guest.value).toEqual({
-      success: { content: [{ type: "text", text: "pong from Code Mode" }], isError: false },
-      failure: { content: [{ type: "text", text: "remote command failed" }], isError: true },
+      success: { content: [textBlock("pong from Code Mode")], isError: false },
+      failure: { content: [textBlock("remote command failed")], isError: true },
     });
     expect(JSON.stringify(guest.value)).not.toContain("privateState");
   });
@@ -326,76 +346,25 @@ describe("createNodePluginTools", () => {
     );
   });
 
-  it("wraps node-host MCP arguments and maps MCP content", async () => {
-    connectTool(docsTool("search", "Search node-local docs"));
-    vi.mocked(callGatewayTool).mockResolvedValueOnce({
-      payload: {
-        content: [
-          {
-            type: "image",
-            data: "aW1hZ2UtMQ==",
-            mimeType: "image/png",
-            annotations: { audience: ["assistant"] },
-            _meta: { detailCanary: "must-not-leak" },
-          },
-          { type: "text", text: "first" },
-          { type: "text", text: "second" },
-          { type: "image", data: "aW1hZ2UtMg==", mimeType: "image/png" },
-          { type: "image", data: 42, mimeType: "image/png" },
-          { type: "audio", data: "audio-canary", mimeType: "audio/wav" },
-        ],
-        structuredContent: { hits: 2 },
-        isError: true,
-      },
-    });
-
-    const tool = firstTool();
-    const result = await tool.execute("call-mcp", { query: "needle" });
-
-    expectInvocation(
-      {
-        nodeId: "node-1",
-        command: "mcp.tools.call.v1",
-        params: { server: "docs", tool: "search", arguments: { query: "needle" } },
-        timeoutMs: 120_000,
-        idempotencyKey: "call-mcp",
-      },
-      { mcp: true },
-    );
-    expect(tool.executionMode).toBe("sequential");
-    expect(tool.resultContentSource).toBe("network");
-    expect(getPluginToolMeta(tool)?.mcp?.node).toEqual({ id: "node-1" });
-    expect(result.content).toEqual([
-      { type: "text", text: 'structuredContent:\n{\n  "hits": 2\n}' },
-      { type: "image", data: "aW1hZ2UtMQ==", mimeType: "image/png" },
-      { type: "text", text: "first" },
-      { type: "text", text: "second" },
-      { type: "image", data: "aW1hZ2UtMg==", mimeType: "image/png" },
-      { type: "text", text: '{"type":"image","data":42,"mimeType":"image/png"}' },
-      { type: "text", text: "[audio audio/wav]" },
-    ]);
-    expect(result.details).toEqual({
-      mcpServer: "docs",
-      mcpTool: "search",
-      structuredContent: { hits: 2 },
-      status: "error",
-    });
-    expect(JSON.stringify(result.details)).not.toContain("canary");
-    expect(isToolResultError(result)).toBe(true);
-  });
-
-  it.each([false])("snapshots node MCP text once (isError: %s)", async (isError) => {
+  it("snapshots successful node MCP text once", async () => {
     const text = "ordinary report line\n".repeat(25_000);
     const payload = CallToolResultSchema.parse({
       content: [
         { type: "text", text },
         { type: "resource_link", uri: "memo://report", name: "Report" },
         { type: "text", text: "résumé\n東京", _meta: { source: "report" } },
+        {
+          type: "image",
+          data: "aW1hZ2U=",
+          mimeType: "image/png",
+          annotations: { audience: ["assistant"] },
+          _meta: { detailCanary: "must-not-leak" },
+        },
       ],
-      isError,
+      isError: false,
     });
     connectTool(docsTool("read", "Read node-local reports"));
-    vi.mocked(callGatewayTool).mockResolvedValueOnce({ payload });
+    respond(payload);
     const tool = firstTool();
     const result = snapshotToolSearchTargetTranscriptResult(await tool.execute("report", {}));
 
@@ -403,8 +372,9 @@ describe("createNodePluginTools", () => {
       { type: "text", text },
       { type: "text", text: "[Report] memo://report" },
       { type: "text", text: "résumé\n東京" },
+      { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
     ]);
-    expect(isToolResultError(result)).toBe(isError);
+    expect(isToolResultError(result)).toBe(false);
     expect(consumeMcpCodeModeGuestResult(result)).toEqual(payload);
     const contentBytes = Buffer.byteLength(JSON.stringify(result.content));
     expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(contentBytes + 1_024);
@@ -421,16 +391,21 @@ describe("createNodePluginTools", () => {
       }),
       { nodeId: "node-1", displayName: "Studio Node" },
     );
-    vi.mocked(callGatewayTool).mockResolvedValueOnce({
-      payload: {
-        content: richMcpContent(),
-        structuredContent: { hits: 1 },
-        isError: false,
-        _meta: { privateAppState: "must-not-leak" },
-      },
+    respond({
+      content: richMcpContent(),
+      structuredContent: { hits: 1 },
+      isError: false,
+      _meta: { privateAppState: "must-not-leak" },
     });
 
-    const nodeTools = createNodePluginTools({ agentSessionKey: "agent:main:node-mcp-code-mode" });
+    const nodeTools = materializeNodeTools({ agentSessionKey: "agent:main:node-mcp-code-mode" });
+    const nodeTool = expectDefined(nodeTools[0], "node MCP tool");
+    expect(nodeTool.executionMode).toBe("sequential");
+    expect(nodeTool.resultContentSource).toBe("network");
+    expect(getPluginToolMeta(nodeTool)?.mcp?.node).toEqual({
+      id: "node-1",
+      displayName: "Studio Node",
+    });
     const { catalogRef, codeModeTools, ctx } = createCodeModeHarness(nodeTools);
     const nodeEntry = catalogRef.current?.entries.find(
       (entry) => entry.name === "docs_search" && entry.source === "mcp",
@@ -495,17 +470,17 @@ describe("createNodePluginTools", () => {
 
   it("makes empty MCP application results visible", async () => {
     connectTool(docsTool("fail", "Fail without content", { type: "object", properties: {} }));
-    vi.mocked(callGatewayTool)
-      .mockResolvedValueOnce({ payload: { content: [], isError: true } })
-      .mockResolvedValueOnce({ payload: { content: [], isError: true } });
+    respond({ content: [], isError: true });
+    respond({ content: [], isError: true });
 
-    const nodeTools = createNodePluginTools({});
+    const nodeTools = materializeNodeTools({});
     const tool = expectDefined(nodeTools[0], "node MCP tool");
     const result = await tool.execute("empty-error", {});
 
     expect(result.content).toEqual([
       { type: "text", text: "MCP tool failed without returning content." },
     ]);
+    expect(result.details).toEqual({ mcpServer: "docs", mcpTool: "fail", status: "error" });
     expect(isToolResultError(result)).toBe(true);
 
     const { codeModeTools } = createCodeModeHarness(nodeTools);
@@ -532,15 +507,11 @@ describe("createNodePluginTools", () => {
         { nodeId, displayName },
       );
     }
-    vi.mocked(callGatewayTool).mockResolvedValueOnce({
-      payload: {
-        content: malformedMcpContent(),
-      },
-    });
+    respond({ content: malformedMcpContent() });
 
     const { catalogRef, codeModeTools, ctx } = createCodeModeHarness([
       gatewayMcpTool("tickets"),
-      ...createNodePluginTools({}),
+      ...materializeNodeTools({}),
     ]);
     expect(buildCodeModeCatalogPrompt(ctx, catalogRef.current?.entries ?? [])).toContain(
       "visible servers: nodeATickets (node: Node A), nodeBDocs (node: Node B), nodeCDocs (node: Node C), tickets",
@@ -576,12 +547,12 @@ describe("createNodePluginTools", () => {
     );
   });
 
-  it.each(["NODE_B_*"])("honors policy for disambiguated names with %s", (allowedName) => {
+  it("honors policy for disambiguated names with NODE_B_*", () => {
     for (const nodeId of ["node-a", "node-b"]) {
       connectTool(remoteEcho, { nodeId });
     }
 
-    expect(toolNames({ toolAllowlist: [allowedName] })).toEqual(["node_b_remote_echo"]);
+    expect(toolNames({ toolAllowlist: ["NODE_B_*"] })).toEqual(["node_b_remote_echo"]);
     expect(toolNames({ toolDenylist: ["node_b_remote_echo"] })).toEqual(["node_a_remote_echo"]);
   });
 
@@ -601,28 +572,25 @@ describe("createNodePluginTools", () => {
     expect(toolNames()).toEqual(["node_a_remote_echo", "node_a_remote_echo_2"]);
   });
 
-  it.each([true])(
-    "does not use local runtime grants for node tools (registered: %s)",
-    (registered) => {
-      connectTool(
-        {
-          pluginId: "github",
-          name: "remote_repo_search",
-          description: "Search repos",
-          command: "remote.search",
-        },
-        { nodeId: "node-1", registered },
-      );
-      const toolAllowlist = appendRuntimePluginToolGrant([], {
+  it("does not use local runtime grants for registered node tools", () => {
+    connectTool(
+      {
         pluginId: "github",
-        toolNames: ["remote_repo_search"],
-      });
+        name: "remote_repo_search",
+        description: "Search repos",
+        command: "remote.search",
+      },
+      { nodeId: "node-1", registered: true },
+    );
+    const toolAllowlist = appendRuntimePluginToolGrant([], {
+      pluginId: "github",
+      toolNames: ["remote_repo_search"],
+    });
 
-      expect(createNodePluginTools({ toolAllowlist })).toEqual([]);
-      expect(createNodePluginTools({ toolAllowlist: ["git*"] })).toEqual([]);
-      expect(callGatewayTool).not.toHaveBeenCalled();
-    },
-  );
+    expect(materializeNodeTools({ toolAllowlist })).toEqual([]);
+    expect(materializeNodeTools({ toolAllowlist: ["git*"] })).toEqual([]);
+    expect(callGatewayTool).not.toHaveBeenCalled();
+  });
 
   it("trusts plugin-id allowlist entries only for registered tools and node-mcp", () => {
     const githubDescriptor: NodePluginToolDescriptor = {
@@ -633,7 +601,7 @@ describe("createNodePluginTools", () => {
     };
 
     connectTool(githubDescriptor);
-    expect(createNodePluginTools({ toolAllowlist: ["github"] })).toEqual([]);
+    expect(materializeNodeTools({ toolAllowlist: ["github"] })).toEqual([]);
 
     connectTool(githubDescriptor, { nodeId: "node-1", registered: true });
     expect(toolNames({ toolAllowlist: ["github"] })).toEqual(["remote_repo_search"]);
@@ -644,7 +612,7 @@ describe("createNodePluginTools", () => {
     connectTool(githubDescriptor);
     expect(toolNames({ toolAllowlist: ["remote_repo_search"] })).toEqual(["remote_repo_search"]);
     expect(
-      createNodePluginTools({
+      materializeNodeTools({
         toolAllowlist: ["remote_repo_search"],
         toolDenylist: ["github"],
       }),

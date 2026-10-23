@@ -80,6 +80,7 @@ export type SubagentCompletionDeliveryState = {
     | "sink_unavailable"
     | "steer_dropped"
     | "message_tool_delivery_missing"
+    | "visible_reply_missing"
     | "dedupe"
     | "waiting_for_requester_turn";
 };

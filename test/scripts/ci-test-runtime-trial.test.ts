@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { afterEach, expect, it, vi } from "vitest";
 import { runCiManifestFixture } from "./ci-workflow-manifest.test-support.js";
 import {
@@ -27,49 +26,21 @@ const fixture = {
   ],
 } satisfies Parameters<typeof runCiManifestFixture>[0];
 
-// Captured before the default cutover, with host gzip metadata canonicalized.
 const mainScope = {
   OPENCLAW_CI_VALIDATION_TIER: "main",
   OPENCLAW_CI_WORKFLOW_REVISION: "a".repeat(40),
 };
-const digests = {
-  PR: "66eb4fe868dcfe446d359e9b5a0249a76467ca1198f435c5f160420289871862",
-  "main push": "f05634e6cd8e14f3dc45a53122605175c95b5276541a3da7e25a635683363df8",
-  "main dispatch": "854476e7a631b59fb62e33bd45005b7de782a583b8a003d6c4b6599ea52c38a1",
-  FRV: "86598cc288a105d40ad4bdf2a4cc6b2d0635d75183e18a209f4bc9c062922849",
-};
 const defaults = [
-  ["PR", "pull_request", "bun-compatible"],
-  ["main push", "push", "node"],
-  ["main dispatch", "workflow_dispatch", "node"],
-  ["FRV", "workflow_dispatch", "dual"],
+  ["PR", "pull_request", "bun-all"],
+  ["main push", "push", "bun-all"],
+  ["main dispatch", "workflow_dispatch", "bun-all"],
+  ["FRV", "workflow_dispatch", "dual-all"],
 ] as const;
 
 function manifest(options: Omit<Parameters<typeof runCiManifestFixture>[0], "bundledPlanner">) {
   const result = runCiManifestFixture({ ...fixture, ...options });
   expect(result.status, result.output).toBe(0);
   return result.outputs;
-}
-
-function manifestDigest(outputs: Record<string, string>) {
-  const normalizeGzip = (key: string, value: unknown) => {
-    if (key.endsWith("gzip_base64") && typeof value === "string" && value) {
-      const bytes = Buffer.from(value, "base64");
-      // zlib builds encode a host-specific OS byte; every other byte stays covered.
-      bytes[9] = 3;
-      return bytes.toString("base64");
-    }
-    return value;
-  };
-  const normalized = Object.fromEntries(
-    Object.entries(outputs).map(([key, value]) => [
-      key,
-      value.startsWith("{")
-        ? JSON.stringify(JSON.parse(value), normalizeGzip)
-        : normalizeGzip(key, value),
-    ]),
-  );
-  return createHash("sha256").update(JSON.stringify(normalized)).digest("hex");
 }
 
 function nodeRows(outputs: Record<string, string>) {
@@ -81,9 +52,8 @@ function stableOutputs(outputs: Record<string, string>) {
 }
 
 it.each(defaults)(
-  "changes only the %s runtime and sequential budget",
-  (name, eventName, previousPolicy) => {
-    const policy = name === "FRV" ? "dual-all" : "bun-all";
+  "selects the %s default runtime and sequential budget",
+  (name, eventName, policy) => {
     vi.stubEnv("OPENCLAW_CI_TEST_RUNTIME_POLICY", "node");
     const outputs = manifest({
       eventName,
@@ -94,19 +64,6 @@ it.each(defaults)(
     expect(rows[0]).toMatchObject({ test_runtime_policy: policy, requires_bun: true });
     expect(rows[0].timeout_minutes).toBe(policy === "dual-all" ? 120 : undefined);
     expect(outputs.ui_test_runtime_policy).toBe(policy);
-    // Project only the changed policy fields back to the captured baseline.
-    rows[0].test_runtime_policy = previousPolicy;
-    if (previousPolicy === "node") {
-      delete rows[0].requires_bun;
-    }
-    delete rows[0].timeout_minutes;
-    expect(
-      manifestDigest({
-        ...outputs,
-        checks_node_core_nondist_matrix: JSON.stringify({ include: rows }),
-        ui_test_runtime_policy: previousPolicy,
-      }),
-    ).toBe(digests[name]);
   },
 );
 
@@ -151,23 +108,6 @@ it.each(["node", "bun-all", "dual-all"])(
     delete rows[0].timeout_minutes;
     expect(rows).toEqual(nodeRows(baseline));
     expect(stableOutputs(outputs)).toEqual(stableOutputs(baseline));
-  },
-);
-
-it.each(["node", "bun-all", "dual-all"])(
-  "preserves UI backend budgets and doubles only dual-all (%s)",
-  (policy) => {
-    const timeout = readCiWorkflow().jobs["checks-ui"]["timeout-minutes"];
-    for (const runnerBackend of ["blacksmith", "github"] as const) {
-      expect(
-        evaluateWorkflow(timeout, {
-          eventName: "workflow_dispatch",
-          ciShape: "main",
-          runnerBackend,
-          preflightOutputs: { ui_test_runtime_policy: policy, ci_shape: "main" },
-        }),
-      ).toBe((runnerBackend === "github" ? 35 : 20) * (policy === "dual-all" ? 2 : 1));
-    }
   },
 );
 

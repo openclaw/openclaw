@@ -363,6 +363,38 @@ it.each([true, false])(
   },
 );
 
+it("reports retained update custody beside deferred Doctor maintenance", async () => {
+  const retained = {
+    nextAction: "Cancelled update custody still blocks the next update.",
+    retainedUpdateCustody: {
+      key: native.root,
+      owner: "original-owner",
+      leaseVersion: 4,
+      lastActivityAt: "2026-10-17T01:52:32.724Z",
+      reason: "Synthetic retained custody",
+    },
+  };
+
+  await expect(
+    updateFinalizeCommand(
+      { json: true, yes: true, deferCompletionCache: true },
+      [],
+      undefined,
+      retained,
+    ),
+  ).rejects.toEqual(new ExitError(2));
+
+  expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      status: "warning",
+      nextAction: expect.stringMatching(
+        /gateway stop --force.*update repair.*Cancelled update custody still blocks/u,
+      ),
+      retainedUpdateCustody: retained.retainedUpdateCustody,
+    }),
+  );
+});
+
 it.each(["coordinator-contention", "admission-unavailable"] as const)(
   "keeps deferred finalization successful for an inherited update driver (%s)",
   async (reason) => {
@@ -383,6 +415,7 @@ it.each(["coordinator-contention", "admission-unavailable"] as const)(
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
       expect.objectContaining({
         status: "warning",
+        coreUpdate: "pending",
         nextAction: expect.stringContaining("openclaw update repair"),
         postUpdate: { doctor: { status: "warning", warnings: expect.any(Array) } },
       }),

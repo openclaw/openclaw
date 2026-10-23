@@ -572,7 +572,6 @@ ${imageTypographyCss}
     title,
     fileCount: sections.length,
     inputKind: input.kind,
-    viewerRuntime,
   };
 }
 

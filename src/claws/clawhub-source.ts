@@ -4,7 +4,11 @@ import { flattenMarkdownToPlainText } from "@openclaw/normalization-core/markdow
 import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
 import { stripFrontmatterBlock } from "../../packages/markdown-core/src/frontmatter.js";
 import { downloadClawHubPackageArchive } from "../infra/clawhub-artifacts.js";
-import { resolveClawHubBaseUrl, type ClawHubFetchOptions } from "../infra/clawhub-client.js";
+import {
+  resolveClawHubBaseUrl,
+  resolveClawHubImageUrl,
+  type ClawHubFetchOptions,
+} from "../infra/clawhub-client.js";
 import { checkClawHubPackageTrust } from "../infra/clawhub-install-trust.js";
 import { normalizeClawHubSha256Hex } from "../infra/clawhub-integrity.js";
 import {
@@ -47,6 +51,7 @@ export type ClawHubClawCatalogEntry = {
   packageName: string;
   displayName: string;
   summary?: string;
+  iconUrl?: string;
   latestVersion?: string;
   channel: "official" | "community";
   official: boolean;
@@ -151,11 +156,16 @@ function requireExactVersion(version: string): void {
   }
 }
 
-function projectCatalogEntry(pkg: OwnedClawPackage): ClawHubClawCatalogEntry {
+function projectCatalogEntry(pkg: OwnedClawPackage, baseUrl?: string): ClawHubClawCatalogEntry {
+  const iconUrl = resolveClawHubImageUrl(
+    typeof pkg.icon === "string" ? pkg.icon : undefined,
+    baseUrl,
+  );
   const downloads = pkg.stats?.downloads;
   const installs = pkg.stats?.installs;
   return {
     packageName: pkg.name,
+    ...(iconUrl ? { iconUrl } : {}),
     displayName: pkg.displayName,
     ...(pkg.summary ? { summary: pkg.summary } : {}),
     ...(pkg.latestVersion ? { latestVersion: pkg.latestVersion } : {}),
@@ -170,8 +180,8 @@ function projectCatalogEntry(pkg: OwnedClawPackage): ClawHubClawCatalogEntry {
   };
 }
 
-function projectPublicEntries(packages: unknown[]): ClawHubClawCatalogEntry[] {
-  return packages.filter(isPublicClawListItem).map(projectCatalogEntry);
+function projectPublicEntries(packages: unknown[], baseUrl?: string): ClawHubClawCatalogEntry[] {
+  return packages.filter(isPublicClawListItem).map((pkg) => projectCatalogEntry(pkg, baseUrl));
 }
 
 function rankByInstalls(left: ClawHubClawCatalogEntry, right: ClawHubClawCatalogEntry): number {
@@ -267,7 +277,7 @@ export async function listClawHubClaws(
       ),
       ...(cursor ? { cursor } : {}),
     });
-    for (const entry of projectPublicEntries(result.items)) {
+    for (const entry of projectPublicEntries(result.items, params.baseUrl)) {
       entries.set(entry.packageName, entry);
       if (requestedLimit && entries.size >= requestedLimit) {
         return finish();
@@ -305,7 +315,10 @@ export async function searchClawHubClaws(
     category: params.category,
     limit: params.limit ?? CATALOG_PAGE_SIZE,
   });
-  const entries = projectPublicEntries(results.map((result) => result.package));
+  const entries = projectPublicEntries(
+    results.map((result) => result.package),
+    params.baseUrl,
+  );
   return params.category ? entries.toSorted(rankByInstalls) : entries;
 }
 
@@ -340,7 +353,7 @@ export async function readClawHubClawDetail(
     version,
   });
   return {
-    ...projectCatalogEntry(pkg),
+    ...projectCatalogEntry({ ...pkg, icon: release.version.icon }, params.baseUrl),
     version,
     ...(summary.name ? { agentName: summary.name } : {}),
     ...(summary.description ? { agentDescription: summary.description } : {}),

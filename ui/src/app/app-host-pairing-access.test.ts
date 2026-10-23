@@ -2,21 +2,21 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "@solidjs/web";
-import { createComponent, onSettled } from "solid-js";
+import { createComponent, createMemo, onSettled, Show } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../api/gateway.ts";
 import { visibleSettingsNavigationGroups } from "../app-navigation.ts";
 import { createApplicationRouter } from "../app-routes.ts";
 import type { AppSidebarElement } from "../components/app-sidebar.tsx";
+import * as settingsSidebar from "../components/settings-sidebar-shell.tsx";
 import { createStoredChatOutboxReader } from "../lib/chat/outbox-store-projection.ts";
 import { captureChatOutboxAdmission } from "../lib/chat/outbox-store.ts";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
 import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
-import {
-  admitStoredChatComposerQueueItem,
-  persistChatComposerState,
-} from "../pages/chat/composer-persistence.ts";
+import { persistChatComposerState } from "../pages/chat/composer-draft-storage.ts";
+import { admitStoredChatComposerQueueItemResult } from "../pages/chat/composer-queue-persistence.ts";
+import * as pairingView from "../pages/devices/view-pairing.tsx";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import {
   createContext,
@@ -40,10 +40,7 @@ import {
   refreshShellView,
 } from "./app-host-solid.test-support.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "./context.ts";
-import { createLazyRenderer } from "./lazy-renderer.ts";
 import { ShellLayoutBoundary } from "./shell-layout-traits-solid.tsx";
-
-type PairingSidebar = AppSidebarElement;
 
 type PairingAuth = { role: string; scopes?: string[] };
 const operator = (...scopes: string[]): PairingAuth => ({ role: "operator", scopes });
@@ -61,12 +58,21 @@ function outboxes(sessionKey: string, total: number, draft: boolean) {
   };
 }
 
-function deferredRenderer<Renderer>(shell: object, property: string) {
-  const loading = createDeferred<Renderer>();
-  const retrying = createDeferred<Renderer>();
+function deferredRenderer() {
+  const loading = createDeferred();
+  const retrying = createDeferred();
   const load = vi.fn(() => retrying.promise).mockImplementationOnce(() => loading.promise);
-  Object.defineProperty(shell, property, { value: createLazyRenderer(load) });
-  return { loading, retrying, load };
+  const view = () => {
+    const ready = createMemo(load);
+    return createComponent(Show, {
+      get when() {
+        ready();
+        return true;
+      },
+      children: (_ready) => document.createTextNode("Lazy view ready"),
+    });
+  };
+  return { loading, retrying, load, view };
 }
 
 setupSidebarTest();
@@ -181,7 +187,7 @@ function createPairingShell(params: {
   const renderSidebar = async () => {
     await refresh();
     return expectDefined(
-      container.querySelector<PairingSidebar>("openclaw-app-sidebar"),
+      container.querySelector<AppSidebarElement>("openclaw-app-sidebar"),
       "shell sidebar",
     );
   };
@@ -237,13 +243,17 @@ describe("application shell pairing access", () => {
     };
     expect(persistChatComposerState(host)).toBe(true);
     expect(
-      admitStoredChatComposerQueueItem(host, captureChatOutboxAdmission(host, host.sessionKey), {
-        id: "failed",
-        text: "private queued input",
-        createdAt: 1,
-        sendState: "failed",
-      }),
-    ).toBe(true);
+      admitStoredChatComposerQueueItemResult(
+        host,
+        captureChatOutboxAdmission(host, host.sessionKey),
+        {
+          id: "failed",
+          text: "private queued input",
+          createdAt: 1,
+          sendState: "failed",
+        },
+      ),
+    ).toBe("admitted");
     shell.outboxStoreRuntime = createStoredChatOutboxReader();
     const first = (await renderSidebar()).storedOutboxes!;
     expect(first.total).toBe(1);
@@ -376,7 +386,9 @@ describe("application shell pairing access", () => {
     replacement.context.navigation.update = update;
     replacement.context.overlays.subscribe = vi.fn(() => stopOverlays);
     shell.runtime = { ...shell.runtime!, context: replacement.context };
-    const openNewSession = vi.spyOn(shell, "openNewSession").mockImplementation(() => undefined);
+    const openNewSession = vi
+      .spyOn(shell.shellNavigation, "openNewSession")
+      .mockImplementation(() => undefined);
 
     onPairMobile?.();
     onRetryConnect?.();
@@ -419,7 +431,7 @@ describe("application shell pairing access", () => {
     document.body.append(shell.element, shell.navigationSidebar);
     shell.connect();
     try {
-      await settleLitElements([shell.navigationSidebar as PairingSidebar]);
+      await settleLitElements([shell.navigationSidebar as AppSidebarElement]);
       const update = vi.spyOn(shell, "invalidate");
 
       publish?.();
@@ -468,13 +480,15 @@ describe("application shell pairing access", () => {
     ["settings", true],
   ] as const)("keeps lazy %s visible (failed: %s)", async (surface, failed) => {
     const settings = surface === "settings";
-    const { shell, container, refresh, renderSidebar } = createPairingShell({
+    const { shell, container, overlaySnapshot, refresh, renderSidebar } = createPairingShell({
       auth: settings ? { role: "operator" } : admin,
       setupCode: settings ? undefined : "pair-mobile-secret",
     });
-    const property = settings ? "settingsSidebar" : "devicePairSetup";
-    type Renderer = NonNullable<ReturnType<(typeof shell)[typeof property]["renderer"]>>;
-    const { loading, retrying, load } = deferredRenderer<Renderer>(shell, property);
+    const { loading, retrying, load, view } = deferredRenderer();
+    const renderer = settings
+      ? vi.spyOn(settingsSidebar, "ShellSettingsSidebar").mockImplementation(view)
+      : vi.spyOn(pairingView, "DevicePairSetup").mockImplementation(view);
+    onTestFinished(() => renderer.mockRestore());
     if (settings) {
       shell.routeState = {
         routeId: "profile",
@@ -482,61 +496,60 @@ describe("application shell pairing access", () => {
       };
       await refresh();
     } else {
+      overlaySnapshot.devicePairSetupOpen = false;
       await renderSidebar();
+      await vi.dynamicImportSettled();
+      expect(load).not.toHaveBeenCalled();
+      overlaySnapshot.devicePairSetupOpen = true;
+      await refresh();
     }
+    await waitForSolid(() => expect(load).toHaveBeenCalledOnce());
     const message = settings
       ? "Settings navigation could not load."
       : "Could not load the pairing dialog";
+    const target = () =>
+      container.querySelector<HTMLElement>(settings ? ".settings-sidebar" : ".device-pair-setup");
+    expect(target()?.getAttribute("aria-busy")).toBe("true");
+    if (settings) {
+      const skeleton = target()?.querySelector<HTMLElement>(
+        '.settings-sidebar__loading[role="status"][aria-busy="true"]',
+      );
+      expect(skeleton?.getAttribute("aria-label")).toBe("Loading…");
+      const expectedItems = visibleSettingsNavigationGroups(true).reduce(
+        (count, group) => count + group.routes.length,
+        0,
+      );
+      for (const selector of [
+        ".settings-sidebar__loading-item",
+        ".settings-sidebar__loading-item .settings-sidebar__loading-icon",
+      ]) {
+        expect(skeleton?.querySelectorAll(selector)).toHaveLength(expectedItems);
+      }
+    } else {
+      expect(target()?.textContent).toContain("Loading…");
+    }
     if (failed) {
       loading.reject(new Error(`${surface} chunk unavailable`));
       await waitForSolid(() => expect(container.textContent).toContain(message));
-    }
-    const target = container.querySelector<HTMLElement>(
-      settings ? ".settings-sidebar" : ".device-pair-setup",
-    );
-    if (failed) {
-      expect(target?.textContent).toContain(message);
+      expect(target()?.textContent).toContain(message);
       if (settings) {
-        expect(target?.getAttribute("aria-busy")).toBeNull();
+        expect(target()?.getAttribute("aria-busy")).toBeNull();
       }
       const actions = [
-        ...(target?.querySelectorAll<HTMLButtonElement>(
+        ...(target()?.querySelectorAll<HTMLButtonElement>(
           settings ? "button" : ".device-pair-setup__footer button",
         ) ?? []),
       ];
       if (!settings) {
-        expect(actions.map((button) => button.textContent?.trim())).toEqual(["Retry", "Close"]);
+        expect(actions.map((button) => button.textContent?.trim())).toEqual(["Close", "Retry"]);
       }
       actions.find((button) => button.textContent?.trim() === "Retry")?.click();
-      await waitForSolid(() => expect(target?.getAttribute("aria-busy")).toBe("true"));
-    } else {
-      expect(target?.getAttribute("aria-busy")).toBe("true");
-      if (settings) {
-        const skeleton = target?.querySelector<HTMLElement>(
-          '.settings-sidebar__loading[role="status"][aria-busy="true"]',
-        );
-        expect(skeleton?.getAttribute("aria-label")).toBe("Loading…");
-        const expectedItems = visibleSettingsNavigationGroups(true).reduce(
-          (count, group) => count + group.routes.length,
-          0,
-        );
-        for (const selector of [
-          ".settings-sidebar__loading-item",
-          ".settings-sidebar__loading-item .settings-sidebar__loading-icon",
-        ]) {
-          expect(skeleton?.querySelectorAll(selector)).toHaveLength(expectedItems);
-        }
-      } else {
-        expect(target?.textContent).toContain("Loading…");
-        expect(load).toHaveBeenCalledOnce();
-      }
+      await waitForSolid(() => expect(target()?.getAttribute("aria-busy")).toBe("true"));
     }
-    if (settings) {
-      expect(load).toHaveBeenCalledTimes(failed ? 2 : 1);
-      (failed ? retrying : loading).resolve(() => document.createTextNode("Settings ready"));
-      await waitForSolid(() => expect(container.textContent).toContain("Settings ready"));
-      expect(container.querySelector(".settings-sidebar__loading")).toBeNull();
-    }
+    expect(load).toHaveBeenCalledTimes(failed ? 2 : 1);
+    (failed ? retrying : loading).resolve();
+    await waitForSolid(() => expect(container.textContent).toContain("Lazy view ready"));
+    expect(target()).toBeNull();
   });
 
   it("shows a visible accessible error when a mobile setup code cannot be copied", async () => {

@@ -509,7 +509,8 @@ describe("channels controller DM pairing", () => {
     await approval;
 
     expect(channels.state.pairingSnapshot?.requests).toEqual([]);
-    expect(channels.state.pairingError).toBe("refresh unavailable");
+    await expect(channels.state.pairingRead?.completion).resolves.toBe("refresh unavailable");
+    expect(channels.state.pairingError).toBeNull();
     channels.dispose();
   });
 
@@ -536,7 +537,10 @@ describe("channels controller DM pairing", () => {
     } as never);
 
     const staleRefresh = channels.refreshPairing();
-    await vi.waitFor(() => expect(listCount).toBe(1));
+    const staleReceipt = channels.state.pairingRead!;
+    await channels.refreshPairing();
+    expect(channels.state.pairingRead).toBe(staleReceipt);
+    expect(listCount).toBe(1);
     const approval = channels.approvePairing({
       channel: "whatsapp",
       accountId: "personal",
@@ -544,7 +548,9 @@ describe("channels controller DM pairing", () => {
       notify: false,
       bootstrapCommandOwner: false,
     });
+    await expect(staleReceipt.completion).resolves.toBeNull();
     await vi.waitFor(() => expect(listCount).toBe(2));
+    expect(channels.state.pairingRead).not.toBe(staleReceipt);
     freshList.resolve(emptyPairing);
     await approval;
 
@@ -554,6 +560,46 @@ describe("channels controller DM pairing", () => {
     expect(channels.state.pairingSnapshot?.requests).toEqual([]);
     channels.dispose();
   });
+
+  it.each(["disconnect", "authorization", "dispose"] as const)(
+    "settles a retired pairing read before its transport responds after %s",
+    async (change) => {
+      const pending = createDeferred<ChannelsPairingListResult>();
+      const request = vi.fn().mockReturnValue(pending.promise);
+      const client = { request };
+      let snapshot = {
+        client,
+        phase: "connected" as "connected" | "reconnecting",
+        hello: { auth: { role: "operator", scopes: ["operator.pairing"] } },
+      };
+      const { gateway, publish } = createChannelGatewayFixture(() => snapshot);
+      const channels = createChannelCapability(gateway);
+      const refresh = channels.refreshPairing();
+      const receipt = channels.state.pairingRead!;
+      let settled = false;
+      void receipt.completion.then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      if (change === "disconnect") {
+        snapshot = { ...snapshot, phase: "reconnecting" };
+        publish();
+      } else if (change === "authorization") {
+        snapshot = { ...snapshot, hello: { auth: { role: "operator", scopes: [] } } };
+        publish();
+      } else {
+        channels.dispose();
+      }
+      await expect(receipt.completion).resolves.toBeNull();
+      expect(channels.state.pairingLoading).toBe(false);
+      pending.resolve(pendingPairing);
+      await refresh;
+      expect(channels.state.pairingSnapshot).toBeNull();
+      channels.dispose();
+    },
+  );
 
   it("retains sender metadata on disconnect and clears it on pairing-scope changes", () => {
     const client = { request: vi.fn() };
@@ -691,6 +737,7 @@ describe("channel refresh sequencing", () => {
       }));
       const channels = createChannelCapability(gateway);
       const refresh = channels.refresh();
+      const initialRead = channels.state.channelsRead!;
 
       emitEvent("config.changed");
       emitEvent("config.changed");
@@ -700,12 +747,16 @@ describe("channel refresh sequencing", () => {
         probeTiming === "pending"
           ? channels.refresh(true)
           : pending.promise.then(() => channels.refresh(true));
+      expect(channels.state.channelsRead).toBe(initialRead);
       try {
         pending.resolve(createChannelsSnapshot("before save"));
         await refresh;
 
         expect(channels.state.channelsSnapshot).toBe(configured);
         expect(channels.state.channelsLoading).toBe(false);
+        expect(channels.state.channelsRead).not.toBe(initialRead);
+        await expect(initialRead.completion).resolves.toBeNull();
+        await expect(channels.state.channelsRead!.completion).resolves.toBeNull();
         expect(request).toHaveBeenCalledTimes(2);
         expect(request).toHaveBeenLastCalledWith("channels.status", {
           probe: false,
@@ -733,6 +784,7 @@ describe("channel refresh sequencing", () => {
       const { gateway, publish, emitEvent } = createChannelGatewayFixture(() => snapshot);
       const channels = createChannelCapability(gateway);
       const refresh = channels.refresh();
+      const receipt = channels.state.channelsRead!;
       emitEvent("config.changed");
 
       if (transition === "reconnect") {
@@ -750,6 +802,8 @@ describe("channel refresh sequencing", () => {
         channels.dispose();
         emitEvent("config.changed");
       }
+      await expect(receipt.completion).resolves.toBeNull();
+      expect(channels.state.channelsRead).toBeNull();
       pending.resolve(createChannelsSnapshot("retired"));
       await refresh;
 
@@ -771,6 +825,7 @@ describe("channel refresh sequencing", () => {
 
     await channels.refresh();
     expect(channels.state.channelsError).toBe("status unavailable");
+    await expect(channels.state.channelsRead!.completion).resolves.toBe("status unavailable");
 
     snapshot = { client, phase: "reconnecting" };
     publish();
@@ -780,6 +835,7 @@ describe("channel refresh sequencing", () => {
     expect(channels.state.channelsError).toBeNull();
     await channels.refresh();
     expect(channels.state.channelsSnapshot?.channelLabels.test).toBe("recovered");
+    await expect(channels.state.channelsRead!.completion).resolves.toBeNull();
     channels.dispose();
   });
 
@@ -833,11 +889,18 @@ describe("channel refresh sequencing", () => {
     });
 
     const probeLoad = channels.refresh(true);
+    const probeReceipt = channels.state.channelsRead!;
+    await channels.refresh(true);
+    expect(channels.state.channelsRead).toBe(probeReceipt);
     emitEvent("config.changed");
     expect(request).toHaveBeenCalledTimes(2);
+    const runtimeReceipt = channels.state.channelsRead!;
+    expect(runtimeReceipt).not.toBe(probeReceipt);
+    await expect(probeReceipt.completion).resolves.toBeNull();
 
     fastRuntime.resolve(fresh);
     await runtimeLoaded.promise;
+    await expect(runtimeReceipt.completion).resolves.toBeNull();
     slowProbe.resolve(createChannelsSnapshot("stale"));
     await probeLoad;
 

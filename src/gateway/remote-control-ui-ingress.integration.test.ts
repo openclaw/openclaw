@@ -23,6 +23,7 @@ import {
   mergeCanonicalUserProfiles,
   setCanonicalUserProfileAvatar,
 } from "../state/user-profile-writes.js";
+import { withEnv } from "../test-utils/env.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -225,7 +226,10 @@ describe("remote Control UI ingress production composition", () => {
     );
     Object.assign(requestContext, { resolveGatewayContext: () => requestContext });
     gatewayContext = requestContext as never;
-    const preauthConnectionBudget = createPreauthConnectionBudget(8);
+    const preauthConnectionBudget = withEnv(
+      { OPENCLAW_MAX_PREAUTH_CONNECTIONS_PER_IP: "8" },
+      createPreauthConnectionBudget,
+    );
     attachGatewayWsConnectionHandler({
       wss,
       clients,
@@ -637,13 +641,13 @@ describe("remote Control UI ingress production composition", () => {
           );
         }
         await expectStatus(readRemote(`/claw/api/users/${person.id}/avatar`, ui), 200);
-        await expectStatus(
-          readRemote(
-            `/claw/__openclaw__/workspace-icon/${encodeURIComponent(`agent:main:ingress-${person.id}`)}`,
-            ui,
-          ),
-          isAdmin ? 200 : 403,
-        );
+        // Session byte routes follow session visibility: each person reads the icon of the
+        // draft they created, the reader role (sessions.others: none) cannot see the admin's
+        // draft, and admin scope stays unfiltered.
+        const iconPath = (owner: { id: string }) =>
+          `/claw/__openclaw__/workspace-icon/${encodeURIComponent(`agent:main:ingress-${owner.id}`)}`;
+        await expectStatus(readRemote(iconPath(person), ui), 200);
+        await expectStatus(readRemote(iconPath(isAdmin ? reader : admin), ui), isAdmin ? 200 : 403);
       } finally {
         await binding.close();
       }

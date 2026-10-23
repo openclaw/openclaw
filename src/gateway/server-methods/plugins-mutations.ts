@@ -10,6 +10,7 @@ import type {
   PluginsUninstallResult,
 } from "../../../packages/gateway-protocol/src/schema/plugins.js";
 import { withInstallActivity } from "../../infra/install-progress.js";
+import { pluginCatalogId } from "../../plugins/catalog-discovery.js";
 import { pluginInstallRequiresLocalHost } from "../../plugins/install-source-plan.js";
 import type { PluginRuntimeApplication } from "../../plugins/lifecycle.js";
 import { ManagedPluginLifecycleError } from "../../plugins/management-lifecycle-error.js";
@@ -123,7 +124,8 @@ function lifecycleHandler<T>(
           ok: true,
           restartRequired,
           runtime,
-          ...(plugin ? { plugin } : {}),
+          // Clients merge this row into plugins.list inventory; keep its catalog join.
+          ...(plugin ? { plugin: { ...plugin, catalogId: pluginCatalogId(plugin) } } : {}),
           ...(pluginId ? { pluginId } : {}),
           ...(pluginIds ? { pluginIds } : {}),
           ...(removed ? { removed } : {}),

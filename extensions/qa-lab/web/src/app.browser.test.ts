@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createBootstrap,
   httpMock,
+  mountCapture,
   mountRunner,
   setupAppBrowserTests,
 } from "./app.browser.test-support.js";
@@ -135,22 +136,7 @@ describe("QA Lab runner browser interactions", () => {
     "shows $endpoint failures without discarding capture selection",
     async ({ selector, endpoint, body }) => {
       const root = await mountRunner(createRunnerSelection());
-      const getJson = httpMock.getJson.getMockImplementation()!;
-      httpMock.getJson.mockImplementation(async (url: string) => {
-        if (url === "/api/capture/sessions") {
-          return { sessions: [{ id: "capture-1", startedAt: 0, mode: "proxy", eventCount: 0 }] };
-        }
-        if (url.startsWith("/api/capture/events?")) {
-          return { events: [] };
-        }
-        if (url.startsWith("/api/capture/coverage?")) {
-          return { coverage: null };
-        }
-        return getJson(url);
-      });
-      await vi.advanceTimersByTimeAsync(1_000);
-      root.querySelector<HTMLButtonElement>('[data-tab="capture"]')!.click();
-      root.querySelector<HTMLButtonElement>("#capture-controls-toggle")!.click();
+      await mountCapture(root);
       const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
       httpMock.postJson.mockRejectedValueOnce(new Error("Capture deletion failed"));
       const readsBefore = httpMock.getJson.mock.calls.length;
@@ -184,34 +170,18 @@ describe("QA Lab runner browser interactions", () => {
     "keeps the complete sparkline drag window across renders (shift=$shiftKey)",
     async ({ shiftKey, expectedIds }) => {
       const root = await mountRunner(createRunnerSelection());
-      const getJson = httpMock.getJson.getMockImplementation()!;
-      httpMock.getJson.mockImplementation(async (url: string) => {
-        if (url === "/api/capture/sessions") {
-          return {
-            sessions: [{ id: "capture-1", startedAt: 0, mode: "proxy", eventCount: 4 }],
-          };
-        }
-        if (url.startsWith("/api/capture/events?")) {
-          return {
-            events: [0, 600, 1200, 1800].map((ts, index) => ({
-              id: index + 1,
-              ts,
-              kind: "request",
-              host: "example.test",
-              flowId: `flow-${index + 1}`,
-              direction: "outbound",
-              protocol: "https",
-            })),
-          };
-        }
-        if (url.startsWith("/api/capture/coverage?")) {
-          return { coverage: null };
-        }
-        return getJson(url);
-      });
-      await vi.advanceTimersByTimeAsync(1_000);
-      root.querySelector<HTMLButtonElement>('[data-tab="capture"]')!.click();
-      root.querySelector<HTMLButtonElement>("#capture-controls-toggle")!.click();
+      await mountCapture(
+        root,
+        [0, 600, 1200, 1800].map((ts, index) => ({
+          id: index + 1,
+          ts,
+          kind: "request",
+          host: "example.test",
+          flowId: `flow-${index + 1}`,
+          direction: "outbound",
+          protocol: "https",
+        })),
+      );
       selectValue(root, "#capture-view-mode", "timeline");
 
       const bins = () =>
@@ -555,7 +525,7 @@ describe("QA Lab runner browser interactions", () => {
   it("renders server-resolved exclusions and errors from a rejected launch", async () => {
     const root = await mountRunner(createRunnerSelection());
     httpMock.postJson.mockRejectedValueOnce(
-      new httpMock.QaLabHttpError("selection rejected", 400, {
+      new httpMock.QaLabHttpError("selection rejected", {
         plan: {
           errors: ["Explicit QA scenario selection is not runnable."],
           exclusions: [

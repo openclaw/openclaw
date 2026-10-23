@@ -632,7 +632,6 @@ describe("startGatewayPostAttachRuntime", () => {
     );
     expect(log.info).toHaveBeenCalledWith("gateway ready");
     expect(hoisted.scheduleRestartAbortedMainSessionRecovery).toHaveBeenCalledWith({
-      delayMs: 0,
       getConfig: expect.any(Function),
       shouldContinue: expect.any(Function),
       startupCheckedStorePaths: expect.any(Set),
@@ -3148,7 +3147,7 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
     minimalTestGateway: false,
     cfgAtStart: { hooks: { internal: { enabled: false } } } as never,
     getConfig: () => ({ hooks: { internal: { enabled: false } } }) as never,
-    getReadiness: () => ({ ready: true, failing: [], uptimeMs: 0 }),
+    getReadiness: () => ({ ready: true, coreReady: true, failing: [], uptimeMs: 0 }),
     port: 18789,
     log: { info: vi.fn(), warn: vi.fn() },
     isNixMode: false,

@@ -398,7 +398,7 @@ it("accepts editor bytes and Git-normalized publication before acknowledging the
   writeFile(".gitattributes", "changed.txt text eol=lf\n");
   await files.ok("set", edit("saved\r\n"), accepted.context);
   await withSessionRepositoryCheckpoint(
-    { store, workspaceId: source.workspaceId, includePublication: true },
+    { store, workspaceId: source.workspaceId },
     async ({ stagingRoot, publicationDigest, publicationStagingRoot }) => {
       expect(fs.readFileSync(path.join(stagingRoot, "changed.txt"), "utf8")).toBe("saved\r\n");
       expect(publicationDigest).toBeDefined();

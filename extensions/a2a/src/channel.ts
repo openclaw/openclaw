@@ -204,25 +204,22 @@ export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = create
           if (account.enabled === false || typeof accountId !== "string" || !accountId) {
             continue;
           }
+          const addIssue = (message: string, fix: string) =>
+            issues.push({ channel: "a2a", accountId, kind: "config", message, fix });
+
           const inbound = filterStringEntries(account.unresolvedPeers).filter(Boolean);
           if (inbound.length > 0) {
-            issues.push({
-              channel: "a2a",
-              accountId,
-              kind: "config",
-              message: `A2A peer${inbound.length === 1 ? "" : "s"} ${inbound.join(", ")} cannot authenticate: the inbound token reference did not resolve, so requests from ${inbound.length === 1 ? "it are" : "them are"} rejected with 401.`,
-              fix: `Set the environment variable referenced by channels.a2a.peers.<name>.token for ${inbound.join(", ")}, then reload or restart the gateway.`,
-            });
+            addIssue(
+              `A2A peer${inbound.length === 1 ? "" : "s"} ${inbound.join(", ")} cannot authenticate: the inbound token reference did not resolve, so requests from ${inbound.length === 1 ? "it are" : "them are"} rejected with 401.`,
+              `Set the environment variable referenced by channels.a2a.peers.<name>.token for ${inbound.join(", ")}, then reload or restart the gateway.`,
+            );
           }
           const outbound = filterStringEntries(account.unresolvedOutboundPeers).filter(Boolean);
           if (outbound.length > 0) {
-            issues.push({
-              channel: "a2a",
-              accountId,
-              kind: "config",
-              message: `Sends to A2A peer${outbound.length === 1 ? "" : "s"} ${outbound.join(", ")} are refused: the outbound token reference did not resolve.`,
-              fix: `Set the environment variable referenced by channels.a2a.peers.<name>.outboundToken for ${outbound.join(", ")}, then reload or restart the gateway.`,
-            });
+            addIssue(
+              `Sends to A2A peer${outbound.length === 1 ? "" : "s"} ${outbound.join(", ")} are refused: the outbound token reference did not resolve.`,
+              `Set the environment variable referenced by channels.a2a.peers.<name>.outboundToken for ${outbound.join(", ")}, then reload or restart the gateway.`,
+            );
           }
         }
         return issues;
@@ -417,7 +414,6 @@ export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = create
                       account,
                       config,
                       channelRuntime,
-                      buildContext: channelRuntime.inbound.buildContext,
                       store,
                       taskId: task.id,
                       contextId: task.contextId,
@@ -428,13 +424,11 @@ export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = create
                   }).catch((error: unknown) => store.fail(task.id, error));
                 }
 
-                if (send.data.configuration?.returnImmediately) {
-                  result = { task: store.get(task.id, peerName) ?? task };
-                } else {
+                if (!send.data.configuration?.returnImmediately) {
                   const timeoutMs = a2aConfig.replyTimeoutMs ?? DEFAULT_REPLY_TIMEOUT_MS;
-                  const settled = await store.wait(task.id, timeoutMs);
-                  result = { task: settled ?? store.get(task.id, peerName) ?? task };
+                  await store.wait(task, timeoutMs);
                 }
+                result = { task };
               } else {
                 const taskParams = A2aTaskRequestParamsSchema.safeParse(request.params);
                 if (!taskParams.success) {

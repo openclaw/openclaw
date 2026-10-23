@@ -326,6 +326,31 @@ authentication.
     Changing these values affects embedding cache identity for provider batch indexing and should be followed by a memory reindex when the upstream model treats the labels differently.
 
   </Accordion>
+  <Accordion title="OpenAI-compatible output dimensions">
+    Providers that use the OpenAI-compatible embeddings transport (`openai-compatible`, `omlx`, and custom `models.providers` entries with an OpenAI-compatible API) receive `outputDimensionality` as the `dimensions` request field. Set it only when the server supports that field for the configured model, for example a Matryoshka embedding model served by a runtime that shortens vectors server-side.
+
+    | Key                    | Type     | Default       | Description                                    |
+    | ---------------------- | -------- | ------------- | ---------------------------------------------- |
+    | `outputDimensionality` | `number` | model default | Requested vector size, sent as `dimensions`    |
+
+    ```json5
+    {
+      memory: {
+        search: {
+          provider: "openai-compatible",
+          remote: { baseUrl: "http://127.0.0.1:8000/v1" },
+          model: "local-embedder",
+          outputDimensionality: 512,
+        },
+      },
+    }
+    ```
+
+    OpenClaw checks every returned vector against the requested size. When an endpoint returns a different size, the request fails with `expected <requested> dimensions, got <returned>` instead of storing those vectors under the requested size. The failure is not retried or split into smaller batches. Some servers ignore `dimensions` and always return the model's native size; for those, remove `outputDimensionality` or use a runtime that honors it. The managed `local` provider instead truncates the native vector to the requested size and L2-normalizes it locally. Use a model that supports this projection; requesting more dimensions than the model returns fails.
+
+    `outputDimensionality` is part of the index identity. After changing or removing it, rebuild with `openclaw memory index --force --agent <id>`. Also rebuild existing managed-local indexes if they were created with `outputDimensionality` but still contain native-size vectors.
+
+  </Accordion>
   <Accordion title="Bedrock">
     ### Bedrock embedding config
 

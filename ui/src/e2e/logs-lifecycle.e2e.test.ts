@@ -10,6 +10,7 @@ import {
 } from "../../../src/test-utils/openclaw-test-state.ts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -147,8 +148,14 @@ suite.define(() => {
             let latestSocket: WebSocket | undefined;
             page.on("websocket", (socket) => (latestSocket = socket));
             page.on("pageerror", (error) => pageErrors.push(String(error)));
+            const nextPoll = async () => {
+              await pauseVirtualClock(page);
+              await page.clock.runFor(2_001);
+              await page.clock.resume();
+            };
             const url = new URL("logs", suite.server.baseUrl);
             url.searchParams.set("gatewayUrl", `ws://127.0.0.1:${port}`);
+            await page.clock.install();
             await page.goto(url.toString());
             const confirmation = page.locator("openclaw-gateway-url-confirmation");
             await confirmation.waitFor();
@@ -159,6 +166,7 @@ suite.define(() => {
             await expectMessages(page, ["source A only"]);
 
             useLog(sourceB);
+            await nextPoll();
             await expect
               .poll(() => page.locator(".logs-card .settings-row").first().textContent())
               .toContain(sourceB);
@@ -176,10 +184,12 @@ suite.define(() => {
             await expectMessages(page, ["source B tail"]);
             await page.locator("label.log-chip.info input").check();
             await appendFile(sourceB, `${lineBAppended}\n`, "utf8");
+            await nextPoll();
             const appended = [messageBPrefix, "source B tail", "source B appended"];
             await expectMessages(page, appended);
 
             useLog(readFailure);
+            await nextPoll();
             const error = page.locator(".logs-refresh-status[role=alert]");
             await expect.poll(() => error.isVisible()).toBe(true);
             await expect.poll(() => error.textContent()).toContain("log read failed");
@@ -187,6 +197,7 @@ suite.define(() => {
             await expectMessages(page, appended);
 
             useLog(sourceB);
+            await nextPoll();
             await expect.poll(() => error.count()).toBe(0);
             await expect.poll(() => visibleMessages(page)).toHaveLength(3);
 
@@ -215,6 +226,7 @@ suite.define(() => {
               .locator(".sidebar-shell__footer .gateway-status")
               .waitFor({ state: "detached" });
             await appendFile(sourceB, `${lineBAfterReconnect}\n`, "utf8");
+            await nextPoll();
             await expectMessages(page, [
               messageBRestartPrefix,
               "source B restart tail",
@@ -241,9 +253,11 @@ suite.define(() => {
               },
             });
             await unlink(sourceB);
+            await nextPoll();
             await missingTail;
             const replacement = logLine("source B replacement", "info", 8);
             await writeLog(sourceB, replacement);
+            await nextPoll();
             await page.getByText("source B replacement", { exact: true }).waitFor();
             expect.soft(await visibleMessages(page)).toEqual(["source B replacement"]);
             const { contents: replacementExport } = await downloadLog(page, "Export visible");

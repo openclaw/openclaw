@@ -2,6 +2,12 @@ import { Command } from "commander";
 import { createPluginStateSyncKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { beforeEach, expect, it, vi } from "vitest";
 import { crabboxState, openWarmImageStore } from "./crabbox-state.test-support.js";
+import {
+  captureOperation,
+  expectText,
+  warmImage,
+  warmRecord,
+} from "./crabbox-warm-scenarios.test-support.js";
 import { registerCrabboxWarmImageCommands } from "./crabbox-worker-warm-image-cli.js";
 import {
   assertCrabboxWarmImageMigrationReady,
@@ -23,25 +29,10 @@ beforeEach(() => {
 function pendingCapture(phase: "scrubbing" | "creating" | "uncertain" = "creating") {
   const now = Date.now();
   const record = {
-    version: 3,
-    allocations: {},
-    image: {
-      checkpointId: "chk_last_good",
-      kind: "native",
-      state: "available",
-      createdAtMs: now - 86_400_000,
-      preparationKey: null,
-      cacheKey: null,
-      purpose: null,
-      lastDemandAtMs: now,
-    },
-    operation: {
-      type: "capture",
-      id: SELECTOR,
-      startedAtMs: now - 1_200_000,
-      phase,
-    },
-  } satisfies WarmProfileRecord;
+    ...warmRecord(),
+    image: warmImage("chk_last_good", { createdAtMs: now - 86_400_000, lastDemandAtMs: now }),
+    operation: captureOperation(SELECTOR, { startedAtMs: now - 1_200_000, phase }),
+  };
   openWarmImageStore().register("profile", record);
   return record;
 }
@@ -57,27 +48,28 @@ const recover = (selector = SELECTOR, ...args: string[]) =>
   runCli("--recover", selector, "--acknowledge-provider-cleanup", ...args);
 
 it("prints cold-only guidance for unsupported capture without changing local state", async () => {
-  const record: WarmProfileRecord = {
-    version: 3,
-    allocations: {},
+  const record = warmRecord({
     captureUnsupported: {
       atMs: Date.now(),
       provider: "hetzner",
       message: "Native capture is unsupported by this coordinator.",
     },
-  };
+  });
   openWarmImageStore().register("profile", record);
 
   await runCli();
 
-  [
-    "Capture unsupported: Native capture is unsupported by this coordinator.",
-    "use an existing compatible snapshot when one is available",
-    "capture attempts are skipped until warmImages.refreshAfter",
-    "has elapsed since the refusal",
-    "settings.warmImage: false",
-  ].forEach((text) => expect(output).toContain(text));
-  expect(output).not.toContain("--recover");
+  expectText(
+    output,
+    [
+      "Capture unsupported: Native capture is unsupported by this coordinator.",
+      "use an existing compatible snapshot when one is available",
+      "capture attempts are skipped until warmImages.refreshAfter",
+      "has elapsed since the refusal",
+      "settings.warmImage: false",
+    ],
+    ["--recover"],
+  );
   expect(openWarmImageStore().lookup("profile")).toEqual(record);
 });
 
@@ -140,15 +132,12 @@ it.each(["scrubbing", "uncertain"] as const)(
     await runCli();
 
     if (phase === "uncertain") {
-      [
+      expectText(output, [
         `openclaw crabbox warm-images --recover ${SELECTOR} --acknowledge-provider-cleanup`,
         "Stop the owning Gateway and capture processes",
-      ].forEach((text) => expect(output).toContain(text));
+      ]);
     } else {
-      expect(output).toContain("may still be");
-      for (const absent of ["paused", "--recover", "Stop the owning Gateway"]) {
-        expect(output).not.toContain(absent);
-      }
+      expectText(output, ["may still be"], ["paused", "--recover", "Stop the owning Gateway"]);
     }
     expect(output).toContain("Checkpoint deletion pending: chk_predecessor");
     expect(openWarmImageStore().lookup("profile")).toEqual(record);

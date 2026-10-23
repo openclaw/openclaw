@@ -75,6 +75,35 @@ function fixture(
 }
 
 describe.skipIf(!connection)("PostgreSQL schema admission", () => {
+  it("keeps migration callbacks out of worker admission snapshots", () => {
+    fixture(({ open, invalidate }) => {
+      invalidate();
+      open({
+        ...schema,
+        postgresMigrations: [
+          {
+            version: 2,
+            fromSchema: { postgres: ddl },
+            schema: { postgres: ddl },
+            sql: "",
+            backup: {
+              id: "fixture",
+              version: 1,
+              minimumPostgresVersion: 16,
+              tables: [],
+              sqlite: "",
+              preData: "",
+              postData: "",
+              expectedCatalog: [],
+              postgresPostData: () => "",
+            },
+          },
+        ],
+      });
+      expect(() => structuredClone(captureSqliteDatabaseAdmissions())).not.toThrow();
+    });
+  });
+
   it("reads an existing anchor while another handle holds write admission", () => {
     fixture(({ db }) => {
       db.exec("INSERT INTO items (id) VALUES (1)");

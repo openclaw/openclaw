@@ -1,6 +1,6 @@
 // Synology Chat tests cover channel.integration plugin behavior.
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildChannelInboundEventContextMock,
   channelInboundRunMock,
@@ -45,21 +45,37 @@ function makeStartContext<T>(cfg: T, accountId: string, abortSignal: AbortSignal
     accountId,
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     abortSignal,
+    setStatus: vi.fn(),
   };
 }
 
-const requireRecord = createRequireRecord("record", "expected-label-record");
+function startAccount(
+  cfg: Parameters<typeof synologyChatPlugin.gateway.startAccount>[0]["cfg"],
+  accountId = "default",
+) {
+  const controller = new AbortController();
+  const ctx = makeStartContext(cfg, accountId, controller.signal);
+  const started = synologyChatPlugin.gateway.startAccount(ctx);
+  return {
+    ctx,
+    task: started,
+    stop: async () => {
+      controller.abort();
+      await started;
+    },
+  };
+}
 
-function requireMockCall<TArgs extends unknown[]>(
-  mock: { mock: { calls: TArgs[] } },
-  index: number,
-  label: string,
-): TArgs {
-  const call = mock.mock.calls[index];
-  if (!call) {
-    throw new Error(`expected ${label}`);
-  }
-  return call;
+const routeAt = (index = 0) =>
+  expectDefined(registerPluginHttpRouteMock.mock.calls[index], "registered route")[0];
+async function post(
+  route: ReturnType<typeof routeAt>,
+  fields: Record<string, string>,
+  options?: Parameters<typeof makeReq>[2],
+) {
+  const res = makeRes();
+  await route.handler(request(fields, options), res);
+  return res;
 }
 
 describe("Synology channel wiring integration", () => {
@@ -68,6 +84,8 @@ describe("Synology channel wiring integration", () => {
   });
 
   beforeEach(() => {
+    vi.stubEnv("SYNOLOGY_CHAT_TOKEN", "");
+    vi.stubEnv("SYNOLOGY_CHAT_INCOMING_URL", "");
     registerPluginHttpRouteMock.mockClear();
     dispatchReplyWithBufferedBlockDispatcher.mockClear();
     buildChannelInboundEventContextMock.mockClear();
@@ -79,6 +97,107 @@ describe("Synology channel wiring integration", () => {
     tryHandleSynologyHostedMediaRequestMock.mockClear();
     tryHandleSynologyHostedMediaRequestMock.mockResolvedValue(false);
     setSynologyRuntimeConfigForTest({});
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  function namedConfig(overrides: SynologyChatChannelConfig) {
+    return config(
+      account({
+        webhookPath: "/webhook/shared",
+        webhookUrl: "https://gateway.example.com/shared",
+        accounts: {
+          alerts: {
+            enabled: true,
+            token: "alerts-token",
+            incomingUrl: "https://nas/alerts",
+            ...overrides,
+          },
+        },
+      }),
+    );
+  }
+
+  it.each([
+    ["disabled", config({ enabled: false }), "default", ""],
+    ["empty allowlist", config(account({ allowedUserIds: [] })), "default", "empty allowedUserIds"],
+    [
+      "empty open policy",
+      config(account({ dmPolicy: "open", allowedUserIds: [] })),
+      "default",
+      "dmPolicy=open but empty allowedUserIds",
+    ],
+    [
+      "inherited path",
+      namedConfig({ dmPolicy: "allowlist", allowedUserIds: ["123"] }),
+      "alerts",
+      "must set an explicit webhookPath",
+    ],
+    [
+      "duplicate path",
+      namedConfig({ webhookPath: "/webhook/shared", dmPolicy: "open", allowedUserIds: ["*"] }),
+      "alerts",
+      "conflicts on webhookPath",
+    ],
+    [
+      "duplicate URL",
+      namedConfig({
+        webhookPath: "/alerts",
+        webhookUrl: "https://gateway.example.com/shared",
+        dmPolicy: "open",
+        allowedUserIds: ["*"],
+      }),
+      "alerts",
+      "conflicts on webhookUrl",
+    ],
+  ] as const)("blocks startup for %s until aborted", async (_name, cfg, id, warning) => {
+    const { ctx, task, stop } = startAccount(cfg, id);
+    let settled = false;
+    void task.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await Promise.resolve();
+    expect(task).toBeInstanceOf(Promise);
+    expect(settled).toBe(false);
+    if (warning) {
+      expect(JSON.stringify(ctx.log.warn.mock.calls)).toContain(warning);
+    } else {
+      expect(ctx.setStatus).toHaveBeenCalledWith({
+        accountId: "default",
+        running: true,
+        lifecycle: "blocked",
+        terminalDisconnect: true,
+        lastError: "Synology Chat account failed startup validation",
+      });
+    }
+    expect(registerPluginHttpRouteMock).not.toHaveBeenCalled();
+    await stop();
+  });
+
+  it("publishes ready after registration and stopped after cleanup", async () => {
+    const { ctx, stop } = startAccount(config());
+    await vi.waitFor(() => expect(registerPluginHttpRouteMock).toHaveBeenCalledOnce());
+    expect(ctx.setStatus).toHaveBeenCalledWith({
+      accountId: "default",
+      running: true,
+      connected: true,
+      lifecycle: "ready",
+      lastConnectedAt: expect.any(Number),
+      lastError: null,
+      terminalDisconnect: undefined,
+    });
+    await stop();
+    expect(registerPluginHttpRouteMock.mock.results[0]?.value).toHaveBeenCalledOnce();
+    expect(ctx.setStatus).toHaveBeenLastCalledWith({
+      accountId: "default",
+      running: false,
+      connected: false,
+      lifecycle: "stopped",
+    });
   });
 
   it("re-enables a configured named account without replacing root or sibling credentials", async () => {
@@ -100,7 +219,6 @@ describe("Synology channel wiring integration", () => {
       accountId: "alerts",
       input,
     });
-
     expect(configured).toEqual({
       channels: {
         "synology-chat": {
@@ -121,55 +239,36 @@ describe("Synology channel wiring integration", () => {
   });
 
   it("registers real webhook handler with resolved account config and enforces allowlist", async () => {
-    const plugin = synologyChatPlugin;
-    const abortController = new AbortController();
     const cfg = config({
       enabled: true,
       accounts: {
         alerts: account({ webhookPath: "/webhook/synology-alerts", allowedUserIds: ["456"] }),
       },
     });
-
-    const started = plugin.gateway.startAccount(
-      makeStartContext(cfg, "alerts", abortController.signal),
-    );
+    const { stop } = startAccount(cfg, "alerts");
     expect(registerPluginHttpRouteMock).toHaveBeenCalledTimes(1);
-
-    const [registered] = requireMockCall(registerPluginHttpRouteMock, 0, "alerts route");
+    const registered = routeAt();
     expect(registered).toMatchObject({
       path: "/webhook/synology-alerts",
       accountId: "alerts",
       throwOnFailure: true,
     });
-
-    const req = request({
+    const res = await post(registered, {
       token: "valid-token",
       username: "unauthorized-user",
       post_id: "post-allowlist-rejected",
     });
-    const res = makeRes();
-    await registered.handler(req, res);
-
     expect(res.status).toBe(403);
     expect(res.body).toContain("not authorized");
     expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
-    abortController.abort();
-    await started;
+    await stop();
   });
 
   it("dispatches hosted GET and HEAD capabilities before the inbound webhook parser", async () => {
-    const abortController = new AbortController();
     const cfg = config(account({ webhookUrl: "https://gateway.example.com/webhook/synology" }));
-    const started = synologyChatPlugin.gateway.startAccount(
-      makeStartContext(cfg, "default", abortController.signal),
-    );
-    const [registered] = requireMockCall(
-      registerPluginHttpRouteMock,
-      0,
-      "Synology hosted media route",
-    );
+    const { stop } = startAccount(cfg);
+    const registered = routeAt();
     tryHandleSynologyHostedMediaRequestMock.mockResolvedValue(true);
-
     for (const method of ["GET", "HEAD"]) {
       await registered.handler(
         makeReq(method, "", {
@@ -178,11 +277,9 @@ describe("Synology channel wiring integration", () => {
         makeRes(),
       );
     }
-
     expect(tryHandleSynologyHostedMediaRequestMock).toHaveBeenCalledTimes(2);
     expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
-    abortController.abort();
-    await started;
+    await stop();
   });
 
   it("stops ingress and rejects startup when the webhook route cannot bind", async () => {
@@ -192,34 +289,27 @@ describe("Synology channel wiring integration", () => {
     registerPluginHttpRouteMock.mockImplementationOnce(() => {
       throw new Error("Synology route conflict");
     });
-
     await expect(
       synologyChatPlugin.gateway.startAccount({
         ...makeStartContext(cfg, "default", abortController.signal),
         setStatus: statusSink,
       }),
     ).rejects.toThrow("Synology route conflict");
-
     expect(synologyIngressStartMock).toHaveBeenCalledOnce();
     expect(synologyIngressStopMock).toHaveBeenCalledOnce();
     expect(statusSink).not.toHaveBeenCalledWith(expect.objectContaining({ lifecycle: "ready" }));
   });
 
   it("uses gateway trusted proxy settings for pre-auth invalid-token throttling", async () => {
-    const plugin = synologyChatPlugin;
-    const abortController = new AbortController();
     const cfg = {
       gateway: {
         trustedProxies: ["127.0.0.1"],
       },
       ...config(account({ dmPolicy: "open", allowedUserIds: ["*"], rateLimitPerMinute: 1 })),
     };
-
-    const startContext = makeStartContext(cfg, "default", abortController.signal);
-    const started = plugin.gateway.startAccount(startContext);
+    const { ctx: startContext, stop } = startAccount(cfg);
     expect(registerPluginHttpRouteMock).toHaveBeenCalledTimes(1);
-    const [registered] = requireMockCall(registerPluginHttpRouteMock, 0, "default Synology route");
-
+    const registered = routeAt();
     for (let i = 0; i < 2; i += 1) {
       const req = request(
         {
@@ -233,7 +323,6 @@ describe("Synology channel wiring integration", () => {
       await registered.handler(req, res);
       expect(res.status).toBe(i === 0 ? 401 : 429);
     }
-
     const validReq = request(
       {
         token: "valid-token",
@@ -245,7 +334,6 @@ describe("Synology channel wiring integration", () => {
     (validReq.socket as { remoteAddress?: string }).remoteAddress = "127.0.0.1";
     const validRes = makeRes();
     await registered.handler(validReq, validRes);
-
     expect(validRes.status, JSON.stringify(startContext.log.error.mock.calls)).toBe(204);
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
     expect(channelInboundRunMock).toHaveBeenCalledWith(
@@ -253,14 +341,10 @@ describe("Synology channel wiring integration", () => {
         turnAdoptionLifecycle: expect.objectContaining({ admission: "exclusive" }),
       }),
     );
-    abortController.abort();
-    await started;
+    await stop();
   });
 
   it("isolates same user_id across different accounts", async () => {
-    const plugin = synologyChatPlugin;
-    const alphaAbortController = new AbortController();
-    const betaAbortController = new AbortController();
     const cfg = {
       channels: {
         "synology-chat": {
@@ -287,57 +371,35 @@ describe("Synology channel wiring integration", () => {
         dmScope: "main" as const,
       },
     };
-
-    const alphaStarted = plugin.gateway.startAccount(
-      makeStartContext(cfg, "alpha", alphaAbortController.signal),
-    );
-    const betaStarted = plugin.gateway.startAccount(
-      makeStartContext(cfg, "beta", betaAbortController.signal),
-    );
-
+    const alpha = startAccount(cfg, "alpha");
+    const beta = startAccount(cfg, "beta");
     expect(registerPluginHttpRouteMock).toHaveBeenCalledTimes(2);
-    const [alphaRoute] = requireMockCall(registerPluginHttpRouteMock, 0, "alpha Synology route");
-    const [betaRoute] = requireMockCall(registerPluginHttpRouteMock, 1, "beta Synology route");
-
-    const alphaReq = request({
+    const alphaRoute = routeAt();
+    const betaRoute = routeAt(1);
+    const alphaRes = await post(alphaRoute, {
       token: "token-alpha",
       username: "alice",
       text: "alpha secret",
       post_id: "post-alpha",
     });
-    const alphaRes = makeRes();
-    await alphaRoute.handler(alphaReq, alphaRes);
-
-    const betaReq = request({
+    const betaRes = await post(betaRoute, {
       token: "token-beta",
       username: "bob",
       text: "beta secret",
       post_id: "post-beta",
     });
-    const betaRes = makeRes();
-    await betaRoute.handler(betaReq, betaRes);
-
     expect(alphaRes.status).toBe(204);
     expect(betaRes.status).toBe(204);
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(2);
     expect(finalizeInboundContextMock).toHaveBeenCalledTimes(2);
-
-    const [alphaCtx] = requireMockCall(finalizeInboundContextMock, 0, "alpha inbound context");
-    const [betaCtx] = requireMockCall(finalizeInboundContextMock, 1, "beta inbound context");
-    const alphaContext = requireRecord(alphaCtx, "alpha inbound context");
-    expect(alphaContext).toMatchObject({
+    expect(finalizeInboundContextMock.mock.calls[0]?.[0]).toMatchObject({
       AccountId: "alpha",
       SessionKey: "agent:agent-alpha:synology-chat:alpha:direct:123",
     });
-    const betaContext = requireRecord(betaCtx, "beta inbound context");
-    expect(betaContext).toMatchObject({
+    expect(finalizeInboundContextMock.mock.calls[1]?.[0]).toMatchObject({
       AccountId: "beta",
       SessionKey: "agent:agent-beta:synology-chat:beta:direct:123",
     });
-
-    alphaAbortController.abort();
-    betaAbortController.abort();
-    await alphaStarted;
-    await betaStarted;
+    await Promise.all([alpha.stop(), beta.stop()]);
   });
 });

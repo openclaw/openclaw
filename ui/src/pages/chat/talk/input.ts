@@ -1,7 +1,10 @@
 import { racePromiseWithAbortSignal } from "@openclaw/retry";
 import { t } from "../../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { UserFacingError } from "../../../lib/format-error.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
+
+registerChatComposerEnglish();
 
 export type RealtimeTalkInputDevice = {
   deviceId: string;
@@ -316,7 +319,7 @@ export class RealtimeTalkInputOwner {
         this.onEnded(t("chat.composer.microphoneStopped"));
       };
       for (const track of media.getTracks()) {
-        track.addEventListener("ended", onEnded, { signal: controller.signal });
+        listen(track, "ended", onEnded, { signal: controller.signal });
       }
       // Only the current, successful acquisition advances the visible startup phase.
       // Cancellation must not overwrite idle or a replacement's microphone prompt.

@@ -196,7 +196,7 @@ describe("runNodeDaemonInstall", () => {
     vi.stubEnv("OPENCLAW_WRAPPER", undefined);
     mocks.runExec.mockReset().mockImplementation(async (executable: string) => ({
       stdout: JSON.stringify({
-        nodeVersion: "26.8.1",
+        nodeVersion: "26.12.1",
         bunVersion: /(?:^|[/\\])bun(?:\.exe)?$/i.test(executable) ? "1.4.3" : null,
         sqliteVersion: "3.53.4",
         sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
@@ -254,7 +254,7 @@ describe("runNodeDaemonInstall", () => {
       if (probe === "unsupported") {
         mocks.runExec.mockImplementation(async (executable: string) => ({
           stdout: JSON.stringify({
-            nodeVersion: "26.8.1",
+            nodeVersion: "26.12.1",
             bunVersion: executable === recordedPath ? "1.3.0" : null,
             sqliteVersion: "3.53.4",
             sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },

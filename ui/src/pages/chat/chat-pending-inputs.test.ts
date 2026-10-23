@@ -11,6 +11,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import * as outboxPayloadStore from "../../lib/chat/outbox-payload-store.runtime.ts";
+import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import {
   captureChatOutboxAdmission,
   storageTargetForGateway,
@@ -38,7 +39,7 @@ import { retireDeliveredQueuedUserTurn } from "./chat-send-support.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import { resetChatThreadState } from "./chat-thread.ts";
-import { listStoredChatOutboxes, loadChatComposerState } from "./composer-persistence.ts";
+import { loadChatComposerState } from "./composer-draft-storage.ts";
 import {
   admitChatSubmission,
   reduceChatSessionProjection,

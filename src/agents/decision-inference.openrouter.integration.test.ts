@@ -249,8 +249,7 @@ it.each([
             await expect(evaluate()).rejects.toMatchObject({
               code: "LLM_COMPLETION_NOT_AUTHORIZED",
             });
-            expect(received).toHaveLength(0);
-            expect(events).toHaveLength(0);
+            expect({ received, events }).toEqual({ received: [], events: [] });
             setRuntimeConfigSnapshot(cfg, sourceConfig);
             const outcome = await evaluate();
             expect(outcome, JSON.stringify({ outcome, received })).toMatchObject({
@@ -292,21 +291,20 @@ it.each([
                 require_parameters: true,
               },
             });
-            expect(events).toHaveLength(1);
-            expect(events[0]).toMatchObject({
-              provider: "openrouter",
-              model: modelId,
-              usage: { input: 476, output: 70 },
-              costUsd: cost,
-            });
+            expect(events).toMatchObject([
+              {
+                provider: "openrouter",
+                model: modelId,
+                usage: { input: 476, output: 70 },
+                costUsd: cost,
+              },
+            ]);
             if (auth === "oauth-key") {
               await resetPreparedModelRuntimeSnapshotsForTest();
               return;
             }
             cost = 0;
-            expect(await evaluate()).toMatchObject({
-              result: { usage: { costUsd: 0 } },
-            });
+            expect(await evaluate()).toMatchObject({ result: { usage: { costUsd: 0 } } });
             expect(events).toHaveLength(2);
             expect(events[1]?.costUsd).toBe(0);
             const legacy = { state: "Synthetic evidence", questions: batch.questions };
@@ -321,22 +319,20 @@ it.each([
               result: { answers: { q: { probabilityTrue: 0.37 } } },
             });
             const calls = received.length;
-            expect(await evaluate({ reasoning: "on" })).toMatchObject({
-              reason: "unsupported-input",
-            });
-            expect(received).toHaveLength(calls);
+            const expectNoDispatch = async (
+              reason: string,
+              overrides: Parameters<typeof evaluate>[0] = {},
+            ) => {
+              expect(await evaluate(overrides)).toMatchObject({ status: "unavailable", reason });
+              expect(received).toHaveLength(calls);
+            };
+            await expectNoDispatch("unsupported-input", { reasoning: "on" });
             const foreign = structuredClone(cfg);
             foreign.models!.providers!.openrouter!.baseUrl = origin + "/undeclared";
             setRuntimeConfigSnapshot(foreign);
-            expect(await evaluate()).toMatchObject({
-              reason: "unsupported-input",
-            });
-            expect(received).toHaveLength(calls);
+            await expectNoDispatch("unsupported-input");
             selectModel(`${modelRef}@missing-fixture-profile`);
-            expect(await evaluate()).toMatchObject({
-              reason: "credentials-unavailable",
-            });
-            expect(received).toHaveLength(calls);
+            await expectNoDispatch("credentials-unavailable");
             setRuntimeConfigSnapshot(cfg, sourceConfig);
             if (route === "declared-proxy") {
               const provider = registry.decisionProviders.find(
@@ -355,13 +351,8 @@ it.each([
                 });
                 return providerEvaluate(offered, context);
               });
-              const interrupted = await evaluate();
+              await expectNoDispatch("retiring");
               expect(closedDuringPreparation).toBe(true);
-              expect(interrupted).toMatchObject({
-                status: "unavailable",
-                reason: "retiring",
-              });
-              expect(received).toHaveLength(calls);
               setRuntimeConfigSnapshot(cfg, sourceConfig);
             }
             // Authentication latches the generation; test it last so other errors prove recovery.

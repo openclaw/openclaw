@@ -3,8 +3,12 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildChildEnv } from "../../scripts/ci-run-node-test-shard.mts";
 import { hasBuildArtifactAffectingChange } from "../../scripts/lib/ci-changed-node-test-plan.mts";
-import { createNodeTestShardBundles } from "../../scripts/lib/ci-node-test-plan.mts";
+import {
+  createNodeTestShardBundles,
+  createSelectedNodeTestShardBundles,
+} from "../../scripts/lib/ci-node-test-plan.mts";
 import { resolvePolicyTestTargets } from "../../scripts/lib/ci-policy-test-watch.mts";
 import {
   isCiProofTestFile,
@@ -26,6 +30,7 @@ import {
 const argvTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const sourcePolicyTest = "src/infra/fs-safe-import-boundary.test.ts";
+const lintSuppressionInventory = "test/scripts/lint-suppressions.test.ts";
 
 function writeFiles(cwd: string, files: Record<string, string>) {
   for (const [file, source] of Object.entries(files)) {
@@ -211,6 +216,8 @@ describe("CI changed Node test plan", () => {
         "src/agents/command/delivery.settle-reset.integration.test.ts",
         "src/auto-reply/reply/commands-acp.owner.test.ts",
         "src/auto-reply/reply/commands-allowlist.owner.test.ts",
+        "src/auto-reply/reply/commands-plugin.channel-native.test.ts",
+        "src/auto-reply/reply/commands-plugin.native-subagents.test.ts",
         "src/gateway/operator-run-recovery.test.ts",
         "src/gateway/server.mcp-session-owner.test.ts",
       ],
@@ -546,6 +553,7 @@ describe("CI changed Node test plan", () => {
       "test/scripts/update-restart-module-outcome.test.ts",
       "test/scripts/type-suppression-inventory.test.ts",
       "test/scripts/plugin-sdk-surface-report.test.ts",
+      lintSuppressionInventory,
     ];
     expect(resolvePolicyTestTargets([source])).toEqual([
       ...sourceInventories,
@@ -557,6 +565,30 @@ describe("CI changed Node test plan", () => {
       ...sourceInventories,
       gatewayCallsitesGuard,
     ]);
+  });
+
+  it.each([
+    "scripts/perf/idle-gateway-measure-preload.mjs",
+    "src/example.test.js",
+    "src/.hidden.ts",
+    "extensions/xai/.boundary-stubs/example.d.ts",
+    "extensions/example/.one/.two/file.ts",
+  ])("retains the lint inventory through the actual PR-exempt planner for %s", (changedPath) => {
+    const shards = createChangedNodeTestShards([changedPath], {
+      includePrExemptRuntimeTests: false,
+      includeReleaseOnlyRuntimeTests: false,
+    });
+    expect(shards).not.toBeNull();
+    expect(selectedFiles(shards)).toContain(lintSuppressionInventory);
+  });
+
+  it.each([
+    "scripts/perf/example.mts",
+    "scripts/perf/example.cts",
+    "packages/example/index.js",
+    "docs/example.js",
+  ])("keeps the lint inventory outside unsupported path %s", (changedPath) => {
+    expect(resolvePolicyTestTargets([changedPath])).not.toContain(lintSuppressionInventory);
   });
 
   it("keeps erased-source owner selection independent of history", () => {
@@ -837,6 +869,7 @@ describe("CI changed Node test plan", () => {
       job.groups.filter((group) => group.configs.includes(config)),
     );
     expect(owners.length).toBeGreaterThan(1);
+    const envScratch = argvTempDirs.make("changed-command-owner-env-");
     const expectCanonicalCommands = (shards: ReturnType<typeof createChangedNodeTestShards>) => {
       expect(shards).not.toBeNull();
       const groups = fallbackGroups(shards ?? []);
@@ -845,25 +878,78 @@ describe("CI changed Node test plan", () => {
         owners.flatMap((group) => group.includePatterns ?? []).toSorted(),
       );
       expect(selectedOwners.every((group) => (group.includePatterns?.length ?? 0) > 0)).toBe(true);
-      for (const owner of owners) {
-        const fullJob = expectDefined(
-          full.find((job) => job.groups.includes(owner)),
-          "canonical commands job",
+      // Selected owners retain their singleton worker ceiling when serial rows share setup.
+      const canonical = expectDefined(
+        createSelectedNodeTestShardBundles(selectedFiles(shards), {
+          includePrExemptRuntimeTests: true,
+          includeReleaseOnlyRuntimeTests: true,
+        }),
+        "canonical selected commands jobs",
+      );
+      for (const group of selectedOwners) {
+        const owner = expectDefined(
+          owners.find((candidate) => candidate.shard_name === group.shard_name),
+          "canonical commands owner",
+        );
+        expect(group.configs).toEqual(owner.configs);
+        expect(group.env).toEqual(owner.env);
+        expect(group.fallbackMaxWorkers).toBe(owner.fallbackMaxWorkers);
+        expect(group.minTotalMemoryBytes).toBe(owner.minTotalMemoryBytes);
+        const ownerJob = expectDefined(
+          canonical.find((job) =>
+            job.groups.some((candidate) => candidate.shard_name === group.shard_name),
+          ),
+          "canonical selected commands job",
+        );
+        const ownerGroup = expectDefined(
+          ownerJob.groups.find((candidate) => candidate.shard_name === group.shard_name),
+          "canonical selected commands group",
         );
         const selectedJob = expectDefined(
-          shards?.find((job) => job.groups?.some((group) => group.shard_name === owner.shard_name)),
+          shards?.find((job) => job.groups?.includes(group)),
           "selected commands job",
         );
-        expect(selectedJob.runner).toBe(fullJob.runner);
-        const singleton = selectedJob.groups?.length === 1 && fullJob.planConcurrency === 2;
-        expect(selectedJob.env).toEqual(
-          singleton && owner.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined
-            ? { ...fullJob.env, OPENCLAW_VITEST_MAX_WORKERS: "2" }
-            : fullJob.env,
+        for (const key of [
+          "runner",
+          "pretestBuildMode",
+          "requiresDist",
+          "timeoutMinutes",
+        ] as const) {
+          expect(selectedJob[key], `${group.shard_name} job ${key}`).toEqual(ownerJob[key]);
+        }
+        expect(
+          Object.fromEntries(
+            Object.entries(selectedJob.env ?? {}).filter(
+              ([key]) => key !== "OPENCLAW_VITEST_MAX_WORKERS",
+            ),
+          ),
+          `${group.shard_name} job environment`,
+        ).toEqual(
+          Object.fromEntries(
+            Object.entries(ownerJob.env ?? {}).filter(
+              ([key]) => key !== "OPENCLAW_VITEST_MAX_WORKERS",
+            ),
+          ),
         );
-        expect(selectedJob.planConcurrency).toBe(singleton ? 1 : fullJob.planConcurrency);
-        expect(selectedJob.pretestBuildMode).toBe(fullJob.pretestBuildMode);
-        expect(selectedJob.timeoutMinutes).toBe(fullJob.timeoutMinutes);
+        const childWorkers = buildChildEnv(
+          { kind: "group", name: group.shard_name, plan: group },
+          {
+            OPENCLAW_VITEST_MAX_WORKERS: selectedJob.planConcurrency === 1 ? "8" : "2",
+            ...selectedJob.env,
+          },
+          envScratch,
+          0,
+        ).OPENCLAW_VITEST_MAX_WORKERS;
+        const ownerChildWorkers = buildChildEnv(
+          { kind: "group", name: ownerGroup.shard_name, plan: ownerGroup },
+          {
+            OPENCLAW_VITEST_MAX_WORKERS: ownerJob.planConcurrency === 1 ? "8" : "2",
+            ...ownerJob.env,
+          },
+          envScratch,
+          0,
+        ).OPENCLAW_VITEST_MAX_WORKERS;
+        expect(childWorkers, `${group.shard_name} child worker ceiling`).toBe(ownerChildWorkers);
       }
       const configs = groups.flatMap((group) => group.configs);
       expect(configs).not.toContain("test/vitest/vitest.cron.config.ts");

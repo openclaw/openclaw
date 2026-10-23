@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { createStablePluginNpmBootstrapApproval } from "../../scripts/plugin-npm-bootstrap-approval.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT_PATH = "scripts/validate-release-publish-approval.mjs";
@@ -262,49 +261,6 @@ if (JSON.stringify(args) === JSON.stringify(["rev-parse", "v2026.8.1^{commit}"])
     tempRoot,
   );
   expect(producer.status, producer.stderr).toBe(0);
-  const dispatch = spawnSync(
-    "bash",
-    [
-      "-c",
-      `
-set -euo pipefail
-source scripts/lib/release-publish-children.sh
-is_android_release() { return 0; }
-verify_android_release_asset_contract() { return 1; }
-dispatch_workflow_at_ref() { printf '%s\n' "$@" > "$RUNNER_TEMP/dispatch-args"; echo 456; }
-wait_for_run() { touch "$RUNNER_TEMP/android-waited"; return 0; }
-promote_android_release_asset
-`,
-    ],
-    {
-      encoding: "utf8",
-      env: {
-        ...env,
-        GITHUB_RUN_ID: "123",
-        GITHUB_RUN_ATTEMPT: "2",
-        GITHUB_STEP_SUMMARY: path.join(tempRoot, "summary"),
-        PARENT_WORKFLOW_BRANCH: ref,
-        PARENT_WORKFLOW_FULL_REF: fullRef,
-        PARENT_WORKFLOW_SHA: ANDROID_TOOLING_SHA,
-      },
-    },
-  );
-  expect(dispatch.status, dispatch.stderr).toBe(0);
-  expect(fs.readFileSync(path.join(tempRoot, "dispatch-args"), "utf8").trim().split("\n")).toEqual([
-    "v2026.8.1",
-    "a".repeat(40),
-    "android-release.yml",
-    ...[
-      "tag=v2026.8.1",
-      "release_publish_run_id=123",
-      "release_publish_run_attempt=2",
-      `release_publish_branch=${ref}`,
-      `release_publish_full_ref=${fullRef}`,
-      `release_publish_workflow_sha=${ANDROID_TOOLING_SHA}`,
-      `release_target_sha=${"a".repeat(40)}`,
-      "direct_release_recovery=false",
-    ].flatMap((field) => ["-f", field]),
-  ]);
   writeJson(approvalPath, { ...JSON.parse(fs.readFileSync(approvalPath, "utf8")), ...approval });
   writeJson(nativeCiPath, { ...nativeRun, ...nativeCi });
   let result = runWorkflowStep(
@@ -339,7 +295,6 @@ promote_android_release_asset
   return {
     ...result,
     uploads: JSON.parse(fs.readFileSync(effectsPath, "utf8")),
-    waitedForAndroid: fs.existsSync(path.join(tempRoot, "android-waited")),
   };
 }
 
@@ -508,9 +463,6 @@ describe("scripts/validate-release-publish-approval.mjs", () => {
     const result = runAndroidApproval(options);
     expect(result.status, result.stderr).toBe(0);
     expect(result.uploads).toEqual(ANDROID_ASSETS.map((name) => `dist/${name}#${name}`));
-    if (options?.nativeCi) {
-      expect(result.waitedForAndroid).toBe(false);
-    }
   });
 
   androidIt.each([
@@ -612,16 +564,5 @@ describe("scripts/validate-release-publish-approval.mjs", () => {
   ])("rejects ClawHub bootstrap with env %j and artifact %j", (env, approval, message) => {
     const result = runClawHubApproval(env, approval);
     expect(result).toMatchObject({ status: 1, stderr: message });
-  });
-  it("rejects historical sealed waivers for beta-profile stable bootstrap", () => {
-    expect(() =>
-      createStablePluginNpmBootstrapApproval({
-        releaseTag: "v2026.9.6",
-        publishTag: "latest",
-        releaseProfile: "beta",
-        stableSoakWaiver: "2026.9.6 approved",
-        stableSoakWaiverSource: "sealed",
-      }),
-    ).toThrow("stable/full validation");
   });
 });

@@ -37,7 +37,10 @@ it.each(["valid", "framed", "close", "mismatched", "unsafe", "malformed"])(
       const unexpected = () => {
         throw new Error("Runtime admission must not add a request or fail the operation");
       };
-      const actor: Pick<Actor, "id" | "closeReceipt"> = { id: 1 };
+      const actor: Pick<Actor, "id" | "closeReceipt" | "openDispatch"> = {
+        id: 1,
+        openDispatch: { custody: new SqliteWorkerSlotCustody().createRequest() },
+      };
       const closeReceipt: SqliteWorkerCloseReceipt = {
         identity: { key: "fixture", canonicalPath: "/fixture/state.sqlite" },
         incarnation: "closed-incarnation",
