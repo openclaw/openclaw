@@ -566,19 +566,22 @@ suite.define(() => {
         const search = composer.locator("[data-chat-model-search]");
         await search.fill("account");
         await expect.poll(() => workOption.isVisible()).toBe(true);
-        await search.fill(work.label);
-        await search.press("ArrowDown");
-        await expect.poll(() => workOption.getAttribute("data-chat-model-highlighted")).toBe("");
-        await search.press("Enter");
+        if (input === "keyboard") {
+          await workOption.press("Enter");
+        } else {
+          await workOption.click();
+        }
         const patch = await gateway.waitForRequest("sessions.patch");
         expect(patch.params).toEqual({
           expectedSessionId: `session:${sessionKey}`,
           key: sessionKey,
           model: `openai/gpt-5.5@${work.authProfileId}`,
         });
-        // A pending write must not promote this candidate to the current account.
-        await expect.poll(() => workOption.isVisible()).toBe(true);
-        expect(await workOption.getAttribute("aria-selected")).toBe("false");
+        // A pending model override must not change the confirmed account.
+        const currentOption = picker.locator('[data-chat-account-option="current"]');
+        await expect.poll(() => currentOption.isVisible()).toBe(true);
+        expect(await currentOption.textContent()).toContain(personal.label);
+        expect(await currentOption.getAttribute("aria-selected")).toBe("true");
         expect(await search.isDisabled()).toBe(true);
         await gateway.resolveDeferred("sessions.patch", { ok: true });
         await gateway.setMethodResponse("sessions.list", sessionList);
