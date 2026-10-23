@@ -133,18 +133,25 @@ export function createLazyXaiRealtimeVoiceBridge(
     }
   };
 
+  const dispatchOrIgnoreInput = (send: (bridge: RealtimeVoiceBridge) => void): boolean => {
+    if (!lifecycle.isActive()) {
+      return true;
+    }
+    const bridge = lifecycle.bridge;
+    if (!acceptsInput || !bridge) {
+      return false;
+    }
+    send(bridge);
+    return true;
+  };
+
   return {
     get supportsToolResultContinuation() {
       return lifecycle.bridge?.supportsToolResultContinuation ?? false;
     },
     connect: lifecycle.connect,
     sendAudio: (audio) => {
-      if (!lifecycle.isActive()) {
-        return;
-      }
-      const bridge = lifecycle.bridge;
-      if (acceptsInput && bridge) {
-        bridge.sendAudio(audio);
+      if (dispatchOrIgnoreInput((bridge) => bridge.sendAudio(audio))) {
         return;
       }
       if (pendingAudio.enqueue(audio)) {
@@ -152,12 +159,7 @@ export function createLazyXaiRealtimeVoiceBridge(
       }
     },
     setMediaTimestamp: (timestamp) => {
-      if (!lifecycle.isActive()) {
-        return;
-      }
-      const bridge = lifecycle.bridge;
-      if (acceptsInput && bridge) {
-        bridge.setMediaTimestamp(timestamp);
+      if (dispatchOrIgnoreInput((bridge) => bridge.setMediaTimestamp(timestamp))) {
         return;
       }
       pendingMediaTimestamp = replacePendingOperation(pendingMediaTimestamp, {
@@ -166,12 +168,7 @@ export function createLazyXaiRealtimeVoiceBridge(
       });
     },
     sendUserMessage: (text) => {
-      if (!lifecycle.isActive()) {
-        return;
-      }
-      const bridge = lifecycle.bridge;
-      if (acceptsInput && bridge) {
-        bridge.sendUserMessage?.(text);
+      if (dispatchOrIgnoreInput((bridge) => bridge.sendUserMessage?.(text))) {
         return;
       }
       const messageBytes = Buffer.byteLength(text, "utf8");
@@ -193,12 +190,7 @@ export function createLazyXaiRealtimeVoiceBridge(
       pendingUserMessageBytes += messageBytes;
     },
     triggerGreeting: (instructions) => {
-      if (!lifecycle.isActive()) {
-        return;
-      }
-      const bridge = lifecycle.bridge;
-      if (acceptsInput && bridge) {
-        bridge.triggerGreeting?.(instructions);
+      if (dispatchOrIgnoreInput((bridge) => bridge.triggerGreeting?.(instructions))) {
         return;
       }
       pendingGreeting = replacePendingOperation(pendingGreeting, {
