@@ -1427,8 +1427,16 @@ const mock = createServer((req, res) => {
         ? lastUser.includes(
             `Reply with benchmark stream ${index}. Transcript-broadcast cohort ${cohort.id}.`,
           )
-        : stripInboundMetadata(lastUser).trim().split("\n")[0] ===
-          `Reply with benchmark stream ${index}. Transcript-broadcast cohort ${cohort.id}.`);
+        : chatAttachmentContent
+          ? lastUser
+              .split("\n")
+              .some(
+                (line) =>
+                  stripInboundMetadata(line).trim() ===
+                  `Reply with benchmark stream ${index}. Transcript-broadcast cohort ${cohort.id}.`,
+              )
+          : stripInboundMetadata(lastUser).trim().split("\n")[0] ===
+            `Reply with benchmark stream ${index}. Transcript-broadcast cohort ${cohort.id}.`);
     const requestPhase = primary
       ? `primary:${index}`
       : continuation
