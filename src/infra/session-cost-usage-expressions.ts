@@ -1,4 +1,8 @@
-import { expressionBuilder } from "kysely";
+import {
+  expressionBuilder,
+  type ExpressionWrapper,
+  type ExtractTypeFromReferenceExpression,
+} from "kysely";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
 
 const cacheExpressions = expressionBuilder<Pick<DB, "cache_entries">, "cache_entries">();
@@ -12,7 +16,11 @@ export function usageCacheJsonText(value: string | Uint8Array) {
 export function boundedUsageCacheColumn<Column extends "value_json" | "blob">(
   column: Column,
   budget?: { remainingBytes: number },
-) {
+): ExpressionWrapper<
+  Pick<DB, "cache_entries">,
+  "cache_entries",
+  ExtractTypeFromReferenceExpression<Pick<DB, "cache_entries">, "cache_entries", Column> | null
+> {
   if (!budget) {
     return cacheExpressions.ref(column);
   }
