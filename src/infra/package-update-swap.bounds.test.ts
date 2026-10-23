@@ -48,6 +48,104 @@ function captureReaderLogs() {
 }
 
 describe("package verification bounds", () => {
+  it.each(["presence", "root", "tree"] as const)(
+    "continues with a warning and restores the original tree after the baseline %s deadline",
+    async (operation) => {
+      await withTestDir({ prefix: "openclaw-baseline-stat-deadline-" }, async (base) => {
+        const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
+        const original = await fs.stat(packageRoot);
+        const entry = path.join(packageRoot, "dist", "index.js");
+        const originalContents = await fs.readFile(entry, "utf8");
+        const target = operation === "tree" ? path.join(packageRoot, "dist") : packageRoot;
+        const lstat = fs.lstat.bind(fs);
+        let now = performance.now();
+        vi.spyOn(performance, "now").mockImplementation(() => now);
+        let reads = 0;
+        vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+          const stat = await lstat(...args);
+          if (String(args[0]) === target && ++reads === (operation === "root" ? 2 : 1)) {
+            now += 1_001;
+          }
+          return stat;
+        });
+        let transaction: PackageUpdateTransaction | undefined;
+        const result = await swapStagedPackageInstall({
+          ...params,
+          timeoutMs: 1_000,
+          onTransaction: (value) => {
+            transaction = value;
+          },
+        });
+        expect(result.status, result.step.stderrTail ?? "").toBe("committed");
+        expect(result.step.stdoutTail).toContain("replaced openclaw");
+        expect(result.step.advisory?.message).toContain("baseline package fingerprint incomplete");
+        expect(result.step.advisory?.message).toContain("Package rollback verification timed out");
+        expect(result.step.stderrTail ?? "").not.toContain("Installation recovery is unverified");
+        expect(await fs.readFile(launcher, "utf8")).toBe("candidate launcher\n");
+        expect(await fs.readFile(path.join(packageRoot, "package.json"), "utf8")).toContain(
+          '"version":"2.0.0"',
+        );
+        if (!transaction) {
+          throw new Error("Missing package transaction");
+        }
+        const restored = await transaction.rollback(() => {});
+        expect(restored).toMatchObject({ exitCode: 0, activePackageRoot: packageRoot });
+        expect(restored.advisory?.message).toContain("fingerprint verification unavailable");
+        expect(await fs.readFile(launcher, "utf8")).toBe("old launcher\n");
+        expect(await fs.readFile(entry, "utf8")).toBe(originalContents);
+        expect(await fs.readFile(path.join(packageRoot, "package.json"), "utf8")).toContain(
+          '"version":"1.0.0"',
+        );
+        const actual = await fs.stat(packageRoot);
+        expect([actual.dev, actual.ino]).toEqual([original.dev, original.ino]);
+        expect(await transaction.complete({ activationVerified: false }, () => {})).toBeUndefined();
+      });
+    },
+  );
+
+  it("refuses a presence deadline when the fallback has no directory identity", async () => {
+    await withTestDir({ prefix: "openclaw-baseline-null-identity-" }, async (base) => {
+      const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
+      const linkedRoot = packageRoot + ".linked";
+      await fs.rename(packageRoot, linkedRoot);
+      await fs.symlink(linkedRoot, packageRoot, "junction");
+      const lstat = fs.lstat.bind(fs);
+      let now = performance.now();
+      vi.spyOn(performance, "now").mockImplementation(() => now);
+      let reads = 0;
+      vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+        const stat = await lstat(...args);
+        if (String(args[0]) === packageRoot && ++reads === 1) {
+          now += 1_001;
+        }
+        return stat;
+      });
+      const beforeActivate = vi.fn();
+      const onLiveMutation = vi.fn();
+      const onTransaction = vi.fn();
+      const result = await swapStagedPackageInstall({
+        ...params,
+        timeoutMs: 1_000,
+        beforeActivate,
+        onLiveMutation,
+        onTransaction,
+      });
+      expect(result.status).toBe("failed");
+      expect(result.step.failureFacts).toEqual(
+        expect.arrayContaining([expect.objectContaining({ code: "baseline-scan-failed" })]),
+      );
+      expect(result.step.stderrTail).toContain("Package rollback verification timed out");
+      expect(beforeActivate).not.toHaveBeenCalled();
+      expect(onLiveMutation).not.toHaveBeenCalled();
+      expect(onTransaction).not.toHaveBeenCalled();
+      expect(await fs.readlink(packageRoot)).toBe(linkedRoot);
+      expect(await fs.readFile(launcher, "utf8")).toBe("old launcher\n");
+      expect(await fs.readFile(path.join(packageRoot, "package.json"), "utf8")).toContain(
+        '"version":"1.0.0"',
+      );
+    });
+  });
+
   it("keeps a fresh reader usable after a wall-clock jump forward", async () => {
     await withTestDir({ prefix: "openclaw-integrity-clock-forward-" }, async (base) => {
       const reader = createPackageIntegrityReader(1_000);
