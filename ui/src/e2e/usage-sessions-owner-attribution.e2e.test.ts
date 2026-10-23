@@ -236,6 +236,14 @@ suite.define(() => {
               const row = page.locator(`.session-bar-row[title="${PROOF_STORE_KEY}"]`);
               await row.waitFor();
               await expect.poll(() => row.count()).toBe(1);
+              // Usage rows can render before the agent-name roster finishes.
+              await evaluateControlUiContext(page, async (app) => {
+                const read = app.agents.listRead;
+                if (!read) {
+                  throw new Error("Usage page has not requested the agent roster");
+                }
+                await read;
+              });
               for (const [ownerRow, agentId] of [
                 [row, "main"],
                 [otherRow, "opus"],
@@ -244,7 +252,6 @@ suite.define(() => {
                   name: `Molty (agent:${agentId})`,
                   exact: true,
                 });
-                // Usage rows can render before the agent-name roster finishes.
                 await chip.waitFor({ state: "attached", timeout: controlUiE2eWaitTimeoutMs });
                 await expect.poll(() => chip.getAttribute("data-agent-id")).toBe(agentId);
                 await expect.poll(() => ownerRow.locator(".agent-row-chip").count()).toBe(1);
@@ -527,12 +534,10 @@ suite.define(() => {
                 .toEqual({ sessionId: replacementId, tokens: pointCount * 300 });
               const focusOverviewStart = observedOverviews.length;
 
-              // Keep the real connection active while aging the browser's five-minute focus TTL.
+              // Age the focus TTL, then refresh inbound activity before focusing the page.
               const browserNow = await page.evaluate(() => Date.now());
-              for (let step = 1; step <= 31; step++) {
-                await page.clock.setFixedTime(new Date(browserNow + step * 10_000));
-                await requestGateway(page, "health", {});
-              }
+              await page.clock.setFixedTime(new Date(browserNow + 310_000));
+              await requestGateway(page, "health", {});
               await page.bringToFront();
               await page.evaluate(() => window.dispatchEvent(new Event("focus")));
               await expect
