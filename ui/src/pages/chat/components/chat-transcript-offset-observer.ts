@@ -366,11 +366,12 @@ export function observeTranscriptOffset(
     // reader who has since been resize-clamped to a different end. Completion
     // must not stop a smooth animation on its penultimate 1px frame; retain
     // the restore path's rounding tolerance only after native scrolling settles.
-    const reachedEnd =
-      Math.abs((maxTranscriptScrollOffset(element) ?? 0) - (element?.scrollTop ?? 0)) <=
-      (scrolling ? 0 : 1);
     // Reaching the end cannot retire a message reveal awaiting its DOM commit.
-    if (reachedEnd && element && owner.state.scrollCommand?.target === "end") {
+    if (
+      element &&
+      owner.state.scrollCommand?.target === "end" &&
+      Math.abs((maxTranscriptScrollOffset(element) ?? 0) - element.scrollTop) <= (scrolling ? 0 : 1)
+    ) {
       if (owner.state.scrollCommand.behavior === "smooth") {
         owner.cancelScroll();
       } else {

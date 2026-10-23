@@ -41,6 +41,7 @@ type RenderedNode = DomRange & {
 type Fragment = DomRange & {
   html: string;
   prefix: string;
+  parsedHtml?: string;
   incremental: boolean;
   canonical: CanonicalNode[];
   children: RenderedNode[];
@@ -281,7 +282,7 @@ export class MarkdownDomReconciler {
     if (
       this.messageKey !== messageKey ||
       !source.startsWith(this.source) ||
-      !stableHtml.startsWith(this.stableHtml)
+      (stableHtml !== this.stableHtml && !stableHtml.startsWith(this.stableHtml))
     ) {
       this.reset();
     }
@@ -362,19 +363,19 @@ export class MarkdownDomReconciler {
 
   private renderFragments(media?: MarkdownDomMedia): void {
     this.usedSlots = new Set();
+    const prefix = media?.prefix ?? "";
     for (const fragment of this.fragments) {
-      const prefix = media?.prefix ?? "";
-      // Canonical strings also memoize completed fragments without retaining a
-      // detached DOM tree. Media policy still refreshes on every update.
-      const canonical = `${prefix}\0${fragment.html}`;
-      if (fragment.prefix !== canonical) {
+      // Retain the inputs separately so completed fragments need no combined key.
+      // Media policy still refreshes on every update.
+      if (fragment.prefix !== prefix || fragment.parsedHtml !== fragment.html) {
         fragment.canonical = parseCanonical(
           fragment.html,
           prefix,
           fragment.incremental,
           Boolean(this.registerSessionTitle),
         );
-        fragment.prefix = canonical;
+        fragment.prefix = prefix;
+        fragment.parsedHtml = fragment.html;
       } else if (!media) {
         continue;
       }

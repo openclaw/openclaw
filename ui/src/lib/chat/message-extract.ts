@@ -6,7 +6,7 @@ import { projectChatWorkContextForDisplay } from "../../../../src/chat/work-cont
 import { readPersistedMediaFacts } from "../../../../src/media/media-facts.js";
 import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
 import { extractAssistantPhaseText } from "../../../../src/shared/chat-message-content.js";
-import { stripThinkingTags } from "../strip-thinking-tags.ts";
+import { stripAssistantMessageText } from "./assistant-message-text.ts";
 import { projectImportedMessageForDisplay } from "./imported-message-display.ts";
 
 const textCache = new WeakMap<object, string | null>();
@@ -20,11 +20,11 @@ function isTextContentBlockType(value: unknown, role: string): boolean {
   );
 }
 
-function processMessageText(text: string, role: string): string {
+function processMessageText(text: string, role: string, message: unknown): string {
   const shouldStripInboundMetadata = normalizeLowercaseStringOrEmpty(role) === "user";
   const withoutInternalContext = stripInternalRuntimeContext(text);
   if (role === "assistant") {
-    return stripThinkingTags(withoutInternalContext);
+    return stripAssistantMessageText(message, withoutInternalContext, "display");
   }
   return shouldStripInboundMetadata
     ? stripUserEnvelopeForDisplay(withoutInternalContext)
@@ -45,7 +45,7 @@ export function extractText(message: unknown): string | null {
   if (!raw) {
     return null;
   }
-  return processMessageText(raw, role);
+  return processMessageText(raw, role, projected);
 }
 
 function readCachedMessageExtraction(
