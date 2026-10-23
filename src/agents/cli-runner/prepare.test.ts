@@ -97,9 +97,7 @@ import {
   loadAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
 } from "../auth-profiles/store-runtime.js";
-import {
-  resolveBootstrapContextForRun as resolveBootstrapContextForRunImpl,
-} from "../bootstrap-files.js";
+import { resolveBootstrapContextForRun as loadBootstrapContext } from "../bootstrap-files.js";
 import { CLI_AUTH_EPOCH_VERSION, resolveCliAuthEpoch } from "../cli-auth-epoch.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import {
@@ -2094,9 +2092,7 @@ describe("prepareCliRunContext", () => {
   it.each([false, true])(
     "keeps agent bootstrap and layers only execution AGENTS (explicit root: %s)",
     async (explicitRoot) => {
-      setCliRunnerPrepareTestDeps({
-        resolveBootstrapContextForRun: resolveBootstrapContextForRunImpl,
-      });
+      setCliRunnerPrepareTestDeps({ resolveBootstrapContextForRun: loadBootstrapContext });
       const { dir } = fixture.session;
       const executionDir = path.join(dir, "execution");
       const bootstrapDir = explicitRoot ? path.join(dir, "bootstrap-override") : dir;
