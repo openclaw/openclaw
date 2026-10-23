@@ -778,7 +778,7 @@ it("keeps warm default-loader SQL constant as readers join without a native row 
       expect(preparation).toHaveBeenCalledTimes(1);
       preparation.mockClear();
       await f.subscriptions.replace(f.client.connId!, [sessionKey]);
-      expect(preparation).toHaveBeenCalledTimes(2);
+      expect(preparation).not.toHaveBeenCalled();
     } finally {
       preparation.mockRestore();
     }

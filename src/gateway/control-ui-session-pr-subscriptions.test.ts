@@ -2,6 +2,7 @@ import { getEventListeners } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createRetainedCache } from "../infra/retained-cache.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -81,6 +82,34 @@ function expectSessions(
 }
 
 describe("control UI session PR subscriptions", () => {
+  it.each([false, true])(
+    "does no reader work for category-only notifications (uncertain=%s)",
+    async (uncertain) => {
+      const readSource = createTestSessionPrReadSource();
+      const readCurrent = vi.fn(async () => ({
+        sessionId: "session-id",
+        params: { sessionKey: "session", agentId: "main" },
+        identity: "session",
+        readSource,
+        source: null,
+        taskReceipts: { sessions: [] },
+      }));
+      const active = start({ prepareRead: async () => readCurrent, load: async () => READY });
+      await active.replace("reader", ["session"]);
+      readCurrent.mockClear();
+      broadcastToConnIds.mockClear();
+      sessionChanges.emit({
+        sessionKey: "session",
+        ...(uncertain
+          ? { factsInvalidated: "category" as const }
+          : { facts: { kind: "category" as const, sessionId: "session-id", category: "work" } }),
+      });
+      await active.stop();
+      expect(readCurrent).not.toHaveBeenCalled();
+      expect(broadcastToConnIds).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     { cleanup: "stop", failing: true },
     { cleanup: "disconnect", failing: false },

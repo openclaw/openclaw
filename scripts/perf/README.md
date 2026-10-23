@@ -292,7 +292,7 @@ preparation outside the measurement CPU allocation.
 ## Session pull-request subscriptions
 
 `session-pr-subscriptions-measure.ts` runs a real source Gateway in a separate
-process, with signed synthetic WebSocket clients and the standard 5,000-session
+process, waits for its readiness probe, and uses signed synthetic WebSocket clients and the standard 5,000-session
 fixture. Prepare fixtures sequentially outside measurement CPU allocations:
 
 ```sh
@@ -307,16 +307,20 @@ node --import ./scripts/tsx.mjs scripts/perf/session-pr-subscriptions-measure.ts
 
 Each tab watches one active and 49 passive session PR targets. The measured
 writer alternates an unrelated session's category through `sessions.patch`;
-category commits exercise the stored-row notification path even when PR
+`--mutation label` exercises full entry notifications instead. These commits
+exercise the stored-row notification path even when PR
 snapshots remain unchanged. The child counts eligible row notifications, samples
 all main-isolate allocations (including collected objects), and captures GC and
-promotion. Controller and socket-driver allocation is excluded. Reported notify
-latency is the category RPC round trip, not a claim of individual asynchronous
-listener completion. Setup identifies the subscription owner's native work scope
+promotion. Controller and socket-driver allocation is excluded. Notify RPC
+latency reports the mutation round trip; notify settlement latency continues
+through the native subscription owner's idle barrier. Settlement is an upper
+bound including controller and IPC overhead. Each mutation settles before the
+next scheduled mutation, and scheduling delay records any workload overruns.
+Setup identifies the subscription owner's native work scope
 from its direct caller stack, then restores the original tracking method before
 measurement. Exactly one scope must be found; connection and ingress lifetimes
-are excluded. A native idle barrier joins this owner inside the allocation capture and records settlement
-duration; failure to settle within 30 seconds fails the run. Every client must
+are excluded. Native idle barriers run inside the allocation capture and record
+settlement duration; failure to settle within 30 seconds fails the run. Every client must
 receive all watched keys before measurement. Final observations after settlement
 must match the initial snapshots; canonical hashes sort clients and session keys,
 while raw frames preserve delivery order for inspection.
@@ -338,7 +342,8 @@ per side; total GC remains the gate. Reject a mean paired regression of at least
 20%, or a metric at least 10% worse in both pairs. Inspect family allocation
 share and snapshot captures alongside total allocation at the matched workload.
 To compare a small owner-only change without another source tree, place candidate
-copies of `control-ui-session-task-prs.ts`, `control-ui-session-pr-subscriptions.ts`,
+copies of `control-ui-session-task-prs.ts`, `control-ui-session-pr-read.ts`,
+`control-ui-session-pr-subscriptions.ts`,
 and `session-row-scope.ts`
 beside the originals with a `.candidate.ts` suffix and pass `--owner-suffix candidate`.
 The child verifies all substitutions loaded; results record the owner hashes
