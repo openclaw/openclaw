@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { defineCodexBuildState } from "../build-state.js";
 import { readCodexInferenceMetadata, type CodexInferenceMetadata } from "./inference-metadata.js";
 import { isJsonObject, type JsonObject } from "./protocol.js";
@@ -176,12 +177,12 @@ export function createCodexInferenceContext(assertClientCurrent: () => void) {
             try {
               resolve(admit());
             } catch (error) {
-              reject(error);
+              reject(toErrorObject(error, "Codex inference root admission failed"));
             }
           },
           cancel: (error: unknown) => {
             remove();
-            reject(error);
+            reject(toErrorObject(error, "Codex inference root admission cancelled"));
           },
         };
         const onAbort = () => waiter.cancel(params.signal.reason);
