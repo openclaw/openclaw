@@ -190,9 +190,10 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   }
 
   // Catalog rows retain their idle prewarm and only render at their keyed section.
-  readonly catalogRendererImport = createSidebarRendererLoader(
-    () => import("./app-sidebar-session-catalog-render.tsx"),
-  );
+  private readonly Catalog = lazy(() => import("./app-sidebar-session-catalog-render.tsx"), {
+    export: "renderSessionCatalogGroups",
+  });
+  readonly catalogRendererImport = createSidebarRendererLoader(this.Catalog.preload);
   catalogProjectGrouping: CatalogProjectGrouping = loadStoredSidebarCatalogGrouping();
 
   override dismissTransientMenus(): boolean {
@@ -362,9 +363,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
       });
       return null;
     };
-    const LazyCatalog = lazy(this.catalogRendererImport.load, {
-      export: "renderSessionCatalogGroups",
-    });
+    const LazyCatalog = this.Catalog;
     const Boundary = this.catalogRendererImport.Boundary;
     const Catalog: SessionCatalogGroupsRenderer = (props) => (
       <Boundary>

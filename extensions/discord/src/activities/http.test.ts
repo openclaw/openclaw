@@ -207,6 +207,39 @@ async function createWidgetFixture(
 }
 
 describe("Discord Activity HTTP OAuth", () => {
+  it.each([false, true])(
+    "cancels rejected OAuth bodies before release when cancellation fails=%s",
+    async (cancelFails) => {
+      const lifecycle: string[] = [];
+      const response = new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("rejected"));
+          },
+          cancel() {
+            lifecycle.push("cancel");
+            if (cancelFails) {
+              throw new Error("cancel failed");
+            }
+          },
+        }),
+        { status: cancelFails ? 429 : 401 },
+      );
+      const guard = vi.fn<typeof fetchWithSsrFGuard>(async () => ({
+        response,
+        finalUrl: "https://discord.com/api/oauth2/token",
+        release: async () => {
+          lifecycle.push("release");
+        },
+      }));
+      const base = await startTokenServer(guard);
+      const result = await requestToken(base);
+      expect(result.status).toBe(401);
+      await expect(result.json()).resolves.toEqual({ error: "invalid authorization code" });
+      expect(lifecycle).toEqual(["cancel", "release"]);
+    },
+  );
+
   it("leaves the public prefix externally absent when the bot token is unresolved", async () => {
     const cfg = createActivityTestConfig();
     const config = {

@@ -2,11 +2,6 @@ import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { bindOperatorModelExecution } from "../agents/admitted-run-context.js";
-import {
-  getRuntimeAuthProfileStoreCredentialsRevision,
-  getRuntimeAuthProfileStoreSnapshotsRevision,
-  prepareRuntimeAuthProfileStoreSnapshots,
-} from "../agents/auth-profiles/runtime-snapshots.js";
 import * as preparedModelRuntime from "../agents/prepared-model-runtime.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -24,7 +19,6 @@ import {
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
-import { createEmptyRuntimeWebToolsMetadata } from "../secrets/runtime-fast-path.js";
 import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import * as sessionQueries from "../sessions/session-controller.queries.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
@@ -50,7 +44,10 @@ import {
 } from "./server-reload-handlers.config.test-support.js";
 import { startManagedGatewayConfigReloader } from "./server-reload-managed.js";
 import { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
-import { createTestRuntimeSecretsActivator } from "./server-startup-config.test-support.js";
+import {
+  createTestRuntimeSecretsActivator,
+  makePreparedSecretsSnapshot,
+} from "./server-startup-config.test-support.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
@@ -75,18 +72,6 @@ afterEach(() => {
   setGatewayRestartPolicy({ allowExternal: false });
   resetGatewayWorkAdmission();
 });
-
-function makePreparedSecretsSnapshot(config: OpenClawConfig) {
-  return {
-    sourceConfig: config,
-    config,
-    authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-    authStoreSnapshotsRevision: getRuntimeAuthProfileStoreSnapshotsRevision(),
-    warnings: [],
-    webTools: createEmptyRuntimeWebToolsMetadata(),
-    authStores: prepareRuntimeAuthProfileStoreSnapshots([]),
-  };
-}
 
 it("commits model-only role changes without retiring permitted models or original source work", async () => {
   const profileState = { scenario: "minimal", prepareProfileCatalog: true } as const;

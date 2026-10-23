@@ -14,7 +14,11 @@ import type {
 } from "../infra/approval-gateway-runtime.types.js";
 import { createApprovalNativeRouteCoordinator } from "../infra/approval-native-route-coordinator.js";
 import type { ChannelApprovalKind } from "../infra/approval-types.js";
-import { GatewayDispatchUnavailableError } from "../infra/restart-recovery-errors.js";
+import {
+  GatewayDispatchUnavailableError,
+  GatewayOperatorRecoveryAuthorizationError,
+  GatewayOperatorRecoveryOwnershipError,
+} from "../infra/restart-recovery-errors.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 // HTTP agent ingress can finish before the lazy agent.wait handler loads its recorder.
@@ -303,13 +307,17 @@ export function createGatewayInstanceRuntime(
           restored?.requesterOrigin ?? dispatchOptions.agentToolCaller?.requesterOrigin;
         assertRecoveryCurrent();
         if (requesterTarget && !requesterOrigin) {
-          throw new Error("Restart recovery requester source is unavailable; send a new request.");
+          throw new GatewayOperatorRecoveryOwnershipError(
+            "Restart recovery requester source is unavailable; send a new request.",
+          );
         }
         if (
           requesterOrigin?.operatorProfileId &&
           requesterOrigin.operatorProfileId !== operatorAuthority?.profileId
         ) {
-          throw new Error("Restart recovery requester has no matching operator authority.");
+          throw new GatewayOperatorRecoveryAuthorizationError(
+            "Restart recovery requester has no matching operator authority.",
+          );
         }
         delegatedToolPolicyHandoffId = dispatchOptions.delegatedToolPolicyHandoff
           ? registerSubagentCompletionToolHandoff(dispatchOptions.delegatedToolPolicyHandoff)

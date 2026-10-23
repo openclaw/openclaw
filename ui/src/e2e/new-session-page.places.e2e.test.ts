@@ -161,6 +161,7 @@ suite.define(() => {
     ).toBe(0);
     const fastMode = page.locator('.new-session-page__composer [data-chat-speed-option="on"]');
     await page.locator('.new-session-page__composer [data-chat-thinking-select="true"]').click();
+    await fastMode.waitFor();
     expect(await fastMode.count()).toBe(1);
     expect(await fastMode.getAttribute("aria-checked")).toBe("false");
     expect(

@@ -1,5 +1,5 @@
 import { dynamic, render, type JSX } from "@solidjs/web";
-import { createMemo, createSignal, For, onSettled, runWithOwner, Show, untrack } from "solid-js";
+import { createMemo, createSignal, For, onSettled, runWithOwner, Show } from "solid-js";
 import { PRESENTATION_CHANGED_EVENT, type PresentationBinding } from "../../../lib/presentation.ts";
 import { ApplicationProvider } from "../../../lib/reactive/context.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
@@ -51,6 +51,13 @@ function TranscriptRows(props: {
   const virtualRows = createMemo(() => {
     return props.snapshot.virtualizer.getVirtualItems();
   });
+  const rowRef = (key: string) => {
+    const measureRef = props.measureRowRefFor(key);
+    return elementRef((element: HTMLDivElement) => {
+      measureRef(element);
+      return () => measureRef(undefined);
+    });
+  };
   return (
     <>
       <Show when={props.snapshot.header}>{(header) => <ChatHistoryBoundary {...header()} />}</Show>
@@ -73,20 +80,13 @@ function TranscriptRows(props: {
                   ? virtualRow().start - previous.end
                   : 0;
               };
-              // The keyed row owns one measurement binding for its entire mounted lifetime.
-              const initialKey = untrack(() => String(virtualRow().key));
-              const measureRef = props.measureRowRefFor(initialKey);
-              const rowRef = elementRef((element: HTMLDivElement) => {
-                measureRef(element);
-                return () => measureRef(undefined);
-              });
               return (
                 <>
                   <Show when={gap() > 0}>
                     <div aria-hidden="true" style={{ height: `${gap()}px` }} />
                   </Show>
                   <div
-                    ref={rowRef}
+                    ref={[rowRef(String(virtualRow().key))]}
                     class={[
                       "chat-virtual-row",
                       { "chat-virtual-row--first": virtualRow().index === 0 },
