@@ -5,6 +5,7 @@ import { gfmTableFromMarkdown } from "mdast-util-gfm-table";
 import { gfmTable } from "micromark-extension-gfm-table";
 import { hasUnresolvedImageCode } from "./image-code-retention.js";
 import { findUnsettledDefinitionStarts } from "./reference-definition-retention.js";
+import { retainTableParagraph } from "./table-code-retention.js";
 
 export type ReasoningTagTextDelta =
   | { kind: "text"; text: string }
@@ -188,7 +189,7 @@ export function findNextLineEnding(text: string, start: number): number {
   return lineFeed === -1 ? carriageReturn : Math.min(carriageReturn, lineFeed);
 }
 
-type PositionedNode = {
+export type PositionedNode = {
   type?: string;
   value?: string;
   identifier?: string;
@@ -396,19 +397,7 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownOwnership
     const blockStart = block.position?.start?.offset;
     const endLine = block.position?.end?.line;
     const blockEnd = block.position?.end?.offset;
-    const previous = blocks[index - 1];
-    const startLine = block.position?.start?.line;
-    // An unfinished table delimiter can still rejoin its preceding paragraph.
-    if (
-      block.type === "table" &&
-      block.children?.length === 1 &&
-      blockEnd === text.length &&
-      previous?.type === "paragraph" &&
-      startLine !== undefined &&
-      previous.position?.end?.line === startLine - 1
-    ) {
-      retainStart = Math.min(retainStart, previous.position?.start?.offset ?? retainStart);
-    }
+    retainStart = retainTableParagraph(retainStart, text.length, block, blocks[index - 1]);
     if (
       paragraphs &&
       block.type === "paragraph" &&
