@@ -50,7 +50,7 @@ const catalogMetadata = new WeakMap<
   ToolSearchCatalogSession,
   {
     toolExecutionAllow?: readonly string[];
-    directTools?: readonly CatalogTool[];
+    directTools?: readonly AnyAgentTool[];
     directClientTools?: readonly CatalogTool[];
   }
 >();
@@ -116,6 +116,7 @@ function sameCatalogDescriptor(a: ToolSearchCatalogEntry, b: ToolSearchCatalogEn
       (a.label ?? "") === (b.label ?? "") &&
       a.description === b.description &&
       (a.directVisible === true) === (b.directVisible === true) &&
+      (a.requiresExactId === true) === (b.requiresExactId === true) &&
       (a.mcp === b.mcp || stableStringify(a.mcp) === stableStringify(b.mcp)) &&
       sameCatalogSchema(a.source, a.parameters, b.parameters) &&
       sameCatalogSchema(a.source, a.outputSchema, b.outputSchema))
@@ -281,10 +282,15 @@ export function collectUniqueCatalogToolNames(tools: readonly AnyAgentTool[]): S
 function finalizeCatalogAvailability(
   entries: ToolSearchCatalogEntry[],
   toolExecutionAllow?: readonly string[],
-  directTools: readonly CatalogTool[] = [],
+  directTools: readonly AnyAgentTool[] = [],
   directClientTools: readonly CatalogTool[] = [],
 ): ToolSearchCatalogEntry[] {
   const orderedEntries = entries.toSorted((a, b) => a.id.localeCompare(b.id));
+  // Selected-out eligible tools still own their native names. Recording the collision
+  // on descriptors keeps cached directories and name-based lookup in agreement.
+  const directNames = new Set(
+    [...directTools.filter(shouldCatalogTool), ...directClientTools].map((tool) => tool.name),
+  );
   // Client definitions win exact-name shadows, matching the guest projection.
   const tools = [
     ...directTools,
@@ -296,14 +302,17 @@ function finalizeCatalogAvailability(
   finalizeAgentToolAvailability(tools, { toolExecutionAllow });
   // The array is a fresh copy, but its descriptors may belong to retained snapshots.
   orderedEntries.forEach((entry, index) => {
+    const requiresExactId = directNames.has(entry.name);
     if (
       entry.parameters !== entry.tool.parameters ||
-      entry.description !== entry.tool.description
+      entry.description !== entry.tool.description ||
+      (entry.requiresExactId === true) !== requiresExactId
     ) {
       orderedEntries[index] = {
         ...entry,
         parameters: entry.tool.parameters,
         description: entry.tool.description ?? "",
+        requiresExactId,
       };
     }
   });
@@ -316,7 +325,7 @@ function registerToolSearchCatalog(params: {
   mode?: "append" | "reuse";
   replaceSource?: CatalogSource;
   toolExecutionAllow?: readonly string[];
-  directTools?: readonly CatalogTool[];
+  directTools?: readonly AnyAgentTool[];
   directClientTools?: readonly CatalogTool[];
 }): boolean {
   const existing = params.catalogRef.current;
@@ -567,7 +576,7 @@ export function applyToolCatalogCompaction(
   }
 
   const visible: AnyAgentTool[] = [];
-  const directTools: CatalogTool[] = [];
+  const directTools: AnyAgentTool[] = [];
   const catalog: ToolSearchCatalogEntry[] = [];
   const selected = createToolSearchSelectionMatcher(params.selection);
   for (const tool of tools) {

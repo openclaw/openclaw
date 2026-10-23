@@ -166,6 +166,11 @@ Direct-only tools stay outside the catalog. Core coding primitives and
 runtime-required trusted direct tools retain their existing mode-specific
 visibility even if selected.
 
+If selectors split same-named tools between the direct and deferred surfaces,
+use the deferred tool's exact catalog ID. Its bare name is not listed as uniquely
+callable, and name-only catalog calls are rejected rather than selecting a
+different owner.
+
 Both Tool Search modes support selectors. In `directory` mode, client tools
 still stay direct regardless of selectors; the Copilot harness retains its
 documented mapping of `directory` to `tools`. Engaged independent

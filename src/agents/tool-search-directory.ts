@@ -112,7 +112,9 @@ export function resolveToolSearchCatalogTool(
     return undefined;
   }
   const matches = visibleCatalogEntries(catalog, options).filter((entry) => entry.name === needle);
-  return matches.length === 1 ? (matches[0]?.tool as AnyAgentTool | undefined) : undefined;
+  return matches.length === 1 && !matches[0]?.requiresExactId
+    ? (matches[0]?.tool as AnyAgentTool | undefined)
+    : undefined;
 }
 
 function compactDirectoryDescription(description: string, maxChars: number): string {
@@ -177,7 +179,7 @@ function formatToolSearchCatalogDirectory(
   }
   // Count collisions before excluding native tools: their lookalikes remain ambiguous.
   const listedEntries = deferredEntries
-    .filter((entry) => nameCounts.get(entry.name) === 1)
+    .filter((entry) => !entry.requiresExactId && nameCounts.get(entry.name) === 1)
     .toSorted(
       (left, right) =>
         (left.name < right.name ? -1 : left.name > right.name ? 1 : 0) ||

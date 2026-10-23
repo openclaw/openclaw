@@ -8,6 +8,7 @@ import { wrapToolDefinition } from "./sessions/tools/tool-definition-wrapper.js"
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 import { filterToolsByPolicy } from "./tool-policy-match.js";
 import { addClientToolsToToolCatalog } from "./tool-search-catalog.js";
+import { resolveToolSearchCatalogTool } from "./tool-search-directory.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import {
   createToolSearchSelectionMatcher,
@@ -216,6 +217,64 @@ describe("Tool Search selectors", () => {
       }
     },
   );
+
+  it("keeps split direct/deferred names ambiguous across inventory and prompt-policy refreshes", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const config: OpenClawConfig = {
+      tools: { toolSearch: { mode: "directory", include: [{ source: "openclaw" }] } },
+    };
+    const ctx = { config, catalogRef };
+    const native = tool("acme_lookup", "plugin");
+    setPluginToolMeta(native, { pluginId: "acme", optional: false });
+    const direct = tool("acme_lookup", "mcp");
+    const apply = (includeDirect: boolean) =>
+      applyToolSchemaDirectoryCatalog({
+        ...ctx,
+        tools: [...createToolSearchTools(ctx), native, ...(includeDirect ? [direct] : [])],
+      });
+    const runtime = new ToolSearchRuntime(ctx, resolveToolSearchConfig(config));
+    const ambiguous = "Ambiguous tool name: acme_lookup; use an exact tool id.";
+    try {
+      const surface = apply(true);
+      expect(surface.tools).toContain(direct);
+      expect(surface.tools).not.toContain(native);
+      expect(buildToolSchemaDirectoryPrompt(ctx)).not.toContain("- acme_lookup (acme)");
+      expect(resolveToolSearchCatalogTool(ctx, "acme_lookup")).toBeUndefined();
+      await expect(runtime.describe("acme_lookup")).rejects.toThrow(ambiguous);
+      await expect(runtime.call("acme_lookup", {})).rejects.toThrow(ambiguous);
+      await expect(runtime.call("acme_lookupp", {})).rejects.toThrow(
+        "Did you mean: openclaw:acme:acme_lookup",
+      );
+      expect(native.execute).not.toHaveBeenCalled();
+      expect(direct.execute).not.toHaveBeenCalled();
+      await runtime.call("openclaw:acme:acme_lookup", {});
+      await direct.execute("direct-call", {});
+      expect(native.execute).toHaveBeenCalledOnce();
+      expect(direct.execute).toHaveBeenCalledOnce();
+
+      const policy = createAgentHarnessPromptToolPolicy({
+        tools: surface.tools,
+        catalogRef,
+        codeModeControlsEnabled: false,
+        catalogPrompt: { config },
+      });
+      policy.apply({ toolsAllow: ["acme"] });
+      expect(buildToolSchemaDirectoryPrompt(ctx)).toContain("- acme_lookup (acme)");
+      await expect(runtime.describe("acme_lookup")).resolves.toMatchObject({ source: "openclaw" });
+      policy.apply();
+      expect(buildToolSchemaDirectoryPrompt(ctx)).not.toContain("- acme_lookup (acme)");
+      await expect(runtime.call("acme_lookup", {})).rejects.toThrow(ambiguous);
+
+      apply(false);
+      expect(buildToolSchemaDirectoryPrompt(ctx)).toContain("- acme_lookup (acme)");
+      expect(resolveToolSearchCatalogTool(ctx, "acme_lookup")).toBe(native);
+      apply(true);
+      expect(buildToolSchemaDirectoryPrompt(ctx)).not.toContain("- acme_lookup (acme)");
+      expect(resolveToolSearchCatalogTool(ctx, "acme_lookup")).toBeUndefined();
+    } finally {
+      clearToolSearchCatalog({ catalogRef });
+    }
+  });
 
   it("never reintroduces denied tools and invalidates selected catalogs and cached guidance", async () => {
     const catalogRef = createToolSearchCatalogRef();
