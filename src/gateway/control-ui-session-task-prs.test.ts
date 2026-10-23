@@ -127,6 +127,7 @@ it("shares lineage work across audiences without sharing visibility or stale des
   await projection.ensureMaterialized();
   const root = projection.describe({ agentId: "main", key: sessionKey })!;
   const reads = vi.spyOn(projection, "selectEntries");
+  const captures = vi.spyOn(projection, "capture");
   const resolveParent = vi.spyOn(records, "parentReference");
   const expected = (keys: string[]) =>
     keys.map((key) => ({
@@ -142,6 +143,7 @@ it("shares lineage work across audiences without sharing visibility or stale des
     expected([child, hidden, leaf, sessionKey]),
   );
   const firstReads = reads.mock.calls.length;
+  const firstCaptures = captures.mock.calls.length;
   expect(firstReads).toBeGreaterThan(0);
   expect(selectTaskPublicationSessions(projection, root, allowsShared)).toEqual(
     expected([child, leaf, sessionKey]),
@@ -150,7 +152,34 @@ it("shares lineage work across audiences without sharing visibility or stale des
     expected([child, hidden, leaf, sessionKey]),
   );
   expect(reads).toHaveBeenCalledTimes(firstReads);
+  expect(captures).toHaveBeenCalledTimes(firstCaptures);
   expect(resolveParent).not.toHaveBeenCalled();
+
+  await fixture.seed("agent:main:unrelated", fixture.profile.id);
+  await projection.ensureMaterialized();
+  selectTaskPublicationSessions(projection, root, allowsAll);
+  const afterCreation = reads.mock.calls.length;
+  await fixture.seed("agent:main:unrelated", fixture.profile.id, {
+    label: "Updated",
+    updatedAt: 2,
+  });
+  await fixture.seed(child, fixture.profile.id, { parentSessionKey: sessionKey, label: "Updated" });
+  await projection.ensureMaterialized();
+  expect(selectTaskPublicationSessions(projection, root, allowsShared)).toEqual(
+    expected([child, leaf, sessionKey]),
+  );
+  expect(reads).toHaveBeenCalledTimes(afterCreation);
+
+  // Permissions consume the replacement row even when lineage itself is unchanged.
+  await fixture.seed(hidden, fixture.profile.id, {
+    parentSessionKey: sessionKey,
+    visibility: "shared",
+  });
+  await projection.ensureMaterialized();
+  expect(
+    selectTaskPublicationSessions(projection, root, (row) => row.entry.visibility !== "draft"),
+  ).toEqual(expected([child, hidden, leaf, sessionKey]));
+  expect(reads).toHaveBeenCalledTimes(afterCreation);
 
   await fixture.seed(leaf, fixture.profile.id, { parentSessionKey: hidden, updatedAt: 2 });
   await projection.ensureMaterialized();

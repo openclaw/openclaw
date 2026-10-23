@@ -223,6 +223,10 @@ async function fixture({
     },
     resolveUpdateResultNextAction: () => "Retain recovery material until health is verified.",
     completeUpdateCommandRun: (value) => value,
+    // This VM has no durable recovery ledger. Recovery-artifact deletion has
+    // real owner/filesystem coverage in update-automatic-cleanup.test.ts; these
+    // cases prove the separate package transaction's retirement authorization.
+    automaticallyCleanUpdateRecovery: async () => undefined,
     prepareResult: async (value) => () => printed.push(value),
     printResult: (value) => printed.push(value),
     writeControlPlaneUpdateRestartSentinel: async () => {},

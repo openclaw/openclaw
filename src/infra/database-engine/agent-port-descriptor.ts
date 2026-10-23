@@ -7,6 +7,7 @@ import {
 } from "../../../packages/memory-host-sdk/src/host/memory-search-schema.js";
 import { readTranscriptPayload } from "../../config/sessions/transcript-payload.js";
 import { deriveTranscriptPredicateFields } from "../../config/sessions/transcript-predicate-fields.js";
+import { FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS } from "../../state/openclaw-agent-db-additive-columns.js";
 import {
   AGENT_MEMORY_REVISION_SCHEMA_VERSION,
   AGENT_VECTOR_DECODER_SCHEMA_VERSION,
@@ -34,6 +35,7 @@ import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../state/openclaw-agent-schema.js"
 import { agentTranscriptSearchSchema } from "../../state/openclaw-agent-search-schema.js";
 import { withLegacyAgentPostgresTrajectoryStorage } from "../../state/openclaw-agent-trajectory-storage-migration.js";
 import { withLegacyAgentPostgresWriteLayout } from "../../state/openclaw-agent-write-layout-migration.js";
+import { ensureColumn } from "../../state/openclaw-state-db-schema-helpers.js";
 import metadata from "../../state/postgres-schema.generated/agent-port.json" with { type: "json" };
 import { agentPostgresRuntime } from "../../state/postgres-schema.generated/agent-runtime.js";
 import { agentSearchPostgresRuntime } from "../../state/postgres-schema.generated/agent-search-runtime.js";
@@ -55,7 +57,12 @@ import {
 } from "./agent-port-projections.js";
 import { withDatabaseEngineSelection } from "./context.js";
 import type { SearchSchema } from "./contract.js";
-import { DatabasePortDataError, type PortDescriptor, type PortTable } from "./port-descriptor.js";
+import {
+  DatabasePortDataError,
+  pendingSqliteColumns,
+  type PortDescriptor,
+  type PortTable,
+} from "./port-descriptor.js";
 import { pgSearchName, postgresSearchSql } from "./postgres-search-schema.js";
 import { resolveDatabaseFamilyEngines } from "./registry.js";
 
@@ -314,7 +321,7 @@ export async function loadAgentPortDescriptor(
           needsIndexRepair ||
           Boolean(hasRetiredUsagePartitions) ||
           hasPendingCurrentVersionAgentDatabaseMigration(db),
-        pendingColumns: {},
+        pendingColumns: pendingSqliteColumns(db, FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS),
       };
     },
     async migrateSqliteSource(file, _version, assertCurrent) {
@@ -336,6 +343,13 @@ export async function loadAgentPortDescriptor(
             file,
             async () => {
               ensureOpenClawAgentDatabaseSchema(db, { agentId, register: false });
+              for (const {
+                tableName,
+                columnName,
+                dataType,
+              } of FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS) {
+                ensureColumn(db, tableName, `${columnName} ${dataType}`);
+              }
               // Retired partitions are rebuilt from retained transcripts; their NUL keys cannot port.
               executeSqliteQuerySync(
                 db,

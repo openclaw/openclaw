@@ -157,6 +157,7 @@ export function buildFallbackCandidateTurnParams(params: AgentFallbackCandidateC
     fastModeAutoProgressState: params.fastModeAutoProgressState,
     isFinalFallbackAttempt: params.isFinalFallbackAttempt,
     resolvedModelSelection: params.resolvedModelSelection,
+    modelRoutingProvenance: params.modelRoutingProvenance,
     modelFallbacksOverride: params.modelFallbacksOverride,
     prompt: turn.commandBody,
     finalizePromptForResolvedTools:

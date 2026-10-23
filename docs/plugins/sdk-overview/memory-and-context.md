@@ -211,6 +211,14 @@ Capabilities are enforced before provider code runs:
 | Automatic recall  | `candidates` array containing `"trigger"` and/or `"project"`        | `candidates({ kind })` names an undeclared kind                           |
 | Project filtering | `projectFilter: boolean`                                            | non-empty `activeProjectKeys` is supplied when project filtering is false |
 
+The selected memory slot owner can also join `/learn` by declaring
+`learnToolNames` and `learnGuidanceBuilder`. The host checks the declared tools
+against the turn's tool policy and calls the builder with the allowed subset;
+the builder returns guidance lines appended to the `/learn` prompt, or `[]`
+when those tools cannot persist lessons. The host adds a routing rule when
+Skill Workshop is also available. Unselected sidecars cannot contribute these
+fields.
+
 The selected memory slot owner can also declare `recallToolNames`. These are
 the concrete agent tools Active Memory uses for deep recall. A valid explicit
 Active Memory `toolsAllow` list takes precedence, followed by the selected

@@ -59,7 +59,10 @@ async function checkRequesterOwner(
 ): Promise<boolean> {
   switch (requester.kind) {
     case "channel": {
-      const prepared = await prepareCommandOwnerAuthority(cfg, requester.requester);
+      // The stored envelope's version would select the recovery-reference branch; pass
+      // only the native sender identity so configured and linked owners are rechecked.
+      const { channel, accountId, senderId } = requester.requester;
+      const prepared = await prepareCommandOwnerAuthority(cfg, { channel, accountId, senderId });
       return prepared.source !== undefined && prepared.isCurrent(cfg);
     }
     case "profile":

@@ -467,6 +467,11 @@ The dry run inventories sources and checks read-only prerequisites. It does not
 create a recovery manifest, copy data, create destination namespaces, or complete
 checks that need private migration or a privilege probe. `--json` is available.
 
+Empty retained retired tables such as `fleet_cells` are skipped with an inspection
+note. Populated retired tables refuse the port so their rows cannot be silently
+discarded; preserve the SQLite store and archive the retired data through its owner
+before retrying. Unrecognized tables still require complete descriptor coverage.
+
 The real port includes registered shared-state, agent, Workboard, Logbook, and
 Team Reports stores, including retained roots and disabled plugin data. Keep
 matching separately installed plugins available so their schema owners can be

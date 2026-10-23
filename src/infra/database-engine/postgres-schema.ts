@@ -13,6 +13,14 @@ import {
 } from "./postgres-catalog.js";
 import { postgresSearchSql } from "./postgres-search-schema.js";
 
+export function postgresStoreNamespace(
+  schemaPrefix: string,
+  store: string,
+  storeId: string,
+): string {
+  return `${schemaPrefix}_${store}_${storeId.replaceAll("-", "").slice(0, 16)}`;
+}
+
 export const postgresSchemaMetadataSql = `CREATE TABLE openclaw_schema_meta (
   store TEXT PRIMARY KEY, version BIGINT NOT NULL, store_id TEXT NOT NULL,
   fingerprint TEXT, ddl_hash TEXT, server_major BIGINT)`;

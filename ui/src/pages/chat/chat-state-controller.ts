@@ -81,7 +81,6 @@ export function createChatState<TState extends ChatPageHost>(
   let attachmentReadsValue = new ChatAttachmentReadLifecycle(attachmentChanged);
   let publishedDraft: ReturnType<typeof composerDraft.read> | undefined;
   let publishedAttachmentReads: ChatAttachmentReadLifecycle | undefined;
-  let publishedAttachmentReadRevision: number | undefined;
   const composerPersistence = new ChatComposerPersistence(
     () => stateValue,
     () => {
@@ -326,7 +325,6 @@ export function createChatState<TState extends ChatPageHost>(
   function publishComposerDraft() {
     publishedDraft = composerDraft.read();
     publishedAttachmentReads = attachmentReadsValue;
-    publishedAttachmentReadRevision = attachmentReadsValue.revision;
     composerDraft.publish();
   }
 
@@ -475,7 +473,6 @@ export function createChatState<TState extends ChatPageHost>(
     if (
       !publishedDraft ||
       attachmentReadsValue !== publishedAttachmentReads ||
-      attachmentReadsValue.revision !== publishedAttachmentReadRevision ||
       draft.draft !== publishedDraft.draft ||
       draft.mentions !== publishedDraft.mentions ||
       draft.attachments !== publishedDraft.attachments ||

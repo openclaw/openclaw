@@ -1547,6 +1547,13 @@ openclaw doctor
 
 Migrates config, audits DM policies, and checks gateway health. Doctor also compares active official plugins with the OpenClaw package the managed service will load after restart. Resolve any plugin restart-readiness warning before continuing. Details: [Doctor](/gateway/doctor)
 
+Standalone repair cancels its pre-repair original-state capture after ten minutes.
+If that capture times out, Doctor waits for its workers to settle and reports a
+warning with backup and retry instructions; repair-specific migration backups still apply.
+Doctor restores a managed Gateway it stopped, including after interruption. If
+restoration fails, it prints the failure and the command to start the Gateway
+after resolving it.
+
 On Linux, `openclaw doctor --fix` can reclaim abandoned updater runtimes even
 after a systemd user-manager re-exec. The manager's `--deserialize` argument and
 its protected `(sd-pam)` child do not count as runtime holders. Actual runtime

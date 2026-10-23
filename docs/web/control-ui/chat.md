@@ -413,12 +413,14 @@ unchanged. The encoder loads on demand and runs in a background worker, with
 per-file progress while you keep typing. Remove the file to cancel. Nothing is
 uploaded until preparation finishes and you send the message.
 
-The copy preserves audio and orientation, uses MP4 when the browser supports the
-required codecs or WebM otherwise, and limits the longest edge to 1920 pixels
-and frame rate to 30 fps. The original file is never changed. The final bytes
-must fit the advertised per-file and batch limits; if the browser cannot decode
-or encode the video with its audio, or a smaller copy still cannot fit, the slot
-shows an error. Choose a smaller file, trim the video, or try another browser.
+Compression re-encodes a copy, targets the displayed orientation, and limits the
+longest edge to 1920 pixels and frame rate to 30 fps. The original file is never
+changed. The final bytes must fit the advertised per-file and batch limits. A
+compression failure keeps the card with **Retry compression**; removing it cancels
+preparation. Retrying does not add codec support. Trim the video, choose a smaller
+file, or try another browser if preparation still fails. See
+[Video preparation compatibility](/web/control-ui/chat#video-preparation-compatibility) for output
+formats, evidence, and remaining gaps.
 
 In **Plugins**, administrators can select **Add MCP server…** and choose a scope. **This session** saves the server definition globally but disabled by default, then enables it only for the current session. **Everywhere** saves the definition enabled globally. Transport, authentication, and other server-definition fields are always global. Session policy can override server enablement and deny individual tools through **Tool access**.
 
@@ -429,6 +431,179 @@ If **Tool access** is already open, it refreshes when the current session's run 
 Capability toggles stay disabled until the Gateway, session, and runtime config are loaded, and read-only operators cannot change them. Adding a server requires administrator access. See [Connect MCP servers](/tools/mcp) for the Settings, CLI, and config paths.
 
 Switching capability views focuses the first menu item after the new view renders, while preserving any newer focus choice you make.
+
+## Video preparation compatibility
+
+**Compress to fit** is local, pre-upload preparation in the Control UI's Chat
+and New Session composers. It is separate from the Gateway's post-upload
+[playback renditions](/nodes/media-playback#lazy-playback-renditions). A playable
+original, a visible thumbnail, or successful Gateway playback does not prove
+that this browser can compress the recording. Native composers need their own
+transport and lifecycle proof; a shared worker or embedded WKWebView result is
+not native-app qualification.
+
+### Output and input boundaries
+
+The worker prefers MP4 when its H.264 and, for inputs with audio, AAC encoder
+checks succeed. Otherwise it checks VP9 and Opus for WebM. These are candidate
+paths, not a browser support table:
+
+| Output | Video | Audio, when present | MIME         | Extension |
+| ------ | ----- | ------------------- | ------------ | --------- |
+| MP4    | H.264 | AAC                 | `video/mp4`  | `.mp4`    |
+| WebM   | VP9   | Opus                | `video/webm` | `.webm`   |
+
+Source AAC may be transcoded to Opus on the WebM path. Neither path is lossless
+by default. Usable audio does not establish APAC or spatial-audio preservation;
+HDR/color preservation also needs separate evidence.
+
+A container such as MOV can hold several different tracks. Container recognition
+alone does not establish decoder availability. At the baseline below, the worker
+requires exactly one video track, a finite positive duration, available output
+encoders, and a valid conversion with **no discarded tracks**. A decodable video
+and AAC track can therefore still be refused if another track is unsupported.
+Do not classify every MOV, HEVC recording, or Apple device as unsupported from
+that refusal. See [Mediabunny's format/codec guide](https://mediabunny.dev/guide/supported-formats-and-codecs)
+for the distinction between containers, codecs, and browser capabilities.
+
+### Evidence baseline
+
+Source inspected at OpenClaw
+[`068f9a75733f9f55b8393077729550f3b87d99a3`](https://github.com/openclaw/openclaw/commit/068f9a75733f9f55b8393077729550f3b87d99a3),
+with UI Mediabunny **1.61.4**:
+
+- The [worker](https://github.com/openclaw/openclaw/blob/068f9a75733f9f55b8393077729550f3b87d99a3/ui/src/pages/chat/components/chat-attachment-video.worker.ts)
+  selects the output paths above and rejects discarded tracks. This is source
+  inspection, not a physical-device or current-candidate conversion run.
+- The [existing browser test](https://github.com/openclaw/openclaw/blob/068f9a75733f9f55b8393077729550f3b87d99a3/ui/src/e2e/chat-video-compression.e2e.test.ts)
+  uses a repository MP4 fixture with 256 KiB of padding and a 128 KiB test budget. It
+  exercises real preparation, bounded nonempty output, playback dimensions and
+  duration, draft/IME behavior, retry, and cancellation through a mock Gateway.
+  Playback is **muted**. It does not establish audible audio, A/V synchronization,
+  physical Apple behavior, or a particular output codec merely by accepting
+  either extension. Controlled missing-encoder coverage is not a browser
+  capability measurement. These tests were inspected, not rerun for this baseline.
+- [#172844](https://github.com/openclaw/openclaw/pull/172844) reports a
+  3,091,704-byte input converted to 752,337 bytes under a 1 MiB budget with
+  VP9/Opus, and a rotated case producing 540 × 960 output. Its final head is
+  `8d14e2b5e47fe89a50b5c5304c857f89753f8ca1`, with Mediabunny **1.61.0**.
+  The report does not bind those earlier size/rotation measurements to an exact
+  run revision. These are author-reported historical results, not independently
+  executed qualification here. Exact recording/processing versions, fixture provenance,
+  and listening/sync evidence are incomplete; do not transfer them to current main.
+- The H.264/AAC/additional-APAC rejection reported in
+  [#180550](https://github.com/openclaw/openclaw/issues/180550) used a beta.3-based
+  backport and Mediabunny **1.61.0** in isolated Chromium. Its exact candidate
+  revision was not supplied there. It is a reported **REFUSAL**, not a current-main
+  APAC reproduction, physical-Apple run, or successful compatible copy.
+
+### Qualification outcomes
+
+Use these outcomes separately for each executed input/surface pair:
+
+| Outcome                   | Meaning                                                                          |
+| ------------------------- | -------------------------------------------------------------------------------- |
+| PASS-THROUGH              | Input bytes are unchanged; not compression proof.                                |
+| SUCCESSFUL CONVERSION     | Encoding occurred and the agreed checks passed.                                  |
+| DISCLOSED-LOSS CONVERSION | Encoding and checks passed after accepted, specific loss disclosure and consent. |
+| REFUSAL                   | Preparation actually rejected the input; not compatibility success.              |
+| UNTESTED                  | No qualifying execution exists. Unknown is not unsupported.                      |
+| BLOCKED                   | A named prerequisite is missing; record it and the next owner/action.            |
+
+### Proposed successful-conversion minimum
+
+The following is a **proposal for agreement**, not an accepted support promise
+or completed matrix. No operator/device booking or WKWebView-host access is
+confirmed in this baseline. Input descriptions are targets, not probed track
+facts. Every row still needs the evidence record below; actual versions,
+capabilities, budgets, sizes, and outputs are unmeasured. A pass-through or refusal
+cannot satisfy a row once successful conversion is agreed as required.
+
+| ID  | Recording target → processing surface                                                            | Current outcome and missing prerequisite                                                                  |
+| --- | ------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------- |
+| C1  | iPhone H.264/AAC portrait and HEVC/AAC SDR landscape camera inputs → physical iPhone Safari      | BLOCKED: consenting device operator and fixtures.                                                         |
+| C2  | Audible iPad screen recording, with orientation coverage → physical iPad Safari                  | BLOCKED: consenting device operator and fixture.                                                          |
+| C3  | Apple H.264 and HEVC camera/screen fixtures → macOS Safari                                       | BLOCKED: macOS/browser operator and fixtures.                                                             |
+| C4  | Identified fixture → existing macOS WKWebView host's actual Control UI preparation path          | BLOCKED: identify host, access owner, operator, and fixture.                                              |
+| C5  | Apple camera fixture → Windows Chrome                                                            | BLOCKED: Windows/browser operator and fixture.                                                            |
+| C6  | Apple screen-recording fixture → Windows Edge                                                    | BLOCKED: Windows/browser operator and fixture.                                                            |
+| O1  | Actual MP4/H.264/AAC output in a capable browser; may reuse C1–C6                                | UNTESTED: verify capabilities and execute with audible content.                                           |
+| O2  | Actual WebM/VP9/Opus output, including AAC-source audio, in a capable browser                    | UNTESTED: verify capabilities and execute; existing Linux Chromium infrastructure is only a candidate.    |
+| M1  | Genuine redistributable AAC/APAC input → physical Apple Safari and a qualified WebM-path browser | BLOCKED: mixed-track policy, fixture, and operators; only if that policy is accepted.                     |
+| H1  | Apple HEVC/HDR → physical Apple Safari and macOS Safari                                          | BLOCKED: HDR fixture/operators and preservation proof or separate acceptance of disclosed SDR conversion. |
+
+This is not an exhaustive cross-product. Android, other desktop, VP8/VP9/Opus,
+and native-client qualification remain subsequent umbrella slices, not erased
+requirements. Proposed ownership: Vitor or a maintainer nominates consenting
+physical-device/browser operators; device/access owners approve hands-on tests.
+The preparation
+implementation owner prepares the device runbook and reconciles conversion
+evidence. A documented remote-test route is not an allocated environment.
+
+### Evidence record and runbook
+
+For **each row**, retain one record with:
+
+- Recording device/model and recording OS/version, or synthetic/public provenance
+  and redistribution license; camera versus screen recording.
+- Actual input container and all video/audio tracks, including AAC/APAC where
+  present; orientation/rotation, aspect ratio, and SDR/HDR facts.
+- Separate processing OS, browser/app version, and surface; exact OpenClaw,
+  dependency, and candidate revisions; measured decoder/encoder availability.
+- Applicable budget and input/output byte counts; actual output container, codecs,
+  MIME, and extension. Do not fill these from the requested encoder alone.
+- Exercised boundary, outcome, public-safe evidence link and fixture hash,
+  remaining limitation, operator/access owner, and next action. Label evidence
+  author-reported, independently inspected, or actually executed. Unavailable
+  fields stay unknown with a reason, not an inferred pass.
+
+Use an over-budget recording or the existing controlled test budget. Never raise
+production upload limits to obtain a pass. Padding can exercise admission, but
+does not establish realistic audible content or prove that encoding occurred.
+
+1. Confirm nonempty output within the applicable budget, unchanged admission
+   safeguards, and the actual container/codecs/MIME/extension.
+2. Play the copy on the named target. Listen **unmuted** to known expected content;
+   automated audio checks support, but do not replace, listening. Use beginning
+   and end synchronization markers. Proposed tolerances are at most **100 ms**
+   A/V offset/drift and **250 ms** duration difference; record acceptance or a
+   justified fixture-specific tolerance before declaring success.
+3. Check duration, upright orientation, aspect ratio, no unintended crop, and
+   explicit HDR/color/spatial findings. Keep the original bytes unchanged and
+   recoverable; usable stereo audio does not prove spatial preservation.
+4. Exercise cancellation, removal, retry, failed preparation, draft/session
+   replacement, and the ready-result lifecycle. Preserve text/other attachments
+   and prevent a removed or stale result from being sent.
+
+Synthetic unknown-codec tracks are not genuine APAC reproduction. Publish only
+redistributable fixtures and safe hashes/evidence. Do not publish credentials or
+private originals, recordings, paths, configuration, conversations, screenshots,
+or runtime logs. Keep the checkpoint's source/candidate revisions, evidence
+provenance, proposed/accepted decisions, row outcomes, gaps, owners/access, and
+next action current.
+
+### Outstanding compatibility decisions
+
+[#180550](https://github.com/openclaw/openclaw/issues/180550) still needs an agreed
+mixed-track policy and qualification matrix. Diagnostics and this documentation
+do not make rejected recordings convertible. If maintainers reject an AAC/APAC
+compatible-copy fallback, record that decision and the unresolved compatibility
+gap. All-track preservation through supported capabilities, dependency support,
+or another accepted remedy still require investigation. Missing hardware or a
+fixture does not make that outcome optional. A real platform limitation leaves
+a failed/blocked cell and an outstanding support/scope decision, not a pass.
+
+The [compression foundation](https://github.com/openclaw/openclaw/pull/172844),
+[card/progress/retry flow](https://github.com/openclaw/openclaw/pull/179007),
+[named-error proposal](https://github.com/openclaw/openclaw/pull/180319),
+[picker discovery](https://github.com/openclaw/openclaw/issues/180298), and
+[M4V playback policy](https://github.com/openclaw/openclaw/pull/172163) have distinct
+owners. The closed [cross-client playback foundation](https://github.com/openclaw/openclaw/issues/115590)
+does not qualify pre-upload conversion. Initial diagnostic, compatible-copy, and
+documentation PRs only advance the umbrella. Completion requires the agreed
+compatibility outcomes and successful-conversion cells, or an explicit maintainer
+scope change; implementation gaps, hardware gaps, and optional follow-ups remain
+separate.
 
 ## Emoji shortcodes
 
@@ -642,7 +817,7 @@ Run-error banners offer **Refresh** to reload the conversation without resending
     - **Split view:** open the session actions menu (**⋯**) and select **Open split view**. For an existing pane, use the menu's **View** group to split it right or down for as many panes as fit. Each pane has its own session title, thread, transcript, composer, and tool stream. Titles stay with their conversations when you focus a pane belonging to another agent.
     - Agents with the `screen` tool can request pane, sidebar, terminal, browser, desktop, portal, focus, and navigation changes in the capable Control UI browser that requested the turn. Other connected browsers keep their own layout; see [Screen](/tools/screen).
     - Drag a session from the sidebar into chat to open it in a pane. An animated drop preview glides between zones and labels the outcome — "Split" over the exact half a new pane will occupy, "Open here" over a whole pane — and drops also work from single-pane mode.
-    - The active split pane drives the sidebar selection and URL. Selecting another pane or closing the active pane uses the surviving conversation's Chat or Dashboard preference; it does not copy the previous pane's view. Closing a pane that holds keyboard focus returns focus to the surviving pane's header, which is labeled with the session title for assistive technology. Its title bar adds split and close controls; dividers resize columns and stacked panes, and the browser stores the layout locally across reloads.
+    - The active split pane drives the sidebar selection and URL. Selecting another pane or closing the active pane uses the surviving conversation's Chat or Dashboard preference; it does not copy the previous pane's view. Closing a pane that holds keyboard focus returns focus to the surviving pane's header, which is labeled with the session title for assistive technology. On desktop, every split pane has an always-visible **Close pane** (×) button at the right edge of its header, including inactive panes. It closes only that view, without deleting the session or stopping its work, and disappears when one pane remains. The session menu’s **View → Close pane** action remains available. Dividers resize columns and stacked panes, and the browser stores the layout locally across reloads.
     - On narrow screens, split view keeps the layout but renders only the active pane at the full available width and height, including its header with the close control. Widening the window restores the saved column and row proportions without losing drafts.
     - If you send a message while a model picker change for the same session is still saving, the composer waits for that session patch before calling `chat.send` so the send uses the selected model.
     - On the New Session page, submitting opens the created conversation automatically. On desktop, **Cmd+Enter** on macOS or **Ctrl+Enter** elsewhere is ordinary submit with either send preference. Use **Cmd/Ctrl+Shift+Enter** to explicitly start in the background without leaving the page; a completion notice offers to open that session. The selected local, cloud-profile, or paired-device placement is preserved. Explicit Draft visibility keeps its create-only behavior.

@@ -36,15 +36,23 @@ api.registerCommand({
 ```
 
 The result contains an opaque `revision`, `state: "prepared" | "pending"`, and
-`models` with `id`, `provider`, `name`, optional `thinkingLevels` (level IDs), and
-optional `fastModes` (`false`, `true`, or `"auto"`). Restricted requesters also
+`models` with `id`, `provider`, `name`, optional `family`, optional `thinkingLevels`
+(level IDs), and optional `fastModes` (`false`, `true`, or `"auto"`). Restricted requesters also
 receive `selectionPolicy: { restricted: true, defaultModel: string | null }`.
 For a prepared result, a null default means there is no currently admitted
 default. While pending, it may also mean the default is not known yet.
 `fastModes` covers the boolean/`"auto"` fast toggle, not service tiers or
 `"ultrafast"`; absence means the prepared catalog makes no fast-toggle claim.
-No canonical model family metadata is currently exposed; do not infer families
-from model names.
+
+Hosts advertising `requester-model-family-v1` add an optional `family` to rows
+whose provider or catalog metadata declares one: the developer lineage, named by
+that developer's own provider id, such as `anthropic`, `openai` or `google`. It is
+consistent across routes, so `anthropic/claude-opus-5-5`, `github-copilot/claude-opus-5.5`
+and `clawrouter/anthropic/claude-opus-5-5` all report `anthropic`. The value is a
+lowercase, hyphen-separated token; compare it only for equality. Absence means the
+host does not know the family, never that two models differ. A host without the
+capability carries no family at all. Do not infer families from model names.
+See [model family](/plugins/manifest/models#model-family) for its sources.
 
 This is the safe projection of the same saved-session, prepared inventory and
 role policy used by session-scoped `models.list`, without needing a Gateway

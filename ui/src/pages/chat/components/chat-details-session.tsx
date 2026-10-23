@@ -1,4 +1,4 @@
-import { For, Show, createMemo, createSignal, createStore, onSettled } from "solid-js";
+import { For, Show, createMemo, createSignal, createStore } from "solid-js";
 import type { SessionParticipant } from "../../../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuHandle } from "../../../components/solid/menu.tsx";
@@ -70,18 +70,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
         props.props?.selectedSession?.sessionId,
       ]);
     const identity = createMemo(readIdentity);
-    const outputsDemand = createMemo(() =>
-      props.presented && props.desktop && props.props?.outputs
-        ? props.props.retainOutputs
-        : undefined,
-    );
-    return [
-      <Show when={outputsDemand()} keyed>
-        {(retain) => {
-          onSettled(retain);
-          return null;
-        }}
-      </Show>,
+    return (
       <Show when={identity()} keyed>
         {(_identity) => {
           const [pullRequestsOpen, setPullRequestsOpen] = createSignal(true);
@@ -482,6 +471,8 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                     showProcesses={false}
                   />
                   <ChatDetailsProcesses
+                    sessionKey={props.props?.sessionKey ?? ""}
+                    agentId={props.props?.currentAgentId ?? "main"}
                     processes={processes}
                     presented={active()}
                     expanded={sectionExpanded("processes")}
@@ -521,8 +512,8 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
             </Show>
           );
         }}
-      </Show>,
-    ];
+      </Show>
+    );
   },
   {
     propertyChanged: (host, key) => {

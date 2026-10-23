@@ -135,7 +135,7 @@ export async function searchPostgresMemoryVector(
           distance.as("dist"),
         ])
         .where(match)
-        .orderBy(distance)
+        .orderBy("dist")
         .orderBy("c.id")
         .limit(query.limit),
   });

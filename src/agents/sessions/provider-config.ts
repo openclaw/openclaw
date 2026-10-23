@@ -43,6 +43,7 @@ interface ProviderModelConfig
       | "input"
       | "maxTokens"
       | "parameterCount"
+      | "family"
       | "headers"
       | "compat"
     >,
