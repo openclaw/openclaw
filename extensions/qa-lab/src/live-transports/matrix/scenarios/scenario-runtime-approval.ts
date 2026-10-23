@@ -227,14 +227,12 @@ function requestExecApproval(params: {
 async function resolveApprovalDecision(params: {
   approvalId: string;
   context: MatrixQaScenarioContext;
-  decision: MatrixQaApprovalDecision;
-  kind: ChannelApprovalKind;
 }) {
   return resolveLiveQaApprovalDecision({
     approvalId: params.approvalId,
-    decision: params.decision,
+    decision: "allow-once",
     gateway: { call: params.context.gatewayCall },
-    kind: params.kind,
+    kind: "exec",
     timeoutMs: 5_000,
   });
 }
@@ -496,8 +494,6 @@ export async function runApprovalChannelTargetBothScenario(context: MatrixQaScen
   await resolveApprovalDecision({
     approvalId,
     context,
-    decision: "allow-once",
-    kind: "exec",
   });
   const lateDuplicate = await client.waitForOptionalRoomEvent({
     observedEvents: context.observedEvents,

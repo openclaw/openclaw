@@ -269,7 +269,6 @@ export function runOpenClawAgentBoardReadAdmission<T>(
 export async function runOpenClawAgentWriteAdmissions<T>(
   options: readonly OpenClawAgentDatabaseOptions[],
   run: () => Promise<T> | T,
-  reentrant = false,
   signal?: AbortSignal,
 ): Promise<T> {
   signal?.throwIfAborted();
@@ -285,7 +284,7 @@ export async function runOpenClawAgentWriteAdmissions<T>(
     paths.some(
       (pathname) =>
         inherited.includes(pathname) &&
-        (!reentrant || paths.length !== 1 || admission.queues.get(pathname)?.holder?.worker),
+        (paths.length !== 1 || admission.queues.get(pathname)?.holder?.worker),
     )
   ) {
     throw new Error("Session read batch cannot reenter an active SQLite writer admission");
