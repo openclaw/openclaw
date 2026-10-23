@@ -21,6 +21,7 @@ it("loads recovery storage only for an admitted owner and ignores retired import
   const loading = createDeferred();
   const release = createDeferred();
   const initializeRuntime = vi.fn();
+  // mock-isolation: Hold recovery's failed import independently of the initialized state owner.
   vi.doMock("../../lib/chat/composer-draft-store.runtime.ts", async () => {
     initializeRuntime();
     loading.resolve();
