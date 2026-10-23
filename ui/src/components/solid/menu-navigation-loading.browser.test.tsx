@@ -94,6 +94,20 @@ it.each([
   }
 });
 
+it.each(["Enter", " "])(
+  "commits a focused cold leaf with %j before immediate overlay close",
+  (value) => {
+    const selections: string[] = [];
+    const { handle, surface } = mountMenu({ onSelect: (entry) => selections.push(entry.id) });
+    expect(handle.open()).toBe(true);
+    const target = surface.querySelector<HTMLElement>('[data-value="beta"]')!;
+    target.focus();
+    expect(key(target, value).defaultPrevented).toBe(true);
+    handle.close();
+    expect(selections).toEqual(["beta"]);
+  },
+);
+
 it("continues from the entry row when focus returns to the trigger during first load", async () => {
   const { handle, trigger, surface } = mountMenu();
   expect(handle.open()).toBe(true);

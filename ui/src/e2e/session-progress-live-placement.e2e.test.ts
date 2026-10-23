@@ -690,10 +690,11 @@ suite.define(() => {
             await card.locator("summary").click();
           }
           await captureProof(page, "hide-" + name + "-collapsed-before.png");
-          const options = card.getByRole("button", { name: "Task progress options" });
-          await options.press("Enter");
-          await card.getByRole("menuitem", { name: "Hide this card", exact: true }).press("Enter");
-          await expect.poll(() => options.getAttribute("aria-expanded")).toBe("false");
+          await card.getByRole("button", { name: "Task progress options" }).press("Enter");
+          const hideCard = card.getByRole("menuitem", { name: "Hide this card", exact: true });
+          await hideCard.press("Enter");
+          // Keyboard selection may wait for the lazy menu runtime; let it finish before resizing.
+          await hideCard.waitFor({ state: "hidden" });
           expect(await card.count()).toBe(1);
           await page.setViewportSize({ width, height: 900 });
           await page.locator(".agent-chat__header--mobile").waitFor({ state: "visible" });

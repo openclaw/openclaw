@@ -19,6 +19,7 @@ import { createDeferredCore } from "../../../shared/deferred.js";
 import { prepareEmbeddedAttemptTimeout } from "../../embedded-agent-runner/run/attempt-timeout-prepare.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import { consumeSubagentPauseNotice } from "../registry/subagent-delivery-state.js";
+import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import {
@@ -31,6 +32,7 @@ import {
   deliver,
   loadRequester,
   registryRead,
+  readDescendantFacts,
   startTurn,
   REQUESTER_KEY,
   REQUESTER_TARGET,
@@ -100,6 +102,187 @@ describe("requester settle dispatch deadline", () => {
   useRequesterSettleDispatchFixture();
 
   beforeEach(() => setRuntimeConfigSnapshot({}));
+
+  it("does not reserve a foreground-blocking source for a wholly superseded yielded cohort", async () => {
+    const context = createContext();
+    const { child, completeBatch, params } = dispatchFixture();
+    child.killReconciliation = { killedAt: 3_000, supersededAt: 4_000 };
+    child.suppressCompletionDelivery = true;
+    child.requesterSettleWake = {
+      ...child.requesterSettleWake!,
+      status: "dispatching",
+      attemptCount: 1,
+      batchRunIds: [child.runId],
+    };
+    useDirectDelivery();
+    subagentRuns.set(child.runId, child);
+    onTestFinished(() => {
+      subagentRuns.delete(child.runId);
+    });
+
+    expect(await reserveRestoredSubagentControllerSources([child])).toEqual([]);
+    await expect(
+      withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params)),
+    ).resolves.toBe(false);
+    expect(startTurn).not.toHaveBeenCalled();
+    expect(completeBatch).toHaveBeenCalledWith([child], 1, undefined, expect.any(Function));
+    const foreground = vi.fn(async () => "foreground completed");
+    await expect(withSessionTurn(REQUESTER_TURN, foreground)).resolves.toBe("foreground completed");
+    expect(foreground).toHaveBeenCalledOnce();
+  });
+
+  it.each(["superseded sibling", "current killed child"] as const)(
+    "restores the same owed yielded cohort as dispatch with a %s",
+    async (scenario) => {
+      const context = createContext();
+      const child = settledChild();
+      child.delivery = { status: "pending" };
+      const obsolete: SubagentRunRecord = {
+        ...settledChild(),
+        runId: "superseded-child",
+        childSessionKey: "agent:main:subagent:superseded-child",
+        completion: {
+          ...settledChild().completion,
+          required: true,
+          resultText: "OBSOLETE-FINDING",
+        },
+        delivery: { status: "pending" },
+        suppressCompletionDelivery: true,
+        killReconciliation: { killedAt: 3_000, supersededAt: 4_000 },
+      };
+      const rows = scenario === "superseded sibling" ? [child, obsolete] : [child];
+      if (scenario === "current killed child") {
+        child.killReconciliation = { killedAt: 3_000 };
+        child.suppressCompletionDelivery = true;
+        child.endedReason = SUBAGENT_ENDED_REASON_KILLED;
+        child.execution.outcome = { status: "error", error: "synthetic cancellation" };
+      }
+      for (const row of rows) {
+        row.requesterSettleWake = {
+          ...row.requesterSettleWake!,
+          batchRunIds: rows.map((member) => member.runId).toSorted(),
+        };
+        subagentRuns.set(row.runId, row);
+        onTestFinished(() => {
+          subagentRuns.delete(row.runId);
+        });
+      }
+      registryRead.listSubagentRunsForRequester.mockReturnValue(rows);
+      const completeBatch = vi.fn<Wake["completeBatch"]>(
+        async (batch, _generation, _outcome, committed) => {
+          for (const row of batch) {
+            row.requesterSettleWake = undefined;
+          }
+          await committed?.();
+        },
+      );
+      const params = wakeParams(child, completeBatch);
+      const received: Array<{ message: string; runId: string }> = [];
+      startTurn.mockImplementation(async ({ controllerInput, preflight, io }) => {
+        acceptTurn({ controllerInput, preflight, io });
+        await withSessionTurn({ ...REQUESTER_TURN, controllerInput }, async () => {
+          io.emitExecutionStarted?.();
+          received.push({
+            message: preflight.request.message,
+            runId: preflight.request.idempotencyKey,
+          });
+        });
+        io.emitFinal([
+          true,
+          {
+            status: "ok",
+            inputProcessingCompleted: true,
+            result: { payloads: [{ text: "Completion received." }] },
+          },
+          undefined,
+        ]);
+      });
+      useDirectDelivery();
+
+      const restored = await reserveRestoredSubagentControllerSources(rows);
+      expect(restored).toHaveLength(1);
+      await expect(
+        withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params)),
+      ).resolves.toBe(true);
+      expect(received).toHaveLength(1);
+      expect(received[0]!.message).not.toContain("OBSOLETE-FINDING");
+      expect(received[0]!.message).toContain(
+        scenario === "superseded sibling" ? "child result" : "synthetic cancellation",
+      );
+      expect(received[0]!.runId).toBe(
+        scenario === "superseded sibling"
+          ? "announce:requester-settle:main:agent:main:main:settled-child,superseded-child:yield-1"
+          : "announce:requester-settle:main:agent:main:main:settled-child:yield-1",
+      );
+      expect(completeBatch).toHaveBeenCalledWith(
+        rows,
+        1,
+        expect.objectContaining({ delivered: true }),
+        expect.any(Function),
+      );
+      await expect(
+        withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params)),
+      ).resolves.toBe(false);
+      expect(startTurn).toHaveBeenCalledOnce();
+      const foreground = vi.fn(async () => "foreground completed");
+      await expect(withSessionTurn(REQUESTER_TURN, foreground)).resolves.toBe(
+        "foreground completed",
+      );
+      expect(foreground).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("does not dispatch findings whose child becomes superseded after preparation", async () => {
+    const context = createContext();
+    const { child, completeBatch, params } = dispatchFixture();
+    child.delivery = { status: "pending" };
+    child.requesterSettleWake!.batchRunIds = [child.runId];
+    const prepared = createDeferredCore();
+    const release = createDeferredCore();
+    readDescendantFacts
+      .mockImplementationOnce(async () => ({ unsettled: false, active: 0 }))
+      .mockImplementationOnce(async () => {
+        // This second read follows the real completion-findings preparation.
+        prepared.resolve();
+        await release.promise;
+        return { unsettled: false, active: 0 };
+      });
+    const transition = vi.fn(params.transitionBatch);
+    startTurn.mockImplementation(async ({ controllerInput, preflight, io }) => {
+      acceptTurn({ controllerInput, preflight, io });
+      await withSessionTurn({ ...REQUESTER_TURN, controllerInput }, async () => {
+        io.emitExecutionStarted?.();
+      });
+      io.emitFinal([
+        true,
+        {
+          status: "ok",
+          inputProcessingCompleted: true,
+          result: { payloads: [{ text: "Completion received." }] },
+        },
+        undefined,
+      ]);
+    });
+    useDirectDelivery();
+    const pending = withGateway(context, () =>
+      maybeWakeRequesterAfterAllChildrenSettled({ ...params, transitionBatch: transition }),
+    );
+    try {
+      await prepared.promise;
+      // Keep the same row owner and terminal outcome: only latest-execution custody changes.
+      child.killReconciliation = { killedAt: 3_000, supersededAt: 4_000 };
+      release.resolve();
+      await expect(pending).rejects.toThrow(
+        "Requester completion source changed before continuation admission.",
+      );
+      expect(startTurn).not.toHaveBeenCalled();
+      expect(transition).not.toHaveBeenCalled();
+      expect(completeBatch).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await pending.catch(() => {});
+    }
+  });
 
   it("retains an expired completion until unrelated interrupted requester work recovers", async () => {
     const context = createContext();

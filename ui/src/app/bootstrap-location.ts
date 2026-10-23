@@ -5,7 +5,7 @@ import type {
   SessionsResolveResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { AgentsListResult } from "../api/types.ts";
-import { isSessionRouteId, pathForRoute, pluginSlugCandidate } from "../app-route-paths.ts";
+import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { routeIdFromPath, type ApplicationRouter } from "../app-routes.ts";
 import { pathForSession } from "../app-session-path-builder.ts";
 import { sessionRefFromPath } from "../app-session-route-paths.ts";
@@ -31,10 +31,8 @@ import { loadGatewaySessionSelection } from "./settings.ts";
 // candidates remain explicit, even before Gateway hello registers plugin tabs.
 function isPersistedSessionLanding(location: RouteLocation, basePath: string): boolean {
   return (
-    !new URLSearchParams(location.search + "&" + location.hash.slice(1)).has("session") &&
-    !pluginSlugCandidate(location.pathname, basePath) &&
-    (routeIdFromPath(location.pathname, basePath) === null ||
-      /^\/chat\/?$/u.test(location.pathname.slice(basePath.length)))
+    isDefaultChatLanding(location, basePath, routeIdFromPath) &&
+    !/^\/chat\/main\/?$/u.test(location.pathname.slice(basePath.length))
   );
 }
 

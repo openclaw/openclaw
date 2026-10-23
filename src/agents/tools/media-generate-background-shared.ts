@@ -33,10 +33,7 @@ import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
 import { normalizeMessageChannel } from "../../utils/message-channel-core.js";
 import { captureAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
-import {
-  resolveRequiredCompletionDeliveryFailureTerminalResult,
-  type RequiredCompletionTerminalResult,
-} from "../completion-result.js";
+import type { RequiredCompletionTerminalResult } from "../completion-result.js";
 import type { AgentGeneratedAttachment } from "../generated-attachments.js";
 import {
   clearGeneratedMediaTaskActivity,
@@ -466,13 +463,11 @@ export function scheduleMediaGenerationTaskCompletion(params: {
       });
       if (wakeOutcome.status !== "delivered") {
         const failureReason = "completion delivery was not confirmed after successful generation";
-        terminalResult = resolveRequiredCompletionDeliveryFailureTerminalResult(failureReason);
+        terminalResult = { terminalOutcome: "blocked" };
         reportFailure(`${params.toolName} ${failureReason}`);
       }
     } catch (error) {
-      terminalResult = resolveRequiredCompletionDeliveryFailureTerminalResult(
-        formatToolErrorMessage(error),
-      );
+      terminalResult = { terminalOutcome: "blocked" };
       reportFailure(`${params.toolName} completion wake failed after successful generation`, {
         error,
       });

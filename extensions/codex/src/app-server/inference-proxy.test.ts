@@ -1,3 +1,4 @@
+import { AsyncLocalStorage, AsyncResource } from "node:async_hooks";
 import { once } from "node:events";
 import { Agent, createServer, request, type IncomingHttpHeaders } from "node:http";
 import {
@@ -8,6 +9,8 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CODEX_INFERENCE_GENERATION_KEY } from "./inference-context.js";
 import { createCodexInferenceProxy, type CodexInferenceProxy } from "./inference-proxy.js";
+import { createCodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
+import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
 
 const transport = vi.hoisted(() => {
   const wsAgents: unknown[] = [];
@@ -91,11 +94,13 @@ async function fixture(
   withInstructions = true,
   contextText = "synthetic persona",
   oauth?: Parameters<typeof createCodexInferenceProxy>[0]["oauth"],
+  bindModelExecution?: Parameters<typeof createCodexInferenceProxy>[0]["bindModelExecution"],
 ) {
   const proxy = await createCodexInferenceProxy({
     upstream: new URL("https://api.openai.com/v1"),
     assertCurrent: () => {},
     oauth,
+    bindModelExecution,
   });
   proxies.push(proxy);
   const controller = new AbortController();
@@ -119,6 +124,143 @@ async function fixture(
   };
   return { proxy, controller, registration, body };
 }
+
+it.each(["HTTP", "WebSocket"] as const)(
+  "admits a fresh %s assignment after its listener's startup binding lease closes",
+  async (kind) => {
+    const startupContext = new AsyncLocalStorage<string>();
+    const store = createCodexTestBindingStore();
+    const identity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "synthetic-parent-session",
+      sessionKey: "agent:main:synthetic-inference-context",
+    };
+    const binding = {
+      threadId: "root",
+      cwd: "/synthetic-workspace",
+      appServerRuntimeFingerprint: "synthetic-runtime",
+    };
+    await store.mutate(identity, { kind: "set", binding });
+    const owner = createCodexNativeSubagentHistoryOwner({
+      parentThreadId: binding.threadId,
+      sessionId: identity.sessionId,
+      binding,
+    });
+    if (!owner) {
+      throw new Error("Synthetic binding has no history owner");
+    }
+    const assignment = {
+      runId: "codex-thread:synthetic-child:turn:synthetic-child-turn",
+      childThreadId: "synthetic-child",
+      nativeTurnId: "synthetic-child-turn",
+      nativeParentThreadId: binding.threadId,
+      owner,
+    };
+    let mutationError: unknown;
+    let observedStartup: string | undefined;
+    const release = vi.fn();
+    const bindModelExecution = vi.fn(async () => {
+      observedStartup = startupContext.getStore();
+      try {
+        expect(
+          await store.mutate(
+            identity,
+            { kind: "record-native-subagent-assignment", owner, assignment },
+            () => {},
+          ),
+        ).toBe(true);
+      } catch (error) {
+        mutationError = error;
+        throw error;
+      }
+      return { signal: new AbortController().signal, assertCurrent: () => {}, release };
+    });
+    const { next, staleWrite } = await startupContext.run("startup lease", () =>
+      store.withLease(identity, async () => ({
+        next: await fixture(true, undefined, undefined, bindModelExecution),
+        staleWrite: AsyncResource.bind(() =>
+          store.mutate(identity, {
+            kind: "patch",
+            threadId: binding.threadId,
+            patch: { model: "stale-callback" },
+          }),
+        ),
+      })),
+    );
+    await expect(staleWrite()).rejects.toThrow("Lost Codex binding lease");
+    expect(store.read(identity)).toEqual(binding);
+    const final = '{"type":"response.completed","response":{"id":"synthetic-assignment"}}';
+    transport.fetch.mockResolvedValue({
+      response: new Response(final),
+      release: async () => {},
+    });
+    const server = kind === "WebSocket" ? createServer() : undefined;
+    const wss = server ? new WebSocketServer({ server }) : undefined;
+    let socket: WebSocket | undefined;
+    const forwarded = vi.fn();
+    try {
+      let response: string | undefined;
+      if (server && wss) {
+        wss.on("connection", (upstream) => {
+          upstream.on("message", (bytes) => {
+            if (!Buffer.isBuffer(bytes)) {
+              throw new Error("fixture expected an uncompressed Node WebSocket buffer");
+            }
+            forwarded(JSON.parse(bytes.toString("utf8")));
+            upstream.send(final);
+          });
+        });
+        await new Promise<void>((resolve) => {
+          server.listen(0, "127.0.0.1", resolve);
+        });
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          throw new Error("fixture did not listen");
+        }
+        transport.upstream = "ws://127.0.0.1:" + address.port;
+        socket = new WebSocket(next.proxy.baseUrl.replace("http:", "ws:") + "/responses");
+        await once(socket, "open");
+        const received = Promise.race([
+          once(socket, "message").then(([bytes]) => bytes.toString()),
+          once(socket, "close").then(() => undefined),
+        ]);
+        socket.send(JSON.stringify({ ...next.body, type: "response.create", model: "synthetic" }));
+        response = await received;
+      } else {
+        const result = await post(next.proxy.baseUrl + "/responses", {
+          ...next.body,
+          model: "synthetic",
+        });
+        response = await result.text();
+      }
+      expect(mutationError).toBeUndefined();
+      expect(observedStartup).toBeUndefined();
+      expect(response).toBe(final);
+      expect(bindModelExecution).toHaveBeenCalledOnce();
+      expect(await store.readNativeSubagentAssignments?.(identity, owner)).toEqual([assignment]);
+      expect(kind === "HTTP" ? transport.fetch : forwarded).toHaveBeenCalledOnce();
+      await expect(staleWrite()).rejects.toThrow("Lost Codex binding lease");
+      expect(store.read(identity)).toEqual(binding);
+    } finally {
+      socket?.terminate();
+      next.proxy.close();
+      for (const upstream of wss?.clients ?? []) {
+        upstream.terminate();
+      }
+      if (wss) {
+        await new Promise<void>((resolve) => {
+          wss.close(() => resolve());
+        });
+      }
+      if (server) {
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        });
+      }
+    }
+  },
+);
 
 describe("private inference HTTP relay", () => {
   it("resolves host OAuth only for admitted Responses requests and refreshes once after 401", async () => {
