@@ -350,14 +350,12 @@ describe("iMessage monitor last-route updates", () => {
       expect(auxiliaryClient.request).toHaveBeenCalledWith(
         "typing",
         expect.objectContaining({ service: expectedService, to: DEFAULT_SENDER, typing: true }),
-        expect.any(Object),
       );
     });
     const expectedReadTarget = chatGuid ? { chat_guid: chatGuid } : { chat_id: 123 };
     expect(auxiliaryClient.request).toHaveBeenCalledWith(
       "read",
       expect.objectContaining(expectedReadTarget),
-      expect.any(Object),
     );
     expect(auxiliaryClient.request).toHaveBeenCalledWith(
       "send",
@@ -850,14 +848,12 @@ describe("iMessage monitor last-route updates", () => {
       expect(client.request).toHaveBeenCalledWith(
         "typing",
         expect.objectContaining({ typing: true }),
-        expect.any(Object),
       );
     });
     await vi.waitFor(() => {
       expect(client.request).toHaveBeenCalledWith(
         "typing",
         expect.objectContaining({ typing: false }),
-        expect.any(Object),
       );
     });
   });
@@ -880,7 +876,6 @@ describe("iMessage monitor last-route updates", () => {
           expect(earlyTypingClient.request).toHaveBeenCalledWith(
             "typing",
             expect.objectContaining({ typing: true, to: "+15550001111" }),
-            expect.any(Object),
           );
           expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
         });
@@ -891,7 +886,6 @@ describe("iMessage monitor last-route updates", () => {
       expect(earlyTypingClient.request).toHaveBeenCalledWith(
         "typing",
         expect.objectContaining({ typing: true, to: "+15550001111" }),
-        expect.any(Object),
       );
       return EMPTY_DISPATCH_RESULT;
     });
@@ -901,13 +895,11 @@ describe("iMessage monitor last-route updates", () => {
     expect(watchClient.request).not.toHaveBeenCalledWith(
       "typing",
       expect.objectContaining({ typing: true }),
-      expect.anything(),
     );
     await vi.waitFor(() => {
       expect(earlyTypingClient.request).toHaveBeenCalledWith(
         "typing",
         expect.objectContaining({ typing: false, to: "+15550001111" }),
-        expect.any(Object),
       );
     });
   });
@@ -936,12 +928,10 @@ describe("iMessage monitor last-route updates", () => {
     expect(auxiliaryClient.request).toHaveBeenCalledWith(
       "read",
       expect.objectContaining({ chat_id: 123 }),
-      expect.any(Object),
     );
     expect(auxiliaryClient.request).toHaveBeenCalledWith(
       "typing",
       expect.objectContaining({ typing: true }),
-      expect.any(Object),
     );
   });
 
@@ -988,7 +978,6 @@ describe("iMessage monitor last-route updates", () => {
       expect(client.request).not.toHaveBeenCalledWith(
         "typing",
         expect.objectContaining({ typing: true }),
-        expect.anything(),
       );
     });
   }
@@ -1013,13 +1002,8 @@ describe("iMessage monitor last-route updates", () => {
     expect(readClient.request).toHaveBeenCalledWith(
       "read",
       expect.objectContaining({ chat_id: 123 }),
-      expect.any(Object),
     );
-    expect(watchClient.request).not.toHaveBeenCalledWith(
-      "read",
-      expect.anything(),
-      expect.anything(),
-    );
+    expect(watchClient.request).not.toHaveBeenCalledWith("read", expect.anything());
     expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
   });
 
