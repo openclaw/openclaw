@@ -639,7 +639,6 @@ src/config/mutate.snapshot.ts
 src/config/mutate.ts
 src/config/mutation-conflict.ts
 src/config/normalize-exec-safe-bin.ts
-src/config/normalize-paths.ts
 src/config/official-external-channel-secret-schema.ts
 src/config/patch-replace-paths.ts
 src/config/paths.ts
@@ -2611,7 +2610,6 @@ src/shared/channel-read-authority.ts
 src/shared/tool-approval-reviews.ts
 src/agents/agent-lifecycle-parent-state.ts
 src/agents/agent-run-terminal-error.ts
-src/agents/agent-run-terminal-outcome-merge.ts
 src/agents/agent-run-terminal-outcome.ts
 src/agents/main-session-recovery/main-session-recovery-lifecycle.ts
 src/agents/run-termination.ts
@@ -2662,3 +2660,14 @@ src/plugins/service-scheduler-binding.ts
 src/plugins/setup-registry.ts
 src/shared/map-nested-strings.ts
 src/status/utility-model-warnings.ts
+src/infra/sqlite-integrity.worker.ts
+src/infra/sqlite-readonly-inspection.ts
+src/infra/sqlite-readonly-native-resource.ts
+src/infra/sqlite-snapshot-staging-runtime.ts
+src/infra/sqlite-snapshot-staging.worker.ts
+src/process/spawn-broker/execa-worker.ts
+src/process/spawn-broker/resource-server.ts
+src/process/spawn-broker/worker-sender.ts
+src/process/spawn-broker/worker.ts
+src/state/openclaw-agent-schema-inspection.worker.ts
+src/state/openclaw-state-ownership.worker.ts

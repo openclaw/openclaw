@@ -88,6 +88,20 @@ describe("legacy managed outgoing image migration", () => {
     await fsp.rm(stateDir, { recursive: true, force: true });
   });
 
+  it("retains malformed UTF-8 without importing replacement characters", async () => {
+    const legacy = await writeLegacyRecord({ alt: "utf8-marker" });
+    const bytes = await fsp.readFile(legacy.sourcePath);
+    bytes[bytes.indexOf("utf8-marker")] = 0xff;
+    await fsp.writeFile(legacy.sourcePath, bytes);
+    const result = migrate();
+    expect(result.changes).toEqual([]);
+    expect(result.warningDisposition).toBe("recoverable");
+    expect(result.warnings.join("\n")).toContain("must be valid UTF-8");
+    expect(await fsp.readFile(legacy.sourcePath)).toEqual(bytes);
+    await expect(fsp.readFile(legacy.originalPath, "utf8")).resolves.toBe("image-bytes");
+    await expect(legacy.read()).resolves.toBeNull();
+  });
+
   it("reports an invalid records directory instead of silently skipping migration", async () => {
     const recordsDir = resolveLegacyManagedOutgoingImageRecordsDir();
     await fsp.mkdir(path.dirname(recordsDir), { recursive: true });

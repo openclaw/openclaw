@@ -13,6 +13,7 @@ import {
   createPluginGenerationFileCapture,
   createPluginSourceLinkCapture,
   linkPluginGenerationDependency,
+  linkPluginGenerationHostModule,
 } from "./plugin-generation-file-capture.js";
 import { createPluginGenerationReceipt } from "./plugin-generation-receipt.js";
 import {
@@ -417,7 +418,17 @@ function createPluginGenerationArtifact(
           module && path.isAbsolute(value) && isPathInside(lexicalBoundary, requested)
             ? path.join(boundary, path.relative(lexicalBoundary, requested))
             : requested;
-        if (module && resolveBundledSharedModule(bundledReloadSource, rootDir, source, local)) {
+        const shared =
+          module && resolveBundledSharedModule(bundledReloadSource, rootDir, source, local);
+        if (shared) {
+          // Native Workers do not inherit the parent resolver. Their relative imports
+          // must reach the same host modules without capturing another SDK identity.
+          if (value.startsWith(".") && isPathInside(boundary, local)) {
+            const sharedLink = path.join(destination, path.relative(boundary, local));
+            if (linkPluginGenerationHostModule(sharedLink, shared)) {
+              additions.add(sharedLink);
+            }
+          }
           return undefined;
         }
         if (module && !isPathInside(boundary, local)) {

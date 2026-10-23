@@ -1,4 +1,5 @@
 import { base64ToBytes } from "../../../lib/bytes-base64.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 
 export function floatToPcm16(samples: Float32Array): Uint8Array {
   const bytes = new Uint8Array(samples.length * 2);
@@ -255,7 +256,7 @@ export class RealtimeTalkPcmOutputQueue {
     const source = outputContext.createBufferSource();
     this.sources.add(source);
     this.sourceListeners ??= new AbortController();
-    source.addEventListener("ended", () => this.sources.delete(source), {
+    listen(source, "ended", () => this.sources.delete(source), {
       once: true,
       signal: this.sourceListeners.signal,
     });

@@ -538,6 +538,7 @@ export type CronAddOptions = {
   /** Captured source digest of the admitting plugin instance; enables restart continuity. */
   pluginCommandSourceDigest?: string;
   operatorSource?: NonNullable<CronStoredJob["operatorSource"]>["source"];
+  operatorSourceExecutionRevision?: string;
   inferenceBinding?: CronStoredJob["inferenceBinding"];
   sourceConversation?: CronStoredJob["sourceConversation"];
   /** Logical sandbox target captured from the admitted creator, never public input. */
@@ -570,6 +571,8 @@ export type CronUpdateInput = CronJobPatch;
 /** Authenticated caller provenance used only when a tool policy is explicitly adopted. */
 export type CronUpdateOptions = Pick<
   CronAddOptions,
+  | "operatorSource"
+  | "operatorSourceExecutionRevision"
   | "toolsAllowProvenance"
   | "toolsAllowExecTarget"
   | "commitGuard"

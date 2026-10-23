@@ -300,7 +300,6 @@ async function fixture({
     "../../utils/absolute-deadline",
     "update-command-post-update-maintenance",
     "../../infra/update-candidate-predecessor-stop",
-    "update-command-legacy-service-stop",
     // Recovery and reporting stay real; only their I/O uses finite fixture facts.
     "update-command-failure-recovery",
     "update-command-service-recovery",

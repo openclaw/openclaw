@@ -132,7 +132,7 @@ extensions/codex/src/command-rpc.ts	1
 extensions/codex/src/migration/apply.ts	2
 extensions/codex/src/migration/auth.ts	3
 extensions/codex/src/migration/plan.ts	4
-extensions/codex/src/migration/session-binding-sidecars.ts	4
+extensions/codex/src/migration/session-binding-sidecars.ts	3
 extensions/codex/src/session-catalog-node-continue.ts	1
 extensions/codex/src/session-catalog-parsing.ts	2
 extensions/codex/src/session-catalog-transcript-item.ts	1

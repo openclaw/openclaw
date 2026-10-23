@@ -9,6 +9,8 @@ import type { GatewayClient } from "../server-methods/client-types.js";
 
 export type InternalAgentTurnPrincipalOptions = {
   // Authorization can await; the lifecycle owner must still be current before dispatch.
+  // Agent dispatch carries this into accepted execution as its Gateway lifetime, so it must
+  // not carry caller authority; check that in `assertAdmissionCurrent`.
   assertContextCurrent?: () => void;
   client: GatewayClient;
   isWebchatConnect?: (params: ConnectParams | null | undefined) => boolean;

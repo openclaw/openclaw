@@ -5,10 +5,9 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { makeChatHost, makeRequestMock, expectRequestCounts } from "./chat-host.test-support.ts";
-import { idleChatHistory } from "./chat-outbox-recovery.test-support.ts";
+import { admitHostQueueItems, idleChatHistory } from "./chat-outbox-recovery.test-support.ts";
 import { createTestPageState } from "./chat-page-state.test-support.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
-import { handleSendChat } from "./chat-send-submit.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 
 useChatSendBrowserFixture();
@@ -35,14 +34,24 @@ it.each([
       sessionKey,
       currentSessionId: "outbox-session",
       chatRunId: "finished-run",
-      chatMessage: "Retained outbox message",
+      chatQueue: [
+        {
+          id: "retained-input",
+          text: "Retained outbox message",
+          createdAt: 1,
+          sessionKey,
+          sendRunId: "next-run",
+          sendState: "waiting-idle",
+          sendAttempts: 0,
+        },
+      ],
       requestHandlers: {
         "chat.history": history,
         "chat.send": { runId: "next-run", status: "started", messageSeq: 1 },
       },
     }),
   );
-  await handleSendChat(host, undefined, { followUpMode: "queue" });
+  admitHostQueueItems(host);
   expect(host.chatQueue).toHaveLength(1);
   const renderedErrors: Array<string | null | undefined> = [];
   const dispose = createRoot((stop) => {
