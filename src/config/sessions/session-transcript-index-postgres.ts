@@ -1,4 +1,4 @@
-import { sql } from "kysely";
+import { sql, type UpdateQueryBuilder, type UpdateResult } from "kysely";
 import { getNodeSqliteKysely, prepareSqliteQuerySync } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
@@ -6,7 +6,6 @@ import {
   withSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
-import type { TranscriptWindowUpdate } from "./session-accessor.sqlite-transcript-state.js";
 import {
   withPostgresSessionTranscriptFtsRows,
   type SessionTranscriptFtsSourceRow,
@@ -17,6 +16,13 @@ import type {
 } from "./session-transcript-projection-append.js";
 import type { PreparedSessionTranscriptProjection } from "./session-transcript-projection-rebuild.js";
 import { TRANSCRIPT_INSERT_BATCH_SIZE } from "./transcript-payload.js";
+
+export type TranscriptWindowUpdate = UpdateQueryBuilder<
+  DB,
+  "session_windows",
+  "session_windows",
+  UpdateResult
+>;
 
 /** Writes each bounded PG projection chunk within the caller's existing transaction. */
 export function createPostgresProjectionFlusher(db: EngineConnection, sessionId: string) {

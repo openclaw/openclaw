@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { UpdateQueryBuilder, UpdateResult } from "kysely";
 import type { SessionRowTranscriptProjection } from "../../gateway/session-row-transcript-preview.js";
 import {
   createSqliteQueryCache,
@@ -17,7 +16,6 @@ import {
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import { getSqliteReadScopeRevision } from "../../infra/sqlite-schema-facts.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
-import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { SessionTranscriptContextVersion } from "./session-accessor.sqlite-contract.js";
 import {
@@ -50,6 +48,7 @@ import {
   readTranscriptContextFacts,
   retainTranscriptContextFacts,
 } from "./session-transcript-context-facts.js";
+import type { TranscriptWindowUpdate } from "./session-transcript-index-postgres.js";
 import { resolveDeliveryProvenCanonicalSessionKey } from "./store-entry.js";
 
 const transcriptContextVersionQuery = createSqliteQueryCache((database: EngineConnection) => {
@@ -447,13 +446,6 @@ export function readTranscriptMutationStateInTransaction(
     updatedAt: row?.transcript_updated_at ?? null,
   };
 }
-
-export type TranscriptWindowUpdate = UpdateQueryBuilder<
-  DB,
-  "session_windows",
-  "session_windows",
-  UpdateResult
->;
 
 export function advanceTranscriptMutationAtInTransaction(
   database: OpenClawAgentDatabase,

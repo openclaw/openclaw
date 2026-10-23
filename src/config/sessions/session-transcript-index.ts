@@ -28,7 +28,10 @@ import {
   createSessionTranscriptFtsInserter,
   deleteSessionTranscriptFtsRowsInTransaction,
 } from "./session-transcript-fts.js";
-import { createPostgresProjectionFlusher } from "./session-transcript-index-postgres.js";
+import {
+  createPostgresProjectionFlusher,
+  type TranscriptWindowUpdate,
+} from "./session-transcript-index-postgres.js";
 import {
   prepareSessionTranscriptProjectionAppend,
   type SessionTranscriptProjectionState,
@@ -305,9 +308,7 @@ export function createTranscriptIndexAppenderInTransaction(
 ): {
   append: (params: TranscriptIndexAppend) => boolean;
   flushRows: () => void;
-  flush: (
-    windowUpdate?: import("./session-accessor.sqlite-transcript-state.js").TranscriptWindowUpdate,
-  ) => void;
+  flush: (windowUpdate?: TranscriptWindowUpdate) => void;
 } {
   const actor = readSessionActorTransactionState({ db }, { sessionId });
   const initial = prepared ? prepared.state : readSessionTranscriptProjectionState(db, sessionId);
@@ -430,9 +431,6 @@ export function createTranscriptIndexAppenderInTransaction(
         return;
       }
       flushRows();
-      if (windowUpdate) {
-        executeSqliteQuerySync(db, windowUpdate);
-      }
       if (pendingUpdatedAt === undefined || !watermark) {
         return;
       }
