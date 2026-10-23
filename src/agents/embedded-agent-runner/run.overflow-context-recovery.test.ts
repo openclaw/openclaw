@@ -321,6 +321,33 @@ describe("recoverEmbeddedRunOverflow", () => {
     expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining("source=assistantError"));
   });
 
+  it("recovers the local transport guard's zero-output rejection by compacting and replaying once", async () => {
+    // Live incident 2026-10-23T16:55: the proxy-style OpenAI-completions transport
+    // guard threw before dispatch ("Assistant attempt failed code=context_length_exceeded"),
+    // and the deployed build surfaced the raw diagnostic instead of compacting.
+    // Recovery must treat its exact diagnostic as context overflow, compact the
+    // persisted history, and re-dispatch the retried prompt exactly once.
+    const promptError = new Error(
+      "Context window exceeded: estimated input 230519 leaves only 0 output tokens within the 229715-token context.",
+    );
+    const input = makeInput({
+      contextTokenBudget: 229_715,
+      promptError,
+      attempt: { terminal: { kind: "failed", source: "prompt", error: promptError } },
+    });
+    input.state.compactionRequestBudget = createCompactionRequestBudget({
+      contextWindow: 229_715,
+      reserveTokens: 8_192,
+      systemPrompt: "Follow the project rules. ".repeat(2_000),
+      pendingPrompt: "What did we decide about the WAL fix?",
+    });
+
+    expect(await recoverEmbeddedRunOverflow(input)).toEqual({ action: "retry" });
+    expect(mocks.compact).toHaveBeenCalledOnce();
+    expect(input.markOwnedTranscriptRetry).toHaveBeenCalledOnce();
+    expect(input.prepareCompactedTranscriptRetry).toHaveBeenCalledOnce();
+  });
+
   it("does not compact a validation rejection naming context_length_exceeded", async () => {
     const assistantOverflowCandidate = makeAssistantMessage({
       stopReason: "error",

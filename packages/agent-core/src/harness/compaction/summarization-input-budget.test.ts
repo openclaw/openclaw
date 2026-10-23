@@ -35,7 +35,10 @@ function createModel(contextWindow: number, maxTokens = 32_000): Model {
  * summary, or with a provider context-overflow error while `overflowAbove`
  * says the prompt is too long.
  */
-function createCapturingStream(overflowAbove?: (prompt: string) => boolean): {
+function createCapturingStream(
+  overflowAbove?: (prompt: string) => boolean,
+  overflowMessage = "prompt is too long: 40000 tokens > 32768 maximum",
+): {
   streamFn: StreamFn;
   prompts: string[];
 } {
@@ -69,7 +72,7 @@ function createCapturingStream(overflowAbove?: (prompt: string) => boolean): {
         error: {
           ...message,
           stopReason: "error",
-          errorMessage: "prompt is too long: 40000 tokens > 32768 maximum",
+          errorMessage: overflowMessage,
         },
       });
     } else {
@@ -618,6 +621,33 @@ describe("summary request input budget", () => {
     expect(prompts.length).toBeGreaterThan(1);
     expect(prompts.at(-1)?.length).toBeLessThanOrEqual(60_000);
     expect(prompts.at(-1)).toContain("entries omitted ...]");
+  });
+
+  it("shrinks when the transport guard rejects with its zero-output context diagnostic", async () => {
+    // Live incident 2026-10-23: the proxy-style transport guard throws locally
+    // before dispatch when its estimate leaves no output headroom. The shrink
+    // loop must recognize this exact diagnostic and re-summarize a smaller sample.
+    const { streamFn, prompts } = createCapturingStream(
+      (prompt) => prompt.length > 60_000,
+      "Context window exceeded: estimated input 230519 leaves only 0 output tokens within the 229715-token context.",
+    );
+    const result = await generateSummary(
+      createLongSession(200),
+      createModel(200_000, 64_000),
+      16_384,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      streamFn,
+    );
+
+    expect(result).toEqual({ ok: true, value: "summary" });
+    expect(prompts.length).toBeGreaterThan(1);
+    expect(prompts[0]?.length).toBeGreaterThan(60_000);
+    expect(prompts.at(-1)?.length).toBeLessThanOrEqual(60_000);
   });
 
   it("stops with a budget error when the provider keeps rejecting the request as too long", async () => {
