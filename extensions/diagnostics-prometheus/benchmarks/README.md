@@ -41,8 +41,9 @@ Add `--http --http-port <port>` to measure rendering through a real loopback Nod
 HTTP server after the owner phases, or use `--http-only --http-port <port>` to
 run only the HTTP phases. Each paired side needs a distinct port in 40000–65535.
 The server mirrors the authorized metrics GET response: render, set its content
-type and byte length, and `res.end(body, callback)`. On successful completion, the
-callback releases the response's private backing store. Failed writes leave
+type and byte length, and `res.end(body)`. Buffer responses alone use a completion
+callback to release their private backing store after a successful write. The
+baseline string path has no callback retaining its body. Failed writes leave
 reclamation to GC. Static metric prefixes never share response backing storage. The client runs in a child process so
 its CPU and heap allocation do not enter the server measurements. It makes ten
 warmup requests, then sequential requests with a keep-alive agent, consuming all

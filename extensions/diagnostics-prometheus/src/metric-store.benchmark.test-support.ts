@@ -441,11 +441,16 @@ async function measureHttp(
     if (values["flush-headers"]) {
       res.flushHeaders();
     }
-    res.end(body, (error?: Error | null) => {
-      if (!error) {
-        releaseScrape(body);
-      }
-    });
+    if (Buffer.isBuffer(body)) {
+      res.end(body, (error?: Error | null) => {
+        if (!error) {
+          releaseScrape(body);
+        }
+      });
+    } else {
+      // The baseline string response has no completion closure retaining its body.
+      res.end(body);
+    }
   });
   server.listen(port, "127.0.0.1");
   await once(server, "listening");
