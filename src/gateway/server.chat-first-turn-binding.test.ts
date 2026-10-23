@@ -287,7 +287,12 @@ it("binds native chat.send, preserves its stopped partial, and resumes terminal 
     }),
   );
   expect(requestBodies).toHaveLength(1);
-  for (const nextRunId of ["resume-after-stop", "stale-terminal-generation", "continue-again"]) {
+  for (const nextRunId of [
+    "resume-after-stop",
+    "stale-terminal-generation",
+    "killed-unfinished-fence",
+    "continue-again",
+  ]) {
     if (nextRunId === "stale-terminal-generation") {
       // Older interrupted runs can leave terminal fences on an otherwise stopped row.
       await patchSessionEntryCore(transcriptScope, (entry) => ({
@@ -301,6 +306,21 @@ it("binds native chat.send, preserves its stopped partial, and resumes terminal 
           ...(entry.restartRecoveryTerminalRunIds ?? []),
           "stopped-old-run",
         ],
+      }));
+    }
+    if (nextRunId === "killed-unfinished-fence") {
+      await patchSessionEntryCore(transcriptScope, () => ({
+        status: "killed",
+        abortedLastRun: false,
+        mainRestartRecovery: undefined,
+        pendingFinalDelivery: undefined,
+        restartRecoveryDeliveryRunId: undefined,
+        restartRecoveryHarnessCompletion: undefined,
+        restartRecoveryRuns: [{ runId: "killed-old-run", lifecycleGeneration: "dead-generation" }],
+        restartRecoveryTerminalRunIds: Array.from(
+          { length: 8 },
+          (_, index) => `other-run-${index}`,
+        ),
       }));
     }
     const currentHistory = await gateway.client.request<{
@@ -321,7 +341,7 @@ it("binds native chat.send, preserves its stopped partial, and resumes terminal 
       status: "ok",
     });
   }
-  expect(requestBodies).toHaveLength(4);
+  expect(requestBodies).toHaveLength(5);
   expect(await loadTranscriptEvents(transcriptScope)).toEqual(expect.arrayContaining(events));
   expect(loadExactSessionEntryReadOnly({ sessionKey })?.entry).toMatchObject({ sessionId });
 });
