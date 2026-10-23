@@ -46,8 +46,7 @@ import { assertTranscriptNavigationValid } from "./transcript-predicate-fields.j
 
 function transcriptPositionSet(projection: CurrentTranscriptProjection, positions: number[]) {
   // A complete current context can exceed SQLite's bound-parameter limit.
-  /* kysely-allow-raw: Numeric position sets use one binding on both database engines. */
-  return sql<number>`(SELECT CAST(value AS BIGINT) FROM ${jsonArrayElements(projection.database.db, sql.val(JSON.stringify(positions)))})`;
+  return /* kysely-allow-raw: Numeric position sets use one binding on both database engines. */ sql<number>`(SELECT CAST(value AS BIGINT) FROM ${jsonArrayElements(projection.database.db, sql.val(JSON.stringify(positions)))})`;
 }
 
 function readBoundedRetentionRanges(
@@ -357,9 +356,7 @@ export function readSessionTranscriptBoundedActiveContextCore(
       ? undefined
       : resolveTranscriptBoundaryWindow(projection, "context", fence?.beforeRawSeq);
     const retained =
-      !limits && window?.boundaryType === "compaction"
-        ? []
-        : (window?.keptMessagePositions ?? []);
+      !limits && window?.boundaryType === "compaction" ? [] : (window?.keptMessagePositions ?? []);
     const retainedPositions = limits ? retained.slice(-(limits.maxEvents + 1)) : retained;
     // Compaction keeps custom/branch messages in its retained tail too. Reset
     // retention instead uses the owner's paired message selection.
