@@ -94,6 +94,7 @@ const repositoryScriptEntries = [
   "scripts/perf/codex-process-inspection-measure.ts!",
   "scripts/perf/diagnostic-profile-measure.ts!",
   "scripts/perf/session-pr-subscriptions-measure.ts!",
+  "scripts/perf/subagent-maintenance-capture-measure.ts!",
   "scripts/perf/tool-schema-preparation-measure.ts!",
   // The performance guide and transcript driver invoke these tools and preloads by path.
   "scripts/lib/gateway-bench-transport-preload.ts!",

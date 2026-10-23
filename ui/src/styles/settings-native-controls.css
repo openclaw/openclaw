@@ -74,7 +74,7 @@
   outline-offset: 1px;
 }
 
-.settings-row--toggle:has(.settings-toggle__input:disabled) {
+.settings-row--toggle:has(.settings-toggle__input:is(:disabled, [aria-disabled="true"])) {
   cursor: not-allowed;
 }
 

@@ -306,11 +306,14 @@ function ToggleControl(
         type="checkbox"
         role="switch"
         checked={props.checked}
-        disabled={props.disabled}
+        aria-disabled={props.disabled ? "true" : undefined}
         aria-labelledby={props.labelledBy ?? labelId}
         onClick={(event) => {
           const input = event.currentTarget;
-          if (!input.matches(":disabled") && !props.disabled && input.checked !== props.checked) {
+          if (props.disabled) {
+            // Busy switches keep focus (aria-disabled), so cancel the native toggle here.
+            event.preventDefault();
+          } else if (!input.matches(":disabled") && input.checked !== props.checked) {
             props.onAct?.(input.checked);
           }
         }}
@@ -454,15 +457,17 @@ export function SettingsSegmented<T extends string>(props: SettingsSegmentedProp
                     name={name}
                     value={option().value}
                     checked={option().value === props.value}
-                    disabled={props.disabled || option().disabled}
+                    disabled={option().disabled}
+                    aria-disabled={props.disabled ? "true" : undefined}
                     aria-label={option().ariaLabel}
                     onClick={(event) => {
                       const input = event.currentTarget;
-                      if (
-                        props.mode === "buttons" ||
-                        props.disabled ||
-                        input.matches(":disabled")
-                      ) {
+                      if (props.disabled) {
+                        // Busy radios keep focus (aria-disabled), so cancel the native selection.
+                        event.preventDefault();
+                        return;
+                      }
+                      if (props.mode === "buttons" || input.matches(":disabled")) {
                         return;
                       }
                       if (option().value === props.value) {
@@ -515,6 +520,9 @@ export function SettingsSegmented<T extends string>(props: SettingsSegmentedProp
                           return;
                       }
                       event.preventDefault();
+                      if (props.disabled) {
+                        return;
+                      }
                       const enabled = radios().filter((radio) => !radio.matches(":disabled"));
                       const index = enabled.indexOf(input);
                       const next = enabled[(index + step + enabled.length) % enabled.length];
@@ -563,13 +571,14 @@ function SettingsSegmentedButtons<T extends string>(props: SettingsSegmentedProp
             data-compact-label={option().compactLabel}
             data-test-id={option().testId}
             title={option().title}
-            disabled={props.disabled || option().disabled}
+            disabled={option().disabled}
+            aria-disabled={props.disabled ? "true" : undefined}
             onClick={(event) => {
-              if (props.mode !== "buttons") {
+              if (props.mode !== "buttons" || props.disabled) {
                 return;
               }
               props.onClick?.(event, option().value);
-              if (event.defaultPrevented || props.disabled || option().disabled) {
+              if (event.defaultPrevented || option().disabled) {
                 return;
               }
               if (option().value === props.value) {

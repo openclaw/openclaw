@@ -688,7 +688,7 @@ describe("chat history pagination", () => {
     expect(loadingButton.textContent?.trim()).toBe("Loading earlier…");
     expect(loadingButton.getAttribute("aria-label")).toBe("Loading earlier…");
     expect(loadingButton.getAttribute("aria-busy")).toBe("true");
-    expect(loadingButton.disabled).toBe(true);
+    expect(loadingButton.getAttribute("aria-disabled")).toBe("true");
     expect(loadingButton.closest(".chat-history-boundary--loading")).not.toBeNull();
     loadingButton.click();
     expect(onShowEarlier).toHaveBeenCalledOnce();

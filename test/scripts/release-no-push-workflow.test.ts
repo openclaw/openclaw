@@ -339,7 +339,6 @@ function executeReleaseGroupCapture(
       RELEASE_RUN_MATURITY_SCORECARD_INPUT: "false",
       RELEASE_RUN_RELEASE_SOAK_INPUT: String(runReleaseSoak),
       RELEASE_SKIP_PACKAGE_TELEGRAM_E2E_INPUT: "false",
-      TELEGRAM_WAIVER: "",
     },
   });
   const outputText = readFileSync(output, "utf8").trim();
@@ -834,7 +833,6 @@ describe("release validation no-push transport", () => {
       expect(outputs.run_release_soak).toBe(String(effectiveSoak));
       expect(outputs.docker_required).toBe(String(effectiveSoak));
       expect(outputs.skip_package_telegram_e2e).toBe(String(!effectiveSoak));
-      expect(outputs.telegram_waiver).toBe("");
     },
   );
 
@@ -1257,7 +1255,20 @@ describe("release validation no-push transport", () => {
     const verify = step(job(full, "summary"), "Verify exact release state artifacts");
     const dispatch = step(job(full, "summary"), "Request release evidence update");
 
-    expect(verify.run).toBe("node scripts/full-release-validation-state.mjs verify");
+    expect(verify.run).toBe('node "$RELEASE_STATE_SCRIPT" verify');
+    const stateScript = job(full, "release_decision").env?.RELEASE_STATE_SCRIPT;
+    expect(stateScript).toContain("qualificationAdmission != null");
+    expect(stateScript).toContain(
+      "qualification-verifier/scripts/full-release-validation-state.mjs",
+    );
+    for (const name of ["release_decision", "diagnostic_drain", "summary"]) {
+      const stateJob = job(full, name);
+      expect(stateJob.env?.RELEASE_STATE_SCRIPT).toBe(stateScript);
+      expect(step(stateJob, "Checkout admitted qualification verifier").with).toMatchObject({
+        ref: "${{ fromJSON(needs.resolve_target.outputs.source_admission_json).qualificationAdmission.workflowSha }}",
+        path: "qualification-verifier",
+      });
+    }
     expect(dispatch.run).not.toContain('GITHUB_RUN_ID_VALUE="$EVIDENCE_ROOT_RUN_ID"');
     expect(dispatch.run).toContain("reused green product evidence from chain-root run");
     expect(dispatch.run).toContain("--connect-timeout 10");
@@ -1879,7 +1890,7 @@ describe("release validation no-push transport", () => {
     expect(fullText).toContain("Report publication: disabled (artifacts only)");
     expect(
       step(job(readWorkflow(FULL_RELEASE), "summary"), "Write release validation manifest").run,
-    ).toBe("node scripts/full-release-validation-state.mjs write-manifest");
+    ).toBe('node "$RELEASE_STATE_SCRIPT" write-manifest');
     expect(publisher.if).toContain("inputs.publish_reports == true");
     const guard = job(performance, "artifact_only_guard");
     expect(guard.if).toContain("inputs.publish_reports != true");
