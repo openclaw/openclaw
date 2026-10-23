@@ -1294,6 +1294,7 @@ src/infra/update-runtime-path-index.ts
 src/infra/update-runtime-staging.ts
 src/infra/update-snapshot-capacity-schema.ts
 src/infra/update-step-identity.ts
+src/infra/utf8-input.ts
 src/infra/warning-filter.ts
 src/infra/windows-appcontainer-spawn.ts
 src/infra/windows-encoding.ts
