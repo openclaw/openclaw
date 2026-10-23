@@ -1,0 +1,278 @@
+{
+  "status": "specification_not_executed",
+  "purpose": "Recovery of an already-mismatched pending review; successful recovery is not demonstrated by this plan.",
+  "fixture": {
+    "session": "session-S",
+    "review": {
+      "id": "review-R",
+      "pending": true,
+      "nativeThread": "reviewed-thread-A",
+      "failedTurn": "failed-turn-T"
+    },
+    "currentBinding": {
+      "nativeThread": "replacement-thread-B",
+      "revision": "binding-v2"
+    },
+    "originalCatalog": {
+      "topLevelDeclarations": 7,
+      "flattenedFunctions": 43
+    },
+    "operatorUiToolSurface": {
+      "flattenedFunctions": 61
+    },
+    "nativeOwnershipAttestation": null,
+    "effectiveConfigurationAttestation": null,
+    "displacedThreadUnusedProof": null
+  },
+  "noSyntheticAuthority": "No JSON fixture field or test cast may stand in for the missing genuine runtime-issued authority. Positive recovery cases must use the real isolated gateway/native lifecycle and canonical store implementation.",
+  "cases": [
+    {
+      "id": "R01",
+      "scenario": "already mismatched review/binding",
+      "action": "Run reconciliation with real test-native owner/configuration evidence and compatible authorized original catalog.",
+      "expected": "Binding returns to reviewed-thread-A; identical review-R remains pending; no native/model turn, findings edit, source spoofing, or replacement thread.",
+      "requiredProof": "gateway_native_required",
+      "executionStatus": "not_executed"
+    },
+    {
+      "id": "R02",
+      "scenario": "same damaged state after prevention-only upgrade",
+      "action": "Run the new recovery regression on PR179054 alone.",
+      "expected": "Regression remains red: the prevention guard cannot restore the already-replaced binding.",
+      "requiredProof": "baseline_required",
+      "executionStatus": "not_executed"
+    },
+    {
+      "id": "R03",
+      "scenario": "reconciliation unavailable",
+      "action": "Native broker cannot establish current ownership/configuration.",
+      "expected": "Return unavailable; no binding/review mutation or native turn.",
+      "requiredProof": "gateway_native_required",
+      "executionStatus": "not_executed"
+    },
+    {
+      "id": "R04",
+      "scenario": "viewer or unauthorized operator",
+      "action": "Request reconcile.",
+      "expected": "Deny before native preparation or any write.",
+      "requiredProof": "gateway_required",
+      "executionStatus": "not_executed"
+    },
+    {
+      "id": "R05",
+      "scenario": "synthetic client or sender-attributed request",
+      "action": "Request reconcile.",
+      "expected": "Deny; never impersonate an operator UI or original channel sender.",
+      "requiredProof": "gateway_required",
+      "executionStatus": "not_executed"
+    },
+    {
+      "id": "R06",
+      "scenario": "wrong review or session lifecycle",
+      "action": "Use stale sessionId/reviewId/revision.",
+      "expected": "Conflict; preserve all current state.",
+      "requiredProof": "gateway_required",
+      "executionStatus": "not_executed"
+    },
+    {
+      "id": "R07",
+      "scenario": "client supplies target thread, owner, catalog or policy",
+      "action": "Send extra wire parameters.",
+      "expected": "Reject schema; server derives target only from the genuine pending review.",
+      "requiredProof": "gateway_required",
+      "executionStatus": "not_executed"
+    },
+    {
+      "id": "R08",
+      "scenario": "original belongs to another native home or conversation",
+      "action": "Attempt recovery from matching-looking historical records.",
+      "expected": "Refuse; historical association and advisory registry membership cannot grant ownership.",
+      "requiredProof": "gateway_native_required",
+      "executionStatus": "not_executed"
+    },
+    {
+      "id": "R09",
+      "scenario": "foreign native subscriber or active native turn",
+      "action": "Prepare original thread.",
+      "expected": "Refuse or wait with bounded cancellation; do not steal subscription, terminate work or weaken policy.",
+      "requiredProof": "gateway_native_required",
+      "executionStatus": "not_executed"
+    },
+    {
+      "id": "R10",
+      "scenario": "failed-run writer identity remains recorded",
+      "action": "Inspect and attempt reconciliation.",
+      "expected": "Require canonical runtime owner reconciliation; never delete the writer field or infer idle from failed status.",
+      "requiredProof": "gateway_native_required",
+      "executionStatus": "not_executed"
+    },
+    {
+      "id": "R11",
+      "scenario": "latest failed turn or findings changed",
+      "action": "Validate original native review.",
+      "expected": "Refuse through unchanged identity/latest-failure/findings checks.",
+      "requiredProof": "gateway_native_required",
+      "executionStatus": "not_executed"
+    },
+    {
+      "id": "R12",
+      "scenario": "current executor policy denies an original declared tool",
+      "action": "Prepare catalog and executor mapping.",
+      "expected": "Refuse; retain original declarations unchanged and do not resurrect denied executors.",
+      "requiredProof": "gateway_native_required",
+      "executionStatus": "not_executed"
+    },
+    {
+      "id": "R13",
+      "scenario": "native profile or effective configuration is unknown",
+      "action": "Receive incomplete or non-attested native response.",
+      "expected": "Return unavailable; requested config and matching JSON fields alone cannot mint authority.",
+      "requiredProof": "gateway_native_required",
+      "executionStatus": "not_executed"
+    },
+    {
+      "id": "R14",
+      "scenario": "provider ignores requested approval/sandbox/reviewer settings",
+      "action": "Observe actual native response/configuration.",
+      "expected": "Refuse; do not hash requested settings and claim they took effect.",
+      "requiredProof": "gateway_native_required",
+      "executionStatus": "not_executed"
+    },
+    {
+      "id": "R15",
+      "scenario": "catalog changed or fingerprint/metadata identity invalid",
+      "action": "Load immutable original catalog.",
+      "expected": "Refuse under the existing parser, home/path and fingerprint checks.",
+      "requiredProof": "gateway_native_required",
+      "executionStatus": "not_executed"
+    },
+    {
+      "id": "R16",
+      "scenario": "original native catalog has 43 functions; UI has 61",
+      "action": "Prepare a review-owned native surface under the proposed broker.",
+      "expected": "Succeed only if exact original declarations map to currently authorized, schema-compatible executors; otherwise report incompatible. No truncation, fabricated supervision scope or source spoofing.",
+      "requiredProof": "gateway_native_required",
+      "executionStatus": "not_executed"
+    },
+    {
+      "id": "R17",
+      "scenario": "runtime/client/config generation changes during preparation",
+      "action": "Continue a previously prepared recovery.",
+      "expected": "Invalidate observation and refuse before commit; preserve review.",
+      "requiredProof": "gateway_native_required",
+      "executionStatus": "not_executed"
+    },
+    {
+      "id": "R18",
+      "scenario": "review or host authority changes during native read",
+      "action": "Finish preparation.",
+      "expected": "Refuse before binding commit; dispose only this operation's resources.",
+      "requiredProof": "gateway_native_required",
+      "executionStatus": "not_executed"
+    },
+    {
+      "id": "R19",
+      "scenario": "binding changes concurrently, including same thread with changed policy/client",
+      "action": "Commit recovery.",
+      "expected": "Full preimage/revision CAS fails; never overwrite the winner.",
+      "requiredProof": "gateway_native_required",
+      "executionStatus": "not_executed"
+    },
+    {
+      "id": "R20",
+      "scenario": "duplicate identical operation after committed reconciliation",
+      "action": "Repeat operationId with identical target and parameters.",
+      "expected": "Return recorded consistent result without native preparation, second write, acknowledgment or turn.",
+      "requiredProof": "gateway_required",
+      "executionStatus": "not_executed"
+    },
+    {
+      "id": "R21",
+      "scenario": "operationId reused for different review/session/request",
+      "action": "Retry altered request.",
+      "expected": "Conflict; do not reuse receipts or broaden authority.",
+      "requiredProof": "gateway_required",
+      "executionStatus": "not_executed"
+    },
+    {
+      "id": "R22",
+      "scenario": "native ownership acquired, binding commit rejected",
+      "action": "Trigger failure before canonical commit.",
+      "expected": "Conditionally release only acquired reservation/subscription; leave binding and review untouched. No blind snapshot restore.",
+      "requiredProof": "gateway_native_required",
+      "executionStatus": "not_executed"
+    },
+    {
+      "id": "R23",
+      "scenario": "binding committed, reply lost",
+      "action": "Reconnect and inspect operation receipt.",
+      "expected": "Return/reconcile known committed result; never automatically repeat native admission or roll back the binding.",
+      "requiredProof": "gateway_native_required",
+      "executionStatus": "not_executed"
+    },
+    {
+      "id": "R24",
+      "scenario": "native preparation outcome unknown",
+      "action": "Lose response during native configuration/subscription handoff.",
+      "expected": "Persist uncertain outcome and block retries; read current native/canonical evidence before any further action.",
+      "requiredProof": "gateway_native_required",
+      "executionStatus": "not_executed"
+    },
+    {
+      "id": "R25",
+      "scenario": "process crash in prepared or committed phase",
+      "action": "Restart isolated test gateway and inspect journal.",
+      "expected": "Recover disposition from canonical CAS/receipt and actual native ownership; preserve review; no automatic acknowledgment or replay.",
+      "requiredProof": "gateway_native_required",
+      "executionStatus": "not_executed"
+    },
+    {
+      "id": "R26",
+      "scenario": "subscription cleanup or conditional rollback loses ownership",
+      "action": "Dispose failed recovery.",
+      "expected": "Do not touch another owner's subscription/binding; report uncertain and retain hold.",
+      "requiredProof": "gateway_native_required",
+      "executionStatus": "not_executed"
+    },
+    {
+      "id": "R27",
+      "scenario": "displaced replacement contains accepted input or consequential work",
+      "action": "Attempt to supersede it.",
+      "expected": "Refuse and preserve both histories; do not merge, discard or replay work.",
+      "requiredProof": "gateway_native_required",
+      "executionStatus": "not_executed"
+    },
+    {
+      "id": "R28",
+      "scenario": "successful consistency repair",
+      "action": "Observe returned state before acknowledgment.",
+      "expected": "Review remains byte-for-byte identical and pending; continuationApproved=false; queued inputs remain held.",
+      "requiredProof": "gateway_native_required",
+      "executionStatus": "not_executed"
+    },
+    {
+      "id": "R29",
+      "scenario": "separate explicit normal acknowledgment after repair",
+      "action": "Use unchanged sessions.providerReview.continue and native review validator.",
+      "expected": "Original thread and failed turn/findings/runtime validated again; only genuine provider acceptance of a distinct native turn retires review. No automatic replay of held inputs.",
+      "requiredProof": "gateway_native_required",
+      "executionStatus": "not_executed"
+    },
+    {
+      "id": "R30",
+      "scenario": "only stored flags or serialized observations exist",
+      "action": "Attempt native catalog preparation or commit.",
+      "expected": "Reject unissued/stale observations; persisted data and TypeScript brands are not executable authority.",
+      "requiredProof": "gateway_native_required",
+      "executionStatus": "not_executed"
+    },
+    {
+      "id": "R31",
+      "scenario": "current MCP/app/skills/network policy becomes incompatible",
+      "action": "Prepare original catalog/configuration.",
+      "expected": "Refuse with specific compatibility reason; no policy rollback or broadening.",
+      "requiredProof": "gateway_native_required",
+      "executionStatus": "not_executed"
+    }
+  ]
+}
