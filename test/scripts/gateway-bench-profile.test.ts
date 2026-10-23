@@ -16,6 +16,7 @@ import {
   readGatewayResources,
   startGatewayDiagnostics,
 } from "../../scripts/lib/gateway-bench-profile.js";
+import type { startGatewayBenchWorkerMessages } from "../../scripts/lib/gateway-bench-worker-messages.js";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 
 const nodeExecutable = requireNodeTool("node");
@@ -103,6 +104,103 @@ function heapBytesUnder(
     )
   );
 }
+
+it("attributes worker receipts without retaining labels or treating unsized messages as empty", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "gateway-message-attribution-"));
+  onTestFinished(() => rm(directory, { recursive: true, force: true }));
+  const profilePath = path.join(directory, "heap");
+  const { child, stderr } = spawnFixture([
+    "--import",
+    new URL("../../scripts/tsx.mjs", import.meta.url).href,
+    "--input-type=module",
+    "-e",
+    `
+    process.env.OPENCLAW_BENCH_WORKER_ATTRIBUTION = "1";
+    process.argv[1] = ${JSON.stringify(fileURLToPath(new URL("../../src/entry.ts", import.meta.url)))};
+    await import(${JSON.stringify(preloadUrl)});
+    const { observeWorkerMessage, recordWorkerMessage } = await import(${JSON.stringify(new URL("../../src/infra/worker-message-metrics.ts", import.meta.url).href)});
+    const { createSqliteWorkerOperationAdmission } = await import(${JSON.stringify(new URL("../../src/infra/sqlite-worker-operation-admission.ts", import.meta.url).href)});
+    const { MessageChannel } = await import("node:worker_threads");
+    const v8 = await import("node:v8");
+    process.channel.ref();
+    process.on("message", message => {
+      if (!message.run) return;
+      const privateKind = "fixture-private-identifier";
+      observeWorkerMessage({ status: "notification", value: { kind: privateKind, text: "x".repeat(4096) } }, "from_worker");
+      const admission = createSqliteWorkerOperationAdmission((_request, grant) => grant());
+      admission.port.postMessage({ stage: "transaction", decision: new SharedArrayBuffer(4), facts: { publication: { kind: "session-actor-admission", snapshot: { entry: { skillsSnapshot: "s".repeat(1024) } } } } });
+      admission.port.postMessage({ kind: "native-commit", payloadBytes: 40, committed: { version: 1, sequence: 1, facts: { kind: "committed", receipt: { kind: "session-actor-committed", phase: "appendTranscriptEvent", postimage: { entry: { systemPromptReport: "p".repeat(2048) } } } } } });
+      admission.service();
+      admission.finish();
+      const { port1, port2 } = new MessageChannel();
+      observeWorkerMessage({ status: "notification", port: port1 }, "from_worker");
+      port1.close(); port2.close();
+      recordWorkerMessage("lifecycle", "from_worker");
+      v8.deserialize(v8.serialize({ kind: privateKind, value: 42 }));
+      process.send({ complete: true });
+    });
+    process.send({ ready: true });
+  `,
+  ]);
+  await waitMessage(child, "ready");
+  await controlGatewayProfile(child, "heap", "start", profilePath);
+  expect(await sendMessage(child, { run: true }), stderr()).toEqual({ complete: true });
+  await controlGatewayProfile(child, "heap", "stop", profilePath);
+  const result = await readJson<ReturnType<ReturnType<typeof startGatewayBenchWorkerMessages>>>(
+    `${profilePath}.worker-attribution.json`,
+  );
+  expect(result.overflowMessages).toBe(0);
+  expect(result.groups.reduce((sum, group) => sum + group.messages, 0)).toBe(5);
+  expect(result.groups).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        kind: "task_notification",
+        messages: 2,
+        serializedMessages: 1,
+        serializedBytes: expect.any(Number),
+        failedSerializationMessages: 1,
+      }),
+      expect.objectContaining({
+        kind: "authority",
+        operation: "transaction",
+        facts: "session-actor-admission",
+        sharedBufferMessages: 1,
+        sharedBackingBytes: 4,
+        serializedMessages: 1,
+      }),
+      expect.objectContaining({
+        kind: "authority",
+        operation: "native-commit",
+        receipt: "session-actor-committed",
+        knownPayloadBytes: 40,
+        serializedMessages: 1,
+      }),
+      expect.objectContaining({
+        kind: "lifecycle",
+        unavailableMessageValues: 1,
+        serializedMessages: 0,
+      }),
+    ]),
+  );
+  expect(
+    result.groups.find((group) => group.kind === "task_notification")?.serializedBytes,
+  ).toBeGreaterThan(4096);
+  const authority = result.groups.find((group) => group.operation === "transaction");
+  expect(authority?.sections["authorityEntry.skillsSnapshot"]?.serializedBytes).toBeGreaterThan(
+    1024,
+  );
+  const receipt = result.groups.find((group) => group.operation === "native-commit");
+  expect(receipt?.phase).toBe("appendTranscriptEvent");
+  expect(receipt?.sections["postimageEntry.systemPromptReport"]?.serializedBytes).toBeGreaterThan(
+    2048,
+  );
+  expect(JSON.stringify(result)).not.toContain("fixture-private-identifier");
+  const deserialized = await readJson<{ groups: Record<string, { count: number; bytes: number }> }>(
+    `${profilePath}.deserialize.json`,
+  );
+  expect(deserialized.groups.other).toMatchObject({ count: 1 });
+  expect(deserialized.groups).not.toHaveProperty("fixture-private-identifier");
+});
 
 it("attributes broadcast allocations through deep stacks without double counting", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "gateway-broadcast-profile-"));

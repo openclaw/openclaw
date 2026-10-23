@@ -22,6 +22,8 @@ if (baselineOwners) {
     "session-accessor.sqlite-history-query",
     "session-memory-entry.worker",
     "session-accessor.sqlite-active-context",
+    "session-actor-replica",
+    "session-actor-receipt",
   ];
   const loadedOwners = new Set<string>();
   registerHooks({

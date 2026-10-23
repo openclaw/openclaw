@@ -1330,8 +1330,9 @@ Gateway swarm and history/list latency comparison.
 For a comparison in one source checkout, `--baseline-owners` substitutes sibling
 `.baseline.ts` copies of `session-transcript.worker`,
 `session-accessor.sqlite-history-query`, `session-memory-entry.worker`, and
-`session-accessor.sqlite-active-context` under `src/config/sessions`. Create those
-four copies from the recorded baseline commit before applying the candidate;
+`session-accessor.sqlite-active-context`, `session-actor-replica`, and
+`session-actor-receipt` under `src/config/sessions`. Create those six copies from
+the recorded baseline commit before applying the candidate;
 they are temporary sandbox artifacts. Both sides otherwise use the same import
 graph, dependencies, and driver. Omit `--worker-memory` for the uninstrumented
 Gateway latency pairs; the baseline loader still selects the pinned owners.
@@ -2439,7 +2440,8 @@ counts and known payload bytes, and RPC p50/p95/p99 with sample counts. Worker
 payload bytes include transferred buffers; they are not an exact count of bytes
 deserialized by `node:v8`. Each profile's `.deserialize.json` sidecar separately
 records exact main-isolate `v8.deserialize` input bytes and call counts, grouped
-by the decoded root's `kind` (or `untyped`). The observer runs only inside profile
+by a fixed allowlist of decoded root `kind` labels (`other` for unknown labels,
+or `untyped` when absent). The observer runs only inside profile
 captures and is restored afterward. Divide a group's bytes by the completed
 operation count to compare deserialize bytes per patch or turn. The generic
 entry-patch transfer also carries lifecycle and transcript work, so inspect these
@@ -2657,6 +2659,35 @@ lengths are exact and string lengths approximate UTF-16 storage; envelope and
 object-graph sizes are not included. Compare the unmeasured counts too: a kind
 with no known bytes is not necessarily cheap. These are logical payload bytes,
 including transferred buffers, rather than bytes copied by structured clone.
+
+For a separate worker-message attribution pass, set
+`OPENCLAW_BENCH_WORKER_ATTRIBUTION=1` and use `--entry src/entry.ts`. The private
+preload instruments the existing metrics owner and SQLite admission receipt
+boundary in memory. Each CPU/heap capture adds `.worker-attribution.json` with
+message counts, known payload bytes, and V8 re-serialized envelope bytes grouped
+by bounded message kind, protocol operation, receipt/publication kind, and known
+lifecycle script. Other script identities are `unknown`; this observer does not
+infer them from message contents or join requests to replies. It caps groups at
+512 and reports overflow. Direct metrics calls that do not expose their message
+value report `unavailableMessageValues`. Shared buffers contribute reference
+encoding bytes and separate `sharedBackingBytes`, never copied backing bytes.
+MessagePorts and unsupported native objects report `failedSerializationMessages`,
+not empty messages. The size estimate includes transferred ArrayBuffer contents
+and is neither native transport bytes nor deserialized heap bytes.
+Actor receipts also report the bounded phase and separate serialized sizes of
+authority snapshot entries, receipt postimage entries, and their skills snapshot,
+system-prompt report, and pending-delivery fields when present. These overlapping
+sections are diagnostic breakdowns; do not add them to total message bytes.
+
+Re-serialization adds allocation and CPU work: use that pass to locate traffic,
+then unset the flag for allocation, retained-heap, promotion, GC, and latency
+acceptance runs. Profiles with collected objects estimate allocation; live-only
+profiles estimate survivors. Native structured-clone allocations without a JS
+stack cannot be assigned exactly to a message or its retaining cache by this
+observer. Correlate those samples with receipt counts and inspect a separate heap
+snapshot for retainers. The observer retains numeric aggregates only and never
+takes per-message sampling profiles or forces a collection.
+
 Use a freshly generated fixture on each revision and compare multiple rounds.
 The driver adds a small parent/child session set; those sessions are included in
 list measurements. For production-shaped database size use `--transcript-mib 1500`
