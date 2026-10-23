@@ -112,6 +112,11 @@ function requireEmbeddedAgentArgs(
   return args;
 }
 
+/** The harness core config mirrors the fake runtime's model defaults through the configured path. */
+const coreConfigWithDefaultModel = {
+  agents: { defaults: { model: { primary: "together/Qwen/Qwen2.5-7B-Instruct-Turbo" } } },
+} as OpenClawConfig;
+
 async function runGenerateVoiceResponse(
   payloads: ReplyPayload[],
   overrides: Partial<VoiceResponseParams> & { runtime?: AgentRuntime } = {},
@@ -120,7 +125,7 @@ async function runGenerateVoiceResponse(
   const userMessage = params.userMessage ?? "hello there";
   const result = await generateVoiceResponse({
     voiceConfig: voiceConfig(),
-    coreConfig: {},
+    coreConfig: coreConfigWithDefaultModel,
     agentRuntime: runtime ?? createAgentRuntime(payloads).runtime,
     callId: "call-123",
     agentId: "main",
@@ -410,6 +415,47 @@ describe("generateVoiceResponse", () => {
     ]);
 
     expect(result.text).toBe("Sounds good. I can help with the next step whenever you are ready.");
+  });
+
+  it("runs the call agent's configured model when responseModel is unset", async () => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime([
+      { text: '{"spoken":"Configured model answers."}' },
+    ]);
+
+    const { result } = await runGenerateVoiceResponse([], {
+      runtime,
+      coreConfig: {
+        agents: { defaults: { model: { primary: "anthropic/claude-opus-5-5" } } },
+      } as OpenClawConfig,
+    });
+
+    expect(result.text).toBe("Configured model answers.");
+    expect(requireEmbeddedAgentArgs(runEmbeddedAgent)).toMatchObject({
+      provider: "anthropic",
+      model: "claude-opus-5-5",
+    });
+  });
+
+  it("runs the agent-specific model over the global default when responseModel is unset", async () => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime([
+      { text: '{"spoken":"Agent model answers."}' },
+    ]);
+
+    const { result } = await runGenerateVoiceResponse([], {
+      runtime,
+      coreConfig: {
+        agents: {
+          entries: { main: { model: "anthropic/claude-opus-5-5" } },
+          defaults: { model: { primary: "openai/gpt-5.4" } },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(result.text).toBe("Agent model answers.");
+    expect(requireEmbeddedAgentArgs(runEmbeddedAgent)).toMatchObject({
+      provider: "anthropic",
+      model: "claude-opus-5-5",
+    });
   });
 
   it("pins the voice session to responseModel before running the embedded agent", async () => {
