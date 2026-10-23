@@ -57,10 +57,15 @@ if (!isMainThread) {
   const port = workerData.diagnostics;
   const loop = monitorEventLoopDelay({ resolution: 1 });
   let active = false;
+  let measuredAfter = Infinity;
   let samples = [];
   const record = (entries) => {
     if (active) {
-      samples.push(...entries.map((entry) => ({ kind: entry.detail.kind, ms: entry.duration })));
+      samples.push(
+        ...entries
+          .filter((entry) => entry.startTime >= measuredAfter)
+          .map((entry) => ({ kind: entry.detail.kind, ms: entry.duration })),
+      );
     }
   };
   const observer = new PerformanceObserver((list) => record(list.getEntries()));
@@ -70,12 +75,20 @@ if (!isMainThread) {
     try {
       let value;
       if (operation === "begin") {
+        if (workerData.traceGc) {
+          fs.writeSync(1, `WORKER_GC_IDENTIFY_BEGIN ${workerData.name}\n`);
+          setFlagsFromString("--trace-gc-nvp");
+          await inspector.post("HeapProfiler.collectGarbage");
+          setFlagsFromString("--no-trace-gc-nvp");
+          fs.writeSync(1, `WORKER_GC_IDENTIFY_END ${workerData.name}\n`);
+        }
         observer.takeRecords();
         samples = [];
         loop.reset();
         loop.enable();
+        measuredAfter = performance.now();
         active = true;
-        console.log(`WORKER_GC_BEGIN ${workerData.name}`);
+        fs.writeSync(1, `WORKER_GC_BEGIN ${workerData.name}\n`);
         if (workerData.traceGc) {
           setFlagsFromString("--trace-gc-nvp");
         }
@@ -87,7 +100,7 @@ if (!isMainThread) {
         if (workerData.traceGc) {
           setFlagsFromString("--no-trace-gc-nvp");
         }
-        console.log(`WORKER_GC_END ${workerData.name}`);
+        fs.writeSync(1, `WORKER_GC_END ${workerData.name}\n`);
         value = {
           gc: {
             all: distribution(samples.map((sample) => sample.ms)),
