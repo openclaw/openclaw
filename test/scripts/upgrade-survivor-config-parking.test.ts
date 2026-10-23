@@ -231,6 +231,7 @@ openclaw_e2e_wait_gateway_ready() {
 check_gateway_status() { printf 'authenticated\\n' >>"$PROBE_EVENTS"; }
 # Independent preparation is covered separately; preserve this probe's service manager.
 prepare_restart_inference() { :; }
+prepare_restart_plugin_release_selectors() { :; }
 install_update_restart_systemctl_shim() { :; }
 prepare_restart_fixture() {
   restart_fixture_package="$RUNTIME_ROOT/future.tgz"
@@ -341,6 +342,7 @@ exit "$probe_status"
             : [
                 "stop-recovery-service",
                 "prepare-restart-inference",
+                "prepare-restart-plugin-selectors",
                 "prepare-restart-fixture",
                 "prepare-restart-manager",
               ],
@@ -375,6 +377,7 @@ baseline_version=2026.9.2
 OPENCLAW_CLAWHUB_URL=fixture
 stop_update_restart_probe_gateway() { :; }
 prepare_restart_inference() { :; }
+prepare_restart_plugin_release_selectors() { :; }
 prepare_restart_fixture() { restart_fixture_package=/tmp/fixture.tgz; restart_fixture_version=2026.9.3; }
 install_update_restart_systemctl_shim() { :; }
 run_update_restart_probe_gateway() { :; }

@@ -16,6 +16,8 @@ Completed calls return command output directly. Use `process` only when `exec` r
 
 <ParamField path="command" type="string" required>
 Shell command to run.
+Gateway-hosted commands containing a literal NUL (U+0000) return an error before process launch; correct the command and retry.
+Empty arguments, newlines, and literal backslash-zero text remain valid and are not rewritten.
 </ParamField>
 
 <ParamField path="workdir" type="string" default="cwd">

@@ -9,6 +9,7 @@ import {
 } from "../../infra/deferred-plugin-migrations.js";
 import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../../infra/gateway-shutdown-budget.js";
 import * as updateCheck from "../../infra/update-check.js";
+import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
 import {
   adoptUpdateRun,
   createUpdateRun,
@@ -20,6 +21,7 @@ import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import * as shared from "./shared.js";
+import { updateFinalizeCommand } from "./update-command-finalize.js";
 import * as freshDoctor from "./update-command-fresh-doctor.js";
 import { validConfigSnapshot } from "./update-command-lifecycle.test-support.js";
 import * as plugins from "./update-command-plugins.js";
@@ -261,6 +263,31 @@ it("does not finish the inherited updater run when Doctor remains pending", asyn
   expect(getUpdateRun(inherited.runId)).toMatchObject({ status: "running", reason: null });
   expect(getUpdateRun(inherited.runId)?.origin.nextAction).toBeUndefined();
   expect(freshDoctor.runUpdateFinalizationDoctorInFreshProcess).not.toHaveBeenCalled();
+});
+
+it("keeps unverified update-driver ancestry as a deferred finalization warning", async () => {
+  const inherited = createUpdateRun({ trigger: "cli" });
+  adoptUpdateRun(inherited.runId);
+  vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", inherited.runId);
+  vi.mocked(freshDoctor.runUpdateFinalizationDoctorInFreshProcess).mockRejectedValueOnce(
+    new DoctorMaintenanceRefusalError("Synthetic unverified update-driver ancestry", {
+      kind: "deferred",
+      reason: "admission-unavailable",
+    }),
+  );
+
+  await expect(
+    updateFinalizeCommand({ json: true, yes: true, deferCompletionCache: true }),
+  ).resolves.toBeUndefined();
+
+  expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+    expect.objectContaining({
+      status: "warning",
+      postUpdate: { doctor: { status: "warning", warnings: expect.any(Array) } },
+    }),
+  );
+  expect(getUpdateRun(inherited.runId)?.status).toBe("running");
+  expect(getUpdateRun(inherited.runId)?.verification.rollbackOutcome).toBeUndefined();
 });
 
 it("keeps a refused stop for an admitted migration write as a failed update", async () => {

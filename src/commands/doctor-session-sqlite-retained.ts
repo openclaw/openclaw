@@ -15,6 +15,7 @@ import {
   hasDeferredPluginSessionImport,
   prepareSessionSourceVerification,
   readDeferredPluginSessionImport,
+  readStaleDeferredPluginSessionImport,
   rebuildDeferredPluginSessionSourceIndex,
   resolveVerifiedSessionSource,
   type DeferredPluginSessionImport,
@@ -95,6 +96,7 @@ export function prepareRetainedSessionImport(
     }
   }
   let retainedImport: DeferredPluginSessionImport | undefined;
+  let staleImport: DeferredPluginSessionImport | undefined;
   const sourceConflicts = new Map<string, string>();
   const sourceVerification = {
     ...prepareSessionSourceVerification({
@@ -122,14 +124,20 @@ export function prepareRetainedSessionImport(
   };
   if (!isSqliteStore) {
     try {
-      if (
-        (params.mode === "import" || params.mode === "recover") &&
-        rebuildDeferredPluginSessionSourceIndex(sourceVerification)
-      ) {
-        issues.push({
-          code: "retained_plugin_source_index_rebuilt",
-          message: `Rebuilt the verified source index and database binding from the deferred import receipt: ${params.target.storePath}. Canonical SQLite sessions were not replayed.`,
-        });
+      if (params.mode === "import" || params.mode === "recover") {
+        const rebuilt = rebuildDeferredPluginSessionSourceIndex(sourceVerification);
+        staleImport = readStaleDeferredPluginSessionImport(sourceVerification);
+        if (staleImport) {
+          issues.push({
+            code: "retained_plugin_receipt_superseded",
+            message: `Session import receipt is bound to a different database (${staleImport.databaseIdentity}); it cannot certify ${sqlitePath}. Preserved the superseded receipt in migration history; retained originals will be checked through ordinary historical import without replacing current settings.`,
+          });
+        } else if (rebuilt) {
+          issues.push({
+            code: "retained_plugin_source_index_rebuilt",
+            message: `Rebuilt the verified source index and database binding from the deferred import receipt: ${params.target.storePath}. Canonical SQLite sessions were not replayed.`,
+          });
+        }
       }
       retainedImport = readDeferredPluginSessionImport(sourceVerification);
     } catch (error) {
@@ -155,7 +163,7 @@ export function prepareRetainedSessionImport(
   ) {
     appendRetainedIndexComparison(params, issues);
   }
-  return { retainedImport, sourceConflicts, sourceVerification, retainedIndexPath };
+  return { retainedImport, staleImport, sourceConflicts, sourceVerification, retainedIndexPath };
 }
 
 /** Compare current rows for diagnosis only; changed index values never gain receipt authority. */

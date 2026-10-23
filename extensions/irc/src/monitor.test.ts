@@ -20,6 +20,8 @@ type DisconnectingIrcServer = {
   port: number;
   lines: string[];
   connectionCount: number;
+  joined: Promise<void>;
+  rejoined: Promise<void>;
   disconnectFirst(): void;
   close(): Promise<void>;
 };
@@ -113,6 +115,8 @@ function observeReconnect() {
 
 async function startDisconnectingIrcServer(): Promise<DisconnectingIrcServer> {
   const lines: string[] = [];
+  const joined = createDeferred<void>();
+  const rejoined = createDeferred<void>();
   let connectionCount = 0;
   let firstSocket: net.Socket;
   const server = await startIrcTestServer((socket) => {
@@ -122,6 +126,9 @@ async function startDisconnectingIrcServer(): Promise<DisconnectingIrcServer> {
     }
     onIrcTestLine(socket, (line) => {
       lines.push(line);
+      if (line === "JOIN #openclaw") {
+        (connectionNumber === 1 ? joined : rejoined).resolve();
+      }
       if (line.startsWith("USER ")) {
         if (connectionNumber === 2) {
           socket.destroy();
@@ -134,6 +141,8 @@ async function startDisconnectingIrcServer(): Promise<DisconnectingIrcServer> {
   return {
     ...server,
     lines,
+    joined: joined.promise,
+    rejoined: rejoined.promise,
     disconnectFirst: () => firstSocket.destroy(),
     get connectionCount() {
       return connectionCount;

@@ -5,6 +5,7 @@ import {
   loadExactSessionEntry,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { loadTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite-read.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { assertSessionStoreMigrationComplete } from "../config/sessions/startup-migration.js";
 import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
@@ -118,6 +119,7 @@ describe("retained session receipt recovery", () => {
           mode: "import",
         });
         const before = receipt(state.env);
+        const originalEvents = loadTranscriptEventsSync({ ...scope, sessionId: "legacy-kept" });
         closeOpenClawAgentDatabasesForTest();
         const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, scope).path;
         fs.copyFileSync(sqlitePath, `${sqlitePath}.replacement`);
@@ -136,6 +138,7 @@ describe("retained session receipt recovery", () => {
           db.exec("COMMIT;");
         }
         db.close();
+        const replacementEvents = loadTranscriptEventsSync({ ...scope, sessionId: "legacy-kept" });
         const manifest = readSessionSqliteMigrationManifest(imported.migrationRun!.manifestPath)!;
         manifest.failedAt = new Date().toISOString();
         const historicalIssues = Array.from({ length: 11 }, (_, index) => ({
@@ -152,12 +155,19 @@ describe("retained session receipt recovery", () => {
           mode: "recover",
         });
         expect(recovered.targets.flatMap((target) => target.issues)).toContainEqual(
-          expect.objectContaining({
-            code: "retained_plugin_source_conflict",
-            message: expect.stringContaining("legacy-kept.jsonl"),
-          }),
+          expect.objectContaining({ code: "retained_plugin_receipt_superseded" }),
         );
-        expect(receipt(state.env)).toEqual(before);
+        expect(loadTranscriptEventsSync({ ...scope, sessionId: "legacy-kept" })).toEqual(
+          change === "missing" ? originalEvents : replacementEvents,
+        );
+        const superseded = withExistingOpenClawStateDatabaseReadOnly(
+          ({ db: stateDb }) =>
+            stateDb
+              .prepare("SELECT report_json FROM migration_runs WHERE status = 'superseded'")
+              .get(),
+          { env: state.env },
+        );
+        expect(JSON.parse(String(superseded?.report_json))).toMatchObject({ receipt: before });
         const jsonReport = JSON.parse(
           fs.readFileSync(recovered.migrationRun!.failureReportJsonPath!, "utf8"),
         ) as { targets: Array<{ issues: Array<{ code: string }> }> };

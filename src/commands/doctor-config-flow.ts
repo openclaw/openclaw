@@ -114,6 +114,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   if (pluginInstallConfigImport?.pluginInventoryChanged) {
     const { readConfigPreflightSnapshot } = await import("./config-preflight-snapshot.js");
     const refreshed = await readConfigPreflightSnapshot({
+      purpose: "doctor",
       allowCurrentPluginMetadata: false,
       includePluginMetadata: true,
       preparePluginMetadataSnapshot: true,
@@ -142,15 +143,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       preflight.deferredPluginMigrations?.map((pending) => pending.pluginId) ?? [],
   });
   preparingResources.use(pluginMetadataSnapshotScope);
-  const runWithPluginMetadataSnapshot = pluginMetadataSnapshotScope.run;
-  const invalidatePluginMetadataSnapshot = () => {
-    // Filesystem/install repairs replace the authoritative plugin generation.
-    pluginMetadataSnapshotState.current = undefined;
-    pluginMetadataSnapshotScope.invalidate();
-  };
   const runWithCurrentPluginMetadata = <T>(config: OpenClawConfig, run: () => T): T => {
     const soleAgentId = tryResolveSoleAgentId(config);
-    return runWithPluginMetadataSnapshot(
+    return pluginMetadataSnapshotScope.run(
       {
         config,
         workspaceDir: soleAgentId ? resolveAgentWorkspaceDir(config, soleAgentId) : undefined,
@@ -537,7 +532,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       env: process.env,
       blockedCodexProviderPlan,
       pluginMetadataSnapshotState,
-      runWithPluginMetadataSnapshot,
+      runWithPluginMetadataSnapshot: pluginMetadataSnapshotScope.run,
       ...(prompter
         ? {
             onCapabilityConsent: createPluginCapabilityConsentPrompter({
@@ -735,7 +730,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     modelRetirementRepairRan:
       modelRetirementRepairRan && !legacyStep.blocksWrite && (shouldWriteConfig || snapshot.valid),
     ...migrationResult,
-    runWithPluginMetadataSnapshot,
-    invalidatePluginMetadataSnapshot,
+    runWithPluginMetadataSnapshot: pluginMetadataSnapshotScope.run,
+    invalidatePluginMetadataSnapshot: () => {
+      pluginMetadataSnapshotState.current = undefined;
+      pluginMetadataSnapshotScope.invalidate();
+    },
   };
 }

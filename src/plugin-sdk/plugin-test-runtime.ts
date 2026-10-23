@@ -93,6 +93,7 @@ export {
   resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
 } from "../plugins/web-provider-public-artifacts.explicit.js";
 export {
+  clearActivePluginRegistry,
   createPluginRegistryOwner,
   disposePluginRegistryInstances,
   getActivePluginRegistry,

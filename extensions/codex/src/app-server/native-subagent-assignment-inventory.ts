@@ -153,6 +153,7 @@ export class CodexNativeSubagentAssignmentInventory {
     }
     const custody = owner.completionCustody.retain();
     try {
+      await this.drain(state);
       store.assertCurrent();
       for (const assignment of store.read()) {
         if (!matchesNativeAssignmentLifecycle(assignment.owner, current)) {
@@ -167,6 +168,8 @@ export class CodexNativeSubagentAssignmentInventory {
           continue;
         }
         await this.dependencies.restore(state, assignment, recovery, custody);
+        // Restoring one child can queue binding writes needed by the next recovery.
+        await this.drain(state);
       }
     } catch (error) {
       embeddedAgentLog.warn("Native pending assignments remain for reconciliation", {

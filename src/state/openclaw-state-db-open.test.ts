@@ -5,6 +5,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import * as kyselyCache from "../infra/kysely-sync-cache-state.js";
 import * as kyselySync from "../infra/kysely-sync.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
@@ -363,6 +364,46 @@ describe("unpublished state database acquisition", () => {
       }
     });
   });
+
+  it.each([
+    { kind: "Doctor maintenance", owner: { role: "sqlite-maintenance" } },
+    {
+      kind: "schema maintenance",
+      owner: { role: "sqlite-maintenance", stateOwnerKind: "schema" },
+    },
+  ])(
+    "defers scheduled shared-state checkpoints while a foreign $kind owner holds the database",
+    async ({ owner }) => {
+      const { params } = acquisitionFixture();
+      const database = openUnpublishedStateDatabase(params);
+      const seed = acquireGatewayStateOwner({ databasePath: params.pathname });
+      const ownerPath = seed.path;
+      seed.release();
+      fs.writeFileSync(
+        ownerPath,
+        JSON.stringify({
+          pid: process.ppid,
+          createdAt: new Date().toISOString(),
+          configPath: path.join(path.dirname(params.pathname), "openclaw.json"),
+          ...owner,
+        }),
+      );
+      const prepare = vi.spyOn(database.db, "prepare");
+      try {
+        await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+        expect(prepare).not.toHaveBeenCalledWith("PRAGMA wal_checkpoint(PASSIVE);");
+        expect(database.walMaintenance.health).toBeUndefined();
+        fs.rmSync(ownerPath);
+        await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+        expect(prepare).toHaveBeenCalledWith("PRAGMA wal_checkpoint(PASSIVE);");
+        expect(database.walMaintenance.health).toMatchObject({ state: "complete" });
+      } finally {
+        fs.rmSync(ownerPath, { force: true });
+        database.walMaintenance.close();
+        closeTrackedStateDatabase(database.db);
+      }
+    },
+  );
 
   it.each([
     "statement cache",

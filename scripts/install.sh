@@ -54,11 +54,11 @@ NODE_BREW_FORMULA="node"
 # Linux package repositories can publish builds ahead of the Node release line.
 # Provision the supported LTS line there so a fresh install never receives a prerelease runtime.
 NODE_LINUX_DEFAULT_MAJOR=24
-NODE_24_MIN_MINOR=16
-NODE_24_MIN_PATCH=0
-NODE_26_MIN_MINOR=1
-NODE_26_MIN_PATCH=0
-NODE_SUPPORTED_VERSION_LABEL="24.16.0+ or 26.1.0+"
+NODE_24_MIN_MINOR=22
+NODE_24_MIN_PATCH=1
+NODE_26_MIN_MINOR=12
+NODE_26_MIN_PATCH=1
+NODE_SUPPORTED_VERSION_LABEL="24.22.1+ or 26.12.1+"
 
 ORIGINAL_PATH="${PATH:-}"
 
@@ -1790,9 +1790,9 @@ node_binary_has_safe_sqlite() {
             const blobSafe = row?.blob_value instanceof Uint8Array && Buffer.from(row.blob_value).equals(bytes);
             const jsonSafe = row?.json_value === json && JSON.parse(row.json_value).value === text;
             if (!textSafe) {
-                console.error("Node " + process.versions.node + ": node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.16+/26.1+ or a build with the fix");
+                console.error("Node " + process.versions.node + ": node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.22.1+/26.12.1+ or a build with the fix");
             } else if (!blobSafe || !jsonSafe) {
-                console.error("Node " + process.versions.node + ": node:sqlite NUL round-trip capability probe failed; use 24.16+/26.1+ or a build with the fix");
+                console.error("Node " + process.versions.node + ": node:sqlite NUL round-trip capability probe failed; use 24.22.1+/26.12.1+ or a build with the fix");
             } else if (!safe) {
                 console.error("Node " + process.versions.node + ": SQLite " + value + " is not WAL-reset-safe");
             }
@@ -2334,7 +2334,7 @@ install_node_with_apk() {
     active_version="$(node -v 2>/dev/null || echo "missing")"
     sqlite_version="$(node_binary_sqlite_version node)"
     ui_error "Alpine apk repositories did not provide Node.js with WAL-reset-safe SQLite; found ${active_version} with SQLite ${sqlite_version} (${active_path})"
-    echo "Use an official node:${NODE_DEFAULT_MAJOR}-alpine container or a glibc-based host until Alpine ships patched SQLite, then rerun the installer."
+    echo "Use an official node:26.12.1-alpine container or a glibc-based host until Alpine ships patched SQLite, then rerun the installer."
     exit 1
 }
 
@@ -2344,7 +2344,7 @@ install_node_with_user_prefix() {
     node_bin_dir="${prefix}/tools/node/bin"
     mktempfile cli_installer
 
-    ui_info "Using a user-space Node.js runtime because the system Node.js links unsafe SQLite"
+    ui_info "Using a user-space Node.js runtime because the package-managed Node.js is unsupported"
     run_required_step "Downloading user-space Node.js installer" \
         download_validated_script "https://openclaw.ai/install-cli.sh" "$cli_installer"
     # The child Bash expands this script's positional arguments, not this shell.
@@ -2372,7 +2372,9 @@ install_node() {
         fi
         brew link "${NODE_BREW_FORMULA}" --overwrite --force 2>/dev/null || true
         if ! ensure_macos_default_node_active; then
-            exit 1
+            ui_warn "Homebrew has not published a Node.js build at the required security floor"
+            install_node_with_user_prefix
+            return 0
         fi
         ui_success "Node.js installed"
         print_active_node_paths || true
@@ -2614,7 +2616,7 @@ ensure_pnpm() {
     local repo_dir="${1:-$PWD}"
     local spec version pnpm_dir corepack_cmd="" npm_cmd lifecycle_arg selected_version
     spec="$(repo_pnpm_spec "$repo_dir" || true)"
-    [[ "$spec" == pnpm@* ]] || spec="pnpm@12.5.1"
+    [[ "$spec" == pnpm@* ]] || spec="pnpm@12.15.0"
     version="${spec#pnpm@}"
     version="${version%%+*}"
     pnpm_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pnpm.XXXXXX")" || return 1

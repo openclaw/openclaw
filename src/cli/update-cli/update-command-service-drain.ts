@@ -67,6 +67,7 @@ export async function withGatewayMaintenanceDrain<T>(
   let residentBudget: GatewayShutdownStatus | undefined;
   let lastObservation: GatewaySuspendPrepareResult | undefined;
   let observationFailure: { error: unknown } | undefined;
+  let stoppedServiceHasNoListener = false;
   const remaining = () => Math.max(1, deadline - performance.now());
   const connection = await (async () => {
     const { config, auth } = await resolveGatewayRestartProbeContext(params.state.env);
@@ -76,6 +77,14 @@ export async function withGatewayMaintenanceDrain<T>(
       serviceCommand: params.state.command,
     });
     const target = await createConfiguredGatewayLocalProbe(config).resolveWebSocketTarget(port);
+    if (!params.state.running && params.state.runtime?.status === "stopped") {
+      const usage = await inspectPortUsage(port, { probeHosts: ["127.0.0.1"] });
+      params.assertCurrent();
+      if (usage.status === "free") {
+        stoppedServiceHasNoListener = true;
+        return undefined;
+      }
+    }
     const controlAuth = await resolveReadOnlyLocalGatewayAuth({
       auth,
       authNone: config.gateway?.auth?.mode === "none",
@@ -96,6 +105,9 @@ export async function withGatewayMaintenanceDrain<T>(
     assertResidentCurrent();
     return usage.status === "busy" && allListenersOwnedByRuntimePid(usage.listeners, pid);
   };
+  if (stoppedServiceHasNoListener) {
+    return await finish();
+  }
   const call = async <R>(method: string, args?: unknown): Promise<R> => {
     assertResidentCurrent();
     if (!connection?.target) {

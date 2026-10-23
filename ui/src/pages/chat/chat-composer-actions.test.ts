@@ -177,7 +177,7 @@ describe("renderChatComposer controls", () => {
     stop?.click();
 
     expect(finishActive).toHaveBeenCalledOnce();
-    expect(handleClick).not.toHaveBeenCalled();
+    expect(handleClick).toHaveBeenCalledOnce();
     expect(onSend).not.toHaveBeenCalled();
   });
 

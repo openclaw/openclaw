@@ -5750,6 +5750,59 @@ describe("runCodexAppServerAttempt", () => {
     },
   );
 
+  it("keeps explicit Ultrafast when a ChatGPT sign-in thread resumes", async () => {
+    const { sessionFile, workspaceDir } = createRunPaths();
+    await writeExistingBinding(sessionFile, workspaceDir, {
+      model: "gpt-5.2",
+      modelProvider: undefined,
+      authProfileId: "openai:work",
+    });
+    const harness = createResumeHarness("thread-existing", async (method) =>
+      method === "model/list"
+        ? {
+            data: [
+              {
+                id: "gpt-5.4-codex",
+                model: "gpt-5.4-codex",
+                displayName: "Test model",
+                description: "Test model",
+                hidden: false,
+                isDefault: false,
+                supportedReasoningEfforts: [],
+                defaultReasoningEffort: "medium",
+                serviceTiers: [{ id: "ultrafast", name: "Ultrafast", description: "Faster" }],
+              },
+            ],
+            nextCursor: null,
+          }
+        : undefined,
+    );
+    for (let turn = 0; turn < 2; turn += 1) {
+      const params = createParams(sessionFile, workspaceDir);
+      params.provider = "openai";
+      params.fastMode = true;
+      params.authProfileId = "openai:work";
+      params.authProfileStore = {
+        version: 1,
+        profiles: { "openai:work": createCodexTestOAuthProfile("account-work") },
+      };
+      const run = runCodexAppServerAttempt(params, {
+        pluginConfig: { appServer: { enableUltrafast: true } },
+      });
+      await run.waitForTurnAccepted();
+      await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+      await run;
+    }
+    expect(harness.requests.filter((request) => request.method === "thread/resume")).toHaveLength(
+      1,
+    );
+    expect(
+      harness.requests
+        .filter((request) => request.method === "turn/start")
+        .map((request) => (request.params as { serviceTier?: string | null }).serviceTier),
+    ).toEqual(["ultrafast", "ultrafast"]);
+  });
+
   it("announces Codex app-server fast auto progress after the crossing tool result", async () => {
     const { harness, now, onAgentEvent, onToolResult, run, workspaceDir } =
       await startFastAutoProgressTest();

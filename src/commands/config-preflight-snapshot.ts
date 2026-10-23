@@ -86,6 +86,7 @@ function formatPluginRegistryDifferences(
 }
 
 export async function readConfigPreflightSnapshot(params: {
+  purpose: "startup" | "doctor";
   allowCurrentPluginMetadata: boolean;
   includePluginMetadata: boolean;
   isolateEnv?: boolean;
@@ -124,6 +125,12 @@ export async function readConfigPreflightSnapshot(params: {
       ...sharedOptions,
       deferredPluginMigrations: deferred,
     };
+    // Advisory repair rules instantiate (and source-capture) plugin Doctor modules;
+    // valid startup must not pay that per read. Invalid config keeps repair guidance.
+    const withLegacyIssues = (snapshot: ConfigFileSnapshot, metadata?: PluginMetadataSnapshot) =>
+      params.purpose === "doctor" || !snapshot.valid
+        ? addDoctorLegacyIssues(snapshot, metadata)
+        : snapshot;
     return withDeferredPluginDoctorMigrations(
       deferred?.map((entry) => entry.pluginId) ?? [],
       async () => {
@@ -136,7 +143,7 @@ export async function readConfigPreflightSnapshot(params: {
               })
             : result.pluginMetadataSnapshot;
           return {
-            snapshot: addDoctorLegacyIssues(result.snapshot, pluginMetadataSnapshot),
+            snapshot: withLegacyIssues(result.snapshot, pluginMetadataSnapshot),
             ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
           };
         }
@@ -147,7 +154,7 @@ export async function readConfigPreflightSnapshot(params: {
         if (!params.preparePluginMigrations) {
           await params.prepareSnapshot?.(snapshot);
         }
-        return { snapshot: addDoctorLegacyIssues(snapshot) };
+        return { snapshot: withLegacyIssues(snapshot) };
       },
     );
   });

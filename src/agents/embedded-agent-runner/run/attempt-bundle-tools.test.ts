@@ -85,6 +85,42 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     } as unknown as Parameters<typeof prepareEmbeddedAttemptBundleTools>[0];
   }
 
+  it("does not widen a file memory flush with MCP, LSP, or client functions", async () => {
+    const persistenceName = "write";
+    const input = createInput([], [createStubTool("read"), createStubTool(persistenceName)]);
+    input.attempt.trigger = "memory";
+    input.attempt.memoryFlushWritePath = "memory/2026-10-08.md";
+    input.attempt.clientTools = [
+      {
+        type: "function",
+        function: { name: "client_canary", parameters: { type: "object" } },
+      },
+    ];
+    mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime: {}, releaseLease: () => {} });
+    mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
+      tools: [createStubTool("canary__write")],
+    });
+    mocks.createBundleLspToolRuntime.mockResolvedValue({
+      tools: [createStubTool("lsp_canary")],
+      dispose: vi.fn(),
+    });
+
+    const result = await prepareEmbeddedAttemptBundleTools(input);
+
+    expect(result.uncompactedEffectiveTools.map((tool) => tool.name)).toEqual([
+      "read",
+      persistenceName,
+    ]);
+    expect(result.clientTools).toBeUndefined();
+    expect(mocks.acquireSessionMcpRuntime).not.toHaveBeenCalled();
+    expect(mocks.createBundleLspToolRuntime).not.toHaveBeenCalled();
+    result.refreshTools();
+    expect(result.uncompactedEffectiveTools.map((tool) => tool.name)).toEqual([
+      "read",
+      persistenceName,
+    ]);
+  });
+
   it.each([
     { allow: ["chrome*"], expected: ["chrome__click"] },
     { allow: ["ch*me*"], expected: ["chrome__click"] },

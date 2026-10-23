@@ -670,7 +670,7 @@ async function inspectOrMigrateTarget(params: {
   if (!retained) {
     return report;
   }
-  const { retainedImport, sourceConflicts, retainedIndexPath } = retained;
+  const { retainedImport, staleImport, sourceConflicts, retainedIndexPath } = retained;
   if (params.mode === "recover" && !shouldFilterLegacySessionRecordsByTarget(params.target)) {
     await archiveConflictingRetainedSessionSources(params, sourceConflicts, report);
   }
@@ -689,7 +689,7 @@ async function inspectOrMigrateTarget(params: {
     (!retainedImport || !retainedIndexPath) &&
     params.mode !== "inspect" &&
     params.mode !== "compact" &&
-    (issues.length === 0 || retainedImport)
+    (issues.length === 0 || retainedImport || staleImport)
   ) {
     const archiveSources = params.historicalArchives?.get(
       canonicalMigrationFilePath(params.target.storePath),

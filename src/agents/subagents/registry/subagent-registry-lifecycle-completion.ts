@@ -264,6 +264,16 @@ export async function completeSubagentRunAttempt(
         };
         entry.cleanupHandled = false;
         entry.terminalOwner = "interrupted-recovery";
+        if (!entry.collect && !suppressSessionEffects) {
+          // Unfinished work needs its history even when successful completion would delete it.
+          entry.cleanup = "keep";
+          if (entry.expectsCompletionMessage === false && entry.completionRequesterSessionId) {
+            // Quiet completion does not waive continuation after a restart. Sessions created
+            // without a lifecycle revision still bind by session id plus that absent revision.
+            entry.completionTarget = "parent";
+            entry.requesterTurnRunId = undefined;
+          }
+        }
         mutated = true;
         if (!(await commit(entrySnapshot))) {
           return;
@@ -293,8 +303,10 @@ export async function completeSubagentRunAttempt(
       // A delayed abort must not replace a finalized result or reopen a cleaned cancellation.
       return;
     }
-    let requestedEndedAt =
+    const existingEndedAt = entry.execution.endedAt;
+    const observedEndedAt =
       typeof completeParams.endedAt === "number" ? completeParams.endedAt : Date.now();
+    let requestedEndedAt = observedEndedAt;
     if (shouldPreservePublishedExplicitRunTimeout(entry)) {
       return;
     }
@@ -463,7 +475,11 @@ export async function completeSubagentRunAttempt(
     }
     const terminalReply = mergeAgentRunTerminalReplySnapshot(
       entry.completion?.terminalReply,
-      completeParams.terminalReply,
+      entry.completion?.terminalReply &&
+        typeof existingEndedAt === "number" &&
+        observedEndedAt <= existingEndedAt
+        ? undefined
+        : completeParams.terminalReply,
     );
     // Lifecycle events and agent.wait both settle here. A required success
     // needs producer evidence before any transcript fallback can freeze it.

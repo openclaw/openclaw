@@ -1,6 +1,6 @@
 import { createLlmRuntime, type LlmRuntime } from "@openclaw/ai";
+import { getEnvApiKey } from "@openclaw/ai/internal/env-api-keys";
 import type { OpenAICompletionsOptions } from "@openclaw/ai/internal/openai";
-import { getEnvApiKey } from "@openclaw/ai/internal/runtime";
 import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {

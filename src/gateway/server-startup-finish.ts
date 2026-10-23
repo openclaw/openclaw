@@ -346,9 +346,7 @@ export async function finishGatewayStartup(params: {
                   return await workerPlacementRuntime.startRuntime({
                     isClosePreludeStarted: () => lifecycle.closePreludeStarted,
                     // Close must see the drain handle before reconciliation can yield.
-                    registerSidecar: (sidecar) => {
-                      registerConnectionDependentSidecars(sidecar);
-                    },
+                    registerSidecar: registerConnectionDependentSidecars,
                     unregisterSidecar: unregisterConnectionDependentSidecar,
                   });
                 },

@@ -656,13 +656,15 @@ export function startGatewayEventSubscriptions(params: {
       );
       return;
     }
-    void dispatchEventHandler({
+    const dispatch = dispatchEventHandler({
       loadHandler: getLifecycleEventHandler,
       event: evt,
       log: params.log,
       failureMessage: "Lifecycle event dispatch failed",
       context: { sessionKey: evt.sessionKey },
     });
+    agentEventDispatches.add(dispatch);
+    void dispatch.then(() => agentEventDispatches.delete(dispatch));
   });
   const unsubscribeSuspension = onGatewaySuspendAdmissionChange((phase) => {
     params.broadcast("gateway.suspension", { phase });

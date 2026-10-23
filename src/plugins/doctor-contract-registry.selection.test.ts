@@ -31,6 +31,7 @@ let clearPluginDoctorContractRegistryCache: typeof import("./doctor-contract-reg
 let collectRelevantDoctorPluginIds: typeof import("./doctor-contract-registry.js").collectRelevantDoctorPluginIds;
 let collectDoctorConfigRepairPluginIds: typeof import("./doctor-contract-registry.js").collectDoctorConfigRepairPluginIds;
 let listPluginDoctorSessionStoreAgentIds: typeof import("./doctor-contract-registry.js").listPluginDoctorSessionStoreAgentIds;
+let withDeferredPluginDoctorMigrations: typeof import("./doctor-contract-registry.js").withDeferredPluginDoctorMigrations;
 let setPluginDoctorContractRegistryModuleLoaderFactoryForTest:
   | typeof import("./doctor-contract-registry.test-fixtures.js").setPluginDoctorContractRegistryModuleLoaderFactoryForTest
   | undefined;
@@ -56,6 +57,7 @@ describe("doctor-contract-registry module loader", () => {
       collectRelevantDoctorPluginIds,
       collectDoctorConfigRepairPluginIds,
       listPluginDoctorSessionStoreAgentIds,
+      withDeferredPluginDoctorMigrations,
     } = await import("./doctor-contract-registry.js"));
     ({
       clearPluginDoctorContractRegistryCache,
@@ -76,6 +78,37 @@ describe("doctor-contract-registry module loader", () => {
     }
     setPluginDoctorContractRegistryModuleLoaderFactoryForTest(mocks.createJiti);
     clearPluginDoctorContractRegistryCache();
+  });
+
+  it("uses the retained config migration for a deferred trusted official owner", () => {
+    const pluginRoot = makeTempDir();
+    retainedConfigDoctorMock.mockReturnValue({
+      normalizeCompatibilityConfig: ({ cfg }: { cfg: Record<string, unknown> }) => ({
+        config: { ...cfg, repairedByRetainedMigration: true },
+        changes: ["repaired deferred official webhook config"],
+      }),
+    });
+    mockDoctorPlugins({
+      id: "msteams",
+      rootDir: pluginRoot,
+      channels: ["msteams"],
+      providers: [],
+      trustedOfficialInstall: true,
+    });
+    const config = { channels: { msteams: { enabled: true } } };
+
+    const result = withDeferredPluginDoctorMigrations(["msteams"], () =>
+      applyPluginDoctorCompatibilityMigrations(config, { config, env: {} }),
+    );
+
+    expect(result.changes).toEqual(["repaired deferred official webhook config"]);
+    expect(result.config).toEqual({ ...config, repairedByRetainedMigration: true });
+    expect(retainedConfigDoctorMock).toHaveBeenCalledWith({
+      dirName: "msteams",
+      artifactCandidates: ["config-doctor-api.js"],
+      env: {},
+    });
+    expect(mocks.createJiti).not.toHaveBeenCalled();
   });
 
   it.each([

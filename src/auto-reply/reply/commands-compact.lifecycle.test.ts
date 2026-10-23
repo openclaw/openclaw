@@ -40,7 +40,7 @@ describe("handleCompactCommand lifecycle authority", () => {
         },
       ),
     ).rejects.toThrow("Command owner was revoked");
-    expect(abortEmbeddedAgentRun).toHaveBeenCalledOnce();
+    expect(abortEmbeddedAgentRun).not.toHaveBeenCalled();
     expect(compactEmbeddedAgentSession).not.toHaveBeenCalled();
     expect(incrementCompactionCount).not.toHaveBeenCalled();
   });
@@ -72,8 +72,9 @@ describe("handleCompactCommand lifecycle authority", () => {
     expect(vi.mocked(compactEmbeddedAgentSession)).not.toHaveBeenCalled();
   });
 
-  it("waits for an active embedded run before compacting even when abort is rejected", async () => {
+  it("waits naturally before aborting an active embedded run", async () => {
     vi.mocked(isEmbeddedAgentRunAbortableForCompaction).mockReturnValueOnce(true);
+    vi.mocked(waitForEmbeddedAgentRunEnd).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
     vi.mocked(abortEmbeddedAgentRun).mockReturnValueOnce(false);
     vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
       ok: true,
@@ -95,7 +96,8 @@ describe("handleCompactCommand lifecycle authority", () => {
     );
 
     expect(vi.mocked(abortEmbeddedAgentRun)).toHaveBeenCalledWith("session-1");
-    expect(vi.mocked(waitForEmbeddedAgentRunEnd)).toHaveBeenCalledWith("session-1", 15_000);
+    expect(vi.mocked(waitForEmbeddedAgentRunEnd)).toHaveBeenNthCalledWith(1, "session-1", 60_000);
+    expect(vi.mocked(waitForEmbeddedAgentRunEnd)).toHaveBeenNthCalledWith(2, "session-1", 15_000);
     expect(vi.mocked(compactEmbeddedAgentSession)).toHaveBeenCalledOnce();
   });
 
@@ -135,7 +137,8 @@ describe("handleCompactCommand lifecycle authority", () => {
 
   it("does not replace an active run when abort drain times out", async () => {
     vi.mocked(isEmbeddedAgentRunAbortableForCompaction).mockReturnValueOnce(true);
-    vi.mocked(waitForEmbeddedAgentRunEnd).mockResolvedValueOnce(false);
+    vi.mocked(abortEmbeddedAgentRun).mockReturnValueOnce(true);
+    vi.mocked(waitForEmbeddedAgentRunEnd).mockResolvedValueOnce(false).mockResolvedValueOnce(false);
 
     const result = await handleCompactCommand(
       {
@@ -158,12 +161,13 @@ describe("handleCompactCommand lifecycle authority", () => {
         reason: "the previous run is still stopping",
       },
       reply: {
-        text: "⚙️ Compaction unavailable: the previous run is still stopping.",
+        text: "⚙️ Compaction unavailable: the previous run is still stopping.\n⚠️ Your in-flight request was aborted by compaction — please resend it.",
         isStatusNotice: true,
       },
     });
     expect(vi.mocked(abortEmbeddedAgentRun)).toHaveBeenCalledWith("session-1");
-    expect(vi.mocked(waitForEmbeddedAgentRunEnd)).toHaveBeenCalledWith("session-1", 15_000);
+    expect(vi.mocked(waitForEmbeddedAgentRunEnd)).toHaveBeenNthCalledWith(1, "session-1", 60_000);
+    expect(vi.mocked(waitForEmbeddedAgentRunEnd)).toHaveBeenNthCalledWith(2, "session-1", 15_000);
     expect(vi.mocked(compactEmbeddedAgentSession)).not.toHaveBeenCalled();
   });
 

@@ -43,4 +43,43 @@ describe("Responses prompt role", () => {
       expect(buildOpenAIResponsesParams(model, context, undefined).input).toMatchObject(expected);
     },
   );
+
+  it.each([
+    ["native OpenAI", "openai", "https://api.openai.com/v1", "developer"],
+    ["OpenAI-compatible proxy", "openai", "https://broker.example.test/v1", "user"],
+    ["provider proxy", "synthetic-proxy", "https://api.openai.com/v1", "user"],
+  ] as const)(
+    "%s (%s at %s) serializes runtime context with the %s role",
+    (_name, provider, baseUrl, expectedRole) => {
+      const model: Model = {
+        id: "synthetic-opaque",
+        name: "Synthetic name",
+        provider,
+        api: "openai-responses",
+        baseUrl,
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 8192,
+        maxTokens: 1024,
+      };
+      const runtimeContext: Context = {
+        systemPrompt: "",
+        messages: [
+          { role: "user", content: "Hello", timestamp: 1 },
+          {
+            role: "user",
+            content: "Runtime facts",
+            runtimeContextCarrier: true,
+            timestamp: 2,
+          },
+        ],
+      };
+
+      expect(convertResponsesMessages(model, runtimeContext, new Set())).toMatchObject([
+        { type: "message", role: "user" },
+        { type: "message", role: expectedRole },
+      ]);
+    },
+  );
 });

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runWithAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
 import { createCodeModeTools } from "./code-mode.js";
+import { createAgentHarnessToolSurfaceRuntimeCore } from "./harness/tool-surface-bridge.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 import {
   createToolSearchCatalogRef,
@@ -28,6 +29,41 @@ const basePlanParams: AgentToolSurfacePlanParams = {
 };
 
 describe("resolveAgentToolSurfacePlan", () => {
+  it.each(["tools", "directory", "code"] as const)(
+    "keeps memory persistence direct in %s mode",
+    (mode) => {
+      const config: OpenClawConfig = {
+        tools: {
+          codeMode: mode === "code",
+          toolSearch: { enabled: true, mode: mode === "directory" ? "directory" : "tools" },
+        },
+      };
+      const params = {
+        config,
+        executeTool: async () => ({ content: [], details: {} }),
+        modelToolsEnabled: true,
+        trigger: "memory" as const,
+        forceCodeModeControls: mode === "code",
+      };
+      const memory = createAgentHarnessToolSurfaceRuntimeCore(params);
+      const foreground = createAgentHarnessToolSurfaceRuntimeCore({ ...params, trigger: "user" });
+      try {
+        const result = memory.compactTools(["read", "write"].map(createStubTool));
+        expect(result.tools.map((tool) => tool.name)).toEqual(["read", "write"]);
+        expect(result.catalog.catalogRegistered).toBe(false);
+        expect(foreground.codeModeControlsEnabled || foreground.toolSearchControlsEnabled).toBe(
+          true,
+        );
+        expect(config.tools?.toolSearch).toEqual({
+          enabled: true,
+          mode: mode === "directory" ? "directory" : "tools",
+        });
+      } finally {
+        memory.cleanup();
+        foreground.cleanup();
+      }
+    },
+  );
   it.each(["tools", "directory"] as const)(
     "keeps invocation-restricted tools direct with configured %s search",
     (mode) => {

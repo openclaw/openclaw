@@ -45,8 +45,10 @@ describe("isCurrentProcessLaunchdServiceLabel", () => {
 });
 
 const probe = vi.hoisted(() => vi.fn());
-vi.mock("./service-process-membership.js", () => ({
-  inspectServiceProcessMembershipSync: () => "outside",
+const membership = vi.hoisted(() => vi.fn());
+vi.mock("./service-process-membership.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./service-process-membership.js")>()),
+  inspectServiceProcessMembershipSync: membership,
 }));
 const ancestors = vi.hoisted(() => vi.fn<() => Set<number>>());
 vi.mock("../infra/restart-stale-pids.js", () => ({ getSelfAndAncestorPidsSync: ancestors }));
@@ -59,21 +61,27 @@ describe("launchd membership with unavailable process evidence", () => {
   beforeEach(() => {
     probe.mockReset();
     ancestors.mockReset();
+    membership.mockReset().mockReturnValue("absent");
   });
   it.each([
-    { pids: [900, 901], inside: undefined },
-    { pids: [900, 901, 1], inside: false },
-    { pids: [900, 901, 4242], inside: true },
-  ])("keeps partial ancestry conservative: $pids", async ({ pids, inside }) => {
-    probe.mockResolvedValue({ state: "running", runtime: { pid: 4242 } });
-    ancestors.mockReturnValue(new Set(pids));
-    const inspection = isCurrentProcessInsideLaunchdService("ai.openclaw.gateway");
-    if (inside === undefined) {
-      await expect(inspection).rejects.toMatchObject({ reason: "service-ancestry-unverified" });
-    } else {
-      await expect(inspection).resolves.toBe(inside);
-    }
-  });
+    { pids: [900, 901], membership: "absent", inside: undefined },
+    { pids: [900, 901], membership: "outside", inside: false },
+    { pids: [900, 901, 1], membership: "absent", inside: false },
+    { pids: [900, 901, 4242], membership: "absent", inside: true },
+  ])(
+    "keeps partial ancestry conservative: $pids with membership=$membership",
+    async ({ pids, membership: membershipResult, inside }) => {
+      probe.mockResolvedValue({ state: "running", runtime: { pid: 4242 } });
+      ancestors.mockReturnValue(new Set(pids));
+      membership.mockReturnValue(membershipResult);
+      const inspection = isCurrentProcessInsideLaunchdService("ai.openclaw.gateway");
+      if (inside === undefined) {
+        await expect(inspection).rejects.toMatchObject({ reason: "service-ancestry-unverified" });
+      } else {
+        await expect(inspection).resolves.toBe(inside);
+      }
+    },
+  );
   it.each([{ state: "unknown" }, { state: "running", runtime: {} }])(
     "preserves managed-wrapper protection when launchd reports %j",
     async (result) => {

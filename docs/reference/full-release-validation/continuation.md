@@ -51,12 +51,19 @@ failed job once, with runner labels. Transient GitHub failures retry on the next
 poll. A local state file under `$TMPDIR/openclaw-frv/` lets a restarted watch
 resume without repeating events.
 
-`rerun --child` waits for one failed child, sends exactly one
-rerun-failed-jobs request, confirms the new attempt has no duplicate jobs, and
+`rerun --child` waits for one failed child, sends exactly one retry request,
+confirms the new attempt has no duplicate jobs, and
 records an audit line. It refuses children past `--max-attempts` (default 2,
 which allows one rerun). When a failed consumer is bound to a green producer's
 run attempt, it reruns that producer and its dependents instead. It returns
 after the new attempt starts; `continue --failed` still owns the final reseal.
+
+When every workload passed and only **Seal child receipt** failed, the preview
+reports `mode: receipt`. The same bounded `rerun --child` command selects that
+exact receipt job instead of rerunning the passing workloads. It carries forward
+their accepted attempts, seals the new receipt against the exact child attempt,
+and still requires `continue --failed` plus strict verification before reporting
+qualification accepted. A metadata retry starting is not qualification success.
 
 `continue --failed` reruns each failed child's jobs as soon as that child is
 terminal, while sibling children and the original parent may still run. It

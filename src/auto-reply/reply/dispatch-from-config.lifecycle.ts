@@ -467,7 +467,10 @@ export function createDispatchReplyOperationCoordinator(params: {
     }
     if (admission.status === "skipped") {
       if (allowActiveResolution && admission.reason === "active-run") {
-        preDispatchAbortOperation = admission.activeOperation;
+        // A low-level successor retains its own cancellation while it waits for queue admission.
+        if (!params.allowActiveQueueResolution) {
+          preDispatchAbortOperation = admission.activeOperation;
+        }
         preDispatchLifecycleAdmission = admission.lifecycleAdmission;
         if (phase === "pre_dispatch") {
           preDispatchLifecycleAbortController = lifecycleOnlyAbortController;

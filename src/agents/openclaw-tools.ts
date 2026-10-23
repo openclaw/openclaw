@@ -389,6 +389,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
                   pairedNodeComputerUse: options?.pairedNodeComputerUse,
                   config: options?.config,
                   modelHasVision: options?.modelHasVision,
+                  computerExecutionId: options?.computerExecutionId,
                   // Run ids expire before later assistant runs can reuse a provider call id.
                   idempotencyScope: options?.runId,
                   contextEpoch: options?.computerContextEpoch,

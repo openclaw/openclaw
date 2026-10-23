@@ -225,6 +225,7 @@ async function runRegisteredDreamingService(
   logger: ReturnType<typeof createNoopLogger>,
 ) {
   const registry = createEmptyPluginRegistry();
+  const starts: Array<{ mock: { results: Array<{ value: unknown }> } }> = [];
   memoryCore.register(
     createTestPluginApi({
       id: "memory-core",
@@ -232,6 +233,8 @@ async function runRegisteredDreamingService(
       logger,
       runtime: createPluginRuntimeMock({ config: { current: () => config } }),
       registerService(service) {
+        // Boot-path starts log failures instead of rejecting; observe them here.
+        starts.push(vi.spyOn(service, "start"));
         registry.services.push({
           pluginId: "memory-core",
           origin: "bundled",
@@ -247,15 +250,19 @@ async function runRegisteredDreamingService(
   }
   let services: PluginServicesHandle | undefined;
   try {
+    // Gateway boot starts services without the hot-reload candidate deadline.
     services = await startPluginServices({
       registry,
       config,
       getCronService: () => cron,
-      throwOnStartError: true,
       onHandle(handle) {
         services = handle;
       },
     });
+    const settled = await Promise.allSettled(
+      starts.flatMap(({ mock }) => mock.results.map(({ value }) => value)),
+    );
+    expect(settled.filter(({ status }) => status === "rejected")).toEqual([]);
     expect(logger.error).not.toHaveBeenCalled();
   } finally {
     await services?.stop({ strict: true });

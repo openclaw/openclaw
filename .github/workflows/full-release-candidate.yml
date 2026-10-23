@@ -81,7 +81,7 @@ jobs:
       - name: Setup supported Node runtime
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           package-manager-cache: false
 
       - name: Discover trusted release candidate
@@ -138,7 +138,7 @@ jobs:
       include_live_suites: false
       enable_prepublish_plugin_registry: true
       published_upgrade_survivor_scenarios: ${{ join(fromJSON(inputs.request_json).upgradeSurvivorScenarios, ',') }}
-      published_upgrade_survivor_baseline: ${{ fromJSON(inputs.request_json).upgradeSurvivorBaselines[0] }}
+      published_upgrade_survivor_baseline: ${{ fromJSON(inputs.request_json).upgradeBaseline }}
       published_upgrade_survivor_baselines: ${{ join(fromJSON(inputs.request_json).upgradeSurvivorBaselines, ' ') }}
       allow_frozen_target_scenario_omissions: ${{ fromJSON(inputs.request_json).allowFrozenTargetScenarioOmissions }}
       allow_unreleased_changelog: ${{ fromJSON(inputs.request_json).allowUnreleasedChangelog }}
@@ -171,7 +171,7 @@ jobs:
         if: ${{ success() && needs.discover.result == 'success' && (needs.prepare.result == 'success' || needs.prepare.result == 'skipped') }}
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           package-manager-cache: false
 
       - name: Resolve candidate binding

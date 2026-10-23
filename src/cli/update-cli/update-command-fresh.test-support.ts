@@ -79,6 +79,7 @@ export function installFreshUpdateFixture() {
       installKind: "package",
       servicePlan: { rootRedirect: null, nodeRunner: fixture.managedServiceNodeRunner },
       pkgOwnership: createFreeBsdPkgOwnershipInspection(5_000),
+      packageActivationNotes: [],
     }));
     vi.spyOn(servicePlan, "isGatewayServiceManagementAllowedForUpdate").mockReturnValue(false);
     vi.spyOn(databaseContext, "inspectUpdateDatabaseContexts").mockImplementation(async () => ({

@@ -190,6 +190,7 @@ resolve_candidate_version() { candidate_version=2026.8.2; }
 configure_clawhub_fixture() { :; }
 configure_plugin_registry() { :; }
 prepare_restart_inference() { :; }
+prepare_restart_plugin_release_selectors() { :; }
 prepare_restart_fixture() {
   restart_fixture_package="$FIXTURE_ROOT/future.tgz"
   restart_fixture_version=2100.1.0
@@ -277,6 +278,12 @@ describe("legacy operator cron acceptance", () => {
     expect(() => assertLegacyOperatorCronOwners({ jobs }, { jobs: baselineJobs })).toThrow(
       "cron owner unresolved or changed: survivor-default-owner",
     );
+  });
+
+  it("accepts Doctor pinning an ownerless job to its historical owner", () => {
+    const jobs = migratedJobs();
+    jobs[0]!.agentId = "main";
+    expect(() => assertLegacyOperatorCronOwners({ jobs }, { jobs: baselineJobs })).not.toThrow();
   });
 
   it("rejects a missing job and an explicit owner rewritten behind a correct projection", () => {

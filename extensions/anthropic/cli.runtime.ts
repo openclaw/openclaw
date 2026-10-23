@@ -420,71 +420,78 @@ export async function* executeClaudeCli(
   session.currentTurn = turn;
   const abort = () => session.handle.close("abort", context.abortSignal?.reason);
   context.abortSignal?.addEventListener("abort", abort, { once: true });
+  let startup: Promise<void> | undefined;
   try {
-    context.abortSignal?.throwIfAborted();
-    // Adopt the process's exact MCP capture before prompt dispatch or native tool callbacks.
-    capability?.activate(session.handle);
-    if (!session.transport) {
-      const { args, excludeDynamicSections } = prepareClaudeCliTransportArgs(context);
-      session.transport = createClaudeCliTransport({
-        context,
-        args,
-        secretInput,
-        currentContext: () => session.currentTurn?.context,
-        initialize: {
-          appendSystemPrompt: context.systemPrompt,
-          excludeDynamicSections,
-          hooks: {
-            UserPromptSubmit: [{ hookCallbackIds: ["UserPromptSubmit"] }],
-            PreToolUse: [{ hookCallbackIds: ["PreToolUse"] }],
+    // Consume startup records while initialization waits on the same stdout reader.
+    startup = (async () => {
+      context.abortSignal?.throwIfAborted();
+      // Adopt the process's exact MCP capture before prompt dispatch or native tool callbacks.
+      capability?.activate(session.handle);
+      if (!session.transport) {
+        const { args, excludeDynamicSections } = prepareClaudeCliTransportArgs(context);
+        session.transport = createClaudeCliTransport({
+          context,
+          args,
+          secretInput,
+          currentContext: () => session.currentTurn?.context,
+          initialize: {
+            appendSystemPrompt: context.systemPrompt,
+            // Native snapshots must not override the host's refreshed prompt on resume.
+            systemPromptSnapshot: false,
+            excludeDynamicSections,
+            hooks: {
+              UserPromptSubmit: [{ hookCallbackIds: ["UserPromptSubmit"] }],
+              PreToolUse: [{ hookCallbackIds: ["PreToolUse"] }],
+            },
           },
-        },
-        onMessage: (message) => acceptMessage(session, message),
-        onRequest: async (request, signal) => {
-          // No interactive MCP elicitation handler is registered; preserve its declined outcome.
-          if (request.subtype === "elicitation") {
-            return () => ({ action: "decline" });
-          }
-          const admittedTurn = activeTurn(session);
-          const response = await handleRequest(session, request, signal);
-          // The transport invokes this synchronously at its final write, after all awaits.
-          return () => {
-            if (admittedTurn && activeTurn(session) === admittedTurn && !signal.aborted) {
-              return response;
+          onMessage: (message) => acceptMessage(session, message),
+          onRequest: async (request, signal) => {
+            // No interactive MCP elicitation handler is registered; preserve its declined outcome.
+            if (request.subtype === "elicitation") {
+              return () => ({ action: "decline" });
             }
-            const message = "The OpenClaw run is no longer active.";
-            if (request.subtype === "can_use_tool") {
-              return { behavior: "deny", message, toolUseID: request.tool_use_id };
-            }
-            return request.callback_id === "PreToolUse"
-              ? {
-                  hookSpecificOutput: {
-                    hookEventName: "PreToolUse",
-                    permissionDecision: "deny",
-                    permissionDecisionReason: message,
-                  },
-                }
-              : {};
-          };
-        },
-        onError: (error) => session.handle.close("abort", error),
+            const admittedTurn = activeTurn(session);
+            const response = await handleRequest(session, request, signal);
+            // The transport invokes this synchronously at its final write, after all awaits.
+            return () => {
+              if (admittedTurn && activeTurn(session) === admittedTurn && !signal.aborted) {
+                return response;
+              }
+              const message = "The OpenClaw run is no longer active.";
+              if (request.subtype === "can_use_tool") {
+                return { behavior: "deny", message, toolUseID: request.tool_use_id };
+              }
+              return request.callback_id === "PreToolUse"
+                ? {
+                    hookSpecificOutput: {
+                      hookEventName: "PreToolUse",
+                      permissionDecision: "deny",
+                      permissionDecisionReason: message,
+                    },
+                  }
+                : {};
+            };
+          },
+          onError: (error) => session.handle.close("abort", error),
+        });
+        await session.transport.initialize();
+      }
+      context.assertCurrent?.();
+      if (session.closed || session.currentTurn !== turn) {
+        throw turn.error ?? new Error("Claude CLI closed before its prompt was accepted.");
+      }
+      await session.transport.send({
+        type: "user",
+        message: { role: "user", content: context.prompt },
+        parent_tool_use_id: null,
+        uuid: turn.inputUuid,
+        ...(context.sessionId ? { session_id: context.sessionId } : {}),
       });
-      await session.transport.initialize();
-    }
-    context.assertCurrent?.();
-    if (session.closed || session.currentTurn !== turn) {
-      throw turn.error ?? new Error("Claude CLI closed before its prompt was accepted.");
-    }
-    await session.transport.send({
-      type: "user",
-      message: { role: "user", content: context.prompt },
-      parent_tool_use_id: null,
-      uuid: turn.inputUuid,
-      ...(context.sessionId ? { session_id: context.sessionId } : {}),
-    });
+    })().catch((error: unknown) => session.handle.close("abort", error));
     for await (const record of turn.events) {
       yield record;
     }
+    await startup;
     if (turn.error) {
       throw turn.error;
     }
@@ -501,6 +508,7 @@ export async function* executeClaudeCli(
     if (session.currentTurn === turn) {
       session.handle.close("abort");
     }
+    await startup;
     if (session.closed) {
       await session.handle.waitForExit();
     }

@@ -63,8 +63,9 @@ When a run still owes a visible reply, the built-in agent runtime performs at mo
 one completion self-check if that run successfully saves an unfinished checklist
 and then produces a normal final answer. The agent rechecks the latest user instructions: continue feasible,
 already-authorized work, reconcile completed steps, or explain the concrete reason
-it cannot continue. This may add one model response; it does not guarantee that the
-model finishes every task.
+it cannot continue. When its previous reply already explained that reason, the check
+ends silently and that reply remains the answer. This may add one model response; it
+does not guarantee that the model finishes every task.
 
 The check continues the same active run with its existing transcript, permissions,
 time limit, and completed tool results. It does not replay earlier actions or

@@ -165,7 +165,7 @@ async function readLaunchAgentEnvironmentFile(
   const lines = content.split("\n");
   for (let index = 0; index < lines.length; index++) {
     const rawLine = lines[index] ?? "";
-    const line = options?.requireEffective ? rawLine.trimStart() : rawLine.trim();
+    const line = rawLine.trimStart();
     if (!line.trim() || line.startsWith("#")) {
       continue;
     }
@@ -181,20 +181,17 @@ async function readLaunchAgentEnvironmentFile(
     if (!key || value === undefined) {
       continue;
     }
-    let parsedValue = parseGeneratedEnvValue(value);
-    if (options?.requireEffective) {
-      // The writer's quoted literals can span physical lines; retain their exact newline bytes.
-      while (
-        quoteLaunchAgentEnvironmentValue(parsedValue) !== value.trim() &&
-        index + 1 < lines.length
-      ) {
-        value += `\n${lines[++index]}`;
-        parsedValue = parseGeneratedEnvValue(value);
-      }
-      // Strict inspection accepts the writer's literal syntax, never shell expressions.
-      if (quoteLaunchAgentEnvironmentValue(parsedValue) !== value.trim()) {
-        throw new Error("Unsupported LaunchAgent environment value");
-      }
+    // Only an unfinished writer literal (including '\'' escapes) consumes another line.
+    while (/^'(?:[^']|'\\'')*$/.test(value) && index + 1 < lines.length) {
+      value += `\n${lines[++index]}`;
+    }
+    const parsedValue = parseGeneratedEnvValue(value);
+    // Strict inspection accepts the writer's literal syntax, never shell expressions.
+    if (
+      options?.requireEffective &&
+      quoteLaunchAgentEnvironmentValue(parsedValue) !== value.trim()
+    ) {
+      throw new Error("Unsupported LaunchAgent environment value");
     }
     environment[key] = parsedValue;
   }
@@ -274,41 +271,7 @@ export async function readLaunchAgentProgramArgumentsFromFile(
       return null;
     }
     const plist = await decodeLaunchdPlistMetadata(contents, options?.timeoutMs);
-    const args = plist?.ProgramArguments;
-    const workingDirectory = plist?.WorkingDirectory;
-    const inlineEnvironment = plist?.EnvironmentVariables;
-    if (
-      !Array.isArray(args) ||
-      !args.every((arg): arg is string => typeof arg === "string") ||
-      (workingDirectory !== undefined && typeof workingDirectory !== "string") ||
-      (inlineEnvironment !== undefined && !isStringRecord(inlineEnvironment))
-    ) {
-      throw new Error("Invalid LaunchAgent command fields");
-    }
-    const layout = resolveGeneratedEnvWrapperLayout(args, options);
-    const fileEnvironment = await readLaunchAgentEnvironmentFile(layout?.envFilePath, options);
-    const effectiveProgramArguments = layout ? args.slice(layout.commandStartIndex) : args;
-    if (options?.requireEffective && !effectiveProgramArguments[0]) {
-      throw new Error("Missing LaunchAgent command");
-    }
-    const environment = { ...inlineEnvironment, ...fileEnvironment };
-    const environmentValueSources: Record<string, GatewayServiceEnvironmentValueSource> = {};
-    // Track source provenance so repair flows can tell inline plist env from the
-    // generated env file and preserve both when they overlap.
-    for (const key of Object.keys(environment)) {
-      environmentValueSources[key] = !Object.hasOwn(fileEnvironment, key)
-        ? "inline"
-        : Object.hasOwn(inlineEnvironment ?? {}, key)
-          ? "inline-and-file"
-          : "file";
-    }
-    return {
-      programArguments: effectiveProgramArguments,
-      ...(workingDirectory ? { workingDirectory } : {}),
-      ...(Object.keys(environment).length > 0 ? { environment } : {}),
-      ...(Object.keys(environmentValueSources).length > 0 ? { environmentValueSources } : {}),
-      sourcePath: plistPath,
-    };
+    return await resolveLaunchAgentProgramArguments(plist, plistPath, options);
   } catch (error) {
     if (hasCommandProcessCleanupError(error)) {
       throw error;
@@ -320,6 +283,49 @@ export async function readLaunchAgentProgramArgumentsFromFile(
     }
     return null;
   }
+}
+
+/** Resolve captured plist metadata through the same generated environment owner as file reads. */
+export async function resolveLaunchAgentProgramArguments(
+  plist: Awaited<ReturnType<typeof decodeLaunchdPlistMetadata>>,
+  plistPath: string,
+  options?: ReadLaunchAgentProgramArgumentsOptions,
+): Promise<GatewayServiceCommandConfig> {
+  const args = plist?.ProgramArguments;
+  const workingDirectory = plist?.WorkingDirectory;
+  const inlineEnvironment = plist?.EnvironmentVariables;
+  if (
+    !Array.isArray(args) ||
+    !args.every((arg): arg is string => typeof arg === "string") ||
+    (workingDirectory !== undefined && typeof workingDirectory !== "string") ||
+    (inlineEnvironment !== undefined && !isStringRecord(inlineEnvironment))
+  ) {
+    throw new Error("Invalid LaunchAgent command fields");
+  }
+  const layout = resolveGeneratedEnvWrapperLayout(args, options);
+  const fileEnvironment = await readLaunchAgentEnvironmentFile(layout?.envFilePath, options);
+  const effectiveProgramArguments = layout ? args.slice(layout.commandStartIndex) : args;
+  if (options?.requireEffective && !effectiveProgramArguments[0]) {
+    throw new Error("Missing LaunchAgent command");
+  }
+  const environment = { ...inlineEnvironment, ...fileEnvironment };
+  const environmentValueSources: Record<string, GatewayServiceEnvironmentValueSource> = {};
+  // Track source provenance so repair flows can tell inline plist env from the
+  // generated env file and preserve both when they overlap.
+  for (const key of Object.keys(environment)) {
+    environmentValueSources[key] = !Object.hasOwn(fileEnvironment, key)
+      ? "inline"
+      : Object.hasOwn(inlineEnvironment ?? {}, key)
+        ? "inline-and-file"
+        : "file";
+  }
+  return {
+    programArguments: effectiveProgramArguments,
+    ...(workingDirectory ? { workingDirectory } : {}),
+    ...(Object.keys(environment).length > 0 ? { environment } : {}),
+    ...(Object.keys(environmentValueSources).length > 0 ? { environmentValueSources } : {}),
+    sourcePath: plistPath,
+  };
 }
 
 export function buildLaunchAgentPlist({

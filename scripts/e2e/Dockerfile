@@ -63,7 +63,8 @@ CMD ["bash"]
 FROM ${OPENCLAW_NODE_ALPINE_IMAGE} AS musl
 
 # Native dependencies without musl prebuilds must compile during real npm installs.
-RUN apk add --no-cache bash g++ make python3
+RUN apk add --no-cache --upgrade ca-certificates-bundle=20261020-r0 \
+ && apk add --no-cache bash g++ make python3
 COPY --from=e2e-runner /opt/openclaw-e2e /opt/openclaw-e2e
 COPY scripts/docker/verify-fs-safe-native.mjs /tmp/verify-fs-safe-native.mjs
 

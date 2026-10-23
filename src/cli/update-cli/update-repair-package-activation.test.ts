@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   openPackageActivationJournal,
   packageActivationIdentity,
+  resolvePackageActivationControl,
   resolvePackageActivationHelper,
   resolvePackageActivationJournalPath,
 } from "../../infra/package-update-activation-journal.js";
@@ -14,6 +15,7 @@ import { createPackageActivationLifetimeFixture } from "../../infra/package-upda
 import {
   assertNoPendingPackageActivation,
   readPackageActivationReceipt,
+  settleStalePackageActivation,
 } from "../../infra/package-update-activation.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
@@ -72,6 +74,81 @@ const repair = () => updateRepairCommand({ json: true, yes: true });
 describe.skipIf(process.platform === "win32")(
   "public repair of untouched package preparation",
   () => {
+    it.each(["missing", "replaced"] as const)(
+      "previews and settles verified recovery with a %s executor lease",
+      async (lease) => {
+        const f = await fixtures.prepare();
+        const record = openPackageActivationJournal(f.anchor).read();
+        const packageBytes = fs.readFileSync(path.join(f.packageRoot, "package.json"));
+        const control = resolvePackageActivationControl(f.anchor);
+        const { databasePath } = record.descriptor.authority;
+        fs.renameSync(databasePath, `${databasePath}.lost`);
+        if (lease === "replaced") {
+          fs.copyFileSync(`${databasePath}.lost`, databasePath);
+          fs.chmodSync(databasePath, 0o600);
+        }
+
+        const preview = await settleStalePackageActivation(f.packageRoot, { dryRun: true });
+
+        expect(preview).toMatchObject({
+          operationId: f.operationId,
+          reason:
+            lease === "missing" ? "recovery-lease-missing" : "recovery-lease-identity-changed",
+        });
+        expect(fs.existsSync(f.anchor)).toBe(true);
+        expect(fs.existsSync(control)).toBe(true);
+        expect(fs.readFileSync(path.join(f.packageRoot, "package.json"))).toEqual(packageBytes);
+
+        const settled = await settleStalePackageActivation(f.packageRoot);
+
+        expect(settled).toEqual(preview);
+        expect(fs.existsSync(f.anchor)).toBe(false);
+        expect(fs.existsSync(control)).toBe(false);
+        expect(fs.existsSync(settled!.retained)).toBe(true);
+        expect(fs.existsSync(`${settled!.retained}.control`)).toBe(true);
+        expect(fs.readFileSync(path.join(f.packageRoot, "package.json"))).toEqual(packageBytes);
+        expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
+      },
+    );
+
+    it("refuses stale settlement when retained candidate bytes changed", async () => {
+      const f = await fixtures.prepare();
+      const record = openPackageActivationJournal(f.anchor).read();
+      fs.renameSync(
+        record.descriptor.authority.databasePath,
+        `${record.descriptor.authority.databasePath}.lost`,
+      );
+      fs.appendFileSync(path.join(f.anchor, "candidate/dist/index.js"), "// changed\n");
+
+      await expect(settleStalePackageActivation(f.packageRoot, { dryRun: true })).rejects.toThrow();
+
+      expect(fs.existsSync(f.anchor)).toBe(true);
+      expect(fs.existsSync(resolvePackageActivationControl(f.anchor))).toBe(true);
+      expect(() => assertNoPendingPackageActivation(f.packageRoot)).toThrow();
+    });
+
+    it("settles prepared recovery when the live package already serves the candidate", async () => {
+      const f = await fixtures.prepare();
+      mocks.root.mockResolvedValue(f.packageRoot);
+      const prepared = openPackageActivationJournal(f.anchor).read();
+      fs.renameSync(f.packageRoot, path.join(f.anchor, "previous"));
+      fs.renameSync(path.join(f.anchor, "candidate"), f.packageRoot);
+
+      await repair();
+
+      expect(readPackageActivationReceipt(f.packageRoot)).toMatchObject({ phase: "complete" });
+      expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
+      expect(fs.existsSync(f.anchor)).toBe(false);
+      expect(fs.existsSync(resolvePackageActivationHelper(f.anchor))).toBe(false);
+      expect(packageActivationIdentity(f.packageRoot, true)).toBe(
+        prepared.descriptor.candidate.identity,
+      );
+      expect(defaultRuntime.error).toHaveBeenCalledWith(
+        expect.stringContaining("publication-settled-external-change"),
+      );
+      expect(mocks.finalize).toHaveBeenCalledOnce();
+    });
+
     it.each(["prepared", "aborted"] as const)(
       "retires %s preparation without changing the live package or launcher",
       async (phase) => {

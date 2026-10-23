@@ -45,7 +45,30 @@ describe("google provider catalog", () => {
     expect(buildGoogleVertexStaticCatalogProvider().models.map((model) => model.id)).toEqual(
       buildGoogleStaticCatalogProvider().models.map((model) => model.id),
     );
-    expect(buildGoogleStaticCatalogProvider().models[0]?.input).toEqual(["text", "image", "video"]);
+    expect(buildGoogleStaticCatalogProvider().models[0]).toEqual({
+      id: "gemini-4-argon",
+      name: "Gemini 4 Argon",
+      reasoning: true,
+      input: ["text", "image", "video"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_048_576,
+      maxTokens: 65_536,
+      thinkingLevelMap: { minimal: null },
+      compat: { codeMode: "preferred" },
+    });
+    expect(
+      buildGoogleStaticCatalogProvider().models.find((model) => model.id === "gemini-3.8-flash"),
+    ).toEqual({
+      id: "gemini-3.8-flash",
+      name: "Gemini 3.8 Flash",
+      reasoning: true,
+      input: ["text", "image", "video"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_048_576,
+      maxTokens: 65_536,
+      thinkingLevelMap: { minimal: null },
+      compat: { codeMode: "preferred" },
+    });
   });
 
   it("builds the authenticated text catalog from Google models.list metadata", async () => {
@@ -57,6 +80,14 @@ describe("google provider catalog", () => {
           isSecondPage
             ? {
                 models: [
+                  {
+                    name: "models/gemini-4-argon",
+                    displayName: "Gemini 4 Argon",
+                    inputTokenLimit: 1_048_576,
+                    outputTokenLimit: 65_536,
+                    supportedGenerationMethods: ["generateContent", "countTokens"],
+                    thinking: true,
+                  },
                   {
                     name: "models/gemini-3.5-flash-lite",
                     displayName: "Gemini 3.5 Flash-Lite",
@@ -93,6 +124,14 @@ describe("google provider catalog", () => {
                     thinking: true,
                   },
                   {
+                    name: "models/gemini-3.8-flash",
+                    displayName: "Gemini 3.8 Flash",
+                    inputTokenLimit: 1_048_576,
+                    outputTokenLimit: 65_536,
+                    supportedGenerationMethods: ["generateContent", "createCachedContent"],
+                    thinking: true,
+                  },
+                  {
                     name: "models/gemma-3-1b-it",
                     displayName: "Gemma 3 1B",
                     inputTokenLimit: 32_768,
@@ -122,11 +161,14 @@ describe("google provider catalog", () => {
       };
     });
 
+    // This projection fixture must not consume the pagination budget during cold imports.
+    const clock = vi.spyOn(performance, "now").mockReturnValue(0);
     const provider = await buildGoogleLiveCatalogProvider({
+      discoveryMode: "strict",
       apiKey: "GEMINI_API_KEY",
       discoveryApiKey: "resolved-google-key",
       fetchGuard,
-    });
+    }).finally(() => clock.mockRestore());
 
     expect(provider.apiKey).toBe("GEMINI_API_KEY");
     expect(provider.models).toEqual([
@@ -151,6 +193,26 @@ describe("google provider catalog", () => {
       expect.objectContaining({
         id: "gemini-3.7-flash",
         name: "Gemini 3.7 Flash",
+        reasoning: true,
+        contextWindow: 1_048_576,
+        maxTokens: 65_536,
+        input: ["text", "image", "video"],
+        compat: { codeMode: "preferred" },
+        thinkingLevelMap: { minimal: null },
+      }),
+      expect.objectContaining({
+        id: "gemini-3.8-flash",
+        name: "Gemini 3.8 Flash",
+        reasoning: true,
+        contextWindow: 1_048_576,
+        maxTokens: 65_536,
+        input: ["text", "image", "video"],
+        compat: { codeMode: "preferred" },
+        thinkingLevelMap: { minimal: null },
+      }),
+      expect.objectContaining({
+        id: "gemini-4-argon",
+        name: "Gemini 4 Argon",
         reasoning: true,
         contextWindow: 1_048_576,
         maxTokens: 65_536,

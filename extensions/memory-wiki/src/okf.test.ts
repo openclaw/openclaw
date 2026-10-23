@@ -662,7 +662,11 @@ private body
     const humanNotes =
       "<!-- openclaw:human:start -->\nKeep café 🦞 and $& exactly.\n<!-- openclaw:human:end -->";
     const original = await fs.readFile(pagePath, "utf8");
-    await fs.writeFile(pagePath, original.replace(emptyNotes, () => humanNotes), "utf8");
+    await fs.writeFile(
+      pagePath,
+      original.replace(emptyNotes, () => humanNotes),
+      "utf8",
+    );
     await fs.writeFile(
       conceptPath,
       "---\ntype: Concept\ntitle: Customers\n---\nUpdated body.\n",

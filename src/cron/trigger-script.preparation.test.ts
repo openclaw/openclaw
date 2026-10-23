@@ -12,7 +12,9 @@ import { ToolSearchRuntime } from "../agents/tool-search-runtime.js";
 import { resolveToolSearchConfig } from "../agents/tool-search.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createScheduledGatewayRunner } from "../gateway/scheduled-run-gateway-context.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
+import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   clearPluginLoaderCache,
@@ -20,12 +22,13 @@ import {
 } from "../plugins/loader.test-fixtures.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createPluginRegistryOwner, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeRegistryScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
+import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createCronScriptRuntimeFixture as createCronScriptRuntime } from "./trigger-script.test-helpers.js";
 
@@ -49,14 +52,15 @@ beforeEach(async () => {
       id: "cold-probe",
       register(api) {
         require("node:fs").appendFileSync(${JSON.stringify(registrations)}, JSON.stringify({ artifact: ${JSON.stringify(artifact)}, mode: api.registrationMode }) + "\\n");
-        if (api.registrationMode !== "tool-discovery") return;
+        if (api.registrationMode !== "full" && api.registrationMode !== "tool-discovery") return;
+        const generation = api.pluginConfig?.generation ?? 1;
         api.registerTool((ctx) => {
           let calls = 0;
           return {
             name: "cold_probe", label: "Cold probe", description: "Fixture preparation probe",
             parameters: { type: "object", properties: {} },
             async execute() {
-              return { content: [], details: { artifact: ${JSON.stringify(artifact)}, calls: ++calls, agentId: ctx.agentId, sessionKey: ctx.sessionKey } };
+              return { content: [], details: { artifact: ${JSON.stringify(artifact)}, generation, calls: ++calls, agentId: ctx.agentId, sessionKey: ctx.sessionKey } };
             }
           };
         }, { names: ["cold_probe"] });
@@ -77,7 +81,7 @@ beforeEach(async () => {
     path.join(dir, "openclaw.plugin.json"),
     JSON.stringify({
       id: "cold-probe",
-      configSchema: { type: "object", properties: {} },
+      configSchema: { type: "object", properties: { generation: { type: "integer" } } },
       contracts: { tools: ["cold_probe"] },
     }),
   );
@@ -135,6 +139,84 @@ async function executeProbe({ ctx }: HeadlessParams): Promise<CodeModeHeadlessRe
 }
 
 describe("cron preparation plugin ownership", () => {
+  it("borrows the current Gateway plugins for detached conditions before and after reload", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    const loadGateway = async (cfg: OpenClawConfig) => {
+      const input = { config: cfg, workspaceDir: state.workspaceDir };
+      const metadata = loadPluginMetadataSnapshot(input);
+      setCurrentPluginMetadataSnapshot(metadata, { config: cfg });
+      const registry = loadAndActivateRootPluginRegistry({
+        ...input,
+        manifestRegistry: metadata.manifestRegistry,
+        discovery: metadata.discovery,
+        runtimeOptions: { allowGatewaySubagentBinding: true },
+        preferBuiltPluginArtifacts: true,
+        cache: false,
+        throwOnLoadError: true,
+      });
+      prepareOwnedPluginLoadContext(input, process.env, registry, metadata, true);
+      return registry;
+    };
+    const owner = createPluginRegistryOwner(await loadGateway(config), state.workspaceDir);
+    const runScheduled = createScheduledGatewayRunner(undefined, () => owner.registry);
+    const createRuntime = (cfg: OpenClawConfig) =>
+      createCronScriptRuntime({
+        config: cfg,
+        loadPluginRegistry: loadPreparedInboundPluginRegistry,
+        runHeadless: async (params) => {
+          const result = await executeProbe(params);
+          return result.status === "completed"
+            ? { ...result, value: { fire: true, state: result.value } }
+            : result;
+        },
+      });
+    const evaluate = (runtime: ReturnType<typeof createRuntime>) =>
+      runInDetachedAsyncContext(() =>
+        runScheduled(() =>
+          runtime.evaluateTrigger({
+            jobId: "detached-condition",
+            agentId: "main",
+            toolsAllow: ["cold_probe"],
+            script: "return { fire: true }",
+            state: null,
+          }),
+        ),
+      );
+    try {
+      const runtime = createRuntime(config);
+      await expect(evaluate(runtime)).resolves.toMatchObject({
+        kind: "evaluated",
+        fire: true,
+        state: { state: { artifact: "built", generation: 1, calls: 1 } },
+      });
+      expect(readRegistrations()).toEqual([{ artifact: "built", mode: "full" }]);
+
+      const nextConfig: OpenClawConfig = {
+        ...config,
+        plugins: {
+          ...config.plugins,
+          entries: { "cold-probe": { enabled: true, config: { generation: 2 } } },
+        },
+      };
+      owner.publish(await loadGateway(nextConfig));
+      setRuntimeConfigSnapshot(nextConfig, config);
+      // Both an existing watcher and a rebuilt cron service must use the new generation.
+      for (const nextRuntime of [runtime, createRuntime(nextConfig)]) {
+        await expect(evaluate(nextRuntime)).resolves.toMatchObject({
+          kind: "evaluated",
+          fire: true,
+          state: { state: { artifact: "built", generation: 2, calls: 1 } },
+        });
+      }
+      expect(readRegistrations()).toEqual([
+        { artifact: "built", mode: "full" },
+        { artifact: "built", mode: "full" },
+      ]);
+    } finally {
+      await owner.close();
+    }
+  });
+
   it.each(["gateway", "standalone"] as const)(
     "preserves %s artifact selection through both real preparation loads",
     async (owner) => {

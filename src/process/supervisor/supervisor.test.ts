@@ -11,7 +11,7 @@ import {
   spawnChild,
   type StubChildAdapter,
 } from "./supervisor.test-support.js";
-import type { ManagedRun } from "./types.js";
+import type { ManagedRun, SpawnInput } from "./types.js";
 
 const { createChildAdapterMock, createPtyAdapterMock } = vi.hoisted(() => ({
   createChildAdapterMock: vi.fn(),
@@ -75,6 +75,28 @@ describe("process supervisor", () => {
       expect.objectContaining({ exactEnv: true, secretInput }),
     );
   });
+
+  it.each([
+    { mode: "child", argv: ["bad\0executable"] },
+    { mode: "child", argv: ["fixture", "bad\0argument"] },
+    { mode: "child", argv: ["fixture"], resolveArgs: () => ["bad\0resolved"] },
+    { mode: "child", argv: ["fixture"], argv0: "bad\0name" },
+    { mode: "pty", argv: ["bad\0shell"] },
+    { mode: "pty", argv: ["fixture", "bad\0argument"] },
+    { mode: "anchored-shell", command: "printf bad\0command" },
+  ] satisfies SpawnInput[])(
+    "rejects NUL-containing $mode input before startup (%#)",
+    async (input) => {
+      const supervisor = createProcessSupervisor();
+      try {
+        await expect(supervisor.spawn(input)).rejects.toThrow("must not contain NUL bytes");
+        expect(createChildAdapterMock).not.toHaveBeenCalled();
+        expect(createPtyAdapterMock).not.toHaveBeenCalled();
+      } finally {
+        await supervisor.shutdown();
+      }
+    },
+  );
 
   it("enforces no-output timeout for silent processes", async () => {
     vi.useFakeTimers();

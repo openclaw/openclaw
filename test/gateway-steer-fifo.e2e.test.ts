@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../packages/gateway-protocol/src/client-info.js";
+import { INTERNAL_RUNTIME_CONTEXT_BEGIN } from "../src/agents/internal-runtime-context.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { GatewayClient, type GatewayClientOptions } from "../src/gateway/client.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
@@ -786,9 +787,7 @@ function userInputs(request: ModelRequest | undefined): string[] {
 function currentUserInput(request: ModelRequest | undefined): string {
   // Conversation metadata can follow the user message as a separate protected block.
   return (
-    userInputs(request).findLast(
-      (text) => !text.startsWith("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>"),
-    ) ?? ""
+    userInputs(request).findLast((text) => !text.includes(INTERNAL_RUNTIME_CONTEXT_BEGIN)) ?? ""
   );
 }
 

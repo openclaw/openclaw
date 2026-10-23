@@ -33,6 +33,7 @@ import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js
 export type AgentSchemaInspectionInput = {
   pathname: string;
   agentId?: string;
+  env?: NodeJS.ProcessEnv;
   supportedVersion: number;
   verifyCurrentSchemaShape?: boolean;
   inspectOwnership?: boolean;

@@ -3,6 +3,10 @@ import {
   GATEWAY_SERVICE_RUNTIME_PID_ENV,
   GATEWAY_SERVICE_SELECTOR_ENV_KEYS,
 } from "../../daemon/constants.js";
+import {
+  readServiceHeapExecArgv,
+  resolveGatewayHeapNodeOptions,
+} from "../../daemon/gateway-heap.js";
 import { mergePathPrepend } from "../../infra/path-prepend.js";
 import { mergeProcessEnv, resolveEnvironmentValue } from "../../infra/process-env.js";
 import { quoteCliArg, quotePowerShellArg } from "../quote-cli-arg.js";
@@ -183,6 +187,23 @@ export function disableUpdatedPackageCompileCacheEnv(env: NodeJS.ProcessEnv): No
   };
 }
 
+/** Carry service heap controls without changing the captured environment's other facts. */
+export function resolveUpdateServiceHeapEnv(
+  env: NodeJS.ProcessEnv,
+  processEnv: NodeJS.ProcessEnv = process.env,
+  programArguments: readonly string[] = [],
+): NodeJS.ProcessEnv {
+  const resolved = { ...env };
+  if (resolved.NODE_OPTIONS !== undefined && !resolved.NODE_OPTIONS.trim()) {
+    resolved.NODE_OPTIONS = resolveGatewayHeapNodeOptions(processEnv.NODE_OPTIONS);
+  }
+  const heapArgs = readServiceHeapExecArgv(programArguments);
+  if (heapArgs.length) {
+    resolved.NODE_OPTIONS = [resolved.NODE_OPTIONS, ...heapArgs].filter(Boolean).join(" ");
+  }
+  return resolved;
+}
+
 export function resolveUpdatedInstallCommandEnv(params?: {
   processEnv?: NodeJS.ProcessEnv;
   serviceEnv?: NodeJS.ProcessEnv;
@@ -197,10 +218,9 @@ export function resolveUpdatedInstallCommandEnv(params?: {
     : undefined;
   // SecretRefs may resolve from the updater's runtime env even when the
   // managed service intentionally omits resolved secrets from its definition.
-  return disableUpdatedPackageCompileCacheEnv({
-    ...processEnv,
-    ...serviceEnv,
-  });
+  return disableUpdatedPackageCompileCacheEnv(
+    resolveUpdateServiceHeapEnv({ ...processEnv, ...serviceEnv }, processEnv),
+  );
 }
 
 export function resolveOwnedManagedUpdateEnv(params: {

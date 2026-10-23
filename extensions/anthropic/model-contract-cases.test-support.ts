@@ -64,7 +64,7 @@ export const claude5ContractCases: Claude5ContractCase[] = [
     name: `resolves ${modelId} with its between-tools thinking contract`,
     defaultLevel: "high" as const,
     modelId,
-    cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+    cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
     thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: "max" },
     thinkingLevels: ["off", "low", "medium", "high", "xhigh", "max"],
     checksMedia: true,

@@ -13,6 +13,7 @@ import {
   filterLocalModelLeanTools,
   resolveLocalModelLeanPreserveToolNames,
 } from "../local-model-lean.js";
+import type { EmbeddedRunTrigger } from "../run-trigger.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import { filterRuntimeCompatibleTools } from "../tool-schema-projection.js";
 import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../tool-search-types.js";
@@ -59,6 +60,7 @@ export function createAgentHarnessToolSurfaceRuntimeCore(params: {
   scheduledToolPolicy?: ScheduledToolPolicyContext;
   sourceReplyDeliveryMode?: string;
   toolsAllow?: readonly string[];
+  trigger?: EmbeddedRunTrigger;
 }) {
   const forceDirectMessageTool = messageToolOwnsVisibleReply(params);
   const plan = resolveAgentToolSurfacePlan({
@@ -76,6 +78,7 @@ export function createAgentHarnessToolSurfaceRuntimeCore(params: {
     isRawModelRun: params.isRawModelRun === true,
     toolsAllow: params.toolsAllow,
     forceCodeModeControls: params.forceCodeModeControls,
+    trigger: params.trigger,
   });
   if (params.supportsDeferredToolCalls === false && plan.toolSearchConfig.mode === "directory") {
     plan.toolSearchConfig = { ...plan.toolSearchConfig, mode: "tools" };

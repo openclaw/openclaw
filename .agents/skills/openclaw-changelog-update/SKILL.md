@@ -292,7 +292,9 @@ of this skill; initial generation must never overwrite them.
   ```
 - add one `--release-tag` for every beta, stable, and extended-stable page in
   the train; a `### Release verification` tail is permitted, but any other
-  body drift fails the check
+  body drift fails the check. Extended-stable verification also requires
+  `--regular-stable-version <current-regular-stable-version>` so its canonical
+  release notice is checked against immutable regular-stable context
 - `scripts/render-github-release-notes.mts` is the canonical release-body
   renderer used by candidate validation, publish, and verification. When the
   complete `## YYYY.M.PATCH` section fits GitHub's 125,000-character limit and

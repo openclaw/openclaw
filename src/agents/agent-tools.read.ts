@@ -40,6 +40,7 @@ import type { AnyAgentTool } from "./agent-tools.types.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
 import { writeHostFile } from "./host-file-write.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
+import { assertNewMemoryFlushContent } from "./memory-flush-content.js";
 import {
   type MemoryWriteProvenanceObserver,
   withMemoryWriteProvenance,
@@ -742,7 +743,7 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
   const allowedAbsolutePath = path.resolve(options.root, options.relativePath);
   return {
     ...tool,
-    description: `${tool.description} During memory flush, this tool may only append to ${options.relativePath}.`,
+    description: `Append new memory notes to ${options.relativePath}; creates parent directories. The content is appended verbatim. Send only new text, never existing entries or a rewritten file.`,
     execute: async (toolCallId, args, signal, onUpdate) => {
       const assertCurrent = captureAgentToolSourceExecutionGuard(signal);
       const record = getToolParamsRecord(args);
@@ -781,6 +782,7 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
         sandbox: options.sandbox,
         signal,
       });
+      assertNewMemoryFlushContent(contentBefore, content);
       const separator =
         contentBefore.length > 0 && !contentBefore.endsWith("\n") && !content.startsWith("\n")
           ? "\n"

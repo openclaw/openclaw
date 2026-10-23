@@ -11,13 +11,17 @@ struct GatewayReadinessDeadlinePolicyTests {
     private let epoch = ContinuousClock.now
 
     @Test(arguments: [
-        (true, false, false),
-        (false, true, false),
-        (false, false, true),
+        (true, false, false, false),
+        (false, true, false, false),
+        (false, false, false, true),
+        (true, false, true, true),
+        (false, true, true, true),
+        (false, false, true, true),
     ])
-    func `migration extension requires fresh proof only without progress or prior grace`(
+    func `migration extension always reproves reused launchd PIDs despite progress or prior grace`(
         responsiveProgress: Bool,
         priorGrace: Bool,
+        reusedLaunchdPID: Bool,
         requiresLaunchdProof: Bool) throws
     {
         let policy = GatewayProcessManager.GatewayReadinessDeadlinePolicy.migration(window: 6, tolerance: 120)
@@ -25,7 +29,8 @@ struct GatewayReadinessDeadlinePolicyTests {
             deadline: self.epoch.advanced(by: .seconds(6)),
             finalProbeDeadline: self.epoch.advanced(by: .seconds(120)),
             responsiveStartupProgressObserved: responsiveProgress,
-            freshInstallGraceAuthorized: priorGrace))
+            freshInstallGraceAuthorized: priorGrace,
+            reusedLaunchdPID: reusedLaunchdPID))
 
         #expect(decision.deadline == self.epoch.advanced(by: .seconds(12)))
         #expect(decision.requiresLaunchdProof == requiresLaunchdProof)
@@ -37,7 +42,8 @@ struct GatewayReadinessDeadlinePolicyTests {
             deadline: self.epoch.advanced(by: .seconds(116)),
             finalProbeDeadline: self.epoch.advanced(by: .seconds(120)),
             responsiveStartupProgressObserved: true,
-            freshInstallGraceAuthorized: false))
+            freshInstallGraceAuthorized: false,
+            reusedLaunchdPID: false))
 
         #expect(decision.deadline == self.epoch.advanced(by: .seconds(120)))
     }
@@ -49,7 +55,8 @@ struct GatewayReadinessDeadlinePolicyTests {
             deadline: self.epoch.advanced(by: .seconds(deadline)),
             finalProbeDeadline: self.epoch.advanced(by: .seconds(120)),
             responsiveStartupProgressObserved: true,
-            freshInstallGraceAuthorized: true) == nil)
+            freshInstallGraceAuthorized: true,
+            reusedLaunchdPID: false) == nil)
     }
 
     @Test func `fixed readiness policy refuses migration extensions`() {
@@ -58,7 +65,8 @@ struct GatewayReadinessDeadlinePolicyTests {
             deadline: self.epoch.advanced(by: .seconds(6)),
             finalProbeDeadline: self.epoch.advanced(by: .seconds(120)),
             responsiveStartupProgressObserved: true,
-            freshInstallGraceAuthorized: true) == nil)
+            freshInstallGraceAuthorized: true,
+            reusedLaunchdPID: false) == nil)
     }
 }
 
@@ -1474,6 +1482,53 @@ struct GatewayProcessManagerTests {
 
             manager.stop()
             await manager.waitForStartupAttempt()
+            await connection.shutdown()
+            await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+        }
+    }
+
+    @Test func `reused launchd gateway gets the cold-start budget before repair`() async throws {
+        let port = 19119
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let firstHealthResponse = AsyncTestGate()
+        let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+            self.gatewayTask(healthSucceedsAfter: 0, healthResponseGates: [firstHealthResponse])
+        }
+
+        try await self.withLaunchAgentEnvironment(
+            port: port,
+            statusPayload: self.loadedGatewayStatus(port: port))
+        {
+            manager.setTestingLastFailureReason(nil)
+            manager._testClearLaunchAgentReadinessFailure()
+            manager._testClearLaunchAgentInstallEvidence()
+            let descriptor = self.gatewayDescriptor(pid: 4242)
+            await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: port)
+            defer {
+                manager.setTestingLastFailureReason(nil)
+                manager._testClearLaunchAgentReadinessFailure()
+                manager._testClearLaunchAgentInstallEvidence()
+            }
+
+            _ = try await connection.request(method: "status", params: nil, retryTransportFailures: false)
+            manager._testStartLaunchdGatewayReadiness(
+                port: port,
+                pid: 4242,
+                readinessWindow: 0.2,
+                firstInstallReadinessBudget: 0.2,
+                reusedLaunchdReadinessBudget: 5,
+                hasFreshInstallEvidence: false)
+            await self.waitForCondition(attempts: 3000) {
+                GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                    .contains { $0.first == "status" }
+            }
+            firstHealthResponse.open()
+            await manager.waitForStartupAttempt()
+
+            #expect(manager.status == .running(details: "pid 4242"))
+            #expect(manager.lastFailureReason == nil)
+            #expect(!manager._testHasLaunchAgentReadinessFailure())
+
             await connection.shutdown()
             await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
         }

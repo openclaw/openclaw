@@ -106,6 +106,8 @@ Options:
   --shipped-ref <tag>   Exclude PRs already recorded by this shipped tag; repeatable.
   --release-provenance <sha -> #PR[, #PR]>
                         Supply an exact provenance marker; repeatable.
+  --regular-stable-version <version>
+                        Regular stable version linked by extended-stable release notes.
   --write-ledger        Write the verified split release entry and contribution record.
   --release-tag <tag>   GitHub release tag to compare; repeatable with --check-github.
   --check-github        Require each supplied GitHub release body to match.
@@ -124,6 +126,7 @@ export function parseArgs(argv) {
     githubSnapshotPath: undefined,
     mainRef: undefined,
     noGithubSnapshot: false,
+    regularStableVersion: undefined,
     refreshGithubSnapshot: false,
     seedRef: /** @type {string | undefined} */ (undefined),
     shippedRefs: [],
@@ -147,6 +150,7 @@ export function parseArgs(argv) {
     ["--github-snapshot", "githubSnapshotPath"],
     ["--main-ref", "mainRef"],
     ["--manifest", "manifestPath"],
+    ["--regular-stable-version", "regularStableVersion"],
     ["--seed-ref", "seedRef"],
   ]);
 
@@ -950,8 +954,13 @@ function backportPullRequestOrigins(message) {
   ].map((match) => Number(match[1]));
 }
 
+const RELEASE_PROVENANCE_MARKER_PATTERN =
+  /^Release provenance: ([0-9a-f]{40}) -> (#\d+(?:,\s*#\d+)*)\.?\s*$/i;
+const CONSOLIDATED_RELEASE_PROVENANCE_PATTERN =
+  /^Release provenance: [0-9a-f]{40} -> #\d+(?:,\s*#\d+)*(?:;\s*[0-9a-f]{40} -> #\d+(?:,\s*#\d+)*)+\.?\s*$/i;
+
 function releaseProvenanceMarker(line) {
-  const match = line.match(/^Release provenance: ([0-9a-f]{40}) -> (#\d+(?:,\s*#\d+)*)\.?\s*$/i);
+  const match = line.match(RELEASE_PROVENANCE_MARKER_PATTERN);
   if (!match) {
     fail(`invalid release provenance marker: ${line}`);
   }
@@ -981,16 +990,29 @@ export function collectReleaseProvenanceOverrides(activeCommits, releaseProvenan
     }
     overrides.set(marker.commit, marker.pullRequests);
   };
-  for (const commit of activeCommits) {
-    for (const marker of releaseProvenanceMarkers(commit.body)) {
-      addMarker(marker);
-    }
-  }
   for (const value of releaseProvenance) {
     if (/[\r\n]/u.test(value)) {
       fail(`invalid release provenance marker: Release provenance: ${value}`);
     }
     addMarker(releaseProvenanceMarker(`Release provenance: ${value}`));
+  }
+  const explicitlyMappedCommits = new Set(overrides.keys());
+  for (const commit of activeCommits) {
+    for (const line of commit.body
+      .split("\n")
+      .filter((line) => /^Release provenance:/i.test(line))) {
+      // Recover consolidated origin metadata without rewriting pushed history, but
+      // only when the containing commit's explicit mapping preserves every PR.
+      if (
+        explicitlyMappedCommits.has(commit.hash) &&
+        CONSOLIDATED_RELEASE_PROVENANCE_PATTERN.test(line) &&
+        [...new Set([...line.matchAll(/#(\d+)/g)].map((match) => Number(match[1])))].join(",") ===
+          overrides.get(commit.hash).join(",")
+      ) {
+        continue;
+      }
+      addMarker(releaseProvenanceMarker(line));
+    }
   }
   return overrides;
 }
@@ -2570,7 +2592,13 @@ function manifestFor(options, source, ledger, directCommitRecords) {
   };
 }
 
-function releaseChecks(changelog, version, releaseTags, contributionRecordPath) {
+function releaseChecks(
+  changelog,
+  version,
+  releaseTags,
+  contributionRecordPath,
+  regularStableVersion,
+) {
   const checks = [];
   for (const tag of releaseTags) {
     const release = githubApi([`repos/${repo}/releases/tags/${encodeURIComponent(tag)}`]);
@@ -2580,6 +2608,7 @@ function releaseChecks(changelog, version, releaseTags, contributionRecordPath) 
       version,
       tag,
       repository: repo,
+      regularStableVersion,
       contributionRecordPath,
     });
     checks.push({
@@ -2892,6 +2921,7 @@ function main() {
         options.version,
         options.releaseTags,
         releaseSource.recordPath ?? undefined,
+        options.regularStableVersion,
       )
     : [];
   for (const check of github) {
@@ -2939,6 +2969,11 @@ function main() {
     process.stdout.write(
       `${options.version}: ${ledger.provenance.uniquePullRequests} unique PRs (${ledger.provenance.inRangePullRequests} in-range + ${ledger.provenance.retainedSeedOnlyPullRequests} retained seed-only), ${ledger.issues.length} issues, ${errors.length === 0 ? "verified" : `${errors.length} errors`}${snapshotSummary}\n`,
     );
+    if (errors.length > 0) {
+      process.stdout.write(
+        `${errors.map((error) => `- ${error.replaceAll("\n", "\n  ")}`).join("\n")}\n`,
+      );
+    }
   }
   if (errors.length > 0) {
     process.exitCode = 1;

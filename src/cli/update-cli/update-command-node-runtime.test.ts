@@ -15,7 +15,7 @@ afterEach(() => {
 
 it("uses an installed target-compatible runtime without fetching or provisioning", async () => {
   vi.mocked(findUsableNodeRuntime).mockResolvedValue({ nodePath: "/owned/node26", reason: "PATH" });
-  expect(await resolveTargetNodeRuntime({ engine: ">=26.1.0", recovery: { env: {} } })).toBe(
+  expect(await resolveTargetNodeRuntime({ engine: ">=26.12.1", recovery: { env: {} } })).toBe(
     "/owned/node26",
   );
   expect(fetchMock).not.toHaveBeenCalled();
@@ -30,7 +30,7 @@ it("selects an exact compatible even release from unordered upstream metadata", 
     new Response(
       JSON.stringify([
         { version: "v28.2.0" },
-        { version: "v26.1.0" },
+        { version: "v26.12.1" },
         { version: "v27.9.0" },
         { version: "v26.8.1" },
         { version: "v24.20.0" },
@@ -40,7 +40,7 @@ it("selects an exact compatible even release from unordered upstream metadata", 
     ),
   );
   expect(
-    await resolveTargetNodeRuntime({ engine: ">=26.1.0", recovery: { env: {}, installCommand } }),
+    await resolveTargetNodeRuntime({ engine: ">=26.12.1", recovery: { env: {}, installCommand } }),
   ).toBe("/owned/private-node");
   const selected = vi.mocked(findUsableNodeRuntime).mock.calls[1]?.[0];
   expect(selected).toMatchObject({ allowInstall: true, nodeVersion: "26.8.1", installCommand });
@@ -63,7 +63,7 @@ it.each(["no compatible release", "upstream unavailable", "oversized response"] 
     );
     expect(
       await resolveTargetNodeRuntime({
-        engine: ">=26.1.0 <27",
+        engine: ">=26.12.1 <27",
         recovery: { env: {}, installCommand: vi.fn() },
       }),
     ).toBeUndefined();

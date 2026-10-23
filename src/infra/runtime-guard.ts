@@ -249,7 +249,7 @@ export async function assertSupportedRuntime(
     details.kind === "bun"
       ? "openclaw requires Bun 1.4 or newer with WAL-reset-safe node:sqlite (SQLite 3.51.3+ or a patched 3.50.x/3.44.x release)."
       : (details.sqliteProbe && nodeRuntimeFailure(details.version, details.sqliteProbe)) ||
-        "openclaw requires Node >=24.16.0 <25, or >=26.1.0.";
+        "openclaw requires Node >=24.22.1 <25, or >=26.12.1.";
   const retryHint =
     details.kind === "bun"
       ? "Upgrade Bun or run OpenClaw with a supported Node release."

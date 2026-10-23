@@ -186,14 +186,17 @@ describe("Parallels runtime companion setup", () => {
 
 describe("Parallels Linux runtime prerequisites", () => {
   it.each([
-    { nodeVersion: "24.18.0", npmExit: 0, gitExit: 0, bootstrap: false },
-    { nodeVersion: "26.1.0", npmExit: 0, gitExit: 0, bootstrap: false },
+    { nodeVersion: "26.12.1", npmExit: 0, gitExit: 0, bootstrap: false },
+    { nodeVersion: "26.12.0", npmExit: 0, gitExit: 0, bootstrap: true },
+    { nodeVersion: "26.1.0", npmExit: 0, gitExit: 0, bootstrap: true },
+    { nodeVersion: "24.22.1", npmExit: 0, gitExit: 0, bootstrap: false },
+    { nodeVersion: "24.22.0", npmExit: 0, gitExit: 0, bootstrap: true },
     { nodeVersion: "26.0.0", npmExit: 0, gitExit: 0, bootstrap: true },
     { nodeVersion: "24.14.1", npmExit: 0, gitExit: 0, bootstrap: true },
     { nodeVersion: "23.11.0", npmExit: 0, gitExit: 0, bootstrap: true },
     { nodeVersion: "", npmExit: 0, gitExit: 0, bootstrap: true },
-    { nodeVersion: "24.18.0", npmExit: 127, gitExit: 0, bootstrap: true },
-    { nodeVersion: "24.18.0", npmExit: 0, gitExit: 127, bootstrap: true },
+    { nodeVersion: "24.22.1", npmExit: 127, gitExit: 0, bootstrap: true },
+    { nodeVersion: "24.22.1", npmExit: 0, gitExit: 127, bootstrap: true },
   ])("checks usable Node/npm/Git before bootstrap: %j", (scenario) => {
     const bootstrap = vi.fn();
     ensureSmokeGuestRuntime({

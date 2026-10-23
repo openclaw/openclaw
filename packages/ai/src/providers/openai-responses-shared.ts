@@ -39,6 +39,7 @@ import {
   type OpenAIRequestReasoningEffort,
 } from "./openai-request-reasoning.js";
 import { convertResponsesToolPayload } from "./openai-responses-tools.js";
+import { clampMaxTokensToModel } from "./simple-options.js";
 
 type OpenAIResponsesStreamOptions = Pick<
   ResponsesStreamOptions,
@@ -122,7 +123,7 @@ export function applyCommonResponsesParams<TApi extends Api>(
   config?: { setDefaultReasoningOff?: boolean },
 ): void {
   if (options?.maxTokens) {
-    params.max_output_tokens = Math.max(options.maxTokens, 16);
+    params.max_output_tokens = clampMaxTokensToModel(model, Math.max(options.maxTokens, 16));
   }
 
   if (options?.temperature !== undefined && supportsOpenAITemperature(model)) {

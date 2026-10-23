@@ -226,9 +226,8 @@ export function createPublicationOwner(
     }
     return { selected, previous, candidate, launcherStates };
   };
-  const verifyClosure = async () => {
+  const verifyEvidence = async () => {
     assertInventory();
-    assertManagedUpdateLeaseDatabaseIdentity(descriptor.authority);
     if (packageActivationIdentity(helper(), false) !== helperIdentity) {
       throw new Error("Sealed package recovery helper identity changed.");
     }
@@ -237,6 +236,10 @@ export function createPublicationOwner(
       throw new Error("Sealed package recovery helper changed.");
     }
     assertCurrent();
+  };
+  const verifyClosure = async () => {
+    assertManagedUpdateLeaseDatabaseIdentity(descriptor.authority);
+    await verifyEvidence();
   };
   const preflight = async (action: "repair" | "retire") => {
     if (
@@ -565,6 +568,11 @@ export function createPublicationOwner(
     retire,
     persistRetirement,
     preflight,
+    async preflightStaleSettlement() {
+      await verifyEvidence();
+      await inspect();
+      assertCurrent();
+    },
     async disarmRollback() {
       assertCurrent();
       const observed = await inspect();

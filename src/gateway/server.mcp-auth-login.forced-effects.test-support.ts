@@ -268,6 +268,7 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
         issuer: new URL(resourceUrl).origin,
       });
       expect(beforeSave?.discoveryState?.authorizationServerMetadata).toMatchObject({
+        issuer: new URL(resourceUrl).origin,
         client_id_metadata_document_supported: true,
       });
       expect(await stored()).toEqual(expectDefined(beforeSave, "pre-client-save store"));

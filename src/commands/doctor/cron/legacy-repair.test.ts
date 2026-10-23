@@ -128,6 +128,30 @@ async function loadRepairStateForStore(storePath: string) {
   return { cfg, state };
 }
 
+it("leaves canonical one-shot jobs untouched without a SQLite repair backup", async () => {
+  tempRoot = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-canonical-repair-")),
+  );
+  vi.stubEnv("OPENCLAW_STATE_DIR", tempRoot);
+  const storePath = path.join(tempRoot, "cron", "jobs.json");
+  const canonical: CronJob = {
+    ...job("canonical-at"),
+    schedule: { kind: "at", at: "2026-04-01T10:00:00.000Z" },
+    sessionTarget: "main",
+    payload: { kind: "systemEvent", text: "tick" },
+  };
+  await saveCronStore(storePath, { version: 1, jobs: [canonical] });
+  const { cfg, state } = await loadRepairStateForStore(storePath);
+
+  expect(await applyLegacyCronStoreRepair({ cfg, state })).toEqual({ changes: [], warnings: [] });
+  expect((await loadCronStore(storePath)).jobs).toEqual([canonical]);
+  expect(
+    (await fs.readdir(path.join(tempRoot, "state"))).filter((name) =>
+      name.includes(".doctor-cron-"),
+    ),
+  ).toEqual([]);
+});
+
 it.each(["legacy JSON", "SQLite"])(
   "preserves current-session delivery through %s repair and reload",
   async (source) => {

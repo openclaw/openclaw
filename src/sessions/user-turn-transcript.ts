@@ -122,6 +122,9 @@ async function persistUserTurnTranscript(
         {
           message,
           idempotencyLookup: "scan",
+          ...(params.beforeFreshMessageCommit
+            ? { beforeFreshMessageCommit: params.beforeFreshMessageCommit }
+            : {}),
           prepareMessageAfterIdempotencyCheck: (candidate) =>
             preparePersistedUserTurnMessageForTranscriptWrite(
               candidate as PersistedUserTurnMessage,
@@ -416,6 +419,7 @@ export function createUserTurnTranscriptRecorder(
     expectedSessionId?: string;
     expectedSessionState?: SessionTranscriptTurnPersistOptions["expectedSessionState"];
     sessionLifecyclePatch?: SessionTranscriptTurnPersistOptions["sessionLifecyclePatch"];
+    beforeFreshMessageCommit?: () => void;
     retryIfUnpersisted?: boolean;
   }): Promise<UserTurnTranscriptPersistResult | undefined> => {
     if (options.skipWhenBlocked && blocked) {
@@ -455,6 +459,10 @@ export function createUserTurnTranscriptRecorder(
         candidate: PersistedUserTurnMessage,
         candidateUpdateMode: UserTurnTranscriptUpdateMode,
       ) => {
+        const assertOriginalInput =
+          candidate.idempotencyKey === message?.idempotencyKey
+            ? recorder.assertOriginalInputCommit
+            : undefined;
         const persist = () =>
           persistUserTurnTranscript({
             ...resolvedTarget,
@@ -466,6 +474,13 @@ export function createUserTurnTranscriptRecorder(
             expectedSessionState: options.expectedSessionState ?? params.expectedSessionState,
             updateMode: candidateUpdateMode,
             beforeMessageWrite: params.beforeMessageWrite ?? resolvedTarget.beforeMessageWrite,
+            beforeFreshMessageCommit:
+              options.beforeFreshMessageCommit || assertOriginalInput
+                ? () => {
+                    options.beforeFreshMessageCommit?.();
+                    assertOriginalInput?.();
+                  }
+                : undefined,
             onOriginalInputCommitted: notifyOriginalInputCommitted,
           });
         // Collection can resolve its media lazily during admission. Bind custody
@@ -693,6 +708,7 @@ export function createUserTurnTranscriptRecorder(
         expectedSessionId: options?.expectedSessionId,
         expectedSessionState: options?.expectedSessionState,
         sessionLifecyclePatch: options?.sessionLifecyclePatch,
+        beforeFreshMessageCommit: options?.beforeFreshMessageCommit,
         retryIfUnpersisted: options?.retryIfUnpersisted,
       }),
     persistBlocked: async (blockedMessage, options) => {

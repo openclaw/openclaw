@@ -14,6 +14,7 @@ const GEMINI_2_5_FLASH_PREFIX = "gemini-2.5-flash";
 const GEMINI_3_PRO_RE = /^gemini-3(?:\.\d+)?-pro(?:-|$)/;
 const GEMINI_3_FLASH_LITE_RE = /^gemini-3(?:\.\d+)?-flash-lite(?:-|$)/;
 const GEMINI_3_FLASH_RE = /^gemini-3(?:\.\d+)?-flash(?:-|$)/;
+const GEMINI_4_RE = /^gemini-4(?:[.-]|$)/;
 const GEMINI_PRO_LATEST_ID = "gemini-pro-latest";
 const GEMINI_FLASH_LATEST_ID = "gemini-flash-latest";
 const GEMINI_FLASH_LITE_LATEST_ID = "gemini-flash-lite-latest";
@@ -29,6 +30,7 @@ const GEMINI_3_FLASH_ANTIGRAVITY_TEMPLATE_IDS = ["gemini-3-flash"] as const;
 // Gemma uses the Gemini flash template as a forward-compat approximation
 // until a dedicated Gemma template is registered in the catalog.
 const GEMMA_TEMPLATE_IDS = GEMINI_3_1_FLASH_TEMPLATE_IDS;
+const GEMINI_4_TEMPLATE_IDS = ["gemini-4-argon"] as const;
 const GOOGLE_PROVIDER_PREFIX = "google/";
 const GOOGLE_NON_TEXT_MODEL_ID_MARKERS = ["-image", "-tts", "-live", "native-audio"] as const;
 
@@ -66,6 +68,7 @@ export function isGoogleTextGenerationModelId(id: string): boolean {
     GEMINI_3_PRO_RE.test(lower) ||
     GEMINI_3_FLASH_LITE_RE.test(lower) ||
     GEMINI_3_FLASH_RE.test(lower) ||
+    GEMINI_4_RE.test(lower) ||
     lower === GEMINI_PRO_LATEST_ID ||
     lower === GEMINI_FLASH_LATEST_ID ||
     lower === GEMINI_FLASH_LITE_LATEST_ID ||
@@ -197,6 +200,10 @@ const GOOGLE_FORWARD_COMPAT_CASES: readonly GoogleForwardCompatCase[] = [
     ],
   },
   {
+    match: (id) => GEMINI_4_RE.test(id),
+    family: [GEMINI_4_TEMPLATE_IDS, GEMINI_4_TEMPLATE_IDS],
+  },
+  {
     match: (id) => id.startsWith(GEMMA_PREFIX),
     family: [GEMMA_TEMPLATE_IDS, GEMMA_TEMPLATE_IDS],
     patch: ({ normalizedModelId }) =>
@@ -273,6 +280,7 @@ export function isModernGoogleModel(modelId: string): boolean {
   return (
     lower.startsWith("gemini-2.5") ||
     lower.startsWith("gemini-3") ||
+    GEMINI_4_RE.test(lower) ||
     lower === GEMINI_PRO_LATEST_ID ||
     lower === GEMINI_FLASH_LATEST_ID ||
     lower === GEMINI_FLASH_LITE_LATEST_ID ||

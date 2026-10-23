@@ -73,6 +73,13 @@ function requiredJob(definition: WorkflowDocument, name: string): WorkflowJob {
   return expectDefined(definition.jobs[name], `release workflow job ${name}`);
 }
 
+function requiredStep(job: WorkflowJob, name: string): WorkflowStep {
+  return expectDefined(
+    job.steps.find((step) => step.name === name),
+    name,
+  );
+}
+
 // Direct dispatches build from the selected ref. Only trusted workflow callers
 // may provide the complete immutable package artifact tuple.
 const WORKFLOW_CALL_ONLY_INPUTS = new Set([
@@ -357,6 +364,23 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
     },
   );
 
+  it("retains exact-candidate live cache diagnostics on failure", () => {
+    const job = requiredJob(workflow(), "validate_release_live_cache");
+    expect(requiredStep(job, "Verify live prompt cache floors").run).toContain(
+      "cache-floors.vitest.json",
+    );
+    expect(requiredStep(job, "Upload live cache diagnostics")).toMatchObject({
+      if: "always()",
+      uses: "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+      with: {
+        name: "live-cache-${{ needs.validate_selected_ref.outputs.selected_sha }}-${{ github.run_id }}-${{ github.run_attempt }}",
+        path: ".artifacts/live-cache/",
+        "retention-days": 14,
+        "if-no-files-found": "warn",
+      },
+    });
+  });
+
   it.each([
     ["validate_docker_e2e", "Run Docker E2E chunk"],
     ["validate_docker_lanes", "Run targeted Docker E2E lanes"],
@@ -490,7 +514,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       "matrix planner Node setup",
     );
     expect(setup.if).toBeUndefined();
-    expect(setup.env).toMatchObject({ REQUESTED_NODE_VERSION: "24.x" });
+    expect(setup.env).toMatchObject({ REQUESTED_NODE_VERSION: "24.22.1" });
     expect(setup.run).toContain("source .github/actions/setup-pnpm-store-cache/ensure-node.sh");
     expect(setup.run).toContain('openclaw_ensure_node "$REQUESTED_NODE_VERSION"');
     const planner = expectDefined(

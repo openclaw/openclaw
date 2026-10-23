@@ -187,7 +187,10 @@ function loadPluginDoctorContractEntry(
 }
 
 function resolvePluginDoctorManifestRecords(
-  params: PluginDoctorRegistryParams & { artifactPreservingReadOnly?: boolean },
+  params: PluginDoctorRegistryParams & {
+    artifactPreservingReadOnly?: boolean;
+    includeDeferred?: boolean;
+  },
 ): PluginManifestRegistryRecord[] {
   if (params?.pluginIds && params.pluginIds.length === 0) {
     return [];
@@ -203,12 +206,17 @@ function resolvePluginDoctorManifestRecords(
       artifactPreservingReadOnly: params.artifactPreservingReadOnly,
     });
 
-  return filterPluginDoctorRecordsByScope(manifestRegistry.plugins, params.pluginIds);
+  return filterPluginDoctorRecordsByScope(
+    manifestRegistry.plugins,
+    params.pluginIds,
+    params.includeDeferred,
+  );
 }
 
 function filterPluginDoctorRecordsByScope(
   records: readonly PluginManifestRegistryRecord[],
   pluginIds?: readonly string[],
+  includeDeferred = false,
 ): PluginManifestRegistryRecord[] {
   const scopedPluginIds = pluginIds ? new Set(pluginIds) : null;
   const scopedProviderIds = pluginIds
@@ -216,7 +224,7 @@ function filterPluginDoctorRecordsByScope(
     : null;
   return records.filter(
     (record) =>
-      !deferredPluginMigrations.getStore()?.has(record.id) &&
+      (includeDeferred || !deferredPluginMigrations.getStore()?.has(record.id)) &&
       !(
         scopedPluginIds &&
         !scopedPluginIds.has(record.id) &&
@@ -249,13 +257,23 @@ function resolvePluginDoctorContracts(
   }
   const ownedChannels = new Set(records.flatMap((record) => record.channels));
   const installedPluginIds = new Set(records.map((record) => record.id));
+  const deferredPluginIds = deferredPluginMigrations.getStore();
+  const deferredRecords = deferredPluginIds
+    ? resolvePluginDoctorManifestRecords({ ...params, includeDeferred: true }).filter((record) =>
+        deferredPluginIds.has(record.id),
+      )
+    : [];
   for (const { channelId, pluginId } of GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA) {
+    const deferredOwner = deferredRecords.find(
+      (record) => record.id === pluginId || record.channels.includes(channelId),
+    );
+    const deferredOfficialOwner = deferredOwner?.trustedOfficialInstall === true;
     if (
-      deferredPluginMigrations.getStore()?.has(pluginId) ||
+      (deferredPluginIds?.has(pluginId) && !deferredOfficialOwner) ||
       (!Object.hasOwn(params.config?.channels ?? {}, channelId) &&
         !Object.hasOwn(params.config?.plugins?.entries ?? {}, pluginId)) ||
-      ownedChannels.has(channelId) ||
-      installedPluginIds.has(pluginId) ||
+      (ownedChannels.has(channelId) && !deferredOfficialOwner) ||
+      (installedPluginIds.has(pluginId) && !deferredOfficialOwner) ||
       (params.pluginIds &&
         !params.pluginIds.includes(channelId) &&
         !params.pluginIds.includes(pluginId))

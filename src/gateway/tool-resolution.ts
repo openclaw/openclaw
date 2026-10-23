@@ -1,5 +1,8 @@
 // Gateway-scoped tool resolution for HTTP and loopback tool surfaces.
-import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import type {
+  AdmittedRunContext,
+  AdmittedRunOperatorAuthority,
+} from "../agents/admitted-run-context.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "../agents/agent-scope.js";
 import { applyToolAvailabilityDescriptions } from "../agents/agent-tools.deferred-followup.js";
 import { createOpenClawCodingTools } from "../agents/agent-tools.js";
@@ -87,6 +90,7 @@ export function resolveGatewayScopedTools(
     agentTo?: string;
     agentThreadId?: string;
     senderIsOwner?: boolean;
+    admittedRunContext?: AdmittedRunContext;
     /** Host-issued source for limited session controls; execution rechecks its own caller. */
     sessionControlAuthority?: AdmittedRunOperatorAuthority;
     conversationReadOrigin?: ConversationReadInvocationOrigin;
@@ -324,6 +328,7 @@ export function resolveGatewayScopedTools(
   };
   const swarmCollectorContext = resolveSwarmCollectorToolContext(swarmCollectorAdmission);
   const openClawTools = createOpenClawTools({
+    computerExecutionId: params.admittedRunContext?.operationalRunInstance.instanceId,
     sessionPortalTarget,
     gatewayConfigReadAllowed,
     agentSessionKey: params.sessionKey,

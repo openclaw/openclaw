@@ -18,6 +18,30 @@ vi.mock("../process/exec.js", async (importOriginal) => ({
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("LaunchAgent environment round-trip", () => {
+  it("keeps lenient hand-edited expressions from consuming following assignments", async () => {
+    const dir = dirs.make("openclaw-plist-lenient-");
+    const plistPath = path.join(dir, "gateway.plist");
+    const envFile = path.join(dir, "gateway.env");
+    await fs.writeFile(envFile, "export EDITED=$(id)\nexport NEXT='retained'\n");
+    await fs.writeFile(
+      plistPath,
+      buildLaunchAgentPlist({
+        label: "ai.openclaw.gateway",
+        programArguments: [
+          "/bin/sh",
+          path.join(dir, "gateway-env-wrapper.sh"),
+          envFile,
+          "openclaw",
+        ],
+        stdoutPath: "/dev/null",
+        stderrPath: "/dev/null",
+      }),
+    );
+    await expect(readLaunchAgentProgramArgumentsFromFile(plistPath)).resolves.toMatchObject({
+      environment: { EDITED: "$(id)", NEXT: "retained" },
+    });
+  });
+
   it("preserves inline, file, and overlapping provenance after merging generated environment", async () => {
     const dir = dirs.make("openclaw-plist-provenance-");
     const plistPath = path.join(dir, "gateway.plist");

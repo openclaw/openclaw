@@ -63,7 +63,7 @@ describe("package runtime compatibility guidance", () => {
     vi.stubGlobal("process", {
       ...process,
       execPath: path.resolve("/fixture/node"),
-      versions: { ...process.versions, node: "24.16.0", bun: undefined },
+      versions: { ...process.versions, node: "24.22.1", bun: undefined },
     });
   });
   afterEach(() => {
@@ -146,7 +146,7 @@ describe("package runtime compatibility guidance", () => {
     vi.mocked(resolveNodeRuntimeInfo).mockResolvedValue(unsupportedServiceRuntimeFixture);
     vi.mocked(resolveTargetNodeRuntime).mockResolvedValue("/recovered/node");
     const result = await resolvePackageRuntimePreflight({
-      target: { version: "2027.1.0", nodeEngine: ">=24.16.0" },
+      target: { version: "2027.1.0", nodeEngine: ">=24.22.1" },
       nodeRunner: "/old/node",
       shouldRestart: true,
       alreadyCurrent: true,
@@ -167,11 +167,11 @@ describe("package runtime compatibility guidance", () => {
   });
 
   it.each([
-    [">=24.16.0 <25 || >=26.1.0", "24.16.0", "2026.9.4", "2026.9.4"],
+    [">=24.22.1 <25 || >=26.12.1", "24.22.1", "2026.9.4", "2026.9.4"],
     [null, "unspecified", "2026.9.4", "2026.9.4"],
     ["invalid", "unspecified", "2026.9.4", "2026.9.4"],
-    [">=24.16.0", "24.16.0", "2026.9.4-beta.1", "2026.9.4-beta.1"],
-    [">=24.16.0", "24.16.0", "2026.9.4-private-customer", "[redacted-version]"],
+    [">=24.22.1", "24.22.1", "2026.9.4-beta.1", "2026.9.4-beta.1"],
+    [">=24.22.1", "24.22.1", "2026.9.4-private-customer", "[redacted-version]"],
   ] as const)(
     "records inspected runtime facts for public refusal reports: %s / %s / %s",
     async (nodeEngine, floor, version, publicVersion) => {
@@ -219,19 +219,19 @@ describe("package runtime compatibility guidance", () => {
   it.each([
     [
       "/home/operator/.nvm/versions/node/v22.23.2/bin/node",
-      "nvm install 24.16.0 && nvm use 24.16.0",
+      "nvm install 24.22.1 && nvm use 24.22.1",
     ],
     ["/usr/bin/node", null],
     ["/source/node", null, "/fixture"],
     ["/home/operator/.nvm/../system/bin/node", null],
     [
       "/home/operator/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
-      "fnm install 24.16.0 && fnm use 24.16.0",
+      "fnm install 24.22.1 && fnm use 24.22.1",
     ],
-    ["/home/operator/.volta/tools/image/node/22.23.2/bin/node", "volta install node@24.16.0"],
+    ["/home/operator/.volta/tools/image/node/22.23.2/bin/node", "volta install node@24.22.1"],
     [
       "/custom/node-manager/versions/node/v22.23.2/bin/node",
-      "nvm install 24.16.0 && nvm use 24.16.0",
+      "nvm install 24.22.1 && nvm use 24.22.1",
     ],
   ])(
     "keeps the CLI and owned service reachable after switching %s",
@@ -244,7 +244,7 @@ describe("package runtime compatibility guidance", () => {
         sqliteProbe: { available: true, version: "3.51.3", text: true, blob: true, json: true },
       });
       const result = await resolvePackageRuntimePreflight({
-        target: { version: "2026.9.4", nodeEngine: ">=24.16.0" },
+        target: { version: "2026.9.4", nodeEngine: ">=24.22.1" },
         nodeRunner,
         sourceRoot,
         root: sourceRoot ?? "/fixture",
@@ -254,7 +254,7 @@ describe("package runtime compatibility guidance", () => {
           serviceEnv: { OPENCLAW_PROFILE: "work", NVM_DIR: "/custom/node-manager" },
         },
       });
-      const prefix = command === "volta install node@24.16.0" ? "volta run --node 24.16.0 " : "";
+      const prefix = command === "volta install node@24.22.1" ? "volta run --node 24.22.1 " : "";
       const sourceEntry = path.join(sourceRoot ?? "/fixture", "openclaw.mjs");
       const cli = sourceEntry
         ? `node ${process.platform === "win32" ? quotePowerShellArg(sourceEntry) : quoteCliArg(sourceEntry)}`
@@ -277,15 +277,15 @@ describe("package runtime compatibility guidance", () => {
             ? {
                 kind: "select-runtime",
                 command: command.startsWith("nvm")
-                  ? expectedRuntimeSelectionCommand("nvm", "24.16.0")
+                  ? expectedRuntimeSelectionCommand("nvm", "24.22.1")
                   : command.startsWith("fnm")
-                    ? expectedRuntimeSelectionCommand("fnm", "24.16.0")
+                    ? expectedRuntimeSelectionCommand("fnm", "24.22.1")
                     : command,
               }
             : {
                 kind: "select-runtime",
                 instruction:
-                  "Install and select Node 24.16.0 using your system package manager or https://nodejs.org/en/download.",
+                  "Install and select Node 24.22.1 using your system package manager or https://nodejs.org/en/download.",
               },
           {
             kind: "continue-update",
@@ -307,7 +307,7 @@ describe("package runtime compatibility guidance", () => {
         sqliteProbe: { available: true, version: "3.51.3", text: true, blob: true, json: true },
       });
       const result = await resolvePackageRuntimePreflight({
-        target: { version: "2026.9.4", nodeEngine: ">=24.16.0" },
+        target: { version: "2026.9.4", nodeEngine: ">=24.22.1" },
         nodeRunner: "/usr/bin/node",
         invocationCwd: "/service-launch",
         service: {
@@ -350,12 +350,12 @@ describe("package runtime compatibility guidance", () => {
       const launcher = path.join(alias, "node");
       vi.mocked(resolveNodeRuntimeInfo).mockResolvedValue(unsupportedServiceRuntimeFixture);
       const result = await resolvePackageRuntimePreflight({
-        target: { version: "2026.9.4", nodeEngine: ">=24.16.0" },
+        target: { version: "2026.9.4", nodeEngine: ">=24.22.1" },
         nodeRunner: launcher,
       });
       expect(result.recoverySteps?.[1]).toEqual({
         kind: "select-runtime",
-        command: expectedRuntimeSelectionCommand("fnm", "24.16.0"),
+        command: expectedRuntimeSelectionCommand("fnm", "24.22.1"),
       });
     });
   });
@@ -424,7 +424,7 @@ describe("package runtime compatibility guidance", () => {
         ...(nodePath === "/old/node" ? { capabilityError: "broken TEXT decoder" } : {}),
       }));
       const result = await resolvePackageRuntimePreflight({
-        target: { version: "2027.1.0", nodeEngine: ">=24.16.0 <25 || >=26.1.0" },
+        target: { version: "2027.1.0", nodeEngine: ">=24.22.1 <25 || >=26.12.1" },
         nodeRunner: "/old/node",
         shouldRestart: fallback,
         alreadyCurrent: true,
@@ -469,7 +469,7 @@ describe("package runtime compatibility guidance", () => {
         execPath: path.resolve("/fixture/node"),
         versions: { ...process.versions, node },
       });
-      const engine = ">=24.16.0 <25 || >=26.1.0";
+      const engine = ">=24.22.1 <25 || >=26.12.1";
       const result = await resolvePackageRuntimePreflight({
         target: { version: "2026.9.3", nodeEngine: engine },
       });
@@ -480,22 +480,22 @@ describe("package runtime compatibility guidance", () => {
             check: "node-runtime",
             code: "node-runtime-preflight",
             affectedKey: "engines.node",
-            message: `Target package: openclaw@2026.9.3; Minimum Node engine: 24.16.0; Running Node: ${node}`,
+            message: `Target package: openclaw@2026.9.3; Minimum Node engine: 24.22.1; Running Node: ${node}`,
           },
         ],
         error: [
           `openclaw@2026.9.3 requires Node ${engine}; selected runtime is Node ${node}.`,
-          `Node ${node}: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.16+/26.1+ or a build with the fix`,
-          expectedPlainRecovery("2026.9.3", "24.16.0"),
+          `Node ${node}: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.22.1+/26.12.1+ or a build with the fix`,
+          expectedPlainRecovery("2026.9.3", "24.22.1"),
         ].join("\n"),
       });
     },
   );
 
   it.each([
-    [">=22.19.0", "24.16.0"],
+    [">=22.19.0", "24.22.1"],
     [">=24.18.0 <25", "24.18.0"],
-    ["^22 || >=25 <27", "26.1.0"],
+    ["^22 || >=25 <27", "26.12.1"],
     [">=26.2.0-rc.1 <27", "26.2.0"],
   ])("recommends a release usable by the updater and candidate %s", async (engine, minimum) => {
     const node = "22.23.2";
@@ -512,7 +512,7 @@ describe("package runtime compatibility guidance", () => {
       failureFacts: [{ check: "node-runtime", code: "node-runtime-preflight" }],
       error: [
         `openclaw@2027.1.0 requires Node ${engine}; selected runtime is Node ${node}.`,
-        `Node ${node}: openclaw requires Node >=24.16.0 <25, or >=26.1.0.`,
+        `Node ${node}: openclaw requires Node >=24.22.1 <25, or >=26.12.1.`,
         expectedPlainRecovery("2027.1.0", minimum),
       ].join("\n"),
     });
@@ -561,15 +561,15 @@ describe("package runtime compatibility guidance", () => {
         `openclaw@${version} requires Node ${engine}; selected runtime is Node ${process.versions.node}.\n${
           minimum
             ? expectedPlainRecovery(version, minimum)
-            : "No Node version satisfies both this range and this updater's supported range (>=24.16.0 <25 || >=26.1.0). This candidate version cannot be run by this updater with a supported Node release; install a supported Node and select a compatible OpenClaw target."
+            : "No Node version satisfies both this range and this updater's supported range (>=24.22.1 <25 || >=26.12.1). This candidate version cannot be run by this updater with a supported Node release; install a supported Node and select a compatible OpenClaw target."
         }`,
       );
     });
   }
 
   it.each([
-    ["24.16.0", false, "nodejs/node#61954"],
-    ["24.15.0+vendor.1", true, "requires Node >=24.16.0 <25 || >=26.1.0"],
+    ["24.22.1", false, "nodejs/node#61954"],
+    ["24.15.0+vendor.1", true, "requires Node >=24.22.1 <25 || >=26.12.1"],
     ["24.19.0", true, null],
   ] as const)(
     "requires target engines and SQLite capabilities for Node %s",
@@ -579,7 +579,7 @@ describe("package runtime compatibility guidance", () => {
       const result = await resolvePackageRuntimePreflight({
         target: {
           version: "2026.9.3",
-          nodeEngine: ">=24.16.0 <25 || >=26.1.0",
+          nodeEngine: ">=24.22.1 <25 || >=26.12.1",
         },
       });
       expect(result.ok).toBe(error === null);
@@ -631,7 +631,7 @@ describe("package runtime compatibility guidance", () => {
             };
       });
       const pending = resolvePackageRuntimePreflight({
-        target: { version: "2026.9.4", nodeEngine: ">=24.16.0" },
+        target: { version: "2026.9.4", nodeEngine: ">=24.22.1" },
         nodeRunner: "/fixture/bin/node",
         timeoutMs,
       });
@@ -681,7 +681,7 @@ describe("package runtime compatibility guidance", () => {
       vi.mocked(resolveNodeRuntimeInfo)
         .mockResolvedValueOnce({
           status: "unsupported",
-          version: "24.16.0",
+          version: "24.22.1",
           sqliteVersion: "3.51.3",
           nodeSharedSqlite: false,
           sqliteProbe: { ...sqliteProbe, text: false },
@@ -695,7 +695,7 @@ describe("package runtime compatibility guidance", () => {
           sqliteProbe,
         });
       const result = await resolvePackageRuntimePreflight({
-        target: { version: "2026.9.3", nodeEngine: ">=24.16.0 <25 || >=26.1.0" },
+        target: { version: "2026.9.3", nodeEngine: ">=24.22.1 <25 || >=26.12.1" },
         nodeRunner: "/fixture/old/node",
         shouldRestart: true,
         alreadyCurrent: true,
@@ -713,7 +713,7 @@ describe("package runtime compatibility guidance", () => {
       } else {
         expect(result).toMatchObject({
           ok: false,
-          error: expect.stringContaining("requires Node >=24.16.0 <25 || >=26.1.0"),
+          error: expect.stringContaining("requires Node >=24.22.1 <25 || >=26.12.1"),
         });
       }
     },

@@ -311,6 +311,85 @@ describe("streamOpenAICodexResponses transport", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it.each(["auto", "websocket", "websocket-cached"] as const)(
+    "leaves mid-stream connection expiry to transcript recovery over %s",
+    async (transport) => {
+      let connections = 0;
+      let closes = 0;
+      class MidStreamExpiryWebSocket extends EventTarget {
+        readyState = 1;
+
+        constructor() {
+          super();
+          connections += 1;
+          queueMicrotask(() => this.dispatchEvent(new Event("open")));
+        }
+
+        send(): void {
+          const events = [
+            {
+              type: "response.output_item.added",
+              output_index: 0,
+              item: { type: "message", id: "msg_partial", role: "assistant", content: [] },
+            },
+            {
+              type: "response.output_text.delta",
+              output_index: 0,
+              content_index: 0,
+              delta: "Already visible.",
+            },
+            {
+              type: "error",
+              error: {
+                code: "websocket_connection_limit_reached",
+                message: "Responses websocket connection limit reached (60 minutes).",
+              },
+            },
+          ];
+          for (const payload of events) {
+            queueMicrotask(() => {
+              this.dispatchEvent(
+                Object.assign(new Event("message"), { data: JSON.stringify(payload) }),
+              );
+            });
+          }
+        }
+
+        close(): void {
+          this.readyState = 3;
+          closes += 1;
+        }
+      }
+      const fetchMock = vi.fn();
+      vi.stubGlobal("WebSocket", MidStreamExpiryWebSocket);
+      vi.stubGlobal("fetch", fetchMock);
+
+      const result = await streamOpenAICodexResponses(model, context, {
+        apiKey: createJwt({
+          "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
+        }),
+        sessionId: "mid-stream-expiry",
+        transport,
+      }).result();
+
+      expect(result).toMatchObject({
+        stopReason: "error",
+        content: [{ type: "text", text: "Already visible." }],
+        errorCode: "ERR_WEBSOCKET_TRANSPORT",
+        diagnostics: [
+          {
+            type: "provider_transport_failure",
+            details: { eventsEmitted: true, phase: "after_message_stream_start" },
+          },
+        ],
+      });
+      expect(result.errorMessage).toContain("Responses websocket connection limit reached");
+      expect(connections).toBe(1);
+      expect(closes).toBe(1);
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("rotates cached websockets before the backend connection age limit", async () => {
     vi.useFakeTimers();
     const startedAt = new Date("2026-07-03T00:00:00Z");

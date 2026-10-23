@@ -49,7 +49,7 @@ it.each([
         ...targetMetadata,
         target,
         version,
-        nodeEngine: ">=24.16.0",
+        nodeEngine: ">=24.22.1",
       }),
     );
     vi.mocked(updateCheck.resolveNpmChannelTag).mockResolvedValue({ tag: channel, version });
@@ -101,7 +101,7 @@ it.each([
     expect(command.slice(0, launcher.length)).toBe(launcher);
     runtime.mockResolvedValue({
       status: "supported",
-      version: "26.1.0",
+      version: "26.12.1",
       sqliteVersion: "3.53.0",
       nodeSharedSqlite: false,
       sqliteProbe: { available: true, version: "3.53.0", text: true, blob: true, json: true },

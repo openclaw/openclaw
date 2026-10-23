@@ -57,6 +57,7 @@ async function prepareStartupConfig(
   const measure: ConfigSnapshotReadMeasure = options.measure ?? (async (_name, run) => await run());
   const readSnapshot = (readOptions?: Pick<ConfigSnapshotReadOptions, "isolateEnv">) =>
     readConfigPreflightSnapshot({
+      purpose: "startup",
       allowCurrentPluginMetadata: false,
       includePluginMetadata: true,
       isolateEnv: readOptions?.isolateEnv,

@@ -1966,6 +1966,8 @@
     "release-metadata:check": "node --import ./scripts/tsx.mjs scripts/check-release-metadata-only.mts",
     "release:beta": "node --import ./scripts/tsx.mjs scripts/release-candidate-checklist.mts",
     "release:beta-smoke": "node --import ./scripts/tsx.mjs scripts/release-beta-smoke.ts",
+    "release:backport-companions": "node scripts/release-backport-companions.mjs",
+    "release:backport-probe": "node scripts/release-backport-probe.mjs",
     "release:candidate": "node --import ./scripts/tsx.mjs scripts/release-candidate-checklist.mts",
     "release:clawhub-recovery": "node scripts/plugin-clawhub-recovery.mjs",
     "release:check": "pnpm build:package && pnpm release:generated:check && node --import ./scripts/tsx.mjs scripts/release-check.ts",
@@ -1974,6 +1976,8 @@
     "release:openclaw:npm:check": "node --import ./scripts/tsx.mjs scripts/openclaw-npm-release-check.ts",
     "release:openclaw:npm:verify-published": "node --import ./scripts/tsx.mjs scripts/openclaw-npm-postpublish-verify.ts",
     "release:prepare": "node --import ./scripts/tsx.mjs scripts/release-prepare.ts",
+    "release:prepush": "node --import ./scripts/tsx.mjs scripts/release-prepush.mts",
+    "release:push": "node --import ./scripts/tsx.mjs scripts/release-prepush.mts --push",
     "release:plugins:clawhub:check": "node --import ./scripts/tsx.mjs scripts/plugin-clawhub-release-check.ts",
     "release:plugins:clawhub:plan": "node --import ./scripts/tsx.mjs scripts/plugin-clawhub-release-plan.ts",
     "release:plugins:npm:check": "node --import ./scripts/tsx.mjs scripts/plugin-npm-release-check.ts",
@@ -2268,7 +2272,7 @@
     "@homebridge/ciao": "1.3.12",
     "@lydell/node-pty": "1.2.0-beta.15",
     "@mistralai/mistralai": "2.7.0",
-    "@modelcontextprotocol/sdk": "1.31.0",
+    "@modelcontextprotocol/sdk": "1.32.1",
     "@mozilla/readability": "0.6.0",
     "@openclaw/ai": "workspace:*",
     "@openclaw/fs-safe": "0.21.1",
@@ -2358,7 +2362,7 @@
     "jsdom": "30.1.0",
     "lit": "3.3.3",
     "lit-analyzer": "2.0.3",
-    "markdown-it": "15.0.2",
+    "markdown-it": "15.0.3",
     "markdown-it-anchor": "10.0.0",
     "marked": "18.0.13",
     "minipass": "7.1.3",
@@ -2368,7 +2372,7 @@
     "oxlint-tsgolint": "7.0.2002",
     "pako": "3.0.2",
     "playwright": "1.63.0",
-    "postcss": "8.5.28",
+    "postcss": "8.5.30",
     "postcss-lit": "1.4.1",
     "postcss-selector-parser": "7.1.6",
     "shiki": "4.4.3",
@@ -2383,14 +2387,14 @@
     "tsx": "4.23.15",
     "typescript": "7.1.0-dev.20260920.1",
     "unrun": "0.3.1",
-    "vite": "8.3.0",
+    "vite": "8.3.4",
     "vitest": "5.0.1"
   },
   "optionalDependencies": {
     "sqlite-vec": "0.1.9"
   },
   "engines": {
-    "node": ">=24.16.0 <25 || >=26.1.0"
+    "node": ">=24.22.1 <25 || >=26.12.1"
   },
-  "packageManager": "pnpm@12.5.1+sha512.e3f305bc784a2bc89f5ad3b6138889470fae8d2af5f36b61216ec91c2c3d64089775f9de38aac331044ea40f245cb0d5666392dfdf65824e1907ef6a2c62de5f"
+  "packageManager": "pnpm@12.15.0+sha512.b3951d6d6ff4a9f13dc7cf56cd28d2b8eb37dbcc9c68e52e1e1191873ea9f82a017287ab50baadc5ccc494f036c67c0e47eb13608c2fa36f47711b61ea128e61"
 }

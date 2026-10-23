@@ -153,6 +153,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         ...(params.resolveGatewayContext
           ? { resolveGatewayContext: params.resolveGatewayContext }
           : {}),
+        resolvePluginRegistry: params.getPluginRegistry,
       });
       if (
         state.cronState.cronEnabled &&
@@ -630,7 +631,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           }),
         );
       } catch (err) {
-        if (err instanceof PreparedModelRuntimePublicationSupersededError) {
+        if (err instanceof PreparedModelRuntimePublicationSupersededError && !isCurrent()) {
           // Credential writes can retire models before their queued config applies.
           // The replacement owns publication; cancellation creates no restart debt.
           throw createReloadCancellationError(true);

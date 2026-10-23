@@ -755,7 +755,7 @@ fi
     const result = runInstallCliShell(`
       set -euo pipefail
       source "${SCRIPT_PATH}"
-      NODE_VERSION=26.1.0
+      NODE_VERSION=26.12.1
       NODE_VERSION_REQUESTED=0
       printf 'default=%s\n' "$(required_node_version)"
       NODE_VERSION_REQUESTED=1
@@ -763,8 +763,8 @@ fi
     `);
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain("default=24.16.0");
-    expect(result.stdout).toContain("requested=26.1.0");
+    expect(result.stdout).toContain("default=24.22.1");
+    expect(result.stdout).toContain("requested=26.12.1");
   });
 
   it("rejects Linux ARMv7 before installing an explicitly requested Node", () => {
@@ -795,7 +795,7 @@ fi
 
     expect(result.status).toBe(1);
     expect(result.stdout).toContain(
-      "Node 24.14.1 is unsupported; use Node 24.16.0+ or Node 26.1.0+.",
+      "Node 24.14.1 is unsupported; use Node 24.22.1+ or Node 26.12.1+.",
     );
     expect(result.stdout).not.toContain("Installing Node 24.14.1");
   });
@@ -1131,7 +1131,7 @@ fi
       const home = join(tmp, "home");
       const prefixInput = input === "literal tilde" ? "~/openclaw-local" : "openclaw-local";
       const prefix = join(input === "literal tilde" ? home : installRoot, "openclaw-local");
-      const nodeDir = join(prefix, "tools", "node-v24.21.0");
+      const nodeDir = join(prefix, "tools", "node-v24.22.1");
       const repoInput = input === "literal tilde" ? "~/openclaw-source" : "openclaw-source";
       const repo = join(input === "literal tilde" ? home : installRoot, "openclaw-source");
       mkdirSync(installRoot, { recursive: true });
@@ -1141,7 +1141,7 @@ fi
       mkdirSync(join(repo, "dist"), { recursive: true });
       mkdirSync(otherRoot, { recursive: true });
       symlinkSync(nodeExecutable, join(nodeDir, "bin", "node"));
-      symlinkSync("node-v24.21.0", join(prefix, "tools", "node"));
+      symlinkSync("node-v24.22.1", join(prefix, "tools", "node"));
       writeFileSync(
         join(nodeDir, "bin", "npm"),
         '#!/bin/bash\nif [[ "$1" == "--version" ]]; then printf "11.15.0\\n"; elif [[ "$1" == "config" ]]; then printf "null\\n"; fi\n',
@@ -1310,7 +1310,7 @@ fi
       fakeApk,
       ["#!/bin/bash", 'printf "%s\\n" "$*" >> "$APK_LOG"', "exit 99", ""].join("\n"),
     );
-    writeNodeFixture(fakeNode, "v24.16.0");
+    writeNodeFixture(fakeNode, "v24.22.1");
     writeFileSync(fakeNpm, ["#!/bin/bash", "exit 0", ""].join("\n"));
     chmodSync(fakeApk, 0o755);
     chmodSync(fakeNode, 0o755);
@@ -1337,8 +1337,8 @@ fi
     expect(result.status).toBe(0);
     expect(result.stdout).not.toContain("Installing Node via apk");
     expect(() => readFileSync(apkLog, "utf8")).toThrow();
-    const nodeLink = join(prefix, "tools", "node-v24.21.0", "bin", "node");
-    const npmLink = join(prefix, "tools", "node-v24.21.0", "bin", "npm");
+    const nodeLink = join(prefix, "tools", "node-v24.22.1", "bin", "node");
+    const npmLink = join(prefix, "tools", "node-v24.22.1", "bin", "npm");
     expect(lstatSync(nodeLink).isSymbolicLink()).toBe(true);
     expect(readlinkSync(nodeLink)).toBe(fakeNode);
     expect(readlinkSync(npmLink)).toBe(fakeNpm);
@@ -1350,7 +1350,7 @@ fi
     const bin = join(tmp, "bin");
     const oldBin = join(tmp, "old-bin");
     const prefix = join(tmp, "prefix");
-    const nodePrefixBin = join(prefix, "tools", "node-v24.16.0", "bin");
+    const nodePrefixBin = join(prefix, "tools", "node-v24.22.1", "bin");
     const apkLog = join(tmp, "apk.log");
     const fakeApk = join(bin, "apk");
     const fakeNode = join(bin, "node");
@@ -1367,8 +1367,8 @@ fi
       fakeApk,
       ["#!/bin/bash", 'printf "%s\\n" "$*" >> "$APK_LOG"', "exit 99", ""].join("\n"),
     );
-    writeNodeFixture(staleNode, "v24.16.0", 1);
-    writeNodeFixture(fakeNode, "v24.16.0");
+    writeNodeFixture(staleNode, "v24.22.1", 1);
+    writeNodeFixture(fakeNode, "v24.22.1");
     writeNodeFixture(oldNode, "v18.20.0", 1);
     writeFileSync(oldNpm, ["#!/bin/bash", "exit 0", ""].join("\n"));
     writeFileSync(fakeNpm, ["#!/bin/bash", "exit 0", ""].join("\n"));
@@ -1388,7 +1388,7 @@ fi
         "is_musl_linux() { return 0; }",
         "is_root() { return 1; }",
         `PREFIX=${JSON.stringify(prefix)}`,
-        "NODE_VERSION=24.16.0",
+        "NODE_VERSION=24.22.1",
         "install_node linux x64",
       ].join("\n"),
       {
@@ -1400,8 +1400,8 @@ fi
     expect(result.status).toBe(0);
     expect(result.stdout).not.toContain("Installing Node via apk");
     expect(() => readFileSync(apkLog, "utf8")).toThrow();
-    const nodeLink = join(prefix, "tools", "node-v24.16.0", "bin", "node");
-    const npmLink = join(prefix, "tools", "node-v24.16.0", "bin", "npm");
+    const nodeLink = join(prefix, "tools", "node-v24.22.1", "bin", "node");
+    const npmLink = join(prefix, "tools", "node-v24.22.1", "bin", "npm");
     expect(lstatSync(nodeLink).isSymbolicLink()).toBe(true);
     expect(readlinkSync(nodeLink)).toBe(fakeNode);
     expect(readlinkSync(npmLink)).toBe(fakeNpm);
@@ -1435,7 +1435,7 @@ fi
         "#!/bin/bash",
         'if [[ "${1:-}" == "-v" ]]; then',
         '  if [[ -f "$NODE_STATE" ]]; then',
-        "    printf 'v24.16.0\\n'",
+        "    printf 'v24.22.1\\n'",
         "  else",
         "    printf 'v18.20.0\\n'",
         "  fi",
@@ -1464,7 +1464,7 @@ fi
         "is_root() { return 0; }",
         `PREFIX=${JSON.stringify(prefix)}`,
         `APK_NODE_BIN_DIR=${JSON.stringify(bin)}`,
-        "NODE_VERSION=24.16.0",
+        "NODE_VERSION=24.22.1",
         "install_node linux x64",
       ].join("\n"),
       {
@@ -1477,8 +1477,8 @@ fi
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("Installing Node via apk");
     expect(readFileSync(apkLog, "utf8")).toContain("add --no-cache nodejs npm");
-    const nodeLink = join(prefix, "tools", "node-v24.16.0", "bin", "node");
-    const npmLink = join(prefix, "tools", "node-v24.16.0", "bin", "npm");
+    const nodeLink = join(prefix, "tools", "node-v24.22.1", "bin", "node");
+    const npmLink = join(prefix, "tools", "node-v24.22.1", "bin", "npm");
     expect(lstatSync(nodeLink).isSymbolicLink()).toBe(true);
     expect(readlinkSync(nodeLink)).toBe(fakeNode);
     expect(readlinkSync(npmLink)).toBe(fakeNpm);
@@ -1546,8 +1546,8 @@ fi
     );
 
     expect(result.status).toBe(0);
-    const nodeLink = join(prefix, "tools", "node-v24.21.0", "bin", "node");
-    const npmLink = join(prefix, "tools", "node-v24.21.0", "bin", "npm");
+    const nodeLink = join(prefix, "tools", "node-v24.22.1", "bin", "node");
+    const npmLink = join(prefix, "tools", "node-v24.22.1", "bin", "npm");
     expect(readFileSync(badNpmLog, "utf8")).toBe("--version\n");
     expect(readFileSync(goodNpmLog, "utf8")).toBe("--version\n");
     expect(readFileSync(goodNodeLog, "utf8")).toContain("npm --version");
@@ -1607,7 +1607,7 @@ fi
     }
     expect(readlinkSync(join(prefix, "tools", "node"))).toBe(oldRuntime);
     expect(readlinkSync(join(oldRuntime, "bin", "node"))).toBe(nodeExecutable);
-    expect(existsSync(join(prefix, "tools", "node-v24.21.0"))).toBe(false);
+    expect(existsSync(join(prefix, "tools", "node-v24.22.1"))).toBe(false);
   });
 
   it.each(["alias path", "empty entry"])(
@@ -1760,7 +1760,7 @@ fi
     (entry) => {
       const root = tempDirs.make("openclaw-install-cli-filtered-path-");
       const prefix = join(root, "prefix");
-      const managed = join(prefix, "tools", "node-v24.21.0", "bin");
+      const managed = join(prefix, "tools", "node-v24.22.1", "bin");
       const current = entry === "empty managed cwd" ? managed : join(root, "current");
       mkdirSync(managed, { recursive: true });
       mkdirSync(current, { recursive: true });
@@ -1815,7 +1815,7 @@ fi
         "is_root() { return 0; }",
         `PREFIX=${JSON.stringify(prefix)}`,
         `APK_NODE_BIN_DIR=${JSON.stringify(bin)}`,
-        "NODE_VERSION=24.16.0",
+        "NODE_VERSION=24.22.1",
         "install_node linux x64",
       ].join("\n"),
       {
@@ -1827,7 +1827,7 @@ fi
     expect(result.status).toBe(1);
     expect(readFileSync(apkLog, "utf8")).toContain("add --no-cache nodejs npm");
     expect(result.stdout).toContain(
-      "Alpine Node package must provide Node >= 24.16.0 with WAL-reset-safe SQLite 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x",
+      "Alpine Node package must provide Node >= 24.22.1 with WAL-reset-safe SQLite 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x",
     );
     expect(result.stdout).toContain("found Node v22.18.0, SQLite unavailable");
   });
@@ -1835,7 +1835,7 @@ fi
   it("replaces cached generic Node runtimes below the runtime floor", () => {
     const tmp = tempDirs.make("openclaw-install-cli-generic-stale-node-");
     const prefix = join(tmp, "prefix");
-    const nodePrefixBin = join(prefix, "tools", "node-v24.16.0", "bin");
+    const nodePrefixBin = join(prefix, "tools", "node-v24.22.1", "bin");
     const staleNode = join(nodePrefixBin, "node");
     const staleNpm = join(nodePrefixBin, "npm");
     const newNode = join(tmp, "new-node");
@@ -1844,7 +1844,7 @@ fi
     mkdirSync(nodePrefixBin, { recursive: true });
     writeNodeFixture(staleNode, "v22.18.0");
     writeFileSync(staleNpm, ["#!/bin/bash", "exit 0", ""].join("\n"));
-    writeNodeFixture(newNode, "v24.16.0");
+    writeNodeFixture(newNode, "v24.22.1");
     writeFileSync(newNpm, ["#!/bin/bash", "exit 0", ""].join("\n"));
     chmodSync(staleNode, 0o755);
     chmodSync(staleNpm, 0o755);
@@ -1861,7 +1861,7 @@ fi
         "require_bin() { :; }",
         "download_file() {",
         '  case "$1" in',
-        "    */SHASUMS256.txt) printf 'fixture-sha  node-v24.16.0-linux-x64.tar.gz\\n' > \"$2\" ;;",
+        "    */SHASUMS256.txt) printf 'fixture-sha  node-v24.22.1-linux-x64.tar.gz\\n' > \"$2\" ;;",
         "    *) printf 'node tarball fixture\\n' > \"$2\" ;;",
         "  esac",
         "}",
@@ -1876,7 +1876,7 @@ fi
         '  cp "$NEW_NPM" "$dest/bin/npm"',
         "}",
         `PREFIX=${JSON.stringify(prefix)}`,
-        "NODE_VERSION=24.16.0",
+        "NODE_VERSION=24.22.1",
         "install_node linux x64",
       ].join("\n"),
       {
@@ -1886,9 +1886,9 @@ fi
     );
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain("Installing Node 24.16.0 (user-space)");
+    expect(result.stdout).toContain("Installing Node 24.22.1 (user-space)");
     expect(result.stdout).not.toContain('"status":"skip"');
-    expect(readFileSync(staleNode, "utf8")).toContain("v24.16.0");
+    expect(readFileSync(staleNode, "utf8")).toContain("v24.22.1");
   });
 
   it.each([
@@ -1946,7 +1946,7 @@ fi
             "require_bin() { :; }",
             "download_file() {",
             '  case "$1" in',
-            "    */SHASUMS256.txt) printf 'fixture-sha  node-v24.16.0-linux-x64.tar.gz\\n' > \"$2\" ;;",
+            "    */SHASUMS256.txt) printf 'fixture-sha  node-v24.22.1-linux-x64.tar.gz\\n' > \"$2\" ;;",
             "    *) printf 'node tarball fixture\\n' > \"$2\" ;;",
             "  esac",
             "}",
@@ -1961,7 +1961,7 @@ fi
             '  cp "$NEW_NPM" "$dest/bin/npm"',
             "}",
             `PREFIX=${JSON.stringify(prefix)}`,
-            "NODE_VERSION=24.16.0",
+            "NODE_VERSION=24.22.1",
             "install_node linux x64",
           ].join("\n"),
           {
@@ -1972,7 +1972,7 @@ fi
       const result = install();
       expect(result.status).toBe(1);
       expect(result.stdout).toContain(
-        "Installed Node 24.16.0 must provide Node >= 24.16.0 with WAL-reset-safe SQLite",
+        "Installed Node 24.22.1 must provide Node >= 24.22.1 with WAL-reset-safe SQLite",
       );
       expect(result.stdout).toContain(
         starts
@@ -1991,13 +1991,13 @@ fi
 
       writeFileSync(
         newNode,
-        "#!/bin/bash\nif [[ \"${1:-}\" == '-v' ]]; then printf 'v24.16.0\\n'; fi\nexit 0\n",
+        "#!/bin/bash\nif [[ \"${1:-}\" == '-v' ]]; then printf 'v24.22.1\\n'; fi\nexit 0\n",
       );
       const retry = install();
       expect(retry.status, retry.stdout + retry.stderr).toBe(0);
-      expect(readlinkSync(activeNode)).toBe(join(prefix, "tools", "node-v24.16.0"));
+      expect(readlinkSync(activeNode)).toBe(join(prefix, "tools", "node-v24.22.1"));
       expect(spawnSync(join(activeNode, "bin", "node"), ["-v"], { encoding: "utf8" }).stdout).toBe(
-        "v24.16.0\n",
+        "v24.22.1\n",
       );
       if (existing) {
         expect(readFileSync(oldPackage, "utf8")).toBe('{"name":"openclaw","version":"2026.9.2"}\n');
@@ -2022,7 +2022,7 @@ fi
         `mktemp() { mkdir -p ${JSON.stringify(stagingDir)}; printf '%s\\n' ${JSON.stringify(stagingDir)}; }`,
         "download_file() { return 42; }",
         `PREFIX=${JSON.stringify(prefix)}`,
-        "NODE_VERSION=24.16.0",
+        "NODE_VERSION=24.22.1",
         "install_node linux x64",
       ].join("\n"),
     );

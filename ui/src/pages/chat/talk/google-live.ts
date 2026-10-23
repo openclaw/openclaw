@@ -77,6 +77,13 @@ function isGemini31LiveModel(model: string | undefined): boolean {
   return modelId.startsWith("gemini-3.1-") && modelId.includes("-live");
 }
 
+function isGeminiCompleteInputTranscriptModel(model: string | undefined): boolean {
+  return (
+    isGemini31LiveModel(model) ||
+    normalizeGoogleLiveModelId(model ?? "").startsWith("gemini-3.8-live")
+  );
+}
+
 // Gemini 3.8 Live Extended Thinking closes the session (1007) on function response
 // scheduling, so like Gemini 3.1 Live it gets one unscheduled final response per call.
 // Plain `gemini-3.8-live` keeps the async tool contract.
@@ -461,7 +468,8 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   ): boolean {
     const pending = this.pendingTranscripts[role];
     // Live 3.1 input messages are complete utterances even without finished.
-    const completeInput = role === "user" && isGemini31LiveModel(this.session.model);
+    const completeInput =
+      role === "user" && isGeminiCompleteInputTranscriptModel(this.session.model);
     if (transcript.text) {
       pending.byteCount += utf8Encoder.encode(transcript.text).byteLength;
       if (pending.byteCount > GOOGLE_LIVE_MAX_TRANSCRIPT_BYTES) {

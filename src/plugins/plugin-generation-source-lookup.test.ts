@@ -61,4 +61,38 @@ describe("plugin generation source lookup", () => {
     expect(lookup.hasSource(source)).toBe(true);
     expect(lookup.resolve(source)).toBe(source);
   });
+
+  it("relocates absolute dependency junctions into the captured generation", () => {
+    const boundaryRoot = fs.realpathSync(tempDirs.make("plugin-generation-junctions-"));
+    const pluginRoot = path.join(boundaryRoot, "plugin");
+    const dependencyRoot = path.join(boundaryRoot, "shared");
+    const source = path.join(pluginRoot, "index.js");
+    const dependencyLink = path.join(pluginRoot, "node_modules", "shared");
+    fs.mkdirSync(path.dirname(dependencyLink), { recursive: true });
+    fs.mkdirSync(dependencyRoot);
+    fs.writeFileSync(source, "export default {};\n");
+    fs.writeFileSync(path.join(dependencyRoot, "resource.txt"), "captured");
+    fs.symlinkSync(dependencyRoot, dependencyLink, "junction");
+
+    const lookup = createPluginGenerationSourceLookup({
+      rootDir: pluginRoot,
+      sourceRoot: pluginRoot,
+      capturedRoot: pluginRoot,
+      boundaryRoot,
+      capturedPaths: new Map([[source, source]]),
+      hardlinkedSources: new Set(),
+      assertModuleAvailable: vi.fn(),
+    });
+    const recovery = lookup.captureRecoverySource();
+    try {
+      const capturedLink = path.join(recovery.rootDir, "node_modules", "shared");
+      expect(path.isAbsolute(fs.readlinkSync(capturedLink))).toBe(false);
+      expect(fs.realpathSync(capturedLink)).toBe(
+        fs.realpathSync(path.join(path.dirname(recovery.rootDir), "shared")),
+      );
+      expect(fs.readFileSync(path.join(capturedLink, "resource.txt"), "utf8")).toBe("captured");
+    } finally {
+      recovery.dispose();
+    }
+  });
 });

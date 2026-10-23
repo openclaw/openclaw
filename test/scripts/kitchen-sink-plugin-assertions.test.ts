@@ -439,6 +439,26 @@ describe("kitchen-sink plugin assertions", () => {
     });
   });
 
+  it("tolerates optional Kitchen Sink 0.4.1 registrar probe diagnostics", () => {
+    const registrarProbeDiagnostics = [
+      "Gateway access policy requires an authorize handler",
+      "invalid version 1 decision provider contract",
+      "storage provider registration missing label",
+      "agent executor controller requires an absolute workspaceDirectory",
+    ];
+    const report = (messages: string[]) =>
+      runAssertInstalled({
+        diagnostics: diagnosticErrors([...REQUIRED_FULL_DIAGNOSTIC_CANARIES, ...messages]),
+      });
+    const tolerated = report(registrarProbeDiagnostics);
+    expect(tolerated.status, tolerated.stderr).toBe(0);
+    const unrelated = report([...registrarProbeDiagnostics, "unrelated registrar failure"]);
+    expect(unrelated.status).not.toBe(0);
+    expect(unrelated.stderr).toContain(
+      "unexpected kitchen-sink diagnostic error: unrelated registrar failure",
+    );
+  });
+
   it("rejects diagnostics in conformance mode", () => {
     const result = runAssertInstalled({
       diagnostics: diagnosticErrors(["plugin must declare contracts.tools for: kitchen-sink-tool"]),

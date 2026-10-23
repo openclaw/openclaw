@@ -78,6 +78,7 @@ it.each(["recovered", "busy", "corrupt"] as const)(
         installKind: "git",
         servicePlan: undefined,
         pkgOwnership: { assertUnowned: boundary.inspect, assertEntryUnowned: vi.fn() },
+        packageActivationNotes: [],
       },
       { enter },
       1000,
@@ -131,6 +132,7 @@ it.each(["forced", "uncertain"] as const)(
       installKind: "git",
       servicePlan: undefined,
       pkgOwnership: { assertUnowned: boundary.inspect, assertEntryUnowned: vi.fn() },
+      packageActivationNotes: [],
     } satisfies Parameters<typeof resolveUpdateCommandTarget>[3];
     const work = withCommandProcessScope(() =>
       resolveUpdateCommandTarget(

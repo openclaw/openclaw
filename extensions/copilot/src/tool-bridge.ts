@@ -155,6 +155,7 @@ export async function createCopilotToolBridge(
     scheduledToolPolicy: attemptParams.scheduledToolPolicy,
     sourceReplyDeliveryMode: attemptParams.sourceReplyDeliveryMode,
     toolsAllow: attemptParams.toolsAllow,
+    trigger: attemptParams.trigger,
   });
   const toolOptions = buildOpenClawCodingToolsOptions(
     input,

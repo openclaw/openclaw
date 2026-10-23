@@ -12,6 +12,9 @@ enum GatewayLaunchAgentManager {
     /// A first-run daemon command may wait behind state integrity checks and the shared startup-
     /// migration lease. Keep the app from killing healthy migration work before it can finish.
     static let startupMigrationTolerance: TimeInterval = 120
+    /// A launchd PID started at login has no install evidence, and a cold start after reboot can
+    /// outlast the first-run budget. The app re-proves the same PID at every deadline.
+    static let reusedLaunchdColdStartTolerance: TimeInterval = 300
 
     private static var disableLaunchAgentMarkerURL: URL {
         #if DEBUG

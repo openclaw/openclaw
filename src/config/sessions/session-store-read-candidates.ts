@@ -67,7 +67,8 @@ export function assertSessionStoreReadCandidate(
   const physicalPath = resolveIdentityPathViaExistingAncestorSync(pathname);
   for (const candidate of candidates) {
     if (
-      matchesAgentDatabaseReadCandidatePath(candidate, pathname) &&
+      (matchesAgentDatabaseReadCandidatePath(candidate, pathname) ||
+        (!candidate.scope && physicalPath === candidate.physicalPath)) &&
       matchesAgentDatabaseReadCandidatePath(
         { ...candidate, path: candidate.physicalPath },
         physicalPath,

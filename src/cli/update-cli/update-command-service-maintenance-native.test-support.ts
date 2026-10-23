@@ -131,6 +131,7 @@ export async function runNativeMaintenanceUpdate(
     installKind: "package",
     servicePlan: serviceRoot ? { rootRedirect: null, serviceRoot } : undefined,
     pkgOwnership: createFreeBsdPkgOwnershipInspection(),
+    packageActivationNotes: [],
   });
   command.admit.mockResolvedValue(run);
   command.target.mockResolvedValue({

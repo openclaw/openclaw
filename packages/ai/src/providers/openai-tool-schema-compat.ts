@@ -127,6 +127,27 @@ export function normalizeOpenAIStrictCompatSchema(schema: unknown): TSchema {
   return normalizeOpenAIStrictCompatSchemaRecursive(schema, true) as TSchema;
 }
 
+/**
+ * Returns whether a regex pattern contains a lookahead or lookbehind group.
+ * Escaped parentheses, character classes, and named groups are not lookarounds.
+ */
+function hasRegexLookaround(pattern: string): boolean {
+  let inCharacterClass = false;
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index];
+    if (char === "\\") {
+      index += 1;
+    } else if (inCharacterClass) {
+      inCharacterClass = char !== "]";
+    } else if (char === "[") {
+      inCharacterClass = true;
+    } else if (char === "(" && /^\?<?[=!]/.test(pattern.slice(index + 1, index + 4))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Finds schema paths that violate OpenAI strict tool-schema requirements. */
 export function findOpenAIStrictSchemaViolations(
   schema: unknown,
@@ -154,6 +175,9 @@ export function findOpenAIStrictSchemaViolations(
   }
   if (Array.isArray(record.type)) {
     violations.push(`${path}.type`);
+  }
+  if (typeof record.pattern === "string" && hasRegexLookaround(record.pattern)) {
+    violations.push(`${path}.pattern`);
   }
 
   const properties = isRecord(record.properties) ? record.properties : undefined;

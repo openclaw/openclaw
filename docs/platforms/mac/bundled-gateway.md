@@ -74,7 +74,7 @@ menu bar, or run `openclaw-mac status --json`, which reports the app version
 and build.
 
 For a manual install, use Node 26 (recommended) or another supported release:
-Node 24.16+ or Node 26.1+. Install `openclaw` globally:
+Node 24.22.1+ or Node 26.12.1+. Install `openclaw` globally:
 
 The command below is for npm 12 or npm 11.16+. On npm 11.15 and earlier,
 omit `--allow-scripts=openclaw`.
@@ -228,6 +228,12 @@ local CLI installation diagnostics. Use **Retry setup** after a failed managed
 installation, or open **Connection… → Connection** from the menu bar and choose
 **Recheck** after repairing it. The Connection window remains available when
 the Dashboard cannot reach the Gateway.
+
+For a bundled app, Connection reports the connected local Gateway's version,
+or the installed service's version when disconnected—not just the app's bundled
+version. An older Gateway exposes **Update Gateway…**; unfinished preparation or
+recovery exposes **Repair Gateway…**, including when the Gateway is newer than
+the app. A healthy compatible newer Gateway does not offer a downgrade.
 
 ## State directory on macOS
 

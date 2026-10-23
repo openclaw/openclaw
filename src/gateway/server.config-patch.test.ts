@@ -41,7 +41,7 @@ import {
   withConfigFileFixture,
 } from "./server.config-patch.test-support.js";
 
-const reloadBarrier = vi.hoisted(() => ({ wait: undefined as Promise<void> | undefined }));
+const reloadBarrier = vi.hoisted(() => ({ hold: undefined as (() => Promise<void>) | undefined }));
 
 vi.mock("./config-reload.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./config-reload.js")>();
@@ -53,7 +53,7 @@ vi.mock("./config-reload.js", async (importOriginal) => {
       actual.startGatewayConfigReloader({
         ...options,
         onHotReload: async (...args) => {
-          await reloadBarrier.wait;
+          await reloadBarrier.hold?.();
           return await options.onHotReload(...args);
         },
       }),

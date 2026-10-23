@@ -65,6 +65,12 @@ describe("exec-completion reply on a WebChat-internal session (#147387)", () => 
       expect(result.status).toBe("ran");
       expect(getReplyFromConfig).toHaveBeenCalledOnce();
       const [ctx] = getReplyFromConfig.mock.calls[0] as [Record<string, unknown>];
+      expect(ctx).toMatchObject({
+        From: "heartbeat",
+        To: undefined,
+        OriginatingChannel: undefined,
+        OriginatingTo: undefined,
+      });
       expect(ctx.Body).toContain("Please relay the command output to the user");
       expect(ctx.Body).not.toContain("user delivery is disabled");
     });

@@ -452,8 +452,8 @@ async function runVitestPairBenchmarkBeforeDeadline(
   if (gitOutput(candidateDir, ["rev-parse", "HEAD"], deadline) !== context.candidateSha) {
     throw new Error("candidate checkout does not match the requested SHA");
   }
-  if (process.version !== "v24.21.0") {
-    throw new Error(`vitest-pair benchmark requires Node v24.21.0, got ${process.version}`);
+  if (process.version !== "v24.22.1") {
+    throw new Error(`vitest-pair benchmark requires Node v24.22.1, got ${process.version}`);
   }
   mkdirSync(context.outputDir, { recursive: true });
   mkdirSync(context.scratchDir, { recursive: true });
@@ -464,8 +464,8 @@ async function runVitestPairBenchmarkBeforeDeadline(
     deadline,
   );
   deadline.throwIfExpired();
-  if (packageManager.version !== "12.5.1") {
-    throw new Error(`vitest-pair benchmark requires pnpm 12.5.1, got ${packageManager.version}`);
+  if (packageManager.version !== "12.15.0") {
+    throw new Error(`vitest-pair benchmark requires pnpm 12.15.0, got ${packageManager.version}`);
   }
   const baselineInventory = assertInventoryAvailable(baselineDir, context.manifest);
   const candidateInventory = assertInventoryAvailable(candidateDir, context.manifest);

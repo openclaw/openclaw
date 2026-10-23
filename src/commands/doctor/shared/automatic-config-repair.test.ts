@@ -17,6 +17,7 @@ import {
 import { writeOpenClawConfig } from "../../../config/test-helpers.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.js";
 import { validateConfigObjectWithPlugins } from "../../../config/validation.js";
+import { recordDeferredPluginMigrations } from "../../../infra/deferred-plugin-migrations.js";
 import { isPathInside } from "../../../infra/path-guards.js";
 import * as pluginModuleLoader from "../../../plugins/plugin-module-loader-cache.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
@@ -199,6 +200,47 @@ describe("automatic config repair", () => {
       expect(plan?.snapshot.valid).toBe(true);
       expect(snapshot.sourceConfig).toHaveProperty("tools.exec.timeoutSec", 45);
       expect(await fs.readFile(configPath, "utf8")).toBe(raw);
+    });
+  });
+
+  it("commits core repairs while keeping a deferred plugin's admitted legacy input", async () => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      const configPath =
+        process.env.OPENCLAW_CONFIG_PATH ?? path.join(home, ".openclaw", "openclaw.json");
+      const legacyPluginInput = { root: "/srv/pending-plugin-state" };
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({
+          gateway: { mode: "local" },
+          tools: { exec: { timeoutSec: 45 } },
+          plugins: { allow: ["pending-owner"], entries: { "pending-owner": { enabled: true } } },
+          legacyPluginInput,
+        }),
+      );
+      const pending = {
+        pluginId: "pending-owner",
+        reason:
+          "Package convergence must wait until the updating parent releases its install records.",
+        command: "openclaw update repair",
+        configPaths: [["legacyPluginInput"]],
+        validationExcludedPaths: [["legacyPluginInput"]],
+      };
+      await recordDeferredPluginMigrations({ env: process.env, pending: [pending] });
+      const snapshot = await createConfigIO({
+        configPath,
+        env: process.env,
+        observe: false,
+        deferredPluginMigrations: [pending],
+      }).readConfigFileSnapshot();
+      const plan = planAutomaticConfigRepair(snapshot);
+      if (!plan) {
+        throw new Error("expected a repairable exec config");
+      }
+      await commitAutomaticConfigRepair(plan, snapshot);
+      const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
+      expect(saved.tools.exec).toEqual({ timeoutSeconds: 45 });
+      expect(saved.legacyPluginInput).toEqual(legacyPluginInput);
     });
   });
 
