@@ -215,7 +215,7 @@ describe("shell lazy events", () => {
       expect(shell.commandPaletteLoading).toBe(state);
       const fresh = state.captureHandoff()();
       expect(fresh).toMatchObject({ value: "" });
-      expect(fresh?.imageFiles).toBeUndefined();
+      expect(fresh?.attachmentFiles).toBeUndefined();
       expect(fresh?.submitRequested).toBeUndefined();
       expect(take()).toBeUndefined();
       await vi.advanceTimersByTimeAsync(20);

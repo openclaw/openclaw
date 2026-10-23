@@ -64,6 +64,14 @@ and the agent's
 The lifecycle owner closes its read scope and drains accepted writes before
 retiring the store.
 
+Startup client credential preparation uses the existing credential worker and
+its native custody admission. The admission's receipt postimage also decides
+whether legacy metadata needs upgrading, without a second receipt read. An app
+that owns the credentials remains authoritative through its existing IPC route.
+Required migrations still finish under maintenance ownership before startup
+continues; native schema, integrity, file-permission, and source-binding checks
+remain with credential admission.
+
 On Node 26.8 and later, the synchronous query owner explicitly disposes private
 statements after execution or iterator completion, and cached statements on
 eviction or invalidation. Large string bindings otherwise remain native allocations
@@ -4830,7 +4838,12 @@ cache updates and delivery acknowledgments compare the current payload inside
 the worker transaction. Only definite comparison conflicts retry, at most four
 times; failed reads never advance the audit cursor and uncertain writes never
 replay. Config observation captures its audit writer before filesystem reads and
-rechecks its health owner at transaction and commit admission. Cold synchronous
+rechecks its health owner at transaction and commit admission. Accepted config writes
+and rollback consume the health worker's conditional-write outcome without rereading
+their own writes. Only definite comparison conflicts refresh and reconsider, at
+most four times; unavailable reads and uncertain writes stop best-effort health
+bookkeeping without replay. Newer baselines and anomaly markers retain their
+existing compensation guards. This adds no schema or stored fields. Cold synchronous
 config loading retains native audit registration; Doctor and update inspection
 retain native tail reads. Schemas, audit collection and retention, stored payloads,
 prompt bytes, and update behavior are unchanged.

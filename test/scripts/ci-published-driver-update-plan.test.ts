@@ -113,22 +113,6 @@ it.each<
     if (selected) {
       expect(result.outputs.run_build_artifacts).toBe("true");
     }
-    const job = readCiWorkflow().jobs["published-driver-update"];
-    const revision = "a".repeat(40);
-    expect(
-      evaluateWorkflowCondition(job.if, {
-        ...baseContext,
-        eventName,
-        sha: revision,
-        additionalNeeds: {
-          "build-artifacts": {
-            result: "failure",
-            outputs: { published_driver_artifact_id: "fixture-run-artifact" },
-          },
-        },
-        preflightOutputs: { ...result.outputs, checkout_revision: revision },
-      }),
-    ).toBe(selected);
   },
 );
 

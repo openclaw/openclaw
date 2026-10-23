@@ -7,6 +7,7 @@ import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-
 import { installMockGateway, type MockGatewayRequest } from "../test-helpers/control-ui-e2e.ts";
 import {
   objectSchema,
+  configSnapshot,
   configSchema,
   pageRunner,
   configProof,
@@ -21,13 +22,9 @@ const proof = configProof("config-safe-write");
 
 function configResponse(config: Record<string, unknown>, hash: string, appliedConfigHash = hash) {
   return {
+    ...configSnapshot(config, hash, true),
     appliedConfigHash,
-    config,
-    configRevisionHash: hash,
-    hash,
-    issues: [],
     raw: JSON.stringify(config, null, 2),
-    valid: true,
   };
 }
 
@@ -75,22 +72,42 @@ async function installConfig(page: Page, config: Record<string, unknown>, hash: 
   });
 }
 
-function mutationParams(request: MockGatewayRequest): {
+type MutationParams = {
   baseHash?: string;
   note?: string;
   raw?: string;
   sessionKey?: string;
-} {
+};
+function mutationParams(request: MockGatewayRequest): MutationParams {
   const params = request.params;
   if (!params || typeof params !== "object" || Array.isArray(params)) {
     throw new Error(`Expected ${request.method} mutation params`);
   }
-  return params as {
-    baseHash?: string;
-    note?: string;
-    raw?: string;
-    sessionKey?: string;
-  };
+  return params as MutationParams;
+}
+
+const button = (page: Page, name: string) => page.getByRole("button", { name, exact: true });
+const expectSaveStatus = (page: Page, status: string) =>
+  expect
+    .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
+    .toContain(status);
+const requestCount = async (gateway: Awaited<ReturnType<typeof installConfig>>, method: string) =>
+  (await gateway.getRequests(method)).length;
+
+async function openLaboratory(page: Page, endpoint: string, checkStatus = false) {
+  const response = await page.goto(`${suite.server.baseUrl}settings/advanced?section=laboratory`);
+  if (checkStatus) {
+    expect(response?.status()).toBe(200);
+  }
+  const field = page.getByRole("textbox", { name: "Endpoint", exact: true });
+  await expect.poll(() => field.inputValue()).toBe(endpoint);
+  return field;
+}
+
+async function reconnect(gateway: Awaited<ReturnType<typeof installConfig>>, before: number) {
+  await gateway.setOnline(false);
+  await gateway.setOnline(true);
+  await expect.poll(() => requestCount(gateway, "config.get")).toBe(before + 1);
 }
 
 function overlapArea(
@@ -227,13 +244,11 @@ suite.define(() => {
     await withPage(async ({ page }) => {
       const initialConfig = laboratoryConfig("original-api");
       const gateway = await installConfig(page, initialConfig, "revision-original");
-      await page.goto(`${suite.server.baseUrl}settings/advanced?section=laboratory`);
-      const endpoint = page.getByRole("textbox", { name: "Endpoint", exact: true });
-      await expect.poll(() => endpoint.inputValue()).toBe("original-api");
-      await page.getByRole("button", { name: "Raw", exact: true }).click();
+      const endpoint = await openLaboratory(page, "original-api");
+      await button(page, "Raw").click();
       const raw = page.locator(".config-raw-field textarea");
       const originalRaw = await raw.inputValue();
-      await page.getByRole("button", { name: "Form", exact: true }).click();
+      await button(page, "Form").click();
 
       await gateway.deferNext("config.set");
       await endpoint.fill("committed-api");
@@ -241,7 +256,7 @@ suite.define(() => {
       expect(JSON.parse(String(submitted.raw))).toMatchObject({
         laboratory: { endpoint: "committed-api" },
       });
-      await page.getByRole("button", { name: "Raw", exact: true }).click();
+      await button(page, "Raw").click();
       await raw.fill(originalRaw);
       await capture(page, "14-lost-ack-raw-revert.png", raw);
 
@@ -281,10 +296,8 @@ suite.define(() => {
     await withPage(async ({ page }) => {
       const initialConfig = laboratoryConfig("original-api");
       const gateway = await installConfig(page, initialConfig, "revision-original");
-      await page.goto(`${suite.server.baseUrl}settings/advanced?section=laboratory`);
-      const endpoint = page.getByRole("textbox", { name: "Endpoint", exact: true });
-      await expect.poll(() => endpoint.inputValue()).toBe("original-api");
-      await page.getByRole("button", { name: "Raw", exact: true }).click();
+      const endpoint = await openLaboratory(page, "original-api");
+      await button(page, "Raw").click();
       const raw = page.locator(".config-raw-field textarea");
       const originalRaw = await raw.inputValue();
       await raw.fill(originalRaw.replace("original-api", "unsaved-api"));
@@ -297,14 +310,10 @@ suite.define(() => {
           "revision-external",
         ),
       );
-      await gateway.setOnline(false);
-      await gateway.setOnline(true);
-      await expect
-        .poll(async () => (await gateway.getRequests("config.get")).length)
-        .toBe(getsBeforeReconnect + 1);
+      await reconnect(gateway, getsBeforeReconnect);
       await expect.poll(() => raw.isEnabled()).toBe(true);
       await raw.fill(originalRaw);
-      await page.getByRole("button", { name: "Form", exact: true }).click();
+      await button(page, "Form").click();
       await endpoint.waitFor();
       await capture(page, "12-reconnect-raw-revert.png", endpoint);
       expect.soft(await endpoint.inputValue()).toBe("external-api");
@@ -318,9 +327,7 @@ suite.define(() => {
         laboratory: { endpoint: "external-api", retryBudget: 3 },
       });
       await gateway.resolveDeferred("config.set");
-      await expect
-        .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
-        .toContain("Saved");
+      await expectSaveStatus(page, "Saved");
       await page.reload();
       await endpoint.waitFor();
       await capture(page, "13-reconnect-save-reload.png", endpoint);
@@ -332,9 +339,7 @@ suite.define(() => {
     await withPage(async ({ page }) => {
       const initialConfig = laboratoryConfig("saved-api");
       const gateway = await installConfig(page, initialConfig, "revert-snapshot");
-      await page.goto(`${suite.server.baseUrl}settings/advanced?section=laboratory`);
-      const endpoint = page.getByRole("textbox", { name: "Endpoint", exact: true });
-      await expect.poll(() => endpoint.inputValue()).toBe("saved-api");
+      const endpoint = await openLaboratory(page, "saved-api");
 
       await gateway.deferNext("config.set");
       await endpoint.fill("discarded-api");
@@ -345,9 +350,9 @@ suite.define(() => {
       });
       const saveIndicator = page.locator("openclaw-settings-save-indicator");
       await expect.poll(() => saveIndicator.textContent()).toContain("Save failed");
-      await page.getByRole("button", { name: "Raw", exact: true }).click();
+      await button(page, "Raw").click();
       await page.locator(".config-raw-field textarea").fill(JSON.stringify(initialConfig, null, 2));
-      await page.getByRole("button", { name: "Form", exact: true }).click();
+      await button(page, "Form").click();
       await endpoint.waitFor();
       await capture(page, "11-form-after-raw-revert.png", endpoint);
       expect.soft(await endpoint.inputValue()).toBe("saved-api");
@@ -412,13 +417,9 @@ suite.define(() => {
       await expect.poll(() => labsLink.getAttribute("aria-current")).toBe("page");
       await capture(page, "00-labs-canonical-refresh.png", codeModeSwitch);
 
-      expect(
-        (await page.goto(`${suite.server.baseUrl}settings/advanced?section=laboratory`))?.status(),
-      ).toBe(200);
+      const endpoint = await openLaboratory(page, "local-api", true);
       const advancedLink = page.locator('.settings-sidebar__item[href="/settings/advanced"]');
       await expect.poll(() => advancedLink.getAttribute("aria-current")).toBe("page");
-      const endpoint = page.getByRole("textbox", { name: "Endpoint", exact: true });
-      await expect.poll(() => endpoint.inputValue()).toBe("local-api");
 
       await gateway.deferNext("config.set");
       await endpoint.fill("form-api");
@@ -464,7 +465,7 @@ suite.define(() => {
       });
       await expect.poll(() => saveIndicator.textContent()).toContain("Saved");
 
-      await page.getByRole("button", { name: "Raw", exact: true }).click();
+      await button(page, "Raw").click();
       const rawEditor = page.locator(".config-raw-field textarea");
       await rawEditor.waitFor();
       const rawDraft = `{
@@ -526,11 +527,7 @@ suite.define(() => {
       const initialConfig = laboratoryConfig("initial-api");
       const gateway = await installConfig(page, initialConfig, "snapshot-initial");
 
-      expect(
-        (await page.goto(`${suite.server.baseUrl}settings/advanced?section=laboratory`))?.status(),
-      ).toBe(200);
-      const endpoint = page.getByRole("textbox", { name: "Endpoint", exact: true });
-      await expect.poll(() => endpoint.inputValue()).toBe("initial-api");
+      const endpoint = await openLaboratory(page, "initial-api", true);
       const initialConfigGets = (await gateway.getRequests("config.get")).length;
 
       await page.locator('.settings-sidebar__item[href="/settings/connection"]').click();
@@ -540,11 +537,7 @@ suite.define(() => {
         "config.get",
         configResponse(reconnectedConfig, "snapshot-reconnected"),
       );
-      await gateway.setOnline(false);
-      await gateway.setOnline(true);
-      await expect
-        .poll(async () => (await gateway.getRequests("config.get")).length)
-        .toBe(initialConfigGets + 1);
+      await reconnect(gateway, initialConfigGets);
 
       await page.locator('.settings-sidebar__item[href="/settings/advanced"]').click();
       await page.waitForURL(/\/settings\/advanced/u);
@@ -586,9 +579,7 @@ suite.define(() => {
         config: JSON.parse(String(save.raw)),
         hash: "snapshot-saved",
       });
-      await expect
-        .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
-        .toContain("Saved");
+      await expectSaveStatus(page, "Saved");
       await capture(page, "06-replacement-save.png", endpoint);
     });
   });
@@ -598,11 +589,7 @@ suite.define(() => {
       const config = laboratoryConfig("initial-api");
       const gateway = await installConfig(page, config, "legacy-raw-hash");
 
-      expect(
-        (await page.goto(`${suite.server.baseUrl}settings/advanced?section=laboratory`))?.status(),
-      ).toBe(200);
-      const endpoint = page.getByRole("textbox", { name: "Endpoint", exact: true });
-      await expect.poll(() => endpoint.inputValue()).toBe("initial-api");
+      const endpoint = await openLaboratory(page, "initial-api", true);
       await endpoint.fill("retained-draft");
 
       const getsBeforeReconnect = (await gateway.getRequests("config.get")).length;
@@ -610,11 +597,7 @@ suite.define(() => {
         "config.get",
         configResponse(config, "hmac-sha256:v1:opaque-current"),
       );
-      await gateway.setOnline(false);
-      await gateway.setOnline(true);
-      await expect
-        .poll(async () => (await gateway.getRequests("config.get")).length)
-        .toBe(getsBeforeReconnect + 1);
+      await reconnect(gateway, getsBeforeReconnect);
       await expect.poll(() => endpoint.inputValue()).toBe("retained-draft");
 
       const saveIndicator = page.locator("openclaw-settings-save-indicator");
@@ -666,11 +649,7 @@ suite.define(() => {
       };
       const gateway = await installConfig(page, initialConfig, "id-snapshot-1");
 
-      expect(
-        (await page.goto(`${suite.server.baseUrl}settings/advanced?section=laboratory`))?.status(),
-      ).toBe(200);
-      const endpoint = page.getByRole("textbox", { name: "Endpoint", exact: true });
-      await expect.poll(() => endpoint.inputValue()).toBe("before-save");
+      const endpoint = await openLaboratory(page, "before-save", true);
       await capture(page, "08-id-before-unrelated-save.png", endpoint);
 
       await gateway.deferNext("config.set");
@@ -699,7 +678,7 @@ suite.define(() => {
 
       await page.reload();
       await expect.poll(() => endpoint.inputValue()).toBe("after-save");
-      await page.getByRole("button", { name: "Raw", exact: true }).click();
+      await button(page, "Raw").click();
       const rawEditor = page.locator(".config-raw-field textarea");
       await rawEditor.waitFor();
       await expect.poll(() => rawEditor.inputValue()).toContain(`"${identifier}"`);

@@ -99,7 +99,6 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
     summaryLine?: string;
     strandedReplyRetry?: boolean;
     sendPolicyDenied?: boolean;
-    isHeartbeat?: boolean;
     chatType?: "direct" | "group";
     terminalReplyExpectation?: "required" | "optional";
     pendingContinuation?: boolean;
@@ -177,9 +176,7 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
         extraSystemPrompt: "Use message(action=send) for all visible replies.",
         terminalReplyExpectation:
           params.terminalReplyExpectation ??
-          (params.isHeartbeat || params.inboundEventKind === "room_event"
-            ? "optional"
-            : "required"),
+          (params.inboundEventKind === "room_event" ? "optional" : "required"),
       },
     });
 
@@ -220,7 +217,7 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
           opts: {
             runId,
             toolsAllow: queuedRun.toolsAllow,
-            isHeartbeat: params.isHeartbeat,
+
             onDeliberateSilentTerminalReply: params.onDeliberateSilentTerminalReply,
             onObservedReplyDelivery: params.onObservedReplyDelivery,
             onReplyOperationOwned: params.onReplyOperationOwned,
@@ -543,26 +540,6 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
       expect(payloads).toEqual([]);
       expect(onDeliberateSilentTerminalReply).toHaveBeenCalledOnce();
       expectNoRecovery();
-    },
-  );
-
-  it.each([
-    { name: "room event", params: { inboundEventKind: "room_event" } },
-    { name: "heartbeat", params: { isHeartbeat: true } },
-    { name: "denied send policy", params: { sendPolicyDenied: true } },
-  ] satisfies Array<{ name: string; params: Parameters<typeof runPrivateFinalCase>[0] }>)(
-    "does not recover a $name",
-    async ({ params }) => {
-      const { result, terminalEvent } = await runPrivateFinalCase(params);
-      expect((terminalEvent?.data.terminalReply as { code?: unknown } | undefined)?.code).not.toBe(
-        "message-tool-not-called",
-      );
-      expectNoRecovery();
-      if (params.isHeartbeat) {
-        expect(
-          normalizeReplyPayloads(result).some((payload) => payload.text === strandedDiagnosticText),
-        ).toBe(false);
-      }
     },
   );
 

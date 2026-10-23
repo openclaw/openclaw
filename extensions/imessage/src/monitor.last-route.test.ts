@@ -28,7 +28,6 @@ import {
   matchIMessageAcpConversation,
   normalizeIMessageAcpConversationId,
 } from "./conversation-id.js";
-import { monitorIMessageProvider } from "./monitor.js";
 import {
   createChatDb,
   createChatDbMessage,
@@ -38,6 +37,7 @@ import {
   withChatDb,
 } from "./monitor.last-route.test-support.js";
 import * as iMessageMediaStaging from "./monitor/media-staging.js";
+import { monitorIMessageProvider } from "./monitor/monitor-provider.js";
 import {
   advanceIMessageRecoveryCursor,
   loadIMessageRecoveryCursor,

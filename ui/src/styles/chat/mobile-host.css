@@ -172,7 +172,7 @@
     font-weight: 500;
     color: var(--text-strong);
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
     white-space: nowrap;
 
     /* Selected PR is the sole two-line heading exception. Keep the header height. */
@@ -180,6 +180,7 @@
       display: -webkit-box;
       -webkit-box-orient: vertical;
       -webkit-line-clamp: 2;
+      text-overflow: ellipsis;
       font-size: 16px;
       line-height: 20px;
       white-space: normal;
@@ -613,12 +614,6 @@
 }
 
 .chat-mobile-host__scroll-edge[hidden] {
-  display: none;
-}
-
-/* This footer fade is unconditional and uses the outer chat surface. The host
-   now paints only the child's actual overflow boundaries on its own surface. */
-.sidebar-region--mobile-host .chat-subagents__detail-pane .chat-footer::before {
   display: none;
 }
 

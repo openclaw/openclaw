@@ -200,6 +200,27 @@ it.each([false, true])("opens sender's nested tool files (frame=%s)", async (fra
   ]);
 });
 
+it.each([false, true])("opens own tool files from their message (frame=%s)", async (frame) => {
+  const onOpenWorkspaceFile = vi.fn();
+  const group = createGroup(undefined, {
+    runId: "own-tools",
+    __openclaw: { id: "entry-read" },
+    content: [readCall("own-read", reportPath)],
+  });
+  const options = { onOpenWorkspaceFile, ...expanded };
+  if (frame) {
+    renderFrame(group, options);
+  } else {
+    renderGroup(group, options);
+  }
+  await settleToolBridges(container);
+  required(".chat-tool-row__file-link").click();
+  expect(onOpenWorkspaceFile).toHaveBeenCalledExactlyOnceWith({
+    path: reportPath,
+    messageEntryId: "entry-read",
+  });
+});
+
 it("keeps the sender on narrated file links in a run frame", () => {
   const groups = groupMessages([
     narration([{ type: "text", text: reportLink }, readCall("read-report", reportPath)], 1_000, {

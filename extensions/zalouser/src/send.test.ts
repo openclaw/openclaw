@@ -65,17 +65,19 @@ describe("zalouser send helpers", () => {
   });
 
   it("combines earlier chunks with a failed chunk's partial receipt without duplicate parts", async () => {
+    const cause = new Error("voice send failed");
     mockSendText
       .mockResolvedValueOnce(sendResult("mid-first"))
       .mockImplementationOnce(async (_threadId, _text, _options, onDeliveryResult) => {
         const accepted = sendResult("mid-caption");
         await onDeliveryResult?.(accepted);
-        throw new Error("voice send failed");
+        throw cause;
       });
 
     await expect(sendMessageZalouser("thread", "a".repeat(2001))).rejects.toMatchObject({
       code: "CHANNEL_PARTIAL_DELIVERY",
       message: "voice send failed",
+      cause,
       deliveryResult: {
         messageIds: ["mid-first", "mid-caption"],
         receipt: {
@@ -86,20 +88,6 @@ describe("zalouser send helpers", () => {
         },
         visibleReplySent: true,
       },
-    });
-  });
-
-  it("retains nested progress when the transport throws without a progress subscriber", async () => {
-    const cause = new Error("voice authority ended");
-    mockSendText.mockImplementationOnce(async (_threadId, _text, _options, onDeliveryResult) => {
-      await onDeliveryResult?.(sendResult("mid-caption"));
-      throw cause;
-    });
-
-    await expect(sendMessageZalouser("thread", "caption")).rejects.toMatchObject({
-      code: "CHANNEL_PARTIAL_DELIVERY",
-      cause,
-      deliveryResult: { messageIds: ["mid-caption"], visibleReplySent: true },
     });
   });
 

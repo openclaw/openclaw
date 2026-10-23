@@ -66,19 +66,8 @@ export class FakeSocket extends EventEmitter implements OpenAIQuicksilverSocket 
   }
 }
 
-export function createHarness(params?: {
-  audioFormat?: "pcm16" | "g711_ulaw";
-  handleDelegationInput?: RealtimeVoiceGatewayControl["handleDelegationInput"];
-  autoStart?: boolean;
-  deferClose?: boolean;
-  afterOpen?: (socket: FakeSocket) => void;
-  model?: string;
-  resolveAuth?: () => Promise<{ type: "api-key"; token: string }>;
-}) {
-  const socket = new FakeSocket(params?.autoStart, params?.afterOpen);
-  socket.deferClose = params?.deferClose ?? false;
-  const connections: Array<{ url: string; options: ClientOptions }> = [];
-  const callbacks = {
+export function createBridgeCallbacks() {
+  return {
     onAudio: vi.fn<RealtimeVoiceBridgeCallbacks["onAudio"]>(),
     onClearAudio: vi.fn<RealtimeVoiceBridgeCallbacks["onClearAudio"]>(),
     onTranscript: vi.fn<NonNullable<RealtimeVoiceBridgeCallbacks["onTranscript"]>>(),
@@ -87,8 +76,27 @@ export function createHarness(params?: {
     onError: vi.fn<NonNullable<RealtimeVoiceBridgeCallbacks["onError"]>>(),
     onClose: vi.fn<NonNullable<RealtimeVoiceBridgeCallbacks["onClose"]>>(),
     onEvent: vi.fn<NonNullable<RealtimeVoiceBridgeCallbacks["onEvent"]>>(),
+    logger: {
+      warn: vi.fn<PluginLogger["warn"]>(),
+      debug: vi.fn<NonNullable<PluginLogger["debug"]>>(),
+    },
   };
-  const logger = { warn: vi.fn<PluginLogger["warn"]>() };
+}
+
+export function createHarness(params?: {
+  audioFormat?: "pcm16" | "g711_ulaw";
+  handleDelegationInput?: RealtimeVoiceGatewayControl["handleDelegationInput"];
+  autoStart?: boolean;
+  deferClose?: boolean;
+  afterOpen?: (socket: FakeSocket) => void;
+  model?: string;
+  resolveAuth?: () => Promise<{ type: "api-key"; token: string }>;
+  socketFactory?: () => FakeSocket;
+}) {
+  const socket = params?.socketFactory?.() ?? new FakeSocket(params?.autoStart, params?.afterOpen);
+  socket.deferClose = params?.deferClose ?? false;
+  const connections: Array<{ url: string; options: ClientOptions }> = [];
+  const callbacks = createBridgeCallbacks();
   const bridge = new OpenAIQuicksilverVoiceBridge(
     {
       providerConfig: {},
@@ -101,17 +109,18 @@ export function createHarness(params?: {
           : { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
       resolveAuth: params?.resolveAuth ?? (async () => ({ type: "api-key", token: "test-key" })),
       mediaSocketFactory: fakeQuicksilverMediaSocket((url, options) => {
+        const wire = connections.length > 0 ? (params?.socketFactory?.() ?? socket) : socket;
         connections.push({ url, options });
-        queueMicrotask(() => socket.open());
-        return socket;
+        queueMicrotask(() => wire.open());
+        return wire;
       }),
       ...callbacks,
+      logger: { warn: callbacks.logger.warn },
       handleDelegationInput: params?.handleDelegationInput,
-      logger,
     },
     openAIRealtimeHost,
   );
-  return { bridge, connections, logger, ...callbacks, socket };
+  return { bridge, connections, ...callbacks, socket };
 }
 
 export function sentEvents(socket: FakeSocket): Array<Record<string, unknown>> {

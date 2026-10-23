@@ -126,12 +126,12 @@ it.each(["operator.read", "operator.sessions.read", "operator.sessions.write"])(
     await waitForSolid(() => expect(page.textContent).toContain("ada@example.test"));
     expect(page.querySelector<HTMLInputElement>(".identity-name-control input")).toMatchObject({
       value: "Ada",
-      disabled: true,
+      disabled: false,
     });
     expect(page.querySelector<HTMLButtonElement>(".identity-name-control button")?.disabled).toBe(
       true,
     );
-    expect(page.querySelector('input[type="file"]')).toBeNull();
+    expect(page.querySelector('input[type="file"]')).not.toBeNull();
     await waitForSolid(() =>
       expect(page.querySelector<HTMLButtonElement>(".profile-refresh")?.disabled).toBe(false),
     );
@@ -159,3 +159,26 @@ it.each(["operator.read", "operator.sessions.read", "operator.sessions.write"])(
     ).toBe(false);
   },
 );
+
+it("retires a pending identity read and Gateway subscription when unmounted", async () => {
+  const pending = createDeferred<{ profile: typeof modelAccountProfile }>();
+  const request = mockRpc({ "users.self": () => pending.promise });
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
+    id: modelAccountProfile.id,
+    name: "Ada",
+  });
+  harness.emitHello(gatewayHelloForMethods([], ["operator.write"]));
+  const loadProfile = vi.spyOn(harness.context.gateway, "loadSelfProfile");
+  const page = mountProfilePage(harness.context);
+  await waitForSolid(() => expect(loadProfile).toHaveBeenCalledTimes(1));
+
+  page.unmount();
+  pending.resolve({ profile: modelAccountProfile });
+  await loadProfile.mock.results[0]!.value;
+  flush();
+  harness.emitSnapshot({ selfUser: { id: "replacement", name: "Grace" } });
+  flush();
+
+  expect(loadProfile).toHaveBeenCalledTimes(1);
+  expect(request.mock.calls.some(([method]) => method === "users.prefs.get")).toBe(false);
+});

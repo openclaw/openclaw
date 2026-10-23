@@ -47,6 +47,7 @@ function channelReplyEvent(id: string, nest: string) {
       post: {
         id: "parent-post",
         "r-post": {
+          set: { essay: essay("~bus", "parent essay") },
           reply: { id, "r-reply": { set: { memo: essay() } } },
         },
       },
@@ -167,16 +168,36 @@ describe("Tlon durable ingress", () => {
     });
   });
 
-  it("uses the nested reply id rather than the parent post id", async () => {
+  it.each([
+    {
+      name: "reply takes precedence over the parent essay",
+      source: "channels" as const,
+      event: channelReplyEvent("reply-stable", "chat/~zod/ops"),
+      id: "reply-stable",
+      laneKey: "group:chat/~zod/ops",
+    },
+    {
+      name: "group identity trims without changing the delivered envelope",
+      source: "channels" as const,
+      event: channelReplyEvent(" reply-padded ", " chat/~zod/ops "),
+      id: "reply-padded",
+      laneKey: "group:chat/~zod/ops",
+    },
+    {
+      name: "direct identity trims without changing the delivered envelope",
+      source: "chat" as const,
+      event: { ...chatEvent(" dm-padded "), whom: { ship: " ~nec " } },
+      id: "dm-padded",
+      laneKey: "direct:~nec",
+    },
+  ])("preserves raw wire facts while $name", async ({ source, event, id, laneKey }) => {
     await withQueue(async (queue, _stateDir, start) => {
       const dispatch = vi.fn(async () => ({ kind: "deferred" }) as const);
       const monitor = start(queue, dispatch);
-      const reply = channelReplyEvent("reply-stable", "chat/~zod/ops");
-      await monitor.receive({ source: "channels", event: reply });
+      await monitor.receive({ source, event });
       await monitor.waitForIdle();
-      expect(await queue.listClaims()).toEqual([
-        expect.objectContaining({ id: "reply-stable", laneKey: "group:chat/~zod/ops" }),
-      ]);
+      expect(await queue.listClaims()).toEqual([expect.objectContaining({ id, laneKey })]);
+      expect(dispatch).toHaveBeenCalledExactlyOnceWith(source, event, expect.any(Object));
     });
   });
 

@@ -125,7 +125,8 @@ export function enqueueSessionEventForHost(
           ),
           execRequestOwners,
         ),
-        { allowDuplicate: true },
+        // Refuse matching keyed plugin retries; unkeyed and host occurrences stay distinct.
+        { allowDuplicate: options.source !== "plugin" || !options.contextKey?.trim() },
       );
   const occurrences = options.occurrences
     ? [...options.occurrences]

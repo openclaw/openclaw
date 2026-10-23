@@ -1,15 +1,14 @@
-import { dynamic } from "@solidjs/web";
-import { Match, Show, Switch, createMemo, onSettled } from "solid-js";
+import { Match, Show, Switch, createMemo, isPending, onSettled } from "solid-js";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
-import type { SessionPlacementPresentation } from "../../../components/session-placement-move-dialog.tsx";
 import { StepMarker } from "../../../components/session-progress-card-content.tsx";
 import {
   progressCardNoteSummary,
   progressCardPresentation,
 } from "../../../components/session-progress-card.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import { listSubagents } from "../chat-subagent-wait.ts";
 import {
   SessionAutomationMobileList,
@@ -41,7 +40,6 @@ import {
   GitHubPublicationMobile,
   type GitHubPublicationMobileProps,
 } from "./chat-github-publication-mobile.tsx";
-import { ChatMachine, type ChatMachineProps } from "./chat-machine.tsx";
 import { ChatMobilePeopleBody, type ChatMobilePeopleBodyProps } from "./chat-mobile-people.tsx";
 import { ChatOutputsMobile, getChatOutputsCount } from "./chat-outputs.tsx";
 import {
@@ -63,9 +61,14 @@ import {
   ChatSessionVersionsMobile,
   type ChatSessionVersionsMobileProps,
 } from "./chat-session-versions-mobile.tsx";
-import type { SessionAutomationInventory } from "./chat-summary-automations.tsx";
-import { sessionAutomationSchedule } from "./session-automation-schedule.ts";
+import {
+  SessionAutomationRead,
+  type SessionAutomationInventory,
+} from "./chat-summary-automations.tsx";
 import "../../../styles/chat/details.css";
+import { sessionAutomationSchedule } from "./session-automation-schedule.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 type ChatDetailsMobileRegionProps = {
   details: ChatDetailsProps;
@@ -92,7 +95,7 @@ type ChatDetailsMobileRootContent = {
   /** Review's Uncommitted snapshot and the host's actual navigation callbacks. */
   environment?: Omit<ChatDetailsEnvironmentMobileProps, "details" | "presented">;
   /** Labels only; facts/actions/demand come from the native details.outputs binding. */
-  outputs?: { label: string; accessibleLabel?: string };
+  outputs?: { label: string };
   /** The native Sharing adapter, constructed under the retained session host. */
   sharing?: ChatSessionSharingMobileAdapter;
   /** The publication owner supplies the review entry, including retained publication/recovery states. */
@@ -113,13 +116,9 @@ type ChatDetailsMobilePeopleContent = Omit<ChatMobilePeopleBodyProps, "sharingOp
   sharing?: ChatSessionSharingMobileAdapter;
 };
 
-type ChatDetailsMobileMoveRequest = Parameters<SessionPlacementPresentation>[0];
-
 /** Only supplied mobile bodies belong here. Missing peer bodies stay with their owners. */
 export type ChatDetailsMobilePage =
   | { kind: "root"; content: ChatDetailsMobileRootContent }
-  | { kind: "machine"; content: Omit<ChatMachineProps, "session"> }
-  | { kind: "move"; content: ChatDetailsMobileMoveRequest }
   | { kind: "people"; content: ChatDetailsMobilePeopleContent }
   | { kind: "task-progress"; content: ChatDetailsMobileProgressPreference }
   | { kind: "pull-requests"; content: ChatPullRequestMobileCollectionProps }
@@ -161,7 +160,6 @@ function MobileRoot(
     const count = getChatOutputsCount(data);
     return {
       label: props.content.outputs?.label ?? props.content.entries.labels.generatedFiles,
-      accessibleLabel: props.content.outputs?.accessibleLabel,
       metadata: count === null ? undefined : count,
     };
   };
@@ -193,6 +191,37 @@ function MobileRoot(
       }),
     );
   });
+  const automationNotice = (
+    <Show when={props.content.automations}>
+      {(input) => (
+        <SessionAutomationRead
+          inventory={input().inventory}
+          readDeniedOnly
+          error={
+            input().inventory.connected() && (
+              <div class="chat-details-mobile-root__notice" role="status">
+                <span>
+                  {t(
+                    input().inventory.loaded()
+                      ? "chat.sessionDetails.automationUpdateError"
+                      : "chat.sessionDetails.automationError",
+                  )}
+                </span>
+                <button
+                  type="button"
+                  class="chip"
+                  disabled={!props.presented || isPending(input().inventory.read)}
+                  onClick={() => void input().inventory.refresh()}
+                >
+                  {t("common.retry")}
+                </button>
+              </div>
+            )
+          }
+        />
+      )}
+    </Show>
+  );
   const automations = (): ChatDetailsMobileRootProps["automations"] => {
     const input = props.content.automations;
     if (!input) {
@@ -215,41 +244,17 @@ function MobileRoot(
       })),
       total: inventory.loaded() ? inventory.total() : undefined,
       summary: input.summary,
-      notice:
-        inventory.error() && inventory.connected() ? (
-          <div class="chat-details-mobile-root__notice" role="status">
-            <span>
-              {t(
-                inventory.loaded()
-                  ? "chat.sessionDetails.automationUpdateError"
-                  : "chat.sessionDetails.automationError",
-              )}
-            </span>
-            <button
-              type="button"
-              class="chip"
-              disabled={!props.presented || inventory.loading()}
-              onClick={() => void inventory.refresh()}
-            >
-              {t("common.retry")}
-            </button>
-          </div>
-        ) : !inventory.loaded() &&
-          inventory.loading() &&
-          inventory.available() &&
-          inventory.connected() ? (
-          <PanelLoadingSkeleton
-            variant="file-list"
-            label={t("chat.sessionDetails.automationLoading")}
-            compact
-          />
-        ) : undefined,
+      notice: automationNotice,
     };
   };
   return (
     <ChatDetailsMobileRoot
       {...props.content.entries}
       presented={props.presented}
+      sessionTitle={resolveSessionDisplayName(
+        props.details.selectedSession?.key ?? "",
+        props.details.selectedSession,
+      )}
       taskProgress={
         progress()?.counts || progressNote()
           ? {
@@ -274,25 +279,10 @@ function MobileRoot(
           : undefined
       }
       taskProgressNotice={
-        props.details.progressCardInitialLoading || props.details.progressCardError ? (
-          <Show
-            when={props.details.progressCardError}
-            fallback={
-              <PanelLoadingSkeleton
-                variant="document"
-                label={t("sessionProgressCard.widgetLoading")}
-                compact
-              />
-            }
-          >
-            <div class="chat-details-mobile-root__notice" role="status">
-              {t(
-                props.details.progressCardError === "access-denied"
-                  ? "sessionProgressCard.widgetAccessDenied"
-                  : "sessionProgressCard.widgetUnavailable",
-              )}
-            </div>
-          </Show>
+        props.details.progressCardError === "access-denied" ? (
+          <div class="chat-details-mobile-root__notice" role="status">
+            {t("sessionProgressCard.widgetAccessDenied")}
+          </div>
         ) : undefined
       }
       subagents={{ ...props.content.subagents, rows: listSubagents(props.details) }}
@@ -335,7 +325,8 @@ function MobileRoot(
       }
       processes={
         props.content.processes &&
-        (props.content.processes.rows.length > 0 || props.content.processes.error) ? (
+        (props.content.processes.rows.length > 0 ||
+          (props.content.processes.errorKind !== "read" && props.content.processes.error)) ? (
           <ChatDetailsMobileProcesses
             data={props.content.processes}
             presented={props.presented}
@@ -377,12 +368,6 @@ export function ChatDetailsMobileContent(props: ChatDetailsMobileContentProps) {
             content={page().content}
           />
         )}
-      </Match>
-      <Match when={props.page.kind === "machine" && props.page}>
-        {(page) => <ChatMachine {...page().content} session={props.details.selectedSession} />}
-      </Match>
-      <Match when={props.page.kind === "move" && props.page}>
-        {(page) => <MobileMove request={page().content} />}
       </Match>
       <Match when={props.page.kind === "people" && props.page}>
         {(page) => (
@@ -496,10 +481,4 @@ export function ChatDetailsMobileControls(props: ChatDetailsMobileContentProps) 
       )}
     </Show>
   );
-}
-
-/** The factory identity belongs to the native request, not the changing placement snapshot. */
-function MobileMove(props: { request: ChatDetailsMobileMoveRequest }) {
-  const Picker = dynamic(() => props.request.render);
-  return <Picker />;
 }

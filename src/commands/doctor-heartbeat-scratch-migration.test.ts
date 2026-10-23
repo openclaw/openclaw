@@ -3,10 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { writeCronJobScratchForMaintenance } from "../../test/helpers/cron/scratch-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readDefaultProactiveJobReceiptInDatabase } from "../cron/proactive-job-receipt.js";
 import { readCronJobScratchState } from "../cron/scratch-store.js";
-import { writeCronJobScratchForMaintenance } from "../cron/scratch-write.kernel.js";
 import {
   loadCronJobsStore,
   resolveCronJobsStorePath,

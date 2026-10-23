@@ -1,11 +1,14 @@
 import { loadSessionEntryForAdmission } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
+import { getSessionControllerEntryForOperation } from "../../sessions/session-controller.identity.js";
 import { createReplyOperation, type ReplyOperation } from "../../sessions/session-controller.js";
 import {
   acquireReplyOperationSessionActor,
   getReplyOperationSessionTarget,
+  lifecycleAdmissionByOperation,
   type ReplyOperationAdmission,
 } from "../../sessions/session-controller.state.js";
-import { bindReplyOperationDatabaseAdmission } from "./reply-turn-database-admission.js";
+import { waitForReplyRunSuccessorAdmission } from "../../sessions/session-controller.wait.js";
+import { bindReplyAdmissionRelease } from "./reply-turn-admission-lifecycle.js";
 
 /** Real physical admission without adding ingress recovery policy to controller tests. */
 export function createReplyRecoveryActorFixture(params: {
@@ -18,7 +21,7 @@ export function createReplyRecoveryActorFixture(params: {
   let bound:
     | Promise<{
         operation: ReplyOperation;
-        operationAdmission: ReplyOperationAdmission;
+        operationAdmission: ReplyOperationAdmission | undefined;
         release: () => Promise<void>;
       }>
     | undefined;
@@ -37,12 +40,36 @@ export function createReplyRecoveryActorFixture(params: {
           sessionId: params.getSessionId(),
           resetTriggered: false,
         });
-        const { operationAdmission, releaseWorkerDatabaseClaim } =
-          bindReplyOperationDatabaseAdmission(operation, params, undefined, databaseClaim);
-        if (!releaseWorkerDatabaseClaim) {
+        if (!("kind" in databaseClaim)) {
           throw new Error("Recovery fixture requires an actor-capable database claim");
         }
-        return { operation, operationAdmission, release: releaseWorkerDatabaseClaim };
+        bindReplyAdmissionRelease({
+          operation,
+          sessionKey: params.sessionKey,
+          sessionId: operation.sessionId,
+          admission: undefined,
+          recoveryOwnerLease: undefined,
+          databaseClaim,
+        });
+        const admittedOperation = operation;
+        return {
+          operation,
+          operationAdmission: lifecycleAdmissionByOperation.get(operation),
+          release: async () => {
+            const target = getSessionControllerEntryForOperation(admittedOperation).target;
+            admittedOperation.complete();
+            const settlement = await waitForReplyRunSuccessorAdmission(
+              admittedOperation.key,
+              null,
+              {
+                target,
+              },
+            );
+            if (!settlement.settled || databaseClaim.isCurrent()) {
+              throw new Error("Recovery fixture did not retire its database claim");
+            }
+          },
+        };
       } catch (error) {
         try {
           operation?.complete();

@@ -99,9 +99,9 @@ it.each([
           : undefined;
     const root = roots.make("decision-prepared-integration-");
     const pluginRoot = path.join(root, "plugin");
-    const emptyBundled = path.join(root, "bundled");
-    fs.mkdirSync(pluginRoot);
-    fs.mkdirSync(emptyBundled);
+    for (const directory of [pluginRoot, path.join(root, "bundled")]) {
+      fs.mkdirSync(directory);
+    }
     const id = "decision-prepared-fixture";
     const fixture = createColdPluginFixture({
       rootDir: pluginRoot,
@@ -169,10 +169,7 @@ it.each([
         "}); trace.evaluate = api.runtime.decisions.evaluateV2; } };",
       ].join("\n"),
     );
-    const trace: Trace = {
-      calls: 0,
-      usage: { inputTokens: 100, costUsd: 0 },
-    };
+    const trace: Trace = { calls: 0, usage: { inputTokens: 100, costUsd: 0 } };
     Reflect.set(globalThis, traceKey, trace);
     if (authScope === "profile" || deadlinePhase) {
       profileState = await createOpenClawTestState({
@@ -449,12 +446,7 @@ it.each([
         });
       }
       expect(usageEvents).toMatchObject([
-        {
-          provider: id,
-          model: "native",
-          usage: { input: 100 },
-          costUsd: 0,
-        },
+        { provider: id, model: "native", usage: { input: 100 }, costUsd: 0 },
       ]);
       trace.usage = { inputTokens: 100 };
       const unpriced = await evaluateFixture();
@@ -597,8 +589,7 @@ it("runs both SDK versions through the source TypeSafe plugin, prepared auth, an
         }),
         async () => {
           await harness.activateDecisionRegistry(cfg);
-          // Retain the prepared caller across SDK assertions: releasing a warm-up
-          // lease retires the owner and charges each call for cold catalog setup.
+          // Retain the prepared owner across SDK assertions; releasing it forces cold setup.
           await using prepared = await harness.prepareDecisionRuntime(
             cfg,
             "typesafe",
@@ -614,10 +605,9 @@ it("runs both SDK versions through the source TypeSafe plugin, prepared auth, an
           const typesafeOptions = () =>
             harness.decisionOptions({ purpose: "actual-engine-fixture", rubricVersion: "1" });
           const batch = textBatch();
-          const outcome = await runtime.evaluateV2(batch, {
-            ...typesafeOptions(),
-            reasoning: "auto",
-          });
+          const evaluate = (reasoning?: "auto" | "on" | "off") =>
+            runtime.evaluateV2(batch, { ...typesafeOptions(), reasoning });
+          const outcome = await evaluate("auto");
           expect(outcome).toMatchObject({
             status: "ok",
             result: {
@@ -632,15 +622,13 @@ it("runs both SDK versions through the source TypeSafe plugin, prepared auth, an
             ),
           ).toMatchObject({ status: "ok", result: { answers: { q: { probabilityTrue: 0.37 } } } });
           for (const reasoning of ["off", "on"] as const) {
-            await expect(
-              runtime.evaluateV2(batch, { ...typesafeOptions(), reasoning }),
-            ).resolves.toMatchObject(harness.unavailable("unsupported-input"));
+            await expect(evaluate(reasoning)).resolves.toMatchObject(
+              harness.unavailable("unsupported-input"),
+            );
           }
           for (const rejection of [413, 422]) {
             status = rejection;
-            expect(await runtime.evaluateV2(batch, typesafeOptions())).toMatchObject(
-              harness.unavailable("unsupported-input"),
-            );
+            expect(await evaluate()).toMatchObject(harness.unavailable("unsupported-input"));
           }
           expect(received).toHaveLength(4);
           for (const request of received) {

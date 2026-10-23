@@ -146,11 +146,11 @@ describe("safeRemoveAttachmentsDir", () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attachment-state-"));
     const attachmentId = "2d4a8398-4d5a-4c20-9c16-0a5f6627cf92";
     const childSessionKey = "agent:main:subagent:child";
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const attachmentDir = path.join(
       resolveSubagentSessionAttachmentRootDir({
         agentId: "main",
         childSessionKey,
-        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
       }),
       attachmentId,
     );
@@ -158,7 +158,6 @@ describe("safeRemoveAttachmentsDir", () => {
     await fs.mkdir(attachmentDir, { recursive: true });
     await fs.mkdir(siblingDir, { recursive: true });
     await fs.writeFile(path.join(attachmentDir, "staged.txt"), "staged");
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
 
     await expect(
       safeRemoveAttachmentsDir(createRunEntry({ attachmentId, childSessionKey })),

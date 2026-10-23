@@ -15,27 +15,17 @@ import {
   type SystemAgentGreetingCacheStore,
   type SystemAgentGreetingFacts,
 } from "./greeting.js";
+import { createSystemAgentOverviewFixture } from "./overview.fixture.test-support.js";
 import type { SystemAgentOverview } from "./overview.js";
 
 function createOverview(overrides: Partial<SystemAgentOverview> = {}): SystemAgentOverview {
-  return {
+  return createSystemAgentOverviewFixture({
     config: { path: "/tmp/openclaw.json", exists: true, valid: true, issues: [], hash: "hash" },
     agents: [{ id: "main", name: "Main", isDefault: true, model: "openai/gpt-5.5" }],
-    defaultAgentId: "main",
     defaultModel: "openai/gpt-5.5",
-    tools: {
-      codex: { command: "codex", found: false },
-      claude: { command: "claude", found: false },
-      gemini: { command: "gemini", found: false },
-      apiKeys: { openai: false, anthropic: false },
-    },
     gateway: { url: "ws://127.0.0.1:18789", source: "test", reachable: true },
-    references: {
-      docsUrl: "https://docs.openclaw.ai",
-      sourceUrl: "https://github.com/openclaw/openclaw",
-    },
     ...overrides,
-  };
+  });
 }
 
 const healthyFacts = (): SystemAgentGreetingFacts => ({
@@ -45,12 +35,49 @@ const healthyFacts = (): SystemAgentGreetingFacts => ({
   auditSequence: 0,
 });
 
+function overviewWithConfig(exists: boolean, valid: boolean, issues: string[] = []) {
+  return createOverview({
+    config: { path: "/tmp/openclaw.json", exists, valid, issues, hash: null },
+  });
+}
+
+const offlineOverview = () =>
+  createOverview({
+    gateway: { url: "ws://127.0.0.1:18789", source: "test", reachable: false },
+  });
+
 const HEALTHY_GREETING_TEMPLATE = [
   "Hi, I'm OpenClaw — caretaker of this gateway, config, channels, and agents.",
   "Model: openai/gpt-5.5.",
   "Config: valid. Default agent: main (Main).",
   "Gateway: reachable at ws://127.0.0.1:18789.",
 ].join("\n");
+
+function greet(
+  cache: { store: SystemAgentGreetingCacheStore },
+  overrides: Partial<Parameters<typeof resolveSystemAgentGreeting>[0]> = {},
+) {
+  return resolveSystemAgentGreeting({
+    overview: createOverview(),
+    facts: healthyFacts(),
+    planner: async () => modelReply(),
+    cacheStore: cache.store,
+    ...overrides,
+  });
+}
+
+const modelReply = (text = "All systems nominal.") => ({ text, modelRef: "openai/gpt-5.5" });
+const cachedGreeting = (overrides: Partial<SystemAgentGreetingCacheRecord> = {}) => ({
+  lastSeenAuditSequence: 0,
+  factsHash: systemAgentGreetingFactsHash(createOverview(), healthyFacts()),
+  ...modelReply(),
+  at: 100,
+  ...overrides,
+});
+const unavailableHealth = { available: false, degraded: [] };
+const degradedHealth = { available: true, degraded: ["Telegram", "Discord"] };
+const singleDegradedHealth = { available: true, degraded: ["Telegram"] };
+const handoffReplies = (...actions: string[]) => [...actions, "talk to agent", "audit"];
 
 function createCache(
   initial?: Omit<SystemAgentGreetingCacheRecord, "lastSeenAuditSequence"> & {
@@ -73,7 +100,18 @@ function createCache(
       return true;
     }),
   };
-  return { store, read: () => record };
+  const planner = vi.fn(async () => modelReply());
+  return {
+    store,
+    planner,
+    read: () => record,
+    acknowledge: (auditSequence: number) =>
+      acknowledgeSystemAgentGreetingDelivery({ auditSequence, cacheStore: store }),
+    facts: (audit: ReturnType<typeof createConfigAudit>) =>
+      loadSystemAgentGreetingFacts({ cacheStore: store, configAuditStore: audit.store }),
+    greet: (overrides: Parameters<typeof greet>[1] = {}) =>
+      greet({ store }, { planner, ...overrides }),
+  };
 }
 
 function configAuditEntry(
@@ -105,71 +143,36 @@ function createConfigAudit(
 }
 
 describe("system agent greeting cache", () => {
-  it("returns a matching model greeting without calling the planner", async () => {
-    const overview = createOverview();
-    const facts = healthyFacts();
-    const cached: SystemAgentGreetingCacheRecord = {
-      lastSeenAuditSequence: 4,
-      factsHash: systemAgentGreetingFactsHash(overview, facts),
-      text: "All systems nominal.",
-      modelRef: "openai/gpt-5.5",
-      at: 100,
-    };
-    const cache = createCache(cached);
-    const planner = vi.fn();
-
-    await expect(
-      resolveSystemAgentGreeting({
-        overview,
-        facts,
-        planner,
-        allowInference: false,
-        cacheStore: cache.store,
-      }),
-    ).resolves.toBe(cached.text);
-    await acknowledgeSystemAgentGreetingDelivery({ auditSequence: 5, cacheStore: cache.store });
-    expect(planner).not.toHaveBeenCalled();
-    expect(cache.read()?.lastSeenAuditSequence).toBe(5);
-  });
-
-  it("uses the template without calling the planner when inference is disabled", async () => {
-    const cache = createCache();
-    const planner = vi.fn();
-
-    await expect(
-      resolveSystemAgentGreeting({
-        overview: createOverview(),
-        facts: healthyFacts(),
-        planner,
-        allowInference: false,
-        cacheStore: cache.store,
-      }),
-    ).resolves.toBe(HEALTHY_GREETING_TEMPLATE);
-
-    expect(planner).not.toHaveBeenCalled();
-    expect(cache.read()).toBeUndefined();
-  });
+  it.each([false, true])(
+    "never calls the planner with inference disabled (cached=%s)",
+    async (cached) => {
+      const cache = createCache(cached ? cachedGreeting({ lastSeenAuditSequence: 4 }) : undefined);
+      await expect(cache.greet({ allowInference: false })).resolves.toBe(
+        cached ? "All systems nominal." : HEALTHY_GREETING_TEMPLATE,
+      );
+      if (cached) {
+        await cache.acknowledge(5);
+        expect(cache.read()?.lastSeenAuditSequence).toBe(5);
+      } else {
+        expect(cache.read()).toBeUndefined();
+      }
+      expect(cache.planner).not.toHaveBeenCalled();
+    },
+  );
 
   it("calls the planner once after a state change and replaces the cache", async () => {
     const overview = createOverview();
     const priorFacts = healthyFacts();
     const facts = { ...priorFacts, updateAvailable: "2026.7.20", auditSequence: 6 };
-    const cache = createCache({
-      factsHash: systemAgentGreetingFactsHash(overview, priorFacts),
-      text: "All systems nominal.",
-      modelRef: "openai/gpt-5.5",
-      at: 100,
-    });
-    const planner = vi.fn(async () => ({
-      text: "I'm steady.\nAn upgrade to 2026.7.20 is ready when you are.",
-      modelRef: "openai/gpt-5.5",
-    }));
+    const cache = createCache(cachedGreeting());
+    const planner = vi.fn(async () =>
+      modelReply("I'm steady.\nAn upgrade to 2026.7.20 is ready when you are."),
+    );
 
-    const result = await resolveSystemAgentGreeting({
+    const result = await cache.greet({
       overview,
       facts,
       planner,
-      cacheStore: cache.store,
       now: () => 200,
     });
 
@@ -178,10 +181,7 @@ describe("system agent greeting cache", () => {
     expect(planner).toHaveBeenCalledWith(
       expect.objectContaining({ overview, facts, timeoutMs: 20_000 }),
     );
-    await acknowledgeSystemAgentGreetingDelivery({
-      auditSequence: facts.auditSequence,
-      cacheStore: cache.store,
-    });
+    await cache.acknowledge(facts.auditSequence);
     expect(cache.read()).toMatchObject({
       lastSeenAuditSequence: 6,
       factsHash: systemAgentGreetingFactsHash(overview, facts),
@@ -191,19 +191,11 @@ describe("system agent greeting cache", () => {
   });
 
   it("appends the host-owned edit alert at delivery without caching it", async () => {
-    const overview = createOverview();
     const facts = { ...healthyFacts(), recentExternalEdit: true, auditSequence: 9 };
-    const planner = vi.fn(async () => ({
-      text: "All systems nominal.",
-      modelRef: "openai/gpt-5.5",
-    }));
     const cache = createCache();
 
-    const result = await resolveSystemAgentGreeting({
-      overview,
+    const result = await cache.greet({
       facts,
-      planner,
-      cacheStore: cache.store,
       now: () => 200,
     });
 
@@ -211,71 +203,43 @@ describe("system agent greeting cache", () => {
     // The cache stores only the model text; the alert is delivery-scoped.
     expect(cache.read()?.text).toBe("All systems nominal.");
 
-    const calm = await resolveSystemAgentGreeting({
-      overview,
+    const calm = await cache.greet({
       facts: { ...facts, recentExternalEdit: false },
-      planner,
-      cacheStore: cache.store,
       now: () => 300,
     });
     expect(calm).toBe("All systems nominal.");
-    expect(planner).toHaveBeenCalledOnce();
+    expect(cache.planner).toHaveBeenCalledOnce();
   });
 
   it("reports an edit that arrives between the facts read and delivery", async () => {
     const cache = createCache({ lastSeenAuditSequence: 10 });
     const audit = createConfigAudit([configAuditEntry(10, "config.write")]);
-    const facts = await loadSystemAgentGreetingFacts({
-      cacheStore: cache.store,
-      configAuditStore: audit.store,
-    });
+    const facts = await cache.facts(audit);
 
     audit.add(configAuditEntry(11, "config.external"));
-    await acknowledgeSystemAgentGreetingDelivery({
-      auditSequence: facts.auditSequence,
-      cacheStore: cache.store,
-    });
+    await cache.acknowledge(facts.auditSequence);
 
-    expect(
-      await loadSystemAgentGreetingFacts({
-        cacheStore: cache.store,
-        configAuditStore: audit.store,
-      }),
-    ).toMatchObject({ auditSequence: 11, recentExternalEdit: true });
+    expect(await cache.facts(audit)).toMatchObject({ auditSequence: 11, recentExternalEdit: true });
   });
 
   it("keeps a template delivery as cursor-only state, then reports a later edit", async () => {
-    const overview = createOverview();
     const cache = createCache();
     const audit = createConfigAudit([configAuditEntry(3, "config.write")]);
-    const facts = await loadSystemAgentGreetingFacts({
-      cacheStore: cache.store,
-      configAuditStore: audit.store,
-    });
+    const facts = await cache.facts(audit);
 
     await expect(
-      resolveSystemAgentGreeting({
-        overview,
+      cache.greet({
         facts,
         planner: async () => {
           throw new Error("offline");
         },
-        cacheStore: cache.store,
       }),
     ).resolves.toBe(`${HEALTHY_GREETING_TEMPLATE}\nChannel health is not available yet.`);
-    await acknowledgeSystemAgentGreetingDelivery({
-      auditSequence: facts.auditSequence,
-      cacheStore: cache.store,
-    });
+    await cache.acknowledge(facts.auditSequence);
     expect(cache.read()).toEqual({ lastSeenAuditSequence: 3 });
 
     audit.add(configAuditEntry(4, "config.external"));
-    expect(
-      await loadSystemAgentGreetingFacts({
-        cacheStore: cache.store,
-        configAuditStore: audit.store,
-      }),
-    ).toMatchObject({ auditSequence: 4, recentExternalEdit: true });
+    expect(await cache.facts(audit)).toMatchObject({ auditSequence: 4, recentExternalEdit: true });
   });
 
   it("acknowledges a delivered edit so the next facts load is clear", async () => {
@@ -284,23 +248,12 @@ describe("system agent greeting cache", () => {
       configAuditEntry(2, "config.external"),
       configAuditEntry(3, "config.write"),
     ]);
-    const facts = await loadSystemAgentGreetingFacts({
-      cacheStore: cache.store,
-      configAuditStore: audit.store,
-    });
+    const facts = await cache.facts(audit);
     expect(facts.recentExternalEdit).toBe(true);
 
-    await acknowledgeSystemAgentGreetingDelivery({
-      auditSequence: facts.auditSequence,
-      cacheStore: cache.store,
-    });
+    await cache.acknowledge(facts.auditSequence);
 
-    expect(
-      await loadSystemAgentGreetingFacts({
-        cacheStore: cache.store,
-        configAuditStore: audit.store,
-      }),
-    ).toMatchObject({ auditSequence: 3, recentExternalEdit: false });
+    expect(await cache.facts(audit)).toMatchObject({ auditSequence: 3, recentExternalEdit: false });
   });
 
   it.each([
@@ -315,7 +268,7 @@ describe("system agent greeting cache", () => {
       compareAndSet.mockRejectedValue(new Error("writer disconnected before acknowledgement"));
     }
 
-    await acknowledgeSystemAgentGreetingDelivery({ auditSequence: 2, cacheStore: cache.store });
+    await cache.acknowledge(2);
 
     expect(compareAndSet).toHaveBeenCalledTimes(attempts);
     expect(cache.read()?.lastSeenAuditSequence).toBe(1);
@@ -331,15 +284,9 @@ describe("system agent greeting cache", () => {
       await resumeWrite.promise;
       return compareAndSet(...args);
     });
-    const greeting = resolveSystemAgentGreeting({
-      overview: createOverview(),
-      facts: healthyFacts(),
-      planner: async () => ({ text: "All systems nominal.", modelRef: "openai/gpt-5.5" }),
-      cacheStore: cache.store,
-      now: () => 100,
-    });
+    const greeting = cache.greet({ now: () => 100 });
     await awaitGateBeforeSettlement(reachedWrite.promise, greeting, "greeting never reached CAS");
-    await acknowledgeSystemAgentGreetingDelivery({ auditSequence: 7, cacheStore: cache.store });
+    await cache.acknowledge(7);
     resumeWrite.resolve();
     await greeting;
 
@@ -351,8 +298,6 @@ describe("system agent greeting cache", () => {
   });
 
   it("coalesces concurrent planner calls for the same facts", async () => {
-    const overview = createOverview();
-    const facts = healthyFacts();
     const cache = createCache();
     const started = createDeferred();
     const plan = createDeferred<{ text: string; modelRef: string }>();
@@ -361,15 +306,10 @@ describe("system agent greeting cache", () => {
       return plan.promise;
     });
 
-    const first = resolveSystemAgentGreeting({ overview, facts, planner, cacheStore: cache.store });
-    const second = resolveSystemAgentGreeting({
-      overview,
-      facts,
-      planner,
-      cacheStore: cache.store,
-    });
+    const first = cache.greet({ planner });
+    const second = cache.greet({ planner });
     await awaitGateBeforeSettlement(started.promise, first, "planner did not start");
-    plan.resolve({ text: "All systems nominal.", modelRef: "openai/gpt-5.5" });
+    plan.resolve(modelReply());
 
     await expect(Promise.all([first, second])).resolves.toEqual([
       "All systems nominal.",
@@ -381,14 +321,11 @@ describe("system agent greeting cache", () => {
   it("timestamps the greeting snapshot before inference begins", async () => {
     const events: string[] = [];
     const cache = createCache();
-    await resolveSystemAgentGreeting({
-      overview: createOverview(),
-      facts: healthyFacts(),
+    await cache.greet({
       planner: async () => {
         events.push("planner");
-        return { text: "All systems nominal.", modelRef: "openai/gpt-5.5" };
+        return modelReply();
       },
-      cacheStore: cache.store,
       now: () => {
         events.push("snapshot");
         return 100;
@@ -403,198 +340,92 @@ describe("system agent greeting cache", () => {
     const cache = createCache();
     const renewedCache = createCache();
     const cacheOwner = {};
-    const overview = createOverview();
     const planner = vi.fn(async () => {
       throw new Error("offline");
     });
     const facts: SystemAgentGreetingFacts = {
       updateAvailable: "2026.7.20",
-      channelHealth: { available: true, degraded: ["Telegram"] },
+      channelHealth: singleDegradedHealth,
       recentExternalEdit: true,
       auditSequence: 7,
     };
 
-    const result = await resolveSystemAgentGreeting({
-      overview,
+    const result = await cache.greet({
       facts,
       planner,
-      cacheStore: cache.store,
       cacheOwner,
       now: () => 100,
     });
-    const repeated = await resolveSystemAgentGreeting({
-      overview,
-      facts,
-      planner,
-      cacheStore: renewedCache.store,
-      cacheOwner,
-      now: () => 200,
-    });
+    const repeated = await renewedCache.greet({ facts, planner, cacheOwner, now: () => 200 });
 
     expect(result).toBe(
       `${HEALTHY_GREETING_TEMPLATE}\nUpdate 2026.7.20 is available. Channels needing attention: Telegram.\n${SYSTEM_AGENT_EXTERNAL_EDIT_ALERT}`,
     );
     expect(repeated).toEqual(result);
     expect(planner).toHaveBeenCalledOnce();
-    await acknowledgeSystemAgentGreetingDelivery({
-      auditSequence: facts.auditSequence,
-      cacheStore: renewedCache.store,
-    });
+    await renewedCache.acknowledge(facts.auditSequence);
     expect(renewedCache.read()).toEqual({ lastSeenAuditSequence: 7 });
   });
 
-  it("rejects structured output smuggled behind a preamble line", async () => {
-    const cache = createCache();
-    const result = await resolveSystemAgentGreeting({
-      overview: createOverview(),
-      facts: healthyFacts(),
-      planner: async () => ({
-        text: 'Sure:\n{"status":"healthy"}',
-        modelRef: "openai/gpt-5.5",
-      }),
-      cacheStore: cache.store,
-      now: () => 100,
-    });
-
-    expect(result).toBe(HEALTHY_GREETING_TEMPLATE);
-    expect(cache.read()?.text).toBeUndefined();
-  });
-
-  it("requires an available update's version before caching model text", async () => {
-    const cache = createCache();
-    const result = await resolveSystemAgentGreeting({
-      overview: createOverview(),
-      facts: { ...healthyFacts(), updateAvailable: "2026.7.20" },
-      planner: async () => ({
-        text: "An update is ready when you are.",
-        modelRef: "openai/gpt-5.5",
-      }),
-      cacheStore: cache.store,
-      now: () => 100,
-    });
-
-    expect(result).toBe(`${HEALTHY_GREETING_TEMPLATE}\nUpdate 2026.7.20 is available.`);
-    expect(cache.read()).toBeUndefined();
-  });
-
-  it("requires every degraded channel label before caching model text", async () => {
-    const cache = createCache();
-    const result = await resolveSystemAgentGreeting({
-      overview: createOverview(),
-      facts: {
-        ...healthyFacts(),
-        channelHealth: { available: true, degraded: ["Telegram", "Discord"] },
-      },
-      planner: async () => ({
-        text: "Telegram needs attention.",
-        modelRef: "openai/gpt-5.5",
-      }),
-      cacheStore: cache.store,
-      now: () => 100,
-    });
-
-    expect(result).toBe(
-      `${HEALTHY_GREETING_TEMPLATE}\nChannels needing attention: Telegram, Discord.`,
-    );
-    expect(cache.read()).toBeUndefined();
-  });
+  it.each([
+    ["structured output", {}, 'Sure:\n{"status":"healthy"}', ""],
+    [
+      "missing update version",
+      { updateAvailable: "2026.7.20" },
+      "An update is ready when you are.",
+      "\nUpdate 2026.7.20 is available.",
+    ],
+    [
+      "missing degraded channel",
+      { channelHealth: degradedHealth },
+      "Telegram needs attention.",
+      "\nChannels needing attention: Telegram, Discord.",
+    ],
+    [
+      "missing health unavailability",
+      { channelHealth: unavailableHealth },
+      "All systems nominal.",
+      "\nChannel health is not available yet.",
+    ],
+  ] satisfies Array<[string, Partial<SystemAgentGreetingFacts>, string, string]>)(
+    "does not cache model text with %s",
+    async (_name, facts, text, suffix) => {
+      const cache = createCache();
+      const result = await cache.greet({
+        facts: { ...healthyFacts(), ...facts },
+        planner: async () => modelReply(text),
+        now: () => 100,
+      });
+      expect(result).toBe(HEALTHY_GREETING_TEMPLATE + suffix);
+      expect(cache.read()).toBeUndefined();
+    },
+  );
 
   it("accepts model text that names every degraded channel", async () => {
     const cache = createCache();
-    const result = await resolveSystemAgentGreeting({
-      overview: createOverview(),
-      facts: {
-        ...healthyFacts(),
-        channelHealth: { available: true, degraded: ["Telegram", "Discord"] },
-      },
-      planner: async () => ({
-        text: "Telegram and Discord need attention.",
-        modelRef: "openai/gpt-5.5",
-      }),
-      cacheStore: cache.store,
+    const text = "Telegram and Discord need attention.";
+    const result = await cache.greet({
+      facts: { ...healthyFacts(), channelHealth: degradedHealth },
+      planner: async () => modelReply(text),
       now: () => 100,
     });
-
-    expect(result).toBe("Telegram and Discord need attention.");
-    expect(cache.read()?.text).toBe("Telegram and Discord need attention.");
-  });
-
-  it("requires channel health unavailability before caching model text", async () => {
-    const cache = createCache();
-    const facts: SystemAgentGreetingFacts = {
-      ...healthyFacts(),
-      channelHealth: { available: false, degraded: [] },
-    };
-
-    const result = await resolveSystemAgentGreeting({
-      overview: createOverview(),
-      facts,
-      planner: async () => ({ text: "All systems nominal.", modelRef: "openai/gpt-5.5" }),
-      cacheStore: cache.store,
-      now: () => 100,
-    });
-
-    expect(result).toBe(`${HEALTHY_GREETING_TEMPLATE}\nChannel health is not available yet.`);
-    expect(cache.read()).toBeUndefined();
+    expect(result).toBe(text);
+    expect(cache.read()?.text).toBe(text);
   });
 
   it.each([
-    {
-      name: "missing config",
-      overview: createOverview({
-        config: {
-          path: "/tmp/openclaw.json",
-          exists: false,
-          valid: false,
-          issues: [],
-          hash: null,
-        },
-      }),
-      expected: "Config: missing",
-    },
-    {
-      name: "invalid config",
-      overview: createOverview({
-        config: {
-          path: "/tmp/openclaw.json",
-          exists: true,
-          valid: false,
-          issues: ["invalid"],
-          hash: null,
-        },
-      }),
-      expected: "Config: invalid",
-    },
-    {
-      name: "unreachable gateway",
-      overview: createOverview({
-        gateway: { url: "ws://127.0.0.1:18789", source: "test", reachable: false },
-      }),
-      expected: "Gateway: not reachable",
-    },
-    {
-      name: "missing default model",
-      overview: createOverview({ defaultModel: undefined }),
-      expected: "Inference is unavailable",
-    },
-  ])(
-    "uses the deterministic template for $name without opening the cache",
-    async ({ overview, expected }) => {
+    [overviewWithConfig(false, false), "Config: missing"],
+    [overviewWithConfig(true, false, ["invalid"]), "Config: invalid"],
+    [offlineOverview(), "Gateway: not reachable"],
+    [createOverview({ defaultModel: undefined }), "Inference is unavailable"],
+  ] as const)(
+    "uses the deterministic template (%s: %s) without opening the cache",
+    async (overview, expected) => {
       const cache = createCache();
-      const planner = vi.fn(async () => ({
-        text: "Config setup is complete.",
-        modelRef: "openai/gpt-5.5",
-      }));
-      const result = await resolveSystemAgentGreeting({
-        overview,
-        facts: healthyFacts(),
-        planner,
-        cacheStore: cache.store,
-        now: () => 100,
-      });
+      const result = await cache.greet({ overview, now: () => 100 });
 
       expect(result).toContain(expected);
-      expect(planner).not.toHaveBeenCalled();
+      expect(cache.planner).not.toHaveBeenCalled();
       expect(cache.store.latest).not.toHaveBeenCalled();
       expect(cache.read()).toBeUndefined();
     },
@@ -618,14 +449,7 @@ describe("system agent greeting cache", () => {
   it.each(["failed", "revoked"])(
     "does not publish cached text after a %s asynchronous greeting read",
     async (failure) => {
-      const overview = createOverview();
-      const facts = healthyFacts();
-      const cache = createCache({
-        factsHash: systemAgentGreetingFactsHash(overview, facts),
-        text: "Cached greeting that must not publish.",
-        modelRef: "openai/gpt-5.5",
-        at: 100,
-      });
+      const cache = createCache(cachedGreeting({ text: "Cached greeting that must not publish." }));
       const readStarted = createDeferred();
       const finishRead = createDeferred();
       const latest = cache.store.latest;
@@ -637,13 +461,7 @@ describe("system agent greeting cache", () => {
         }
         return latest(...args);
       });
-      const planner = vi.fn();
-      const greeting = resolveSystemAgentGreeting({
-        overview,
-        facts,
-        planner,
-        cacheStore: cache.store,
-      });
+      const greeting = cache.greet();
       await awaitGateBeforeSettlement(readStarted.promise, greeting, "cache read did not start");
       if (failure === "revoked") {
         vi.spyOn(cache.store, "assertCurrent").mockImplementation(() => {
@@ -657,7 +475,7 @@ describe("system agent greeting cache", () => {
       } else {
         await expect(greeting).resolves.toBe(HEALTHY_GREETING_TEMPLATE);
       }
-      expect(planner).not.toHaveBeenCalled();
+      expect(cache.planner).not.toHaveBeenCalled();
       expect(cache.store.compareAndSet).not.toHaveBeenCalled();
     },
   );
@@ -665,7 +483,7 @@ describe("system agent greeting cache", () => {
   it("hashes decision fields stably while ignoring diagnostic-only details", () => {
     const facts = {
       ...healthyFacts(),
-      channelHealth: { available: true, degraded: ["Telegram", "Discord"] },
+      channelHealth: degradedHealth,
     };
     const left = createOverview();
     const right = createOverview({
@@ -688,7 +506,7 @@ describe("system agent greeting cache", () => {
     expect(systemAgentGreetingFactsHash(left, facts)).not.toBe(
       systemAgentGreetingFactsHash(left, {
         ...facts,
-        channelHealth: { available: false, degraded: [] },
+        channelHealth: unavailableHealth,
       }),
     );
   });
@@ -755,22 +573,12 @@ describe("system agent greeting facts", () => {
     const cache = createCache();
     const audit = createConfigAudit([configAuditEntry(1, "config.external")]);
 
-    expect(
-      await loadSystemAgentGreetingFacts({
-        cacheStore: cache.store,
-        configAuditStore: audit.store,
-      }),
-    ).toMatchObject({ auditSequence: 1, recentExternalEdit: true });
+    expect(await cache.facts(audit)).toMatchObject({ auditSequence: 1, recentExternalEdit: true });
   });
 
   it("uses cached update and health state without probing", async () => {
     const facts = await loadSystemAgentGreetingFacts({
-      cacheStore: createCache({
-        factsHash: "old",
-        text: "old",
-        modelRef: "model",
-        at: 100,
-      }).store,
+      cacheStore: createCache({ lastSeenAuditSequence: 0 }).store,
       configAuditStore: {
         assertCurrent: vi.fn(),
         configAuditFacts: async () => ({ auditSequence: 2, recentExternalEdit: true }),
@@ -794,7 +602,7 @@ describe("system agent greeting facts", () => {
     });
     expect(facts).toEqual({
       updateAvailable: "2026.7.20",
-      channelHealth: { available: true, degraded: ["Telegram"] },
+      channelHealth: singleDegradedHealth,
       recentExternalEdit: true,
       auditSequence: 2,
     });
@@ -830,93 +638,37 @@ describe("system agent greeting facts", () => {
 
 describe("system agent quick actions", () => {
   it.each([
-    {
-      name: "healthy",
-      overview: createOverview(),
-      facts: healthyFacts(),
-      replies: ["talk to agent", "audit"],
-    },
-    {
-      name: "channel health unavailable",
-      overview: createOverview(),
-      facts: { ...healthyFacts(), channelHealth: { available: false, degraded: [] } },
-      replies: ["health", "talk to agent", "audit"],
-    },
-    {
-      name: "missing config",
-      overview: createOverview({
-        config: {
-          path: "/tmp/openclaw.json",
-          exists: false,
-          valid: true,
-          issues: [],
-          hash: null,
-        },
-      }),
-      facts: healthyFacts(),
-      replies: ["setup", "talk to agent", "audit"],
-    },
-    {
-      name: "invalid config",
-      overview: createOverview({
-        config: {
-          path: "/tmp/openclaw.json",
-          exists: true,
-          valid: false,
-          issues: ["invalid"],
-          hash: null,
-        },
-      }),
-      facts: healthyFacts(),
-      replies: ["doctor", "talk to agent", "audit"],
-    },
-    {
-      name: "missing model",
-      overview: createOverview({ defaultModel: undefined }),
-      facts: healthyFacts(),
-      replies: ["setup", "audit"],
-    },
-    {
-      name: "update and manual edit",
-      overview: createOverview(),
-      facts: {
+    ["healthy", undefined, {}, handoffReplies()],
+    ["unknown health", undefined, { channelHealth: unavailableHealth }, handoffReplies("health")],
+    ["missing config", overviewWithConfig(false, true), {}, handoffReplies("setup")],
+    ["invalid config", overviewWithConfig(true, false, ["invalid"]), {}, handoffReplies("doctor")],
+    ["missing model", createOverview({ defaultModel: undefined }), {}, ["setup", "audit"]],
+    [
+      "update and manual edit",
+      undefined,
+      { updateAvailable: "2026.7.20", recentExternalEdit: true },
+      handoffReplies("status"),
+    ],
+    ["degraded", undefined, { channelHealth: singleDegradedHealth }, handoffReplies("health")],
+    [
+      "several exceptional facts",
+      offlineOverview(),
+      {
         updateAvailable: "2026.7.20",
-        channelHealth: { available: true, degraded: [] },
+        channelHealth: singleDegradedHealth,
         recentExternalEdit: true,
-        auditSequence: 0,
       },
-      replies: ["status", "talk to agent", "audit"],
-    },
-    {
-      name: "degraded channel",
-      overview: createOverview(),
-      facts: {
-        updateAvailable: null,
-        channelHealth: { available: true, degraded: ["Telegram"] },
-        recentExternalEdit: false,
-        auditSequence: 0,
-      },
-      replies: ["health", "talk to agent", "audit"],
-    },
-    {
-      name: "several exceptional facts",
-      overview: createOverview({
-        gateway: { url: "ws://127.0.0.1:18789", source: "test", reachable: false },
-      }),
-      facts: {
-        updateAvailable: "2026.7.20",
-        channelHealth: { available: true, degraded: ["Telegram"] },
-        recentExternalEdit: true,
-        auditSequence: 0,
-      },
-      replies: ["gateway status", "restart gateway", "talk to agent", "audit"],
-    },
-  ])("builds canonical replies for $name facts", ({ overview, facts, replies }) => {
-    const question = buildSystemAgentGreetingQuestion(overview, facts);
+      handoffReplies("gateway status", "restart gateway"),
+    ],
+  ] satisfies Array<
+    [string, SystemAgentOverview | undefined, Partial<SystemAgentGreetingFacts>, string[]]
+  >)("builds canonical replies for %s facts", (_name, overview, facts, replies) => {
+    const question = buildSystemAgentGreetingQuestion(overview ?? createOverview(), {
+      ...healthyFacts(),
+      ...facts,
+    });
     expect(question.header).toBe("Quick actions");
     expect(question.options.map((option) => option.reply)).toEqual(replies);
-    expect(question.options.length).toBeGreaterThanOrEqual(2);
-    expect(question.options.length).toBeLessThanOrEqual(4);
   });
 
   it("does not recommend agent handoff for a recent external edit", () => {

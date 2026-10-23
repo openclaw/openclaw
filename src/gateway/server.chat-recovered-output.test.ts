@@ -42,6 +42,13 @@ function messageText(message: unknown): string {
   return isRecord(message) ? collectTextContentBlocks(message.content).join("\n") : "";
 }
 
+function assistantTexts(messages: unknown[]): string[] {
+  return messages
+    .filter(isRecord)
+    .filter((message) => message.role === "assistant")
+    .map(messageText);
+}
+
 function writeResponse(response: ServerResponse, model: string, attempt: number): void {
   const writeTool = model === "settled-write" && attempt === 1;
   const failed =
@@ -262,20 +269,12 @@ it.each(scenarios)(
         },
       ]);
       const display = replayChatDisplay(displayFrames, sessionKey, runId);
-      expect(display.chatRunId).toBeNull();
-      expect(display.chatStream).toBeNull();
-      expect(display.chatStreamSegments).toEqual([]);
-      expect(
-        display.chatMessages
-          .filter(isRecord)
-          .filter((message) => message.role === "assistant")
-          .map(messageText),
-      ).toEqual(
-        history.messages
-          .filter(isRecord)
-          .filter((message) => message.role === "assistant")
-          .map(messageText),
-      );
+      expect(display).toMatchObject({
+        chatRunId: null,
+        chatStream: null,
+        chatStreamSegments: [],
+      });
+      expect(assistantTexts(display.chatMessages)).toEqual(assistantTexts(history.messages));
     } else {
       expect(completed).toMatchObject({ status: "ok", terminalReply: { text: answer } });
       expect(messageText(history.messages.at(-1))).toBe(answer);

@@ -55,7 +55,7 @@ export function createSteerParams(
     restartRecoverySourceTurnId: undefined,
     replyOperationRunState: undefined,
     touchActiveSessionEntry: async () => {},
-    typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
+    typingSignals: createTypingSignaler({ typing, mode: "never" }),
     ...overrides,
   };
 }

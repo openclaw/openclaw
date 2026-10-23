@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, expect, vi } from "vitest";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SystemAgentSetupDetectResult, WizardNextResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGateway } from "../../app/context.ts";
@@ -13,6 +14,25 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createContext, mountPage } from "./test-helpers/page.test-support.ts";
 import type { TestModelSetupPage } from "./test-helpers/solid-page.test-support.tsx";
+
+const onboarding = { search: "?onboarding=1" };
+export const waitForOnboarding = (context: Pick<ApplicationContext, "navigate">) =>
+  waitForFast(() => expect(context.navigate).toHaveBeenCalledWith("custodian", onboarding));
+
+export const missingWizardError = () =>
+  new GatewayRequestError({
+    code: "INVALID_REQUEST",
+    message: "wizard not found",
+    details: { code: "WIZARD_NOT_FOUND" },
+  });
+
+export const running = { done: false, status: "running" } as const;
+
+export const configuredDetection = (configuredModel: string) => ({
+  ...detection,
+  configuredModel,
+  setupComplete: true,
+});
 
 export function authOption(
   id: string,

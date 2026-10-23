@@ -108,8 +108,6 @@ export type PluginManifestModelSupport = {
   modelPatterns?: string[];
 };
 
-export type PluginManifestModelCatalog = ModelCatalog;
-
 export type PluginManifestModelPricing = {
   providers?: Record<string, ModelPricingProvider>;
 };
@@ -465,7 +463,7 @@ export type PluginManifest = {
    * Declarative model catalog metadata used by future read-only listing,
    * onboarding, and model picker surfaces before provider runtime loads.
    */
-  modelCatalog?: PluginManifestModelCatalog;
+  modelCatalog?: ModelCatalog;
   /** Manifest-owned external pricing lookup policy for provider refs. */
   modelPricing?: PluginManifestModelPricing;
   /** Manifest-owned model-id normalization used before provider runtime loads. */

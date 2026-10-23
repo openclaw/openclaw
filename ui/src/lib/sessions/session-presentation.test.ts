@@ -98,6 +98,7 @@ describe("session roster presentation", () => {
       h.publish({ phase: "connected", client: h.client });
       h.sessions.reconcile(row);
       expect(h.sessions.canonicalListRevision).toBe(0);
+      expect(h.sessions.canonicalListReady).toBe(false);
       expect(h.sessions.presentation.result?.sessions[0]?.derivedTitle).toBe(row.derivedTitle);
     } finally {
       initial.resolve(sessionsResult([row], 1));
@@ -129,6 +130,7 @@ describe("session roster presentation", () => {
     try {
       await h.sessions.refresh({ agentId: "main" });
       const presentation = h.sessions.presentation;
+      expect(h.sessions.canonicalListReady).toBe(true);
       h.hold(reconnect.promise);
       h.publish({ phase: "reconnecting" });
       expect(h.sessions.state.result).toBeNull();
@@ -136,12 +138,14 @@ describe("session roster presentation", () => {
       h.publish({ phase: "connected" });
       h.sessions.reconcile({ ...row, derivedTitle: "Partial" });
       expect(h.sessions.presentation).toBe(presentation);
+      expect(h.sessions.canonicalListReady).toBe(false);
       const renamed = sessionsResult([{ ...row, derivedTitle: "Renamed" }], 2);
       reconnect.resolve(renamed);
       await expect
         .poll(() => h.sessions.presentation.result?.sessions[0]?.derivedTitle)
         .toBe("Renamed");
       expect(h.sessions.presentation.agentId).toBe("main");
+      expect(h.sessions.canonicalListReady).toBe(true);
       h.setResult(sessionsResult([{ ...row, derivedTitle: "" }], 3));
       await h.sessions.refresh({ agentId: "main", force: true });
       expect(h.sessions.presentation.result?.sessions[0]?.derivedTitle).toBe("");

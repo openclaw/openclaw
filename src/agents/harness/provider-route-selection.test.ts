@@ -7,7 +7,12 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
-import type { AuthProfileStore } from "../auth-profiles/types.js";
+import {
+  apiKey,
+  authStore as makeAuthStore,
+  model,
+  oauth,
+} from "../model-catalog-fixtures.test-support.js";
 import { prepareAgentRuntimeAuth } from "../runtime-plan/prepare-auth.js";
 import { registerAgentHarness } from "./registry.js";
 import { selectAgentHarness, selectAgentHarnessForPreparedModelProviders } from "./selection.js";
@@ -72,20 +77,11 @@ function config(pinPrimary: boolean): OpenClawConfig {
   };
 }
 
-function authStore(subscription: boolean): AuthProfileStore {
-  const profiles: AuthProfileStore["profiles"] = {
-    "openai:platform": { type: "api_key", provider: "openai", key: "fixture-key" },
-  };
-  if (subscription) {
-    profiles["openai:chatgpt"] = {
-      type: "oauth",
-      provider: "openai",
-      access: "fixture-access",
-      refresh: "fixture-refresh",
-      expires: Date.now() + 60_000,
-    };
-  }
-  return { version: 1, profiles };
+function authStore(subscription: boolean) {
+  return makeAuthStore({
+    "openai:platform": apiKey("openai", "fixture-key"),
+    ...(subscription ? { "openai:chatgpt": oauth("openai", Date.now() + 60_000) } : {}),
+  });
 }
 
 describe("registered provider route selection", () => {
@@ -103,16 +99,10 @@ describe("registered provider route selection", () => {
         ? { supported: true, priority: 100 }
         : { supported: false, reason: "Selected transport is not supported" },
     );
-    const exact: ModelDefinitionConfig = {
-      id: "Model",
-      name: "Configured model",
+    const exact = model("Model", "Configured model", {
       api: "openai-responses",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 64_000,
-      maxTokens: 1024,
-    };
+    });
     const rows: Record<"exact" | "legacy" | "duplicate", ModelDefinitionConfig> = {
       exact,
       legacy: {

@@ -1,6 +1,5 @@
 import type { AgentIdentityCapability } from "../agents/identity.ts";
 import type { AgentCapability } from "../agents/index.ts";
-import type { rosterActivityStore } from "../agents/roster-activity-store.ts";
 import type { ChannelCapability } from "../channels/index.ts";
 import type { RuntimeConfigCapability } from "../config/runtime-config-capability.ts";
 import type { SessionCapability, SessionListScope } from "../sessions/session-capability.ts";
@@ -22,12 +21,6 @@ export function projectAgentIdentity(source: AgentIdentityProjectionSource) {
     subscribe: ({ identities }, notify) => identities.subscribe(notify),
     equality: "revision",
   });
-}
-
-export function projectRosterActivity(
-  source: Pick<ReturnType<typeof rosterActivityStore>, "snapshot" | "subscribe">,
-) {
-  return projectOwner(source, (roster) => roster.snapshot);
 }
 
 export function projectChannels(source: Pick<ChannelCapability, "state" | "subscribe">) {

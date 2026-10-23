@@ -132,6 +132,11 @@ it("skips disabled choices in both keyboard directions", async () => {
     options: fixtureOptions(["first", "First"], ["blocked", "Blocked", true], ["last", "Last"]),
   });
   await clickField(element);
+  await waitForSolid(() =>
+    expect(element.querySelector('[aria-selected="true"]')?.getAttribute("data-value")).toBe(
+      "fixture/first",
+    ),
+  );
   await pressKey(element, "ArrowDown");
   expect(document.activeElement).toBe(input(element));
   expect(element.querySelector('[aria-selected="true"]')?.getAttribute("data-value")).toBe(

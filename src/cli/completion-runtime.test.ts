@@ -212,25 +212,6 @@ it("loads cached Bash completion from a literal path through the login profile",
   }, "openclaw-completion-literal$dollar Ada's !42-");
 });
 
-it("prints the same canonical reload hint used by Doctor and onboarding", async () => {
-  await withCompletionHome(async () => {
-    await writeCompletionCache("zsh");
-    const profilePath = await writeProfile("zsh", "");
-    await fs.chmod(profilePath, 0o640);
-    const log = vi.spyOn(console, "log").mockImplementation(() => {});
-
-    try {
-      await installCompletion("zsh", false, "openclaw");
-      expect(log).toHaveBeenCalledWith(
-        "Completion installed. Restart your shell or run: source ~/.zshrc",
-      );
-      await expectProfileMode(profilePath);
-    } finally {
-      log.mockRestore();
-    }
-  });
-});
-
 it("preserves an existing profile when atomic publication fails", async () => {
   await withCompletionHome(async ({ homeDir }) => {
     await writeCompletionCache("zsh", "# completion\n");

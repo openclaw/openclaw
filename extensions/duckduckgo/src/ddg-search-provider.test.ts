@@ -3,7 +3,6 @@ import type { MockInstance } from "vitest";
 import { afterEach, assert, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
 import { createDuckDuckGoWebSearchProvider } from "../web-search-contract-api.js";
-import { resolveDdgRegion, resolveDdgSafeSearch } from "./config.js";
 import { runDuckDuckGoSearch } from "./ddg-client.js";
 
 let fetch: MockInstance<typeof globalThis.fetch>;
@@ -37,7 +36,7 @@ async function search(query: string, html?: string) {
   if (html !== undefined) {
     fetch.mockResolvedValue(htmlResponse(html));
   }
-  return await runDuckDuckGoSearch({ query, cacheTtlMinutes: 0 });
+  return await runDuckDuckGoSearch({ query });
 }
 
 it.each([4.5, 11])("rejects invalid count %s before searching", async (count) => {
@@ -111,16 +110,25 @@ it("bounds successful DuckDuckGo HTML bodies without using response.text()", asy
   expect(textSpy).not.toHaveBeenCalled();
 });
 
-it("reads region from plugin config and normalizes empty values away", () => {
-  expect(resolveDdgRegion(pluginConfig({ region: "de-de" }))).toBe("de-de");
-  expect(resolveDdgRegion(pluginConfig({ region: "   " }))).toBeUndefined();
-});
-
-it("defaults safeSearch to moderate and accepts strict and off", () => {
-  expect(resolveDdgSafeSearch(undefined)).toBe("moderate");
-  expect(resolveDdgSafeSearch(pluginConfig({ safeSearch: "strict" }))).toBe("strict");
-  expect(resolveDdgSafeSearch(pluginConfig({ safeSearch: "off" }))).toBe("off");
-});
+it.each([
+  { label: "configured region", options: { region: "de-de" }, region: "de-de", safeSearch: "-1" },
+  { label: "blank region", options: { region: "   " }, region: null, safeSearch: "-1" },
+  { label: "default safeSearch", options: {}, region: null, safeSearch: "-1" },
+  { label: "strict safeSearch", options: { safeSearch: "strict" }, region: null, safeSearch: "1" },
+  { label: "off safeSearch", options: { safeSearch: "off" }, region: null, safeSearch: "-2" },
+])(
+  "sends $label from plugin config in the search request",
+  async ({ label, options, region, safeSearch }) => {
+    fetch.mockResolvedValue(htmlResponse(""));
+    await createSearchTool(pluginConfig(options)).execute({ query: `DuckDuckGo config ${label}` });
+    expect(fetch).toHaveBeenCalledOnce();
+    const request = fetch.mock.calls[0]?.[0];
+    assert(typeof request === "string", "Expected DuckDuckGo request URL");
+    const url = new URL(request);
+    expect(url.searchParams.get("kl")).toBe(region);
+    expect(url.searchParams.get("kp")).toBe(safeSearch);
+  },
+);
 
 it("parses href-first links and highlights without mistaking snippets for a challenge", async () => {
   const html = `

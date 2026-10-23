@@ -15,12 +15,13 @@ import {
 import { handleMarkdownTableInteraction } from "../../../components/markdown-tables.ts";
 import { LoadingState } from "../../../components/solid/loading-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import {
   anchorFromNavigationEvent,
   shouldHandleNavigationClick,
 } from "../../../lib/navigation-click.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
 import { projectOwner, projectSource } from "../../../lib/reactive/projection.ts";
@@ -47,6 +48,8 @@ import { projectChatTranscript } from "./chat-transcript-projection.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 import { ChatWelcome } from "./chat-welcome.tsx";
 
+registerEnglishCatalog(registerChatSessionEnglish);
+
 const EMPTY_ENTRY_KEYS: ReadonlyMap<string, string> = new Map();
 
 function navigateCronRunLink(event: Event, props: ChatThreadProps): boolean {
@@ -72,6 +75,8 @@ export function ChatThread(input: {
   const search = createMemo(() =>
     projectOwner(getTranscriptState(paneId()).search, (owner) => owner.snapshot, Object.is),
   );
+  const transcript = createMemo(() => input.transcript);
+  const geometry = createMemo(() => projectOwner(transcript(), (owner) => owner));
   const presentation = createMemo(
     () =>
       input.transcript.renderSession(input.props.sessionKey, (session) => ({
@@ -143,6 +148,8 @@ export function ChatThread(input: {
   );
   const sentinel = () => (input.props.historyPagination ? historySentinel : undefined);
   const contents = createMemo(() => {
+    // Native range changes redraw this island without preparing the whole pane.
+    geometry().read();
     if (routeLoading()) {
       return mobile() ? <ChatConversationLoading route /> : <LoadingState />;
     }

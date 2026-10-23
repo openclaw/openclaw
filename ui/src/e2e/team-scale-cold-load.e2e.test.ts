@@ -213,15 +213,17 @@ suite.define(() => {
         }
 
         const sidebar = page.locator("openclaw-app-sidebar");
+        const pinned = sidebar.locator('[data-session-section="pinned"] .sidebar-recent-session');
         const lastPin = sidebar.locator(
-          `.sidebar-rail [data-sidebar-entry="session:${fixture.pinnedKeys[29]}"]`,
+          `[data-session-section="pinned"] [data-session-key="${fixture.pinnedKeys[29]}"]`,
         );
         await lastPin
-          .getByRole("link", { name: "Project dashboard 30", exact: true })
+          .getByText("Project dashboard 30", { exact: true })
           .waitFor({ state: "attached" });
+        expect(await pinned.count()).toBe(30);
         expect(
           await sidebar.locator('.sidebar-rail [data-sidebar-entry^="session:"]').count(),
-        ).toBe(30);
+        ).toBe(0);
         await sidebar.locator('[data-sidebar-entry="plugin:team-scale-7/overview"]').waitFor();
         const activations = await gateway.getRequests("plugins.controlUi.report");
         expect(activations).toHaveLength(1);
@@ -252,10 +254,7 @@ suite.define(() => {
           await document.fonts.ready;
           return [...document.fonts].map(({ family, status }) => ({ family, status }));
         });
-        expect(fontState).toContainEqual({
-          family: "TeamMetric",
-          status: "loaded",
-        });
+        expect(fontState).toContainEqual({ family: "TeamMetric", status: "loaded" });
         await page
           .frameLocator(".chat-tool-card__preview-frame")
           .last()

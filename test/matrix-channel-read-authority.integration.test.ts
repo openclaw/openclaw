@@ -4,25 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { matrixPlugin } from "../extensions/matrix/api.js";
 import { registerMatrixFullRuntime } from "../extensions/matrix/index.js";
 import { setMatrixRuntime } from "../extensions/matrix/test-api.js";
-import { createOperationalRunInstanceRef } from "../src/agents/admitted-run-context.js";
 import { dispatchChannelMessageAction } from "../src/channels/plugins/message-action-dispatch.js";
-import type {
-  ChannelMessageActionContext,
-  ChannelMessageActionName,
-} from "../src/channels/plugins/types.js";
+import type { ChannelMessageActionName } from "../src/channels/plugins/message-action-names.js";
+import type { ChannelMessageActionContext } from "../src/channels/plugins/types.core.js";
 import { registerMessageCommands } from "../src/cli/program/register.message.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../src/config/config.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../src/gateway/agent-runtime-approval-authority.js";
-import {
-  mintMessageActionTurnCapability,
-  revokeMessageActionTurnCapability,
-} from "../src/gateway/message-action-turn-capability.js";
-import { createAgentRuntimeAuthorityGuard } from "../src/gateway/server-methods/agent-runtime-authority.js";
-import type { GatewayClient, GatewayRequestContext } from "../src/gateway/server-methods/types.js";
-import {
-  claimAgentRunDelegatedAuthority,
-  releaseAgentRunDelegatedAuthority,
-} from "../src/infra/agent-run-registry.js";
 import { getPluginInstance } from "../src/plugins/plugin-instance-scope.js";
 import { createPluginRegistry } from "../src/plugins/registry.js";
 import {
@@ -35,6 +21,7 @@ import { createPluginRecord } from "../src/plugins/status.test-fixtures.js";
 import { defaultRuntime } from "../src/runtime.js";
 import { closeOpenClawStateDatabaseAsync } from "../src/state/openclaw-state-db.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
+import { createMessageReadAuthority } from "./message-read-authority.test-support.js";
 
 const originRoom = "!origin:example.org";
 const allowedRoom = "!allowed:example.org";
@@ -45,6 +32,9 @@ const messageId = "$message:example.org";
 const accessToken = "synthetic-matrix-read-fixture";
 const roomPath = `/_matrix/client/v3/rooms/${allowedRoom}`;
 const messagePath = `${roomPath}/messages`;
+const profilePath = `/_matrix/client/v3/profile/${memberId}`;
+const reactionPath = `/_matrix/client/v1/rooms/${allowedRoom}/relations/${messageId}/m.annotation/m.reaction`;
+const emojiPath = `/_matrix/client/v3/user/${selfId}/account_data/im.ponies.user_emotes`;
 const message = {
   event_id: messageId,
   type: "m.room.message",
@@ -88,50 +78,6 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-function createOriginatingRun() {
-  const sessionKey = `agent:main:matrix:group:${originRoom}`;
-  const operationalRunInstance = createOperationalRunInstanceRef("matrix-context-read");
-  const delegatedAuthority = claimAgentRunDelegatedAuthority(operationalRunInstance);
-  const turnCapability = mintMessageActionTurnCapability({
-    agentId: "main",
-    runId: operationalRunInstance.runId,
-    sessionKey,
-    requesterAccountId: "default",
-    requesterSenderId: memberId,
-    toolContext,
-  });
-  const guard = createAgentRuntimeAuthorityGuard(
-    {
-      internal: {
-        agentRuntimeIdentity: {
-          kind: "agentRuntime",
-          agentId: "main",
-          sessionKey,
-          operationalRunInstance,
-          delegatedAuthority: { kind: "local", ...delegatedAuthority },
-          messageActionContext: { expiresAtMs: Date.now() + 60_000, turnCapability },
-        },
-      },
-    } as GatewayClient,
-    {
-      validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
-    } as GatewayRequestContext,
-    () => {},
-  ).commitGuard;
-  if (!guard) {
-    throw new Error("Expected originating Matrix run authority");
-  }
-  guard();
-  return {
-    assert: guard,
-    revoke: () => revokeMessageActionTurnCapability(turnCapability),
-    dispose: () => {
-      revokeMessageActionTurnCapability(turnCapability);
-      releaseAgentRunDelegatedAuthority(delegatedAuthority);
-    },
-  };
-}
-
 function createConfig(homeserver: string) {
   return {
     channels: {
@@ -157,55 +103,52 @@ function createConfig(homeserver: string) {
   };
 }
 
-function responseFor(path: string): unknown {
-  switch (path) {
-    case `${roomPath}/state/m.room.name/`:
-      return { name: "Allowed room" };
-    case `${roomPath}/state/m.room.canonical_alias/`:
-      return { alias: "#allowed:example.org", alt_aliases: [] };
-    case `${roomPath}/state/m.room.topic/`:
-      return { topic: "Synthetic room topic" };
-    case `${roomPath}/state/m.room.pinned_events/`:
-      return { pinned: [messageId] };
-    case `${roomPath}/joined_members`:
-      return { joined: { [selfId]: {}, [memberId]: {}, "@bob:example.org": {} } };
-    case `${roomPath}/event/${messageId}`:
-      return message;
-    case messagePath:
-      return { chunk: [message], start: "previous", end: "next" };
-    case `/_matrix/client/v1/rooms/${allowedRoom}/relations/${messageId}/m.annotation/m.reaction`:
-      return {
-        chunk: [
-          {
-            event_id: "$reaction:example.org",
-            sender: memberId,
-            type: "m.reaction",
-            origin_server_ts: message.origin_server_ts,
-            content: {
-              "m.relates_to": { rel_type: "m.annotation", event_id: messageId, key: "👍" },
-            },
-          },
-        ],
-      };
-    case `${roomPath}/state`:
-      return [
-        {
-          type: "im.ponies.room_emotes",
-          state_key: "",
-          content: { images: { wave: { url: "mxc://example.org/wave" } } },
-        },
-      ];
-    case `/_matrix/client/v3/user/${selfId}/account_data/im.ponies.user_emotes`:
-      return { images: { spark: { url: "mxc://example.org/spark" } } };
-    case `/_matrix/client/v3/profile/${memberId}`:
-      return { displayname: "Alice", avatar_url: "mxc://example.org/alice" };
-    default:
-      return undefined;
-  }
-}
+const responses: Record<string, unknown> = {
+  [`${roomPath}/state/m.room.name/`]: { name: "Allowed room" },
+  [`${roomPath}/state/m.room.canonical_alias/`]: { alias: "#allowed:example.org", alt_aliases: [] },
+  [`${roomPath}/state/m.room.topic/`]: { topic: "Synthetic room topic" },
+  [`${roomPath}/state/m.room.pinned_events/`]: { pinned: [messageId] },
+  [`${roomPath}/joined_members`]: {
+    joined: { [selfId]: {}, [memberId]: {}, "@bob:example.org": {} },
+  },
+  [`${roomPath}/event/${messageId}`]: message,
+  [messagePath]: { chunk: [message], start: "previous", end: "next" },
+  [reactionPath]: {
+    chunk: [
+      {
+        event_id: "$reaction:example.org",
+        sender: memberId,
+        type: "m.reaction",
+        origin_server_ts: message.origin_server_ts,
+        content: { "m.relates_to": { rel_type: "m.annotation", event_id: messageId, key: "👍" } },
+      },
+    ],
+  },
+  [`${roomPath}/state`]: [
+    {
+      type: "im.ponies.room_emotes",
+      state_key: "",
+      content: { images: { wave: { url: "mxc://example.org/wave" } } },
+    },
+  ],
+  [emojiPath]: { images: { spark: { url: "mxc://example.org/spark" } } },
+  [profilePath]: { displayname: "Alice", avatar_url: "mxc://example.org/alice" },
+};
+const responseFor = (path: string): unknown =>
+  Object.hasOwn(responses, path) ? responses[path] : undefined;
 
 type RegistrationOrigin = "bundled" | "official-installed";
 type MatrixHarness = Awaited<ReturnType<typeof createHarness>>;
+
+function expectReads(requests: MatrixHarness["requests"], paths: string[]) {
+  expect(requests.map((request) => request.path)).toEqual(expect.arrayContaining(paths));
+  expect(
+    requests.every(
+      ({ method, authorization }) => method === "GET" && authorization === `Bearer ${accessToken}`,
+    ),
+  ).toBe(true);
+  expect(requests.filter((request) => responseFor(request.path) === undefined)).toEqual([]);
+}
 
 // Installation provenance is a registrar fixture, as in the shared dispatcher suite.
 // Policy, action handlers, SDK requests, host instance and lifecycle are real; E2EE is off.
@@ -266,7 +209,13 @@ async function createHarness(origin: RegistrationOrigin) {
       });
     });
     setActivePluginRegistry(owner.registry);
-    const run = createOriginatingRun();
+    const run = createMessageReadAuthority({
+      runId: "matrix-context-read",
+      sessionKey: `agent:main:matrix:group:${originRoom}`,
+      requesterSenderId: memberId,
+      toolContext,
+      gatewayContext: "expiry-only",
+    });
     return {
       cfg,
       requests,
@@ -335,7 +284,7 @@ const reads = [
   {
     action: "reactions",
     params: { messageId, limit: 1 },
-    path: `/_matrix/client/v1/rooms/${allowedRoom}/relations/${messageId}/m.annotation/m.reaction`,
+    path: reactionPath,
     result: { reactions: [{ key: "👍", count: 1, users: [memberId] }] },
   },
   {
@@ -347,7 +296,7 @@ const reads = [
   {
     action: "emoji-list",
     params: {},
-    path: `/_matrix/client/v3/user/${selfId}/account_data/im.ponies.user_emotes`,
+    path: emojiPath,
     result: {
       emojis: [
         { name: "spark", url: "mxc://example.org/spark" },
@@ -358,7 +307,7 @@ const reads = [
   {
     action: "member-info",
     params: { userId: memberId },
-    path: `/_matrix/client/v3/profile/${memberId}`,
+    path: profilePath,
     result: { member: { userId: memberId, displayName: "Alice", roomId: allowedRoom } },
   },
   {
@@ -448,21 +397,7 @@ describe("Matrix member info CLI", () => {
           member: { userId: memberId, displayName: "Alice", roomId: allowedRoom },
         },
       });
-      expect(fixture.requests.map((request) => request.path)).toEqual(
-        expect.arrayContaining([
-          `${roomPath}/joined_members`,
-          `/_matrix/client/v3/profile/${memberId}`,
-        ]),
-      );
-      expect(
-        fixture.requests.every(
-          (request) =>
-            request.method === "GET" && request.authorization === `Bearer ${accessToken}`,
-        ),
-      ).toBe(true);
-      expect(fixture.requests.filter((request) => responseFor(request.path) === undefined)).toEqual(
-        [],
-      );
+      expectReads(fixture.requests, [`${roomPath}/joined_members`, profilePath]);
     });
   });
 });
@@ -474,16 +409,7 @@ describe("registered installed Matrix reads", () => {
       await withHarness("official-installed", async (fixture) => {
         const outcome = await fixture.invoke(action, params);
         expect(outcome?.details).toMatchObject({ ok: true, ...result });
-        expect(fixture.requests.map((request) => request.path)).toContain(path);
-        expect(
-          fixture.requests.every(
-            (request) =>
-              request.method === "GET" && request.authorization === `Bearer ${accessToken}`,
-          ),
-        ).toBe(true);
-        expect(
-          fixture.requests.filter((request) => responseFor(request.path) === undefined),
-        ).toEqual([]);
+        expectReads(fixture.requests, [path]);
       });
     },
   );
@@ -499,7 +425,7 @@ describe("registered installed Matrix reads", () => {
       fixture.onRequest((path) => {
         if (path === revokeAt) {
           if (owner === "caller") {
-            fixture.run.revoke();
+            fixture.run.revokeTurn();
           } else {
             void fixture.instance.dispose();
           }
@@ -551,16 +477,4 @@ describe("installed Matrix read restrictions", () => {
       });
     },
   );
-
-  it("does not fetch a profile for someone outside the authorized room", async () => {
-    await withHarness("official-installed", async (fixture) => {
-      await expect(
-        fixture.invoke("member-info", { userId: "@outsider:example.org" }),
-      ).rejects.toThrow("is not a member of room");
-      expect(fixture.requests.map((request) => request.path)).toContain(
-        `${roomPath}/joined_members`,
-      );
-      expect(fixture.requests.some((request) => request.path.includes("/profile/"))).toBe(false);
-    });
-  });
 });

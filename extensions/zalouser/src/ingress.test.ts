@@ -143,7 +143,6 @@ describe("Zalouser durable ingress", () => {
       const ingress = createIngress({
         queue,
         dispatch,
-        pollIntervalMs: 60_000,
       });
       await ingress.receive(createRawZalouserMessage({ msgId: "lane-1" }));
       await ingress.receive(createRawZalouserMessage({ msgId: "lane-2" }));
@@ -206,7 +205,6 @@ describe("Zalouser durable ingress", () => {
           lifecycle.onDeferred();
           deferred.resolve(lifecycle);
         },
-        pollIntervalMs: 60_000,
         adoptionStallTimeoutMs: 10,
       });
       try {

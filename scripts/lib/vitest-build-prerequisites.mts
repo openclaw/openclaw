@@ -171,6 +171,13 @@ const runtimeConsumers = [
     dir: "src/agents",
   })),
   {
+    // Its cold catalog worker imports the bundled provider's built public SDK.
+    file: "src/agents/clawrouter-catalog-discovery.e2e.test.ts",
+    configs: ["test/vitest/vitest.e2e.config.ts"],
+    mode: "runtime",
+    dir: "src/agents",
+  },
+  {
     file: "src/plugins/plugin-module-generation.sdk.test.ts",
     configs: ["test/vitest/vitest.plugins.config.ts"],
     mode: "runtime",

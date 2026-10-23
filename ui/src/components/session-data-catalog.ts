@@ -37,7 +37,7 @@ import {
   createPanelRefreshStatus,
   failPanelRefresh,
   type PanelRefreshStatus,
-} from "./panel-refresh-status.ts";
+} from "./panel-refresh-status-state.ts";
 import type { ContextualSidebar } from "./sidebar-context-state.ts";
 
 export interface SessionDataInputs {
@@ -85,13 +85,11 @@ export interface SessionCatalogDataOwner {
 interface SessionCatalogResetOwner extends SessionCatalogDataOwner {
   sessionScopeGeneration: number;
   pendingCatalogArchives: ReadonlySet<string>;
-  sessionsLoading: boolean;
 }
 
 export function retireSessionCatalogData(owner: SessionCatalogResetOwner): void {
   owner.sessionScopeGeneration += 1;
   owner.pendingCatalogArchives = new Set();
-  owner.sessionsLoading = false;
   owner.loadingMoreSessionCatalogIds = new Set();
   owner.sessionCatalogLive.clear();
 }

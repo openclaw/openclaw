@@ -44,14 +44,6 @@ function commandArgsHint(spec: NativeCommandSpec): string {
   return spec.acceptsArgs ? "[args]" : "";
 }
 
-function errorStatus(error: unknown): number | undefined {
-  if (!error || typeof error !== "object" || !("status" in error)) {
-    return undefined;
-  }
-  const status = error.status;
-  return typeof status === "number" ? status : undefined;
-}
-
 function mapNativeCommandSpecsToClickClackMenu(
   specs: NativeCommandSpec[],
   log?: ChannelGatewayContext<ResolvedClickClackAccount>["log"],
@@ -204,7 +196,7 @@ export async function startClickClackGatewayAccount(
       const commands = mapNativeCommandSpecsToClickClackMenu(specs, ctx.log);
       await client.setBotCommands(commands);
     } catch (error) {
-      const status = errorStatus(error);
+      const status = error instanceof ClickClackHttpError ? error.status : undefined;
       const messagePrefix = `[${account.accountId}] ClickClack command menu sync`;
       if (status === 403) {
         ctx.log?.warn?.(

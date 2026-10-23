@@ -257,10 +257,14 @@ export const SessionsFilesListResultSchema = closedObject({
 });
 
 /** Reads one session-referenced file by path. */
-export const SessionsFilesGetParamsSchema = closedObject({
+const sessionFilePathProperties = {
   sessionKey: NonEmptyString,
   path: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
+};
+export const SessionsFilesGetParamsSchema = closedObject({
+  ...sessionFilePathProperties,
+  messageEntryId: Type.Optional(NonEmptyString),
 });
 
 const SessionFileSourceSchema = closedObject({
@@ -323,7 +327,7 @@ export const SessionsFilesAssetsResultSchema = closedObject({
 
 /** Overwrites an existing file with content and optional managed-source preconditions. */
 export const SessionsFilesSetParamsSchema = closedObject({
-  ...SessionsFilesGetParamsSchema.properties,
+  ...sessionFilePathProperties,
   expectedSource: Type.Optional(SessionFileSourceSchema),
   content: Type.String(),
   expectedHash: SessionFileHashSchema,

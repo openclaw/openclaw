@@ -147,12 +147,10 @@ it.each(["timer maintenance", "startup catch-up"] as const)(
       expect(persisted.enabled).toBe(0);
       order.push("notify");
     });
-    const requestHeartbeat = vi.fn();
     const state = createCronServiceState({
       storePath: store.storePath,
       nowMs: () => now,
       enqueueSessionEvent,
-      requestHeartbeat,
       runIsolatedAgentJob: createDefaultIsolatedRunner(),
     });
     if (path === "startup catch-up") {
@@ -162,7 +160,6 @@ it.each(["timer maintenance", "startup catch-up"] as const)(
     }
 
     expect(order).toEqual(["notify"]);
-    expect(requestHeartbeat).not.toHaveBeenCalled();
     expect(state.store?.jobs.find((job) => job.id === malformed.id)?.enabled).toBe(false);
     expect(
       (await loadCronStore(store.storePath)).jobs.find((job) => job.id === malformed.id),
@@ -444,4 +441,83 @@ it.each(["ok", "error"] as const)("force run preserves the every cadence after %
   expect(job.state.lastRunAtMs).toBe(nowMs);
   expect(job.state.lastStatus).toBe(status);
   expect(job.state.nextRunAtMs).toBe(expectedNextMs);
+});
+
+it("pauses a parent-linked job once when its parent conversation is gone", () => {
+  const { job, apply, deferredNotifications } = outcomeFixture(startedAt);
+  const pause = {
+    reason: "archived" as const,
+    parentSessionKey: "agent:main:dashboard:parent",
+  };
+  apply({ status: "skipped", error: "paused: parent archived", parentUnavailable: pause });
+  expect(job.enabled).toBe(false);
+  expect(job.state.nextRunAtMs).toBeUndefined();
+  expect(deferredNotifications).toEqual([
+    expect.objectContaining({ kind: "auto-disabled", text: "paused: parent archived" }),
+  ]);
+  // A second settled outcome for the already-paused job sends nothing new.
+  apply({ status: "skipped", error: "paused: parent archived", parentUnavailable: pause });
+  expect(deferredNotifications).toHaveLength(1);
+});
+
+it("sends one notice when an alert route also reports skipped runs", () => {
+  const { job, apply, deferredNotifications } = outcomeFixture(startedAt, {
+    failureAlert: { after: 1, cooldownMs: 0, includeSkipped: true },
+  });
+  apply({
+    status: "skipped",
+    error: "paused: parent archived",
+    parentUnavailable: { reason: "archived", parentSessionKey: "agent:main:dashboard:parent" },
+  });
+  expect(job.enabled).toBe(false);
+  expect(deferredNotifications).toEqual([
+    expect.objectContaining({ kind: "auto-disabled", text: "paused: parent archived" }),
+  ]);
+});
+
+it("sends the pause notice to the agent that owns the gone conversation", () => {
+  const parentSessionKey = "agent:ops:dashboard:parent";
+  const { apply, deferredNotifications } = outcomeFixture(startedAt, {
+    agentId: undefined,
+    sessionKey: parentSessionKey,
+  });
+  apply({
+    status: "skipped",
+    error: "paused: parent archived",
+    parentUnavailable: { reason: "archived", parentSessionKey },
+  });
+  expect(deferredNotifications).toEqual([
+    expect.objectContaining({
+      kind: "auto-disabled",
+      job: expect.objectContaining({ agentId: "ops" }),
+    }),
+  ]);
+  expect(deferredNotifications[0]?.job).not.toHaveProperty("sessionKey");
+});
+
+it("sends the pause notice for a one-shot job too", () => {
+  const { job, apply, deferredNotifications } = outcomeFixture(startedAt, {
+    schedule: { kind: "at", at: new Date(startedAt).toISOString() },
+  });
+  apply({
+    status: "skipped",
+    error: "paused: parent removed",
+    parentUnavailable: { reason: "removed", parentSessionKey: "agent:main:dashboard:parent" },
+  });
+  expect(job.enabled).toBe(false);
+  expect(deferredNotifications.filter((notice) => notice.kind === "auto-disabled")).toHaveLength(1);
+});
+
+it("leaves a newer operator edit alone when a pause result is stale", () => {
+  const { job, apply, deferredNotifications } = outcomeFixture(startedAt);
+  apply(
+    {
+      status: "skipped",
+      error: "paused: parent archived",
+      parentUnavailable: { reason: "archived", parentSessionKey: "agent:main:dashboard:parent" },
+    },
+    { scheduleOwnership: "stale" },
+  );
+  expect(job.enabled).toBe(true);
+  expect(deferredNotifications.filter((notice) => notice.kind === "auto-disabled")).toEqual([]);
 });

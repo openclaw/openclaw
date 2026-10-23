@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { hash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
@@ -6,16 +7,7 @@ import {
   packControlUiLocaleArtifact,
   restoreControlUiLocaleArtifacts,
 } from "../../scripts/control-ui-locale-artifacts.ts";
-import {
-  hashControlUiTranslationText,
-  loadControlUiTranslationMemory,
-  materializeControlUiLocaleCatalog,
-} from "../../scripts/lib/control-ui-i18n-catalog-values.ts";
 import { CONTROL_UI_LOCALE_ENTRIES } from "../../scripts/lib/control-ui-i18n-config.ts";
-import {
-  createControlUiLocaleSyncPlan,
-  flattenTranslations,
-} from "../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { readWorkflow, runGit, type WorkflowStep } from "./ci-workflow.test-support.js";
 
@@ -27,6 +19,18 @@ const current = new Map(Object.entries({ keep: "Keep", edit: "New {name}", add: 
 const core = assetRoots[0]!;
 const svMemory = core + "/sv.tm.jsonl";
 const svMetadata = core + "/sv.meta.json";
+const workerMemory = (locale: string) =>
+  `${JSON.stringify({
+    cache_key: "fixture",
+    segment_id: "keep",
+    source_path: "ui/src/i18n/locales/en.ts",
+    src_lang: "en",
+    tgt_lang: locale,
+    text: "Keep",
+    text_hash: hash("sha256", "Keep", "hex"),
+    translated: "Behåll",
+    updated_at: "2026-10-19T00:00:00Z",
+  })}\n`;
 const artifactCli = path.resolve("scripts/control-ui-locale-artifacts.ts");
 const workflow = readWorkflow(".github/workflows/control-ui-locale-refresh.yml");
 type Artifact = Record<"sourceCommit" | "runId" | "runAttempt", string> & {
@@ -70,50 +74,6 @@ function commit(root: string, message: string) {
   return runGit(root, ["rev-parse", "HEAD"]);
 }
 
-function plan(root: string, assets: string, locale: string, sourceFlat = original, force = false) {
-  const entry = CONTROL_UI_LOCALE_ENTRIES.find((candidate) => candidate.locale === locale)!;
-  const memory = loadControlUiTranslationMemory(path.join(root, assets, locale + ".tm.jsonl"));
-  return createControlUiLocaleSyncPlan({
-    allowTranslate: true,
-    cacheKeyFor: (key, hash) => key + ":" + hash,
-    entry,
-    existingFlat: flattenTranslations(materializeControlUiLocaleCatalog(sourceFlat, memory)),
-    force,
-    hashText: hashControlUiTranslationText,
-    previousMeta: JSON.parse(read(root, `${assets}/${locale}.meta.json`)),
-    sourceFlat,
-    sourceHash: JSON.stringify([...sourceFlat]),
-    sourcePath: "ui/src/i18n/locales/en.ts",
-    translationMemory: memory,
-  });
-}
-
-function translate(root: string, assets: string, locale: string, sourceFlat = original) {
-  const planned = plan(root, assets, locale, sourceFlat);
-  planned.recordTranslations(
-    planned.pending,
-    new Map(
-      Object.entries({
-        keep: "Behåll",
-        edit: sourceFlat === original ? "Gammal {count}" : "Ny {name}",
-        remove: "Borttagen",
-        add: "Tillagd",
-      }),
-    ),
-    { sourceLocale: "en", updatedAt: () => "2026-10-19T00:00:00Z" },
-  );
-  const result = planned.render({
-    defaultGlossary: [],
-    glossary: [],
-    generatedAt: "2026-10-19T00:00:00Z",
-    workflow: 1,
-  });
-  put(root, assets + "/" + locale + ".tm.jsonl", result.translationMemory);
-  put(root, assets + "/" + locale + ".meta.json", result.meta);
-  expect(result.fallbackCount).toBe(0);
-  return planned.pending.map(({ key }) => key);
-}
-
 async function createFixture() {
   const directory = tempDirs.make("locale-artifacts-");
   const root = tempDirs.make("locale-reconciliation-");
@@ -146,17 +106,17 @@ async function createFixture() {
       put(root, assets + "/" + locale + ".meta.json", metadata(locale));
     }
   }
-  // Reproduce a newly added locale, not a full 21-locale cold publication.
-  for (const locale of locales.filter((candidate) => candidate !== "sv")) {
-    for (const assets of assetRoots) {
-      translate(root, assets, locale);
-    }
-  }
   const sourceCommit = commit(root, "canonical baseline");
   const identity = { sourceCommit, runId: "123", runAttempt: "1" };
   for (const locale of locales) {
     for (const assets of assetRoots) {
-      translate(root, assets, locale);
+      // Artifact transport owns opaque bytes; actual translation is proved by the finalizer suite.
+      put(root, assets + "/" + locale + ".tm.jsonl", workerMemory(locale));
+      put(
+        root,
+        assets + "/" + locale + ".meta.json",
+        metadata(locale, { totalKeys: 1, translatedKeys: 1 }),
+      );
     }
     await packControlUiLocaleArtifact({ root, directory, locale, identity });
   }
@@ -194,15 +154,7 @@ it("runs the workflow restore CLI with the bound attempt and exposes its fresh s
   expect(result.status, result.stdout + result.stderr).toBe(0);
   expect(readFileSync(output, "utf8")).toBe("sha=" + fresh + "\ninvalidated=[]\n");
   for (const assets of assetRoots) {
-    expect(plan(f.root, assets, "sv", current).pending.map(({ key }) => key)).toEqual([
-      "edit",
-      "add",
-    ]);
-    expect(translate(f.root, assets, "sv", current)).toEqual(["edit", "add"]);
-    const memory = read(f.root, assets + "/sv.tm.jsonl");
-    expect(memory).toContain("Behåll");
-    expect(memory).toContain("Ny {name}");
-    expect(memory).not.toContain("Borttagen");
+    expect(read(f.root, assets + "/sv.tm.jsonl")).toBe(workerMemory("sv"));
   }
 });
 
@@ -215,7 +167,7 @@ it("retains completed workers when only the finalizer is retried in the same run
       identity: { ...f.identity, runAttempt: "2" },
     }),
   ).resolves.toEqual({ sourceCommit: f.identity.sourceCommit, invalidated: [] });
-  expect(plan(f.root, core, "sv").pending).toEqual([]);
+  expect(read(f.root, svMemory)).toBe(workerMemory("sv"));
 });
 
 it("rejects a replacement history before importing matching artifact envelopes", async () => {
@@ -231,8 +183,7 @@ it.each(["canonical", "metadata", "glossary", "policy", "ownership"])(
   async (change) => {
     const f = await createFixture();
     if (change === "canonical") {
-      translate(f.root, core, "sv");
-      put(f.root, svMemory, read(f.root, svMemory).replace("Behåll", "Korrigerad"));
+      put(f.root, svMemory, workerMemory("sv").replace("Behåll", "Korrigerad"));
     } else if (change === "metadata") {
       put(f.root, svMetadata, metadata("sv", { fallbackKeys: ["keep"] }));
     } else if (change === "glossary") {
@@ -252,14 +203,6 @@ it.each(["canonical", "metadata", "glossary", "policy", "ownership"])(
       change === "policy" || change === "ownership" ? locales : ["sv"],
     );
     expect(read(f.root, svMemory)).toBe(before);
-    if (change === "canonical") {
-      expect(plan(f.root, core, "sv").pending).toEqual([]);
-    }
-    expect(plan(f.root, core, "sv", original, true).pending.map(({ key }) => key)).toEqual([
-      "keep",
-      "edit",
-      "remove",
-    ]);
   },
 );
 

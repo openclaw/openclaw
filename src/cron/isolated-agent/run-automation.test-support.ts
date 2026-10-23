@@ -1,6 +1,6 @@
 import { vi } from "vitest";
 
-export const readCronScratchSnapshotMock = vi.fn();
+const readCronScratchSnapshotMock = vi.fn();
 export const appendSessionRuntimeContextMock = vi.fn();
 export const readSessionMessagesAsyncMock = vi.fn();
 // mock-isolation: Use the bounded conversation fixture instead of reading live transcripts.

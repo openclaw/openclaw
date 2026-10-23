@@ -754,22 +754,13 @@ export async function configureLmstudioNonInteractive(
     setupDiscoveryApiKey,
     useHeaderOnlyAuth,
   } = validated;
-  const normalizedCtx = customBaseUrl
-    ? {
-        ...ctx,
-        opts: {
-          ...ctx.opts,
-          customBaseUrl: baseUrl,
-        },
-      }
-    : ctx;
   if (useHeaderOnlyAuth) {
     await removeProviderAuthProfilesWithLock({
-      cfg: normalizedCtx.config,
+      cfg: ctx.config,
       provider: PROVIDER_ID,
-      agentDir: normalizedCtx.agentDir,
+      agentDir: ctx.agentDir,
     });
-    const configWithoutStoredLmstudioAuth = stripLmstudioStoredAuthConfig(normalizedCtx.config);
+    const configWithoutStoredLmstudioAuth = stripLmstudioStoredAuthConfig(ctx.config);
     return applyProviderDefaultModel(
       {
         ...configWithoutStoredLmstudioAuth,
@@ -805,9 +796,10 @@ export async function configureLmstudioNonInteractive(
   // Reuse the verified key without prompting again; the shared owner persists credentials.
   const configured = await configureOpenAICompatibleSelfHostedProviderNonInteractive({
     ctx: {
-      ...normalizedCtx,
+      ...ctx,
       opts: {
-        ...normalizedCtx.opts,
+        ...ctx.opts,
+        ...(customBaseUrl ? { customBaseUrl: baseUrl } : {}),
         customModelId: selectedModelId,
       },
       resolveApiKey: async () => resolvedOrSynthetic,

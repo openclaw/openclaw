@@ -238,9 +238,7 @@ export async function verifyUpdateFailureRecovery(params: {
           result.status = "ok";
         }
         if (run) {
-          recordUpdateRunDiagnostics(run.runId, { recovery: result.recovery }, warnRecording, {
-            env: run.env,
-          });
+          recordUpdateRunDiagnostics(run.runId, { recovery: result.recovery }, warnRecording, run);
         }
       }
     });
@@ -279,7 +277,7 @@ export async function verifyUpdateFailureRecovery(params: {
         return result;
       },
       warnRecording,
-      { env: run.env },
+      run,
     );
     // Unread history may still prohibit restart until the atomic merge confirms it.
     result.recovery =

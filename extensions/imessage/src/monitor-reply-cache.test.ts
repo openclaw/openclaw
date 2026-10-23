@@ -22,7 +22,7 @@ async function loadApi(options?: { preservePersistentState?: boolean }) {
     resolve: api.resolveIMessageMessageId,
     latest: api.findLatestIMessageEntryForChat,
     current: api.isIMessageCurrentMessageInChatAsync,
-    isOwn: api.isKnownFromMeIMessageMessageId,
+    isOwn: api.isKnownFromMeIMessageTarget,
     binding: api.resolveIMessageCachedResourceBinding,
   };
 }
@@ -30,6 +30,7 @@ let cache: Awaited<ReturnType<typeof loadApi>>;
 async function loadReplyCache(options?: { preservePersistentState?: boolean }) {
   cache = await loadApi(options);
 }
+const directChat = { chatGuid: "any;-;+12069106512", chatIdentifier: "+12069106512" };
 
 function remember(
   messageId: string,
@@ -88,17 +89,17 @@ describe("imessage short message id resolution", () => {
   it("recognizes only cached outbound message ids as own messages", async () => {
     const chat = {
       accountId: "default",
-      chatGuid: "any;-;+12069106512",
-      chatIdentifier: "+12069106512",
+      ...directChat,
       chatId: 3,
     };
     await remember("outbound-guid", { ...chat, isFromMe: true });
     await remember("inbound-guid", { ...chat, isFromMe: false });
 
-    expect(await cache.isOwn("outbound-guid", chat)).toBe(true);
-    expect(await cache.isOwn("inbound-guid", chat)).toBe(false);
+    expect(await cache.isOwn({ ...chat, messageIds: ["outbound-guid"] })).toBe(true);
+    expect(await cache.isOwn({ ...chat, messageIds: ["inbound-guid"] })).toBe(false);
     expect(
-      await cache.isOwn("outbound-guid", {
+      await cache.isOwn({
+        messageIds: ["outbound-guid"],
         accountId: "default",
         chatGuid: "any;-;+12069106514",
         chatIdentifier: "+12069106514",
@@ -135,11 +136,10 @@ describe("requireFromMe (edit / unsend authorization)", () => {
 describe("findLatestIMessageEntryForChat", () => {
   it("returns the latest entry for the matching chat scope", async () => {
     await remember("older", {
-      chatGuid: "any;-;+12069106512",
-      chatIdentifier: "+12069106512",
+      ...directChat,
       timestamp: Date.now() - 1000,
     });
-    await remember("newest", { chatGuid: "any;-;+12069106512", chatIdentifier: "+12069106512" });
+    await remember("newest", directChat);
 
     const result = cache.latest({
       accountId: "default",
@@ -240,8 +240,7 @@ describe("current-message chat binding", () => {
     });
     await remember("any-guid", {
       accountId: "work",
-      chatGuid: "any;-;+12069106512",
-      chatIdentifier: "+12069106512",
+      ...directChat,
     });
 
     expect(
@@ -271,8 +270,7 @@ describe("current-message chat binding", () => {
     const chatContext = { chatIdentifier: "+12069106512" };
     const entry = await remember("current-guid", {
       accountId: "work",
-      chatGuid: "any;-;+12069106512",
-      chatIdentifier: "+12069106512",
+      ...directChat,
       chatId: 42,
     });
 
@@ -283,8 +281,7 @@ describe("current-message chat binding", () => {
   it("fails closed for wrong accounts, chats, and unknown current messages", async () => {
     await remember("current-guid", {
       accountId: "work",
-      chatGuid: "any;-;+12069106512",
-      chatIdentifier: "+12069106512",
+      ...directChat,
       chatId: 42,
     });
 

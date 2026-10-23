@@ -1,6 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type, type TSchema } from "typebox";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseVideoGenerationModelRef } from "../../media-generation/model-ref.js";
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
@@ -21,7 +20,6 @@ import type {
   VideoGenerationResolution,
   VideoGenerationSourceAsset,
 } from "../../video-generation/types.js";
-import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { AgentGeneratedAttachment } from "../generated-attachments.js";
 import { buildMediaGenerationRequestKey } from "../media-generation-task-status-shared.js";
 import { getCustomProviderApiKey } from "../model-auth.js";
@@ -203,100 +201,6 @@ const VideoGenerateToolProperties = {
   ),
 } satisfies Record<string, TSchema>;
 
-function shouldExposeVideoReferenceAudioParams(params: {
-  cfg: OpenClawConfig;
-  agentDir?: string;
-  authStore?: AuthProfileStore;
-  authProfileStoreSource?: boolean;
-  workspaceDir?: string;
-}): boolean {
-  const snapshot = loadCapabilityMetadataSnapshot({
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-  });
-  const knownProviderIds = new Set<string>();
-  const audioCandidateProviderIds = new Set<string>();
-  const modelConfig = coerceToolModelConfig(params.cfg.agents?.defaults?.mediaModels?.video);
-  const explicitProviderIds = new Set<string>();
-  for (const modelRef of [modelConfig.primary, ...(modelConfig.fallbacks ?? [])]) {
-    const parsed = parseVideoGenerationModelRef(modelRef);
-    if (parsed?.provider) {
-      explicitProviderIds.add(
-        resolveProviderIdForAuth(parsed.provider, {
-          config: params.cfg,
-          ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-        }),
-      );
-    }
-  }
-  let normalizedConfig: ReturnType<typeof normalizePluginsConfig> | undefined;
-  let isInstalledPluginEnabled:
-    | ReturnType<typeof createInstalledPluginEnabledPredicate>
-    | undefined;
-
-  for (const plugin of snapshot.plugins) {
-    if (
-      !plugin.contracts?.videoGenerationProviders?.length ||
-      !isManifestPluginAvailableForControlPlane({
-        snapshot,
-        plugin,
-        config: params.cfg,
-        normalizedConfig: params.cfg.plugins
-          ? (normalizedConfig ??= normalizePluginsConfig(params.cfg.plugins))
-          : undefined,
-        isInstalledPluginEnabled: (isInstalledPluginEnabled ??=
-          createInstalledPluginEnabledPredicate(snapshot.index.plugins, params.cfg)),
-      })
-    ) {
-      continue;
-    }
-    for (const providerId of plugin.contracts.videoGenerationProviders) {
-      knownProviderIds.add(providerId);
-      const metadata = plugin.videoGenerationProviderMetadata?.[providerId];
-      const providerCanUseReferenceAudio = metadata?.referenceAudioInputs === true;
-      for (const alias of metadata?.aliases ?? []) {
-        knownProviderIds.add(alias);
-        if (providerCanUseReferenceAudio) {
-          audioCandidateProviderIds.add(alias);
-        }
-      }
-      if (providerCanUseReferenceAudio) {
-        audioCandidateProviderIds.add(providerId);
-      }
-    }
-  }
-
-  for (const providerId of explicitProviderIds) {
-    if (!knownProviderIds.has(providerId) || audioCandidateProviderIds.has(providerId)) {
-      return true;
-    }
-  }
-
-  for (const providerId of audioCandidateProviderIds) {
-    if (
-      getCustomProviderApiKey(params.cfg, providerId) !== undefined ||
-      hasSnapshotCapabilityProviderAvailability({
-        snapshot,
-        key: "videoGenerationProviders",
-        providerId,
-        config: params.cfg,
-        authStore: params.authStore,
-      }) ||
-      hasAuthForProvider({
-        provider: providerId,
-        cfg: params.cfg,
-        workspaceDir: params.workspaceDir,
-        agentDir: params.agentDir,
-        authStore: params.authStore,
-        authProfileStoreSource: params.authProfileStoreSource,
-      })
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
 export function createVideoGenerateTool(
   options?: MediaGenerateToolOptions,
   preparedAvailability?: boolean,
@@ -311,13 +215,97 @@ export function createVideoGenerateTool(
     return null;
   }
   const { cfg, preparedProviders, sandboxConfig, taskOptions } = context;
-  const includeAudioReferences = shouldExposeVideoReferenceAudioParams({
-    cfg,
-    agentDir: options?.agentDir,
-    authStore: options?.authProfileStore,
-    authProfileStoreSource: options?.authProfileStoreSource,
-    workspaceDir: options?.workspaceDir,
-  });
+  const includeAudioReferences = (() => {
+    const agentDir = options?.agentDir;
+    const authStore = options?.authProfileStore;
+    const authProfileStoreSource = options?.authProfileStoreSource;
+    const workspaceDir = options?.workspaceDir;
+    const snapshot = loadCapabilityMetadataSnapshot({
+      config: cfg,
+      workspaceDir,
+    });
+    const knownProviderIds = new Set<string>();
+    const audioCandidateProviderIds = new Set<string>();
+    const modelConfig = coerceToolModelConfig(cfg.agents?.defaults?.mediaModels?.video);
+    const explicitProviderIds = new Set<string>();
+    for (const modelRef of [modelConfig.primary, ...(modelConfig.fallbacks ?? [])]) {
+      const parsed = parseVideoGenerationModelRef(modelRef);
+      if (parsed?.provider) {
+        explicitProviderIds.add(
+          resolveProviderIdForAuth(parsed.provider, {
+            config: cfg,
+            ...(workspaceDir !== undefined ? { workspaceDir } : {}),
+          }),
+        );
+      }
+    }
+    let normalizedConfig: ReturnType<typeof normalizePluginsConfig> | undefined;
+    let isInstalledPluginEnabled:
+      | ReturnType<typeof createInstalledPluginEnabledPredicate>
+      | undefined;
+
+    for (const plugin of snapshot.plugins) {
+      if (
+        !plugin.contracts?.videoGenerationProviders?.length ||
+        !isManifestPluginAvailableForControlPlane({
+          snapshot,
+          plugin,
+          config: cfg,
+          normalizedConfig: cfg.plugins
+            ? (normalizedConfig ??= normalizePluginsConfig(cfg.plugins))
+            : undefined,
+          isInstalledPluginEnabled: (isInstalledPluginEnabled ??=
+            createInstalledPluginEnabledPredicate(snapshot.index.plugins, cfg)),
+        })
+      ) {
+        continue;
+      }
+      for (const providerId of plugin.contracts.videoGenerationProviders) {
+        knownProviderIds.add(providerId);
+        const metadata = plugin.videoGenerationProviderMetadata?.[providerId];
+        const providerCanUseReferenceAudio = metadata?.referenceAudioInputs === true;
+        for (const alias of metadata?.aliases ?? []) {
+          knownProviderIds.add(alias);
+          if (providerCanUseReferenceAudio) {
+            audioCandidateProviderIds.add(alias);
+          }
+        }
+        if (providerCanUseReferenceAudio) {
+          audioCandidateProviderIds.add(providerId);
+        }
+      }
+    }
+
+    for (const providerId of explicitProviderIds) {
+      if (!knownProviderIds.has(providerId) || audioCandidateProviderIds.has(providerId)) {
+        return true;
+      }
+    }
+
+    for (const providerId of audioCandidateProviderIds) {
+      if (
+        getCustomProviderApiKey(cfg, providerId) !== undefined ||
+        hasSnapshotCapabilityProviderAvailability({
+          snapshot,
+          key: "videoGenerationProviders",
+          providerId,
+          config: cfg,
+          authStore,
+        }) ||
+        hasAuthForProvider({
+          provider: providerId,
+          cfg,
+          workspaceDir,
+          agentDir,
+          authStore,
+          authProfileStoreSource,
+        })
+      ) {
+        return true;
+      }
+    }
+    return false;
+  })();
   const properties: Record<string, TSchema> = { ...VideoGenerateToolProperties };
   if (!includeAudioReferences) {
     delete properties.audioRef;

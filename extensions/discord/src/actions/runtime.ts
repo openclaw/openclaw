@@ -60,9 +60,6 @@ export async function handleDiscordAction(
   const isActionEnabled = createDiscordActionGate({ cfg, accountId });
 
   if (messagingActions.has(action)) {
-    if (!cfg) {
-      throw new Error("Discord messaging actions require a resolved runtime config.");
-    }
     const ctx = createDiscordMessagingActionContext({
       action,
       input: params,

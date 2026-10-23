@@ -238,6 +238,50 @@ describe("gateway bonjour advertiser", () => {
     expectWarnContaining("suppressing ciao netmask assertion");
   });
 
+  it("handles wrapped interface enumeration failures without hiding unrelated process errors", async () => {
+    await startAdvertiser();
+    const inner = Object.assign(
+      new Error("A system error occurred: uv_interface_addresses returned Unknown system error 1"),
+      { name: "SystemError" },
+    );
+    const wrapper = new Error("ciao NetworkManager init failed", { cause: inner });
+    for (const registration of [
+      registerUncaughtExceptionHandler,
+      registerUnhandledRejectionHandler,
+    ]) {
+      const handler = registration.mock.calls[0]?.[0];
+      if (typeof handler !== "function") {
+        throw new Error("expected Bonjour process error handler");
+      }
+      for (const error of [wrapper, inner]) {
+        logger.warn.mockClear();
+        expect(handler(error)).toBe(true);
+        expect(logger.warn).toHaveBeenCalledExactlyOnceWith(
+          "bonjour: disabling mDNS — networkInterfaces() unavailable in this environment: SystemError: A system error occurred: uv_interface_addresses returned Unknown system error 1",
+        );
+      }
+      logger.warn.mockClear();
+      expect(handler(new Error("boom"))).toBe(false);
+      expect(logger.warn).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each([
+    [Object.assign(new Error("   "), { name: "AbortError" }), "AbortError"],
+    [new Error("   "), "Error"],
+    [new Error(""), "Error"],
+    ["boom", "boom"],
+    [42, "42"],
+  ])("formats advertise rejection %j as %s", async (error, formatted) => {
+    const advertise = vi.fn().mockRejectedValue(error);
+    mockCiaoService({ advertise, serviceState: "unannounced" });
+    await startAdvertiser();
+    await Promise.resolve();
+    expect(logger.warn).toHaveBeenCalledExactlyOnceWith(
+      `bonjour: advertise failed (gateway fqdn=openclaw-gw.local. host=test-host port=18789 state=unannounced): ${formatted}`,
+    );
+  });
+
   it("logs advertise failures without starting a competing retry loop", async () => {
     vi.useFakeTimers();
     const advertise = vi.fn().mockRejectedValue(new Error("boom"));

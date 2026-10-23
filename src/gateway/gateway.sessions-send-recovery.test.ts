@@ -341,7 +341,6 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
               skipBootstrap: true,
               utilityModel: "",
               skills: [],
-              heartbeat: { every: "0m" },
               model: { primary: provider.modelRef, fallbacks: [] },
               models: {
                 [provider.modelRef]: {

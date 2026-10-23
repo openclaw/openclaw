@@ -63,11 +63,11 @@ describe("node pending work", () => {
     });
     const retired = oldPairing.enqueue();
     const replacement = newPairing.enqueue();
-    expect(oldPairing.drain({ includeDefaultStatus: false }).items).toEqual([]);
+    expect(oldPairing.drain()).toMatchObject({ items: baseline });
     expect(oldPairing.clear()).toBe(false);
     expect(oldPairing.remove(retired.item.id)).toBe(false);
-    expect(newPairing.drain({ includeDefaultStatus: false })).toMatchObject({
-      items: [{ id: replacement.item.id }],
+    expect(newPairing.drain()).toMatchObject({
+      items: [{ id: replacement.item.id }, ...baseline],
     });
   });
 
@@ -90,7 +90,7 @@ describe("node pending work", () => {
     const location = work.enqueue();
     work.enqueue({ type: "status.request" });
     expect(work.remove(location.item.id)).toBe(true);
-    expect(work.drain({ includeDefaultStatus: false })).toMatchObject({
+    expect(work.drain()).toMatchObject({
       items: [{ type: "status.request" }],
     });
   });

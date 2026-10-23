@@ -89,7 +89,6 @@ export function createHotTailPlan(overrides: Partial<GatewayReloadPlan> = {}): G
     reloadHooks: false,
     restartGmailWatcher: false,
     restartCron: false,
-    restartHeartbeat: false,
     reloadPlugins: false,
     restartChannels: new Set(),
     disposeMcpRuntimes: false,
@@ -206,7 +205,6 @@ export function createDefaultGatewayReloadState(
   return {
     hooksConfig: {} as never,
     hookClientIpConfig: {} as never,
-    heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() } as never,
     cronState: createTestCronState(),
     ...overrides,
   };

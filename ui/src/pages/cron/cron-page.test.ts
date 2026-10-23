@@ -11,6 +11,8 @@ import { waitForCronPage as waitFor } from "./cron-page.test-support.tsx";
 import { cronRpc, mountCronPage, emitEvent } from "./cron-rpc.test-support.ts";
 import {
   createCronViewJob,
+  createCronViewRun,
+  cronRunsResponse,
   getButtonByText,
   openCronMenu,
   scheduledJob,
@@ -25,13 +27,7 @@ function settle() {
 }
 
 function runPage(jobId: string, ts: number, summary: string) {
-  return {
-    entries: [{ ts, jobId, action: "finished", status: "ok", summary }],
-    total: 1,
-    offset: 0,
-    hasMore: false,
-    nextOffset: null,
-  };
+  return { ...cronRunsResponse([createCronViewRun({ jobId, ts, summary })]), nextOffset: null };
 }
 
 function pacedJob(id: string, overrides: Partial<CronJob> = {}) {
@@ -193,13 +189,8 @@ it.each([1, 2])("scopes %i attached jobs and opens a sole match", async (count) 
 });
 it.each(["visible", "later page"])("opens linked history for a job on %s", async (placement) => {
   const job = scheduledJob("linked-job", { agentId: "main", name: "Linked automation" });
-  const entry = (runId: string, ts: number, summary: string) => ({
-    runId,
-    ts,
-    summary,
-    jobId: job.id,
-    action: "finished",
-  });
+  const entry = (runId: string, ts: number, summary: string) =>
+    createCronViewRun({ runId, ts, summary, jobId: job.id, status: undefined });
   const jobs = createDeferred<CronJobsListResult>();
   const request = cronRpc(
     {
@@ -217,7 +208,7 @@ it.each(["visible", "later page"])("opens linked history for a job on %s", async
             : filter.runId
               ? [entry("cron:linked-job:1", 1, "Linked run")]
               : Array.from({ length: 50 }, (_, i) => entry(`recent-${i}`, i + 2, "Recent run"));
-        return { entries, total: entries.length, offset: 0, hasMore: false };
+        return cronRunsResponse(entries);
       },
       "models.list": () => ({ models: [] }),
     },
@@ -389,7 +380,7 @@ it.each(["operator.write", "operator.read"])(
     const request = cronRpc(
       {
         "cron.list": () => harness.cronListResponse([job]),
-        "cron.runs": () => ({ entries: [], total: 0, offset: 0, hasMore: false }),
+        "cron.runs": () => cronRunsResponse(),
         "models.list": () => ({ models: [] }),
       },
       () => ({}),
@@ -496,7 +487,7 @@ it.each([
         },
         "cron.list": () => harness.cronListResponse([]),
         "cron.get": () => selected,
-        "cron.runs": () => ({ entries: [], total: 0, offset: 0, hasMore: false }),
+        "cron.runs": () => cronRunsResponse(),
         "cron.run": () => ({ ok: true, enqueued: true, runId: "run-fresh" }),
         "models.list": () => ({ models: [] }),
       },
@@ -657,7 +648,7 @@ it("syncs form enabled after header pause and resets runs scope after remove", a
         removeRequested.resolve();
         return {};
       },
-      "cron.runs": () => ({ entries: [], total: 0, offset: 0, hasMore: false }),
+      "cron.runs": () => cronRunsResponse(),
       "models.list": () => ({ models: [] }),
     },
     () => ({}),
@@ -681,8 +672,8 @@ it("syncs form enabled after header pause and resets runs scope after remove", a
     patch: { enabled: false },
   });
   const findRemoveButton = () => getButtonByText(page, "Remove");
-  await waitFor(() => expect(findRemoveButton()?.disabled).toBe(false));
   await openCronMenu(page, ".cron-job-menu");
+  await waitFor(() => expect(findRemoveButton()?.disabled).toBe(false));
   findRemoveButton()?.click();
   getButtonByText(await waitForConfirmDialogActions(), "Remove").click();
   await removeRequested.promise;

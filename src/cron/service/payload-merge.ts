@@ -114,10 +114,6 @@ function mergePayloadFields(existing: CronPayload, patch: CronPayloadPatch): Cro
     if (typeof patch.allowUnsafeExternalContent === "boolean") {
       next.allowUnsafeExternalContent = patch.allowUnsafeExternalContent;
     }
-  } else {
-    // System-owned payloads carry no fields; the service boundary already
-    // rejects client patches for them.
-    return buildPayloadFromPatch(patch);
   }
 
   applyToolsAllowPatch(next, patch, existing);
@@ -151,10 +147,6 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
       throw new Error('cron.update payload.kind="script" requires script');
     }
     return { kind: "script", script: patch.script };
-  }
-
-  if (patch.kind !== "agentTurn") {
-    return { kind: patch.kind };
   }
 
   if (typeof patch.message !== "string" || patch.message.length === 0) {

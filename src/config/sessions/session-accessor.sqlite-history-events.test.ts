@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -7,7 +6,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
-import { appendTranscriptEvent, persistSessionTranscriptTurn } from "./session-accessor.js";
+import { appendTranscriptEvent } from "./session-accessor.js";
 import { readTranscriptRawDelta } from "./session-accessor.sqlite-delta.js";
 import { readSessionTranscriptHistoryEventPage } from "./session-accessor.sqlite-history-events.js";
 import {
@@ -16,6 +15,10 @@ import {
 } from "./session-accessor.sqlite-history-events.test-support.js";
 import {
   historyEventId,
+  historyMessage,
+  historyActivity,
+  clearHistoryNavigation,
+  persistHistory,
   readSessionTranscriptHistoryEventCount,
   insertSyntheticHistory,
   readSessionTranscriptHistoryEvents,
@@ -26,15 +29,6 @@ import {
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { transcriptMessage } from "./transcript-message.test-support.js";
 import { createTranscriptEventInserter } from "./transcript-payload.js";
-
-function messageEvent(
-  id: string,
-  parentId: string | null,
-  role: "user" | "assistant",
-  content: string,
-) {
-  return { type: "message", id, parentId, message: { role, content } };
-}
 
 function message(
   id: string,
@@ -82,8 +76,8 @@ describe("SQLite transcript history events", () => {
   beforeEach(() => setRuntimeConfigSnapshot({}));
   afterEach(() => clearRuntimeConfigSnapshot());
 
-  const persist = (messages: Parameters<typeof persistSessionTranscriptTurn>[1]["messages"]) =>
-    persistSessionTranscriptTurn(scope, { messages, touchSessionEntry: false });
+  const persist = (messages: Parameters<typeof persistHistory>[1]) =>
+    persistHistory(scope, messages);
   const anchor = (messageId: string, maxMessages = 10) =>
     readSessionTranscriptHistoryAnchorPage(scope, { messageId, maxMessages });
   const openDatabase = () => openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
@@ -135,12 +129,12 @@ describe("SQLite transcript history events", () => {
     expect(otherEmpty).toMatchObject({ events: [], totalMessages: 0 });
     expect(otherEmpty.deltaCursor).toBeUndefined();
     expect(readTranscriptDisplayDelta(other)).toEqual({ kind: "missing" });
-    await persistSessionTranscriptTurn(other, {
-      messages: ["other-first", "other-middle", "other-last"].map((eventId, index, ids) =>
+    await persistHistory(
+      other,
+      ["other-first", "other-middle", "other-last"].map((eventId, index, ids) =>
         message(eventId, index === 0 ? null : ids[index - 1]!, "user", eventId),
       ),
-      touchSessionEntry: false,
-    });
+    );
     expect(
       readRecentSessionTranscriptHistoryEvents(other, limits).events.map(historyEventId),
     ).toEqual(["other-first", "other-middle", "other-last"]);
@@ -191,32 +185,19 @@ describe("SQLite transcript history events", () => {
           return {
             eventId: id,
             parentId: startOrder === 0 ? "wait" : "first",
-            message: createNestedToolActivity({
-              runId: "run",
-              scopeId: "attempt",
+            message: historyActivity({
               afterEntryId,
               startOrder,
               parentToolCallId: "exec",
               toolCallId: id,
-              toolName: "read",
-              input: {},
               result: { content: [{ type: "text", text: "done" }] },
-              isError: false,
-              startedAt: 1,
-              timestamp: 2,
             }),
           };
         }),
       ]);
       runOpenClawAgentWriteTransaction(
         (database) => {
-          database.db
-            .prepare(`UPDATE transcript_events
-          SET navigation_type = NULL, navigation_custom_type = NULL,
-              navigation_display = 0, message_role = NULL, navigation_last_type = NULL,
-              navigation_last_custom_type = NULL, navigation_valid = 1
-          WHERE session_id = ?`)
-            .run(scope.sessionId);
+          clearHistoryNavigation(database, scope.sessionId);
           if (legacy) {
             database.db
               .prepare("DELETE FROM transcript_event_identities WHERE session_id = ?")
@@ -336,9 +317,9 @@ describe("SQLite transcript history events", () => {
     const events = [
       { type: "session", version: 3, id: scope.sessionId },
       oldNotice,
-      messageEvent("kept-user", "old-notice", "user", "retained prompt"),
+      historyMessage("kept-user", "old-notice", "retained prompt"),
       { ...oldNotice, id: "shallow-notice", parentId: "kept-user", details: {} },
-      messageEvent("kept-assistant", "shallow-notice", "assistant", "retained reply"),
+      historyMessage("kept-assistant", "shallow-notice", "retained reply", "assistant"),
       boundary("reset", "reset", "kept-assistant", {
         firstKeptEntryId: "kept-user",
         reason: "new",

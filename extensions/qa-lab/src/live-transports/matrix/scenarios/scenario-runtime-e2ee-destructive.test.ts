@@ -184,8 +184,6 @@ it("awaits target room sync before sending", async () => {
     gatewayRuntimeEnv: { OPENCLAW_CONFIG_PATH: "/tmp/unused-gateway-config" },
     restartGatewayAfterStateMutation: async (mutate) => {
       await mutate({ stateDir: "/tmp/unused-gateway-state" });
-    },
-    waitGatewayAccountReady: async () => {
       order.push("ready");
     },
   });
@@ -198,7 +196,7 @@ it("awaits target room sync before sending", async () => {
     timeoutMs: context.timeoutMs,
     userId: replacement.userId,
   });
-  expect(order).toEqual(["ready", "wait", "synced", "send"]);
+  expect(order).toEqual(["ready", "ready", "wait", "synced", "send", "ready"]);
   expect(driver.stop).toHaveBeenCalledOnce();
   expect(mocks.replaceMatrixQaGatewayMatrixAccount).toHaveBeenLastCalledWith(
     expect.objectContaining({ accountId: "sut", accountConfig: { enabled: true } }),

@@ -1,7 +1,6 @@
 // Verifies optional media/PDF tool factory planning from plugin metadata and auth.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
@@ -17,7 +16,6 @@ import {
   resolveOptionalMediaToolFactoryPlan,
 } from "./openclaw-tools.media-factory-plan.js";
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY } from "./tool-policy.js";
-import { loadCapabilityMetadataSnapshot } from "./tools/manifest-capability-availability.js";
 import * as pdfModelConfigModule from "./tools/pdf-tool.model-config.js";
 
 function createAuthStore(providers: string[] = []): AuthProfileStore {
@@ -288,14 +286,6 @@ describe("optional media tool factory planning", () => {
       ],
       "/workspace/a",
     );
-    expect(getCurrentPluginMetadataSnapshot({ config })).toBeUndefined();
-    expect(
-      getCurrentPluginMetadataSnapshot({ config, workspaceDir: "/workspace/a" }),
-    ).toBeDefined();
-    expect(
-      loadCapabilityMetadataSnapshot({ config }).plugins.map((plugin) => plugin.id),
-    ).not.toContain("image-owner");
-
     expect(
       resolveOptionalMediaToolFactoryPlan({
         config,

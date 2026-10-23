@@ -4,9 +4,9 @@ import * as observation from "@openclaw/fs-safe/watch";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { DEFAULT_USAGE_BAR_TEMPLATE } from "./default-template.js";
 import { loadUsageBarTemplate } from "./template.js";
 import { clearUsageBarTemplateCacheForTest } from "./template.test-support.js";
+const defaultTemplate = loadUsageBarTemplate(undefined);
 const warnSpy = vi.hoisted(() => vi.fn());
 vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ warn: warnSpy }),
@@ -44,7 +44,7 @@ const tplB = { output: { default: [{ text: "B" }] } };
 const warning = "configured usage template could not be used; using built-in footer";
 const writeJSON = (file: string, data: object) => writeFileSync(file, JSON.stringify(data));
 function expectWarningCount(file: string, count: number) {
-  expect(loadUsageBarTemplate(file)).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
+  expect(loadUsageBarTemplate(file)).toBe(defaultTemplate);
   expect(warnSpy).toHaveBeenCalledTimes(count);
 }
 function tmpFile(name: string, contents: string, directory = temp.make("usage-template-")): string {
@@ -68,7 +68,7 @@ it.each([
   [() => ({ nope: true }), [[warning, { source: "inline", reason: "unsupported-shape" }]]],
   [() => tmpFile("empty.json", '{"output":{"default":[]}}'), []],
 ] as const)("uses the built-in template for input %#", (configured, warnings) => {
-  expect(loadUsageBarTemplate(configured())).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
+  expect(loadUsageBarTemplate(configured())).toBe(defaultTemplate);
   expect(warnSpy.mock.calls).toEqual(warnings);
 });
 it("reloads a path after invalid JSON is fixed", () => {
@@ -81,7 +81,7 @@ it("bounds invalid-template warnings by least-recently-used path", () => {
   const dir = temp.make("usage-template-");
   const paths = Array.from({ length: 257 }, (_, i) => tmpFile(`${i}.json`, "{ not json", dir));
   for (const path of paths.slice(0, 256)) {
-    expect(loadUsageBarTemplate(path)).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
+    expect(loadUsageBarTemplate(path)).toBe(defaultTemplate);
   }
   expect(warnSpy).toHaveBeenCalledTimes(256);
   expectWarningCount(paths[0]!, 256); // Keep the oldest key hot before overflowing.
@@ -113,7 +113,7 @@ it("refreshes atomic replacements and restored files, then rereads after loss of
   await update(tplA, true);
   unlinkSync(file);
   await subscription.reconcile();
-  expect(loadUsageBarTemplate(file)).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
+  expect(loadUsageBarTemplate(file)).toBe(defaultTemplate);
   await update(tplA);
   await update(tplB, true);
   expect(warnSpy).not.toHaveBeenCalled();
@@ -131,7 +131,7 @@ it("evicts the oldest path with its observation, but retains entries when retryi
     await loadObservedTemplate(file, tplA);
   }
   const miss = files[63]!;
-  expect(loadUsageBarTemplate(miss)).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
+  expect(loadUsageBarTemplate(miss)).toBe(defaultTemplate);
   await loadObservedTemplate(miss, tplB);
   writeJSON(files[0]!, tplB);
   expect([subscriptions.length, loadUsageBarTemplate(files[0])]).toEqual([64, tplA]);

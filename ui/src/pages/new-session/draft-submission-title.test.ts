@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { UserModelAccount } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ModelCatalogResult } from "../../api/types.ts";
+import { backgroundCreateOptions } from "./draft-submission-flow.test-support.ts";
 import { createDraftTitleFixture } from "./draft-title.test-support.ts";
 import { renderControl, waitForModelControl } from "./model-control.test-support.ts";
 
@@ -127,10 +128,7 @@ it("keeps a title handoff on the selected draft account before update", async ()
     expect.objectContaining({
       model: `test/primary@${accounts[1].authProfileId}`,
     }),
-    {
-      reconciliation: "background",
-      signal: expect.any(AbortSignal),
-    },
+    backgroundCreateOptions,
   );
   expect(createdParams(context)).not.toHaveProperty("displayName");
 });
@@ -200,10 +198,7 @@ it.each(["explicit worktree", "pending", "incognito", "retry", "stale"] as const
           displayName: "Repair naming",
           worktreeName: "my-explicit-branch",
         }),
-        {
-          reconciliation: "background",
-          signal: expect.any(AbortSignal),
-        },
+        backgroundCreateOptions,
       );
     } else if (state === "retry") {
       await flow.submit();

@@ -26,7 +26,7 @@ import {
   reconcileClientPluginNodeCapabilities,
   type PluginNodeCapabilitySurface,
 } from "../plugin-node-capability.js";
-import { serializeGatewayFrame } from "../serialized-json.js";
+import { serializeGatewayFrame, type SerializedGatewayFrame } from "../serialized-json.js";
 import { MAX_BUFFERED_BYTES, WEBSOCKET_OPEN_READY_STATE } from "../server-constants.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import { cleanupTalkConnection } from "../talk/session-registry.js";
@@ -296,7 +296,7 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
       closeWithGrace(1008, connectionKind === "worker" ? "slow-consumer" : "slow consumer");
       return { kind: "unavailable" } as const;
     }
-    let encoded: Buffer;
+    let encoded: Buffer | SerializedGatewayFrame;
     try {
       const serialized = serializeGatewayFrame(obj);
       encoded = typeof serialized === "string" ? Buffer.from(serialized) : serialized;
@@ -304,11 +304,11 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
       return { kind: "serialization", error } as const;
     }
     try {
-      socket.send(encoded, { binary: false });
+      const wireBytes = socket.send(encoded, { binary: false });
       const bytes = encoded.byteLength;
       const frame = asOptionalRecord(obj);
       if (frame?.type === "event" && typeof frame.event === "string") {
-        socket.recordEventSent?.(frame.event, encoded);
+        socket.recordEventSent?.(frame.event, encoded, undefined, undefined, wireBytes);
       }
       return { kind: "sent", bytes } as const;
     } catch {

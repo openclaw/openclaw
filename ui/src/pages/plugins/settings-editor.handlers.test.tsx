@@ -1,10 +1,14 @@
 /* @vitest-environment jsdom */
 
+import type { Result } from "@openclaw/normalization-core/result";
 import { createSignal, flush, type Setter } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../../../src/shared/deferred.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { PluginSettingsEditor } from "./settings-editor.tsx";
 import type { PluginSettingsEditorModel } from "./settings-model.ts";
+import { PluginSettingsReadStatus } from "./settings-read-status.tsx";
 
 afterEach(cleanupSolid);
 
@@ -25,6 +29,8 @@ it("dispatches retained retry controls to the current settings operation", () =>
       canEditConfig: true,
       configBusy: false,
       configSchemaLoading: false,
+      configRead: undefined,
+      configSchemaRead: undefined,
       configError: "Request failed",
       onConfigPatch: vi.fn(),
       onConfigRemove: vi.fn(),
@@ -59,4 +65,50 @@ it("dispatches retained retry controls to the current settings operation", () =>
   retry.click();
   expect(currentWrite).toHaveBeenCalledOnce();
   expect(currentRead).toHaveBeenCalledOnce();
+});
+
+it("shows a later write failure after a caught configuration read failure", async () => {
+  const readRetry = vi.fn();
+  const writeRetry = vi.fn();
+  const read = createDeferredCore<Result<void, string>>();
+  read.resolve({ ok: false, error: "Schema unavailable" });
+  let setError!: Setter<string | null>;
+  const { container } = mountSolid(() => {
+    const [error, updateError] = createSignal<string | null>("Schema unavailable");
+    setError = updateError;
+    return (
+      <PluginSettingsReadStatus
+        model={{
+          get configError() {
+            return error();
+          },
+          configValue: {},
+          configSchema: { type: "object", properties: {} },
+          configRead: undefined,
+          configSchemaRead: read.promise,
+          onConfigReadRetry: readRetry,
+          onConfigWriteRetry: writeRetry,
+        }}
+        loading={false}
+        rows={2}
+        renderError={(message, retry) => (
+          <div role="alert">
+            {message}
+            <button onClick={() => retry()}>Retry</button>
+          </div>
+        )}
+      />
+    );
+  });
+  // Let the async read reach its error boundary before the later write completes.
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+  await waitForSolid(() => expect(container.textContent).toContain("Schema unavailable"));
+  setError("Autosave failed");
+  await waitForSolid(() => expect(container.textContent).toContain("Autosave failed"));
+  expect(container.textContent).not.toContain("Schema unavailable");
+  container.querySelector<HTMLButtonElement>("button")!.click();
+  expect(writeRetry).toHaveBeenCalledOnce();
+  expect(readRetry).not.toHaveBeenCalled();
 });

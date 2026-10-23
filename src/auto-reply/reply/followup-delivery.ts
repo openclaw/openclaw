@@ -12,6 +12,7 @@ import {
   MISSING_REPLY_NOTICE_TEXT,
   isRequiredReplyExpectation,
   isSyntheticSourceReplyTurn,
+  resolveClaimedReplyExpectation,
   resolveReplyCompletion,
   shouldDeliverMissingReplyNotice,
 } from "../../agents/reply-completion.js";
@@ -124,6 +125,7 @@ export async function resolveFollowupDeliveryDecision(params: {
   }
   const sourcePolicy = resolveSourceReplyVisibilityPolicy({
     cfg: turn.config,
+    scheduledAutomation: turn.queued.run.scheduledAutomation !== undefined,
     ctx: {
       ChatType: turn.queued.originatingChatType ?? turn.queued.run.chatType,
       InboundEventKind: turn.queued.currentInboundEventKind,
@@ -136,7 +138,10 @@ export async function resolveFollowupDeliveryDecision(params: {
   const terminalReplyExpectation = resolveFollowupReplyExpectation(turn.queued, turn.config);
   const isInteractive =
     isRequiredReplyExpectation(terminalReplyExpectation) ||
-    (!isSyntheticSourceReplyTurn({ inputProvenance: turn.queued.run.inputProvenance }) &&
+    (!isSyntheticSourceReplyTurn({
+      inputProvenance: turn.queued.run.inputProvenance,
+      scheduledAutomation: turn.queued.run.scheduledAutomation !== undefined,
+    }) &&
       !isInternalMessageChannel(
         turn.queued.originatingChannel ?? turn.queued.run.messageProvider,
       ) &&
@@ -215,6 +220,7 @@ export async function resolveFollowupDeliveryDecision(params: {
   const terminalRunFailed = execution.outcome.status === "failed";
   const missingReplyNoticeAllowed = shouldDeliverMissingReplyNotice({
     ...turn.queued.run,
+    scheduledAutomation: turn.queued.run.scheduledAutomation !== undefined,
     terminalReplyExpectation,
     trigger: turn.queued.run.internalEventExecution ? "event" : "user",
     currentInboundEventKind: turn.queued.currentInboundEventKind,
@@ -234,7 +240,7 @@ export async function resolveFollowupDeliveryDecision(params: {
     }),
   );
   let completion = resolveReplyCompletion(
-    terminalReplyExpectation,
+    resolveClaimedReplyExpectation(terminalReplyExpectation, result.meta),
     result.meta?.error?.kind === "hook_block" || result.didSendDeterministicApprovalPrompt === true
       ? "blocked"
       : authoredSilence
@@ -294,7 +300,6 @@ export async function resolveFollowupDeliveryDecision(params: {
           sourceReplyDeliveryMode: sourcePolicy.sourceReplyDeliveryMode,
           sendPolicyDenied: sourcePolicy.sendPolicyDenied,
           successfulSourceReplyDelivery: completedSourceDelivery,
-          isHeartbeat: false,
           isRoomEvent: false,
         });
   if (recovery.kind === "retry") {
@@ -537,7 +542,6 @@ export async function deliverFollowupDecision(params: {
   const typing = createTypingSignaler({
     typing: defaults.typing,
     mode: defaults.typingMode,
-    isHeartbeat: false,
   });
   const crossChannelFailures: ReplyPayload[] = [];
   const queuedPayloads: ReplyPayload[] = [];

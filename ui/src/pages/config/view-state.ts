@@ -5,8 +5,8 @@ export type SettingsMediaDeviceState = {
   devices: RealtimeTalkInputDevice[];
   permissionRequired: boolean;
   selectedDeviceId: string;
-  loading: boolean;
-  error: string | null;
+  discovery: Promise<string | null> | null;
+  selection: Promise<void> | null;
 };
 
 export type ConfigFormMode = "form" | "raw";
@@ -33,12 +33,14 @@ export type ConfigViewState = {
 export function createMediaDeviceState(): Omit<SettingsMediaDeviceState, "selectedDeviceId"> & {
   loaded: boolean;
   requestsPermission: boolean;
+  activeDiscovery: Promise<string | null> | null;
 } {
   return {
     devices: [],
     permissionRequired: true,
-    loading: false,
-    error: null,
+    discovery: null,
+    activeDiscovery: null,
+    selection: null,
     loaded: false,
     requestsPermission: false,
   };

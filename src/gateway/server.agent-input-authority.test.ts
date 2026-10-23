@@ -40,19 +40,14 @@ import * as gatewayDispatch from "./server-plugin-in-process-dispatch.js";
 import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugins.js";
 import { runIndependentCreationInputCase } from "./server.agent-input-authority.create.test-helper.js";
-import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
+import { installAuthorityProofGateway } from "./server.agent-runtime-authority-proof.test-support.js";
 import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { withPreparedSessionResolve } from "./sessions-resolve.js";
-import {
-  agentCommandMock,
-  installGatewayTestHooks,
-  prepareGatewayReplyRuntimeForTest,
-} from "./test-helpers.js";
+import { agentCommandMock, prepareGatewayReplyRuntimeForTest } from "./test-helpers.js";
 
 describe("spawn input ownership transfer", () => {
-  let harness: GatewayServerHarness;
-  let kernel: Awaited<ReturnType<(typeof import("./server-kernel.js"))["createGatewayKernel"]>>;
+  const getContext = installAuthorityProofGateway();
   const prepareAdmission = (
     cfg: OpenClawConfig,
     runId: string,
@@ -79,7 +74,7 @@ describe("spawn input ownership transfer", () => {
     call: Parameters<ReturnType<typeof createSessionsSendTool>["execute"]>,
     client?: ReturnType<typeof createOperatorClient>,
   ) => {
-    const context = kernel.gatewayRequestContext;
+    const context = getContext();
     return withPluginRuntimeGatewayRequestScope(
       { client, context, resolveGatewayContext: () => context, isWebchatConnect: () => false },
       () =>
@@ -165,27 +160,6 @@ describe("spawn input ownership transfer", () => {
       },
     };
   };
-  installGatewayTestHooks({
-    scope: "suite",
-    setup: async () => {
-      const module = await import("./server-kernel.js");
-      const create = module.createGatewayKernel;
-      const capture = vi
-        .spyOn(module, "createGatewayKernel")
-        .mockImplementation(async (...args) => {
-          kernel = await create(...args);
-          return kernel;
-        });
-      try {
-        harness = await startGatewayServerHarness();
-      } finally {
-        capture.mockRestore();
-      }
-    },
-    cleanup: async () => {
-      await harness?.close();
-    },
-  });
 
   it.for([
     "slow acceptance",
@@ -199,7 +173,7 @@ describe("spawn input ownership transfer", () => {
     "target replacement",
     "operator revocation",
   ] as const)("transfers independently created input at %s", async (boundary, { signal }) => {
-    await runIndependentCreationInputCase(kernel.gatewayRequestContext, boundary, signal);
+    await runIndependentCreationInputCase(getContext(), boundary, signal);
   });
 
   it.for([
@@ -211,7 +185,7 @@ describe("spawn input ownership transfer", () => {
     "delivers a $kind reply after the requester ends before child $boundary",
     async ({ kind, boundary }, { signal }) => {
       await prepareGatewayReplyRuntimeForTest();
-      const context = kernel.gatewayRequestContext;
+      const context = getContext();
       const cfg = context.getRuntimeConfig();
       const runId = randomUUID();
       const parentKey = `agent:main:dashboard:reply-parent-${runId}`;
@@ -393,7 +367,7 @@ describe("spawn input ownership transfer", () => {
     "revokes prepared watched followup %s access before real Gateway child admission",
     async (revoked) => {
       await prepareGatewayReplyRuntimeForTest();
-      const context = kernel.gatewayRequestContext;
+      const context = getContext();
       const cfg = context.getRuntimeConfig();
       const runId = randomUUID();
       const parentKey = `agent:main:dashboard:denied-parent-${runId}`;
@@ -506,7 +480,7 @@ describe("spawn input ownership transfer", () => {
   it.for(["before staging", "after acceptance", "before acknowledgement"] as const)(
     "rechecks directed send policy at Gateway input admission (%s)",
     async (boundary, { signal }) => {
-      const context = kernel.gatewayRequestContext;
+      const context = getContext();
       const previousConfig = context.getRuntimeConfig();
       const config: OpenClawConfig = {
         ...previousConfig,
@@ -639,7 +613,7 @@ describe("spawn input ownership transfer", () => {
     "live reset",
   ] as const)("keeps input authority at its current owner: %s", async (boundary, { signal }) => {
     await prepareGatewayReplyRuntimeForTest();
-    const context = kernel.gatewayRequestContext;
+    const context = getContext();
     const runId = randomUUID();
     const parentKey = `agent:main:parent:${runId}`;
     const childKey = `agent:main:subagent:${runId}`;

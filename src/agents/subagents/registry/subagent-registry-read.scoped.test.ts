@@ -5,7 +5,6 @@ import { countUntrackedActiveAcpRunsForOwner } from "../spawn/acp-spawn-admissio
 import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
 import {
   buildScopedSubagentRunReadIndexFromRuns,
-  hasDescendantRunAwaitingSettleFromRuns,
   listRunsForControllerFromRuns,
 } from "./subagent-registry-queries.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
@@ -165,7 +164,12 @@ describe("subagent registry scoped reads", () => {
         ).countActiveDescendantRuns(root),
       ).toBe(1);
       expect(
-        hasDescendantRunAwaitingSettleFromRuns(mocks.liveRuns, root, excluded, "main", storePath),
+        buildScopedSubagentRunReadIndexFromRuns(
+          mocks.liveRuns,
+          root,
+          "main",
+          storePath,
+        ).hasDescendantRunAwaitingSettle(root, excluded),
       ).toBe(false);
     },
   );
@@ -304,7 +308,12 @@ describe("subagent registry scoped reads", () => {
     ).toEqual([2, 1]);
     mocks.readSnapshot = snapshot;
     expect(await mod.countPendingDescendantRuns(root, () => {})).toBe(4);
-    expect(hasDescendantRunAwaitingSettleFromRuns(snapshot, root, pendingRun.runId)).toBe(true);
+    expect(
+      buildScopedSubagentRunReadIndexFromRuns(snapshot, root).hasDescendantRunAwaitingSettle(
+        root,
+        pendingRun.runId,
+      ),
+    ).toBe(true);
     expect(await mod.getLatestSubagentRunByChildSessionKey(reusedChild)).toBe(freshTerminal);
     expect(mod.buildSubagentSessionListReadIndex(now).getDisplaySubagentRun(reusedChild)).toEqual(
       projectSubagentRunForSessionList(freshTerminal),

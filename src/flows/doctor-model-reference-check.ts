@@ -1,5 +1,6 @@
+import { buildModelCatalogMergeKey } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { resolveKnownModelRefMigrationTarget } from "../commands/doctor/shared/codex-route-warnings.js";
-import { readModelCatalogWarnings } from "../commands/models/catalog-warnings.js";
+import { getModelCatalogWarnings, readModelCatalog } from "../commands/models/catalog-warnings.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import type { HealthCheck, HealthFinding } from "./health-checks.js";
 
@@ -11,6 +12,10 @@ export const modelReferenceCheck: HealthCheck = {
   async detect(ctx) {
     const { inspectConfiguredModelReferences } =
       await import("../commands/models/model-reference-validation.js");
+    const catalogSkipped =
+      ctx.allowExecSecretRefs !== true &&
+      (await hasActiveGatewayExecCredential({ cfg: ctx.cfg, env: ctx.env }));
+    const catalog = catalogSkipped ? undefined : await readModelCatalog(ctx.cfg);
     const findings = inspectConfiguredModelReferences({
       cfg: ctx.cfg,
       env: ctx.env,
@@ -24,18 +29,17 @@ export const modelReferenceCheck: HealthCheck = {
             fixHint: `Run \`openclaw doctor --fix\` to migrate this model reference to "${migrationTarget}".`,
           }
         : undefined;
-      // A provider that ships no catalog rows cannot confirm or deny a model
-      // id offline; the generic advisory would be unactionable there, so only
-      // a legacy-reference migration is still worth reporting.
       const unknownProvider = inspection.status === "unknown-provider";
-      if (
-        !unknownProvider &&
-        !(
-          inspection.active &&
-          (inspection.status === "unknown-model" ||
-            (inspection.status === "uncatalogued-provider" && migrationFinding))
-        )
-      ) {
+      // Runtime discovery can publish models that offline metadata cannot enumerate.
+      const modelKey = buildModelCatalogMergeKey(inspection.provider, inspection.model);
+      const published = catalog?.models.some(
+        ({ provider, id }) => buildModelCatalogMergeKey(provider, id) === modelKey,
+      );
+      const unknownModel = inspection.status === "unknown-model" && !published;
+      const needsMigration =
+        migrationFinding &&
+        (inspection.status === "unknown-model" || inspection.status === "uncatalogued-provider");
+      if (!unknownProvider && !(inspection.active && (unknownModel || needsMigration))) {
         return [];
       }
       return [
@@ -61,10 +65,7 @@ export const modelReferenceCheck: HealthCheck = {
         },
       ];
     });
-    if (
-      ctx.allowExecSecretRefs !== true &&
-      (await hasActiveGatewayExecCredential({ cfg: ctx.cfg, env: ctx.env }))
-    ) {
+    if (catalogSkipped) {
       findings.push({
         checkId: "core/doctor/model-references",
         severity: "info",
@@ -75,7 +76,7 @@ export const modelReferenceCheck: HealthCheck = {
       });
       return findings;
     }
-    for (const warning of await readModelCatalogWarnings(ctx.cfg)) {
+    for (const warning of getModelCatalogWarnings(catalog)) {
       findings.push({
         checkId: "core/doctor/model-references",
         severity: "warning",

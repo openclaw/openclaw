@@ -26,7 +26,7 @@ function result(name: string): ProjectsSearchRemoteResult {
   };
 }
 
-function mountSearch() {
+async function mountSearch() {
   vi.useFakeTimers();
   const fixture = createRepositoryFixture();
   const { browser, state: place, context, gateway, changed } = fixture;
@@ -50,6 +50,7 @@ function mountSearch() {
     },
   });
   vi.spyOn(browser, "projects", "get").mockReturnValue(projects);
+  vi.spyOn(browser, "projectsReady", "get").mockReturnValue(true);
   vi.spyOn(browser, "popoverOpen").mockReturnValue(true);
   vi.spyOn(place, "folder", "get").mockReturnValue("");
   vi.spyOn(place, "workspacePath").mockReturnValue("/fixture");
@@ -92,6 +93,9 @@ function mountSearch() {
     });
     return <ProjectChip {...props()} />;
   });
+  await waitForSolid(() =>
+    expect(view.container.querySelector('input[type="search"]')).not.toBeNull(),
+  );
   const input = view.container.querySelector<HTMLInputElement>('input[type="search"]')!;
   const localRow = view.container.querySelector('[data-value="project:sample"]')!;
   const typeQuery = (query: string) => {
@@ -106,7 +110,7 @@ afterEach(() => vi.useRealTimers());
 
 describe("remote project search slot", () => {
   it("keeps input and local selection live through debounce, loading, failure, and a new query", async () => {
-    const { browser, request, view, input, localRow, typeQuery } = mountSearch();
+    const { browser, request, view, input, localRow, typeQuery } = await mountSearch();
     const current = createDeferred<ProjectsSearchRemoteResult>();
     request.mockReturnValueOnce(current.promise);
     input.focus();
@@ -159,7 +163,8 @@ describe("remote project search slot", () => {
   it.each(["client", "epoch"] as const)(
     "retires the old read when the %s changes without resetting the query",
     async (scope) => {
-      const { browser, context, gateway, request, changed, view, input, typeQuery } = mountSearch();
+      const { browser, context, gateway, request, changed, view, input, typeQuery } =
+        await mountSearch();
       const previous = createDeferred<ProjectsSearchRemoteResult>();
       const current = createDeferred<ProjectsSearchRemoteResult>();
       request.mockReturnValueOnce(previous.promise).mockReturnValueOnce(current.promise);

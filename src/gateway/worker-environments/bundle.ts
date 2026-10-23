@@ -61,11 +61,9 @@ type WorkerBundleProducerOptions = {
   cacheDir?: string;
   openclawVersion?: string;
   protocolFeatures?: readonly string[];
-  cacheOwnership?: "exclusive";
   onCacheCleanupError?: (error: unknown) => void;
 };
 
-type WorkerNpmPackageInstallCheck = (packageRoot: string) => Promise<boolean>;
 type WorkerNpmReleaseVerifier = (params: {
   bundleHash: string;
   version: string;
@@ -527,7 +525,7 @@ export function createWorkerBundleProducer(
     }),
     async prune(readRetainedBundleHashes) {
       const artifact = currentArtifact;
-      if (options.cacheOwnership !== "exclusive" || !artifact) {
+      if (!artifact) {
         return;
       }
       const operation = pruning.then(async () => {
@@ -551,7 +549,6 @@ export function createWorkerBundleProducer(
 export async function resolveWorkerNpmInstallationArtifact(params: {
   bundle: WorkerBundleArtifact;
   packageRoot?: string;
-  isPackageInstall?: WorkerNpmPackageInstallCheck;
   verifyRelease?: WorkerNpmReleaseVerifier;
 }): Promise<WorkerNpmArtifact> {
   const version = params.bundle.openclawVersion.trim();
@@ -561,9 +558,7 @@ export async function resolveWorkerNpmInstallationArtifact(params: {
     );
   }
   const packageRoot = resolvePackageRoot(params.packageRoot);
-  const packageInstall = params.isPackageInstall
-    ? await params.isPackageInstall(packageRoot)
-    : await isReleasedPackageInstall(packageRoot);
+  const packageInstall = await isReleasedPackageInstall(packageRoot);
   if (!packageInstall) {
     throw new Error(
       "Worker npm install requires the gateway to run from a packaged release install",

@@ -14,12 +14,14 @@ const mocks = vi.hoisted(() => ({
   locatorFill: vi.fn(async () => undefined),
   locatorPress: vi.fn(async () => undefined),
   locatorWaitFor: vi.fn(async () => undefined),
-  pageOn: vi.fn(),
-  pageEvaluate: vi.fn(async () => "ok"),
-  pageTitle: vi.fn(async () => "QA"),
-  pageUrl: vi.fn(() => "http://127.0.0.1:3000/chat"),
-  pageWaitForFunction: vi.fn(async () => undefined),
-  pageWaitForSelector: vi.fn(async () => undefined),
+  page: {
+    on: vi.fn(),
+    evaluate: vi.fn(async () => "ok"),
+    title: vi.fn(async () => "QA"),
+    url: vi.fn(() => "http://127.0.0.1:3000/chat"),
+    waitForFunction: vi.fn(async () => undefined),
+    waitForSelector: vi.fn(async () => undefined),
+  },
   spawnSync: vi.fn(() => ({ status: 0 })),
 }));
 
@@ -52,12 +54,8 @@ beforeEach(() => {
   openPage = createQaWebPageOpener(new Set());
   vi.stubEnv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH", undefined);
   const page = {
-    on: mocks.pageOn,
+    ...mocks.page,
     goto: mocks.goto,
-    title: mocks.pageTitle,
-    url: mocks.pageUrl,
-    waitForSelector: mocks.pageWaitForSelector,
-    waitForFunction: mocks.pageWaitForFunction,
     locator: vi.fn((selector: string) => {
       if (selector === "body") {
         return mocks.bodyLocator;
@@ -70,7 +68,6 @@ beforeEach(() => {
         }),
       };
     }),
-    evaluate: mocks.pageEvaluate,
   };
   const context = {
     newPage: vi.fn(async () => page),
@@ -110,8 +107,8 @@ describe("qa web runtime", () => {
       waitUntil: "domcontentloaded",
       timeout: 20_000,
     });
-    expect(mocks.pageWaitForSelector).toHaveBeenCalledWith("textarea", { timeout: 20_000 });
-    expect(mocks.pageWaitForFunction).toHaveBeenCalled();
+    expect(mocks.page.waitForSelector).toHaveBeenCalledWith("textarea", { timeout: 20_000 });
+    expect(mocks.page.waitForFunction).toHaveBeenCalled();
     expect(mocks.locatorFill).toHaveBeenCalledWith("hello", { timeout: 20_000 });
     expect(mocks.locatorPress).toHaveBeenCalledWith("Enter", { timeout: 20_000 });
     expect(snapshot.text).toBe("hello");
@@ -123,7 +120,7 @@ describe("qa web runtime", () => {
   it("keeps bounded web text on UTF-16 boundaries", async () => {
     mocks.bodyLocator.textContent.mockResolvedValueOnce(`${"a".repeat(1999)}😀tail`);
     const opened = await openPage({ url });
-    const consoleHandler = mocks.pageOn.mock.calls.find(([event]) => event === "console")?.[1] as
+    const consoleHandler = mocks.page.on.mock.calls.find(([event]) => event === "console")?.[1] as
       | ((message: { type: () => string; text: () => string }) => void)
       | undefined;
     if (!consoleHandler) {
@@ -137,30 +134,19 @@ describe("qa web runtime", () => {
     await closeQaWebSessions();
   });
 
-  it("launches an explicit Chromium executable override when configured", async () => {
-    vi.stubEnv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH", "/custom/chromium");
-    mocks.existsSync.mockImplementation((candidate) => candidate === "/custom/chromium");
+  it.each([
+    ["explicit override", "/custom/chromium"],
+    ["detected system Chromium", "/usr/bin/chromium"],
+  ])("launches %s without requiring branded Chrome", async (mode, executablePath) => {
+    if (mode === "explicit override") {
+      vi.stubEnv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH", executablePath);
+    }
+    mocks.existsSync.mockImplementation((candidate) => candidate === executablePath);
     await openPage({ url });
-    expect(mocks.spawnSync).toHaveBeenCalledWith("/custom/chromium", ["--version"], {
+    expect(mocks.spawnSync).toHaveBeenCalledWith(executablePath, ["--version"], {
       stdio: "ignore",
     });
-    expect(mocks.launch).toHaveBeenCalledWith({
-      headless: true,
-      executablePath: "/custom/chromium",
-    });
-    await closeQaWebSessions();
-  });
-
-  it("launches detected system Chromium without requiring branded Chrome", async () => {
-    mocks.existsSync.mockImplementation((candidate) => candidate === "/usr/bin/chromium");
-    await openPage({ url });
-    expect(mocks.spawnSync).toHaveBeenCalledWith("/usr/bin/chromium", ["--version"], {
-      stdio: "ignore",
-    });
-    expect(mocks.launch).toHaveBeenCalledWith({
-      headless: true,
-      executablePath: "/usr/bin/chromium",
-    });
+    expect(mocks.launch).toHaveBeenCalledWith({ headless: true, executablePath });
     await closeQaWebSessions();
   });
 
@@ -177,7 +163,7 @@ describe("qa web runtime", () => {
       waitUntil: "domcontentloaded",
       timeout: MAX_TIMER_TIMEOUT_MS,
     });
-    expect(mocks.pageWaitForSelector).toHaveBeenCalledWith("textarea", {
+    expect(mocks.page.waitForSelector).toHaveBeenCalledWith("textarea", {
       timeout: MAX_TIMER_TIMEOUT_MS,
     });
     expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);

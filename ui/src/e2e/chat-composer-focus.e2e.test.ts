@@ -154,6 +154,44 @@ suite.define(() => {
     });
   });
 
+  it.each(["chat", "new"])(
+    "keeps %s composer keyboard focus visible in forced colors",
+    async (route) => {
+      await suite.withPage(
+        { viewport: { width: 1280, height: 900 }, forcedColors: "active", reducedMotion: "reduce" },
+        async ({ page }) => {
+          await installMockGateway(page);
+          await page.goto(suite.server.baseUrl + route);
+          const composer = page.locator(".agent-chat__input");
+          const textarea = composer.locator("textarea");
+          await textarea.waitFor();
+          const indicator = () =>
+            composer.evaluate((element) => {
+              const style = getComputedStyle(element);
+              return {
+                border: style.borderColor,
+                shadow: style.boxShadow,
+                outlineStyle: style.outlineStyle,
+                outlineWidth: style.outlineWidth,
+                outlineColor: style.outlineColor,
+              };
+            });
+          await textarea.blur();
+          const resting = await indicator();
+          await textarea.focus();
+          expect(await textarea.evaluate((element) => element.matches(":focus-visible"))).toBe(
+            true,
+          );
+          const focused = await indicator();
+          expect(focused.outlineStyle).toBe("solid");
+          expect(Number.parseFloat(focused.outlineWidth)).toBeGreaterThanOrEqual(2);
+          await page.keyboard.press("Tab");
+          expect(await indicator()).toEqual(resting);
+        },
+      );
+    },
+  );
+
   it("changes neutral focus styling in dark and light themes", async () => {
     await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page);

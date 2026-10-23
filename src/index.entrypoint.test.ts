@@ -47,8 +47,9 @@ vi.mock("./entry.version-fast-path.js", () => ({
 }));
 // mock-isolation: Import this entrypoint as the main module in the fixture.
 vi.mock("./infra/is-main.js", () => ({ isMainModule: vi.fn(() => true) }));
-vi.mock("./infra/package-lifecycle.js", () => ({
-  completePendingPackageLifecycle: vi.fn(async () => true),
+vi.mock("./infra/package-lifecycle.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./infra/package-lifecycle.js")>()),
+  completePendingPackageLifecycle: vi.fn(async () => {}),
 }));
 vi.mock("./library.js", () => ({
   applyTemplate: vi.fn(),
@@ -95,7 +96,7 @@ describe("legacy package executable entrypoint", () => {
     vi.mocked(isMainModule).mockReturnValue(true);
     vi.mocked(tryHandleRootVersionFastPath).mockReturnValue(false);
     vi.mocked(existsSync).mockReturnValue(false);
-    vi.mocked(completePendingPackageLifecycle).mockResolvedValue(true);
+    vi.mocked(completePendingPackageLifecycle).mockResolvedValue(undefined);
     vi.stubEnv("NODE_DISABLE_COMPILE_CACHE", undefined);
     vi.stubEnv("NODE_COMPILE_CACHE", undefined);
     vi.stubEnv("OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED", undefined);
@@ -273,7 +274,6 @@ describe("legacy package executable entrypoint", () => {
       if (fails) {
         throw new Error("postinstall failed");
       }
-      return true;
     });
     vi.mocked(tryHandleRootVersionFastPath).mockImplementation(() => {
       calls.push("version");

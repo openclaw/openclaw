@@ -171,72 +171,50 @@ describe("Codex app-server policy", () => {
     ).rejects.toThrow(error);
   });
 
-  it("uses human approval for OpenAI-compatible custom endpoints", () => {
-    const appServer = openAiRuntimeOptions({
-      model: "gpt-5.5",
-      config: customEndpointConfig,
-    });
-
-    expect(appServer.approvalsReviewer).toBe("user");
+  it.each([
+    ["lmstudio", undefined, {}, undefined],
+    ["openrouter", "openai/gpt-5.5", {}, undefined],
+    ["openai", "gpt-5.5", { model: "gpt-5.5", config: customEndpointConfig }, "user"],
+    ["codex", "lmstudio/local-model", { modelProvider: undefined }, undefined],
+    [
+      "local",
+      undefined,
+      {
+        execMode: undefined,
+        modelProvider: undefined,
+        pluginConfig: { appServer: { mode: "guardian", approvalsReviewer: "guardian_subagent" } },
+      },
+      undefined,
+    ],
+  ] as const)("uses human approval for %s / %s", (provider, model, options, initialReviewer) => {
+    const appServer = openAiRuntimeOptions(options);
+    if (initialReviewer) {
+      expect(appServer.approvalsReviewer).toBe(initialReviewer);
+    } else if (provider === "lmstudio") {
+      expect(appServer.approvalsReviewer).toBe("auto_review");
+    }
     expect(
-      resolveCodexAppServerForModelProvider({
-        appServer,
-        provider: "openai",
-        model: "gpt-5.5",
-        config: customEndpointConfig,
-      }).approvalsReviewer,
-    ).toBe("user");
-  });
-
-  it("uses human approval instead of Codex Guardian for custom model providers", () => {
-    const appServer = openAiRuntimeOptions();
-
-    const resolved = resolveCodexAppServerForModelProvider({
-      appServer,
-      provider: "lmstudio",
-    });
-    const vendorPrefixedModel = resolveCodexAppServerForModelProvider({
-      appServer,
-      provider: "openrouter",
-      model: "openai/gpt-5.5",
-    });
-
-    expect(appServer.approvalsReviewer).toBe("auto_review");
-    expect(resolved).toMatchObject({
-      approvalPolicy: "on-request",
-      sandbox: "workspace-write",
+      resolveCodexAppServerForModelProvider({ appServer, provider, model, ...options }),
+    ).toMatchObject({
       approvalsReviewer: "user",
+      ...(provider === "lmstudio"
+        ? { approvalPolicy: "on-request", sandbox: "workspace-write" }
+        : {}),
     });
-    expect(vendorPrefixedModel.approvalsReviewer).toBe("user");
   });
 
   it.each([
     {
-      name: "provider-qualified model in a native wrapper",
-      provider: "codex",
-      model: "lmstudio/local-model",
-      options: { execMode: "auto" },
+      name: "effective home instead of ambient home",
+      filename: "config.toml",
+      args: undefined,
     },
     {
-      name: "legacy guardian_subagent",
-      provider: "local",
-      model: undefined,
-      options: {
-        pluginConfig: { appServer: { mode: "guardian", approvalsReviewer: "guardian_subagent" } },
-      },
+      name: "selected native profile",
+      filename: "work.config.toml",
+      args: ["-pwork", "app-server"],
     },
-  ] as const)("uses human approval for $name", ({ provider, model, options }) => {
-    const appServer = resolveCodexAppServerRuntimeOptions({
-      env: {},
-      requirementsToml: null,
-      ...options,
-    });
-    expect(
-      resolveCodexAppServerForModelProvider({ appServer, provider, model }).approvalsReviewer,
-    ).toBe("user");
-  });
-
-  it("checks the actual app-server home instead of the caller's ambient Codex home", async () => {
+  ])("checks $name before trusting model-backed review", async ({ filename, args }) => {
     await withTempDir("openclaw-codex-review-home-", async (root) => {
       const ambientHome = path.join(root, "ambient");
       const effectiveHome = path.join(root, "effective");
@@ -244,12 +222,12 @@ describe("Codex app-server policy", () => {
         [ambientHome, effectiveHome].map((dir) => fs.mkdir(dir, { recursive: true })),
       );
       await fs.writeFile(
-        path.join(effectiveHome, "config.toml"),
+        path.join(effectiveHome, filename),
         'openai_base_url = "http://localhost:8080/v1"\n',
       );
       expect(
         reviewerForStart(
-          { homeScope: "user", env: { CODEX_HOME: effectiveHome } },
+          { homeScope: "user", args, env: { CODEX_HOME: effectiveHome } },
           { CODEX_HOME: ambientHome },
         ),
       ).toBe("user");
@@ -260,31 +238,10 @@ describe("Codex app-server policy", () => {
     expect(reviewerForStart({ env: { OPENAI_BASE_URL: "http://localhost:8080/v1" } })).toBe("user");
   });
 
-  it.each([["-pwork"]])(
-    "checks the selected native profile before trusting model-backed review: %j",
-    async (...profileArgs) => {
-      await withTempDir("openclaw-codex-review-profile-", async (codexHome) => {
-        await fs.writeFile(
-          path.join(codexHome, "work.config.toml"),
-          'openai_base_url = "http://localhost:8080/v1"\n',
-        );
-        expect(
-          reviewerForStart({
-            homeScope: "user",
-            args: [...profileArgs, "app-server"],
-            env: { CODEX_HOME: codexHome },
-          }),
-        ).toBe("user");
-      });
-    },
-  );
-
-  it.each(["model_providers.openai.base_url=https://api.openai.com/v1"])(
-    "keeps automatic review for native CLI string override: %s",
-    (override) => {
-      expect(reviewerForStart({ args: ["app-server", "-c", override] })).toBe("auto_review");
-    },
-  );
+  it("keeps automatic review for a trusted native CLI endpoint", () => {
+    const args = ["app-server", "-c", "model_providers.openai.base_url=https://api.openai.com/v1"];
+    expect(reviewerForStart({ args })).toBe("auto_review");
+  });
 
   it.each([
     ["-c", "\u0085openai_base_url=http://localhost:8080/v1"],

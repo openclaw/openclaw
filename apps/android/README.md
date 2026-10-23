@@ -699,4 +699,4 @@ Common failure quick-fixes:
 
 ## Contributions
 
-Maintainer: @obviyus. For issues/questions/contributions, please open an issue or reach out on Discord.
+Maintainer: @obviyus. For official OpenClaw support, visit [community.openclaw.ai](https://community.openclaw.ai/). For reproducible bugs, use the [issue chooser](https://github.com/openclaw/openclaw/issues/new/choose). For contribution coordination, reach out on Discord.

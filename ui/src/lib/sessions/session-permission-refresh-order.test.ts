@@ -1,24 +1,16 @@
 // @vitest-environment node
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import {
-  createSessionCapabilityHarness,
-  sessionsResult,
-} from "./session-capability.test-support.ts";
+import { sessionsResult } from "./session-capability.test-support.ts";
+import { sessionRpcHarness, patchReceipt } from "./session-rpc.test-support.ts";
 
 function row(key: string, sessionId: string): GatewaySessionRow {
   return { key, kind: "direct", sessionId, updatedAt: 1, permissionMode: "guarded" };
 }
 
 function acknowledgment(key: string, sessionId: string) {
-  return {
-    ok: true,
-    path: "(sessions)",
-    key,
-    entry: { sessionId, updatedAt: 2, permissionMode: "workspace" },
-  };
+  return patchReceipt(key, { sessionId, updatedAt: 2, permissionMode: "workspace" });
 }
 
 function harness(
@@ -27,18 +19,10 @@ function harness(
   list: (call: number) => Promise<SessionsListResult>,
 ) {
   let listCalls = 0;
-  const request = vi.fn(async (method: string) => {
-    if (method === "sessions.patch") {
-      return patchReply;
-    }
-    if (method !== "sessions.list") {
-      throw new Error(`Unexpected request: ${method}`);
-    }
-    return ++listCalls === 1 ? initial : list(listCalls);
+  const capability = sessionRpcHarness({
+    "sessions.patch": () => patchReply,
+    "sessions.list": () => (++listCalls === 1 ? initial : list(listCalls)),
   });
-  const capability = createSessionCapabilityHarness(
-    request as unknown as GatewayBrowserClient["request"],
-  );
   return {
     ...capability,
     calls: () => listCalls,
@@ -53,10 +37,8 @@ function harness(
         type: "event",
         event: "session.message",
         payload: {
-          key,
+          ...row(key, sessionId),
           sessionKey: key,
-          kind: "direct",
-          sessionId,
           updatedAt,
           permissionMode,
           archived: false,

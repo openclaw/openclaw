@@ -48,6 +48,7 @@ function workspaceSelection(
             id: entry.worktree.id,
             branch: entry.worktree.branch,
             repoRoot: entry.worktree.repoRoot,
+            githubPullRequest: entry.worktree.githubPullRequest,
           },
         }
       : {}),

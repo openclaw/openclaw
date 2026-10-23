@@ -83,66 +83,6 @@ export function resolveArgumentChurnProgress(
   };
 }
 
-function recordArgumentChurnActivityObservation(
-  activity: DiagnosticArgumentChurnActivity,
-  params: {
-    runId?: string;
-    active: boolean;
-    existingOnly?: boolean;
-    now: number;
-  },
-): void {
-  if (
-    params.existingOnly &&
-    (activity.argumentChurnStartedAt === undefined || activity.argumentChurnRunId !== params.runId)
-  ) {
-    return;
-  }
-  if (!params.active) {
-    if (activity.argumentChurnRunId === params.runId) {
-      clearArgumentChurnActivity(activity, params);
-    }
-    return;
-  }
-  const continuityExpired = hasArgumentChurnContinuityExpired(activity, params.now);
-  if (
-    activity.argumentChurnStartedAt === undefined ||
-    activity.argumentChurnRunId !== params.runId ||
-    continuityExpired
-  ) {
-    activity.argumentChurnStartedAt = params.now;
-    activity.argumentChurnRunId = params.runId;
-  }
-  activity.argumentChurnObservationAt = params.now;
-  activity.argumentChurnObservationSequence = ++diagnosticActivitySequence;
-}
-
-function updateArgumentChurnPolicyWait(
-  activity: DiagnosticArgumentChurnActivity,
-  params: {
-    action: "enter" | "exit";
-    runId?: string;
-    token: symbol;
-  },
-): void {
-  if (params.action === "enter") {
-    if (activity.argumentChurnPolicyWaitRunId !== params.runId) {
-      activity.argumentChurnPolicyWaitRunId = params.runId;
-      activity.argumentChurnPolicyWaitTokens = new Set();
-    }
-    activity.argumentChurnPolicyWaitTokens?.add(params.token);
-    return;
-  }
-  if (activity.argumentChurnPolicyWaitRunId !== params.runId) {
-    return;
-  }
-  activity.argumentChurnPolicyWaitTokens?.delete(params.token);
-  if (activity.argumentChurnPolicyWaitTokens?.size === 0) {
-    activity.argumentChurnPolicyWaitRunId = undefined;
-    activity.argumentChurnPolicyWaitTokens = undefined;
-  }
-}
-
 export function clearArgumentChurnPolicyWaits(
   activity: DiagnosticArgumentChurnActivity,
   params: { runId?: string } = {},
@@ -169,20 +109,48 @@ export function applyArgumentChurnObservation<T extends { runId: string; sequenc
   }
   if (params.policyWait) {
     if (params.policyWaitToken) {
-      updateArgumentChurnPolicyWait(activity, {
-        action: params.policyWait,
-        runId,
-        token: params.policyWaitToken,
-      });
+      if (params.policyWait === "enter") {
+        if (activity.argumentChurnPolicyWaitRunId !== runId) {
+          activity.argumentChurnPolicyWaitRunId = runId;
+          activity.argumentChurnPolicyWaitTokens = new Set();
+        }
+        activity.argumentChurnPolicyWaitTokens?.add(params.policyWaitToken);
+        return;
+      }
+      if (activity.argumentChurnPolicyWaitRunId !== runId) {
+        return;
+      }
+      activity.argumentChurnPolicyWaitTokens?.delete(params.policyWaitToken);
+      if (activity.argumentChurnPolicyWaitTokens?.size === 0) {
+        activity.argumentChurnPolicyWaitRunId = undefined;
+        activity.argumentChurnPolicyWaitTokens = undefined;
+      }
     }
     return;
   }
-  recordArgumentChurnActivityObservation(activity, {
-    runId,
-    active: params.active === true,
-    existingOnly: params.existingOnly,
-    now,
-  });
+  if (
+    params.existingOnly &&
+    (activity.argumentChurnStartedAt === undefined || activity.argumentChurnRunId !== runId)
+  ) {
+    return;
+  }
+  if (params.active !== true) {
+    if (activity.argumentChurnRunId === runId) {
+      clearArgumentChurnActivity(activity, { now, runId });
+    }
+    return;
+  }
+  const continuityExpired = hasArgumentChurnContinuityExpired(activity, now);
+  if (
+    activity.argumentChurnStartedAt === undefined ||
+    activity.argumentChurnRunId !== runId ||
+    continuityExpired
+  ) {
+    activity.argumentChurnStartedAt = now;
+    activity.argumentChurnRunId = runId;
+  }
+  activity.argumentChurnObservationAt = now;
+  activity.argumentChurnObservationSequence = ++diagnosticActivitySequence;
 }
 
 export function mergeArgumentChurnActivity(

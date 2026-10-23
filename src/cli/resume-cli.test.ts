@@ -12,6 +12,7 @@ import { encodeResumeHandoff } from "../shared/resume-handoff.js";
 import type { TuiSessionList } from "../tui/tui-backend.js";
 import { registerResumeCli } from "./resume-cli.js";
 import { runResumeCommand } from "./resume-cli.runtime.js";
+import { createCliTtyMock } from "./test-runtime-capture.js";
 
 const mocks = vi.hoisted(() => ({
   connect: vi.fn(),
@@ -41,9 +42,9 @@ vi.mock("../runtime.js", async (importOriginal) => ({
 
 type SessionRow = TuiSessionList["sessions"][number];
 
-const ttyDescriptors = [process.stdin, process.stdout].map(
-  (stream) => [stream, Object.getOwnPropertyDescriptor(stream, "isTTY")] as const,
-);
+const tty = createCliTtyMock();
+const unresolvedHandoff =
+  "Could not resolve the session handoff. Copy a fresh command from the Control UI.";
 
 function createGatewayClient(
   rows: SessionRow[],
@@ -73,8 +74,7 @@ function createGatewayClient(
 }
 
 beforeEach(() => {
-  Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
-  Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
+  tty.set(true);
   mocks.connect.mockReset();
   mocks.runTui.mockReset().mockResolvedValue(undefined);
   mocks.selectStyled.mockReset();
@@ -82,13 +82,7 @@ beforeEach(() => {
   mocks.exit.mockReset();
 });
 
-afterEach(() => {
-  for (const [stream, descriptor] of ttyDescriptors) {
-    void (descriptor
-      ? Object.defineProperty(stream, "isTTY", descriptor)
-      : Reflect.deleteProperty(stream, "isTTY"));
-  }
-});
+afterEach(() => tty.restore());
 
 describe("runResumeCommand", () => {
   it.each(["cancelled", "empty"])("does not launch the TUI for a %s picker", async (scenario) => {
@@ -227,9 +221,7 @@ describe("runResumeCommand", () => {
     const client = createGatewayClient([]);
     client.resolveSession.mockRejectedValue(new Error("sensitive upstream details"));
 
-    await expect(runResumeCommand(undefined, { handoff })).rejects.toThrow(
-      "Could not resolve the session handoff. Copy a fresh command from the Control UI.",
-    );
+    await expect(runResumeCommand(undefined, { handoff })).rejects.toThrow(unresolvedHandoff);
     expect(client.listSessions).not.toHaveBeenCalled();
     expect(mocks.runTui).not.toHaveBeenCalled();
   });
@@ -285,8 +277,7 @@ describe("runResumeCommand", () => {
   });
 
   it("rejects a non-interactive queried resume before connecting or launching the TUI", async () => {
-    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: false });
-    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: false });
+    tty.set(false);
 
     await expect(runResumeCommand("global", {})).rejects.toThrow(
       "Attaching to a session requires an interactive terminal. Re-run `openclaw resume [query]` from an interactive terminal.",
@@ -396,11 +387,7 @@ describe("real Gateway session boundary", () => {
       if (scenario.found) {
         await result;
       } else {
-        await expect(result).rejects.toThrow(
-          new Error(
-            "Could not resolve the session handoff. Copy a fresh command from the Control UI.",
-          ),
-        );
+        await expect(result).rejects.toThrow(new Error(unresolvedHandoff));
       }
       expect(lifecycle.filter((event) => event === "stopped")).toHaveLength(index + 1);
     }

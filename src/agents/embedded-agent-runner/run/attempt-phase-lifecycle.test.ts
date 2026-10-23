@@ -295,6 +295,7 @@ describe("embedded attempt phase lifecycle state", () => {
         rewrittenEntries: 0,
       }));
       const onContextEngineTurnCandidate = vi.fn();
+      const config = {};
       await completeEmbeddedAttemptAfterTurn(
         {
           ...finalizationInput(prepared(sessionManager)),
@@ -306,9 +307,13 @@ describe("embedded attempt phase lifecycle state", () => {
             sessionFile: target.sessionKey,
             provider: "test",
             modelId: "model",
-            model: { api: "openai-responses", contextWindow: 180_000 },
+            model: { api: "openai-responses", contextWindow: 120_000 },
             modelContextWindow: 200_000,
             contextTokenBudget: 180_000,
+            workspaceDir: dir,
+            cwd: dir,
+            authProfileId: "profile-1",
+            config,
             userTurnTranscriptRecorder: recorder,
             onContextEngineTurnCandidate,
           } as never,
@@ -348,6 +353,32 @@ describe("embedded attempt phase lifecycle state", () => {
       }
       expect(sessionManager.getEntries()).toContainEqual(bootstrapCompletedEntry);
       expect(hoisted.runAgentEndSideEffects).toHaveBeenCalledOnce();
+      const context = hoisted.runAgentEndSideEffects.mock.calls[0]?.[0].ctx;
+      expect(context).toMatchObject({
+        runId: "run-1",
+        agentId: "main",
+        sessionId: target.sessionId,
+        sessionKey: target.sessionKey,
+        modelProviderId: "test",
+        modelId: "model",
+        modelContextWindowTokens: 180_000,
+        authProfileId: "profile-1",
+        skillWorkshopAvailable: false,
+        compacted: false,
+        trace: {
+          traceId: "11111111111111111111111111111111",
+          spanId: "2222222222222222",
+        },
+        foregroundPromptContext: {
+          agentId: "main",
+          agentDir: "/tmp/agent",
+          workspaceDir: dir,
+          cwd: dir,
+          sandboxSessionKey: target.sessionKey,
+          sandboxAgentId: "main",
+        },
+      });
+      expect(context?.config).toBe(config);
       expect(hoisted.runAgentEndSideEffects.mock.calls[0]?.[0].skillExperienceReviewSource).toEqual(
         sessionManager.getSessionTarget()
           ? { ...sessionManager.getSessionTarget(), entryId: terminalEntryId }

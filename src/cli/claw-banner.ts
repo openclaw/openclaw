@@ -78,11 +78,6 @@ function composeFrame(params: {
   return lines;
 }
 
-function plainTitleLine(): string {
-  const icon = decorativeEmoji("🦞");
-  return supportsDecorativeEmoji() && icon ? `${icon} OPENCLAW ${icon}` : "OPENCLAW";
-}
-
 // One combined entrance: a left-to-right molt wipe reveals the color, a
 // shimmer band sweeps the wordmark, and the claws snip once. The 330ms sequence
 // ends on the exact static banner.
@@ -188,7 +183,9 @@ export async function printClawBanner(
 ): Promise<ClawBannerResult> {
   const columns = process.stdout.columns ?? 80;
   if (columns < BANNER_WIDTH) {
-    runtime.log(`${plainTitleLine()}\n`);
+    const icon = decorativeEmoji("🦞");
+    const title = supportsDecorativeEmoji() && icon ? `${icon} OPENCLAW ${icon}` : "OPENCLAW";
+    runtime.log(`${title}\n`);
     return "static";
   }
   const animate = process.stdout.isTTY && isRich() && !process.env.CI && !process.env.VITEST;

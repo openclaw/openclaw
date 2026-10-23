@@ -90,6 +90,7 @@ export type MemorySemanticProviderGeneration = Extract<
 
 export type MemoryReindexProgress = {
   memoryComplete: boolean;
+  memoryPlan?: MemorySourceSyncPlan;
   completedSessionFiles: Set<string>;
   changedSessionFiles: Set<string>;
   changedSessionTargets: Map<string, MemorySessionSyncTarget>;
@@ -434,15 +435,17 @@ export abstract class MemoryManagerSyncBase {
     progress?: MemorySyncProgressState;
   }): Promise<void> {
     const deferIndex = this.shouldDeferSourceWideBatch();
+    const reindexProgress = this.reindexProgress;
     const memoryPlan = params.shouldSyncMemory
-      ? await this.syncMemoryFiles({
+      ? ((deferIndex && !this.dirty ? reindexProgress?.memoryPlan : undefined) ??
+        (await this.syncMemoryFiles({
           needsFullReindex: params.needsFullReindex,
           progress: params.progress,
           ...(deferIndex ? { deferIndex: true } : {}),
-        })
+        })))
       : undefined;
-    if (params.shouldSyncMemory && !deferIndex && this.reindexProgress) {
-      this.reindexProgress.memoryComplete = true;
+    if (params.shouldSyncMemory && !deferIndex && reindexProgress) {
+      reindexProgress.memoryComplete = true;
     }
     if (params.shouldSyncSessions) {
       await this.syncArchiveFiles({
@@ -451,16 +454,25 @@ export abstract class MemoryManagerSyncBase {
         progress: params.progress,
         ...(deferIndex ? { prefixIndexItems: memoryPlan?.indexItems } : {}),
       });
+      if (memoryPlan && !this.dirty) {
+        // Session batches mark memory dirty if any memory items remain unindexed.
+        memoryPlan.indexItems = [];
+      }
     } else if (deferIndex) {
-      await this.indexQueuedFiles(memoryPlan?.indexItems ?? [], params.progress);
+      const remaining = await this.indexQueuedFiles(memoryPlan?.indexItems ?? [], params.progress);
+      if (memoryPlan) {
+        memoryPlan.indexItems = remaining;
+      }
     }
-    if (this.reindexProgress?.yielded) {
+    if (reindexProgress?.yielded) {
+      reindexProgress.memoryPlan = this.dirty ? undefined : memoryPlan;
       return;
     }
     if (deferIndex) {
       await memoryPlan?.finalize();
-      if (params.shouldSyncMemory && this.reindexProgress) {
-        this.reindexProgress.memoryComplete = true;
+      if (params.shouldSyncMemory && reindexProgress) {
+        reindexProgress.memoryPlan = undefined;
+        reindexProgress.memoryComplete = true;
       }
     }
     if (params.shouldSyncSessions) {

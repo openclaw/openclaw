@@ -2,7 +2,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { createMemo, For, Show } from "solid-js";
 import { createFooterControlRef } from "../../app/shell-layout-traits-solid.tsx";
 import { highlightCodeHtml } from "../../components/markdown-code-blocks.ts";
-import { providerIdFromModelRef } from "../../components/provider-icon.ts";
+import { providerIdFromModelRef } from "../../components/provider-icon-data.ts";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
@@ -130,7 +130,11 @@ export function Editor(
         </Show>
       </fieldset>
       {props.editingJob && props.canManage ? (
-        <CronScratchEditor jobId={props.editingJob.id} gateway={props.gateway} />
+        <CronScratchEditor
+          jobId={props.editingJob.id}
+          gateway={props.gateway}
+          getRetired={props.getActionRetired}
+        />
       ) : undefined}
     </>
   );

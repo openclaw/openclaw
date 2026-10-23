@@ -336,7 +336,6 @@ export async function readConfiguredLogTail(
 
 /** Reads the canonical configured tail and parses its already-redacted lines. */
 export async function readConfiguredParsedLogTail(params?: {
-  cursor?: number;
   limit?: number;
   maxBytes?: number;
   filter?: (line: Pick<ParsedLogLine, "subsystem" | "module" | "plugin">) => boolean;

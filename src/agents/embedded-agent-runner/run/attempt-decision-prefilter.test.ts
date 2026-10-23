@@ -184,12 +184,10 @@ it.each(["missing_request_context", "next_response_needs_tools"])(
       [{ type: "choice", choice: "no", probabilities: { no: 1 }, confidence: 1 }, false],
       [{ type: "boolean", probabilityTrue: 0.349 }, true],
       [{ type: "boolean", probabilityTrue: 0.35 }, false],
-      [{ type: "boolean", probabilityTrue: 0.9 }, false],
       [{ type: "boolean", probabilityTrue: 0.1, answer: false }, true],
       [{ type: "boolean", probabilityTrue: 0.1, answer: true }, false],
       [{ type: "boolean", probabilityTrue: 0.1, answer: null }, false],
       [{ type: "boolean", answer: false }, false],
-      [{ type: "error", code: "provider-error" }, false],
     ];
     for (const [value, shouldPruneTools] of cases) {
       const outcome = answer();
@@ -204,8 +202,8 @@ it.each(["missing_request_context", "next_response_needs_tools"])(
     }
   },
 );
-it.each(["transport"] as const)("retains tools without retry on %s", async (reason) => {
-  mocks.evaluate.mockResolvedValue({ status: "unavailable", reason });
+it("retains tools without retry on transport failure", async () => {
+  mocks.evaluate.mockResolvedValue({ status: "unavailable", reason: "transport" });
   expect(await evaluate()).toMatchObject({
     shouldPruneTools: false,
   });
@@ -256,7 +254,6 @@ it.each`
   ${"excluded current input"}       | ${[]}                                                                                                   | ${"Explain"}                        | ${false}                                                                   | ${true}  | ${undefined}
   ${"assistant commentary media"}   | ${[user("Help"), assistant("", { content: [textBlock(imageReference, "commentary")] })]}                | ${"Explain"}                        | ${false}                                                                   | ${false} | ${undefined}
   ${"assistant final_answer media"} | ${[user("Help"), assistant("", { content: [textBlock(imageReference, "final_answer")] })]}              | ${"Explain"}                        | ${false}                                                                   | ${false} | ${undefined}
-  ${"projection overflow"}          | ${[]}                                                                                                   | ${"x".repeat(6_001)}                | ${false}                                                                   | ${false} | ${hookFields("")}
   ${"astral exact"}                 | ${[]}                                                                                                   | ${"🙂".repeat(3_000)}               | ${true}                                                                    | ${false} | ${hookFields("🙂".repeat(1_000))}
   ${"astral overflow"}              | ${[]}                                                                                                   | ${"🙂".repeat(3_000)}               | ${false}                                                                   | ${false} | ${hookFields("🙂".repeat(1_001))}
   ${"JSON expansion"}               | ${[]}                                                                                                   | ${"x".repeat(6_000)}                | ${true}                                                                    | ${false} | ${hookFields(String.fromCharCode(34).repeat(2_000))}

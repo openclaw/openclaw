@@ -2,11 +2,8 @@ import { LanguageDescription } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
-import {
-  applicationContext,
-  type ApplicationContext,
-  type ApplicationContextRequest,
-} from "../../../app/context.ts";
+import { createApplicationGateway } from "../../../test-helpers/application-context.ts";
+import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
 import { readFileDraft, setFileDraft } from "./chat-file-drafts.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { createChatSidebarContainer } from "./chat-sidebar.test-support.ts";
@@ -64,33 +61,20 @@ async function mount(
     setFileDraft(file, { content: retained, expectedHash: retainedHash });
   }
   const panel = document.createElement("openclaw-chat-detail-panel") as Panel;
-  const request = vi.fn(async (_method: string, params: { html: string }) => ({
-    html: params.html,
+  const request = vi.fn(async (_method: string, params?: unknown) => ({
+    html: params && typeof params === "object" && "html" in params ? params.html : "",
     sandboxUrl: "/mcp-app-sandbox",
     sandboxPort: 8444,
   }));
-  const previewContext = {
-    gateway: {
-      snapshot: { client: { request }, phase: "connected" },
-      connection: { gatewayUrl: "ws://gateway.example:8443" },
-      subscribe: () => () => {},
-    },
-  } as unknown as ApplicationContext;
-  // Only the preview consumes this Gateway-only fixture; sibling catalogs need a full app.
-  panel.addEventListener("context-request", (event) => {
-    // SAFETY: This listener handles the native application context protocol.
-    const contextRequest = event as ApplicationContextRequest;
-    if (
-      contextRequest.context === applicationContext &&
-      contextRequest.contextTarget.localName === "openclaw-chat-html-preview"
-    ) {
-      event.stopPropagation();
-      contextRequest.callback(previewContext);
-    }
+  const fixture = createApplicationGateway();
+  fixture.publish({
+    ...fixture.gateway.snapshot,
+    client: createTestGatewayClient(request),
+    phase: "connected",
   });
   panel.style.cssText = "width:100%;height:600px";
   panel.content = file;
-  const container = createChatSidebarContainer();
+  const container = createChatSidebarContainer(fixture.gateway);
   container.append(panel);
   document.body.append(container);
   await panel.updateComplete;
@@ -119,14 +103,14 @@ describe.runIf(browserMode)("HTML file presentation", () => {
 
   it("renders normalized HTML MIME without a filename extension", async () => {
     const { panel, request } = await mount("report", undefined, "Text/HTML; charset=utf-8");
-    expect(request.mock.lastCall?.[1]?.html).toBe(source);
+    expect(request.mock.lastCall?.[1]).toMatchObject({ html: source });
     expect(panel.querySelector(".cm-editor")).toBeNull();
   });
 
   it("opens rendered HTML before loading CodeMirror, then retains editor and undo through draft preview", async () => {
     localStorage.removeItem("openclaw.control.fileView.wrap.v1");
     const { panel, file, request } = await mount();
-    expect(request.mock.lastCall?.[1]?.html).toBe(source);
+    expect(request.mock.lastCall?.[1]).toMatchObject({ html: source });
     expect(panel.querySelector(".cm-editor")).toBeNull();
     expect(panel.querySelector("h1")).toBeNull();
     expect(button(panel, "Enable word wrap").disabled).toBe(true);
@@ -142,7 +126,9 @@ describe.runIf(browserMode)("HTML file presentation", () => {
     await userEvent.fill(input, "<h1>Unsaved draft</h1>");
     expect(readFileDraft(file)?.content).toBe("<h1>Unsaved draft</h1>");
     await userEvent.click(button(panel, "Preview"));
-    await expect.poll(() => request.mock.lastCall?.[1]?.html).toBe("<h1>Unsaved draft</h1>");
+    await expect
+      .poll(() => request.mock.lastCall?.[1])
+      .toMatchObject({ html: "<h1>Unsaved draft</h1>" });
     expect(panel.querySelector(".cm-editor")).toBe(editor);
     expect(input.checkVisibility()).toBe(false);
     expect(button(panel, "Disable word wrap").disabled).toBe(true);
@@ -231,7 +217,7 @@ describe.runIf(browserMode)("HTML file presentation", () => {
         expect(save).toHaveBeenLastCalledWith({ content: draft, expectedHash: "latest-hash" });
       } else {
         expect(save).toHaveBeenCalledOnce();
-        await expect.poll(() => request.mock.lastCall?.[1]?.html).toBe(latest);
+        await expect.poll(() => request.mock.lastCall?.[1]).toMatchObject({ html: latest });
       }
       expect(button(panel, "Save").disabled).toBe(true);
       await userEvent.click(button(panel, "Source"));
@@ -307,7 +293,7 @@ describe.runIf(browserMode)("HTML file presentation", () => {
 
   it("previews a retained unsaved draft without initializing or discarding its editor", async () => {
     const { panel, file, request } = await mount("draft.html", "<h1>Retained draft</h1>");
-    expect(request.mock.lastCall?.[1]?.html).toBe("<h1>Retained draft</h1>");
+    expect(request.mock.lastCall?.[1]).toMatchObject({ html: "<h1>Retained draft</h1>" });
     expect(panel.querySelector(".cm-editor")).toBeNull();
     await userEvent.click(button(panel, "Source"));
     await expect
@@ -318,7 +304,7 @@ describe.runIf(browserMode)("HTML file presentation", () => {
     await expect
       .poll(() => panel.querySelector<HTMLElement>(".chat-html-preview")?.checkVisibility())
       .toBe(true);
-    await expect.poll(() => request.mock.lastCall?.[1]?.html).toBe(source);
+    await expect.poll(() => request.mock.lastCall?.[1]).toMatchObject({ html: source });
     expect(readFileDraft(file)).toBeUndefined();
   });
 });

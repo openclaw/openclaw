@@ -39,7 +39,6 @@ export type AgentRunContext = {
   localModelWait?: { requestId: string };
   activeModel?: AgentRunModel;
   verboseLevel?: VerboseLevel;
-  isHeartbeat?: boolean;
   /** Whether control UI clients should receive chat/agent updates for this run. */
   isControlUiVisible?: boolean;
   projectSessionActive?: boolean;

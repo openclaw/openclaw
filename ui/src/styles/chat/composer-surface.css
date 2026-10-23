@@ -348,6 +348,14 @@
   }
 }
 
+@media (forced-colors: active) {
+  /* Forced colors drop the box shadows and border shift that mark focus above. */
+  .agent-chat__input:has(.agent-chat__composer-combobox > :is(textarea, input):focus-visible) {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+}
+
 /* Everything docked above the editor. It must stay a flow box with nothing in it
    when there is nothing to show — no minimum height, no padding of its own — so
    an absent attachment or reply preview costs the surface no height at all. */
@@ -663,6 +671,10 @@
   position: relative;
 }
 
+.agent-chat__input-btn--attach > .oc-menu-item__label {
+  display: contents;
+}
+
 .agent-chat__input-btn--has-overrides::after {
   position: absolute;
   top: 3px;
@@ -885,6 +897,10 @@
 .chat-send-btn--stop svg {
   width: 18px;
   height: 18px;
+}
+
+.chat-send-btn--stop rect {
+  rx: 3px;
 }
 
 .chat-send-btn--stop:hover:not(:disabled) {
@@ -1190,7 +1206,7 @@
     --chat-composer-send-size: var(--chat-mobile-row-plus-target-size);
   }
 
-  .agent-chat__input--mobile-toolbar svg {
+  :where(.agent-chat__input--mobile-toolbar) svg {
     width: var(--chat-mobile-row-icon-size);
     height: var(--chat-mobile-row-icon-size);
     stroke-width: var(--chat-mobile-row-icon-stroke);
@@ -1303,10 +1319,6 @@
 @container chat-conversation (max-height: 320px) {
   .chat-footer {
     --chat-footer-max-height: 100cqh;
-  }
-
-  .chat-footer::before {
-    display: none;
   }
 
   .agent-chat__input {

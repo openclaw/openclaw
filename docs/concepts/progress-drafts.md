@@ -296,6 +296,10 @@ With the commentary lane enabled, preambles render only as those interleaved
 💬 lines; the status headline below stays out of the way so the lane keeps its
 documented shape.
 
+Send-denied turns cannot forward visible progress callbacks, even when automatic
+source delivery is enabled. Message-tool-only reply ownership can permit temporary
+progress without an automatic final answer, but it never overrides a send denial.
+
 ### Status headline
 
 On Discord and Telegram in progress mode, the model's typed pre-tool preamble
