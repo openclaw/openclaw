@@ -10,8 +10,8 @@ export type AgentInputRecoveryAdmission = {
 };
 
 type AgentInputRecoveryContext = {
-  context?: { inputRecovery: AgentInputRecoveryAdmission };
-  resolveGatewayContext?: () => { inputRecovery: AgentInputRecoveryAdmission } | undefined;
+  context?: { inputRecovery?: AgentInputRecoveryAdmission };
+  resolveGatewayContext?: () => { inputRecovery?: AgentInputRecoveryAdmission } | undefined;
 };
 
 const recovery = new AsyncLocalStorage<AgentInputRecoveryContext>();
