@@ -284,6 +284,81 @@ describe("openclaw-link-reader-hovercard-provider", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
+  it.each([5_000, 90_000])(
+    "honors a server retry window of %i ms without extending it on reentry",
+    async (retryAfterMs) => {
+      const { anchor, provider } = createLink();
+      const message = "GitHub API rate limit exceeded. Wait and retry.";
+      const request = connect(
+        provider,
+        vi
+          .fn()
+          .mockRejectedValueOnce(
+            new GatewayRequestError({
+              code: "UNAVAILABLE",
+              message,
+              retryable: true,
+              retryAfterMs,
+            }),
+          )
+          .mockResolvedValue(preview()),
+      );
+      await hover(anchor);
+      expect(card()?.textContent).toContain(message);
+      const retryAt = Date.now() + retryAfterMs;
+      leave(anchor);
+      await vi.advanceTimersByTimeAsync(120);
+      vi.setSystemTime(retryAt - 1_000);
+      await hover(anchor);
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(card()?.textContent).toContain(message);
+      leave(anchor);
+      await vi.advanceTimersByTimeAsync(120);
+      vi.setSystemTime(retryAt);
+      await hover(anchor);
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(card()?.textContent).toContain(preview().title);
+    },
+  );
+
+  it.each(["agent", "session", "reader", "client", "principal"])(
+    "retires server retry windows after a %s change",
+    async (change) => {
+      const { anchor, provider } = createLink();
+      const request = connect(
+        provider,
+        vi
+          .fn()
+          .mockRejectedValueOnce(
+            new GatewayRequestError({
+              code: "UNAVAILABLE",
+              message: "Wait and retry.",
+              retryable: true,
+              retryAfterMs: 90_000,
+            }),
+          )
+          .mockResolvedValue(preview()),
+      );
+      await hover(anchor);
+      leave(anchor);
+      await vi.advanceTimersByTimeAsync(120);
+      if (change === "agent") {
+        provider.agentId = "other-agent";
+      } else if (change === "session") {
+        provider.sessionKey = "agent:main:other-session";
+      } else if (change === "reader") {
+        provider.readers = [{ ...github }];
+      } else if (change === "client") {
+        connect(provider, request);
+      } else {
+        Object.assign(provider.client!, { recoveryScope: "other-principal" });
+      }
+      await hover(anchor);
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(card()?.textContent).toContain(preview().title);
+    },
+  );
+
   it.each([
     null,
     { title: "Wrong reader", url: "https://other.example/item/1" },

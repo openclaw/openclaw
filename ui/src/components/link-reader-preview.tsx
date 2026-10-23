@@ -129,13 +129,13 @@ export function cacheEntryFromDocument(
     generation: previous?.generation,
     enrichment: previous?.preview && !previous.enrichment ? undefined : "needed",
     promise: Promise.resolve(preview),
-    expiresAt,
+    expiresAt: Math.max(expiresAt, previous?.retryAt ?? 0),
+    retryAt: previous?.retryAt,
     controller: new AbortController(),
     subscribers: new Set(),
   };
 }
 
-/** Preserve last-known facts on refresh failure, but never promote them to fresh cache data. */
 export async function requestReaderPreview(
   scope: {
     client: GatewayBrowserClient | null;
@@ -160,15 +160,7 @@ export async function requestReaderPreview(
     ...(target.reader.linkReader.sessionScoped ? { sessionKey } : {}),
     url: target.href,
   };
-  let preview: ControlUiLinkReaderPreview;
-  try {
-    preview = parsePreviewResponse(target, await client.request(method, params, { signal }));
-  } catch (error) {
-    if (signal.aborted || !cached?.preview) {
-      throw error;
-    }
-    return { ...cached.preview, stale: true };
-  }
+  const preview = parsePreviewResponse(target, await client.request(method, params, { signal }));
   // A reader-first entry owns newer header facts, not the plugin's compact projection.
   const header = cached?.enrichment ? cached.preview : undefined;
   return header
@@ -466,6 +458,8 @@ export type CacheEntry = {
   enrichment?: "needed" | "pending";
   preview?: ControlUiLinkReaderPreview;
   expiresAt: number;
+  /** Reader facts can refresh without clearing an outstanding preview retry window. */
+  retryAt?: number;
   promise: Promise<ControlUiLinkReaderPreview>;
   controller: AbortController;
   subscribers: Set<object>;

@@ -77,7 +77,10 @@ export class LinkReaderPreviewCache {
     // Dismissal invalidates only that request, even before its rejection settles.
     if (
       cached &&
-      (!this.host.client?.connected || cached.enrichment !== "needed" || cached.preview?.stale)
+      (!this.host.client?.connected ||
+        cached.enrichment !== "needed" ||
+        cached.preview?.stale ||
+        (cached.retryAt ?? 0) > Date.now())
     ) {
       this.entries.set(key, cached);
       return subscribeToSharedRequest(cached, {}, signal);
@@ -120,14 +123,33 @@ export class LinkReaderPreviewCache {
           return preview;
         })
         .catch((error: unknown) => {
-          if (
+          const retryAfterMs =
             error instanceof GatewayRequestError &&
-            client.connected &&
-            client.connectionGeneration === entry.generation
+            error.retryable &&
+            typeof error.retryAfterMs === "number" &&
+            Number.isFinite(error.retryAfterMs) &&
+            error.retryAfterMs >= 0
+              ? error.retryAfterMs
+              : FAILURE_CACHE_MS;
+          // Keep the original deadline on reentry, including when preserving reader facts.
+          entry.retryAt = Date.now() + retryAfterMs;
+          entry.expiresAt = entry.retryAt;
+          if (!controller.signal.aborted && previous?.preview) {
+            const preview = { ...previous.preview, stale: true };
+            if (isCurrent() && this.entries.get(key) === entry) {
+              entry.preview = preview;
+              entry.enrichment = previous.enrichment ? "needed" : undefined;
+              this.onChange();
+            }
+            return preview;
+          }
+          // Explicit reader failures back off; interrupted transport is not missing metadata.
+          if (
+            (!(error instanceof GatewayRequestError) ||
+              !client.connected ||
+              client.connectionGeneration !== entry.generation) &&
+            this.entries.get(key) === entry
           ) {
-            // Explicit reader failures back off; interrupted transport is not missing metadata.
-            entry.expiresAt = Date.now() + FAILURE_CACHE_MS;
-          } else if (this.entries.get(key) === entry) {
             if (previous?.preview) {
               this.entries.set(key, previous);
             } else {

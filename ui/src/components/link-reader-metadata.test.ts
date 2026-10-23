@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ControlUiLinkReaderDocument } from "../../../src/shared/control-ui-link-reader.js";
-import { GatewayBrowserClient } from "../api/gateway.ts";
+import { GatewayBrowserClient, GatewayRequestError } from "../api/gateway.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
@@ -271,7 +271,7 @@ it.each([false, true])(
   },
 );
 
-it("keeps reader facts visible when compact preview enrichment fails", async () => {
+it("keeps reader facts and retry deadlines when compact preview enrichment fails", async () => {
   const pending = Promise.withResolvers<ControlUiLinkReaderDocument>();
   let previewResponse = pending.promise;
   const request = vi.fn((method: string) =>
@@ -295,7 +295,14 @@ it("keeps reader facts visible when compact preview enrichment fails", async () 
   await waitForSolid(() => expect(anchor.getAttribute("aria-description")).toBe("Merged"));
   await hover(anchor);
   expect(anchor.getAttribute("aria-description")).toBe("Merged");
-  pending.reject(new Error("Preview rate limited"));
+  pending.reject(
+    new GatewayRequestError({
+      code: "UNAVAILABLE",
+      message: "Preview rate limited",
+      retryable: true,
+      retryAfterMs: 10 * 60_000,
+    }),
+  );
   await vi.advanceTimersByTimeAsync(0);
   expect(badge()).toBe("Merged");
   expect(document.querySelector<HTMLElement>(".link-reader-hovercard")?.dataset.cached).toBe(
@@ -315,12 +322,37 @@ it("keeps reader facts visible when compact preview enrichment fails", async () 
   await hover(anchor);
   expect(badge()).toBe("Merged");
   expect(anchor.getAttribute("aria-description")).toBe("Merged");
+  expect(request.mock.calls.filter(([method]) => method === "github.preview")).toHaveLength(1);
+  anchor.dispatchEvent(
+    new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body }),
+  );
+  const refresh = panel.querySelector<HTMLButtonElement>('button[aria-label="Refresh item"]');
+  expect(refresh).not.toBeNull();
+  refresh?.click();
+  await waitForSolid(() =>
+    expect(request.mock.calls.filter(([method]) => method === "github.detail")).toHaveLength(2),
+  );
+  await vi.advanceTimersByTimeAsync(120);
+  await hover(anchor);
+  expect(badge()).toBe("Merged");
+  expect(request.mock.calls.filter(([method]) => method === "github.preview")).toHaveLength(1);
+  anchor.dispatchEvent(
+    new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body }),
+  );
+  await vi.advanceTimersByTimeAsync(5 * 60_000);
+  await hover(anchor);
+  expect(request.mock.calls.filter(([method]) => method === "github.preview")).toHaveLength(1);
+  anchor.dispatchEvent(
+    new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body }),
+  );
+  await vi.advanceTimersByTimeAsync(5 * 60_000);
+  await hover(anchor);
   expect(request.mock.calls.filter(([method]) => method === "github.preview")).toHaveLength(2);
   previewResponse = Promise.resolve(open);
   anchor.dispatchEvent(
     new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body }),
   );
-  await vi.advanceTimersByTimeAsync(30_000);
+  await vi.advanceTimersByTimeAsync(10 * 60_000);
   await hover(anchor);
   expect(badge()).toBe("Merged");
   expect(document.querySelector(".link-reader-hovercard__metadata")?.textContent).toBe("+42");
