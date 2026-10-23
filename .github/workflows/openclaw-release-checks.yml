@@ -1445,16 +1445,15 @@ jobs:
             exit 1
           }
           prerelease="$(select_release true "$prerelease_tag_pattern")" || {
-            echo "No published Windows-node production prerelease (vX.Y.Z-alpha.N) exposes a hashed x64 ZIP or MSIX tray artifact." >&2
-            exit 1
+            echo "::warning::No published Windows-node production prerelease (vX.Y.Z-alpha.N) exposes a hashed x64 ZIP or MSIX tray artifact. Stable validation will still run."
+            prerelease=""
           }
 
           # `docs/VERSIONING.md` keeps release tags plus GitVersion SemVer as the
           # versioning contract, so `vX.Y.Z-alpha.N` is the prerelease of `X.Y.Z`.
-          # Once a stable release outranks it that alpha is spent, and validating it
-          # would report the fail-closed prerelease lane green against a superseded
-          # build while the current production prerelease is simply missing.
-          if ! jq -ne --argjson stable "$stable" --argjson prerelease "$prerelease" '
+          # A superseded alpha is unavailable advisory coverage, not evidence
+          # against the current preview channel and not a stable-lane blocker.
+          if [[ -n "$prerelease" ]] && ! jq -ne --argjson stable "$stable" --argjson prerelease "$prerelease" '
               def semver_key:
                 ltrimstr("v")
                 | capture("^(?<major>[0-9]+)\\.(?<minor>[0-9]+)\\.(?<patch>[0-9]+)(?:-alpha\\.(?<alpha>[0-9]+)|-(?<correction>[0-9]+))?$")
@@ -1467,8 +1466,8 @@ jobs:
                   ];
               ($prerelease.tag | semver_key) > ($stable.tag | semver_key)
             ' > /dev/null; then
-            echo "Windows-node prerelease $(jq -r .tag <<< "$prerelease") is superseded by stable $(jq -r .tag <<< "$stable"); the alpha channel has no current production prerelease to validate." >&2
-            exit 1
+            echo "::warning::Windows-node prerelease $(jq -r .tag <<< "$prerelease") is superseded by stable $(jq -r .tag <<< "$stable"); the alpha channel has no current production prerelease to validate."
+            prerelease=""
           fi
 
           resolve_tag_sha() {
@@ -1490,6 +1489,7 @@ jobs:
 
           for channel in stable prerelease; do
             selection="${!channel}"
+            [[ -n "$selection" ]] || continue
             tag="$(jq -er '.tag | select(type == "string" and length > 0)' <<< "$selection")"
             asset_name="$(jq -er '.asset_name | select(type == "string" and length > 0)' <<< "$selection")"
             asset_sha256="$(jq -er '.asset_sha256 | select(test("^[a-f0-9]{64}$"))' <<< "$selection")"
@@ -1497,7 +1497,14 @@ jobs:
               echo "Windows-node $channel release is missing its tag." >&2
               exit 1
             }
-            release_sha="$(resolve_tag_sha "$tag")"
+            if ! release_sha="$(resolve_tag_sha "$tag")"; then
+              if [[ "$channel" == "stable" ]]; then
+                exit 1
+              fi
+              echo "::warning::Windows-node prerelease tag could not be bound to a commit. Stable validation will still run."
+              prerelease=""
+              continue
+            fi
             echo "${channel}_tag=${tag}" >> "$GITHUB_OUTPUT"
             echo "${channel}_release_sha=${release_sha}" >> "$GITHUB_OUTPUT"
             echo "${channel}_asset_name=${asset_name}" >> "$GITHUB_OUTPUT"
@@ -1508,7 +1515,11 @@ jobs:
             echo "## Windows-node release artifacts"
             echo
             echo "- Stable: \`$(jq -r .tag <<< "$stable")\` / \`$(jq -r .asset_name <<< "$stable")\` (published $(jq -r .published_at <<< "$stable"))"
-            echo "- Prerelease: \`$(jq -r .tag <<< "$prerelease")\` / \`$(jq -r .asset_name <<< "$prerelease")\` (published $(jq -r .published_at <<< "$prerelease"))"
+            if [[ -n "$prerelease" ]]; then
+              echo "- Prerelease (advisory): \`$(jq -r .tag <<< "$prerelease")\` / \`$(jq -r .asset_name <<< "$prerelease")\` (published $(jq -r .published_at <<< "$prerelease"))"
+            else
+              echo "- Prerelease (advisory): unavailable; see resolver warnings."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
   resolve_windows_node_main_source:
@@ -1599,7 +1610,7 @@ jobs:
   windows_node_prerelease_e2e:
     name: Run Windows-node prerelease E2E
     needs: [resolve_target, prepare_release_package, resolve_windows_node_release_artifacts]
-    if: needs.resolve_target.outputs.windows_node_scheduled == 'true'
+    if: needs.resolve_target.outputs.windows_node_scheduled == 'true' && needs.resolve_windows_node_release_artifacts.outputs.prerelease_tag != ''
     permissions:
       actions: read
       contents: read
@@ -1638,7 +1649,7 @@ jobs:
       windows_node_release_tag: ${{ needs.resolve_windows_node_release_artifacts.outputs.stable_tag }}
       windows_node_release_asset_name: ${{ needs.resolve_windows_node_release_artifacts.outputs.stable_asset_name }}
       windows_node_release_asset_sha256: ${{ needs.resolve_windows_node_release_artifacts.outputs.stable_asset_sha256 }}
-      allow_protocol_mismatch: true
+      allow_protocol_mismatch: false
 
   windows_node_main_e2e:
     name: Run Windows-node main E2E
@@ -3399,7 +3410,18 @@ jobs:
               fi
               continue
             fi
-            if [[ "$name" == windows_node_* && "$WINDOWS_NODE_SELECTED" == "true" && "$result" != "success" ]]; then
+            case "$name" in
+              resolve_windows_node_main_source|windows_node_prerelease_e2e|windows_node_main_e2e)
+                if [[ "$WINDOWS_NODE_SELECTED" == "true" ]]; then
+                  echo "- ${name} (advisory): ${result}" >> "$GITHUB_STEP_SUMMARY"
+                  if [[ "$result" != "success" ]]; then
+                    echo "::warning::${name} (advisory) ended with ${result}"
+                  fi
+                fi
+                continue
+                ;;
+            esac
+            if [[ "$name" == "windows_node_stable_e2e" && "$WINDOWS_NODE_SELECTED" == "true" && "$result" != "success" ]]; then
               echo "::error::${name} ended with ${result}"
               failed=1
               continue

@@ -5020,6 +5020,7 @@ function runReleaseChecksSummary(params: {
       DOCKER_E2E_RELEASE_CHECKS_RESULT: "success",
       GITHUB_RUN_ATTEMPT: params.currentAttempt,
       GITHUB_RUN_ID: runId,
+      GITHUB_STEP_SUMMARY: resolve(workdir, "summary.md"),
       INSTALL_SMOKE_RELEASE_CHECKS_RESULT: "success",
       LIVE_REPO_E2E_RELEASE_CHECKS_RESULT: "success",
       MATURITY_SCORECARD_RELEASE_CHECKS_RESULT: "skipped",
@@ -12220,9 +12221,12 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(mainResolver.outputs).toMatchObject({
       main_source_sha: "${{ steps.resolve.outputs.main_source_sha }}",
     });
-    for (const job of [resolver, mainResolver, prerelease, stable, main]) {
+    for (const job of [resolver, mainResolver, stable, main]) {
       expect(job.if).toBe("needs.resolve_target.outputs.windows_node_scheduled == 'true'");
     }
+    expect(prerelease.if).toBe(
+      "needs.resolve_target.outputs.windows_node_scheduled == 'true' && needs.resolve_windows_node_release_artifacts.outputs.prerelease_tag != ''",
+    );
     expect(prerelease.uses).toBe(reusableWorkflow);
     expect(prerelease.with).toMatchObject({
       candidate_artifact_name: "${{ needs.prepare_release_package.outputs.artifact_name }}",
@@ -12238,6 +12242,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     });
     expect(stable.uses).toBe(reusableWorkflow);
     expect(stable.with).toMatchObject({
+      allow_protocol_mismatch: false,
       candidate_artifact_name: "${{ needs.prepare_release_package.outputs.artifact_name }}",
       candidate_artifact_run_id: "${{ needs.prepare_release_package.outputs.artifact_run_id }}",
       windows_node_release_asset_name:
@@ -12313,7 +12318,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(summary).not.toContain("msixtest");
   });
 
-  it("rejects throwaway Windows-node test releases as the prerelease channel", () => {
+  it("keeps stable coverage when only throwaway Windows-node prereleases exist", () => {
     const releases = [
       windowsNodeRelease({
         assetName: "OpenClaw.Tray.WinUI_0.6.11_x64.msix",
@@ -12329,14 +12334,15 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     ];
     const { outputs, result } = runWindowsNodeReleaseResolver(releases);
 
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(
       "No published Windows-node production prerelease (vX.Y.Z-alpha.N)",
     );
-    expect(outputs).toEqual({});
+    expect(outputs.stable_tag).toBeDefined();
+    expect(outputs.prerelease_tag).toBeUndefined();
   });
 
-  it("fails closed when the newest alpha prerelease is superseded by stable", () => {
+  it("keeps stable coverage when the newest alpha prerelease is superseded", () => {
     const releases = [
       windowsNodeRelease({
         prerelease: false,
@@ -12351,14 +12357,15 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     ];
     const { outputs, result } = runWindowsNodeReleaseResolver(releases);
 
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(
       "Windows-node prerelease v0.6.2-alpha.1 is superseded by stable v0.6.12",
     );
-    expect(outputs).toEqual({});
+    expect(outputs.stable_tag).toBeDefined();
+    expect(outputs.prerelease_tag).toBeUndefined();
   });
 
-  it("fails closed when the current alpha prerelease has no hashed uploaded artifact", () => {
+  it("keeps stable coverage when the current alpha has no hashed uploaded artifact", () => {
     const releases = [
       windowsNodeRelease({
         digest: "",
@@ -12379,33 +12386,39 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     ];
     const { outputs, result } = runWindowsNodeReleaseResolver(releases);
 
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(
       "No published Windows-node production prerelease (vX.Y.Z-alpha.N)",
     );
-    expect(outputs).toEqual({});
+    expect(outputs.stable_tag).toBeDefined();
+    expect(outputs.prerelease_tag).toBeUndefined();
   });
 
-  it.each(["PRERELEASE", "STABLE", "MAIN"])(
-    "rejects a skipped selected Windows-node %s lane",
-    (lane) => {
-      const result = runReleaseChecksSummary({
-        currentAttempt: "1",
-        currentResult: "skipped",
-        phase: "candidate",
-        telegramSelected: false,
-        windowsSelected: true,
-        resultOverrides: {
-          WINDOWS_NODE_PRERELEASE_E2E_RESULT: "success",
-          WINDOWS_NODE_STABLE_E2E_RESULT: "success",
-          WINDOWS_NODE_MAIN_E2E_RESULT: "success",
-          [`WINDOWS_NODE_${lane}_E2E_RESULT`]: "skipped",
-        },
-      });
-      expect(result.status).toBe(1);
-      expect(result.stdout).toContain(`windows_node_${lane.toLowerCase()}_e2e ended with skipped`);
-    },
-  );
+  it.each([
+    ["STABLE", "skipped", 1],
+    ["STABLE", "failure", 1],
+    ["PRERELEASE", "skipped", 0],
+    ["PRERELEASE", "failure", 0],
+    ["MAIN", "failure", 0],
+    ["MAIN", "cancelled", 0],
+  ] as const)("classifies selected Windows-node %s %s with exit %s", (lane, outcome, exitCode) => {
+    const result = runReleaseChecksSummary({
+      currentAttempt: "1",
+      currentResult: "skipped",
+      phase: "candidate",
+      telegramSelected: false,
+      windowsSelected: true,
+      resultOverrides: {
+        WINDOWS_NODE_PRERELEASE_E2E_RESULT: "success",
+        WINDOWS_NODE_STABLE_E2E_RESULT: "success",
+        WINDOWS_NODE_MAIN_E2E_RESULT: "success",
+        [`WINDOWS_NODE_${lane}_E2E_RESULT`]: outcome,
+      },
+    });
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
+    expect(result.stdout).toContain(exitCode ? "::error::" : "::warning::");
+    expect(result.stdout).toContain(`ended with ${outcome}`);
+  });
 
   it("routes release Matrix through the QA Lab selector", () => {
     const releaseWorkflow = readFileSync(RELEASE_CHECKS_WORKFLOW, "utf8");

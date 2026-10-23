@@ -31,8 +31,7 @@ import { validateQualificationCoverage } from "./release-qualification-coverage.
 
 export { MAX_RELEASE_ARTIFACT_BYTES, serializeReleaseArtifact, buildReleaseValidationManifest };
 
-function validateReleaseAdvisoryJobs(value) {
-  const expected = [];
+function validateReleaseAdvisoryJobs(value, expected = []) {
   const recorded = value === undefined ? [] : value;
   if (!Array.isArray(recorded) || jsonSha256(recorded) !== jsonSha256(expected)) {
     throw new Error("Release advisory jobs differ from the release policy evidence");
@@ -61,7 +60,12 @@ export function validateReleaseManifestAdvisoryJobs(manifest) {
       throw new Error("Release manifest contains failed selected job evidence");
     }
   }
-  return validateReleaseAdvisoryJobs(manifest.advisoryJobs);
+  return validateReleaseAdvisoryJobs(
+    manifest.advisoryJobs,
+    Object.entries(manifest.childEvidence ?? {}).flatMap(([key, child]) =>
+      releaseChildAdvisories({ ...child, key }),
+    ),
+  );
 }
 
 const SUCCESSFUL_JOB_CONCLUSIONS = new Set(["neutral", "skipped", "success"]);
@@ -1563,14 +1567,69 @@ function isFailedJob(job) {
   );
 }
 
+const WINDOWS_NODE_STABLE_JOB =
+  "Run Windows-node stable E2E / Setup, connect, and invoke candidate gateway";
+const WINDOWS_NODE_ADVISORY_JOBS = new Set([
+  "Resolve Windows-node main source",
+  "Run Windows-node prerelease E2E / Setup, connect, and invoke candidate gateway",
+  "Run Windows-node main E2E / Setup, connect, and invoke candidate gateway",
+]);
+
+function isReleaseAdvisoryJob(childKey, job) {
+  return childKey === "releaseChecksCandidate" && WINDOWS_NODE_ADVISORY_JOBS.has(job.name);
+}
+
+export function releaseChildAdvisories(child) {
+  if (child.key !== "releaseChecksCandidate") {
+    return [];
+  }
+  const stableRan = child.jobs.some(
+    (job) => job.name === WINDOWS_NODE_STABLE_JOB && job.conclusion !== "skipped",
+  );
+  return child.jobs
+    .filter(
+      (job) =>
+        isReleaseAdvisoryJob(child.key, job) &&
+        (isFailedJob(job) || (stableRan && job.conclusion === "skipped")),
+    )
+    .map((job) => ({
+      class: "windows-node-preview",
+      child: child.key,
+      job: job.name,
+      conclusion: job.conclusion,
+      runId: String(child.runId),
+      url: job.html_url ?? job.url ?? "",
+    }))
+    .toSorted((left, right) => compareAscii(left.job, right.job));
+}
+
 export function terminalPolicyPass(child) {
   const failures = child.jobs.filter(isFailedJob);
-  return child.status === "completed" && child.conclusion === "success" && failures.length === 0;
+  if (
+    child.status !== "completed" ||
+    failures.some((job) => !isReleaseAdvisoryJob(child.key, job))
+  ) {
+    return false;
+  }
+  if (child.conclusion === "success" && failures.length === 0) {
+    return true;
+  }
+  // GitHub retains a failed reusable job's conclusion. Only the two preview
+  // lanes may leave the child red, and both the stable E2E and verifier must pass.
+  return (
+    ["failure", "success"].includes(child.conclusion) &&
+    failures.length > 0 &&
+    [WINDOWS_NODE_STABLE_JOB, "Verify release checks"].every((name) =>
+      child.jobs.some(
+        (job) => job.name === name && job.status === "completed" && job.conclusion === "success",
+      ),
+    )
+  );
 }
 
 export function planReleaseChildRerun({ childKey, jobs }) {
   const failed = jobs
-    .filter(isFailedJob)
+    .filter((job) => isFailedJob(job) && !isReleaseAdvisoryJob(childKey, job))
     .map((job) => job.name)
     .toSorted();
   if (failed.length === 0) {
@@ -1638,18 +1697,20 @@ function releaseState(cancelled, activeRunIds, blockers, errors) {
 
 function releaseChildBlockers(selected) {
   const childJobBlockers = selected.flatMap((child) =>
-    child.jobs.filter(isFailedJob).map((job) => ({
-      child: child.key,
-      conclusion: job.conclusion,
-      job: job.name,
-      kind: "job_failure",
-      message: `${child.key} job failed policy`,
-      primaryAt: stringValue(
-        job.completed_at ?? job.completedAt ?? job.started_at ?? job.startedAt,
-      ),
-      runId: child.runId,
-      url: job.html_url ?? job.url ?? child.url,
-    })),
+    child.jobs
+      .filter((job) => isFailedJob(job) && !isReleaseAdvisoryJob(child.key, job))
+      .map((job) => ({
+        child: child.key,
+        conclusion: job.conclusion,
+        job: job.name,
+        kind: "job_failure",
+        message: `${child.key} job failed policy`,
+        primaryAt: stringValue(
+          job.completed_at ?? job.completedAt ?? job.started_at ?? job.startedAt,
+        ),
+        runId: child.runId,
+        url: job.html_url ?? job.url ?? child.url,
+      })),
   );
   const childJobBlockerKeys = new Set(
     childJobBlockers.map((blocker) => `${blocker.child}:${blocker.runId}`),
@@ -1706,7 +1767,7 @@ export function classifyReleaseSnapshot({
     .toSorted((left, right) => String(left.primaryAt).localeCompare(String(right.primaryAt), "en"));
   return {
     activeRunIds,
-    advisoryJobs: [],
+    advisoryJobs: selected.flatMap(releaseChildAdvisories),
     blockerCount: rawBlockers.length,
     blockerIndex: blockerIndex(rawBlockers),
     blockers,
@@ -2278,7 +2339,12 @@ export function validateReleaseStateArtifact(payload, expected, expectedMode) {
   return {
     ...payload,
     activeRunIds,
-    advisoryJobs: validateReleaseAdvisoryJobs(payload.advisoryJobs),
+    advisoryJobs: validateReleaseAdvisoryJobs(
+      payload.advisoryJobs,
+      Object.entries(children).flatMap(([key, child]) =>
+        releaseChildAdvisories({ ...child, key, jobs: child.timing.jobs }),
+      ),
+    ),
     blockerCount: machineEvidence ? payload.blockerCount : null,
     blockerIndex: completeBlockerIndex,
     blockers,
