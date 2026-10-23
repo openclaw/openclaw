@@ -302,7 +302,7 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      const removed = await removePairedDeviceRole({ deviceId: nodeId, role: "node" });
+      const removed = await removePairedDeviceRole({ deviceId: nodeId });
       if (!removed) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
         return;
