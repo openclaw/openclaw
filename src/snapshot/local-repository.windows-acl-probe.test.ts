@@ -20,9 +20,7 @@ import { assertTrustedStagingRoot } from "./local-repository-directory-policy.js
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const CURRENT_USER_SID = "s-1-5-21-1000";
-type Security = Extract<OwnerAndDaclResult, { status: "supported" }> & {
-  isVolumeRoot?: boolean;
-};
+type Security = Extract<OwnerAndDaclResult, { status: "supported" }>;
 
 function access(
   sid: string,
