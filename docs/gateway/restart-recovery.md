@@ -1412,6 +1412,12 @@ history; they cannot add new instructions to continue those child sessions.
 Current reset already revokes its live saved wakes. Recorded outcomes and historical
 child metadata are retained.
 
+If a restart interrupts a running requester batch wake, its replay includes the
+same restart-interruption guidance as other recovered turns: uncertain tool
+outcomes must be verified before repeating actions. The notice belongs to that
+turn's input, for both embedded and Codex runtimes. The original accepted settle
+content and replay identity stay unchanged; normal batch wakes receive no notice.
+
 On upgrade, unfinished runs with the typed Gateway-restart interruption resume
 through the same startup path. Already-settled interruption outcomes are not
 automatically replayed: the parent may have replaced that work. An operator can
