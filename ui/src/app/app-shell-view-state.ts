@@ -17,7 +17,6 @@ import type { ApplicationRuntime } from "./bootstrap.ts";
 import { canGoBackInNativeEmbed } from "./browser.ts";
 import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
 import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
-import type { OptionalCustomElement } from "./lazy-custom-element.ts";
 import { isMobileNavLayout, shouldMergeChatChrome } from "./mobile-nav-layout.ts";
 import type { NativeHistoryState } from "./native-web-chrome.ts";
 import { isNativeEmbedHost, nativeEmbedHost, isNativeWebChromeHost } from "./native-web-chrome.ts";
@@ -47,8 +46,6 @@ export interface ShellViewHost extends ShellLazyOverlayHost, ShellNavigationElem
   readonly activeSessionKey: string;
   readonly custodianMinimizeRequestId: number;
   readonly desktopNavigationExpanded: boolean;
-  readonly execApprovalElement: OptionalCustomElement;
-  readonly onboardingMemoryImportElement: OptionalCustomElement;
   readonly nativeHistoryState: () => NativeHistoryState;
   readonly navDrawerOpen: boolean;
   readonly shellLayout: ShellLayoutOwner;
@@ -59,6 +56,7 @@ export interface ShellViewHost extends ShellLazyOverlayHost, ShellNavigationElem
   readonly settingsSearchQuery: string;
   readonly storedOutboxes: ReturnType<OutboxStoreRuntime["read"]> | undefined;
   readonly viewCallbacks: ShellViewCallbacks;
+  readonly workspaceChromeVisible: boolean;
   closeNavDrawer(options?: { restoreFocus?: boolean }): void;
   readonly handleNativeNewSession: () => void;
   handleSettingsSearchQueryChange(query: string): Promise<void>;
@@ -280,6 +278,7 @@ export function readShellView(host: ShellViewHost) {
   return {
     nowMs: Date.now(),
     routeReady: host.routeState.routeId !== undefined || host.routeState.routeFailed,
+    workspaceChromeVisible: host.workspaceChromeVisible,
     context,
     runtime,
     callbacks,

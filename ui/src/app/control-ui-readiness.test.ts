@@ -160,6 +160,7 @@ it("does not advertise a retained terminal after it is detached", async () => {
     shellElement: workspace,
     readiness: undefined,
     activeSessionKey: "agent:main:main",
+    workspaceChromeVisible: false,
     navigationSidebar: Object.assign(element("nav"), { navigationVisible: false }),
     routeOutlet: Object.assign(element(), {
       presentationSettled: true,
@@ -196,4 +197,56 @@ it("does not advertise a retained terminal after it is detached", async () => {
     dispose();
     root.remove();
   }
+});
+
+it("waits for a visible lazy sidebar to connect, without blocking hidden navigation", async () => {
+  const { root, runtime } = fixture();
+  const workspace = element();
+  const drawer = element();
+  const sidebar = Object.assign(element("nav"), { navigationVisible: true });
+  const shell: SolidReadinessShell = {
+    element: element("section"),
+    shellElement: workspace,
+    navDrawerElement: drawer,
+    workspaceChromeVisible: true,
+    readiness: undefined,
+    activeSessionKey: "agent:main:main",
+    navigationSidebar: sidebar,
+    routeOutlet: Object.assign(element(), {
+      presentationSettled: true,
+      settlePresentation: async () => true,
+    }),
+  };
+  workspace.append(drawer);
+  shell.element.append(workspace);
+  root.append(shell.element);
+  document.body.append(root);
+  const get = customElements.get.bind(customElements);
+  vi.spyOn(customElements, "get").mockImplementation((name) =>
+    name === "openclaw-app-sidebar" ? HTMLElement : get(name),
+  );
+  const { owner, dispose } = createRoot((disposeRoot) => ({
+    dispose: disposeRoot,
+    owner: createSolidControlUiReadiness(
+      root,
+      runtime,
+      () => {},
+      () => ({ shell }),
+    ),
+  }));
+  onTestFinished(() => {
+    owner.disconnect();
+    dispose();
+    root.remove();
+    vi.restoreAllMocks();
+  });
+  owner.commitRoot();
+  await waitForSolid(() => expect(owner.hook.snapshot()).toMatchObject({ routeReady: false }));
+  drawer.append(sidebar);
+  owner.commitRoot();
+  await waitForSolid(() => expect(owner.hook.snapshot()).toMatchObject({ routeReady: true }));
+  sidebar.remove();
+  sidebar.navigationVisible = false;
+  owner.commitRoot();
+  await waitForSolid(() => expect(owner.hook.snapshot()).toMatchObject({ routeReady: true }));
 });

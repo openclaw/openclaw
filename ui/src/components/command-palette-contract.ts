@@ -78,7 +78,8 @@ export function applyCommandPaletteTargetEvent(
 export type CommandPaletteElement = HTMLElement & {
   custodianAvailable: boolean;
   desktopAvailable: boolean;
-  isOpen: boolean;
+  /** The native getter is installed by the first committed palette setup. */
+  isOpen?: boolean;
   openPalette: (input?: CommandPaletteOpenInput | CommandPaletteInputHandoff) => void;
   togglePalette: () => void;
 };

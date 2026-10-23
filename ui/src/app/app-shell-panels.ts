@@ -12,36 +12,28 @@ import {
 import { rememberSessionPanelToggle } from "../components/session-panel-toggle-buffer.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
-import type { ApplicationContext } from "./context.ts";
 import {
-  isOptionalElementDefined,
-  type LazyCustomElementRequests,
-  type OptionalCustomElement,
-} from "./lazy-custom-element.ts";
+  shellComponentElement,
+  type ShellComponent,
+  type ShellComponentHost,
+} from "./app-shell-components.ts";
+import type { ApplicationContext } from "./context.ts";
 import { lazyShellEvent, type LazyShellEvent } from "./lazy-shell-action.ts";
 import { availableLinkReaders } from "./link-reader-routing.ts";
 import { isNativeEmbedHost } from "./native-web-chrome.ts";
 import { isBrowserPanelSurfaceAvailable, isDesktopPanelAvailable } from "./panel-availability.ts";
 
-export interface ShellPanelHost {
+export interface ShellPanelHost extends Pick<ShellComponentHost, "elements" | "terminalPanel"> {
   readonly context: ApplicationContext | undefined;
-  readonly lazyCustomElements: LazyCustomElementRequests;
-  readonly terminalPanelElement: OptionalCustomElement;
-  readonly browserPanelElement: OptionalCustomElement;
-  readonly desktopPanelElement: OptionalCustomElement;
-  readonly linkReaderPanelElement: OptionalCustomElement;
   routeState: ShellRouteState;
 }
 
 export class ShellPanelOwner {
-  private readonly restoredPanels = new Set<OptionalCustomElement>();
+  private readonly restoredPanels = new Set<ShellComponent>();
 
   constructor(
     private readonly host: ShellPanelHost,
-    private readonly requestLazyElement: (
-      element: OptionalCustomElement,
-      event: LazyShellEvent,
-    ) => void,
+    private readonly requestComponent: (component: ShellComponent, event?: LazyShellEvent) => void,
   ) {}
 
   reset(): void {
@@ -65,10 +57,10 @@ export class ShellPanelOwner {
     );
     const browserAvailable = !sessionRoute && isBrowserPanelSurfaceAvailable(gatewaySnapshot);
     for (const [element, layout, available] of [
-      [host.terminalPanelElement, terminalPanelLayout, terminalAvailable],
-      [host.browserPanelElement, browserPanelLayout, browserAvailable],
+      ["terminal", terminalPanelLayout, terminalAvailable],
+      ["browser", browserPanelLayout, browserAvailable],
       [
-        host.desktopPanelElement,
+        "desktop",
         desktopPanelLayout,
         !sessionRoute && host.routeState.routeId !== "systems" && desktopAvailable,
       ],
@@ -81,7 +73,7 @@ export class ShellPanelOwner {
       // survive unrelated updates until the context or document lifecycle resets.
       this.restoredPanels.add(element);
       if (restored) {
-        host.lazyCustomElements.preload(element, { reportError: true });
+        this.requestComponent(element);
       }
     }
   }
@@ -100,8 +92,7 @@ export class ShellPanelOwner {
       rememberSessionPanelToggle(panel, event);
       return;
     }
-    const element = panel === "terminal" ? host.terminalPanelElement : host.browserPanelElement;
-    if (isOptionalElementDefined(element)) {
+    if (shellComponentElement(host, panel)) {
       return;
     }
     const context = host.context;
@@ -115,8 +106,8 @@ export class ShellPanelOwner {
       event.preventDefault();
       return;
     }
-    this.requestLazyElement(
-      element,
+    this.requestComponent(
+      panel,
       lazyShellEvent(
         panel === "terminal" ? TERMINAL_PANEL_TOGGLE_EVENT : BROWSER_PANEL_TOGGLE_EVENT,
         event,
@@ -150,15 +141,12 @@ export class ShellPanelOwner {
       event.preventDefault();
       return;
     }
-    if (isOptionalElementDefined(host.linkReaderPanelElement)) {
+    if (shellComponentElement(host, "link-reader")) {
       return;
     }
     // Acceptance belongs to the shell until the lazy panel can consume the replay.
     event.preventDefault();
-    this.requestLazyElement(
-      host.linkReaderPanelElement,
-      lazyShellEvent(LINK_READER_PANEL_TOGGLE_EVENT, event),
-    );
+    this.requestComponent("link-reader", lazyShellEvent(LINK_READER_PANEL_TOGGLE_EVENT, event));
   };
 
   readonly handleDeferredDesktopToggle = (event: Event): void => {
@@ -177,12 +165,9 @@ export class ShellPanelOwner {
       event.stopImmediatePropagation();
       return;
     }
-    if (isOptionalElementDefined(host.desktopPanelElement)) {
+    if (shellComponentElement(host, "desktop")) {
       return;
     }
-    this.requestLazyElement(
-      host.desktopPanelElement,
-      lazyShellEvent(DESKTOP_PANEL_TOGGLE_EVENT, event),
-    );
+    this.requestComponent("desktop", lazyShellEvent(DESKTOP_PANEL_TOGGLE_EVENT, event));
   };
 }
