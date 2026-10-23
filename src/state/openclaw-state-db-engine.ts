@@ -183,6 +183,19 @@ const statePostgresSchemaV26 = {
   postgresFragments: statePostgresSchemaV27.postgresFragments,
 };
 
+function statePostgresVersionSql(version: number): string {
+  return `UPDATE schema_meta
+        SET schema_version = ${version},
+          app_version = '${VERSION.replaceAll("'", "''")}',
+          updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
+        WHERE meta_key = 'primary';
+        INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
+        VALUES ('state.schema.contentVersion', '${version}',
+          CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint))
+        ON CONFLICT (state_key) DO UPDATE
+          SET value_json = EXCLUDED.value_json, updated_at_ms = EXCLUDED.updated_at_ms;`;
+}
+
 export const stateEngineSchema: StoreSchema = {
   id: "state",
   version: OPENCLAW_STATE_SCHEMA_VERSION,
@@ -200,32 +213,14 @@ export const stateEngineSchema: StoreSchema = {
       // WITHOUT ROWID only changes SQLite storage; PostgreSQL keeps the same catalog.
       fromSchema: statePostgresSchemaV26,
       schema: statePostgresSchemaV26,
-      sql: `UPDATE schema_meta
-        SET schema_version = 26,
-          app_version = '${VERSION.replaceAll("'", "''")}',
-          updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
-        WHERE meta_key = 'primary';
-        INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
-        VALUES ('state.schema.contentVersion', '26',
-          CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint))
-        ON CONFLICT (state_key) DO UPDATE
-          SET value_json = EXCLUDED.value_json, updated_at_ms = EXCLUDED.updated_at_ms;`,
+      sql: statePostgresVersionSql(26),
     },
     {
       version: 27,
       fromSchema: statePostgresSchemaV26,
       schema: statePostgresSchemaV27,
       sql: `${runtime.writeIndexesV27Sql}
-        UPDATE schema_meta
-        SET schema_version = 27,
-          app_version = '${VERSION.replaceAll("'", "''")}',
-          updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
-        WHERE meta_key = 'primary';
-        INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
-        VALUES ('state.schema.contentVersion', '27',
-          CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint))
-        ON CONFLICT (state_key) DO UPDATE
-          SET value_json = EXCLUDED.value_json, updated_at_ms = EXCLUDED.updated_at_ms;`,
+        ${statePostgresVersionSql(27)}`,
     },
     {
       version: 28,
@@ -234,16 +229,7 @@ export const stateEngineSchema: StoreSchema = {
       sql: `ALTER TABLE IF EXISTS github_publication_requests ADD COLUMN draft bigint;
         ALTER TABLE IF EXISTS github_personal_publication_requests ADD COLUMN draft bigint;
         ALTER TABLE IF EXISTS github_repository_publication_requests ADD COLUMN draft bigint;
-        UPDATE schema_meta
-        SET schema_version = 28,
-          app_version = '${VERSION.replaceAll("'", "''")}',
-          updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
-        WHERE meta_key = 'primary';
-        INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
-        VALUES ('state.schema.contentVersion', '28',
-          CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint))
-        ON CONFLICT (state_key) DO UPDATE
-          SET value_json = EXCLUDED.value_json, updated_at_ms = EXCLUDED.updated_at_ms;`,
+        ${statePostgresVersionSql(28)}`,
     },
     {
       version: 29,
@@ -255,16 +241,7 @@ export const stateEngineSchema: StoreSchema = {
       version: 30,
       fromSchema: statePostgresSchemaV30,
       schema: statePostgresSchemaV30,
-      sql: `UPDATE schema_meta
-        SET schema_version = 30,
-          app_version = '${VERSION.replaceAll("'", "''")}',
-          updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
-        WHERE meta_key = 'primary';
-        INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
-        VALUES ('state.schema.contentVersion', '30',
-          CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint))
-        ON CONFLICT (state_key) DO UPDATE
-          SET value_json = EXCLUDED.value_json, updated_at_ms = EXCLUDED.updated_at_ms;`,
+      sql: statePostgresVersionSql(30),
     },
     {
       version: 31,
@@ -291,16 +268,7 @@ export const stateEngineSchema: StoreSchema = {
             );
           END IF;
         END $workspace$;
-        UPDATE schema_meta
-        SET schema_version = 31,
-          app_version = '${VERSION.replaceAll("'", "''")}',
-          updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
-        WHERE meta_key = 'primary';
-        INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
-        VALUES ('state.schema.contentVersion', '31',
-          CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint))
-        ON CONFLICT (state_key) DO UPDATE
-          SET value_json = EXCLUDED.value_json, updated_at_ms = EXCLUDED.updated_at_ms;`,
+        ${statePostgresVersionSql(31)}`,
     },
   ],
 };

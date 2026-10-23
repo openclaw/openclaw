@@ -1,5 +1,6 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/auto-reply/reply/get-reply.fallback-transcript.test.ts",
   "src/config/sessions/session-actor-initialization.test.ts",
   "test/scripts/upgrade-survivor-acp-metadata.test.ts",
   "src/gateway/server-methods/chat-send-admission.reads.test.ts",
@@ -925,6 +926,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-agent-participants-migration.test.ts",
   "src/state/openclaw-agent-trajectory-storage-migration.test.ts",
   "src/state/openclaw-agent-memory-revision-migration.test.ts",
+  "src/state/openclaw-agent-vector-decoder-migration.test.ts",
   "src/state/openclaw-agent-write-layout-migration.test.ts",
   "src/state/openclaw-agent-index-retirement-migration.test.ts",
   "src/state/openclaw-state-db-write-index-migration.test.ts",
@@ -1256,6 +1258,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/commands/doctor-lint.crabbox.test.ts",
   "src/node-host/config.test.ts",
   "src/flows/doctor-health-contribution-runners.config.deferred.test.ts",
+  "src/flows/doctor-health.deletion-recovery.test.ts",
   "src/flows/doctor-health.dangling-workshop-index.test.ts",
   "src/flows/doctor-health.managed-admission.test.ts",
   "src/flows/doctor-health.managed-approvals.test.ts",

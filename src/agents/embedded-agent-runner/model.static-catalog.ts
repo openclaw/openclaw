@@ -66,6 +66,7 @@ function modelFromStaticCatalogRow(row: NormalizedModelCatalogRow): ProviderRunt
     contextWindowDefault: row.contextWindowDefault,
     contextTokens: row.contextTokens,
     ...(row.parameterCount !== undefined ? { parameterCount: row.parameterCount } : {}),
+    ...(row.family ? { family: row.family } : {}),
     maxTokens: row.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
     thinkingLevelMap: row.thinkingLevelMap ? { ...row.thinkingLevelMap } : undefined,
     headers: row.headers,

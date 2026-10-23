@@ -96,10 +96,14 @@ const repositoryScriptEntries = [
   // The performance guide invokes these measurement commands by path.
   "scripts/perf/adoption-candidates-measure.ts!",
   "scripts/perf/background-result-wait-measure.ts!",
+  // #181383 invokes this committed Bash-output benchmark by path from a source checkout.
+  "scripts/perf/bash-output-measure.ts!",
   "scripts/perf/codex-process-inspection-measure.ts!",
   "scripts/perf/diagnostic-profile-measure.ts!",
   "scripts/perf/owned-directory-events-measure.ts!",
   "scripts/perf/plugin-gateway-scope-measure.ts!",
+  // #181150 invokes this reproducible session-row owner probe by path.
+  "scripts/perf/session-actor-row-facts-measure.ts!",
   "scripts/perf/session-catalog-selection-measure.ts!",
   "scripts/perf/session-pr-subscriptions-measure.ts!",
   "scripts/perf/session-tool-surface-measure.ts!",
@@ -121,6 +125,8 @@ const repositoryScriptEntries = [
   "scripts/perf/chat-metadata-burst-measure.ts!",
   // scripts/perf/README.md invokes this model-prompt statistics measurement CLI by path.
   "scripts/perf/model-prompt-stats-measure.ts!",
+  // scripts/perf/README.md invokes this synthetic mention Inbox benchmark by path.
+  "scripts/perf/mention-inbox-measure.ts!",
   // scripts/perf/README.md invokes this main-thread stall measurement CLI by path.
   "scripts/perf/main-thread-stall-measure.mjs!",
   // scripts/perf/README.md invokes this synthetic reload fixture by path.
@@ -364,6 +370,8 @@ const repositoryScriptEntries = [
   "scripts/pre-commit/guard-staged-content.mjs!",
   // Frozen-target contract admission is invoked as a standalone Node CLI.
   "scripts/preflight-frozen-target-contracts.mjs!",
+  // #175328 invokes this real agent-exec streaming proof by path.
+  "scripts/proof-final-answer-stream.mts!",
   // Generates the checked-in native protocol models from core descriptor metadata.
   "scripts/protocol-gen.ts!",
   "scripts/pr-lib/ci-dispatch.mjs!",

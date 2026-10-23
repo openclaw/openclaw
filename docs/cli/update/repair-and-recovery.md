@@ -942,6 +942,33 @@ history, and checkpoint evidence.
 
 ## `update cleanup`
 
+Successful updates automatically attempt this same recovery retirement after their
+successful outcome is durably recorded. The updater acquires the selected state's
+exclusive offline ownership, or asks the running Gateway to perform retirement
+under its own live ownership. It does not stop or restart the Gateway for cleanup.
+This also applies to the macOS app's CLI updates and `--no-restart`; that flag does
+not bypass state ownership. Gateway-owned restart completion performs the same
+retirement after it records success.
+
+Eligibility and identity checks are unchanged: the just-finished update's capture
+stays until a **later successful update** supersedes it. Unfinished runs, pending
+recovery, unresolved failed or rolled-back captures, orphaned/unmanifested copies,
+and blocked artifacts remain. Standalone Doctor captures keep their existing
+newest-three/30-day policy, always retaining the newest sealed capture. Historical
+originals requiring additional import verification are left for manual cleanup.
+When that verification is deferred, migration originals are retained together:
+a historical index may reference an original in another manifest. Independently
+eligible update and Doctor captures can still be retired.
+There is no age-only expiration of update captures or migration originals.
+
+Retirement is best effort. A partial removal, verification/resource limit, or
+ownership refusal leaves the update successful and reports a recovery-cleanup
+warning in the update output (including JSON) and, when writable, update history.
+Inspect `openclaw update status` and use the manual preview below to see what
+remains. Retrying cleanup never bypasses identity or dependency checks. This
+behavior requires the completing updater or Gateway to include the fix; an older
+running updater does not gain it merely by staging a new package.
+
 Retire migration recovery originals and superseded original-state update captures
 after you have verified that the upgrade and session history work. Start with a
 preview, which can run while the Gateway is active:
@@ -972,15 +999,16 @@ and keep them stopped until cleanup exits. Read-only SQLite connections can
 create or change WAL/SHM sidecars, invalidating cleanup's destination check even
 when session content is unchanged. If cleanup reports `Recovery destination
 database changed; preview cleanup again.`, stop those readers, preview again,
-and retry. Cleanup requires exclusive offline state ownership and never stops
+and retry. Manual cleanup requires exclusive offline state ownership and never stops
 or restarts a service itself. On owner or maintenance-lock contention, cleanup
 reports `Stop the Gateway first (openclaw gateway stop)` before any removal.
 
 <Warning>
 Cleanup permanently removes the selected rollback originals, including branches
 and metadata intentionally removed by a verified repair. Doctor restore cannot
-recreate them afterward. Keep them, or preserve an independent backup containing
-them, if you still need that rollback path. Current SQLite history stays in place.
+recreate them afterward. Preserve an independent backup containing them if you
+need that rollback path beyond a later successful update. Current SQLite history
+stays in place.
 </Warning>
 
 ```bash
@@ -1004,7 +1032,8 @@ Only owner-recorded recovery artifacts with complete import evidence are
 eligible. Unknown or unimported history, malformed inputs, trajectories,
 forensic corrupt databases, operator backups, and unmanifested artifacts stay
 protected. Old manifests are verified offline where possible; missing evidence
-is a reason to retain an artifact. Cleanup has no automatic expiration policy.
+is a reason to retain an artifact. Automatic post-update retirement uses these
+same eligibility rules, without adopting historical originals.
 Immutable release-retention inspection is separate from this migration-backup
 cleanup and remains gated on a compatible serving bridge. Its descriptor policy
 and release-generation inventory record ownership without deleting directories

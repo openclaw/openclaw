@@ -37,7 +37,9 @@ export function resolveChatPaneWorkspace(params: {
   return {
     ...workspace,
     branch,
-    canReveal: canRevealSessionWorkspace({ ...params, workspaceRoot: workspace.root }),
+    canReveal: Boolean(
+      workspace.root && params.methodAdvertised && params.hasAdminAccess && !remote,
+    ),
   };
 }
 
@@ -51,21 +53,6 @@ export function resolveChatPaneParentSession(
   }
   const parent = sessions.find((row) => areUiSessionKeysEquivalent(row.key, parentKey));
   return parent ? { key: parent.key, title: resolveSessionDisplayName(parent.key, parent) } : null;
-}
-
-function canRevealSessionWorkspace(params: {
-  session: GatewaySessionRow | undefined;
-  workspaceRoot: string | null;
-  methodAdvertised: boolean;
-  hasAdminAccess: boolean;
-}): boolean {
-  return Boolean(
-    params.workspaceRoot &&
-    params.methodAdvertised &&
-    params.hasAdminAccess &&
-    !params.session?.execNode &&
-    !isCloudWorkerPlacementState(params.session?.placement?.state),
-  );
 }
 
 export function resolveChatPaneWorkspaceIcon(params: {

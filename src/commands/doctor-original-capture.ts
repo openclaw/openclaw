@@ -22,6 +22,8 @@ import { resolveDoctorUpdateAdmission } from "./doctor-maintenance-admission.js"
 const IMAGE_ACTIVATION_MARKER_ENV = "OPENCLAW_IMAGE_ACTIVATION_CAPTURE_MARKER";
 const STANDALONE_CAPTURE_RUN_ID =
   /^doctor-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+// Twice the measured 258 s Doctor on slow hardware, rounded up; repair backups still apply.
+const ORIGINAL_CAPTURE_TIMEOUT_MS = 10 * 60_000;
 
 /** A marker counts only while the sealed capture it names is still retained. */
 async function readImageActivationCapture(
@@ -160,17 +162,36 @@ export async function preserveDoctorOriginalState(params: {
     }
     assertCurrent();
     const standaloneRunId = `doctor-${randomUUID()}`;
-    const captured = await captureUpdateRecoveryBaseline({
-      runId: standaloneRunId,
-      installRoot,
-      env: params.env,
-      drivers: [driver],
-      assertCurrent,
-      signal: params.signal,
-      acquisition: { mode: "maintenance-owner" },
-      fullIntegrityCheck: params.fullIntegrityCheck,
-    });
-    assertCurrent();
+    const controller = new AbortController();
+    const deadline = performance.now() + ORIGINAL_CAPTURE_TIMEOUT_MS;
+    const timeout = new Error("Original-state capture timed out after 600 s");
+    const timer = setTimeout(() => controller.abort(timeout), ORIGINAL_CAPTURE_TIMEOUT_MS);
+    timer.unref();
+    let captured: Awaited<ReturnType<typeof captureUpdateRecoveryBaseline>>;
+    try {
+      const assertCaptureCurrent = () => {
+        // Synchronous admission/hash work must also observe the deadline before its timer fires.
+        if (performance.now() >= deadline) {
+          controller.abort(timeout);
+        }
+        controller.signal.throwIfAborted();
+        assertCurrent();
+      };
+      // Await cancellation settlement; racing a timeout could release repair while copies still run.
+      captured = await captureUpdateRecoveryBaseline({
+        runId: standaloneRunId,
+        installRoot,
+        env: params.env,
+        drivers: [driver],
+        assertCurrent: assertCaptureCurrent,
+        signal: AbortSignal.any([params.signal, controller.signal]),
+        acquisition: { mode: "maintenance-owner" },
+        fullIntegrityCheck: params.fullIntegrityCheck,
+      });
+      assertCaptureCurrent();
+    } finally {
+      clearTimeout(timer);
+    }
     warnings.push(...captured.warnings.map((warning) => warning.message));
     findings.push(
       ...captured.warnings.map((warning): HealthFinding => ({

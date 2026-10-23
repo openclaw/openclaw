@@ -93,6 +93,7 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     updateRepair: runtimeProcessEntrypoint("infra/update-repair.worker"),
     immutableBuild: runtimeProcessEntrypoint("infra/update-immutable-build.worker"),
     updateMigratedFinalize: runtimeProcessEntrypoint("infra/update-migrated-finalize.worker"),
+    updateAutomaticCleanup: runtimeProcessEntrypoint("infra/update-automatic-cleanup.worker"),
     updateCandidateState: runtimeProcessEntrypoint("infra/update-candidate-state.worker"),
     doctorLint: runtimeProcessEntrypoint("commands/doctor-lint.worker"),
     doctor: runtimeProcessEntrypoint("commands/doctor.worker"),

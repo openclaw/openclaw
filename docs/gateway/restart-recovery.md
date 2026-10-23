@@ -1326,7 +1326,13 @@ settles that same completion obligation; it does not send a second parent notice
 The completed original run keeps its own outcome. Human ownership and dashboard nesting do not
 turn a child into a main-session replay candidate. The subagent registry owns
 continuation in the same child session, using fresh agent admission and the
-original requester's current permissions. Operator recovery restores the exact
+original requester's current permissions. Automatic recovery uses the same
+`sessions.recover` owner as operator recovery, including dashboard/direct children
+spawned by a main session. A drain-recorded session interruption remains resumable
+even if shutdown ended before the registry recorded the interruption. The existing
+registry recovery sweep reconciles that record and admits one continuation;
+it does not announce an unfinished child as settled to its parent.
+Operator recovery restores the exact
 session binding, including for session-scoped operators and collector tasks.
 Channel-origin children, including collectors, use the private requester claim saved with the interrupted child;
 this claim identifies the original sender and does not grant operator authority.
@@ -1334,8 +1340,9 @@ Dashboard session keys and cron parents do not change this ownership. Internal c
 their admitted requester claim even when they have no outward delivery route.
 Its final result follows the normal completion path even when the parent has
 already ended its own turn.
-If the retained child transcript is empty or missing, automatic recovery stays
-pending and logs a warning; restore that transcript before resuming recovery.
+If the retained child transcript is empty or missing, recovery records that reason
+and settles the interrupted task through its normal parent-notification path.
+Restore the transcript before requesting another recovery.
 Explicit Stop, cancellation, and replaced child sessions do not resume.
 Runs without verifiable session ownership or a restorable requester source settle
 through their normal interruption path. When the original child still owns its
@@ -1343,9 +1350,10 @@ interrupted turn but requester authority cannot be restored, recovery also recor
 a visible interruption in that child’s history. It does not execute work or send
 a parent message using the missing authority; a new authenticated message can
 continue the retained conversation.
-For native children with completion notifications disabled, recovery sends a
-private continuation to the original parent when its saved session identity still
-matches. Normal successful completion stays quiet. A reset or cancellation does
+For native children with completion notifications disabled, recovery resumes the
+child when possible. If it cannot resume, it sends a private continuation to the
+original parent when its saved session identity still matches. Normal successful
+completion stays quiet. A reset or cancellation does
 not authorize a continuation into a replacement parent session.
 If the child session was reset or replaced, recovery settles the old task with
 that reason and notifies its original parent without changing the replacement

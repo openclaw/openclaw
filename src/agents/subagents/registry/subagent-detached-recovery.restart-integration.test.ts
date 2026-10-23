@@ -14,8 +14,13 @@ import {
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
 import { captureGatewayAuthPolicy } from "../../../gateway/auth-policy.js";
-import { isInProcessSessionRun } from "../../../gateway/in-process-session-run.js";
+import {
+  createCoreGatewayMethodDescriptors,
+  createGatewayMethodRegistry,
+} from "../../../gateway/methods/registry.js";
 import { captureGatewayOperatorRunAuthority } from "../../../gateway/operator-run-authority.js";
+import { launchSessionRecoveryContinuation } from "../../../gateway/server-methods/session-recovery-continuation.js";
+import { sessionRecoverHandlers } from "../../../gateway/server-methods/sessions-recover.js";
 import { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-authority.js";
 import {
   createContext,
@@ -41,6 +46,7 @@ import { createAgentCommandLifecycle } from "../../command/lifecycle.js";
 import { createRestartRecoveryOperatorSource } from "../../operator-run-recovery-source.js";
 import { createRestartRecoveryRequesterSource } from "../../requester-run-recovery-source.js";
 import { runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
+import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { preserveSubagentRunForRestart } from "./subagent-registry-run-pause.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
@@ -54,12 +60,27 @@ import {
   testing,
 } from "./subagent-registry.test-helpers.js";
 
+// Replace provider execution with native registry admission; keep recovery policy real.
+vi.mock(
+  "../../../gateway/server-methods/session-recovery-continuation.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../../../gateway/server-methods/session-recovery-continuation.js")
+    >()),
+    launchSessionRecoveryContinuation:
+      vi.fn<
+        typeof import("../../../gateway/server-methods/session-recovery-continuation.js").launchSessionRecoveryContinuation
+      >(),
+  }),
+);
+
 describe("detached subagent restart recovery", () => {
   const fixture = useSubagentRestartRecoveryFixture({ reuseDatabaseWorkers: true });
   const { dispatchAgent, gatewayRuntime } = fixture;
   it.each([
     { verified: false, transcript: true, sourceKind: "operator" },
     { verified: true, transcript: true, sourceKind: "operator" },
+    { verified: true, transcript: true, sourceKind: "operator-drain" },
     { verified: true, transcript: false, sourceKind: "operator" },
     { verified: true, transcript: true, sourceKind: "session-operator" },
     { verified: true, transcript: true, sourceKind: "channel" },
@@ -71,6 +92,9 @@ describe("detached subagent restart recovery", () => {
   ])(
     "restores detached child restart custody (verified: $verified, transcript: $transcript, source: $sourceKind)",
     async ({ verified, transcript, sourceKind }) => {
+      const launch = vi.mocked(launchSessionRecoveryContinuation);
+      launch.mockReset();
+      const recoveryWarnings = vi.spyOn(subagentRegistryLog, "warn");
       const channelSource = sourceKind.includes("channel");
       const collect = sourceKind.endsWith("-collector");
       const missingSource = sourceKind === "missing-channel" || sourceKind === "mismatched-channel";
@@ -87,9 +111,12 @@ describe("detached subagent restart recovery", () => {
         "../../../infra/agent-events.js",
       );
       vi.mocked(onAgentEvent).mockImplementation(events.onAgentEvent);
+      const client = channelSource
+        ? createSyntheticPluginRuntimeClient({ operatorRoleActor: { kind: "system" }, scopes })
+        : createOperatorClient({ profileName: "restart-child-owner", scopes });
       const now = Date.now();
       const runId = "warm-restart-child";
-      const childSessionKey = `agent:main:${sourceKind === "channel" || missingSource ? "dashboard" : "subagent"}:warm-restart-child`;
+      const childSessionKey = `agent:main:${sourceKind === "channel" || sourceKind === "operator-drain" || missingSource ? "dashboard" : "subagent"}:warm-restart-child`;
       const requesterSessionKey = "agent:main:main";
       const requesterSessionId = "warm-restart-parent-session";
       const requesterLifecycleRevision = "warm-restart-parent-lifecycle";
@@ -110,6 +137,19 @@ describe("detached subagent restart recovery", () => {
           updatedAt: now,
           abortedLastRun: true,
           createdVia: "spawn",
+          ...(!channelSource
+            ? {
+                createdActor: {
+                  type: "agent" as const,
+                  id: "main",
+                  delegatedBy: {
+                    type: "human" as const,
+                    source: "profile" as const,
+                    id: client.authenticatedUserProfile!.profileId,
+                  },
+                },
+              }
+            : {}),
           spawnedBy: requesterSessionKey,
           parentSessionKey: requesterSessionKey,
           spawnDepth: 1,
@@ -223,9 +263,6 @@ describe("detached subagent restart recovery", () => {
         recoveryRuntime: gatewayRuntime,
         resolveGatewayContext: () => (previousOpen ? previousContext : undefined),
       });
-      const client = channelSource
-        ? createSyntheticPluginRuntimeClient({ operatorRoleActor: { kind: "system" }, scopes })
-        : createOperatorClient({ profileName: "restart-child-owner", scopes });
       if (!channelSource) {
         client.internal = { authenticatedOperator: true };
         client.authPolicy = captureGatewayAuthPolicy(previousContext.getRuntimeConfig(), {
@@ -317,7 +354,7 @@ describe("detached subagent restart recovery", () => {
       expect(() =>
         subagentRuns.runWithCompletionAuthority(registeredPredecessor, () => {}),
       ).not.toThrow();
-      if (verified) {
+      if (verified && sourceKind !== "operator-drain") {
         expect(
           await preserveSubagentRunForRestart({
             entry: registeredPredecessor,
@@ -326,7 +363,9 @@ describe("detached subagent restart recovery", () => {
           }),
         ).toMatchObject({ preserved: true });
       }
-      expect(subagentRuns.get(runId)?.execution.status).toBe("interrupted");
+      expect(subagentRuns.get(runId)?.execution.status).toBe(
+        sourceKind === "operator-drain" ? "running" : "interrupted",
+      );
       previousOpen = false;
       if (source) {
         expect(source.authority.assertCurrent).toThrow();
@@ -335,47 +374,62 @@ describe("detached subagent restart recovery", () => {
 
       let replacementOpen = true;
       const replacementRuntime = { ...gatewayRuntime };
+      const methods = createGatewayMethodRegistry(
+        createCoreGatewayMethodDescriptors(sessionRecoverHandlers),
+      );
       const replacementContext = Object.assign(createContext(), {
         recoveryRuntime: replacementRuntime,
+        getGatewayMethodRegistry: () => methods,
+        getSessionEventSubscriberConnIds: () => [],
         resolveGatewayContext: () => (replacementOpen ? replacementContext : undefined),
       });
       bindGatewayContextResolver(replacementRuntime, replacementContext.resolveGatewayContext);
       if (verified && !missingSource) {
-        dispatchAgent.mockImplementationOnce(async (request, _timeout, options) => {
-          await options.prepareDispatchCurrent();
-          expect(options.operatorRunAuthority?.profileId).toBe(source?.authority.profileId);
-          expect(isInProcessSessionRun("agent", request)).toBe(true);
+        launch.mockImplementationOnce(async (request) => {
+          request.commitGuard?.();
+          expect(request.client?.internal?.operatorRunAuthority?.profileId).toBe(
+            source?.authority.profileId,
+          );
+          expect(request.client?.connect.scopes).toEqual(scopes);
           if (channelSource) {
-            expect(options.agentToolCaller).toMatchObject({
+            expect(request.client?.internal?.agentToolCaller).toMatchObject({
               agentId: "main",
               sessionKey: childSessionKey,
               requesterOrigin,
             });
-            expect(options.scopes).toEqual(scopes);
+            expect(() =>
+              request.client?.internal?.agentToolCaller?.assertCurrent?.(),
+            ).not.toThrow();
           }
           expect(request).toMatchObject({
-            expectedExistingSessionId: "warm-restart-child-session",
-            expectedExistingSessionLifecycleRevision: "child-revision",
+            sessionId: "warm-restart-child-session",
+            sessionKey: childSessionKey,
+            idempotencyKey: `subagent-restart-recovery:${runId}`,
+            resume: {
+              sessionId: "warm-restart-child-session",
+              lifecycleRevision: "child-revision",
+            },
           });
           expect(
             await reactivateCompletedSubagentSession({
               sessionKey: request.sessionKey,
               runId: request.idempotencyKey,
               gatewayContextResolver: replacementContext.resolveGatewayContext,
-              assertCurrent: options.assertAdmissionCurrent,
+              assertCurrent: request.assertAdmittedSourceCurrent,
             }),
           ).toBe(true);
-          options.assertAdmissionCurrent();
-          return { status: "accepted", runId: request.idempotencyKey };
+          request.assertAdmittedSourceCurrent?.();
+          return { status: "started", runId: request.idempotencyKey };
         });
       }
       await activateSubagentRegistry(() => replacementContext).settled;
       await fixture.settle();
       await testing.sweepOnceForTests();
+      await fixture.settle();
 
       const successor = await getSubagentRunByChildSessionKey(childSessionKey);
       if (missingSource) {
-        expect(dispatchAgent).not.toHaveBeenCalled();
+        expect(launch).not.toHaveBeenCalled();
         expect(successor).toMatchObject({
           runId,
           execution: { status: "terminal", outcome: { status: "error" } },
@@ -401,19 +455,49 @@ describe("detached subagent restart recovery", () => {
         return;
       }
       if (!transcript) {
-        expect(dispatchAgent).not.toHaveBeenCalled();
+        expect(launch).not.toHaveBeenCalled();
         expect(successor).toMatchObject({
           runId,
-          execution: { status: "interrupted", interruptionReason: "gateway-restart" },
+          execution: {
+            status: "terminal",
+            interruptionReason: "gateway-restart",
+            outcome: {
+              status: "error",
+              error: expect.stringContaining("Child transcript is missing"),
+            },
+          },
         });
-        expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+        expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
+        expect(vi.mocked(runSubagentAnnounceFlow).mock.calls[0]![0]).toMatchObject({
+          requesterSessionKey,
+          completionRequesterSessionId: requesterSessionId,
+          completionRequesterLifecycleRevision: requesterLifecycleRevision,
+          childRunId: runId,
+          outcome: {
+            status: "error",
+            error: expect.stringContaining("Child transcript is missing"),
+          },
+        });
+        await testing.sweepOnceForTests();
+        await fixture.settle();
+        expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
         replacementOpen = false;
         return;
       }
       if (verified) {
-        expect(dispatchAgent).toHaveBeenCalledOnce();
+        expect(
+          launch,
+          JSON.stringify(recoveryWarnings.mock.calls, (_key, value) =>
+            value instanceof Error ? value.message : value,
+          ),
+        ).toHaveBeenCalledOnce();
+        const assertAdmittedSourceCurrent = launch.mock.calls[0]![0].assertAdmittedSourceCurrent;
+        expect(assertAdmittedSourceCurrent).toBeTypeOf("function");
+        expect(assertAdmittedSourceCurrent!).not.toThrow();
+        expect(dispatchAgent).not.toHaveBeenCalled();
+        expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
         expect(successor).toMatchObject({
-          runId: `subagent-restart:${runId}`,
+          runId: `subagent-restart-recovery:${runId}`,
           taskRunId: runId,
           task: predecessor.task,
           requesterSessionKey,
@@ -426,7 +510,7 @@ describe("detached subagent restart recovery", () => {
           "running",
         );
       } else {
-        expect(dispatchAgent).not.toHaveBeenCalled();
+        expect(launch).not.toHaveBeenCalled();
         expect(successor).toMatchObject({
           runId: predecessor.runId,
           childSessionKey: predecessor.childSessionKey,
@@ -513,6 +597,9 @@ describe("detached subagent restart recovery", () => {
           expect(runSubagentAnnounceFlow).toHaveBeenCalledWith(
             expect.objectContaining({ requesterSessionKey }),
           );
+          await testing.sweepOnceForTests();
+          await fixture.settle();
+          expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
         }
       }
       replacementOpen = false;

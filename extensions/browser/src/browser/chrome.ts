@@ -882,7 +882,7 @@ async function launchOpenClawChromeLocked(
   signal?.throwIfAborted();
 
   try {
-    prepareOpenClawProfile(userDataDir, {
+    await prepareOpenClawProfile(userDataDir, {
       name: profile.name,
       color: profile.color,
       downloadDir: DEFAULT_DOWNLOAD_DIR,

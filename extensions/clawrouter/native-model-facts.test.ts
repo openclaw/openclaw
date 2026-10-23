@@ -193,6 +193,45 @@ describe("ClawRouter native model facts", () => {
     }
   });
 
+  it("names routed rows with the family their bundled catalog declares for the same model", async () => {
+    const google: [string[], Array<[string, string]>] = [
+      ["llm.stream"],
+      [["/v1beta/models/${model}:streamGenerateContent", "google.generate_content"]],
+    ];
+    const provider = await buildCatalog([
+      catalogProvider("anthropic", "claude-opus-5-5", ...MESSAGES),
+      catalogProvider("openai", "gpt-6.1-sol", ...RESPONSES),
+      catalogProvider("google-gemini", "gemini-3.5-flash", ...google),
+      // Not in the bundled catalog: the developer is not inferred from the id or provider.
+      catalogProvider("anthropic", "claude-opus-6", ...MESSAGES),
+      // Another wire API is another route contract, so it inherits no identity facts.
+      catalogProvider("openai", "gpt-6-astra", ["llm.chat"]),
+      catalogProvider("acme", "claude-opus-5-5", ...MESSAGES),
+    ]);
+    const families = Object.fromEntries(provider.models.map(({ id, family }) => [id, family]));
+    const declared = (pluginId: "openai" | "anthropic" | "google") =>
+      (
+        JSON.parse(
+          fs.readFileSync(new URL(`../${pluginId}/openclaw.plugin.json`, import.meta.url), "utf8"),
+        ) as { modelCatalog: { providers: Record<string, { family?: string }> } }
+      ).modelCatalog.providers[pluginId]?.family;
+
+    expect(families).toEqual({
+      "anthropic/claude-opus-5-5": declared("anthropic"),
+      "openai/gpt-6.1-sol": declared("openai"),
+      "google-gemini/gemini-3.5-flash": declared("google"),
+      "anthropic/claude-opus-6": undefined,
+      "openai/gpt-6-astra": undefined,
+      "acme/claude-opus-5-5": undefined,
+    });
+    // Pin the oracle so a manifest edit cannot make both sides vacuously empty.
+    expect([declared("anthropic"), declared("openai"), declared("google")]).toEqual([
+      "anthropic",
+      "openai",
+      "google",
+    ]);
+  });
+
   it("resolves routed Claude models with the native image limits used for compression", async () => {
     // Runtime model resolution prefers this hook's model; image compression reads its mediaInput.
     const registered = await registerSingleProviderPlugin(plugin);
