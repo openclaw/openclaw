@@ -1,5 +1,35 @@
 # Team-shaped synthetic state
 
+## Main-thread filesystem durability
+
+Use `fsync-gateway-entry.ts` as the `--entry` for
+`transcript-broadcast-measure.ts` to log `FSYNC_PROBE` records containing the main
+thread's synchronous fsync stacks, elapsed time, and timestamp. It requires a
+generated team-shape fixture. Separate startup records from the measured workload;
+the probe does not observe worker fsyncs or kernel-internal SQLite synchronization.
+
+`fsync-scratch-measure.ts` exercises the real container environment-file and
+playback cache owners, verifying their output bytes. It injects a fixed delay into
+each main-thread `fsyncSync` call to model slow storage without a loop device or
+large disk writes. This is owner-boundary proof, not whole-Gateway throughput.
+
+```sh
+node --expose-gc --trace-gc-nvp --import ./scripts/tsx.mjs \
+  scripts/perf/fsync-scratch-measure.ts --state-dir /path/to/new-state \
+  --operations 120 --interval-ms 500 --fsync-delay-ms 50 \
+  --start-at <epoch-ms> --gc-log /path/to/capture.log > /path/to/capture.log 2>&1
+```
+
+For the baseline, supply `--container-owner` and `--media-owner` pointing to saved
+baseline modules beside their original sources so relative imports stay intact.
+Run concurrent baseline/candidate pairs under one quiet lock and the shared
+production guard, swapping interleaved CPU sets for the second pair. Discard any
+guard-interrupted pair. Acceptance: exact contents remain valid, synchronous
+fsync count and blocked time fall to zero, and CPU, total GC/work, promotion and
+eligible event-loop tails do not regress under the campaign's paired-delta rules.
+Results include sample counts and maximum pauses; apply the minimum sample and
+absolute-delta rules before treating any percentile as a gate.
+
 ## Owned directory events
 
 `owned-directory-events-measure.ts` opens real shared directory subscriptions and
