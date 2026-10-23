@@ -1,5 +1,34 @@
 # Team-shaped synthetic state
 
+## Subagent maintenance capture
+
+`subagent-maintenance-capture-measure.ts` measures the production session
+maintenance preservation owner with 6,000 synthetic retained subagent runs and
+60 protected sessions. Before measurement it checks live overrides in both
+directions, a live-only row, and real worker update/deletion publications after
+preservation preparation. The returned protected-key digest must match across
+baseline and candidate. This measures the maintenance owner, not Gateway RPCs.
+
+```sh
+node --expose-gc --trace-gc-nvp --import ./scripts/tsx.mjs \
+  scripts/perf/subagent-maintenance-capture-measure.ts \
+  --state-dir /path/to/new-state --operations 4000 --start-at <future-epoch-ms> \
+  --gc-log /path/to/capture.log --output /path/to/result.json > /path/to/capture.log 2>&1
+```
+
+Run each side in a fresh process and a new state directory. Setup and warmup
+precede `CAPTURE_READY`; use preparation CPUs until that marker, then assign the
+pair's interleaved measurement CPUs before the shared start. Use the campaign's
+exclusive lock and production guard, then swap placements for the second pair.
+The default one-millisecond yield between captures permits event-loop sampling;
+it is excluded from per-capture latency but included in elapsed time and CPU.
+Allocation includes collected objects. Registry `Map.set` row writes are counted
+in a separate unprofiled capture. GC reports count, total time, maximum pause,
+and tails with sample counts; promotion excludes setup and profiler-stop GC.
+Apply the campaign's sample-count and paired-delta rules. RSS high water includes
+setup. State and profile files remain in the task-owned directory for inspection
+and cleanup.
+
 ## Gateway startup and restart acceptance
 
 Use `scripts/bench-gateway-startup.ts` and `scripts/bench-gateway-restart.ts`
