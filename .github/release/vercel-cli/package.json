@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "dependencies": {
-    "sandbox": "4.8.0",
+    "sandbox": "4.8.1",
     "vercel": "63.1.2"
   },
   "overrides": {

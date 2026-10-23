@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { vi } from "vitest";
 
 type DispatcherInit = RequestInit & { dispatcher?: unknown };
 
@@ -16,6 +17,38 @@ export function stripDispatcher(init: RequestInit | undefined): RequestInit | un
   }
   const { dispatcher: _dispatcher, ...rest } = init as DispatcherInit;
   return rest;
+}
+
+/** Observe the consumer without replacing the native response, reader, or chunks. */
+export function observeResponseBody(response: Response): {
+  bytesRead: number;
+  cancelCalls: number;
+} {
+  const state = { bytesRead: 0, cancelCalls: 0 };
+  const body = response.body;
+  if (!body) {
+    throw new Error("expected a response body to observe");
+  }
+  const getReader = body.getReader.bind(body);
+  vi.spyOn(body, "getReader").mockImplementation(() => {
+    const reader = getReader();
+    const read = reader.read.bind(reader);
+    const cancel = reader.cancel.bind(reader);
+    vi.spyOn(reader, "read").mockImplementation(async () => {
+      const next = await read();
+      if (!next.done) {
+        state.bytesRead += next.value.byteLength;
+      }
+      return next;
+    });
+    vi.spyOn(reader, "cancel").mockImplementation((reason) => {
+      const result = cancel(reason);
+      state.cancelCalls += 1;
+      return result;
+    });
+    return reader;
+  });
+  return state;
 }
 
 /**

@@ -213,7 +213,7 @@ Declared license: Apache-2.0 OR MIT
 LICENSE-APACHE: L001
 LICENSE-MIT: L022
 
-deranged 0.5.8
+deranged 0.5.9
 Source: https://github.com/jhpratt/deranged
 Declared license: MIT OR Apache-2.0
 LICENSE-Apache: L034
@@ -571,7 +571,7 @@ Declared license: MIT OR Apache-2.0
 LICENSE-APACHE: L079
 LICENSE-MIT: L080
 
-sctp-proto 0.10.5
+sctp-proto 0.10.6
 Source: https://github.com/algesten/sctp-proto
 Declared license: MIT OR Apache-2.0
 LICENSE-APACHE: L081
@@ -778,7 +778,14 @@ Declared license: MIT OR Apache-2.0
 LICENSE-APACHE: L005
 LICENSE-MIT: L102
 
-zerocopy 0.8.61
+zerocopy 0.8.63
+Source: https://github.com/google/zerocopy
+Declared license: BSD-2-Clause OR Apache-2.0 OR MIT
+LICENSE-APACHE: L103
+LICENSE-BSD: L104
+LICENSE-MIT: L105
+
+zerocopy-derive 0.8.63
 Source: https://github.com/google/zerocopy
 Declared license: BSD-2-Clause OR Apache-2.0 OR MIT
 LICENSE-APACHE: L103

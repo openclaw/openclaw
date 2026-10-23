@@ -124,7 +124,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.133.0",
-    "@google/genai": "2.28.0",
+    "@google/genai": "2.29.1",
     "@opentelemetry/semantic-conventions": "1.43.0",
     "openai": "7.32.0",
     "partial-json": "0.1.7",

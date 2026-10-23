@@ -5,7 +5,12 @@ import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withFetchPreconnect, withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { beginAppRegistration, pollAppRegistration, printQrCode } from "./app-registration.js";
-import { readRequestBody, stripDispatcher, writeOversizedJson } from "./http.test-support.js";
+import {
+  observeResponseBody,
+  readRequestBody,
+  stripDispatcher,
+  writeOversizedJson,
+} from "./http.test-support.js";
 
 const FEISHU_JSON_MAX_BYTES = 16 * 1024 * 1024;
 
@@ -35,16 +40,19 @@ const hermeticPublicLookup: LookupFn = async () => [{ address: "93.184.216.34", 
 async function withRegistrationServer(
   handler: (req: IncomingMessage, res: ServerResponse) => void,
   run: (options: RegistrationFetchOptions) => Promise<void>,
+  onResponse?: (response: Response) => void,
 ) {
   return withServer(handler, async (origin) => {
     const realFetch = globalThis.fetch.bind(globalThis);
     const fetchImpl = withFetchPreconnect(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(input instanceof Request ? input.url : input.toString());
       if (url.hostname === "accounts.feishu.cn" || url.hostname === "accounts.larksuite.com") {
-        return await realFetch(
+        const response = await realFetch(
           new URL(`${url.pathname}${url.search}`, origin),
           stripDispatcher(init),
         );
+        onResponse?.(response);
+        return response;
       }
       return await realFetch(input, init);
     });
@@ -182,6 +190,7 @@ describe("Feishu app registration", () => {
   });
 
   it("rejects Feishu API responses that exceed the 16 MiB JSON body cap", async () => {
+    let streamState: ReturnType<typeof observeResponseBody> | undefined;
     let clientClosed: Promise<void> | undefined;
     await withRegistrationServer(
       (_req, res) => {
@@ -197,7 +206,14 @@ describe("Feishu app registration", () => {
         );
         await expect(clientClosed).resolves.toBeUndefined();
       },
+      (response) => {
+        streamState = observeResponseBody(response);
+      },
     );
+
+    expect(streamState?.cancelCalls).toBe(1);
+    expect(streamState?.bytesRead).toBeGreaterThan(FEISHU_JSON_MAX_BYTES);
+    expect(streamState?.bytesRead).toBeLessThan(FEISHU_JSON_MAX_BYTES * 2);
   });
 
   it("sends bound reads through the real SSRF guard before local socket redirect", async () => {

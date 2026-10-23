@@ -88,8 +88,6 @@ const parser = createNativeTypeScriptParser();
 afterAll(() => parser.close());
 
 const SETUP_GRADLE_V6 = "gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6";
-const CREATE_GITHUB_APP_TOKEN_V3_2 =
-  "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1";
 const CREATE_GITHUB_APP_TOKEN_V3_3 =
   "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510";
 const OPENGREP_PR_DIFF_WORKFLOW = ".github/workflows/opengrep-precise.yml";
@@ -915,8 +913,8 @@ AFTER_CD
     const pullRequest = action.runs.steps.find(
       (step: WorkflowStep) => step.id === "pull-request-token",
     );
-    expect(contents.uses).toBe(CREATE_GITHUB_APP_TOKEN_V3_2);
-    expect(pullRequest.uses).toBe(CREATE_GITHUB_APP_TOKEN_V3_2);
+    expect(contents.uses).toBe(CREATE_GITHUB_APP_TOKEN_V3_3);
+    expect(pullRequest.uses).toBe(CREATE_GITHUB_APP_TOKEN_V3_3);
     expect(contents.with).toEqual({
       "client-id": "${{ inputs.contents-client-id }}",
       "private-key": "${{ inputs.contents-private-key }}",

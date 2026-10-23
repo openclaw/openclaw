@@ -3,9 +3,13 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { readRequestBody, stripDispatcher, writeOversizedJson } from "./http.test-support.js";
+import { observeResponseBody, readRequestBody, writeOversizedJson } from "./http.test-support.js";
 import { FeishuStreamingSession, mergeStreamingText } from "./streaming-card.js";
-import { createStreamingSession, type StreamingFetchDeps } from "./streaming-card.test-support.js";
+import {
+  createLocalRedirectFetch,
+  createStreamingSession,
+  type StreamingFetchDeps,
+} from "./streaming-card.test-support.js";
 
 const FEISHU_JSON_MAX_BYTES = 16 * 1024 * 1024;
 type FeishuStreamingFetch = typeof fetch;
@@ -72,25 +76,14 @@ async function startLocalServer(
   });
 }
 
-function createLocalRedirectFetch(port: number): FeishuStreamingFetch {
-  const realFetch = globalThis.fetch.bind(globalThis);
-  return withFetchPreconnect(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = new URL(input instanceof Request ? input.url : input.toString());
-    if (url.hostname === "open.feishu.cn" || url.hostname === "open.larksuite.com") {
-      const loopback = new URL(`${url.pathname}${url.search}`, `http://127.0.0.1:${port}`);
-      return await realFetch(loopback, stripDispatcher(init));
-    }
-    return await realFetch(input, init);
-  });
-}
-
 async function createStreamingFetch(
   handler: (request: StreamingRequest) => void | Promise<void>,
+  onResponse?: (response: Response) => void,
 ): Promise<StreamingFetchDeps> {
   const server = await startLocalServer(handler);
   serverStops.push(server.stop);
   return {
-    fetchImpl: createLocalRedirectFetch(server.port),
+    fetchImpl: createLocalRedirectFetch(server.port, onResponse),
     lookupFn: hermeticPublicLookup,
   };
 }
@@ -440,18 +433,24 @@ describe("FeishuStreamingSession", () => {
   });
 
   it("rejects oversized streaming tenant-token JSON before buffering the full body", async () => {
+    let streamState: ReturnType<typeof observeResponseBody> | undefined;
     let clientClosed: Promise<void> | undefined;
-    const deps = await createStreamingFetch(({ url, res }) => {
-      if (url.pathname.includes("/auth/")) {
-        clientClosed = writeOversizedJson(
-          res,
-          FEISHU_JSON_MAX_BYTES,
-          '{"code":0,"msg":"ok","tenant_access_token":"token","padding":"',
-        );
-        return;
-      }
-      writeJson(res, { code: 0, msg: "ok", data: { card_id: "card_oversized_token" } });
-    });
+    const deps = await createStreamingFetch(
+      ({ url, res }) => {
+        if (url.pathname.includes("/auth/")) {
+          clientClosed = writeOversizedJson(
+            res,
+            FEISHU_JSON_MAX_BYTES,
+            '{"code":0,"msg":"ok","tenant_access_token":"token","padding":"',
+          );
+          return;
+        }
+        writeJson(res, { code: 0, msg: "ok", data: { card_id: "card_oversized_token" } });
+      },
+      (response) => {
+        streamState = observeResponseBody(response);
+      },
+    );
 
     const session = createStreamingSession(
       {} as never,
@@ -467,6 +466,9 @@ describe("FeishuStreamingSession", () => {
       /feishu\.streaming-card\.token: JSON response exceeds \d+ bytes/,
     );
     await expect(clientClosed).resolves.toBeUndefined();
+    expect(streamState?.cancelCalls).toBe(1);
+    expect(streamState?.bytesRead).toBeGreaterThan(FEISHU_JSON_MAX_BYTES);
+    expect(streamState?.bytesRead).toBeLessThan(FEISHU_JSON_MAX_BYTES * 2);
   });
 
   it("aborts a stalled Feishu tenant-token request after the configured timeout", async () => {
@@ -532,23 +534,29 @@ describe("FeishuStreamingSession", () => {
   });
 
   it("rejects oversized streaming card-create JSON before buffering the full body", async () => {
+    let streamState: ReturnType<typeof observeResponseBody> | undefined;
     let clientClosed: Promise<void> | undefined;
-    const deps = await createStreamingFetch(({ url, res }) => {
-      if (url.pathname.includes("/auth/")) {
-        writeJson(res, {
-          code: 0,
-          msg: "ok",
-          tenant_access_token: "token",
-          expire: 7200,
-        });
-        return;
-      }
-      clientClosed = writeOversizedJson(
-        res,
-        FEISHU_JSON_MAX_BYTES,
-        '{"code":0,"msg":"ok","tenant_access_token":"token","padding":"',
-      );
-    });
+    const deps = await createStreamingFetch(
+      ({ url, res }) => {
+        if (url.pathname.includes("/auth/")) {
+          writeJson(res, {
+            code: 0,
+            msg: "ok",
+            tenant_access_token: "token",
+            expire: 7200,
+          });
+          return;
+        }
+        clientClosed = writeOversizedJson(
+          res,
+          FEISHU_JSON_MAX_BYTES,
+          '{"code":0,"msg":"ok","tenant_access_token":"token","padding":"',
+        );
+      },
+      (response) => {
+        streamState = observeResponseBody(response);
+      },
+    );
 
     const session = createStreamingSession(
       {
@@ -570,6 +578,9 @@ describe("FeishuStreamingSession", () => {
       /feishu\.streaming-card\.create: JSON response exceeds \d+ bytes/,
     );
     await expect(clientClosed).resolves.toBeUndefined();
+    expect(streamState?.cancelCalls).toBe(1);
+    expect(streamState?.bytesRead).toBeGreaterThan(FEISHU_JSON_MAX_BYTES);
+    expect(streamState?.bytesRead).toBeLessThan(FEISHU_JSON_MAX_BYTES * 2);
   });
 
   it("flushes only the latest authoritative snapshot after the throttle window", async () => {

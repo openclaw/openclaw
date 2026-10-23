@@ -104,8 +104,8 @@ it("preserves diagram-specific mindmap and swimlane layouts", async () => {
   expect(childY.some((y) => y < rootY)).toBe(true);
   expect(childY.some((y) => y > rootY)).toBe(true);
 
-  expect(lanes.querySelector("#Gateway")).not.toBeNull();
-  expect(lanes.querySelector("#Runtime")).not.toBeNull();
+  expect(lanes.querySelector('[id$="-Gateway"]')).not.toBeNull();
+  expect(lanes.querySelector('[id$="-Runtime"]')).not.toBeNull();
   const admit = parseTranslate(lanes.querySelector('[id*="-flowchart-Admit-"]')!);
   const execute = parseTranslate(lanes.querySelector('[id*="-flowchart-Execute-"]')!);
   expect(admit.x).toBe(execute.x);

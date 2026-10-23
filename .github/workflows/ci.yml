@@ -5932,16 +5932,16 @@ jobs:
         uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a # v1.329.0
         with:
           ruby-version: "4.0.7"
-          bundler: "4.0.22"
+          bundler: "4.0.23"
           bundler-cache: false
           working-directory: apps/ios
 
       - name: Install locked Fastlane bundle
         working-directory: apps/ios
         run: |
-          bundle _4.0.22_ install --jobs 4 --retry 3
-          bundle _4.0.22_ check
-          bundle _4.0.22_ exec fastlane --version
+          bundle _4.0.23_ install --jobs 4 --retry 3
+          bundle _4.0.23_ check
+          bundle _4.0.23_ exec fastlane --version
 
       - *select_xcode_step
 
