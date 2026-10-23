@@ -672,13 +672,22 @@ export function assertScheduledCodexAppAuthorityRuntime(
 export function buildLegacyScheduledCodexAppRecoveryPrompt(
   params: Pick<
     EmbeddedRunAttemptParams,
-    "trigger" | "scheduledRuntimeAuthority" | "scheduledRuntimeAuthorityRecoveryRequired"
+    | "trigger"
+    | "scheduledRuntimeAuthority"
+    | "scheduledRuntimeAuthorityRecoveryRequired"
+    | "toolsAllow"
+    | "disableTools"
   >,
 ): string | undefined {
   if (
     params.trigger !== "cron" ||
     !params.scheduledRuntimeAuthorityRecoveryRequired ||
-    params.scheduledRuntimeAuthority
+    params.scheduledRuntimeAuthority ||
+    params.disableTools ||
+    params.toolsAllow?.every((name) => {
+      const normalized = name.trim().toLowerCase();
+      return normalized !== "*" && !/^(?:mcp__)?codex_apps(?:\.|__)/.test(normalized);
+    })
   ) {
     return undefined;
   }
