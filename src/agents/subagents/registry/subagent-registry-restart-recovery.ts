@@ -1,6 +1,8 @@
 import { getRuntimeConfig } from "../../../config/config.js";
 import type { SessionEntryCurrentFacts } from "../../../config/sessions/session-entry-current.types.js";
 import type { SessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
+import { buildRestartRecoveryExpectedState } from "../../../config/sessions/session-transcript-turn-state.js";
+import { appendAssistantMessageToSessionTranscript } from "../../../config/sessions/transcript.js";
 import { bindInProcessSessionRun } from "../../../gateway/in-process-session-run.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import type { AgentRunRequest } from "../../../gateway/server-methods/agent-request-types.js";
@@ -606,6 +608,36 @@ export async function recoverInterruptedSubagentRow(
       }
       return true;
     };
+    const unavailableSource = getUnrestorableSubagentCompletionSourceReason(entry);
+    if (
+      unavailableSource &&
+      !suppressSessionEffects &&
+      sessionEntry?.status === "interrupted" &&
+      sessionEntry.lastRunId === runId
+    ) {
+      // A denied source cannot notify the parent. The recovery owner still owes
+      // this exact child a local outcome, without borrowing execution authority.
+      const notice = await appendAssistantMessageToSessionTranscript({
+        agentId: sessionAgentId,
+        sessionKey: childSessionKey,
+        storePath,
+        expectedSessionId: sessionEntry.sessionId,
+        expectedLifecycleRevision: sessionEntry.lifecycleRevision ?? null,
+        expectedSessionState: buildRestartRecoveryExpectedState(sessionEntry),
+        assertCurrent: () => {
+          if (!isRecoveryHostCurrent()) {
+            throw new Error("Subagent recovery notice owner changed");
+          }
+        },
+        idempotencyKey: `subagent-restart:${runId}:interrupted`,
+        text:
+          `This interrupted turn could not resume after the Gateway restarted: ${unavailableSource}. ` +
+          "Your session and transcript are preserved. Send a new authenticated message to continue.",
+      });
+      if (!notice.ok) {
+        throw new Error(`Subagent recovery interruption notice was not saved: ${notice.reason}`);
+      }
+    }
     return {
       status: "terminal",
       recoveryCurrent: {

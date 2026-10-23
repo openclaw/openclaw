@@ -42,7 +42,7 @@ import {
   resolveMessageReplyLine,
 } from "./chat-reply-attribution.ts";
 import { ReplyLineView, ReplyLineConnector } from "./chat-reply-attribution.tsx";
-import type { ReplyConnectorElements } from "./chat-reply-connector.ts";
+import type { ReplyConnectorElements } from "./chat-reply-connector.tsx";
 import { ChatSessionActivity } from "./chat-session-activity.solid.tsx";
 import { BrowserTabPreviews } from "./chat-tool-cards.solid.tsx";
 import { selectBrowserTabPreviews } from "./chat-tool-cards.ts";

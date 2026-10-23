@@ -196,17 +196,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       ) {
         deferredTtsTextPending = "";
       }
-      if (finalReply.dispatcherOutcome) {
-        const operation = state.getDispatchReplyOperation();
-        void finalReply.dispatcherOutcome.then(
-          (outcome) => {
-            if (outcome === "delivered") {
-              operation?.watchdog.progress("finalization", "reply:final_delivered");
-            }
-          },
-          () => {},
-        );
-      }
+      state.observeDeliveryProgress(finalReply.dispatcherOutcome, "reply:final_delivered");
       if (finalReply.suppressionReason) {
         channelTransformSuppressedFinal ||= finalReply.suppressionReason === "channel_transform";
         if (!finalReply.blockDeliveryOutcome) {

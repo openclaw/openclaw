@@ -9,7 +9,7 @@ import { ProviderBrandIcon, ProviderFallbackIcon } from "./solid/provider-icon.t
 import "../styles/wizard-sign-in.css";
 
 /** After this long without a callback, the tab most likely opened in another browser or profile. */
-export const SIGN_IN_SLOW_MS = 45_000;
+const SIGN_IN_SLOW_MS = 45_000;
 const EXPIRY_TICK_MS = 15_000;
 const EXPIRY_VISIBLE_MINUTES = 5;
 

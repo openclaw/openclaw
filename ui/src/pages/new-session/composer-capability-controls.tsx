@@ -117,3 +117,51 @@ export function NewSessionSelectionStatus(props: { options: NewSessionComposerCa
     </Show>
   );
 }
+
+export function StartControl(props: {
+  options: {
+    submitting: boolean;
+    nativeTerminal?: boolean;
+    canSubmit: boolean;
+    submitDisabledReason?: string;
+    onBlockedSubmit?: () => void;
+    attachmentDraft: { reads: { pendingReads: number } };
+  };
+  onSubmit: () => void;
+}) {
+  const label = () =>
+    props.options.submitting
+      ? t("newSession.starting")
+      : t(props.options.nativeTerminal ? "newSession.startInTerminal" : "newSession.start");
+  const busy = () =>
+    props.options.submitting || props.options.attachmentDraft.reads.pendingReads > 0;
+  return (
+    <openclaw-tooltip
+      content={props.options.submitDisabledReason ?? label()}
+      onPointerDown={(event) => {
+        if (event.button === 0 && !props.options.canSubmit) {
+          props.options.onBlockedSubmit?.();
+        }
+      }}
+    >
+      <button
+        type="button"
+        class={[
+          "chat-send-btn new-session-page__start-submit",
+          {
+            "new-session-page__start-submit--busy": busy(),
+          },
+        ]}
+        disabled={!props.options.canSubmit}
+        aria-disabled={props.options.canSubmit ? "false" : "true"}
+        aria-busy={busy() ? "true" : "false"}
+        aria-label={label()}
+        onClick={() => props.onSubmit()}
+      >
+        <Icon
+          name={busy() ? "loader" : props.options.nativeTerminal ? "squareTerminal" : "arrowUp"}
+        />
+      </button>
+    </openclaw-tooltip>
+  );
+}

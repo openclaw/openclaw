@@ -402,7 +402,7 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
           : event.key === "0"
             ? resetZoom
             : undefined;
-    if (panzoom && zoom) {
+    if (panzoom && zoom && !event.ctrlKey && !event.metaKey && !event.altKey) {
       event.preventDefault();
       zoom();
       return;

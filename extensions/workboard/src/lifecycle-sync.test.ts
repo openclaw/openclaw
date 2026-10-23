@@ -124,12 +124,12 @@ async function runSessionSweep(params: {
       options,
     );
   });
-  const now = params.now;
+  using clock = vi.spyOn(Date, "now");
+  clock.mockReturnValue(params.now ?? Date.now());
   const service = createWorkboardLifecycleService({
     store,
     readSessions,
     ...(params.onMatched ? { onMatched: params.onMatched } : {}),
-    ...(now === undefined ? {} : { now: () => now }),
   });
   await sweepService(service);
 }

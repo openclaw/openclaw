@@ -1,5 +1,42 @@
 @import "./session-menu.css";
 
+.context-usage__title,
+.context-usage__section-label,
+.palette-session-settings__title,
+.palette-session-settings__machine {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.chat-swarm__task-name,
+.usage-list-label {
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cron-detail-meta,
+.model-setup__provider-copy {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.device-entry__heading,
+.personal-instructions__actions,
+.active-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
 .shell {
   /* One fixed canvas shared by routes; panels keep their own reading surfaces. */
   background-color: var(--bg-content, var(--bg));
@@ -1058,6 +1095,7 @@ openclaw-settings-save-indicator:empty {
   --sidebar-lead: 20px;
   --sidebar-row-gap: 8px;
   --sidebar-text-offset: calc(var(--sidebar-inset) + var(--sidebar-lead) + var(--sidebar-row-gap));
+  --sidebar-session-row-inset: 2px;
   --sidebar-pad-x: 10px;
   --sidebar-session-link-padding-block: 4px;
   --sidebar-session-row-floor: 30px;
@@ -1674,7 +1712,7 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-session-tree__loading {
   min-height: var(--sidebar-session-row-min-height);
-  margin-inline: var(--sidebar-text-offset) 2px;
+  margin-inline: calc(var(--sidebar-text-offset) + var(--sidebar-session-row-inset)) 4px;
   clip-path: inset(calc((100% - 10px) / 2) 0 round var(--radius-sm));
 }
 
@@ -1717,6 +1755,22 @@ openclaw-settings-save-indicator:empty {
 .session-menu__text,
 .sidebar-session-catalog-project__label {
   flex: 1 1 auto;
+}
+
+.sidebar-session-catalog-host__label,
+.session-menu__text,
+.sidebar-session-catalog-project__label,
+.activity-feed__selected-person,
+.activity-feed__git-label,
+.activity-feed__session-headline,
+.activity-feed__session-owner,
+.agent-chat__goal-copy,
+.agent-chat__goal-label,
+.agent-chat__goal-objective,
+.cron-table__name-text,
+.cron-table__cell-value,
+.chat-queue__error-text,
+.multi-select__chip-label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1870,13 +1924,13 @@ openclaw-settings-save-indicator:empty {
   align-items: center;
   min-width: 0;
   min-height: var(--sidebar-session-row-min-height);
-  padding: 0 calc(4px + var(--sidebar-session-state-reserve, 0px)) 0 2px;
+  padding: 0 calc(4px + var(--sidebar-session-state-reserve, 0px)) 0
+    var(--sidebar-session-row-inset);
   border-radius: var(--radius-md);
   color: var(--muted);
   cursor: var(--cursor-action);
-  transition:
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
+  /* Inherited color would restyle every row descendant on each animation frame. */
+  transition: background var(--duration-fast) ease;
 }
 
 /* Inset only the paint: adjacent fills need breathing room without shrinking
@@ -2200,7 +2254,6 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-recent-session--active .sidebar-recent-session__name {
-  font-weight: 600;
   color: var(--text-strong);
 }
 
@@ -3052,7 +3105,6 @@ a:is(
   transition:
     border-color var(--duration-fast) ease,
     background var(--duration-fast) ease,
-    color var(--duration-fast) ease,
     transform var(--duration-fast) ease;
 }
 
@@ -3443,7 +3495,11 @@ openclaw-sidebar-attention {
 .sidebar-gateway-name,
 .gateway-status__label,
 .sidebar-identity-menu__name,
-.sidebar-identity-menu__email {
+.sidebar-identity-menu__email,
+.palette-session-settings__label,
+.palette-session-settings__secondary,
+.sidebar-issues-panel__entity,
+.sidebar-issues-panel__state {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4533,7 +4589,8 @@ html.openclaw-native-web-chrome
   font-size: 6px;
 }
 
-.sidebar-session-tool {
+.sidebar-session-tool,
+.chat-tool-row__chevron {
   display: inline-flex;
   align-items: center;
   justify-content: center;

@@ -29,8 +29,8 @@ import {
   STATE_LABEL_KEYS,
   type ChatPullRequestsProps,
 } from "./chat-pull-request-shared.tsx";
-import "./chat-ci-details.ts";
-import "./chat-ci-automation-control.ts";
+import "./chat-ci-details.tsx";
+import "./chat-ci-automation-control.tsx";
 
 const CHECK_ROLLUP = {
   failing: ["failed", "chat.pullRequests.checksFailed", "circleX"],

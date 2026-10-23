@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { prepareHeadersForSimpleCompletion } from "@openclaw/ai/transports";
-import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  asPositiveFiniteNumber,
+  clampPositiveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
@@ -36,17 +39,6 @@ import type {
   ImagesDescriptionRequest,
   ImagesDescriptionResult,
 } from "./types.js";
-
-function resolveImageToolMaxTokens(modelMaxTokens: number | undefined, requestedMaxTokens = 4096) {
-  if (
-    typeof modelMaxTokens !== "number" ||
-    !Number.isFinite(modelMaxTokens) ||
-    modelMaxTokens <= 0
-  ) {
-    return requestedMaxTokens;
-  }
-  return Math.min(requestedMaxTokens, modelMaxTokens);
-}
 
 function disableReasoningForImageRetryPayload(payload: unknown, model: Model): unknown {
   // Empty-text image responses can be caused by reasoning-only payloads; retry
@@ -223,10 +215,7 @@ function buildImageDescriptionTimeoutError(params: {
       `image description setup timed out after ${params.timeoutMs}ms before provider request started`,
     );
   }
-  const setupDurationMs =
-    typeof params.setupDurationMs === "number" && Number.isFinite(params.setupDurationMs)
-      ? Math.max(0, Math.floor(params.setupDurationMs))
-      : 0;
+  const setupDurationMs = params.setupDurationMs ?? 0;
   return new Error(
     setupDurationMs > 0
       ? `image description request timed out after ${params.timeoutMs}ms (setup took ${setupDurationMs}ms before provider request started)`
@@ -406,7 +395,10 @@ export async function describeImagesWithModelPayloadTransformCore(
       ],
     };
 
-    const maxTokens = resolveImageToolMaxTokens(model.maxTokens, params.maxTokens);
+    const maxTokens = Math.min(
+      params.maxTokens ?? 4096,
+      asPositiveFiniteNumber(model.maxTokens) ?? Number.POSITIVE_INFINITY,
+    );
     // One image request carries one routing identity across the reasoning-only retry: re-rolling
     // it per attempt would split a single image request across two provider conversations. The
     // identity stays a routing header because a stream sessionId would also give unrelated

@@ -48,7 +48,12 @@ const sessionMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../subagents/announce/subagent-announce-delivery.js", () => subagentAnnounceDeliveryMocks);
+// mock-isolation: Keep requester routing fixtures outside the session database.
 vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
+  readSessionEntryReadOnlyInWorker: async (_scope: unknown, assertCurrent: () => void) => {
+    assertCurrent();
+    return sessionMocks.loadSessionEntry();
+  },
   withSessionEntryReadOnlyInWorker: async (
     _scope: unknown,
     assertCurrent: () => void,

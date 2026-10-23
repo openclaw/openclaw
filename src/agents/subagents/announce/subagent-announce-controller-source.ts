@@ -15,6 +15,10 @@ import {
   reserveSessionControllerSource,
   type SessionControllerInput,
 } from "../../../sessions/session-controller.mailbox.js";
+import {
+  buildAnnounceIdFromChildRun,
+  buildAnnounceIdempotencyKey,
+} from "../../announce-idempotency.js";
 import { readInterruptedRunId } from "../../main-session-recovery/main-session-restart-recovery-shared.js";
 import { subagentCompletionSourceId } from "../registry/subagent-controller-inputs.js";
 import { getCurrentSubagentRunOwner, subagentRuns } from "../registry/subagent-registry-memory.js";
@@ -26,6 +30,7 @@ import {
   isRequesterCompletionCohortCurrent,
   isSubagentObligationRetired,
 } from "../registry/subagent-requester-settle-identity.js";
+import { captureRequesterFollowupContinuationCaller } from "../requester-cron-authority.js";
 import { loadRequesterSessionEntry } from "./subagent-announce-delivery.runtime.js";
 
 /** Recovery already owns this exact input; the wake only reconciles its final receipt. */
@@ -129,7 +134,24 @@ export async function reserveSubagentControllerSource(
 export const reserveSubagentCompletionControllerSource = (
   entry: SubagentRunRecord,
   protocolRunId?: string,
-) => reserveSubagentControllerSource(entry, subagentCompletionSourceId(entry), protocolRunId);
+  options: Parameters<typeof reserveSubagentControllerSource>[4] = {},
+) =>
+  reserveSubagentControllerSource(
+    entry,
+    subagentCompletionSourceId(entry),
+    protocolRunId,
+    captureRequesterFollowupContinuationCaller(
+      entry,
+      protocolRunId ??
+        buildAnnounceIdempotencyKey(
+          buildAnnounceIdFromChildRun({
+            childSessionKey: entry.childSessionKey,
+            childRunId: entry.runId,
+          }),
+        ),
+    ),
+    options,
+  );
 
 /** Rebuilds process-local mailbox custody from durable completion obligations in owed order. */
 export async function reserveRestoredSubagentControllerSources(
@@ -219,13 +241,10 @@ export async function reserveRestoredSubagentControllerSources(
           ) {
             return undefined;
           }
-          return reserveSubagentControllerSource(
-            current,
-            subagentCompletionSourceId(current),
-            undefined,
-            undefined,
-            { replaceInactiveTarget: true, requester },
-          );
+          return reserveSubagentCompletionControllerSource(current, undefined, {
+            replaceInactiveTarget: true,
+            requester,
+          });
         },
       ]);
     }

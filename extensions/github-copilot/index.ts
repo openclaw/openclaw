@@ -61,52 +61,6 @@ async function loadGithubCopilotRuntime() {
   return await import("./register.runtime.js");
 }
 
-function applyCopilotDefaultModel(cfg: OpenClawConfig, modelRef: string): OpenClawConfig {
-  if (resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)) {
-    return cfg;
-  }
-  const defaults = cfg.agents?.defaults;
-  const existingModel = defaults?.model;
-  const fallbacks =
-    typeof existingModel === "object" && existingModel !== null && "fallbacks" in existingModel
-      ? (existingModel as { fallbacks?: string[] }).fallbacks
-      : undefined;
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...defaults,
-        model: {
-          ...(fallbacks ? { fallbacks } : undefined),
-          primary: modelRef,
-        },
-        models: {
-          ...defaults?.models,
-          [modelRef]: defaults?.models?.[modelRef] ?? {},
-        },
-      },
-    },
-  };
-}
-
-async function resolveExistingCopilotTokenProfileId(
-  agentDir?: string,
-): Promise<string | undefined> {
-  const authStore = await ensureAuthProfileStoreAsync(agentDir, {
-    allowKeychainPrompt: false,
-  });
-  return listProfilesForProvider(authStore, PROVIDER_ID).find((profileId) => {
-    const profile = authStore.profiles[profileId];
-    if (profile?.type !== "token") {
-      return false;
-    }
-    return Boolean(
-      normalizeOptionalSecretInput(profile.token) || coerceSecretRef(profile.tokenRef)?.id.trim(),
-    );
-  });
-}
-
 function resolveExistingCopilotAuthProfile(profiles: ProviderAuthContext["existingProfiles"]) {
   for (const profile of profiles ?? []) {
     const { credential } = profile;
@@ -208,10 +162,11 @@ function applyGithubCopilotDomainToConfig(
   };
 }
 
-async function resolveCopilotNonInteractiveToken(
+async function runGitHubCopilotNonInteractiveAuth(
   ctx: ProviderAuthMethodNonInteractiveContext,
-  flagValue: string | undefined,
-) {
+): Promise<OpenClawConfig | null> {
+  const opts = ctx.opts as Record<string, unknown> | undefined;
+  const flagValue = normalizeOptionalSecretInput(opts?.githubCopilotToken);
   const referenceMode = ctx.opts.secretInputMode === "ref";
   const resolved = await ctx.resolveApiKey({
     provider: PROVIDER_ID,
@@ -227,15 +182,6 @@ async function resolveCopilotNonInteractiveToken(
       "--github-copilot-token cannot be used with --secret-input-mode ref unless COPILOT_GITHUB_TOKEN is set in env. Set COPILOT_GITHUB_TOKEN and omit --github-copilot-token, or use --secret-input-mode plaintext.",
     );
   }
-  return resolved;
-}
-
-async function runGitHubCopilotNonInteractiveAuth(
-  ctx: ProviderAuthMethodNonInteractiveContext,
-): Promise<OpenClawConfig | null> {
-  const opts = ctx.opts as Record<string, unknown> | undefined;
-  const flagValue = normalizeOptionalSecretInput(opts?.githubCopilotToken);
-  const resolved = await resolveCopilotNonInteractiveToken(ctx, flagValue);
 
   let profileId = DEFAULT_COPILOT_PROFILE_ID;
   let githubToken = resolved?.key ?? "";
@@ -250,7 +196,18 @@ async function runGitHubCopilotNonInteractiveAuth(
       );
     }
   } else {
-    const existingProfileId = await resolveExistingCopilotTokenProfileId(ctx.agentDir);
+    const authStore = await ensureAuthProfileStoreAsync(ctx.agentDir, {
+      allowKeychainPrompt: false,
+    });
+    const existingProfileId = listProfilesForProvider(authStore, PROVIDER_ID).find((candidate) => {
+      const profile = authStore.profiles[candidate];
+      if (profile?.type !== "token") {
+        return false;
+      }
+      return Boolean(
+        normalizeOptionalSecretInput(profile.token) || coerceSecretRef(profile.tokenRef)?.id.trim(),
+      );
+    });
     if (!existingProfileId) {
       throw new Error(
         "Missing --github-copilot-token (or COPILOT_GITHUB_TOKEN env var) for --auth-choice github-copilot.",
@@ -326,7 +283,35 @@ async function runGitHubCopilotNonInteractiveAuth(
     provider: PROVIDER_ID,
     mode: "token",
   });
-  return starterModel ? applyCopilotDefaultModel(configWithAuth, starterModel) : configWithAuth;
+  if (!starterModel) {
+    return configWithAuth;
+  }
+  if (resolveAgentModelPrimaryValue(configWithAuth.agents?.defaults?.model)) {
+    return configWithAuth;
+  }
+  const defaults = configWithAuth.agents?.defaults;
+  const existingModel = defaults?.model;
+  const fallbacks =
+    typeof existingModel === "object" && existingModel !== null && "fallbacks" in existingModel
+      ? (existingModel as { fallbacks?: string[] }).fallbacks
+      : undefined;
+  return {
+    ...configWithAuth,
+    agents: {
+      ...configWithAuth.agents,
+      defaults: {
+        ...defaults,
+        model: {
+          ...(fallbacks ? { fallbacks } : undefined),
+          primary: starterModel,
+        },
+        models: {
+          ...defaults?.models,
+          [starterModel]: defaults?.models?.[starterModel] ?? {},
+        },
+      },
+    },
+  };
 }
 
 export default definePluginEntry({

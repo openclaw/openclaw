@@ -77,12 +77,12 @@ it("shares approval replay across 64 subscribers during unrelated approval activ
     connect: { client: { id: "test" }, scopes: ["operator.admin"] },
   })) as GatewayClient[];
   const subscribers = createSessionMessageSubscriberRegistry();
+  vi.spyOn(Date, "now").mockReturnValue(5000);
   const runtime = createOperatorApprovalSessionEventRuntime({
     clients,
     sessionMessageSubscribers: subscribers,
     broadcastToConnIds: () => {},
     databaseOptions,
-    now: () => 5000,
   });
   const prepare = store.prepareOperatorApprovalReplay;
   const preparations = vi

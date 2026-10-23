@@ -40,13 +40,14 @@ async function plan(
     directory?: boolean;
     allow?: string[] | null;
     config?: OpenClawConfig;
-    clientTools?: typeof clientTools;
     configAllow?: string[];
     agentAllow?: string[];
     toolsEnabled?: boolean;
     disableTools?: boolean;
     effectiveToolsAllow?: string[];
     sandboxed?: boolean;
+    clientTools?: typeof clientTools;
+    toolSearch?: NonNullable<OpenClawConfig["tools"]>["toolSearch"];
   } = {},
 ) {
   const visibleTools = options.visibleTools ?? [tool("dispatch_action")];
@@ -56,7 +57,10 @@ async function plan(
     tools: {
       allow: options.configAllow,
       codeMode: options.codeMode ?? false,
-      toolSearch: { enabled: !options.codeMode, mode: options.directory ? "directory" : "tools" },
+      toolSearch: options.toolSearch ?? {
+        enabled: !options.codeMode,
+        mode: options.directory ? "directory" : "tools",
+      },
       ...options.config?.tools,
     },
     agents: options.config?.agents ?? {
@@ -69,6 +73,7 @@ async function plan(
     config,
     modelToolsEnabled: options.toolsEnabled ?? true,
   });
+  const runClientTools = options.clientTools ?? clientTools;
   try {
     const authStorage = AuthStorage.inMemory();
     const attempt = {
@@ -97,7 +102,7 @@ async function plan(
       authStorage,
       modelRegistry: ModelRegistry.inMemory(authStorage),
     } satisfies EmbeddedRunAttemptParams;
-    const seed = surface.compactTools([]);
+    const seed = surface.compactTools(uncompactedTools);
     const preparedToolBase = {
       toolHookContext: {
         awaitSessionDiffBaseline: undefined,
@@ -171,10 +176,7 @@ async function plan(
         }),
       }),
       preparedToolBase,
-      bundleTools: {
-        clientTools: options.clientTools ?? clientTools,
-        uncompactedEffectiveTools: uncompactedTools,
-      },
+      bundleTools: { clientTools: runClientTools, uncompactedEffectiveTools: uncompactedTools },
       abortSignal: abort.signal,
       executeCodeModeTool: async () => ({ content: [], details: undefined }),
     });
@@ -190,6 +192,64 @@ async function plan(
 }
 
 describe("embedded attempt tool catalog", () => {
+  it("keeps unselected clients direct without promoting MCP or client capabilities", async () => {
+    const remote = tool("sessions_spawn");
+    setPluginToolMeta(remote, {
+      pluginId: "remote-plugin",
+      optional: false,
+      mcp: {
+        serverName: "remote",
+        safeServerName: "remote",
+        toolName: "spawn",
+        operation: "tool",
+      },
+    });
+    const result = await plan({
+      visibleTools: [remote, tool("native_direct")],
+      clientTools: [
+        {
+          type: "function",
+          function: { name: "sessions_yield", parameters: { type: "object", properties: {} } },
+        },
+      ],
+      toolSearch: { mode: "tools", include: [{ source: "mcp" }] },
+      allow: [],
+    });
+    expect([...result.visibleAllowedToolNames]).toEqual([
+      "sessions_spawn",
+      "native_direct",
+      "sessions_yield",
+    ]);
+    expect([...result.capabilityToolNames]).toEqual(["native_direct"]);
+  });
+
+  it("keeps only deferred clients out of visible/live allowlists, not replay", async () => {
+    const result = await plan({
+      clientTools: [
+        ...clientTools,
+        {
+          type: "function",
+          function: { name: "client_direct", parameters: { type: "object", properties: {} } },
+        },
+      ],
+      toolSearch: {
+        mode: "tools",
+        include: [{ source: "client" }],
+        exclude: [{ name: "client_direct" }],
+      },
+      allow: [],
+    });
+    expect([...result.visibleAllowedToolNames]).toEqual(["dispatch_action", "client_direct"]);
+    expect([...result.liveAllowedToolNames]).toEqual(["dispatch_action", "client_direct"]);
+    expect([...result.replayAllowedToolNames]).toEqual([
+      "client_pick_file",
+      "client_direct",
+      "dispatch_action",
+    ]);
+    expect([...result.capabilityToolNames]).toEqual(["dispatch_action"]);
+    expect(result.hasCallableTools).toBe(true);
+  });
+
   it.each([
     { name: "an explicit allowlist", tools: { allow: ["read"] } },
     { name: "additive plugin grants", tools: { alsoAllow: ["optional_plugin_tool"] } },

@@ -195,6 +195,7 @@ export abstract class ChatPaneStateOwner {
   }
 
   dispose() {
+    this.context?.connectionBootstrap.cancelQueued(this);
     this.context?.connectionBootstrap.setForegroundPane(this, null);
     this.chatState.dispose();
     this.isConnected = false;

@@ -21,11 +21,12 @@ describe("Control UI build chunking", () => {
     const markdown = new URL("../../node_modules/markdown-it/dist/markdown-it.mjs", import.meta.url)
       .pathname;
     const entities = new URL("../../node_modules/entities/dist/index.js", import.meta.url).pathname;
+    const motion = new URL("../components/mascot-animator.ts", import.meta.url).pathname;
     const entry = "\0config-parser-fixture";
     const sources = new Map([
       [
         entry,
-        `export { validate } from ${JSON.stringify(zod)}; export { canCall } from ${JSON.stringify(gatewayMethods)}; export { signal } from ${JSON.stringify(solid)}; export { pending } from ${JSON.stringify(verdict)}; export const warm = () => import(${JSON.stringify(json5)}); export const sign = () => import(${JSON.stringify(signer)}); export const render = () => import(${JSON.stringify(markdown)});`,
+        `export { validate } from ${JSON.stringify(zod)}; export { canCall } from ${JSON.stringify(gatewayMethods)}; export { signal } from ${JSON.stringify(solid)}; export { pending } from ${JSON.stringify(verdict)}; export const warm = () => import(${JSON.stringify(json5)}); export const sign = () => import(${JSON.stringify(signer)}); export const render = () => import(${JSON.stringify(markdown)}); export const animate = () => import(${JSON.stringify(motion)});`,
       ],
       [zod, "export const validate = () => true;"],
       [json5, "export const parse = () => ({});"],
@@ -33,6 +34,7 @@ describe("Control UI build chunking", () => {
       [solid, "export const signal = () => 1;"],
       [verdict, "export const pending = () => false;"],
       [signer, "export const sign = () => 'signature';"],
+      [motion, "export class MascotAnimator {}"],
       [markdown, `export { decode as render } from ${JSON.stringify(entities)};`],
       [entities, "export const decode = () => 'decoded';"],
     ]);
@@ -78,6 +80,10 @@ describe("Control UI build chunking", () => {
     const signerChunk = chunks.find((chunk) => signer in chunk.modules)!;
     expect(dependencies.has(signerChunk.fileName)).toBe(false);
     expect(entryChunk.dynamicImports).toContain(signerChunk.fileName);
+    const motionChunk = chunks.find((chunk) => motion in chunk.modules)!;
+    expect(dependencies.has(motionChunk.fileName)).toBe(false);
+    expect(entryChunk.dynamicImports).toContain(motionChunk.fileName);
+    expect(motionChunk.fileName).toContain("mascot-motion-runtime");
     const markdownChunk = chunks.find((chunk) => markdown in chunk.modules)!;
     expect(dependencies.has(markdownChunk.fileName)).toBe(false);
     expect(entryChunk.dynamicImports).toContain(markdownChunk.fileName);

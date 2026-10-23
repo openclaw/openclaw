@@ -496,20 +496,6 @@ span.new-session-page__select {
   display: none;
 }
 
-/* Icon templates only carry paths; without an explicit stroke rule the SVGs
-   render as solid black fills (invisible-blob chips in dark mode). */
-.new-session-page__trigger-chevron svg,
-.new-session-page__target-icon svg,
-.new-session-page__browser-nav svg {
-  width: 14px;
-  height: 14px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
 .new-session-page__trigger-chevron svg {
   width: 10px;
   height: 10px;

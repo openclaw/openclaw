@@ -1,5 +1,6 @@
 import { createEffect, onSettled } from "solid-js";
 import { cancelLayout, scheduleLayout } from "../layout-frame.ts";
+import { listen } from "./listener.ts";
 
 /** Coalesce size and defined invalidations; returned writes run after layout reads. */
 export function createLayoutMeasurement<T>(
@@ -62,9 +63,7 @@ export function createLayoutMeasurement<T>(
   onSettled(() => {
     ready = true;
     // Font metrics can settle without resizing the measured viewport.
-    if (options.fonts) {
-      void document.fonts.ready.then(schedule);
-    }
+    const stopFonts = options.fonts ? listen(document.fonts, "loadingdone", schedule) : undefined;
     if (typeof ResizeObserver === "function") {
       resizeObserver = new ResizeObserver(schedule);
     }
@@ -79,6 +78,7 @@ export function createLayoutMeasurement<T>(
     commitChange();
     return () => {
       ready = false;
+      stopFonts?.();
       cancelLayout(key);
       resizeObserver?.disconnect();
       mutationObserver?.disconnect();
