@@ -3,6 +3,7 @@ import {
   createMemo,
   createOptimistic,
   createSignal,
+  Errored,
   For,
   lazy,
   Loading,
@@ -14,8 +15,9 @@ import type {
   McpAppDiscoveredEntrypoint,
   McpAppDiscoveredServer,
 } from "../../../src/shared/mcp-app-extensions.js";
+import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { registerMcpAppEnglish } from "../i18n/locales/en-mcp-app.ts";
-import { formatUiError } from "../lib/format-error.ts";
+import { formatUiError, UserFacingError } from "../lib/format-error.ts";
 import { createMcpAppCatalog } from "../lib/mcp-app-catalog.ts";
 import { mcpAppRouteSearch } from "../lib/mcp-app-route.ts";
 import { useApplication } from "../lib/reactive/context.ts";
@@ -58,7 +60,10 @@ export function McpAppCatalog(props: McpAppCatalogProps) {
   const surface = () => props.surface ?? "global";
   const context = useApplication();
   const [expanded, setExpanded] = createSignal(false);
-  const [error, setError] = createSignal<string | null>(null);
+  const [operation, setOperation] = createSignal<{
+    current: () => boolean;
+    result: Promise<null>;
+  }>();
   const [onboardingBusy, setOnboardingBusy] = createOptimistic(false);
   let active = true;
   // Admission stays synchronous; the optimistic flag only drives presentation.
@@ -70,7 +75,38 @@ export function McpAppCatalog(props: McpAppCatalogProps) {
     sessionKey: props.sessionKey || context.gateway.snapshot.sessionKey || "",
     agentId: props.agentId || context.agentSelection.state.selectedId || undefined,
   });
+  function captureOperation() {
+    const client = context.gateway.snapshot.client;
+    const initialTarget = target();
+    const scope = gatewayPresentationScope(context.gateway).key;
+    return {
+      client,
+      selected: initialTarget,
+      current: () => {
+        const destination = target();
+        return (
+          active &&
+          context.gateway.snapshot.client === client &&
+          gatewayPresentationScope(context.gateway).key === scope &&
+          destination.sessionKey === initialTarget.sessionKey &&
+          destination.agentId === initialTarget.agentId
+        );
+      },
+    };
+  }
   const catalog = createMcpAppCatalog(context, target, () => surface() === "global");
+  const currentOperation = () => {
+    // The catalog's identity tracks connection and selection changes.
+    catalog.snapshot();
+    const admitted = operation();
+    return admitted?.current() ? admitted : undefined;
+  };
+  function recordOutcome(current: () => boolean, result: Promise<unknown>) {
+    const completion = result.then(() => null);
+    // The alert may be collapsed or retired before its admitted work settles.
+    void completion.catch(() => {});
+    setOperation({ current, result: completion });
+  }
   const entries = (server: McpAppDiscoveredServer) =>
     server.entrypoints.filter(({ entrypoint }) =>
       surface() === "file"
@@ -104,7 +140,7 @@ export function McpAppCatalog(props: McpAppCatalogProps) {
     if (!catalog.available()) {
       return;
     }
-    setError(null);
+    setOperation(undefined);
     if (surface() === "sidebar" || surface() === "global") {
       const search = mcpAppRouteSearch({
         kind: "server",
@@ -128,37 +164,33 @@ export function McpAppCatalog(props: McpAppCatalogProps) {
     ) {
       setExpanded(false);
     } else {
-      setError(t("mcpApp.errors.mountUnavailable"));
+      recordOutcome(
+        captureOperation().current,
+        Promise.reject(new UserFacingError(t("mcpApp.errors.mountUnavailable"))),
+      );
     }
   }
-  const performOnboarding = action(function* (request: () => Promise<unknown>) {
+  const performOnboarding = action(function* (pending: Promise<void>) {
     setOnboardingBusy(true);
-    yield request();
+    yield pending;
   });
   async function onboard(pluginId: string) {
-    const client = context.gateway.snapshot.client;
+    const { client, selected, current } = captureOperation();
     if (!client || !catalog.available() || onboardingPending) {
       return;
     }
-    const selected = target();
-    const current = () => {
-      const destination = target();
-      return (
-        active &&
-        context.gateway.snapshot.client === client &&
-        destination.sessionKey === selected.sessionKey &&
-        destination.agentId === selected.agentId
-      );
-    };
     onboardingPending = true;
+    const pending = (async () => {
+      await client.request("mcp.app.onboard", {
+        ...selected,
+        pluginId,
+        idempotencyKey: generateUUID(),
+      });
+    })();
+    recordOutcome(current, pending);
     try {
-      await performOnboarding(() =>
-        client.request("mcp.app.onboard", {
-          ...selected,
-          pluginId,
-          idempotencyKey: generateUUID(),
-        }),
-      );
+      await performOnboarding(pending);
+      // Read the current target after the action releases its held presentation.
       if (!current()) {
         return;
       }
@@ -169,10 +201,8 @@ export function McpAppCatalog(props: McpAppCatalogProps) {
         face: "chat",
       });
       context.navigate("chat", route.options);
-    } catch (failure) {
-      if (current()) {
-        setError(formatUiError(failure));
-      }
+    } catch {
+      // The scoped outcome boundary consumes the admitted rejection.
     } finally {
       onboardingPending = false;
     }
@@ -314,8 +344,15 @@ export function McpAppCatalog(props: McpAppCatalogProps) {
                   </Show>
                 </div>
               </Show>
-              <Show when={error()}>
-                <p role="alert">{error()}</p>
+              <Show when={currentOperation()} keyed>
+                {(admitted) => {
+                  const outcome = createMemo(() => admitted.result, { loadingValue: null });
+                  return (
+                    <Errored fallback={(error) => <p role="alert">{formatUiError(error())}</p>}>
+                      {outcome()}
+                    </Errored>
+                  );
+                }}
               </Show>
             </section>
           }

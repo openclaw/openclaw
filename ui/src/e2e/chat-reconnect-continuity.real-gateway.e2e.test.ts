@@ -221,10 +221,18 @@ suite.define(() => {
       await composer.fill(followUpPrompt);
       await exactButton(page, "Send message").click();
       await expect.poll(() => provider.requests(), { timeout: 15_000 }).toBe(2);
+      await stop.waitFor({ state: "visible" });
       await followUpTurn.append(followUpReply);
       await followUpTurn.finish();
-      await assistant(followUpReply).waitFor();
+      // Final text hands off from the live stream to persisted history at settlement.
       await stop.waitFor({ state: "detached" });
+      const completedHistory = await readHistory();
+      expect(completedHistory.inFlightRun ?? null).toBeNull();
+      expect(completedHistory.messages?.filter(({ role }) => role === "assistant")).toMatchObject([
+        { content: [{ type: "text", text: opening + offlineTail }] },
+        { content: [{ type: "text", text: followUpReply }] },
+      ]);
+      await assistant(followUpReply).waitFor();
 
       await page.reload();
       await waitForControlUiGatewayReady(page);

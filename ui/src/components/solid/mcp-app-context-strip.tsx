@@ -3,8 +3,9 @@ import {
   createMemo,
   createOptimisticStore,
   createSignal,
+  Errored,
   For,
-  onCleanup,
+  onSettled,
   Show,
 } from "solid-js";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
@@ -33,14 +34,19 @@ type McpAppContextStripProps = { sessionKey: string; agentId: string };
 export function McpAppContextStrip(props: McpAppContextStripProps) {
   const context = useApplication();
   const gateway = projectGateway(context.gateway);
-  const [error, setError] = createSignal<string | null>(null);
+  const [removal, setRemoval] = createSignal<{
+    current: () => boolean;
+    result: Promise<null>;
+  }>();
+  const currentRemoval = () => {
+    const admitted = removal();
+    return admitted?.current() ? admitted : undefined;
+  };
   const [pending, setPending] = createOptimisticStore<Record<string, (() => boolean) | undefined>>(
     {},
   );
-  let mounted = true;
-  onCleanup(() => {
-    mounted = false;
-  });
+  const refreshes = new WeakMap<McpAppContextEntry, Promise<{ state: McpAppContextState }>>();
+  let mounted = false;
   const contexts = createMemo(() => {
     const client = gateway.read().snapshot.client;
     const sessionKey = props.sessionKey;
@@ -51,8 +57,9 @@ export function McpAppContextStrip(props: McpAppContextStripProps) {
       equality: "revision",
     });
   });
-  onCleanup(
-    context.gateway.subscribeEvents((event) => {
+  onSettled(() => {
+    mounted = true;
+    const stop = context.gateway.subscribeEvents((event) => {
       if (event.event !== "mcp.app.hostContextChanged") {
         return;
       }
@@ -79,18 +86,37 @@ export function McpAppContextStrip(props: McpAppContextStripProps) {
         publishMcpAppContext(client, { ...entry, state: null });
         return;
       }
-      const publish = (state: McpAppContextState) =>
-        publishMcpAppContext(client, { ...entry, state });
-      void client
-        .request<{ state: McpAppContextState }>("mcp.app.modelContext", {
-          sessionKey: entry.sessionKey,
-          agentId: entry.agentId,
-          viewId: entry.viewId,
+      const scope = gatewayPresentationScope(context.gateway).key;
+      const sessionKey = props.sessionKey;
+      const agentId = props.agentId;
+      const request = client.request<{ state: McpAppContextState }>("mcp.app.modelContext", {
+        sessionKey: entry.sessionKey,
+        agentId: entry.agentId,
+        viewId: entry.viewId,
+      });
+      refreshes.set(entry, request);
+      void request
+        .then((result) => {
+          if (
+            mounted &&
+            refreshes.get(entry) === request &&
+            context.gateway.snapshot.client === client &&
+            gatewayPresentationScope(context.gateway).key === scope &&
+            props.sessionKey === sessionKey &&
+            props.agentId === agentId &&
+            readMcpAppContexts(client, sessionKey, agentId).includes(entry)
+          ) {
+            publishMcpAppContext(client, { ...entry, state: result.state });
+          }
         })
-        .then((result) => publish(result.state))
-        .catch(() => publish(null));
-    }),
-  );
+        // A failed refresh does not revoke the accepted context.
+        .catch(() => {});
+    });
+    return () => {
+      mounted = false;
+      stop();
+    };
+  });
   const presentRemoval = action(function* (
     viewId: string,
     current: () => boolean,
@@ -112,7 +138,6 @@ export function McpAppContextStrip(props: McpAppContextStripProps) {
     const scope = gatewayPresentationScope(context.gateway).key;
     const sessionKey = props.sessionKey;
     const agentId = props.agentId;
-    setError(null);
     const current = () => {
       gateway.read();
       return (
@@ -145,19 +170,20 @@ export function McpAppContextStrip(props: McpAppContextStripProps) {
         }
       } catch (failure) {
         if (current()) {
-          setError(formatUiError(failure));
+          throw failure;
         }
       }
     })();
+    const result = complete.then(() => null);
+    // Detached strips still consume their admitted operation's late failure.
+    void result.catch(() => {});
+    setRemoval({ current, result });
     await Promise.resolve();
     if (!current()) {
       return complete;
     }
-    return presentRemoval(entry.viewId, current, complete).catch((failure: unknown) => {
-      if (current()) {
-        setError(formatUiError(failure));
-      }
-    });
+    // The alert reads the operation outcome independently of the optimistic flag.
+    return presentRemoval(entry.viewId, current, complete).catch(() => {});
   }
   return (
     <openclaw-mcp-app-context-strip>
@@ -223,8 +249,15 @@ export function McpAppContextStrip(props: McpAppContextStripProps) {
               </div>
             )}
           </For>
-          <Show when={error()}>
-            <p role="alert">{error()}</p>
+          <Show when={currentRemoval()} keyed>
+            {(admitted) => {
+              const outcome = createMemo(() => admitted.result, { loadingValue: null });
+              return (
+                <Errored fallback={(error) => <p role="alert">{formatUiError(error())}</p>}>
+                  {outcome()}
+                </Errored>
+              );
+            }}
           </Show>
         </section>
       </Show>

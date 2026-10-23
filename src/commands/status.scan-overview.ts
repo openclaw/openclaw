@@ -153,13 +153,14 @@ export async function collectStatusScanOverview(params: {
   params.progress?.tick();
   const hasConfiguredChannels = params.resolveHasConfiguredChannels
     ? await params.resolveHasConfiguredChannels(cfg, sourceConfig)
-    : await import("../plugins/channel-plugin-ids.js").then(
-        ({ hasConfiguredChannelsForReadOnlyScope }) =>
-          hasConfiguredChannelsForReadOnlyScope({
-            config: cfg,
-            activationSourceConfig: sourceConfig,
-          }),
-      );
+    : await (async () => {
+        const { hasConfiguredChannelsForReadOnlyScope } =
+          await import("../plugins/channel-plugin-ids.js");
+        return hasConfiguredChannelsForReadOnlyScope({
+          config: cfg,
+          activationSourceConfig: sourceConfig,
+        });
+      })();
   const osSummary = resolveOsSummary();
   let sessionStores: PreparedStatusSessionStores | undefined;
   const bootstrap = await createStatusScanCoreBootstrap<

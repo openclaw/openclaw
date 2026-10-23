@@ -22,6 +22,7 @@ import {
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { captureCronInferenceBinding } from "./inference-binding.runtime.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent/run.js";
+import { TEST_SCHEDULED_OCCURRENCE } from "./scheduled-occurrence.test-support.js";
 import { loadCronJobsStore, saveCronJobsStore } from "./store.js";
 import type { CronStoredJob } from "./types.js";
 
@@ -90,6 +91,7 @@ async function writeConfig(state: OpenClawTestState, cfg: OpenClawConfig) {
 
 function runStoredTurn(cfg: OpenClawConfig, job: CronStoredJob) {
   return runCronIsolatedAgentTurn({
+    occurrence: TEST_SCHEDULED_OCCURRENCE,
     cfg,
     deps: {},
     job,
@@ -214,6 +216,7 @@ describe("persisted cron inference identity through the real embedded runner", (
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
       credential: platformKey,
+      scheduledModel: false,
     },
     {
       mode: "OAuth",
@@ -221,10 +224,19 @@ describe("persisted cron inference identity through the real embedded runner", (
       api: "openai-chatgpt-responses",
       baseUrl: "https://chatgpt.com/backend-api/codex",
       credential: subscriptionToken,
+      scheduledModel: false,
+    },
+    {
+      mode: "scheduled-model OAuth",
+      profileId: subscriptionId,
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      credential: subscriptionToken,
+      scheduledModel: true,
     },
   ] as const)(
-    "keeps the creator's $mode account across fresh runs and default changes",
-    async ({ profileId, api, baseUrl, credential }) => {
+    "keeps the selected $mode account across fresh runs and default changes",
+    async ({ profileId, api, baseUrl, credential, scheduledModel }) => {
       await withAuthState("cron-real-auth-continuity", async (state) => {
         // Only provider HTTP is substituted; unexpected network requests fail closed.
         const requests: Array<{
@@ -267,7 +279,10 @@ describe("persisted cron inference identity through the real embedded runner", (
           return configure(
             state,
             {
-              model: `openai/${model}${selected ? `@${selected}` : ""}`,
+              model: scheduledModel
+                ? `openai/gpt-4.1@${other}`
+                : `openai/${model}${selected ? `@${selected}` : ""}`,
+              ...(scheduledModel ? { subagents: { model: `openai/${model}@${preferred}` } } : {}),
               models: runtimeModels("openai/gpt-4.1", "openai/gpt-4o"),
             },
             { openai: provider(baseUrl, api, modelIds) },
@@ -302,11 +317,11 @@ describe("persisted cron inference identity through the real embedded runner", (
             updatedAt: 1,
             modelProvider: "openai",
             model: "gpt-4.1",
-            authProfileOverride: profileId,
+            authProfileOverride: scheduledModel ? other : profileId,
             authProfileOverrideSource: "auto",
           },
         });
-        expect(binding).toMatchObject({ profileId, source: "auto" });
+        expect(binding).toMatchObject({ profileId, source: scheduledModel ? "user" : "auto" });
         const job: CronStoredJob = {
           ...storedJob("real-auth-continuity", "Reply with the account continuity result."),
           inferenceBinding: binding,

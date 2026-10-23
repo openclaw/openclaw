@@ -1,8 +1,17 @@
 /* @vitest-environment jsdom */
-import { createComponent } from "solid-js";
-import { describe, expect, it, vi } from "vitest";
-import type { DevicePairSetupLifecycle } from "../../lib/device-pair-setup.ts";
+import { createComponent, createSignal } from "solid-js";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import {
+  closeDevicePairSetup,
+  createDevicePairSetupState,
+  readDevicePairSetupSnapshot,
+  refreshDevicePairSetup,
+  type DevicePairSetupLifecycle,
+} from "../../lib/device-pair-setup.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { DevicePairSetup } from "./view-pairing.tsx";
 
 function renderPairing(lifecycle: DevicePairSetupLifecycle, nowMs = 0) {
@@ -12,7 +21,7 @@ function renderPairing(lifecycle: DevicePairSetupLifecycle, nowMs = 0) {
       lifecycle,
       nowMs,
       pendingCount: 0,
-      onRefresh: vi.fn(),
+      onRefresh: vi.fn(async () => {}),
       onAccessChange: vi.fn(),
       onClose: vi.fn(),
       onManageDevices: vi.fn(),
@@ -21,7 +30,123 @@ function renderPairing(lifecycle: DevicePairSetupLifecycle, nowMs = 0) {
   ).container;
 }
 
+function renderOwnedPairing(
+  request: Parameters<typeof createTestGatewayClient>[0],
+  lifecycle: DevicePairSetupLifecycle = { phase: "selection", access: "full" },
+) {
+  const state = createDevicePairSetupState({
+    client: createTestGatewayClient(request),
+    connected: true,
+  });
+  state.devicePairSetupOpen = true;
+  state.devicePairSetupLifecycle = lifecycle;
+  let publish = () => {};
+  const operations: Promise<void>[] = [];
+  const mounted = mountSolid(() => {
+    const [snapshot, setSnapshot] = createSignal(readDevicePairSetupSnapshot(state));
+    publish = () => setSnapshot(readDevicePairSetupSnapshot(state));
+    state.onDevicePairSetupChange = publish;
+    return (
+      <DevicePairSetup
+        open={snapshot().devicePairSetupOpen}
+        lifecycle={snapshot().devicePairSetupLifecycle}
+        nowMs={0}
+        pendingCount={0}
+        onRefresh={async () => {
+          const operation = refreshDevicePairSetup(state);
+          operations.push(operation);
+          publish();
+          await operation;
+          publish();
+        }}
+        onAccessChange={vi.fn()}
+        onClose={() => {
+          closeDevicePairSetup(state);
+          publish();
+        }}
+        onManageDevices={vi.fn()}
+        onGetApps={vi.fn()}
+      />
+    );
+  });
+  onTestFinished(() => closeDevicePairSetup(state));
+  return { ...mounted, state, publish, operations };
+}
+
 describe("device pairing dialog", () => {
+  it("shows status Retry pending and retires it on close before a late completion", async () => {
+    const status = createDeferred<{
+      completion: { setupId: string; access: "full"; deviceName: string };
+    }>();
+    const request = vi.fn<Parameters<typeof createTestGatewayClient>[0]>(() => status.promise);
+    const view = renderOwnedPairing(request, {
+      phase: "error",
+      source: "status",
+      access: "full",
+      setupId: "old-setup",
+      message: "Offline",
+    });
+    view.getByRole("button", { name: "Reload" }).click();
+    await waitForSolid(() => {
+      expect(view.container.querySelector(".device-pair-setup__loading")).not.toBeNull();
+      expect(view.queryByRole("alert")).toBeNull();
+    });
+    expect(request).toHaveBeenCalledOnce();
+    expect(request.mock.calls[0]).toEqual(["device.pair.setupStatus", { setupId: "old-setup" }]);
+
+    view.getByRole("button", { name: "Dismiss" }).click();
+    await waitForSolid(() => expect(view.container.querySelector(".device-pair-setup")).toBeNull());
+    view.state.devicePairSetupOpen = true;
+    view.publish();
+    await waitForSolid(() =>
+      expect(view.getByRole("button", { name: "Create setup code" }).hasAttribute("disabled")).toBe(
+        false,
+      ),
+    );
+    status.resolve({
+      completion: { setupId: "old-setup", access: "full", deviceName: "Retired phone" },
+    });
+    await Promise.all(view.operations);
+    await waitForSolid(() => {
+      expect(view.getByRole("button", { name: "Create setup code" }).hasAttribute("disabled")).toBe(
+        false,
+      );
+      expect(view.queryByText("Retired phone")).toBeNull();
+    });
+  });
+
+  it("keeps create failures visible and allows a successful retry", async () => {
+    const first = createDeferred<never>();
+    const second = createDeferred<unknown>();
+    const request = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    const view = renderOwnedPairing(request);
+    view.getByRole("button", { name: "Create setup code" }).click();
+    await waitForSolid(() =>
+      expect(view.container.querySelector(".device-pair-setup__loading")).not.toBeNull(),
+    );
+    first.reject(new Error("Synthetic create failure"));
+    await waitForSolid(() =>
+      expect(view.getByRole("alert").textContent).toContain("Synthetic create failure"),
+    );
+    view.getByRole("button", { name: "Reload" }).click();
+    await waitForSolid(() =>
+      expect(view.container.querySelector(".device-pair-setup__loading")).not.toBeNull(),
+    );
+    second.resolve({
+      setupId: "new-setup",
+      setupCode: "SYNTHETIC",
+      expiresAtMs: Date.now() + 60000,
+      gatewayUrl: "wss://gateway.example.test",
+      auth: "token",
+      urlSource: "test",
+    });
+    await waitForSolid(() =>
+      expect(view.getByRole("button", { name: "New code" }).hasAttribute("disabled")).toBe(false),
+    );
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(view.queryByRole("alert")).toBeNull();
+  });
+
   it.each([
     { lifecycle: { phase: "selection", access: "full" }, choices: true, selectable: true },
     {

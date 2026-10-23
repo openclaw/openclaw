@@ -63,64 +63,62 @@ function warmRoute(scope: "per-sender" | "global" = "per-sender", mainKey = "wor
   };
 }
 
-it.each([
-  ["chat", "exact"],
-  ["chat", "literal"],
-  ["chat", "short"],
-  ["dashboard", "short"],
-  ["chat", "title"],
-  ["dashboard", "title"],
-] as const)("loads cached %s/%s without Gateway discovery", async (face, mode) => {
-  const { context, seed, cache, request, waiting, load } = warmRoute();
-  const exact = mode === "exact";
-  const literal = mode === "literal";
-  const dashboardId = "12345678-90ab-cdef-1234-567890abcdef";
-  const row = createSessionRouteRow({
-    ...(exact ? { key: `agent:roboclaw:dashboard:${dashboardId}` } : {}),
-    ...(literal ? { key: "agent:roboclaw:thread" } : {}),
-    displayName: exact ? "Cached dashboard" : "Cached conversation",
-  });
-  const suffix = {
-    exact: `dashboard/${dashboardId}`,
-    literal: "thread",
-    short: shortName,
-    title: "cached-conversation",
-  }[mode];
-  if (literal) {
-    seed([row]);
-  }
-  const controller = new AbortController();
-  const completed = vi.fn();
-  const pending = load(`/${face}/roboclaw/${suffix}`, controller.signal).then((result) => {
-    completed(result);
-    return result;
-  });
-  try {
-    if (exact) {
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(completed).not.toHaveBeenCalled();
-    }
-    if (!literal) {
+it.each(["exact", "literal", "short", "title"] as const)(
+  "loads cached %s without Gateway discovery",
+  async (mode) => {
+    const { context, seed, cache, request, waiting, load } = warmRoute();
+    const exact = mode === "exact";
+    const literal = mode === "literal";
+    const dashboardId = "12345678-90ab-cdef-1234-567890abcdef";
+    const row = createSessionRouteRow({
+      ...(exact ? { key: `agent:roboclaw:dashboard:${dashboardId}` } : {}),
+      ...(literal ? { key: "agent:roboclaw:thread" } : {}),
+      displayName: exact ? "Cached dashboard" : "Cached conversation",
+    });
+    const suffix = {
+      exact: `dashboard/${dashboardId}`,
+      literal: "thread",
+      short: shortName,
+      title: "cached-conversation",
+    }[mode];
+    if (literal) {
       seed([row]);
     }
-    cache.resolve();
-    if (literal) {
-      expect(context.sessions.state.result?.sessions[0]?.displayName).toBe("Cached conversation");
-      expect(request).not.toHaveBeenCalled();
-    }
-    expect(await Promise.race([pending, waiting.then(() => "waiting for Gateway")])).toMatchObject({
-      kind: "session",
-      sessionKey: row.key,
-      ...(!exact && !literal ? { sessionResolutionFromCache: true } : {}),
+    const controller = new AbortController();
+    const completed = vi.fn();
+    const pending = load(`/chat/roboclaw/${suffix}`, controller.signal).then((result) => {
+      completed(result);
+      return result;
     });
-    expect(context.agents.state.agentsList).toBeNull();
-    expect(request).not.toHaveBeenCalled();
-  } finally {
-    controller.abort();
-    await pending.catch(() => undefined);
-  }
-});
+    try {
+      if (exact) {
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(completed).not.toHaveBeenCalled();
+      }
+      if (!literal) {
+        seed([row]);
+      }
+      cache.resolve();
+      if (literal) {
+        expect(context.sessions.state.result?.sessions[0]?.displayName).toBe("Cached conversation");
+        expect(request).not.toHaveBeenCalled();
+      }
+      expect(
+        await Promise.race([pending, waiting.then(() => "waiting for Gateway")]),
+      ).toMatchObject({
+        kind: "session",
+        sessionKey: row.key,
+        ...(!exact && !literal ? { sessionResolutionFromCache: "roster" } : {}),
+      });
+      expect(context.agents.state.agentsList).toBeNull();
+      expect(request).not.toHaveBeenCalled();
+    } finally {
+      controller.abort();
+      await pending.catch(() => undefined);
+    }
+  },
+);
 
 it("keeps a configured main key that resembles a short link literal before hello", () => {
   const { context } = warmRoute("per-sender", shortName);

@@ -219,7 +219,6 @@ export function createSlashMenu() {
       requestSlashCommandRefresh(host);
     }
     const items = getSlashCommandCompletions(completion.query, {
-      showAll: true,
       inlineOnly: completion.inline,
       allowImmediateInlineCommands: !completion.skillOnly,
     }).filter(

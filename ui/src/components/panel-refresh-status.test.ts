@@ -9,7 +9,7 @@ import {
   completePanelRefresh,
   createPanelRefreshStatus,
   failPanelRefresh,
-} from "./panel-refresh-status.ts";
+} from "./panel-refresh-status-state.ts";
 import { PanelRefreshStatus } from "./solid/panel-refresh-status.tsx";
 
 const connected: ApplicationGatewaySnapshot = {

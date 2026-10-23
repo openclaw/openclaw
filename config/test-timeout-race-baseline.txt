@@ -80,7 +80,7 @@ src/infra/net/fetch-guard.ssrf.test.ts	1
 src/infra/net/provider-websocket.test.ts	1
 src/infra/push-apns-cancellation.test.ts	1
 src/infra/push-apns.test.ts	1
-src/infra/session-cost-usage-cache.worker.test.ts	8
+src/infra/session-cost-usage-cache.worker.test.ts	5
 src/infra/state-migrations.workspace-setup-sandbox.test.ts	1
 src/meeting-bot/realtime-node-audio-transport.test.ts	1
 src/plugins/openai-compatible-embedding-provider.test.ts	3

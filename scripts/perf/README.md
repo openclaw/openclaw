@@ -1,5 +1,60 @@
 # Team-shaped synthetic state
 
+## Gateway startup and restart acceptance
+
+Use `scripts/bench-gateway-startup.ts` and `scripts/bench-gateway-restart.ts`
+against an exact-head build and isolated synthetic state. Record the Node version,
+source SHA, workload case, host load, and build command. The `default` case is the
+primary workload; use `fiftyPlugins` to check plugin scaling when that owner changes.
+
+Keep fresh-process startup and in-process restart separate. Startup must reach
+HTTP readiness and successfully serve the benchmark's WebSocket session RPC;
+listening alone is insufficient. Restart must complete the supported restart
+signal and recover `/readyz`. Record completion, readiness, session RPC, downtime,
+process-tree CPU, peak RSS, and startup/restart trace phases where available.
+
+Before changing production code, count operations and capture a separate CPU
+profile of startup, including worker threads. Use the frozen SQL workload for
+boot, restart, and warmed-turn SQL statements, worker requests, and main-thread SQL.
+Do not compare profiled timings with unprofiled timings, or call moving work to a
+worker or after readiness a reduction in total work.
+
+For an A/B comparison, interleave at least five baseline and five candidate samples
+per workload (ABAB), with identical runtime, build mode, fixtures, and probe settings.
+Report median, p95, and min–max; report fresh startup separately from warm restart.
+Use the campaign's exclusive timing lock and start each timed sample only below
+its one-minute load limit. After a one-hour capacity wait, report operation counts
+and profile evidence with latency explicitly unmeasured.
+
+Accept a change only when it removes measured work and improves median readiness
+or CPU by at least 5%, without worsening another user-facing median or p95.
+Investigate smaller adverse differences instead of claiming equivalence from
+spread. A 20% regression in any cell stops the change. Boot/restart SQL and main
+SQL must hold or fall; warmed-turn SQL and requests must not increase.
+Migrations, credential custody, admission, and required integrity checks remain
+before the operations they protect.
+
+## Model prompt statistics
+
+`model-prompt-stats-measure.ts` measures the diagnostic size owner with synthetic
+history containing quotes, controls, Unicode, and lone surrogates. It verifies
+the exact pre-provider JSON character counts independently of the cache.
+
+```sh
+node --expose-gc --trace-gc-nvp --import ./scripts/tsx.mjs \
+  scripts/perf/model-prompt-stats-measure.ts --messages 500 --calls 1000
+```
+
+Run at least five serial interleaved baseline/candidate samples on the approved
+benchmark host. The driver counts new large-text size records outside profiling,
+warms 50 calls, then samples allocations including objects collected by both GCs.
+A second pass reports sampled surviving allocations after GC, amortized per call;
+this is retained churn, not total resident memory or whole-turn retention. GC trace
+lines between `PROFILE_START allocation` and `PROFILE_END` belong to the allocation
+window; exclude setup and forced profiler-stop collections. Report promotion,
+collection counts, and maximum pauses with allocation. Profiled timing is context,
+not a Gateway latency measurement. Do not infer tail percentiles from five runs.
+
 ## Diagnostic heap profile sanitization
 
 `diagnostic-profile-measure.ts` measures the production diagnostics owners on an

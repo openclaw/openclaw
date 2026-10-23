@@ -37,35 +37,25 @@ it("resizes filled pips while preserving retained slots", () => {
 });
 
 it.each([
-  ["idle", 8, false, 0, "accent", "0 of 8 slots busy"],
-  ["partially occupied", 5, false, 3, "accent", "3 of 8 slots busy"],
-  ["at capacity", 0, false, 8, "warn", "8 of 8 slots busy"],
-  ["ineligible and saturated", 0, true, 0, "stale", "Slot utilization unavailable"],
+  // total, available, unavailable, filled pips, bar width, tone
+  [8, 8, false, 0, undefined, "accent"],
+  [8, 5, false, 3, undefined, "accent"],
+  [8, 0, false, 8, undefined, "warn"],
+  [8, 0, true, 0, undefined, "stale"],
+  [12, 6, false, 6, undefined, "accent"],
+  [13, 0, false, 0, "100%", "warn"],
+  [1024, 512, false, 0, "50%", "accent"],
+  [13, 0, true, 0, "0%", "stale"],
 ] as const)(
-  "renders %s without reversing free and busy",
-  (_name, available, unavailable, filled, tone, label) => {
-    const container = renderCapacity({ workerSlots: { total: 8, available }, unavailable });
-    const meter = container.querySelector('[role="img"]');
-    expect(meter?.getAttribute("aria-label")).toBe(label);
-    expect(meter?.classList.contains(`session-context-meter--${tone}`)).toBe(true);
-    expect(container.querySelectorAll(".capacity-meter-pips__pip")).toHaveLength(8);
-    expect(container.querySelectorAll(".capacity-meter-pips__pip--filled")).toHaveLength(filled);
-  },
-);
-
-it.each([
-  { total: 12, unavailable: false, pips: 12, width: undefined, tone: "accent" },
-  { total: 13, unavailable: false, pips: 0, width: "100%", tone: "warn" },
-  { total: 1024, unavailable: false, pips: 0, width: "50%", tone: "accent" },
-  { total: 13, unavailable: true, pips: 0, width: "0%", tone: "stale" },
-])(
-  "bounds glyphs for $total slots (unavailable=$unavailable)",
-  ({ total, unavailable, pips, width, tone }) => {
-    const available = total === 13 ? 0 : total / 2;
+  "renders %i total/%i available slots (unavailable=%s)",
+  (total, available, unavailable, filled, width, tone) => {
     const container = renderCapacity({ workerSlots: { total, available }, unavailable });
     const meter = container.querySelector('[role="img"]');
     const fill = container.querySelector<HTMLElement>(".session-context-meter__fill");
-    expect(container.querySelectorAll(".capacity-meter-pips__pip")).toHaveLength(pips);
+    expect(container.querySelectorAll(".capacity-meter-pips__pip")).toHaveLength(
+      total <= 12 ? total : 0,
+    );
+    expect(container.querySelectorAll(".capacity-meter-pips__pip--filled")).toHaveLength(filled);
     expect(fill?.style.width).toBe(width);
     expect(meter?.classList.contains(`session-context-meter--${tone}`)).toBe(true);
     expect(meter?.getAttribute("aria-label")).toBe(

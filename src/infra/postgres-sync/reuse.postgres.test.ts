@@ -202,10 +202,13 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
     expect(pid(differentSettings)).not.toBe(originalPid);
   });
 
-  it("applies all session settings with a quoted, comma-containing schema name", async () => {
+  it("inherits commit durability while applying settings with a quoted, comma-containing schema name", async () => {
     const namespace = `${schema}_"first,second`;
     const quoted = `"${namespace.replaceAll('"', '""')}"`;
     await admin.query(`CREATE SCHEMA ${quoted}`);
+    const defaults = await admin.query<{ synchronous_commit: string }>(
+      "SELECT current_setting('synchronous_commit') AS synchronous_commit",
+    );
     const db = open(connection!, namespace, { lockTimeoutMs: 321, statementTimeoutMs: 654 });
     const settings = query(
       db,
@@ -217,7 +220,7 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
     );
     expect(settings).toEqual([
       {
-        synchronous_commit: "off",
+        synchronous_commit: defaults.rows[0]?.synchronous_commit,
         lock_timeout: "321ms",
         statement_timeout: "654ms",
         search_path: quoted,

@@ -145,7 +145,7 @@ describe("OpenClaw shell context lifecycle", () => {
   setupSidebarTest();
 
   it("restores a modal toast to a late-mounted shell after its navigation drawer closes", async () => {
-    await import("../components/modal-dialog.ts");
+    await import("../components/modal-dialog.tsx");
     vi.stubGlobal("requestIdleCallback", vi.fn());
     vi.stubGlobal("matchMedia", () => ({
       matches: true,
@@ -292,7 +292,7 @@ describe("OpenClaw shell source initialization", () => {
       context: undefined,
       lastLocalePrefSignature: null,
       outboxStoreImport: { load: vi.fn(async () => undefined) },
-      recoverDeletedActiveSession: vi.fn(),
+      shellNavigation: { recoverDeletedActiveSession: vi.fn() },
       routeState: {},
     } as unknown as ShellGatewayHost;
     const owner = new ShellGatewayOwner(host);
@@ -389,9 +389,11 @@ describe("OpenClaw shell source initialization", () => {
 
 describe("OpenClaw shell route session commits", () => {
   it("settles shell commits after the invalidating caller is disposed", async () => {
+    const runtime = bootstrapApplication();
+    onTestFinished(() => runtime.stop());
     const shell = createShellOwner();
-    const unmount = shell.mountPresentation();
-    onTestFinished(unmount);
+    shell.runtime = runtime;
+    const view = mountShellView(shell);
     flush();
 
     let disposeCaller!: () => void;
@@ -408,7 +410,7 @@ describe("OpenClaw shell route session commits", () => {
 
     shell.invalidate();
     const retiredCommit = shell.updateComplete;
-    unmount();
+    view.unmount();
     flush();
     await expect(retiredCommit).resolves.toBe(false);
   });
@@ -453,11 +455,11 @@ describe("OpenClaw shell route session commits", () => {
     shell.activeSessionKey = "main";
     shell.routeState = { routeId: "chat" };
 
-    expect(shell.recoverNotFoundRoute()).toBe(false);
+    expect(shell.shellNavigation.recoverNotFoundRoute()).toBe(false);
     expect(replace).not.toHaveBeenCalled();
 
     snapshot.phase = "connected";
-    expect(shell.recoverNotFoundRoute()).toBe(true);
+    expect(shell.shellNavigation.recoverNotFoundRoute()).toBe(true);
     expect(replace).toHaveBeenCalledWith("chat", { pathname: "/chat/research" });
   });
 

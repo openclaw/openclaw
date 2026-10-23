@@ -2,15 +2,22 @@ import { resolve } from "node:path";
 import type { CopilotClient, CopilotClientOptions } from "@github/copilot-sdk";
 import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClientCreateOptions, PoolKey } from "./runtime.js";
 import { createCopilotClientPool } from "./runtime.js";
 
-type FakeClient = ReturnType<typeof makeClient>;
+const artifactMock = vi.hoisted(() => ({ capture: vi.fn(), validate: vi.fn() }));
+vi.mock("./runtime-artifact.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./runtime-artifact.js")>()),
+  captureCopilotRuntimeArtifact: artifactMock.capture,
+  validateCopilotRuntimeArtifact: artifactMock.validate,
+}));
+beforeEach(() => {
+  artifactMock.capture.mockReset();
+  artifactMock.validate.mockReset();
+});
 
-interface FakeFactoryOptions {
-  readonly stop?: (client: FakeClient) => Promise<Error[]> | Error[];
-}
+type FakeClient = ReturnType<typeof makeClient>;
 
 function makeKey(overrides: Partial<PoolKey> = {}): PoolKey {
   return {
@@ -30,12 +37,13 @@ function makeOptions(overrides: Partial<ClientCreateOptions> = {}): ClientCreate
 }
 
 function makeClient(id: number, stop = vi.fn(async (): Promise<Error[]> => [])) {
-  return { id, stop };
+  return { id, start: vi.fn(async () => undefined), stop };
 }
 
-function setup(idleTtlMs?: number, options: FakeFactoryOptions = {}) {
+function setup(idleTtlMs?: number, stop?: (client: FakeClient) => Promise<Error[]> | Error[]) {
   const stops: number[] = [];
   const ctorCalls: CopilotClientOptions[] = [];
+  const instances: FakeClient[] = [];
   let nextId = 0;
 
   const fake = async (clientOptions: CopilotClientOptions) => {
@@ -45,13 +53,14 @@ function setup(idleTtlMs?: number, options: FakeFactoryOptions = {}) {
       id,
       vi.fn(async () => {
         stops.push(id);
-        return options.stop ? options.stop(client) : [];
+        return stop ? stop(client) : [];
       }),
     );
+    instances.push(client);
     return client as unknown as CopilotClient;
   };
 
-  const sdk = { fake, stops, ctorCalls };
+  const sdk = { fake, stops, ctorCalls, instances };
   const pool = createCopilotClientPool({ idleTtlMs, sdkFactory: fake });
   const acquire = (key: Partial<PoolKey> = {}, clientOptions: Partial<ClientCreateOptions> = {}) =>
     pool.acquire(makeKey(key), makeOptions(clientOptions));
@@ -64,6 +73,64 @@ afterEach(() => {
 });
 
 describe("createCopilotClientPool", () => {
+  it("binds verified clients separately and rejects a changed implementation before creating a client", async () => {
+    const { sdk, pool } = setup();
+    const binding = { id: "copilot-runtime-fixture", fingerprint: "implementation-a" };
+    const connection = { kind: "stdio", path: "/fixture/copilot-runtime" };
+    artifactMock.capture.mockResolvedValue({ binding, connection });
+    artifactMock.validate.mockResolvedValue(true);
+    try {
+      const normal = await pool.acquire(makeKey(), makeOptions());
+      const verified = await pool.acquire(makeKey(), makeOptions(), {});
+      const resumed = await pool.acquire(makeKey(), makeOptions(), { expected: binding });
+      expect(verified.client).not.toBe(normal.client);
+      expect(resumed.client).toBe(verified.client);
+      expect(verified.runtimeArtifact).toEqual(binding);
+      expect(sdk.ctorCalls[1]?.connection).toEqual(connection);
+      expect(sdk.instances[1]?.start).toHaveBeenCalledOnce();
+      artifactMock.capture.mockResolvedValue({
+        binding: { ...binding, fingerprint: "implementation-b" },
+        connection,
+      });
+      await expect(pool.acquire(makeKey(), makeOptions(), { expected: binding })).rejects.toThrow(
+        "verified runtime changed",
+      );
+      expect(sdk.instances).toHaveLength(2);
+      // Both verified handles share the same release identity and settle together.
+      await pool.release(verified);
+      await pool.release(resumed);
+      await pool.release(normal);
+    } finally {
+      await pool.dispose();
+    }
+    expect(sdk.stops.toSorted((left, right) => left - right)).toEqual([1, 2]);
+  });
+
+  it("stops a client whose runtime changes during awaited startup", async () => {
+    const startup = createDeferred<void>();
+    const started = createDeferred<void>();
+    const client = makeClient(1);
+    client.start.mockImplementation(async () => {
+      started.resolve();
+      await startup.promise;
+    });
+    const pool = createCopilotClientPool({
+      sdkFactory: async () => client as unknown as CopilotClient,
+    });
+    const binding = { id: "copilot-runtime-fixture", fingerprint: "implementation-a" };
+    artifactMock.capture.mockResolvedValue({ binding, connection: { kind: "stdio" } });
+    artifactMock.validate.mockResolvedValue(true);
+    const acquire = pool.acquire(makeKey(), makeOptions(), {});
+    const rejected = expect(acquire).rejects.toThrow("runtime changed while starting");
+    await started.promise;
+    artifactMock.validate.mockResolvedValue(false);
+    startup.resolve();
+    await rejected;
+    expect(client.stop).toHaveBeenCalledOnce();
+    expect(pool.size()).toBe(0);
+    await pool.dispose();
+  });
+
   it("preserves an absolute Windows drive root as the SDK base directory", async () => {
     vi.resetModules();
     vi.doMock("node:path", async (importOriginal) => {
@@ -136,9 +203,7 @@ describe("createCopilotClientPool", () => {
   it("acquire during stopping awaits stop(), then creates fresh client", async () => {
     vi.useFakeTimers();
     const stopDeferred = createDeferred<Error[]>();
-    const { sdk, pool, acquire } = setup(10, {
-      stop: async () => stopDeferred.promise,
-    });
+    const { sdk, pool, acquire } = setup(10, async () => stopDeferred.promise);
     const first = await acquire();
     await pool.release(first);
     await vi.advanceTimersByTimeAsync(10);
@@ -227,9 +292,9 @@ describe("createCopilotClientPool", () => {
   });
 
   it("dispose stops all clients exactly once, aggregates errors, clears the map", async () => {
-    const { sdk, pool, acquire } = setup(1000, {
-      stop: (client) => [new Error(`stop-${client.id}-a`), new Error(`stop-${client.id}-b`)],
-    });
+    const { sdk, pool, acquire } = setup(1000, (client) =>
+      ["a", "b"].map((suffix) => new Error(`stop-${client.id}-${suffix}`)),
+    );
 
     const first = await acquire({ agentId: "agent-a" }, { copilotHome: "home-a" });
     const second = await acquire({ agentId: "agent-b" }, { copilotHome: "home-b" });
@@ -274,9 +339,7 @@ describe("createCopilotClientPool", () => {
 
   it("concurrent dispose waits for the in-flight shutdown and does not duplicate errors", async () => {
     const stopDeferred = createDeferred<Error[]>();
-    const { sdk, pool, acquire } = setup(undefined, {
-      stop: async () => stopDeferred.promise,
-    });
+    const { sdk, pool, acquire } = setup(undefined, async () => stopDeferred.promise);
 
     await acquire();
 
@@ -295,10 +358,8 @@ describe("createCopilotClientPool", () => {
   });
 
   it("normalizes non-Error stop failures during dispose", async () => {
-    const { pool, acquire } = setup(undefined, {
-      stop: () => {
-        throw toLintErrorObject("stop-string", "Non-Error thrown");
-      },
+    const { pool, acquire } = setup(undefined, () => {
+      throw toLintErrorObject("stop-string", "Non-Error thrown");
     });
     await acquire();
 

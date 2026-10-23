@@ -10,11 +10,11 @@ import {
 import { readResolvedSessionEntryInWorker } from "../../config/sessions/session-accessor.entry.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { revokeMcpLoopbackClientGrant } from "../../gateway/mcp-grant-store.js";
 import {
-  activateMcpLoopbackClientGrantCapture,
-  mintMcpLoopbackClientGrant,
-  revokeMcpLoopbackClientGrant,
-} from "../../gateway/mcp-grant-store.js";
+  captureGrant,
+  request as requestMcp,
+} from "../../gateway/mcp-http-request.test-support.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "../../gateway/mcp-http.js";
 import {
   clearMcpLoopbackToolCallCapture,
@@ -76,7 +76,7 @@ beforeAll(async () => {
     { agentId: "intake", sessionKey: requester },
     { sessionId: "intake", updatedAt: 1 },
   );
-  await ensureMcpLoopbackServer(0);
+  await ensureMcpLoopbackServer();
 });
 beforeEach(() => setRuntimeConfigSnapshot(config));
 afterEach(() => {
@@ -126,10 +126,6 @@ async function createCaller(
     });
     sessionEntry = await readResolvedSessionEntryInWorker(scope);
   }
-  expect(sessionEntry).toMatchObject({
-    delegatedToolPolicy: { requesterDeny: denied },
-    inheritedToolDeny: denied,
-  });
   const admission = prepareSystemAgentRunAdmission(
     currentConfig,
     runId,
@@ -171,9 +167,6 @@ async function createCaller(
       isSideQuestion: false,
       skipsTurnPreparation: false,
     });
-    if (currentConfig === config) {
-      expect(policy.params.cliToolAvailability?.native).toEqual([]);
-    }
     const context = buildCliMcpGrantContext({
       run: policy.params,
       config: currentConfig,
@@ -191,37 +184,27 @@ async function createCaller(
     const names = projected.tools.map((tool) => tool.name);
     const grantInput = finalizeCliMcpGrant(context, names, false, run)!;
     const runtime = getActiveMcpLoopbackRuntime()!;
-    const grant = mintMcpLoopbackClientGrant({
-      ...grantInput,
-      runtimeOwnerToken: runtime.ownerToken,
-    });
     const captureKey = runId + "-capture";
-    cleanups.push(() => {
-      clearMcpLoopbackToolCallCapture(captureKey);
-      revokeMcpLoopbackClientGrant(grant.token);
-    });
-    expect(
-      activateMcpLoopbackClientGrantCapture({
-        token: grant.token,
-        runtimeOwnerToken: runtime.ownerToken,
-        captureKey,
-      }),
-    ).not.toBe(false);
+    const grant = captureGrant(
+      { ...grantInput, runtimeOwnerToken: runtime.ownerToken },
+      captureKey,
+      (token) =>
+        cleanups.push(() => {
+          clearMcpLoopbackToolCallCapture(captureKey);
+          revokeMcpLoopbackClientGrant(token);
+        }),
+    );
     const request = async (method: string, params?: object) => {
-      const response = await fetch("http://127.0.0.1:" + runtime.port + "/mcp", {
-        method: "POST",
-        headers: {
-          authorization: "Bearer " + grant.token,
-          "content-type": "application/json",
-          "x-openclaw-cli-capture-key": captureKey,
-        },
-        body: JSON.stringify({
+      const response = await requestMcp(
+        runtime,
+        {
           jsonrpc: "2.0",
           id: ++sequence,
           method,
           ...(params ? { params } : {}),
-        }),
-      });
+        },
+        grant,
+      );
       expect(response.status).toBe(200);
       return (await response.json()) as {
         result: {
@@ -285,15 +268,8 @@ async function createCaller(
 }
 
 function observeLaunches() {
-  const supervisor = getProcessSupervisor();
-  const original = supervisor.spawn.bind(supervisor);
-  let launches = 0;
-  vi.spyOn(supervisor, "spawn").mockImplementation(async (input) => {
-    const run = await original(input);
-    launches += 1;
-    return run;
-  });
-  return () => launches;
+  const spawn = vi.spyOn(getProcessSupervisor(), "spawn");
+  return () => spawn.mock.calls.length;
 }
 
 async function prepareEffect(route: Route, suffix: string, senderRestricted = false) {

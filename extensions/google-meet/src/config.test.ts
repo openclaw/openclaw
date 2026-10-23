@@ -77,28 +77,11 @@ it("ignores non-decimal env numeric fallbacks", () => {
 
   expect(config.oauth).toEqual({ accessToken: "access-token" });
 });
-it("keeps sparse and legacy audio config compatible", () => {
+it("keeps sparse audio config compatible", () => {
   expect(resolveConfig({}).chrome).toMatchObject({
     audioBackend: "auto",
     audioInputCommandOverride: undefined,
     audioOutputCommandOverride: undefined,
-  });
-  const legacy = resolveConfig({ chrome: { audioBackend: "blackhole-2ch" } });
-  expect(legacy.chrome.audioBackend).toBe("blackhole-2ch");
-  expect(legacy.chrome.audioInputCommand).toContain("BlackHole 2ch");
-  expect(legacy.chrome.audioOutputCommand).toContain("BlackHole 2ch");
-});
-
-it("builds PipeWire-Pulse commands and retains explicit overrides", () => {
-  const linux = resolveConfig({ chrome: { audioBackend: "pipewire-pulse" } });
-  expect(linux.chrome.audioInputCommand).toContain("parec");
-  expect(linux.chrome.audioOutputCommand).toContain("pacat");
-
-  const commands = { audioInputCommand: ["capture"], audioOutputCommand: ["play"] };
-  expect(resolveConfig({ chrome: commands }).chrome).toMatchObject({
-    ...commands,
-    audioInputCommandOverride: commands.audioInputCommand,
-    audioOutputCommandOverride: commands.audioOutputCommand,
   });
 });
 

@@ -1,10 +1,12 @@
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AgentIdentityResult } from "../api/types.ts";
 import {
   createGatewayEvent,
   createGatewayStoreTestStore,
   GATEWAY_STORE_TEST_HELLO,
 } from "../app/gateway-store.test-support.ts";
+import { t } from "../i18n/index.ts";
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import type { ChatHistoryResponse } from "../pages/chat/chat-history-snapshot.ts";
 import "./control-ui-session-summary.tsx";
@@ -16,7 +18,10 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-function setup(identity?: () => AgentIdentityResult) {
+function setup(
+  identity?: () => AgentIdentityResult,
+  progressRead: () => Promise<unknown> = async () => ({ card: null }),
+) {
   const { gateway, current } = createGatewayStoreTestStore();
   onTestFinished(() => gateway.stop());
   gateway.start();
@@ -39,7 +44,7 @@ function setup(identity?: () => AgentIdentityResult) {
       return Promise.resolve(identity());
     }
     if (method === "progressCard.get") {
-      return Promise.resolve({ card: null });
+      return progressRead();
     }
     return Promise.reject(new Error(`Unexpected method: ${method}`));
   });
@@ -79,6 +84,32 @@ function useClock() {
   vi.spyOn(Math, "random").mockReturnValue(0);
 }
 const messages = (element: Element) => element.querySelectorAll(".plugin-session-summary__message");
+
+it("keeps history available while progress loads, fails, and retries", async () => {
+  const pending = createDeferred<{ card: null }>();
+  const retry = createDeferred<{ card: null }>();
+  const read = vi.fn().mockReturnValueOnce(pending.promise).mockReturnValueOnce(retry.promise);
+  const { element, reply } = setup(undefined, read);
+  await reply(0, "Independent history");
+  expect(element.textContent).toContain(t("sessionProgressCard.widgetLoading"));
+  pending.reject(new Error("Progress unavailable"));
+  await vi.waitFor(() =>
+    expect(element.querySelector(".plugin-session-summary__progress [role=alert]")).not.toBeNull(),
+  );
+  expect(element.textContent).toContain("Independent history");
+
+  element.querySelector<HTMLButtonElement>(".plugin-session-summary > button")!.click();
+  await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+  await vi.waitFor(() =>
+    expect(element.textContent).toContain(t("sessionProgressCard.widgetLoading")),
+  );
+  expect(element.textContent).toContain("Independent history");
+  retry.resolve({ card: null });
+  await vi.waitFor(() =>
+    expect(element.querySelector(".plugin-session-summary__progress")).toBeNull(),
+  );
+  expect(element.textContent).toContain("Independent history");
+});
 
 it("refreshes visible message avatars from identity and stops hydrating while hidden", async () => {
   let avatar = "data:image/png;base64,aWRlbnRpdHk=";

@@ -5,10 +5,8 @@ import { matrixPlugin } from "../extensions/matrix/api.js";
 import { registerMatrixFullRuntime } from "../extensions/matrix/index.js";
 import { setMatrixRuntime } from "../extensions/matrix/test-api.js";
 import { dispatchChannelMessageAction } from "../src/channels/plugins/message-action-dispatch.js";
-import type {
-  ChannelMessageActionContext,
-  ChannelMessageActionName,
-} from "../src/channels/plugins/types.js";
+import type { ChannelMessageActionName } from "../src/channels/plugins/message-action-names.js";
+import type { ChannelMessageActionContext } from "../src/channels/plugins/types.core.js";
 import { registerMessageCommands } from "../src/cli/program/register.message.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../src/config/config.js";
 import { getPluginInstance } from "../src/plugins/plugin-instance-scope.js";

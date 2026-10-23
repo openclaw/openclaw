@@ -97,7 +97,7 @@ export async function createControlUiPrecompressedAssetVariants(
     {
       fileName: `${fileName}.br`,
       source: await compressBrotli(body, {
-        params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 9 },
+        params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 10 },
       }),
     },
     {
@@ -748,7 +748,8 @@ export default function controlUiViteConfig(
       // Source builds retain automatic debugger discovery.
       sourcemap: buildInfo.release ? "hidden" : true,
       modulePreload: {
-        polyfill: true,
+        // Every supported browser has native modulepreload (see docs/web/control-ui.md).
+        polyfill: false,
         resolveDependencies: resolveModulePreloadDependencies,
       },
       rolldownOptions: {

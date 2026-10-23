@@ -129,23 +129,23 @@ describe("formatValidationErrors", () => {
     expect(formatValidationErrors(null)).toBe("unknown validation error");
   });
 
-  it("formats additionalProperties at root", () => {
+  it.each([
+    ["additionalProperties", "additionalProperty", "", "at root: unexpected property 'token'"],
+    [
+      "additionalProperties",
+      "additionalProperty",
+      "/auth",
+      "at /auth: unexpected property 'token'",
+    ],
+    ["required", "missingProperty", "", "must have required property 'token'"],
+    ["required", "missingProperty", "/auth", "at /auth: must have required property 'token'"],
+  ])("formats %s %s at %s", (keyword, field, instancePath, expected) => {
     const err = makeError({
-      keyword: "additionalProperties",
-      params: { additionalProperty: "token" },
+      keyword,
+      instancePath,
+      params: { [field]: "token" },
     });
-    expect(formatValidationErrors([err])).toBe("at root: unexpected property 'token'");
-  });
-
-  it("formats additionalProperties with instancePath", () => {
-    const err: ValidationError = {
-      keyword: "additionalProperties",
-      instancePath: "/auth",
-      params: { additionalProperty: "token" },
-      schemaPath: "#/",
-      message: "validation error",
-    };
-    expect(formatValidationErrors([err])).toBe("at /auth: unexpected property 'token'");
+    expect(formatValidationErrors([err])).toBe(expected);
   });
 
   it.each(["required", "additionalProperties"])(

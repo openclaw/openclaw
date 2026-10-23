@@ -361,6 +361,39 @@ describe("publish model catalog", () => {
     ).rejects.toThrow();
   });
 
+  it("hydrates a runtime-discovered provider that declares no static rows", async () => {
+    const manifests = [
+      {
+        pluginId: "fixture",
+        manifestPath: "fixture.json",
+        manifest: {
+          providers: ["anthropic", "openai", "gateway"],
+          modelCatalog: {
+            providers: {
+              anthropic: fixtureProvider("claude", 100),
+              openai: fixtureProvider("gpt", 100),
+              gateway: { api: "anthropic-messages", models: [] },
+            },
+            modelsDev: { gateway: "upstream-gateway" },
+          },
+        },
+      },
+    ];
+    const bundle = await assembleFixtureBundle(manifests);
+    expect(bundle.providers.gateway).toBeUndefined();
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      Response.json(modelsDevCatalog({ "upstream-gateway": [modelsDevModel("vendor/model")] })),
+    );
+
+    await expect(
+      hydrateModelCatalogFromModelsDev({ bundle, manifests, fetchImpl }),
+    ).resolves.toEqual({ gateway: { added: 1, filled: 0, skipped: 0 } });
+    expect(bundle.providers.gateway).toMatchObject({
+      api: "anthropic-messages",
+      models: [{ id: "vendor/model" }],
+    });
+  });
+
   it("hydrates missing models and fills only undefined manifest metadata", async () => {
     const anthropic = fixtureProvider("claude", 100);
     anthropic.models[0] = {

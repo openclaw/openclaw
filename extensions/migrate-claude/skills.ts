@@ -128,35 +128,6 @@ export async function buildSkillItems(params: {
   return items;
 }
 
-function firstParagraph(content: string): string | undefined {
-  return content
-    .replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/u, "")
-    .split(/\r?\n\r?\n/u)
-    .map((part) => part.replaceAll(/\s+/g, " ").trim())
-    .find(Boolean);
-}
-
-function generatedCommandSkillContent(params: {
-  skillName: string;
-  sourceLabel: string;
-  commandContent: string;
-}): string {
-  const description =
-    firstParagraph(params.commandContent) ?? `Imported Claude command ${params.skillName}`;
-  return [
-    "---",
-    `name: ${params.skillName}`,
-    `description: ${JSON.stringify(truncateUtf16Safe(description, 180))}`,
-    "disable-model-invocation: true",
-    "---",
-    "",
-    `<!-- Imported from Claude: ${params.sourceLabel} -->`,
-    "",
-    params.commandContent.trimEnd(),
-    "",
-  ].join("\n");
-}
-
 export async function applyGeneratedSkillItem(
   item: MigrationItem,
   reportDir: string,
@@ -183,11 +154,25 @@ export async function applyGeneratedSkillItem(
         `Claude command file is not valid UTF-8: ${item.source}. Re-save or re-encode the file as UTF-8, then rerun the migration.`,
       );
     }
-    const content = generatedCommandSkillContent({
-      skillName,
-      sourceLabel,
-      commandContent: bytes.toString("utf8"),
-    });
+    const commandContent = bytes.toString("utf8");
+    const description =
+      commandContent
+        .replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/u, "")
+        .split(/\r?\n\r?\n/u)
+        .map((part) => part.replaceAll(/\s+/g, " ").trim())
+        .find(Boolean) ?? `Imported Claude command ${skillName}`;
+    const content = [
+      "---",
+      `name: ${skillName}`,
+      `description: ${JSON.stringify(truncateUtf16Safe(description, 180))}`,
+      "disable-model-invocation: true",
+      "---",
+      "",
+      `<!-- Imported from Claude: ${sourceLabel} -->`,
+      "",
+      commandContent.trimEnd(),
+      "",
+    ].join("\n");
     const backupPath = targetExists
       ? await backupMigrationItemTarget(item.target, reportDir, { dereference: true })
       : undefined;

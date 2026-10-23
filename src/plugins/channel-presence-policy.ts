@@ -31,13 +31,13 @@ import type { PluginManifestRecord } from "./manifest-registry.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry-contributions.js";
 
 /** Source classes that can make a channel appear configured for read-only scopes. */
-export type ConfiguredChannelPresenceSource =
+type ConfiguredChannelPresenceSource =
   | "explicit-config"
   | Exclude<ChannelPresenceSignalSource, "config">
   | "manifest-env";
 
 /** Reasons a configured channel signal is not effective. */
-export type ConfiguredChannelBlockedReason =
+type ConfiguredChannelBlockedReason =
   | "plugins-disabled"
   | "blocked-by-denylist"
   | "plugin-disabled"

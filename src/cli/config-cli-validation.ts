@@ -198,50 +198,6 @@ function selectConfigMutationSecrets(config: OpenClawConfig, operations: ConfigS
   };
 }
 
-async function collectDryRunResolvabilityErrors(params: {
-  refs: SecretRef[];
-  config: OpenClawConfig;
-}): Promise<ConfigSetDryRunError[]> {
-  const { resolveSecretRefValue } = await import("../secrets/resolve.js");
-  const failures: ConfigSetDryRunError[] = [];
-  for (const ref of params.refs) {
-    try {
-      await resolveSecretRefValue(ref, { config: params.config, env: process.env });
-    } catch (err) {
-      failures.push({
-        kind: "resolvability",
-        message: formatErrorMessage(err),
-        ref: `${ref.source}:${ref.provider}:${ref.id}`,
-      });
-    }
-  }
-  return failures;
-}
-
-function collectDryRunStaticErrorsForSkippedExecRefs(params: {
-  refs: SecretRef[];
-  config: OpenClawConfig;
-}): ConfigSetDryRunError[] {
-  return params.refs.flatMap((ref): ConfigSetDryRunError[] => {
-    const id = ref.id.trim();
-    const refLabel = `${ref.source}:${ref.provider}:${id}`;
-    let message: string | undefined;
-    if (!id) {
-      message = "Error: Secret reference id is empty.";
-    } else if (!isValidExecSecretRefId(id)) {
-      message = `Error: ${formatExecSecretRefIdValidationMessage()} (ref: ${refLabel}).`;
-    } else {
-      const providerConfig = params.config.secrets?.providers?.[ref.provider];
-      if (!providerConfig) {
-        message = `Error: Secret provider "${ref.provider}" is not configured (ref: ${refLabel}).`;
-      } else if (providerConfig.source !== ref.source) {
-        message = `Error: Secret provider "${ref.provider}" has source "${providerConfig.source}" but ref requests "${ref.source}".`;
-      }
-    }
-    return message ? [{ kind: "resolvability", message, ref: refLabel }] : [];
-  });
-}
-
 function collectStrictConfigErrors(
   config: OpenClawConfig,
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">,
@@ -444,9 +400,37 @@ export async function validateConfigMutation(params: {
   }
   if (checksRefs) {
     errors.push(
-      ...collectDryRunStaticErrorsForSkippedExecRefs({ refs: skippedExecRefs, config }),
-      ...(await collectDryRunResolvabilityErrors({ refs: refsToResolve, config })),
+      ...skippedExecRefs.flatMap((ref): ConfigSetDryRunError[] => {
+        const id = ref.id.trim();
+        const refLabel = `${ref.source}:${ref.provider}:${id}`;
+        let message: string | undefined;
+        if (!id) {
+          message = "Error: Secret reference id is empty.";
+        } else if (!isValidExecSecretRefId(id)) {
+          message = `Error: ${formatExecSecretRefIdValidationMessage()} (ref: ${refLabel}).`;
+        } else {
+          const providerConfig = config.secrets?.providers?.[ref.provider];
+          if (!providerConfig) {
+            message = `Error: Secret provider "${ref.provider}" is not configured (ref: ${refLabel}).`;
+          } else if (providerConfig.source !== ref.source) {
+            message = `Error: Secret provider "${ref.provider}" has source "${providerConfig.source}" but ref requests "${ref.source}".`;
+          }
+        }
+        return message ? [{ kind: "resolvability", message, ref: refLabel }] : [];
+      }),
     );
+    const { resolveSecretRefValue } = await import("../secrets/resolve.js");
+    for (const ref of refsToResolve) {
+      try {
+        await resolveSecretRefValue(ref, { config, env: process.env });
+      } catch (err) {
+        errors.push({
+          kind: "resolvability",
+          message: formatErrorMessage(err),
+          ref: `${ref.source}:${ref.provider}:${ref.id}`,
+        });
+      }
+    }
   }
   const failures = dedupeByKey(errors, (error) =>
     error.kind === "resolvability"

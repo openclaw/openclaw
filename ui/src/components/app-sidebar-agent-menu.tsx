@@ -25,7 +25,6 @@ type SidebarAgentMenuParams = Omit<
 > & {
   position: { x: number; top: number; placement?: "right-start" };
   anchor?: HTMLElement;
-  tabFocusTarget?: (backward: boolean) => HTMLElement | undefined;
   basePath: string;
   rosterMode: boolean;
   creationDisabledReason: string | null;
@@ -58,7 +57,9 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams): JSX.Elem
   const agentsTitle = <div class="sidebar-customize-menu__title">{t("agentChip.agents")}</div>;
   const createAgentItem: MenuItem = {
     id: `${COMMAND_VALUE_PREFIX}new-agent`,
-    label: t("agentChip.createAgent"),
+    get label() {
+      return t("agentChip.createAgent");
+    },
     get class() {
       return [
         "sidebar-customize-menu__item sidebar-agent-menu__create",
@@ -136,7 +137,6 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams): JSX.Elem
       class="sidebar-customize-menu sidebar-agent-menu"
       position={params.position}
       anchor={params.anchor}
-      tabFocusTarget={params.tabFocusTarget}
       label={menuLabel()}
       focusOnOpen={params.openMode !== "hover"}
       ref={params.ref}

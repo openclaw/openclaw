@@ -215,12 +215,12 @@ function Invoke-NpmCommand { throw 'unexpected npm invocation' }
 function Invoke-RestMethod {
     param([string]$Uri, [int]$TimeoutSec)
     if ($Uri -ne 'https://nodejs.org/dist/index.json') { throw "unexpected metadata URL: $Uri" }
-    return @([pscustomobject]@{ version = 'v26.1.0'; files = @('win-x64-zip', 'win-arm64-zip') })
+    return @([pscustomobject]@{ version = 'v26.12.1'; files = @('win-x64-zip', 'win-arm64-zip') })
 }
 function Save-InstallerDownload {
     param([string]$Uri, [string]$OutFile)
     if ($script:Scenario -eq 'download') { throw 'fixture download failure' }
-    if ($Uri -eq 'https://nodejs.org/dist/v26.1.0/SHASUMS256.txt') {
+    if ($Uri -eq 'https://nodejs.org/dist/v26.12.1/SHASUMS256.txt') {
         $archive = Get-ChildItem -LiteralPath (Split-Path -Parent $OutFile) -Filter '*.zip' | Select-Object -First 1
         $hash = (Get-FileHash -LiteralPath $archive.FullName -Algorithm SHA256).Hash
         if ($script:Scenario -eq 'checksum') { $hash = '0' * 64 }
@@ -228,7 +228,7 @@ function Save-InstallerDownload {
         [IO.File]::WriteAllText($OutFile, "$hash  $name")
         return
     }
-    if ($Uri -notmatch '^https://nodejs\.org/dist/v26\.1\.0/node-v26\.1\.0-win-(x64|arm64)\.zip$') { throw "unexpected archive URL: $Uri" }
+    if ($Uri -notmatch '^https://nodejs\.org/dist/v26\.12\.1/node-v26\.12\.1-win-(x64|arm64)\.zip$') { throw "unexpected archive URL: $Uri" }
     [IO.File]::WriteAllText($OutFile, 'downloaded archive bytes')
 }
 function Expand-PortableNodeArchive {
@@ -467,8 +467,8 @@ try {
     "node-capabilities": installerFixture(
       `$cases = ${toPowerShellSingleQuotedLiteral(
         JSON.stringify([
-          ["v24.19.0", "3.51.3", true, true],
-          ["v24.19.0", "3.51.3", false, false],
+          ["v24.22.1", "3.51.3", true, true],
+          ["v24.22.1", "3.51.3", false, false],
           ["v24.15.0+vendor.1", "3.51.3", true, false],
           ["v26.0.0+vendor.1", "3.51.3", true, false],
           ["v24.15.0", "3.51.3", false, false],
@@ -483,7 +483,7 @@ try {
             "3.51.3": true,
             "3.53.1": true,
             unavailable: false,
-          }).map(([sqlite, expected]) => ["v26.1.0", sqlite, true, expected]),
+          }).map(([sqlite, expected]) => ["v26.12.1", sqlite, true, expected]),
         ]),
       )} | ConvertFrom-Json`,
       String.raw`
@@ -498,7 +498,7 @@ function Get-Command {
   return [pscustomobject]@{ Source = 'Invoke-FixtureNode' }
 }
 foreach ($script:nodeCapabilityCase in $cases) {
-  $script:explicit = $script:nodeCapabilityCase[0] -eq 'v26.1.0'
+  $script:explicit = $script:nodeCapabilityCase[0] -eq 'v26.12.1'
   $actual = if ($script:explicit) { Check-Node -NodePath 'Invoke-FixtureNode' } else { Check-Node }
   if ($actual -ne $script:nodeCapabilityCase[3]) { throw "Node/SQLite case failed: $script:nodeCapabilityCase actual=$actual" }
 }
@@ -1456,7 +1456,8 @@ try {
         );
         const preflight = runNative(["-File", preflightPath], preflightRoot);
         const prerequisite = `${engine} requires usable Node/SQLite: ${preflight.stdout}\n${preflight.stderr}`;
-        expect(preflight, prerequisite).toMatchObject({ error: undefined, status: 0 });
+        expect(preflight.error, prerequisite).toBeUndefined();
+        expect(preflight.status, prerequisite).toBe(0);
         for (const usableCommand of [false, true]) {
           for (const mode of ["file", "scriptblock"]) {
             const root = harness.createTempDir("openclaw-native-upgrade-é-");
@@ -1636,7 +1637,7 @@ function Get-Command {
 function Invoke-FixtureNode {
     $global:LASTEXITCODE = 0
     if ($args[0] -eq '-v') {
-        return 'v26.1.0'
+        return 'v26.12.1'
     }
     $probe = @($input) -join [Environment]::NewLine
     if (-not $probe.Contains('CREATE TABLE probe') -or -not $probe.Contains('a\u0000b\u0000')) {

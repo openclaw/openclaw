@@ -1,4 +1,12 @@
-import { action, createMemo, createOptimistic, createSignal, createUniqueId, Show } from "solid-js";
+import {
+  action,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  createUniqueId,
+  Errored,
+  Show,
+} from "solid-js";
 import type { AgentsAvatarGenerateResult } from "../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../app/context.ts";
 import { LobsterSvg } from "../components/lobster-pet-artwork.tsx";
@@ -31,7 +39,10 @@ export function AgentCreateDialog(props: {
   const [name, setName] = createSignal("");
   const [avatar, setAvatar] = createSignal<string | null>(null);
   const [uploadBusy, setUploadBusy] = createOptimistic(false);
-  const [avatarError, setAvatarError] = createSignal<string | null>(null);
+  const [uploadAttempt, setUploadAttempt] = createSignal<{ result: Promise<void> }>();
+  const uploadOutcome = createMemo(() => uploadAttempt()?.result.then(() => null), {
+    loadingValue: undefined,
+  });
   const initialPickerFooter: AvatarPickerFooterState = {
     mode: "bot",
     canGenerate: false,
@@ -83,22 +94,17 @@ export function AgentCreateDialog(props: {
     file: File,
   ): Generator<Promise<AvatarDataUrlResult>, void, AvatarDataUrlResult> {
     setUploadBusy(true);
-    setAvatarError(null);
-    try {
-      const result = yield fileToAvatarDataUrl(file, props.context.config);
-      if (!result.ok) {
-        throw new Error(
-          t(
-            result.reason === "too-detailed"
-              ? "agents.identity.imageTooDetailed"
-              : "agents.identity.imageUnusable",
-          ),
-        );
-      }
-      setAvatar(result.dataUrl);
-    } catch (error) {
-      setAvatarError(formatUiError(error));
+    const result = yield fileToAvatarDataUrl(file, props.context.config);
+    if (!result.ok) {
+      throw new Error(
+        t(
+          result.reason === "too-detailed"
+            ? "agents.identity.imageTooDetailed"
+            : "agents.identity.imageUnusable",
+        ),
+      );
     }
+    setAvatar(result.dataUrl);
   });
 
   let submitted = false;
@@ -172,23 +178,32 @@ export function AgentCreateDialog(props: {
             disabled={uploadBusy()}
             onSelect={(nextAvatar) => {
               setAvatar(nextAvatar);
-              setAvatarError(null);
+              setUploadAttempt(undefined);
             }}
-            onUpload={(file) => void uploadAvatar(file)}
+            onUpload={(file) => {
+              const result = uploadAvatar(file);
+              // The dialog can close before its error slot observes the result.
+              void result.catch(() => undefined);
+              setUploadAttempt({ result });
+            }}
             onGenerate={generateAvatar}
             footerGeneration
             onActionsReady={setPickerActions}
             onReset={() => {
               setAvatar(null);
-              setAvatarError(null);
+              setUploadAttempt(undefined);
             }}
           />
-          <Show when={!uploadBusy() && avatarError()}>
-            {(message) => (
-              <p class="agent-create-dialog__error" role="alert">
-                {message()}
-              </p>
-            )}
+          <Show when={!uploadBusy()}>
+            <Errored
+              fallback={(error) => (
+                <p class="agent-create-dialog__error" role="alert">
+                  {formatUiError(error())}
+                </p>
+              )}
+            >
+              {uploadOutcome()}
+            </Errored>
           </Show>
         </div>
         <openclaw-modal-actions class="agent-create-dialog__actions">

@@ -2632,6 +2632,19 @@ function writeFileAtomic(filePath, contents) {
   }
 }
 
+function loadOrInitializeReleaseChangelog(rootDir, version, writeLedger) {
+  const existing = findReleaseChangelog({ rootDir, version });
+  if (existing || !writeLedger) {
+    return existing ?? loadReleaseChangelog({ rootDir, version });
+  }
+  writeReleaseChangelog({
+    rootDir,
+    version,
+    section: `## ${version}\n\n### Highlights\n\n### Changes\n\n### Fixes\n`,
+  });
+  return loadReleaseChangelog({ rootDir, version });
+}
+
 function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
@@ -2687,7 +2700,11 @@ function main() {
     options.base = git(["merge-base", options.base, options.target]);
   }
   const rootDir = process.cwd();
-  const releaseSource = loadReleaseChangelog({ rootDir, version: options.version });
+  const releaseSource = loadOrInitializeReleaseChangelog(
+    rootDir,
+    options.version,
+    options.writeLedger,
+  );
   if (releaseSource.format !== "initial") {
     fail("docs-mirrored release notes must be verified by the docs-publication workflow");
   }

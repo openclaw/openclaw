@@ -106,25 +106,6 @@ const SLACK_SUBTEAM_MENTION_MARKER = "<!subteam^";
 const SLACK_CHANNEL_ACCESS_DOCS_URL =
   "https://docs.openclaw.ai/channels/slack#access-control-and-routing";
 
-function mergeSlackAssistantThreadContext(
-  primary: Omit<SlackAssistantThreadContext, "updatedAt"> | undefined,
-  fallback: Omit<SlackAssistantThreadContext, "updatedAt"> | undefined,
-): Omit<SlackAssistantThreadContext, "updatedAt"> | undefined {
-  if (!primary) {
-    return fallback;
-  }
-  if (!fallback) {
-    return primary;
-  }
-  return {
-    assistantChannelId: primary.assistantChannelId || fallback.assistantChannelId,
-    threadTs: primary.threadTs || fallback.threadTs,
-    channelId: primary.channelId ?? fallback.channelId,
-    teamId: primary.teamId ?? fallback.teamId,
-    enterpriseId: primary.enterpriseId !== undefined ? primary.enterpriseId : fallback.enterpriseId,
-  };
-}
-
 function hasSlackAssistantThreadMetadata(
   context: Omit<SlackAssistantThreadContext, "updatedAt"> | undefined,
 ): boolean {
@@ -223,22 +204,6 @@ type SlackInboundDropReason =
   | "empty-content"
   | "final-route-denied";
 
-type SlackMentionMetadata = {
-  mentionedUserIds: string[];
-  mentionedSubteamIds: string[];
-  hasAnyMention: boolean;
-  hasSubteamMention: boolean;
-};
-
-function collectSlackMentionMetadata(text: string): SlackMentionMetadata {
-  return {
-    mentionedUserIds: collectSlackMentionIds(text, SLACK_USER_MENTION_RE),
-    mentionedSubteamIds: collectSlackMentionIds(text, SLACK_SUBTEAM_MENTION_RE),
-    hasAnyMention: SLACK_ANY_MENTION_RE.test(text),
-    hasSubteamMention: text.includes(SLACK_SUBTEAM_MENTION_MARKER),
-  };
-}
-
 export async function prepareSlackMessage(params: {
   ctx: SlackMonitorContext;
   account: ResolvedSlackAccount;
@@ -314,7 +279,12 @@ export async function prepareSlackMessage(params: {
 
   const isBotMessage = Boolean(message.bot_id);
   const messageText = message.text ?? "";
-  const mentionMetadata = collectSlackMentionMetadata(messageText);
+  const mentionMetadata = {
+    mentionedUserIds: collectSlackMentionIds(messageText, SLACK_USER_MENTION_RE),
+    mentionedSubteamIds: collectSlackMentionIds(messageText, SLACK_SUBTEAM_MENTION_RE),
+    hasAnyMention: SLACK_ANY_MENTION_RE.test(messageText),
+    hasSubteamMention: messageText.includes(SLACK_SUBTEAM_MENTION_MARKER),
+  };
   const normalizedBotUserId = normalizeSlackId(ctx.botUserId);
   const explicitBotMention =
     opts.source === "app_mention" ||
@@ -492,10 +462,20 @@ export async function prepareSlackMessage(params: {
   const channelRequireMention = channelConfig?.requireMention ?? ctx.defaultRequireMention ?? true;
   const chatType = resolveSlackChatType(resolvedChannelType);
   const restoredAssistantThreadContext = await restoredAssistantThreadContextPromise;
-  const assistantThreadContext = mergeSlackAssistantThreadContext(
-    messageAssistantThreadContext,
-    cachedAssistantThreadContext ?? restoredAssistantThreadContext,
-  );
+  const primary = messageAssistantThreadContext;
+  const fallback = cachedAssistantThreadContext ?? restoredAssistantThreadContext;
+  const assistantThreadContext = !primary
+    ? fallback
+    : !fallback
+      ? primary
+      : {
+          assistantChannelId: primary.assistantChannelId || fallback.assistantChannelId,
+          threadTs: primary.threadTs || fallback.threadTs,
+          channelId: primary.channelId ?? fallback.channelId,
+          teamId: primary.teamId ?? fallback.teamId,
+          enterpriseId:
+            primary.enterpriseId !== undefined ? primary.enterpriseId : fallback.enterpriseId,
+        };
   const assistantThreadContextToCache =
     messageAssistantThreadContext || restoredAssistantThreadContext
       ? assistantThreadContext

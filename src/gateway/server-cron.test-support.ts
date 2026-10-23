@@ -122,14 +122,6 @@ vi.mock("../infra/system-events.js", async (importOriginal) => {
   };
 });
 
-// mock-isolation: Keep heartbeat enrollment inert while testing cron lifecycle wiring.
-vi.mock("../infra/heartbeat-runner.js", () => ({
-  // Heartbeat monitor convergence enumerates agents at cron start; keep it
-  // inert so these tests exercise cron wiring, not heartbeat enrollment.
-  resolveHeartbeatAgents: () => [],
-  resolveHeartbeatSchedulerSeed: () => "test-seed",
-}));
-
 vi.mock("../infra/restart-coordinator.js", async () => {
   const actual = await vi.importActual<typeof import("../infra/restart-coordinator.js")>(
     "../infra/restart-coordinator.js",

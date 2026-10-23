@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { createComponent, createMemo, createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { makeChatHost, requestCalls } from "./chat-host.test-support.ts";
@@ -18,7 +19,6 @@ import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
-import { listStoredChatOutboxes } from "./composer-persistence.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 
 useChatSendBrowserFixture();

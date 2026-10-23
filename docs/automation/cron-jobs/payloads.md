@@ -122,10 +122,20 @@ The stored tool cap, sandbox, and current tool denials still apply. Scheduled
 automation management remains self-scoped.
 
 This source is not inferred for existing jobs, guests, isolated/current targets,
-scripts, or another conversation. Executable edits discard it unless an
-authenticated creator schedules a fresh continuation; display-only edits retain
-it. Disabling, removing, or replacing the job or session retires the active
-occurrence. Re-enabling the job does not revive a revoked occurrence.
+scripts, or another conversation. An authenticated owner update can bind it again
+to the updated task. Executable edits without that authentication discard it.
+Display-only edits and disabling or re-enabling the job preserve its stored
+source; names, schedules, and other executable inputs remain bound. A fresh
+owner capture applies only to the definition captured, even if another manager
+edits the job before the update commits. Disabling or removing a job still
+cancels its active occurrence; re-enabling it does not revive that cancelled
+occurrence.
+
+A continuation waits for its current conversation turn to finish before reading
+the current job and checking its source at launch. Trigger-supplied context does
+not change that stored definition. Existing stored sources remain valid after an
+upgrade, including jobs the scheduler disabled. A rejected source is recorded as
+a terminal failure instead of repeatedly retrying the same authority error.
 
 While an `at` agent-turn continuation in an explicitly named conversation waits
 for a result, it can call `automations` with `action: "next_check"` and `in: "3m"`
@@ -205,6 +215,10 @@ not switch the job’s account or billing route. Automatic ownership remains dis
 from an explicit user profile pin. Token refresh within the same authorization is
 allowed; deleting, replacing, or revoking that authorization stops the job rather
 than falling back to another account. Model and route compatibility still apply.
+
+At creation, account capture follows scheduled-model selection, including an
+allowed `model@profile` value in per-agent or global `subagents.model`. A disallowed
+scheduled model falls back without retaining that model's account.
 
 To change an account deliberately, update the job with a model/profile selection,
 for example `--model "openai/gpt-4.1@work"`. This captures a fresh authorization.

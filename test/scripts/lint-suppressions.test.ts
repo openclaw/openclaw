@@ -156,6 +156,10 @@ describe("production lint suppressions", () => {
         "scripts/perf/catalog-polling-measure.ts|typescript/unbound-method|1",
         // The diagnostics probe restores Session.post and invokes it with its live receiver.
         "scripts/perf/diagnostic-profile-measure.ts|typescript/unbound-method|1",
+        // Node BroadcastChannel.postMessage has no target-origin parameter.
+        "scripts/perf/idle-gateway-measure-preload.mjs|unicorn/require-post-message-target-origin|1",
+        // The size-record probe forwards Map.set with the original map receiver.
+        "scripts/perf/model-prompt-stats-measure.ts|typescript/unbound-method|1",
         // The provider probe forwards native methods with their original receivers.
         "scripts/perf/provider-request-prepare-measure.ts|typescript/unbound-method|3",
         // The subscription probe forwards track with the original AsyncWorkScope receiver.
@@ -185,9 +189,10 @@ describe("production lint suppressions", () => {
         // Canonical entries must honor toJSON and omit non-JSON values exactly as persistence does.
         "src/config/sessions/transcript-json.ts|unicorn/prefer-structured-clone|1",
         "src/config/zod-schema.channel-messaging-common.ts|typescript/no-generated-empty-object-type|1",
+        // Command declarations compare their stored JSON shape, where undefined properties are omitted.
+        "src/cron/store/job-mutations.ts|unicorn/prefer-structured-clone|1",
         // Pinned Bun HTTP sockets omit Writable._writev; this probe selects native or one-copy batching.
         "src/gateway/server/ws-transport.ts|no-underscore-dangle|1",
-        "src/gateway/test-helpers.server.ts|typescript/no-unnecessary-type-parameters|1",
         "src/hooks/module-loader.ts|typescript/no-unnecessary-type-parameters|1",
         "src/infra/device-pairing-row-mapping.ts|typescript/no-unnecessary-type-parameters|1",
         "src/infra/json-file.ts|typescript-eslint/no-unnecessary-type-parameters|1",
@@ -241,6 +246,8 @@ describe("production lint suppressions", () => {
         "src/state/openclaw-agent-worker-store.test-support.ts|unicorn/require-post-message-target-origin|1",
         "src/test-utils/config-machine-state.ts|typescript/no-unnecessary-type-parameters|1",
         "src/test-utils/vitest-mock-fn.ts|typescript/no-explicit-any|1",
+        // The query observer invokes the captured native method with the intercepted database receiver.
+        "src/transcripts/library.query-budget.test-support.ts|typescript/unbound-method|1",
         "src/utils.ts|typescript/no-unnecessary-type-parameters|1",
         "src/utils/run-with-concurrency.ts|typescript/prefer-promise-reject-errors|1",
         // Native host bridges are not EventTargets or Window.postMessage endpoints.
@@ -255,6 +262,8 @@ describe("production lint suppressions", () => {
         // PanelRefreshStatus keeps its shared className prop across rendering callers.
         "ui/src/pages/custodian/custodian-surface.tsx|solid/no-react-specific-props|1",
         "ui/src/pages/logs/view.tsx|solid/no-react-specific-props|1",
+        // Session commands relay the owner's original error so the display boundary can format it.
+        "ui/src/pages/sessions/view.tsx|typescript/only-throw-error|1",
       ].filter((entry) => fs.existsSync(path.join(repoRoot, entry.split("|", 1)[0]!))),
     );
   });

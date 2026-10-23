@@ -146,7 +146,7 @@ describe("full release metadata checkouts", () => {
     expect(steps.indexOf(setup)).toBeLessThan(
       steps.indexOf(step("evidence_reuse", "Find reusable validation evidence")),
     );
-    expect(setup.env).toMatchObject({ REQUESTED_NODE_VERSION: "24.x" });
+    expect(setup.env).toMatchObject({ REQUESTED_NODE_VERSION: "24.22.1" });
     const setupPath = `${dirname(process.execPath)}${delimiter}${process.env.PATH ?? ""}`;
     const activeNodeVersion = execFileSync("node", ["-p", "process.versions.node"], {
       cwd: root,
@@ -482,6 +482,22 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:'main',event:
         name: "full-release-execution-plan-${{ github.run_id }}",
       });
     }
+  });
+
+  it("waits for installation quota before candidate dispatch", () => {
+    const candidateSteps = workflow.jobs.candidate_acquisition?.steps ?? [];
+    const quotaIndex = candidateSteps.findIndex(
+      (candidate) => candidate?.name === "Wait for candidate acquisition GitHub API quota",
+    );
+    const dispatchIndex = candidateSteps.findIndex(
+      (candidate) => candidate?.name === "Dispatch immutable validation candidate producer",
+    );
+    expect(quotaIndex).toBeGreaterThan(-1);
+    expect(dispatchIndex).toBeGreaterThan(quotaIndex);
+    expect(String(candidateSteps[quotaIndex]?.if)).toContain("github.run_attempt == 1");
+    expect(String(candidateSteps[quotaIndex]?.run)).toContain(
+      "wait-for-github-api-quota.mjs --minimum-remaining 6 --max-wait-seconds 18000",
+    );
   });
 
   it.each([

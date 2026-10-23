@@ -250,7 +250,6 @@ export function MobileWorkspaceContents(props: {
       onOpenFileInsideFiles={(file, origin) => props.workspace.onOpenFile(file, origin)}
       onOpenArtifactInsideFiles={(id) => props.workspace.onOpenArtifact(id)}
       onToggleGroup={(kind) => props.workspace.onToggleMobileGroup?.(kind)}
-      onSearchFocus={() => props.workspace.onSearchFocus?.()}
       onScrollElement={onScrollElement}
       onScrollPortRef={props.workspace.onScrollPortRef}
       onScroll={onScroll}

@@ -358,6 +358,46 @@ ${changeLock}
 
   // Only an actual accelerated host can prove this cell; a skip is not APFS proof.
   it.skipIf(process.platform !== "darwin")(
+    "removes a failed template clone after losing its PR registration, then retries",
+    () => {
+      const f = coldFixture(false);
+      const fault = join(f.root, "lose-registration.mjs");
+      const receipt = join(f.root, "lost-registration");
+      writeFileSync(
+        fault,
+        `import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+const marker = ${JSON.stringify(join(f.worktree, ".git"))};
+const admin = ${JSON.stringify(join(f.canonical, ".git/worktrees/pr-42"))};
+if (process.argv.includes('.git/worktrees/pr-42') && existsSync(marker) &&
+    !readFileSync(marker, 'utf8').includes('/pr-42')) {
+  writeFileSync(${JSON.stringify(receipt)}, readFileSync(marker));
+  rmSync(admin, { recursive: true, force: true });
+}
+`,
+      );
+      const gitShim = join(f.root, "bin/git");
+      writeFileSync(
+        gitShim,
+        readFileSync(gitShim, "utf8").replace(
+          "#!/bin/sh\n",
+          `#!/bin/sh\ncase "$*" in *'.git/worktrees/pr-42 rev-parse HEAD --symbolic-full-name HEAD'*) node '${fault}' "$@" || exit $? ;; esac\n`,
+        ),
+      );
+      const failed = f.run("review-init");
+      expect(failed.status).not.toBe(0);
+      expect(readFileSync(receipt, "utf8")).toMatch(/worktrees\/[0-9a-f-]{36}\n$/);
+      expect(failed.stderr).toContain("not a git repository");
+      expect(existsSync(f.worktree)).toBe(false);
+      expect(f.git(f.canonical, "rev-parse", "refs/heads/temp/pr-42")).toBe(f.main);
+      // The same PR can provision again, without a replacement PR or manual repair.
+      writeFileSync(fault, "");
+      const retried = f.run("review-init");
+      expect(retried.status, retried.stderr).toBe(0);
+      expectSeed(f);
+    },
+  );
+
+  it.skipIf(process.platform !== "darwin")(
     "materializes full cold/warm PR siblings, then preserves native sparse transitions",
     async () => {
       const f = coldFixture(false);

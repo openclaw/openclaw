@@ -431,7 +431,6 @@ src/auto-reply/commands-registry.data.ts
 src/auto-reply/commands-registry.shared.ts
 src/auto-reply/group-activation.ts
 src/auto-reply/heartbeat-filter.ts
-src/auto-reply/heartbeat-tool-response.ts
 src/auto-reply/heartbeat.ts
 src/auto-reply/reply/commands-slash-parse.ts
 src/auto-reply/reply/delivery-hints.ts
@@ -567,7 +566,6 @@ src/config/config-write-guard.ts
 src/config/config.ts
 src/config/defaults.ts
 src/config/deferred-plugin-migration-config.ts
-src/config/env-preserve-authored.ts
 src/config/env-preserve.ts
 src/config/env-substitution.ts
 src/config/env-vars.ts
@@ -590,6 +588,7 @@ src/config/io.health-state.ts
 src/config/io.invalid-config.ts
 src/config/io.load.ts
 src/config/io.meta.ts
+src/config/io.observe-promotion.ts
 src/config/io.observe-recovery-effects.ts
 src/config/io.observe-recovery.ts
 src/config/io.observe-state.ts
@@ -640,7 +639,6 @@ src/config/mutate.snapshot.ts
 src/config/mutate.ts
 src/config/mutation-conflict.ts
 src/config/normalize-exec-safe-bin.ts
-src/config/normalize-paths.ts
 src/config/official-external-channel-secret-schema.ts
 src/config/patch-replace-paths.ts
 src/config/paths.ts
@@ -944,7 +942,6 @@ src/infra/directory-durability.ts
 src/infra/directory-watch-host.ts
 src/infra/disk-space.ts
 src/infra/dispatch-wrapper-resolution.ts
-src/infra/device-identity-process-cache.ts
 src/infra/device-identity-store.ts
 src/infra/device-identity.ts
 src/infra/dotenv-global-core.ts
@@ -961,8 +958,6 @@ src/infra/exec-allowlist-pattern.ts
 src/infra/exec-approval-action.types.ts
 src/infra/exec-approvals-core.ts
 src/infra/exec-command-resolution.ts
-src/infra/exec-safe-bin-policy-profiles.ts
-src/infra/exec-safe-bin-policy-validator.ts
 src/infra/exec-safe-bin-policy.ts
 src/infra/exec-safe-bin-semantics.ts
 src/infra/exec-safe-bin-trust.ts
@@ -1099,6 +1094,7 @@ src/infra/restart-stale-pids.ts
 src/infra/retry-attempt-errors.ts
 src/infra/retry.ts
 src/infra/root-walk.ts
+src/infra/runtime-dependency-ownership.ts
 src/infra/runtime-process-entrypoints.ts
 src/infra/runtime-process-manifest.ts
 src/infra/runtime-process-url.ts
@@ -1317,7 +1313,6 @@ src/infra/worker-native-handle.ts
 src/infra/worker-native-lifecycle.ts
 src/infra/worker-native-lifecycle.worker.ts
 src/infra/worker-native-port.ts
-src/infra/worker-native-resource.ts
 src/infra/worker-native-task-port.ts
 src/infra/worker-pool-sizing.ts
 src/infra/worker-request-diagnostics.ts
@@ -1559,6 +1554,7 @@ src/plugins/provider-thinking.ts
 src/plugins/registry-runtime-binding.ts
 src/plugins/plugin-instance-error.ts
 src/plugins/plugin-instance-invocation.ts
+src/plugins/plugin-bundled-reload.ts
 src/plugins/plugin-instance-module-loader.ts
 src/plugins/plugin-state-operation-module-loader.ts
 src/plugins/plugin-state-operation-source.ts
@@ -1691,7 +1687,6 @@ src/process/spawn-broker/child-diagnostics.ts
 src/process/spawn-broker/child.ts
 src/process/spawn-broker/cleanup.ts
 src/process/spawn-broker/context.ts
-src/process/spawn-broker/execa-client.ts
 src/process/spawn-broker/execa-protocol.ts
 src/process/spawn-broker/file-reads.ts
 src/process/spawn-broker/host.ts
@@ -1799,6 +1794,7 @@ src/shared/listeners.ts
 src/shared/model-context-message.ts
 src/shared/model-key.ts
 src/shared/node-list-parse.ts
+src/shared/oauth-refresh-outcome.ts
 src/shared/path-array-index.ts
 src/shared/permit-pool.ts
 src/shared/pid-alive.ts
@@ -1904,7 +1900,6 @@ src/state/openclaw-agent-execution.ts
 src/state/openclaw-agent-goal-operations-schema.ts
 src/state/openclaw-agent-json-predicate-schema.ts
 src/state/openclaw-agent-memory-revision-migration.ts
-src/state/openclaw-agent-message-tool-outcome-schema.ts
 src/state/openclaw-agent-outbox-sequence-migration.ts
 src/state/openclaw-agent-participants-migration.ts
 src/state/openclaw-agent-pending-inputs-schema.ts
@@ -1983,6 +1978,7 @@ src/state/openclaw-state-db-schema-runtime.ts
 src/state/openclaw-state-db-schema-v12-foldin.ts
 src/state/openclaw-state-db-schema-v13-widerow.ts
 src/state/openclaw-state-db-schema-v21-columns.ts
+src/state/openclaw-state-db-schema-v31-workspace-manifests.ts
 src/state/openclaw-state-db-schema-v22-columns.ts
 src/state/openclaw-state-db-schema-v24-indexes.ts
 src/state/openclaw-state-db-schema-v26-layout.ts
@@ -2614,7 +2610,6 @@ src/shared/channel-read-authority.ts
 src/shared/tool-approval-reviews.ts
 src/agents/agent-lifecycle-parent-state.ts
 src/agents/agent-run-terminal-error.ts
-src/agents/agent-run-terminal-outcome-merge.ts
 src/agents/agent-run-terminal-outcome.ts
 src/agents/main-session-recovery/main-session-recovery-lifecycle.ts
 src/agents/run-termination.ts
@@ -2665,3 +2660,14 @@ src/plugins/service-scheduler-binding.ts
 src/plugins/setup-registry.ts
 src/shared/map-nested-strings.ts
 src/status/utility-model-warnings.ts
+src/infra/sqlite-integrity.worker.ts
+src/infra/sqlite-readonly-inspection.ts
+src/infra/sqlite-readonly-native-resource.ts
+src/infra/sqlite-snapshot-staging-runtime.ts
+src/infra/sqlite-snapshot-staging.worker.ts
+src/process/spawn-broker/execa-worker.ts
+src/process/spawn-broker/resource-server.ts
+src/process/spawn-broker/worker-sender.ts
+src/process/spawn-broker/worker.ts
+src/state/openclaw-agent-schema-inspection.worker.ts
+src/state/openclaw-state-ownership.worker.ts

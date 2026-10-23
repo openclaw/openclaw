@@ -22,7 +22,7 @@ import { redactToolPayloadText } from "../logging/redact.js";
 import { withChildProcessOperation } from "../process/spawn-diagnostics.js";
 import type { SpawnInitiation } from "../process/spawn-initiation.js";
 import { getProcessSupervisor, type ManagedRun } from "../process/supervisor/index.js";
-import type { RunExit, SpawnInput, TerminationReason } from "../process/supervisor/types.js";
+import type { RunExit, SpawnInput } from "../process/supervisor/types.js";
 import type {
   SecretEgressProcessGrant,
   SecretEgressSentinelBinding,
@@ -198,61 +198,6 @@ function joinExecFailureOutput(aggregated: string, reason: string) {
   return aggregated ? `${aggregated}\n\n${reason}` : reason;
 }
 
-function classifyExecFailureKind(params: {
-  exitReason: TerminationReason;
-  exitCode: number;
-  isShellFailure: boolean;
-  exitSignal: NodeJS.Signals | number | null;
-}): ExecExitFailureKind {
-  if (params.isShellFailure) {
-    return params.exitCode === 127 ? "shell-command-not-found" : "shell-not-executable";
-  }
-  if (params.exitReason === "overall-timeout") {
-    return "overall-timeout";
-  }
-  if (params.exitReason === "no-output-timeout") {
-    return "no-output-timeout";
-  }
-  if (params.exitSignal != null) {
-    return "signal";
-  }
-  return "aborted";
-}
-
-function formatExecFailureReason(params: {
-  failureKind: ExecExitFailureKind;
-  exitSignal: NodeJS.Signals | number | null;
-  timeoutSec: number | null | undefined;
-  processContinuationAvailable: boolean;
-}): string {
-  switch (params.failureKind) {
-    case "shell-command-not-found":
-      return "Command not found";
-    case "shell-not-executable":
-      return "Command not executable (permission denied)";
-    case "overall-timeout": {
-      const timeoutText =
-        typeof params.timeoutSec === "number" && params.timeoutSec > 0
-          ? `Command timed out after ${params.timeoutSec} seconds.`
-          : "Command timed out.";
-      const retryGuidance = appendExecTimeoutRetryGuidance(timeoutText, params.failureKind);
-      return params.processContinuationAvailable
-        ? `${retryGuidance}\n\nIf it should keep running, start it with exec background=true or yieldMs so OpenClaw can register a pollable process session. Do not rely on shell backgrounding with a trailing &.`
-        : retryGuidance;
-    }
-    case "no-output-timeout":
-      return appendExecTimeoutRetryGuidance(
-        "Command timed out waiting for output.",
-        params.failureKind,
-      );
-    case "signal":
-      return `Command aborted by signal ${params.exitSignal}`;
-    case "aborted":
-      return "Command aborted before exit code was captured";
-  }
-  throw new Error("Unsupported exec failure kind");
-}
-
 function buildExecExitOutcome(params: {
   exit: RunExit;
   aggregated: string;
@@ -278,18 +223,48 @@ function buildExecExitOutcome(params: {
       noOutputTimedOut: params.exit.noOutputTimedOut,
     };
   }
-  const failureKind = classifyExecFailureKind({
-    exitReason: params.exit.reason,
-    exitCode,
-    isShellFailure,
-    exitSignal: params.exit.exitSignal,
-  });
-  const reason = formatExecFailureReason({
-    failureKind,
-    exitSignal: params.exit.exitSignal,
-    timeoutSec: params.timeoutSec,
-    processContinuationAvailable: params.processContinuationAvailable,
-  });
+  const failureKind: ExecExitFailureKind = isShellFailure
+    ? exitCode === 127
+      ? "shell-command-not-found"
+      : "shell-not-executable"
+    : params.exit.reason === "overall-timeout"
+      ? "overall-timeout"
+      : params.exit.reason === "no-output-timeout"
+        ? "no-output-timeout"
+        : params.exit.exitSignal != null
+          ? "signal"
+          : "aborted";
+  let reason: string;
+  switch (failureKind) {
+    case "shell-command-not-found":
+      reason = "Command not found";
+      break;
+    case "shell-not-executable":
+      reason = "Command not executable (permission denied)";
+      break;
+    case "overall-timeout": {
+      const timeoutText =
+        typeof params.timeoutSec === "number" && params.timeoutSec > 0
+          ? `Command timed out after ${params.timeoutSec} seconds.`
+          : "Command timed out.";
+      const retryGuidance = appendExecTimeoutRetryGuidance(timeoutText, failureKind);
+      reason = params.processContinuationAvailable
+        ? `${retryGuidance}\n\nIf it should keep running, start it with exec background=true or yieldMs so OpenClaw can register a pollable process session. Do not rely on shell backgrounding with a trailing &.`
+        : retryGuidance;
+      break;
+    }
+    case "no-output-timeout":
+      reason = appendExecTimeoutRetryGuidance("Command timed out waiting for output.", failureKind);
+      break;
+    case "signal":
+      reason = `Command aborted by signal ${params.exit.exitSignal}`;
+      break;
+    case "aborted":
+      reason = "Command aborted before exit code was captured";
+      break;
+    default:
+      throw new Error("Unsupported exec failure kind");
+  }
   return {
     status: "failed",
     exitCode: params.exit.exitCode,
@@ -361,8 +336,6 @@ export async function runExecProcess({
   /** Start-time routing policy for detached exec system events. */
   eventRouting?: EventSessionRoutingPolicy;
   notifyDeliveryContext?: DeliveryContext;
-  /** The command was started by a conversation turn, not heartbeat or automation work. */
-  notifyFromConversationTurn?: boolean;
   timeoutSec: number | null;
   /** Whether exec may return a supervised session for later continuation. */
   processContinuationAvailable?: boolean;
@@ -408,7 +381,6 @@ export async function runExecProcess({
       agentId: opts.agentId,
       eventRouting: opts.eventRouting,
       notifyDeliveryContext: normalizeDeliveryContext(opts.notifyDeliveryContext),
-      notifyFromConversationTurn: opts.notifyFromConversationTurn === true,
       notifyOnExit: opts.notifyOnExit,
       notifyOnExitEmptySuccess: opts.notifyOnExitEmptySuccess === true,
       exitNotified: false,

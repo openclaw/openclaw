@@ -46,9 +46,9 @@ import { createReplyDispatcher } from "./reply-dispatcher.js";
 import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
 import {
   REPLY_OPERATION_RUN_STATE,
-  resolveReplyOperationAgentTurn,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
+import { resolveReplyOperationAgentTurn } from "./reply-operation-run-state.test-support.js";
 
 const freshCfg = { runtimeFresh: true };
 const sentinelError = new Error("stop-after-preflight");

@@ -80,9 +80,8 @@ function resolveGatewayInstallBindMode(cfg: OpenClawConfig): GatewayBindMode {
 export function mergeInstallInvocationEnv(params: {
   env: NodeJS.ProcessEnv;
   existingServiceEnv?: Record<string, string>;
-  platform?: NodeJS.Platform;
 }): NodeJS.ProcessEnv {
-  const platform = params.platform ?? process.platform;
+  const platform = process.platform;
   const normalizeInstallEnvKey = (key: string) => (platform === "win32" ? key.toUpperCase() : key);
   const currentEnv: NodeJS.ProcessEnv = {};
   for (const [rawKey, rawValue] of Object.entries(
@@ -154,7 +153,10 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   const service = resolveGatewayService();
   let existingServiceCommand: GatewayServiceCommandConfig | null;
   try {
-    existingServiceCommand = await service.readCommand(process.env, { requireEffective: true });
+    existingServiceCommand = await service.readCommand(process.env, {
+      requireEffective: true,
+      allowMissingDefinition: true,
+    });
   } catch (error) {
     const message = sanitizeServiceInspectionError(error).message;
     // No installer writes precede this read; the updater can retain the unchanged definition.
@@ -361,11 +363,8 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     runtimePath = recordedRuntime.path;
   }
   if (recordedRuntime?.runtime === "node") {
-    if (recordedRuntime.status !== "probe-failed") {
-      const diagnostic = recordedRuntime.capabilityError ?? recordedRuntime.note;
-      if (diagnostic) {
-        warn(diagnostic);
-      }
+    if (recordedRuntime.status !== "probe-failed" && recordedRuntime.capabilityError) {
+      warn(recordedRuntime.capabilityError);
     }
     const missingRuntime =
       recordedRuntime.status === "probe-failed" &&
@@ -429,7 +428,9 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       try {
         const currentCommand = resolveManagedGatewayServiceCommand(existingServiceCommand);
         if (!currentCommand) {
-          return undefined;
+          return existingServiceCommand
+            ? undefined
+            : "Gateway service definition is missing; refreshing the install.";
         }
         if (pinChanged) {
           return "Gateway runtime selection changed; refreshing the install.";

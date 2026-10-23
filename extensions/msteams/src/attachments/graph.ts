@@ -138,8 +138,6 @@ export async function downloadMSTeamsGraphMedia(params: {
   allowHosts?: string[];
   authAllowHosts?: string[];
   deadline?: MSTeamsRequestDeadline;
-  /** When true, embeds original filename in stored path for later extraction. */
-  preserveFilenames?: boolean;
   /** Optional logger used to surface Graph/SharePoint fetch errors. */
   logger?: MSTeamsAttachmentDownloadLogger;
 }): Promise<MSTeamsGraphMediaResult> {
@@ -318,7 +316,6 @@ export async function downloadMSTeamsGraphMedia(params: {
       allowHosts: policy.allowHosts,
       authAllowHosts: policy.authAllowHosts,
       deadline: params.deadline,
-      preserveFilenames: params.preserveFilenames,
       logger: params.logger,
     });
   } catch (err) {

@@ -26,11 +26,6 @@ function deliveryAttempt(
 }
 
 type Observation = "pending" | "observation-failed" | "missing" | "delivered";
-const heartbeatResponse = {
-  outcome: "done" as const,
-  notify: true,
-  summary: "Current heartbeat report.",
-};
 const committedReply = { text: "Earlier committed reply.", sourceReplyFinal: true };
 const committedPayload = expect.objectContaining({ text: "Earlier committed reply." });
 const textAssistant = (text: string) =>
@@ -48,7 +43,7 @@ function observedOutputs<T extends string>(outputs: readonly T[]) {
 function deliveryInput(
   attempt: EmbeddedRunAttemptWithReceiptEvidence,
   observation: Observation,
-  trigger: "user" | "cron" | "heartbeat" = "cron",
+  trigger: "user" | "cron" = "cron",
   mode: "automatic" | "message_tool_only" = "automatic",
 ) {
   const input = createSettledFinalizationTestInput(
@@ -97,33 +92,6 @@ async function resolveCompletion(
 }
 
 describe("terminal preparation delivery custody", () => {
-  it.each(observedOutputs(["response", "failed-response", "failure-only"] as const))(
-    "retains observed $observation custody for heartbeat $output",
-    async ({ output, observation }) => {
-      const attempt = deliveryAttempt(buildEmbeddedRunnerAssistant({ content: [] }));
-      if (output !== "failure-only") {
-        attempt.heartbeatToolResponse = { ...heartbeatResponse };
-        attempt.messagingToolSourceReplyPayloads = [{ ...committedReply }];
-        attempt.answerSegments = precedingAnswer();
-      }
-      if (output !== "response") {
-        attempt.lastToolError = { toolName: "write", error: "write failed", mutatingAction: true };
-      }
-      const input = deliveryInput(attempt, observation, "heartbeat");
-      const settled = await prepareTerminalWithSettledTurnFinalization(input);
-      const result = await resolveCompletion(input, settled);
-      const payloads = result.payloads ?? [];
-      if (observation === "missing") {
-        const expected =
-          output === "failure-only" ? { isError: true } : { text: "Current heartbeat report." };
-        expect(payloads).toContainEqual(expect.objectContaining(expected));
-      } else {
-        expect(payloads).toEqual(output === "failure-only" ? [] : [committedPayload]);
-        expect(result.sourceReplyDeliveryState).toBe("pending");
-      }
-    },
-  );
-
   it.each(observedOutputs(["text", "error", "media", "timeout"] as const))(
     "carries $observation custody through $output preparation and terminal resolution",
     async ({ output, observation }) => {
@@ -235,24 +203,20 @@ describe("terminal preparation delivery custody", () => {
     });
   });
 
-  it.each([false, true])(
-    "preserves a preceding input's answer while current delivery remains pending (heartbeat=%s)",
-    async (heartbeat) => {
-      const earlier = textAssistant("Earlier answer.");
-      const current = textAssistant("Current answer.");
-      const attempt = deliveryAttempt(current, {
-        assistantTexts: ["Earlier answer.", "Current answer."],
-        ...(heartbeat ? { heartbeatToolResponse: heartbeatResponse } : {}),
-      });
-      attempt.answerSegments = precedingAnswer(earlier, "missing", 1);
-      const input = deliveryInput(attempt, "pending", "cron");
-      const settled = await prepareTerminalWithSettledTurnFinalization(input);
-      expect(settled.prepared.payloadsWithToolMedia).toEqual([
-        expect.objectContaining({ text: "Earlier answer." }),
-      ]);
-      expect(getReplyPayloadMetadata(settled.prepared.payloadsWithToolMedia![0]!)).toMatchObject({
-        precedingInputAnswer: true,
-      });
-    },
-  );
+  it("preserves a preceding input's answer while current delivery remains pending", async () => {
+    const earlier = textAssistant("Earlier answer.");
+    const current = textAssistant("Current answer.");
+    const attempt = deliveryAttempt(current, {
+      assistantTexts: ["Earlier answer.", "Current answer."],
+    });
+    attempt.answerSegments = precedingAnswer(earlier, "missing", 1);
+    const input = deliveryInput(attempt, "pending", "cron");
+    const settled = await prepareTerminalWithSettledTurnFinalization(input);
+    expect(settled.prepared.payloadsWithToolMedia).toEqual([
+      expect.objectContaining({ text: "Earlier answer." }),
+    ]);
+    expect(getReplyPayloadMetadata(settled.prepared.payloadsWithToolMedia![0]!)).toMatchObject({
+      precedingInputAnswer: true,
+    });
+  });
 });

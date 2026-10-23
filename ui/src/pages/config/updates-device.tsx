@@ -60,7 +60,9 @@ export function DeviceUpdates(props: {
     requestedValue = value;
     const capability = props.capability;
     const pending = new Promise<void>((resolve, reject) => {
-      capability.set("updates.automatic", value, (error) => (error ? reject(error) : resolve()));
+      void capability.set("updates.automatic", value, (error) =>
+        error ? reject(error) : resolve(),
+      );
     });
     const completion = Promise.race([pending, view.retired]);
     void setCompleted(() => completion);
@@ -124,7 +126,7 @@ export function DeviceUpdates(props: {
             title={t("updates.device.check")}
             control={
               <button
-                class="btn btn--sm"
+                class="btn primary"
                 type="button"
                 onClick={() => props.capability.checkForUpdates()}
               >

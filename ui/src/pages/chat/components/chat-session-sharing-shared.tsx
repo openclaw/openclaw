@@ -1,4 +1,13 @@
-import { Show } from "solid-js";
+import type { JSX } from "@solidjs/web";
+import {
+  action,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  Errored,
+  onSettled,
+  Show,
+} from "solid-js";
 import { SESSION_VISIBILITY_VALUES } from "../../../../../packages/gateway-protocol/src/schema/sessions-sharing-constants.js";
 import type {
   GatewaySessionRow,
@@ -9,7 +18,9 @@ import type { PersonActivityRouting } from "../../../components/person-activity-
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerSessionPeopleEnglish } from "../../../i18n/locales/en-session-people.ts";
+import { formatUiError } from "../../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -21,13 +32,15 @@ export type ChatSessionSharingOutcome =
   | { status: "failed"; error: string };
 
 // Legacy parents may still discard the result; only confirmed success closes a surface.
-export type ChatSessionSharingAction =
+type ChatSessionSharingAction =
   | void
   | ChatSessionSharingOutcome
   | Promise<void | ChatSessionSharingOutcome>;
 
 export type ChatSessionSharingState = {
   loading: boolean;
+  /** Completes after the pane publishes or retires its admitted membership read. */
+  read?: Promise<void>;
   result?: SessionMembersListEvidenceResult;
   publicUrl?: string;
   error?: string;
@@ -35,6 +48,7 @@ export type ChatSessionSharingState = {
 
 export type ChatSessionSharingProps = {
   session: GatewaySessionRow | undefined;
+  operationSignal?: AbortSignal;
   state: ChatSessionSharingState | undefined;
   allowedVisibilities?: readonly SessionVisibility[];
   membersAvailable?: boolean;
@@ -71,7 +85,7 @@ export const VISIBILITY_LABEL_KEYS: Record<SessionVisibility, string> = {
   draft: "chat.sessionSharing.draft",
 };
 
-export function selectChatSessionSharingItem(
+function selectChatSessionSharingItem(
   props: ChatSessionSharingProps,
   value: string | undefined,
 ): ChatSessionSharingAction {
@@ -120,6 +134,133 @@ export function selectChatSessionSharingItem(
   if (!disabledReason) {
     return props.onMemberChange(identityId, member);
   }
+}
+
+/** Presents admitted work; the pane still owns reads, writes, and their outcomes. */
+export function createChatSessionSharingPresentation(
+  source: () => ChatSessionSharingProps | null | undefined,
+) {
+  const scope = createMemo(
+    () => {
+      const props = source();
+      return {
+        key: props?.session?.key,
+        sessionId: props?.session?.sessionId,
+        signal: props?.operationSignal,
+      };
+    },
+    {
+      equals: (previous, next) =>
+        previous.key === next.key &&
+        previous.sessionId === next.sessionId &&
+        previous.signal === next.signal,
+    },
+  );
+  const read = createMemo(() => source()?.state?.read);
+  const activity = createMemo(() => {
+    const target = scope();
+    const [saving, setSaving] = createOptimistic(false);
+    return { target, saving, setSaving };
+  });
+  const [completion, setCompletion] = createSignal<Promise<void> | undefined>(() => {
+    scope();
+    return undefined;
+  });
+  const disposed = Promise.withResolvers<void>();
+  onSettled(() => () => disposed.resolve());
+
+  const present = action(function* (
+    view: ReturnType<typeof activity>,
+    pending: Promise<void | ChatSessionSharingOutcome>,
+  ): Generator<
+    Promise<void | ChatSessionSharingOutcome>,
+    void | ChatSessionSharingOutcome,
+    void | ChatSessionSharingOutcome
+  > {
+    const { target } = view;
+    const retired = Promise.withResolvers<void>();
+    const stop = target.signal
+      ? listen(target.signal, "abort", () => retired.resolve(), { once: true })
+      : undefined;
+    if (target.signal?.aborted) {
+      retired.resolve();
+    } else if (scope() === target) {
+      view.setSaving(true);
+    }
+    try {
+      return yield Promise.race([pending, retired.promise, disposed.promise]);
+    } finally {
+      stop?.();
+    }
+  });
+
+  async function select(value: string) {
+    const props = source();
+    if (!props) {
+      return;
+    }
+    const view = activity();
+    const { target } = view;
+    const pending = (async () => {
+      // Admission and its synchronous publication precede the presentation transaction.
+      const selected = selectChatSessionSharingItem(props, value);
+      if (!(selected instanceof Promise)) {
+        return selected;
+      }
+      await Promise.resolve();
+      return await present(view, selected);
+    })().catch((cause: unknown) => {
+      if (!target.signal?.aborted && scope() === target) {
+        throw cause;
+      }
+    });
+    const completed = pending.then(() => undefined);
+    void setCompletion(completed);
+    // The view may retire before its error slot observes this operation.
+    void completed.catch(() => undefined);
+    return pending.catch(
+      (cause: unknown) =>
+        ({
+          status: "failed",
+          error: formatUiError(cause),
+        }) satisfies ChatSessionSharingOutcome,
+    );
+  }
+
+  return { read, scope, select, completion, busy: () => activity().saving() };
+}
+
+export function ChatSessionSharingError(props: {
+  error?: string;
+  completion?: Promise<void>;
+  pending?: boolean;
+  children: (message: string) => JSX.Element;
+}) {
+  // Keep the promise inside a receipt: a bare Promise used as Show's condition is awaited.
+  const attempt = createMemo(() => props.completion && { result: props.completion });
+  return (
+    <Show
+      when={props.error}
+      fallback={
+        <Show when={!props.pending}>
+          <Show when={attempt()} keyed>
+            {(receipt) => {
+              const outcome = createMemo(() => receipt.result.then(() => null), {
+                loadingValue: null,
+              });
+              return (
+                <Errored fallback={(error) => <>{props.children(formatUiError(error()))}</>}>
+                  {outcome()}
+                </Errored>
+              );
+            }}
+          </Show>
+        </Show>
+      }
+    >
+      {(error) => <>{props.children(error())}</>}
+    </Show>
+  );
 }
 
 export function canManageChatSessionSharing(

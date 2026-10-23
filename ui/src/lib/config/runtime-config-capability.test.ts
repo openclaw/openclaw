@@ -18,6 +18,32 @@ import {
 import { createRuntimeConfigCapability } from "./runtime-config-capability.ts";
 
 describe("runtime config capability", () => {
+  it("publishes schema completion and retires a held schema read on disconnect", async () => {
+    const first = deferred<unknown>();
+    const second = deferred<unknown>();
+    let attempts = 0;
+    const { runtimeConfig, state, client, publish } = await loadHarness(
+      mockRequest({
+        "config.schema": () => (++attempts === 1 ? first.promise : second.promise),
+      }),
+    );
+    const initialLoad = runtimeConfig.ensureSchemaLoaded();
+    const initial = runtimeConfig.schemaRead!;
+    first.reject(new Error("Schema unavailable"));
+    await initialLoad;
+    expect(await initial).toEqual({ ok: false, error: "Schema unavailable" });
+
+    const retry = runtimeConfig.ensureSchemaLoaded();
+    const pending = runtimeConfig.schemaRead!;
+    expect(pending).not.toBe(initial);
+    publish(false, client);
+    expect(runtimeConfig.schemaRead).toBeNull();
+    second.resolve({ schema: { type: "object" }, uiHints: {}, version: "retired" });
+    await retry;
+    expect(state.configSchema).toBeNull();
+    runtimeConfig.dispose();
+  });
+
   it("does not load configuration for session-only connections, including reconnect refresh", async () => {
     const request = vi.fn(async () => ({ config: {}, hash: "ready", valid: true, issues: [] }));
     let auth: GatewayHelloOk["auth"] = { role: "operator", scopes: ["operator.sessions.read"] };

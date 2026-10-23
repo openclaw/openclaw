@@ -145,6 +145,28 @@ describe("legacy Web Push Doctor migration", () => {
     }
   }
 
+  it.each(["subscriptions", "vapid"] as const)(
+    "retains malformed UTF-8 in %s without importing replacement characters",
+    async (source) => {
+      const paths = await writeLegacyState({
+        subscriptions: [subscription({ keys: { p256dh: "utf8-marker", auth: "auth" } })],
+        vapid: vapidKeys({ publicKey: "utf8-marker" }),
+      });
+      const sourcePath = source === "subscriptions" ? paths.subscriptionsPath : paths.vapidKeysPath;
+      const bytes = await fsp.readFile(sourcePath);
+      bytes[bytes.indexOf("utf8-marker")] = 0xff;
+      await fsp.writeFile(sourcePath, bytes);
+      const result = await migrate();
+      expect(result.changes).toEqual([]);
+      expect(result.warningDisposition).toBe("recoverable");
+      expect(result.warnings.join("\n")).toContain("must be valid UTF-8");
+      expect(await fsp.readFile(sourcePath)).toEqual(bytes);
+      expectFiles(true, paths.subscriptionsPath, paths.vapidKeysPath);
+      expect(await listWebPushSubscriptions()).toEqual([]);
+      expect(await readPersistedVapidKeyPair()).toBeNull();
+    },
+  );
+
   it("detects original and interrupted-claim files only for explicit Doctor repair", async () => {
     const { subscriptionsPath } = await writeSubscriptions([]);
     expect(detectLegacyWebPush({ stateDir }).hasLegacy).toBe(false);

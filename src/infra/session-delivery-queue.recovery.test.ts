@@ -10,15 +10,15 @@ vi.mock("../utils/sleep.js", () => ({ sleep: sleepMock }));
 
 import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import {
-  drainPendingSessionDelivery,
+  drainPendingSessionDelivery as drainEntry,
   recoverPendingSessionDeliveries,
 } from "./session-delivery-queue-recovery.js";
 import {
-  deferSessionDelivery,
+  deferSessionDelivery as defer,
   enqueueSessionDelivery,
-  failSessionDelivery,
-  loadPendingSessionDeliveries,
-  markSessionDeliveryAttemptStarted,
+  failSessionDelivery as fail,
+  loadPendingSessionDeliveries as listPending,
+  markSessionDeliveryAttemptStarted as markStarted,
 } from "./session-delivery-queue-storage.js";
 import {
   SessionDeliveryDeadLetteredError,
@@ -27,90 +27,66 @@ import {
   SessionDeliverySafeRetryError,
 } from "./session-delivery-queue.records.js";
 
-type QueueContext = Parameters<typeof enqueueSessionDelivery>[1];
+type QueueContext = NonNullable<Parameters<typeof enqueueSessionDelivery>[1]>;
 type AgentTurn = Extract<Parameters<typeof enqueueSessionDelivery>[0], { kind: "agentTurn" }>;
-const enqueueTurn = (
-  queueContext: QueueContext,
-  messageId: string,
-  overrides: Partial<AgentTurn> = {},
-) =>
-  enqueueSessionDelivery(
-    {
-      kind: "agentTurn",
-      sessionKey: "agent:main:main",
-      message: "generated image ready",
-      messageId,
-      ...overrides,
+type RecoveryOptions = Omit<
+  Parameters<typeof recoverPendingSessionDeliveries>[0],
+  "queueContext" | "log"
+> &
+  Partial<Pick<Parameters<typeof recoverPendingSessionDeliveries>[0], "log">>;
+type DrainOptions = Omit<Parameters<typeof drainEntry>[0], "queueContext" | "log" | "logLabel"> &
+  Partial<Pick<Parameters<typeof drainEntry>[0], "log" | "logLabel">>;
+function queueFixture(context: QueueContext, stateDir: string) {
+  const defaults = () => ({ queueContext: context, log: createInfoWarnErrorLogger() });
+  const pending = () => listPending(context);
+  const drain = (options: DrainOptions) =>
+    drainEntry({ ...defaults(), logLabel: "test restart continuation", ...options });
+  return {
+    context,
+    pending,
+    drain,
+    recover: (options: RecoveryOptions) =>
+      recoverPendingSessionDeliveries({ ...defaults(), ...options }),
+    drainNow: (id: string, deliver: DrainOptions["deliver"], options: Partial<DrainOptions> = {}) =>
+      drain({ id, deliver, bypassBackoff: true, ...options }),
+    turn: (messageId: string, overrides: Partial<AgentTurn> = {}) =>
+      enqueueSessionDelivery(
+        {
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "generated image ready",
+          messageId,
+          ...overrides,
+        },
+        context,
+      ),
+    event: (text: string) =>
+      enqueueSessionDelivery({ kind: "systemEvent", sessionKey: "agent:main:main", text }, context),
+    seed: (entry: Parameters<typeof seedDeliveryQueueEntry>[0]["entry"]) =>
+      seedDeliveryQueueEntry({ queueName: "session", stateDir, entry }),
+    started: (entry: Parameters<typeof markStarted>[0]) => markStarted(entry, context),
+    fail: (id: string, error: string) => fail(id, error, context),
+    defer: (id: string, delay: number) => defer(id, delay, context),
+    async first() {
+      const [entry] = await pending();
+      if (!entry) {
+        throw new Error("Expected pending session delivery");
+      }
+      return entry;
     },
-    queueContext,
-  );
-const enqueueEvent = (queueContext: QueueContext, text: string) =>
-  enqueueSessionDelivery(
-    { kind: "systemEvent", sessionKey: "agent:main:main", text },
-    queueContext,
-  );
-
-function recover(
-  queueContext: QueueContext,
-  options: Omit<Parameters<typeof recoverPendingSessionDeliveries>[0], "queueContext" | "log">,
-) {
-  return recoverPendingSessionDeliveries({
-    ...options,
-    queueContext,
-    log: createInfoWarnErrorLogger(),
-  });
+    async expectPending(...entries: object[]) {
+      expect(await pending()).toEqual(entries.map((entry) => expect.objectContaining(entry)));
+    },
+  };
 }
-async function firstPending(queueContext: QueueContext) {
-  const [entry] = await loadPendingSessionDeliveries(queueContext);
-  if (!entry) {
-    throw new Error("Expected pending session delivery");
-  }
-  return entry;
+function withQueue(run: (queue: ReturnType<typeof queueFixture>) => Promise<void>) {
+  return withSessionDeliveryQueue((stateDir, context) => run(queueFixture(context, stateDir)));
 }
 
 describe("session-delivery queue recovery", () => {
   beforeEach(() => {
     sleepMock.mockReset();
     sleepMock.mockResolvedValue(undefined);
-  });
-
-  it("replays and acks old SQLite entries on recovery", async () => {
-    await withSessionDeliveryQueue(async (stateDir, queueContext) => {
-      await enqueueEvent(queueContext, "restart complete");
-      const entry = await firstPending(queueContext);
-      seedDeliveryQueueEntry({
-        queueName: "session",
-        entry: { ...entry, enqueuedAt: Date.now() - 6 * 24 * 60 * 60_000 },
-        stateDir,
-      });
-
-      const deliver = vi.fn(async () => undefined);
-      const onSettled = vi.fn(async () => undefined);
-      const summary = await recover(queueContext, { deliver, onSettled });
-
-      expect(deliver).toHaveBeenCalledTimes(1);
-      expect(onSettled).toHaveBeenCalledWith(expect.any(Object), "recovered", queueContext);
-      expect(summary.recovered).toBe(1);
-      expect(await loadPendingSessionDeliveries(queueContext)).toStrictEqual([]);
-    });
-  });
-
-  it("lets the delivery owner persist its fence at the side-effect boundary", async () => {
-    await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-      const id = await enqueueTurn(queueContext, "image:task-preflight-owner:agent-loop");
-      const deliver = vi.fn(async (entry, context) => {
-        expect(context).toEqual({ queueContext });
-        await markSessionDeliveryAttemptStarted(entry, queueContext);
-        expect(await loadPendingSessionDeliveries(queueContext)).toEqual([
-          expect.objectContaining({ id, deliveryStartedAt: expect.any(Number) }),
-        ]);
-      });
-
-      await recover(queueContext, { deliver });
-
-      expect(deliver).toHaveBeenCalledTimes(1);
-      expect(await loadPendingSessionDeliveries(queueContext)).toEqual([]);
-    });
   });
 
   it.each([
@@ -120,8 +96,8 @@ describe("session-delivery queue recovery", () => {
   ] as const)(
     "retries $mode settlement cleanup (terminal: $terminal) without replay",
     async ({ mode, terminal }) => {
-      await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-        const id = await enqueueTurn(queueContext, "image:task-settlement-retry:agent-loop");
+      await withQueue(async (q) => {
+        const id = await q.turn("image:task-settlement-retry:agent-loop");
         const deliver = vi.fn(async () => {
           if (terminal) {
             throw new SessionDeliveryDeadLetteredError("ambiguous side effects");
@@ -132,24 +108,22 @@ describe("session-delivery queue recovery", () => {
           .mockRejectedValueOnce(new Error("cleanup interrupted"))
           .mockResolvedValue(undefined);
         const log = createInfoWarnErrorLogger();
-        const options = { deliver, onSettled, queueContext, log };
+        const options = { deliver, onSettled, log };
         const drain = () =>
           mode === "recovery"
-            ? recoverPendingSessionDeliveries(options)
-            : drainPendingSessionDelivery({ ...options, id, logLabel: "Session delivery" });
+            ? q.recover(options)
+            : q.drain({ ...options, id, logLabel: "Session delivery" });
         const count = terminal ? "failed" : "recovered";
         const outcome = terminal ? "moved-to-failed" : "recovered";
         expect(await drain()).toEqual(
           expect.objectContaining(mode === "recovery" ? { [count]: 0 } : { id }),
         );
         expect(deliver).toHaveBeenCalledTimes(1);
-        expect(await loadPendingSessionDeliveries(queueContext)).toEqual([
-          expect.objectContaining({
-            id,
-            settlementOutcome: outcome,
-            ...(!terminal ? { acknowledgedAt: expect.any(Number) } : {}),
-          }),
-        ]);
+        await q.expectPending({
+          id,
+          settlementOutcome: outcome,
+          ...(!terminal ? { acknowledgedAt: expect.any(Number) } : {}),
+        });
         if (terminal) {
           expect(log.warn).toHaveBeenCalledExactlyOnceWith(
             `Session delivery: dead-letter decision for entry ${id}: ambiguous side effects`,
@@ -160,12 +134,8 @@ describe("session-delivery queue recovery", () => {
         );
         expect(deliver).toHaveBeenCalledTimes(1);
         expect(onSettled).toHaveBeenCalledTimes(2);
-        expect(onSettled).toHaveBeenCalledWith(
-          expect.objectContaining({ id }),
-          outcome,
-          queueContext,
-        );
-        expect(await loadPendingSessionDeliveries(queueContext)).toEqual([]);
+        expect(onSettled).toHaveBeenCalledWith(expect.objectContaining({ id }), outcome, q.context);
+        await q.expectPending();
         if (terminal) {
           expect(log.warn).toHaveBeenNthCalledWith(
             2,
@@ -184,44 +154,38 @@ describe("session-delivery queue recovery", () => {
   it.each(["recovery", "exact"] as const)(
     "cleans exhausted acknowledged tombstones through %s without replay or backoff",
     async (mode) => {
-      await withSessionDeliveryQueue(async (stateDir, queueContext) => {
-        const id = await enqueueTurn(queueContext, "image:task-drain-ack:agent-loop", {
+      await withQueue(async (q) => {
+        const id = await q.turn("image:task-drain-ack:agent-loop", {
           maxRetries: 1,
         });
-        seedDeliveryQueueEntry({
-          queueName: "session",
-          stateDir,
-          entry: {
-            ...(await firstPending(queueContext)),
-            acknowledgedAt: Date.now(),
-            retryCount: mode === "recovery" ? 99 : 1,
-            lastAttemptAt: Date.now(),
-            availableAt: Date.now() + 60_000,
-          },
+        q.seed({
+          ...(await q.first()),
+          acknowledgedAt: Date.now(),
+          retryCount: mode === "recovery" ? 99 : 1,
+          lastAttemptAt: Date.now(),
+          availableAt: Date.now() + 60_000,
         });
         const deliver = vi.fn(async () => undefined);
         const onSettled = vi.fn(async () => undefined);
         if (mode === "recovery") {
-          expect(await recover(queueContext, { deliver, onSettled })).toMatchObject({
+          expect(await q.recover({ deliver, onSettled })).toMatchObject({
             recovered: 1,
           });
         } else {
-          await drainPendingSessionDelivery({
+          await q.drain({
             id,
             logLabel: "test acknowledged cleanup",
             deliver,
             onSettled,
-            queueContext,
-            log: createInfoWarnErrorLogger(),
           });
         }
         expect(deliver).not.toHaveBeenCalled();
         expect(onSettled).toHaveBeenCalledWith(
           expect.objectContaining({ id }),
           "recovered",
-          queueContext,
+          q.context,
         );
-        expect(await loadPendingSessionDeliveries(queueContext)).toStrictEqual([]);
+        expect(await q.pending()).toStrictEqual([]);
       });
     },
   );
@@ -237,15 +201,15 @@ describe("session-delivery queue recovery", () => {
       vi.setSystemTime(startedAt);
       try {
         const controlledSleep = controlNextRecoverySleep(sleepMock);
-        await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
+        await withQueue(async (q) => {
           for (const text of ["first", "second", "third"].slice(0, count)) {
-            await enqueueEvent(queueContext, text);
+            await q.event(text);
           }
           const deliveryTimes: number[] = [];
           const deliver = vi.fn(async () => {
             deliveryTimes.push(Date.now());
           });
-          const recovery = recover(queueContext, { deliver, maxRecoveryMs: budget });
+          const recovery = q.recover({ deliver, maxRecoveryMs: budget });
           await expect(controlledSleep.started).resolves.toBe(spacing);
           expect(deliver).toHaveBeenCalledTimes(1);
           controlledSleep.release();
@@ -254,7 +218,7 @@ describe("session-delivery queue recovery", () => {
           expect(deliveryTimes).toEqual(
             recovered === 1 ? [startedAt] : [startedAt, startedAt + spacing],
           );
-          expect(await loadPendingSessionDeliveries(queueContext)).toHaveLength(count - recovered);
+          expect(await q.pending()).toHaveLength(count - recovered);
         });
       } finally {
         vi.useRealTimers();
@@ -266,14 +230,13 @@ describe("session-delivery queue recovery", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(MAX_DATE_TIMESTAMP_MS));
 
-    await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-      await enqueueEvent(queueContext, "leave queued");
+    await withQueue(async (q) => {
+      await q.event("leave queued");
 
       const deliver = vi.fn(async () => undefined);
       const warn = vi.fn();
-      const summary = await recoverPendingSessionDeliveries({
+      const summary = await q.recover({
         deliver,
-        queueContext,
         maxRecoveryMs: 1,
         log: { info: vi.fn(), warn, error: vi.fn() },
       });
@@ -283,7 +246,7 @@ describe("session-delivery queue recovery", () => {
         "Session delivery recovery time budget exceeded — remaining entries deferred",
       );
       expect(summary.recovered).toBe(0);
-      expect(await loadPendingSessionDeliveries(queueContext)).toHaveLength(1);
+      expect(await q.pending()).toHaveLength(1);
     });
 
     vi.useRealTimers();
@@ -311,22 +274,21 @@ describe("session-delivery queue recovery", () => {
   ])(
     "keeps $failure retryable with correct attempt ownership",
     async ({ failure, started, safe, messageId }) => {
-      await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-        const id = await enqueueTurn(queueContext, messageId, { message: "continue" });
+      await withQueue(async (q) => {
+        const id = await q.turn(messageId, { message: "continue" });
         const log = createInfoWarnErrorLogger();
-        const summary = await recoverPendingSessionDeliveries({
+        const summary = await q.recover({
           deliver: vi.fn(async (entry) => {
             if (started) {
-              await markSessionDeliveryAttemptStarted(entry, queueContext);
+              await q.started(entry);
             }
             throw safe ? new SessionDeliverySafeRetryError(failure) : new Error(failure);
           }),
           onSettled: vi.fn(async () => undefined),
-          queueContext,
           log,
         });
         expect(summary.failed).toBe(1);
-        const pending = await loadPendingSessionDeliveries(queueContext);
+        const pending = await q.pending();
         expect(pending).toEqual([expect.objectContaining({ retryCount: 1, lastError: failure })]);
         expect(pending).toEqual([
           started && !safe
@@ -343,19 +305,17 @@ describe("session-delivery queue recovery", () => {
   );
 
   it("defers active agent ownership without consuming retry budget", async () => {
-    await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-      const id = await enqueueTurn(queueContext, "image:task-owned:agent-loop");
+    await withQueue(async (q) => {
+      const id = await q.turn("image:task-owned:agent-loop");
 
-      const summary = await recoverPendingSessionDeliveries({
+      const summary = await q.recover({
         deliver: vi.fn(async () => {
-          await deferSessionDelivery(id, 1_000, queueContext);
+          await q.defer(id, 1_000);
           throw new SessionDeliveryDeferredError("agent run still active");
         }),
-        queueContext,
-        log: createInfoWarnErrorLogger(),
       });
 
-      const [entry] = await loadPendingSessionDeliveries(queueContext);
+      const [entry] = await q.pending();
       expect(summary.failed).toBe(0);
       expect(entry?.retryCount).toBe(0);
       expect(entry?.availableAt).toBeGreaterThan(Date.now());
@@ -363,38 +323,32 @@ describe("session-delivery queue recovery", () => {
   });
 
   it("does not charge retry budget twice after a charged transition failure", async () => {
-    await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-      const id = await enqueueTurn(queueContext, "image:task-charged-transition:agent-loop");
-      const summary = await recover(queueContext, {
+    await withQueue(async (q) => {
+      const id = await q.turn("image:task-charged-transition:agent-loop");
+      const summary = await q.recover({
         deliver: async () => {
-          await failSessionDelivery(id, "terminal attempt failed", queueContext);
+          await q.fail(id, "terminal attempt failed");
           throw new SessionDeliveryRetryChargedError("advance failed after retry charge");
         },
       });
 
       expect(summary.failed).toBe(1);
-      expect(await loadPendingSessionDeliveries(queueContext)).toEqual([
-        expect.objectContaining({ id, retryCount: 1, lastChargedAgentRunAttempt: 0 }),
-      ]);
+      await q.expectPending({ id, retryCount: 1, lastChargedAgentRunAttempt: 0 });
     });
   });
 
   it.each(["recovery", "exact"] as const)(
     "reports the redacted terminal reason and queue ID through %s without queue content",
     async (mode) => {
-      await withSessionDeliveryQueue(async (stateDir, queueContext) => {
+      await withQueue(async (q) => {
         const token = "sk-abcdefghijklmnopqrstuv";
-        const id = await enqueueTurn(queueContext, "image:task-dead-lettered:agent-loop", {
+        const id = await q.turn("image:task-dead-lettered:agent-loop", {
           sessionKey: "agent:main:private-session",
           message: "private queued message",
           route: { channel: "test", to: "private-recipient", chatType: "direct" },
         });
-        const entry = await firstPending(queueContext);
-        seedDeliveryQueueEntry({
-          queueName: "session",
-          entry: { ...entry, lastError: "previous retry failure" },
-          stateDir,
-        });
+        const entry = await q.first();
+        q.seed({ ...entry, lastError: "previous retry failure" });
 
         const onSettled = vi.fn(async () => undefined);
         const log = createInfoWarnErrorLogger();
@@ -405,17 +359,14 @@ describe("session-delivery queue recovery", () => {
             );
           }),
           onSettled,
-          queueContext,
           log,
         };
 
         if (mode === "recovery") {
-          const summary = await recoverPendingSessionDeliveries(options);
+          const summary = await q.recover(options);
           expect(summary).toMatchObject({ recovered: 0, failed: 1 });
         } else {
-          expect(
-            await drainPendingSessionDelivery({ ...options, id, logLabel: "Session delivery" }),
-          ).toBeNull();
+          expect(await q.drain({ ...options, id, logLabel: "Session delivery" })).toBeNull();
         }
         expect(log.warn).toHaveBeenNthCalledWith(
           1,
@@ -440,10 +391,10 @@ describe("session-delivery queue recovery", () => {
         expect(onSettled).toHaveBeenCalledWith(
           expect.objectContaining({ id }),
           "moved-to-failed",
-          queueContext,
+          q.context,
         );
-        expect(await loadPendingSessionDeliveries(queueContext)).toStrictEqual([]);
-        expect((await recoverPendingSessionDeliveries(options)).failed).toBe(0);
+        expect(await q.pending()).toStrictEqual([]);
+        expect((await q.recover(options)).failed).toBe(0);
         expect(options.deliver).toHaveBeenCalledTimes(1);
         expect(log.warn).toHaveBeenCalledTimes(2);
       });
@@ -451,64 +402,48 @@ describe("session-delivery queue recovery", () => {
   );
 
   it("uses the entry retry budget when draining entries", async () => {
-    await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-      const id = await enqueueTurn(queueContext, "restart-sentinel:agent:main:main:agentTurn:123", {
+    await withQueue(async (q) => {
+      const id = await q.turn("restart-sentinel:agent:main:main:agentTurn:123", {
         message: "continue",
         maxRetries: 20,
       });
       for (let attempt = 0; attempt < 5; attempt += 1) {
-        await failSessionDelivery(id, "busy", queueContext);
+        await q.fail(id, "busy");
       }
 
       const deliver = vi.fn(async () => undefined);
-      await drainPendingSessionDelivery({
-        id,
-        logLabel: "test restart continuation",
-        bypassBackoff: true,
-        deliver,
-        queueContext,
-        log: createInfoWarnErrorLogger(),
-      });
+      await q.drainNow(id, deliver);
 
       expect(deliver).toHaveBeenCalledTimes(1);
-      expect(await loadPendingSessionDeliveries(queueContext)).toEqual([]);
+      await q.expectPending();
     });
   });
 
   it.each(["drain", "startup"] as const)(
     "settles entries moved to failed after %s retry exhaustion",
     async (mode) => {
-      await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-        const id = await enqueueTurn(
-          queueContext,
-          `restart-sentinel:agent:main:main:agentTurn:${mode}-exhausted`,
-          { message: "continue", maxRetries: 1 },
-        );
-        await failSessionDelivery(id, "busy", queueContext);
+      await withQueue(async (q) => {
+        const id = await q.turn(`restart-sentinel:agent:main:main:agentTurn:${mode}-exhausted`, {
+          message: "continue",
+          maxRetries: 1,
+        });
+        await q.fail(id, "busy");
         const deliver = vi.fn(async () => undefined);
         const onSettled = vi.fn(async () => undefined);
         if (mode === "startup") {
-          expect(await recover(queueContext, { deliver, onSettled })).toMatchObject({
+          expect(await q.recover({ deliver, onSettled })).toMatchObject({
             skippedMaxRetries: 1,
           });
         } else {
-          await drainPendingSessionDelivery({
-            id,
-            logLabel: "test restart continuation",
-            bypassBackoff: true,
-            deliver,
-            onSettled,
-            queueContext,
-            log: createInfoWarnErrorLogger(),
-          });
+          await q.drainNow(id, deliver, { onSettled });
         }
         expect(deliver).not.toHaveBeenCalled();
         expect(onSettled).toHaveBeenCalledWith(
           expect.objectContaining({ id }),
           "moved-to-failed",
-          queueContext,
+          q.context,
         );
-        expect(await loadPendingSessionDeliveries(queueContext)).toEqual([]);
+        await q.expectPending();
       });
     },
   );
@@ -520,41 +455,34 @@ describe("session-delivery queue recovery", () => {
         vi.useFakeTimers();
       }
       try {
-        await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-          const id = await enqueueTurn(queueContext, `image:task-exhausted-${mode}:agent-loop`, {
+        await withQueue(async (q) => {
+          const id = await q.turn(`image:task-exhausted-${mode}:agent-loop`, {
             maxRetries: 1,
           });
-          const entry = await firstPending(queueContext);
-          await markSessionDeliveryAttemptStarted(entry, queueContext);
-          await failSessionDelivery(id, "final response lost", queueContext);
+          const entry = await q.first();
+          await q.started(entry);
+          await q.fail(id, "final response lost");
 
           const deliver = vi.fn(async () => undefined);
           if (mode === "startup") {
-            const [pending] = await loadPendingSessionDeliveries(queueContext);
+            const [pending] = await q.pending();
             if (pending?.lastAttemptAt === undefined) {
               throw new Error("Expected the worker to persist the failed attempt timestamp");
             }
             vi.setSystemTime(new Date(pending.lastAttemptAt + 60_000));
           }
           if (mode === "runtime") {
-            await drainPendingSessionDelivery({
-              id,
-              logLabel: "test started reconciliation",
-              bypassBackoff: true,
-              deliver,
-              queueContext,
-              log: createInfoWarnErrorLogger(),
-            });
+            await q.drainNow(id, deliver, { logLabel: "test started reconciliation" });
           } else {
-            const summary = await recover(queueContext, { deliver });
+            const summary = await q.recover({ deliver });
             expect(summary.skippedMaxRetries).toBe(0);
           }
 
           expect(deliver).toHaveBeenCalledWith(
             expect.objectContaining({ id, deliveryStartedAt: expect.any(Number) }),
-            { queueContext },
+            { queueContext: q.context },
           );
-          expect(await loadPendingSessionDeliveries(queueContext)).toEqual([]);
+          await q.expectPending();
         });
       } finally {
         if (mode === "startup") {
@@ -565,36 +493,30 @@ describe("session-delivery queue recovery", () => {
   );
 
   it("dead-letters a started agent turn after its bounded reconciliation fails", async () => {
-    await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-      const id = await enqueueTurn(queueContext, "image:task-reconciliation-failed:agent-loop", {
+    await withQueue(async (q) => {
+      const id = await q.turn("image:task-reconciliation-failed:agent-loop", {
         maxRetries: 1,
       });
-      const entry = await firstPending(queueContext);
-      await markSessionDeliveryAttemptStarted(entry, queueContext);
-      await failSessionDelivery(id, "final response lost", queueContext);
+      const entry = await q.first();
+      await q.started(entry);
+      await q.fail(id, "final response lost");
 
       const deliver = vi.fn(async () => {
         throw new Error("terminal evidence unavailable");
       });
-      const drain = async () =>
-        await drainPendingSessionDelivery({
-          id,
-          logLabel: "test started reconciliation",
-          bypassBackoff: true,
-          deliver,
-          queueContext,
-          log: createInfoWarnErrorLogger(),
-        });
+      const drain = () => q.drainNow(id, deliver, { logLabel: "test started reconciliation" });
 
       await drain();
       expect(deliver).toHaveBeenCalledOnce();
-      expect(await loadPendingSessionDeliveries(queueContext)).toEqual([
-        expect.objectContaining({ id, retryCount: 2, deliveryStartedAt: expect.any(Number) }),
-      ]);
+      await q.expectPending({
+        id,
+        retryCount: 2,
+        deliveryStartedAt: expect.any(Number),
+      });
 
       await drain();
       expect(deliver).toHaveBeenCalledOnce();
-      expect(await loadPendingSessionDeliveries(queueContext)).toEqual([]);
+      await q.expectPending();
     });
   });
 
@@ -602,19 +524,20 @@ describe("session-delivery queue recovery", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-23T00:00:00.000Z"));
 
-    await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-      await enqueueEvent(queueContext, "recover old entry");
+    await withQueue(async (q) => {
+      await q.event("recover old entry");
+      q.seed({ ...(await q.first()), enqueuedAt: Date.now() - 6 * 24 * 60 * 60_000 });
       const maxEnqueuedAt = Date.now();
 
       vi.setSystemTime(new Date("2026-04-23T00:00:05.000Z"));
-      await enqueueEvent(queueContext, "leave fresh entry queued");
+      await q.event("leave fresh entry queued");
 
       const deliver = vi.fn(async () => undefined);
-      const summary = await recover(queueContext, { deliver, maxEnqueuedAt });
+      const summary = await q.recover({ deliver, maxEnqueuedAt });
 
       expect(deliver).toHaveBeenCalledTimes(1);
       expect(summary.recovered).toBe(1);
-      const pending = await loadPendingSessionDeliveries(queueContext);
+      const pending = await q.pending();
       expect(pending).toEqual([
         expect.objectContaining({ kind: "systemEvent", text: "leave fresh entry queued" }),
       ]);

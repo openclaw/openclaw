@@ -33,6 +33,9 @@ it("keeps predecessor resources through abandoned growth and transfers them only
       scopedRuntime: true,
     });
     expect(current?.()).toBe(true);
+    getPluginRegistryInspectionResources(previous.registry)!.adoptRetainedRegistrations(
+      previous.registry,
+    );
     pending = await acquirePluginRegistryForInspection({
       config,
       previousRegistry: previous.registry,

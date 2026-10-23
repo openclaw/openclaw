@@ -82,39 +82,25 @@ describe("QA-channel vision offload", () => {
     const scenarioRequests = (await readMockRequests(mock.baseUrl, requestCursor)).filter(
       (request) => request.allInputText.includes(SCENARIO_MARKER),
     );
-    const requestDiagnostics = JSON.stringify(
-      scenarioRequests.map(({ cursor, model, imageInputCount }) => ({
-        cursor,
-        model,
-        imageInputCount,
+    expect(
+      scenarioRequests.map((request) => ({
+        model: request.model,
+        imageInputCount: request.imageInputCount,
+        roles: readInputRoles(request),
       })),
-    );
-    expect(scenarioRequests, requestDiagnostics).toHaveLength(2);
+    ).toEqual([
+      { model: IMAGE_MODEL_ID, imageInputCount: 1, roles: ["developer", "user"] },
+      { model: ACTIVE_MODEL_ID, imageInputCount: 0, roles: ["developer", "user", "user"] },
+    ]);
 
     const [imageRequest, activeModelRequest] = scenarioRequests;
     if (!imageRequest || !activeModelRequest) {
-      throw new Error(requestDiagnostics);
+      throw new Error("expected image and active model requests");
     }
-    expect(imageRequest, requestDiagnostics).toMatchObject({
-      model: IMAGE_MODEL_ID,
-      imageInputCount: 1,
-    });
-    expect(readInputRoles(imageRequest), requestDiagnostics).toEqual(["developer", "user"]);
-    expect(activeModelRequest, requestDiagnostics).toMatchObject({
-      model: ACTIVE_MODEL_ID,
-      imageInputCount: 0,
-    });
-    expect(readInputRoles(activeModelRequest), requestDiagnostics).toEqual([
-      "developer",
-      "user",
-      "user",
-    ]);
-    expect(imageRequest.cursor, requestDiagnostics).toBeLessThan(activeModelRequest.cursor);
-    expect(imageRequest.allInputText, requestDiagnostics).toContain(IMAGE_PROMPT);
-    expect(activeModelRequest.allInputText, requestDiagnostics).toContain(PROVIDER_SUMMARY);
-    expect(activeModelRequest.allInputText, requestDiagnostics).toContain(
-      "OpenClaw runtime context:\n",
-    );
+    expect(imageRequest.cursor).toBeLessThan(activeModelRequest.cursor);
+    expect(imageRequest.allInputText).toContain(IMAGE_PROMPT);
+    expect(activeModelRequest.allInputText).toContain(PROVIDER_SUMMARY);
+    expect(activeModelRequest.allInputText).toContain("OpenClaw runtime context:\n");
 
     const visibleOutbound = state
       .getSnapshot()
@@ -126,10 +112,8 @@ describe("QA-channel vision offload", () => {
           message.conversation.kind === CONVERSATION.kind &&
           !message.deleted,
       );
-    expect(visibleOutbound).toHaveLength(1);
-    expect(visibleOutbound[0]).toMatchObject({
-      id: finalOutbound.id,
-      text: FINAL_REPLY,
-    });
+    expect(visibleOutbound).toEqual([
+      expect.objectContaining({ id: finalOutbound.id, text: FINAL_REPLY }),
+    ]);
   }, 180_000);
 });

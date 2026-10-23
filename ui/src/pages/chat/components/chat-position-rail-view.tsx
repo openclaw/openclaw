@@ -84,7 +84,7 @@ export type PositionRailViewParams = {
   bindScroller: (element?: Element) => void;
   bindPreview: (element?: Element, description?: () => string) => void;
   onScroll: () => void;
-  stopScrollInput: EventListenerObject & AddEventListenerOptions;
+  stopScrollInput: (event: Event) => void;
   onPointerLeave: () => void;
   onMarkerHover: (id: string) => void;
   onMarkerFocus: (id: string, event: FocusEvent) => void;
@@ -95,15 +95,24 @@ export type PositionRailViewParams = {
 
 /** Presentation only; the rail owner manages windowing, interaction, and DOM lifetime. */
 export function ChatPositionRailView(props: PositionRailViewParams) {
-  const assistantLabel = () =>
-    props.assistant?.name.trim() || t("chat.thread.positionAssistantMessage");
+  const assistantLabel = createMemo(
+    () => props.assistant?.name.trim() || t("chat.thread.positionAssistantMessage"),
+  );
+  // Live preview text changes independently of the retained marker window.
+  const markers = createMemo(() => props.markers);
+  const renderedIndexes = createMemo(() => props.renderedIndexes);
+  const count = () => markers().length;
+  const hoveredId = createMemo(() => props.hoveredId);
+  const rovingId = createMemo(() => props.rovingId);
+  const activeId = createMemo(() => props.activeId);
+  const visibleIds = createMemo(() => props.visibleIds);
   const markerLabel = (marker: ChatPositionIndex["markers"][number]) =>
     marker.role === "user" ? t("chat.thread.positionUserMessage") : assistantLabel();
   const entries = createMemo(() =>
-    props.renderedIndexes.map((index, renderedIndex) => ({
+    renderedIndexes().map((index, renderedIndex) => ({
       index,
-      marker: props.markers[index]!,
-      separated: renderedIndex > 0 && index > props.renderedIndexes[renderedIndex - 1]! + 1,
+      marker: markers()[index]!,
+      separated: renderedIndex > 0 && index > renderedIndexes()[renderedIndex - 1]! + 1,
     })),
   );
   const previewMarker = createMemo(() => {
@@ -132,7 +141,6 @@ export function ChatPositionRailView(props: PositionRailViewParams) {
         : "";
     return text ? toSanitizedMarkdownHtml(text, { codeBlockChrome: "none" }) : "";
   });
-  const stopScrollInput = (event: Event) => props.stopScrollInput.handleEvent(event);
   const Preview = () => {
     let label: HTMLElement | undefined;
     let copy: HTMLElement | undefined;
@@ -175,7 +183,7 @@ export function ChatPositionRailView(props: PositionRailViewParams) {
   return (
     <aside
       class="chat-position-rail"
-      style={{ "--chat-position-rail-count": props.markers.length }}
+      style={{ "--chat-position-rail-count": count() }}
       aria-label={t("chat.thread.positionRail")}
       onPointerLeave={() => props.onPointerLeave()}
     >
@@ -186,7 +194,7 @@ export function ChatPositionRailView(props: PositionRailViewParams) {
               props.bindScroller(element);
               // Stop touch input here, before the transcript's native history listeners.
               const stopInput = ["wheel", "touchstart", "touchmove"].map((type) =>
-                listen(element, type, stopScrollInput, { passive: true }),
+                listen(element, type, props.stopScrollInput, { passive: true }),
               );
               return () => stopInput.forEach((stop) => stop());
             }),
@@ -208,10 +216,10 @@ export function ChatPositionRailView(props: PositionRailViewParams) {
                     </Show>
                     <div
                       class="chat-position-rail__item"
-                      data-hovered={entry().marker.id === props.hoveredId ? "" : undefined}
+                      data-hovered={entry().marker.id === hoveredId() ? "" : undefined}
                       role="listitem"
                       aria-posinset={entry().index + 1}
-                      aria-setsize={props.markers.length}
+                      aria-setsize={count()}
                     >
                       <button
                         ref={[
@@ -225,15 +233,15 @@ export function ChatPositionRailView(props: PositionRailViewParams) {
                         style={{ top: `${entry().index * POSITION_RAIL_MARKER_HEIGHT}px` }}
                         type="button"
                         data-position-marker-id={entry().marker.id}
-                        tabindex={entry().marker.id === props.rovingId ? 0 : -1}
+                        tabindex={entry().marker.id === rovingId() ? 0 : -1}
                         aria-label={t("chat.thread.positionMarker", {
                           position: String(entry().index + 1),
-                          count: String(props.markers.length),
+                          count: String(count()),
                           label: markerLabel(entry().marker),
                         })}
                         aria-description={t("chat.thread.positionMarkerHint")}
-                        aria-current={entry().marker.id === props.activeId ? "true" : "false"}
-                        data-visible={props.visibleIds.has(entry().marker.id) ? "" : undefined}
+                        aria-current={entry().marker.id === activeId() ? "true" : "false"}
+                        data-visible={visibleIds().has(entry().marker.id) ? "" : undefined}
                         onPointerEnter={() => props.onMarkerHover(entry().marker.id)}
                         onFocus={(event) => props.onMarkerFocus(entry().marker.id, event)}
                         onBlur={() => props.onMarkerBlur()}

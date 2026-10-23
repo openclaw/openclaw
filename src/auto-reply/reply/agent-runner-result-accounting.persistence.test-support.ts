@@ -77,7 +77,7 @@ export function createTestFinalizationContext(
     activeSessionStore: {},
     blockReplyPipeline: null,
     cfg,
-    isHeartbeat: false,
+
     pendingToolTasks: new Set(),
     preflightCompactionApplied: false,
     replyMediaContext: { normalizePayload: async (payload) => payload },
@@ -106,7 +106,6 @@ export function createTestFinalizationContext(
     typingSignals: createTypingSignaler({
       typing: reply.typing,
       mode: "never",
-      isHeartbeat: false,
     }),
   };
 }

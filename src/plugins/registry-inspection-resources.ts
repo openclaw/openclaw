@@ -91,6 +91,10 @@ export class PluginRegistryInspectionResources {
     if (!source || !registry || source.#release || this.#release) {
       throw new Error("Plugin inspection handoff requires live source and successor registries");
     }
+    // A scoped catalog acquisition can reuse this same physical inspection.
+    if (source === this) {
+      return;
+    }
     for (const record of registry.plugins) {
       if (
         previous.plugins.includes(record) &&

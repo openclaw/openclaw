@@ -36,7 +36,7 @@ it("bounds retained entries while reserving every family and releasing cleared g
   const store = createPrometheusMetricStore();
   const families = Object.keys(PROMETHEUS_FAMILY_RESERVES) as PrometheusMetricName[];
   for (const name of families) {
-    for (let index = 0; index < 400; index++) {
+    for (let index = 0; index <= Math.max(128, PROMETHEUS_FAMILY_RESERVES[name]); index++) {
       store.gauge(name, "Synthetic admission pressure.", { index: String(index) }, index);
     }
   }
@@ -44,22 +44,25 @@ it("bounds retained entries while reserving every family and releasing cleared g
     .render()
     .split("\n")
     .filter((line) => line.includes('{index="'));
-  expect(samples).toHaveLength(2048);
+  expect(samples).toHaveLength(16384);
   for (const name of families) {
     const count = samples.filter((line) => line.startsWith(`${name}{`)).length;
     expect(count).toBeGreaterThanOrEqual(PROMETHEUS_FAMILY_RESERVES[name]);
     expect(count).toBeLessThanOrEqual(Math.max(128, PROMETHEUS_FAMILY_RESERVES[name]));
+    if (name.startsWith("openclaw_gateway_rpc_")) {
+      expect(count).toBeGreaterThanOrEqual(256);
+    }
   }
   expect(
     samples.filter((line) => line.startsWith("openclaw_worker_request_phase_seconds{")),
-  ).toHaveLength(384);
+  ).toHaveLength(1024);
   expect(
     samples.filter((line) => line.startsWith("openclaw_gateway_ws_event_frame_bytes{")),
-  ).toHaveLength(256);
+  ).toHaveLength(2048);
   // This late family only used its reserve. Clearing it must not make that
   // capacity available to another family whose shared admission is exhausted.
   const late = "openclaw_worktree_preparation_seconds";
-  const competing = "openclaw_worker_request_seconds";
+  const competing = "openclaw_webhook_received_total";
   store.clearGauges(late);
   store.counter(competing, "Competing admission.", { index: "late" });
   for (let index = 0; index < 32; index++) {
@@ -68,7 +71,7 @@ it("bounds retained entries while reserving every family and releasing cleared g
   const rebuilt = store.render();
   expect(rebuilt).not.toContain(`${competing}{index="late"}`);
   expect(rebuilt.split("\n").filter((line) => line.startsWith(`${late}{`))).toHaveLength(32);
-  expect(rebuilt.split("\n").filter((line) => line.includes('{index="'))).toHaveLength(2048);
+  expect(rebuilt.split("\n").filter((line) => line.includes('{index="'))).toHaveLength(16384);
   store.reset();
   expect(store.render()).toBe("");
   for (let index = 0; index < 128; index++) {

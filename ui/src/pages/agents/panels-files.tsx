@@ -1,24 +1,72 @@
-import { createMemo, createSignal, For, Show } from "solid-js";
+import type { JSX } from "@solidjs/web";
+import {
+  action,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  Errored,
+  For,
+  isPending,
+  latest,
+  Loading,
+  onSettled,
+  Show,
+} from "solid-js";
 import type { AgentFileEntry } from "../../api/types.ts";
-import type { OpenClawModalDialog } from "../../components/modal-dialog.ts";
+import type { OpenClawModalDialog } from "../../components/modal-dialog.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { MarkdownHtml } from "../../components/solid/markdown-html.tsx";
 import { SettingsEmpty, SettingsSection } from "../../components/solid/settings-ui.tsx";
-import "../../components/modal-dialog.ts";
+import "../../components/modal-dialog.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import "../../components/tooltip.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { pathDisplayName } from "../../lib/path-display.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { AgentFilePreview } from "./agent-file-preview.tsx";
 import type { AgentsPageView } from "./agents-page-state.ts";
-import { hasAgentFileContent, isAgentFileDirty } from "./files.ts";
+import { hasAgentFileContent, isAgentFileDirty, type AgentFileOutcome } from "./files.ts";
 import { AgentPanelAction } from "./panel-ui.tsx";
 import { AgentReadNotice, createAgentReadPending } from "./read-status.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
+
+function AgentFileStatus(props: {
+  request: Promise<AgentFileOutcome> | null;
+  fallback: (message: string) => JSX.Element;
+  children: JSX.Element;
+}) {
+  return (
+    <For each={props.request ? [props.request] : []} fallback={props.children}>
+      {(request) => (
+        <Errored fallback={(error) => props.fallback(formatUiError(error()))}>
+          <Loading>
+            <AgentFileCompletion request={request}>{props.children}</AgentFileCompletion>
+          </Loading>
+        </Errored>
+      )}
+    </For>
+  );
+}
+
+function AgentFileCompletion(props: { request: Promise<AgentFileOutcome>; children: JSX.Element }) {
+  const completion = createMemo(async () => {
+    const outcome = await props.request;
+    if (outcome.error !== undefined) {
+      throw new Error(outcome.error);
+    }
+    return null;
+  });
+  return (
+    <>
+      {completion()}
+      {props.children}
+    </>
+  );
+}
 
 function getExtensionLabel(fileName: string) {
   const ext = fileName.split(".").pop()?.trim().toLowerCase();
@@ -61,13 +109,40 @@ function renderPreviewFact(value: string | number, label: string, secondary = fa
 
 export function AgentFiles(
   params: AgentsPageView["agentFiles"] &
-    Pick<AgentsPageView, "readData"> & {
+    Pick<AgentsPageView, "readData" | "presentationRetired"> & {
       agentId: string;
       canWrite: boolean;
     },
 ) {
   const inventoryPending = createAgentReadPending(() => params.listRead);
-  const loading = () => params.readData().agentFilesLoading || inventoryPending();
+  const contentRequest = createMemo(() => ({ request: params.readData().agentFileRead }), {
+    equals: (previous, next) => previous.request === next.request,
+  });
+  const contentRead = createMemo(() => contentRequest().request ?? undefined, {
+    loadingValue: undefined,
+  });
+  const loading = () =>
+    params.readData().agentFilesLoading ||
+    inventoryPending() ||
+    (params.readData().agentFileRead !== null &&
+      (isPending(contentRead) || latest(contentRead) === undefined));
+  // The owner admits writes synchronously, including overwrite's preceding hash read.
+  const [optimisticSaving, setSaving] = createOptimistic(false);
+  const saving = () => optimisticSaving() || params.readData().agentFileSaving;
+  const savingAction = action(function* (completion: Promise<boolean>, retired: Promise<void>) {
+    setSaving(true);
+    yield Promise.race([completion, retired]);
+  });
+  const save = (name: string, overwrite = false) => {
+    const retired = params.presentationRetired();
+    const completion = overwrite ? params.onFileOverwrite(name) : params.onFileSave(name);
+    if (completion) {
+      // Publish the admitted owner state before opening the optimistic transaction.
+      onSettled(() => {
+        void savingAction(completion, retired);
+      });
+    }
+  };
   const list = () =>
     params.readData().agentFilesList?.agentId === params.agentId
       ? params.readData().agentFilesList
@@ -109,31 +184,36 @@ export function AgentFiles(
       <Show
         when={conflictName()}
         fallback={
-          <Show
-            when={params.agentFilesError}
-            fallback={<AgentReadNotice request={params.listRead} />}
+          <AgentFileStatus
+            request={params.readData().agentFileOutcome}
+            fallback={(message) => <div class="callout danger">{message}</div>}
           >
-            <div class="callout danger">{params.agentFilesError}</div>
-          </Show>
+            <AgentReadNotice request={params.listRead} />
+          </AgentFileStatus>
         }
       >
         {(name) => (
           <div class="callout danger">
-            <span>{params.agentFilesError ?? t("agents.files.conflictHint")}</span>
+            <AgentFileStatus
+              request={params.readData().agentFileOutcome}
+              fallback={(message) => <span>{message}</span>}
+            >
+              <span>{t("agents.files.conflictHint")}</span>
+            </AgentFileStatus>
             <div class="agent-file-actions">
               <button
                 class="btn btn--sm"
                 type="button"
-                disabled={loading() || params.readData().agentFileSaving}
-                onClick={() => params.onFileReload(name())}
+                disabled={loading() || saving()}
+                onClick={() => void params.onFileReload(name())}
               >
                 {t("common.reload")}
               </button>
               <button
                 class="btn btn--sm"
                 type="button"
-                disabled={loading() || params.readData().agentFileSaving || !params.canWrite}
-                onClick={() => params.onFileOverwrite(name())}
+                disabled={loading() || saving() || !params.canWrite}
+                onClick={() => save(name(), true)}
               >
                 {t("agents.files.overwrite")}
               </button>
@@ -186,7 +266,7 @@ export function AgentFiles(
                   ariaLabel: t("agents.files.coreFilesTitle"),
                   panelId: "agent-file-panel",
                   variant: "sub",
-                  onSelect: params.onSelectFile,
+                  onSelect: (name) => void params.onSelectFile(name),
                 }}
               />
               {creatableFiles().length === 0 ? undefined : (
@@ -200,7 +280,7 @@ export function AgentFiles(
                     const name = select.value;
                     select.value = "";
                     if (name) {
-                      params.onSelectFile(name);
+                      void params.onSelectFile(name);
                     }
                   }}
                 >
@@ -257,17 +337,10 @@ export function AgentFiles(
                           />
                           <button
                             class="btn btn--sm primary"
-                            disabled={
-                              !params.canWrite ||
-                              !hasContent() ||
-                              params.readData().agentFileSaving ||
-                              !isDirty()
-                            }
-                            onClick={() => params.onFileSave(entry().name)}
+                            disabled={!params.canWrite || !hasContent() || saving() || !isDirty()}
+                            onClick={() => save(entry().name)}
                           >
-                            {params.readData().agentFileSaving
-                              ? t("common.saving")
-                              : t("common.save")}
+                            {saving() ? t("common.saving") : t("common.save")}
                           </button>
                         </div>
                       </div>

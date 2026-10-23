@@ -72,6 +72,25 @@ function databaseFamily(databasePath: string) {
   });
 }
 
+const metadataOptions = {
+  allowCurrentPluginMetadata: false,
+  includePluginMetadata: true,
+  skipPluginValidation: false,
+  observe: false,
+} as const;
+const readCore = () => readConfigFileSnapshot({ observe: false, pluginValidation: "core-only" });
+const admissionRefusal = (
+  options: Partial<Parameters<typeof createAgentDatabaseInspectionRefusal>[0]>,
+) =>
+  new AgentDatabaseAdmissionError(
+    createAgentDatabaseInspectionRefusal({
+      agentId: "requested",
+      paths: ["/synthetic/agent.sqlite"],
+      reason: "storage unavailable",
+      ...options,
+    }),
+  );
+
 it("reports completed plugin metadata work in startup admission traces", async () => {
   await withDoctorConfigPreflightHome(async (home) => {
     writeConfig(home);
@@ -83,11 +102,8 @@ it("reports completed plugin metadata work in startup admission traces", async (
           env: process.env,
           readSnapshot: () =>
             snapshots.read({
+              ...metadataOptions,
               purpose: "startup",
-              allowCurrentPluginMetadata: false,
-              includePluginMetadata: true,
-              skipPluginValidation: false,
-              observe: false,
             }),
         });
         expect(result.snapshot.valid).toBe(true);
@@ -189,14 +205,7 @@ it.each([
             ? new AggregateError([inspectionFailure, mismatch], "read admission failed")
             : mismatch;
     } else if (phase === "pending inspection" || phase === "failed inspection") {
-      failure = new AgentDatabaseAdmissionError(
-        createAgentDatabaseInspectionRefusal({
-          agentId: "requested",
-          paths: ["/synthetic/agent.sqlite"],
-          reason: "storage unavailable",
-          pending: phase === "pending inspection",
-        }),
-      );
+      failure = admissionRefusal({ pending: phase === "pending inspection" });
     } else if (phase === "proven integrity damage" || phase === "unavailable integrity check") {
       const integrity = new Error(
         "SQLite integrity_check failed",
@@ -205,14 +214,7 @@ it.each([
           : undefined,
       );
       integrity.name = "SqliteIntegrityError";
-      failure = new AgentDatabaseAdmissionError(
-        createAgentDatabaseInspectionRefusal({
-          agentId: "requested",
-          paths: ["/synthetic/agent.sqlite"],
-          reason: integrity.message,
-          cause: integrity,
-        }),
-      );
+      failure = admissionRefusal({ reason: integrity.message, cause: integrity });
     }
     const read = readAdmittedConfigSnapshot({
       env: process.env,
@@ -283,7 +285,7 @@ it("waits through temporary schema custody before reading startup configuration 
       }),
     );
     const readSnapshot = vi.fn(async () => ({
-      snapshot: await readConfigFileSnapshot({ observe: false, pluginValidation: "core-only" }),
+      snapshot: await readCore(),
     }));
     const now = vi.spyOn(performance, "now").mockReturnValue(0);
     const wait = vi.spyOn(retry, "sleepWithAbort").mockImplementation(async () => {
@@ -402,10 +404,7 @@ it("shares startup validation and discovery reads, then releases them before rea
           expect(readBundledDiscoveryMode(options)).toBe("compat");
         },
         readSnapshot: async () => {
-          const snapshot = await readConfigFileSnapshot({
-            observe: false,
-            pluginValidation: "core-only",
-          });
+          const snapshot = await readCore();
           expect(readBundledDiscoveryMode(options)).toBe("compat");
           expect(family()).toEqual(before);
           // A different owner commits between the two metadata reads.
@@ -461,10 +460,7 @@ it.each([
     });
     fs.writeFileSync(configPath, activeRaw);
     fs.writeFileSync(`${configPath}.bak`, backupRaw);
-    const initial = await readConfigFileSnapshot({
-      observe: false,
-      pluginValidation: "core-only",
-    });
+    const initial = await readCore();
     expect(initial.valid).toBe(legacyIdentity);
 
     await recordDeferredPluginMigrations({
@@ -505,11 +501,8 @@ it.each([
       await using snapshots = createConfigPreflightSnapshotReader();
       const result = await withArtifactPreservingStateReads(async () =>
         snapshots.read({
+          ...metadataOptions,
           purpose: "doctor",
-          allowCurrentPluginMetadata: false,
-          includePluginMetadata: true,
-          skipPluginValidation: false,
-          observe: false,
           deferredPluginMigrations: await readDeferredPluginMigrationsAsync(),
         }),
       );

@@ -105,7 +105,6 @@ export function registerSecurityCli(program: Command) {
         sourceConfig,
         deep: Boolean(opts.deep),
         includeFilesystem: true,
-        includeChannelSecurity: true,
         deepProbeAuth:
           token || password
             ? {

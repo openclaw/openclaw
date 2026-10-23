@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { resolveThinkingProfile } from "../auto-reply/thinking.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import * as activeThinkingPolicy from "../plugins/provider-thinking-active.js";
@@ -12,16 +12,21 @@ import {
 } from "./model-auth-availability.test-support.js";
 import { model, providerConfig, snapshot } from "./model-catalog-fixtures.test-support.js";
 import {
-  type ModelCatalogRoutePolicy,
   projectModelCatalogEntryForRoute,
   createConfiguredModelCatalogOverridesResolver,
 } from "./model-catalog-route.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
+import { openAIModelCatalogRoutePolicy } from "./openai-model-routes.js";
 
-const routePolicy: ModelCatalogRoutePolicy = {
-  resolveIdentity: (entry) => ({ id: entry.id, key: `${entry.provider}/${entry.id}` }),
-  matchesRoute: (entry, route) => entry.api === route.api && entry.baseUrl === route.baseUrl,
-};
+beforeEach(() => {
+  vi.spyOn(openAIModelCatalogRoutePolicy, "resolveIdentity").mockImplementation((entry) => ({
+    id: entry.id,
+    key: `${entry.provider}/${entry.id}`,
+  }));
+  vi.spyOn(openAIModelCatalogRoutePolicy, "matchesRoute").mockImplementation(
+    (entry, route) => entry.api === route.api && entry.baseUrl === route.baseUrl,
+  );
+});
 
 const platformEntry: ModelCatalogEntry = {
   provider: "openai",
@@ -49,7 +54,7 @@ const chatGPTEntry: ModelCatalogEntry = {
 const project = (params: Partial<Parameters<typeof projectModelCatalogEntryForRoute>[0]> = {}) =>
   projectModelCatalogEntryForRoute({
     entry: platformEntry,
-    projection: { kind: "selected", route: chatGPTRoute, policy: routePolicy },
+    projection: { kind: "selected", route: chatGPTRoute },
     ...params,
   });
 
@@ -103,9 +108,7 @@ it.each([
     .mockReturnValue({ levels: [{ id: "off" }], defaultLevel: "off" });
   const { entry: projected } = project({
     entry: expectDefined(catalog.entries[0], "prepared route test entry"),
-    projection: route
-      ? { kind: "selected", route, policy: routePolicy }
-      : { kind: "unresolved", policy: routePolicy },
+    projection: route ? { kind: "selected", route } : { kind: "unresolved" },
     catalog: catalog.routeVariants,
   });
   expect(
@@ -140,17 +143,13 @@ it("selects logical overrides from a legacy fallback", () => {
     maxTokens: 4096,
   });
   const cfg = providerConfig("openai", { baseUrl: platformRoute.baseUrl, models: [legacy] });
-  const canonicalPolicy: ModelCatalogRoutePolicy = {
-    ...routePolicy,
-    resolveIdentity: (entry) => {
-      const id = entry.id.replace(/^openai\//u, "");
-      return { id, key: `${entry.provider}/${id}` };
-    },
-  };
+  vi.spyOn(openAIModelCatalogRoutePolicy, "resolveIdentity").mockImplementation((entry) => {
+    const id = entry.id.replace(/^openai\//u, "");
+    return { id, key: `${entry.provider}/${id}` };
+  });
 
   const resolveOverrides = createConfiguredModelCatalogOverridesResolver({
     cfg,
-    policy: canonicalPolicy,
   });
   for (const id of ["gpt-5.5", "openai/gpt-5.5", "gpt-5.5"]) {
     expect(resolveOverrides({ ...platformEntry, id })).toEqual({

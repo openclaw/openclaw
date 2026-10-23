@@ -122,12 +122,17 @@ export function createContext(
     whatsappLoginConnected: null,
     whatsappBusy: false,
   };
+  let settleChannels: ((error: string | null) => void) | undefined;
   const refreshChannels = vi.fn(() => {
+    settleChannels?.(null);
+    const { promise, resolve } = Promise.withResolvers<string | null>();
+    settleChannels = resolve;
+    channelState.channelsRead = { completion: promise };
     channelState.channelsLoading = true;
     for (const listener of channelListeners) {
       listener(channelState);
     }
-    return new Promise<void>(() => {});
+    return promise.then(() => undefined);
   });
   const routeListeners = new Set<() => void>();
   const context = {
@@ -191,6 +196,8 @@ export function createContext(
       connection.token = credentials.token;
     },
     setChannelsConnected: (connected) => {
+      settleChannels?.(null);
+      channelState.channelsRead = null;
       channelState.connected = connected;
       channelState.channelsLoading = false;
       channelState.channelsError = null;
@@ -201,6 +208,9 @@ export function createContext(
     setChannelsSnapshot: (nextSnapshot) => {
       channelState.channelsSnapshot = nextSnapshot;
       channelState.channelsLastSuccess = nextSnapshot ? Date.now() : null;
+      channelState.channelsLoading = false;
+      channelState.channelsError = null;
+      settleChannels?.(null);
       for (const listener of channelListeners) {
         listener(channelState);
       }
@@ -208,6 +218,7 @@ export function createContext(
     setChannelsError: (error: string | null) => {
       channelState.channelsLoading = false;
       channelState.channelsError = error;
+      settleChannels?.(error);
       for (const listener of channelListeners) {
         listener(channelState);
       }

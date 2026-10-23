@@ -702,10 +702,13 @@ These are not per-operation config options. A timeout is a failure to investigat
 not permission to delete recovery state. Inspect server load, locks, network, and
 storage, and retry only after resolving the reported cause.
 
-The runtime sets `synchronous_commit=off`, matching the intended SQLite
-`synchronous=NORMAL` tradeoff. A PostgreSQL server or operating-system crash can
-lose recently acknowledged commits. Plan backups and recovery objectives with
-that durability policy in mind.
+OpenClaw uses the server's `synchronous_commit` setting. PostgreSQL's default
+`on` makes acknowledged commits durable across PostgreSQL or operating-system
+crashes. For SQLite WAL `synchronous=NORMAL`-like throughput, operators can opt in
+with `ALTER ROLE <openclaw_role> SET synchronous_commit = off` or the equivalent
+`ALTER DATABASE` setting. This can lose recently acknowledged commits on a server
+or operating-system crash, without corruption. Ports and backups always commit
+durably.
 
 ## Search on PostgreSQL
 

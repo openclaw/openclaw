@@ -121,13 +121,12 @@ describe("evaluateTelegramGroupPolicyAccess", () => {
         }),
       ).toEqual({
         allowed,
-        groupPolicy: policy,
         ...(!allowed ? { reason: "group-policy-allowlist-unauthorized" } : {}),
       });
     },
   );
 
-  it.each<[string, Partial<GroupAccessParams>, string?, string?]>([
+  it.each<[string, Partial<GroupAccessParams>, string?]>([
     ["explicit group with no sender entries", {}],
     ["empty wildcard", { resolveGroupPolicy: groupPolicy(true) }, "group-policy-allowlist-empty"],
     [
@@ -151,7 +150,6 @@ describe("evaluateTelegramGroupPolicyAccess", () => {
         resolveGroupPolicy: () => ({ allowlistEnabled: false, allowed: false }),
       },
       undefined,
-      "open",
     ],
     [
       "disabled policy",
@@ -160,7 +158,6 @@ describe("evaluateTelegramGroupPolicyAccess", () => {
         resolveGroupPolicy: () => ({ allowlistEnabled: false, allowed: false }),
       },
       "group-policy-disabled",
-      "disabled",
     ],
     [
       "non-group bypass",
@@ -179,10 +176,9 @@ describe("evaluateTelegramGroupPolicyAccess", () => {
         resolveGroupPolicy: groupPolicy(true),
       },
     ],
-  ])("enforces %s", (_name, overrides, reason, policy = "allowlist") => {
+  ])("enforces %s", (_name, overrides, reason) => {
     expect(runAccess(overrides)).toEqual({
       allowed: !reason,
-      groupPolicy: policy,
       ...(reason ? { reason } : {}),
     });
   });
@@ -197,7 +193,6 @@ describe("evaluateTelegramGroupPolicyAccess", () => {
     ).toEqual({
       allowed: false,
       reason: "group-policy-disabled",
-      groupPolicy: "disabled",
     });
     expect(
       runAccess({
@@ -205,6 +200,6 @@ describe("evaluateTelegramGroupPolicyAccess", () => {
         groupConfig: { groupPolicy: "disabled" },
         topicConfig: { groupPolicy: "open" },
       }),
-    ).toEqual({ allowed: true, groupPolicy: "open" });
+    ).toEqual({ allowed: true });
   });
 });

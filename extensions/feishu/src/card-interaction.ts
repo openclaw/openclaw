@@ -85,11 +85,7 @@ function buildFeishuCardActionTextFallback(event: FeishuCardActionEventLike): st
   return String(actionValue);
 }
 
-export function decodeFeishuCardAction(params: {
-  event: FeishuCardActionEventLike;
-  now?: number;
-}): DecodedFeishuCardAction {
-  const { event, now = Date.now() } = params;
+export function decodeFeishuCardAction(event: FeishuCardActionEventLike): DecodedFeishuCardAction {
   const actionValue = event.action.value;
   if (!isRecord(actionValue) || actionValue.oc !== FEISHU_CARD_INTERACTION_VERSION) {
     return {
@@ -131,7 +127,7 @@ export function decodeFeishuCardAction(params: {
       return { kind: "invalid", reason: "malformed" };
     }
 
-    if (typeof actionValue.c.e === "number" && actionValue.c.e < now) {
+    if (typeof actionValue.c.e === "number" && actionValue.c.e < Date.now()) {
       return { kind: "invalid", reason: "stale" };
     }
 
