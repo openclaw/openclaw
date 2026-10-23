@@ -388,7 +388,7 @@ export function discoverSkillCandidates(params: {
   const rootDir = path.resolve(params.dir);
   let rootRealPath: string;
   try {
-    rootRealPath = fs.realpathSync(rootDir);
+    rootRealPath = fs.realpathSync.native(rootDir);
   } catch (error) {
     if (!isMissingPathError(error)) {
       params.onDiagnostic?.({ kind: "read", path: rootDir, message: String(error) });
