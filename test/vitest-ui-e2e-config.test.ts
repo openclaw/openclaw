@@ -345,7 +345,7 @@ describe("Control UI E2E resource ownership", () => {
       expect(entry.phase).toBe(serial ? 1 : 0);
       expect(entry.workers).toBe(serial ? 1 : result.rootWorkers);
       if (uiE2ePrivateServerTestFiles.includes(entry.file)) {
-        expect(entry.project).toBe("ui-e2e-serial-standalone");
+        expect(entry.project).toBe(serial ? "ui-e2e-serial-standalone" : "ui-e2e-standalone");
       }
       if (realGatewayFiles.includes(entry.file)) {
         expect(entry.project).toBe(
