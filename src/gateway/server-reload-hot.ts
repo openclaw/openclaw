@@ -605,7 +605,6 @@ export function createGatewayReloadHandlers(
             }),
           timeoutMs: MCP_RUNTIME_RELOAD_DISPOSE_TIMEOUT_MS,
           onWarn: params.logReload.warn,
-          label: "bundle-mcp runtime disposal during config reload",
         });
       }
 
