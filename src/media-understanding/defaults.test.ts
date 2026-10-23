@@ -126,7 +126,7 @@ describe("media defaults", () => {
   });
   it("reads document model hints from provider metadata", () => {
     const resolve = (providerId: string, mode: "textExtraction" | "image") =>
-      resolveDocumentMediaModel({ providerId, document: "pdf", mode });
+      resolveDocumentMediaModel({ providerId, mode });
     expect(resolve("minimax-portal-cn", "textExtraction")).toBe("MiniMax-M2.7");
     expect(resolve("minimax", "image")).toBe(false);
     expect(resolve("openai", "textExtraction")).toBeUndefined();

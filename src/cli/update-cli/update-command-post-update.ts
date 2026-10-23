@@ -345,6 +345,7 @@ async function finishSettledUpdate(
         opts: params.opts,
         env: currentServiceStop()?.serviceEnv ?? params.ownedManagedUpdateEnv,
         timeoutMs: params.updateStepTimeoutMs,
+        mutationStarted: params.mutationStarted,
         serviceStopped: !rolledBack && currentServiceStop()?.stopped,
         gatewayStartAttempted,
         definitionRecovery,

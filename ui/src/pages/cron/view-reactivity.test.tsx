@@ -157,14 +157,26 @@ it("keeps retained row controls current across pending queries and access change
   flush();
   expect(view.container.querySelector(".cron-table__row")).toBe(row);
   expect(run.disabled).toBe(true);
-  expect(toggle.getAttribute("aria-disabled")).toBe("true");
+  expect(toggle.disabled).toBe(true);
 
-  setProps((previous) => ({ ...previous, busy: false, connected: false }));
+  setProps((previous) => ({ ...previous, toggleSavingJobId: job.id }));
   flush();
   expect(run.disabled).toBe(true);
+  expect(toggle.disabled).toBe(false);
   expect(toggle.getAttribute("aria-disabled")).toBe("true");
 
-  setProps((previous) => ({ ...previous, connected: true, onRun: currentRun }));
+  setProps((previous) => ({ ...previous, connected: false }));
+  flush();
+  expect(run.disabled).toBe(true);
+  expect(toggle.disabled).toBe(true);
+
+  setProps((previous) => ({
+    ...previous,
+    busy: false,
+    connected: true,
+    toggleSavingJobId: null,
+    onRun: currentRun,
+  }));
   flush();
   expect(row.querySelector(".cron-row-run")).toBe(run);
   expect(run.disabled).toBe(false);

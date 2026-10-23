@@ -29,8 +29,10 @@ import {
   mutateSessionGroupCatalog,
   readSessionGroupCatalog,
 } from "./session-group-catalog.js";
-import { readSessionGroupCatalogSnapshot } from "./session-group-catalog.kernel.js";
-import { registerSessionGroupInDatabase } from "./session-group-registration.kernel.js";
+import {
+  mutateSessionGroupCatalogInDatabase,
+  readSessionGroupCatalogSnapshot,
+} from "./session-group-catalog.kernel.js";
 import {
   deleteSessionGroup,
   ensureSessionGroupRegistered,
@@ -345,9 +347,15 @@ describe("session groups catalog", () => {
     );
 
     const database = openOpenClawStateDatabase({ env });
-    expect(registerSessionGroupInDatabase(database, "Travel", env)).toBe(false);
+    expect(
+      mutateSessionGroupCatalogInDatabase(database, { kind: "register", name: "Travel" }, env)
+        .changed,
+    ).toBe(false);
     expect(readSessionGroupCatalogSnapshot(database.db).groups).toEqual(groups("Work", "Travel"));
-    expect(registerSessionGroupInDatabase(database, "Later", env)).toBe(true);
+    expect(
+      mutateSessionGroupCatalogInDatabase(database, { kind: "register", name: "Later" }, env)
+        .changed,
+    ).toBe(true);
     expect(readSessionGroupCatalogSnapshot(database.db).groups.at(-1)).toEqual({
       name: "Later",
       position: 2,

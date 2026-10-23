@@ -400,7 +400,7 @@ describe("renderUpdates", () => {
     });
     const automatic = automaticUpdatesControl().toggle;
     expect(automatic.checked).toBe(false);
-    expect(automatic.hasAttribute("aria-disabled")).toBe(true);
+    expect(automatic.hasAttribute("disabled")).toBe(true);
     expect(row("Automatic updates").textContent).toContain("never installs them automatically");
   });
 
@@ -421,7 +421,7 @@ describe("renderUpdates", () => {
     });
 
     const automatic = automaticUpdatesControl();
-    expect(automatic.toggle.hasAttribute("aria-disabled")).toBe(disabled);
+    expect(automatic.toggle.hasAttribute("disabled")).toBe(disabled);
     if (disabled) {
       expect(automatic.row.textContent).toContain(
         "Automatic dev updates require a source (git) install. This install is a package install — use stable or beta for automatic updates.",

@@ -12,19 +12,17 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { formatTimeAgo } from "./format-time/format-relative.ts";
 
-type ChannelSummaryOptions = {
-  colorize?: boolean;
-  includeAllowFrom?: boolean;
-  sourceConfig?: OpenClawConfig;
-};
-
 type ChannelAccountEntry = ChannelAccountInspectionResult & {
   accountId: string;
 };
 
 export async function buildChannelSummary(
   cfg: OpenClawConfig,
-  options?: ChannelSummaryOptions,
+  options?: {
+    colorize?: boolean;
+    includeAllowFrom?: boolean;
+    sourceConfig?: OpenClawConfig;
+  },
 ): Promise<string[]> {
   const lines: string[] = [];
   const { colorize = false, includeAllowFrom = false } = options ?? {};

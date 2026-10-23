@@ -296,7 +296,7 @@ describe("agents skills panel (browser)", () => {
     );
     const toggle = learnedRow?.querySelector<HTMLInputElement>("input.settings-toggle__input");
     expect(toggle?.checked).toBe(true);
-    expect(toggle?.hasAttribute("aria-disabled")).toBe(true);
+    expect(toggle?.hasAttribute("disabled")).toBe(true);
     expect(learnedRow?.textContent).toContain("archive in Workshop to hide");
     expect(container.textContent).toContain("2/2");
   });

@@ -313,6 +313,7 @@ function JobsTable(
               jobs={props.jobs}
               canManage={canManage()}
               busy={busy()}
+              toggleSavingJobId={props.toggleSavingJobId}
               connected={connected()}
               onRun={props.onRun}
               onToggle={props.onToggle}

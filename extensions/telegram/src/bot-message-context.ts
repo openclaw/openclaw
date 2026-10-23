@@ -447,10 +447,7 @@ export const buildTelegramMessageContext = async ({
     statusReactionsConfig?.enabled === true &&
     shouldSendAckReaction;
   const resolvedStatusReactionEmojis = statusReactionsEnabled
-    ? resolveTelegramStatusReactionEmojis({
-        initialEmoji: ackReaction,
-        overrides: undefined,
-      })
+    ? resolveTelegramStatusReactionEmojis(ackReaction)
     : null;
   const statusReactionVariantsByEmoji = resolvedStatusReactionEmojis
     ? buildTelegramStatusReactionVariants(resolvedStatusReactionEmojis)

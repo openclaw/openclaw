@@ -1,6 +1,20 @@
 // Barnacle owns deterministic GitHub triage and auto-response behavior.
 
+import { createHash } from "node:crypto";
 import { escapeRegExp } from "../lib/regexp.mjs";
+import {
+  BARNACLE,
+  admissionKey,
+  cheapProtection,
+  freshTarget,
+  humanActivityAt,
+  ownershipProtection,
+  reader,
+  securityProtection,
+  snapshotOf,
+  trustedBarnacle,
+  verifiedComment,
+} from "./barnacle-state.mjs";
 import {
   NEEDS_PR_CONTEXT_LABEL,
   PROOF_SUFFICIENT_LABEL,
@@ -68,6 +82,73 @@ const rules = [
       "OpenClaw is not affiliated with Moltbook, and issues related to Moltbook should not be submitted here.",
   },
 ];
+const issueInvalidRule = { stateReason: "not_planned" };
+const issueSpamRule = { stateReason: "not_planned", lock: true, lockReason: "spam" };
+
+// A receipt from a previous close cannot authorize a later reopen episode.
+// Immutable event IDs distinguish transitions even within the same second.
+function responseEpisode(snapshot) {
+  const reopens = snapshot.timeline.filter((event) => event.event === "reopened");
+  if (
+    reopens.some(
+      (event) => !Number.isSafeInteger(event.id) || event.id <= 0 || !Date.parse(event.created_at),
+    )
+  ) {
+    return null;
+  }
+  return reopens.length ? `reopen-${reopens.at(-1).id}` : "initial";
+}
+
+function responseClosureBody(snapshot, rule) {
+  const { pr: item } = snapshot;
+  const episode = responseEpisode(snapshot);
+  if (!episode) {
+    throw new Error("Unknown Barnacle response episode; closure withheld");
+  }
+  const kind = item.head ? "pull-request" : "issue";
+  return `${rule.message ?? "Closing as not planned."}\n\n<!-- barnacle-response:v1 item=${item.number} kind=${kind} head=${item.head?.sha ?? "none"} episode=${episode} rule=${createHash("sha256").update(JSON.stringify(rule)).digest("hex")} -->\n`;
+}
+
+function verifiedResponseReceipt(snapshot, commentId, body, appId, existing = false) {
+  return (
+    verifiedComment(
+      snapshot.comments.find((comment) => comment.id === commentId),
+      body,
+      appId,
+      existing,
+    ) && !snapshot.edits.some((edit) => edit.commentId === commentId)
+  );
+}
+
+/** Only the response owner can authenticate its deterministic closure rules. */
+export function hasVerifiedResponseClosure(snapshot, event) {
+  const { pr, comments } = snapshot;
+  if (
+    pr.head ||
+    pr.state !== "closed" ||
+    pr.state_reason !== "not_planned" ||
+    pr.closed_by?.id !== event.actor?.id ||
+    !BARNACLE.has(event.actor?.id) ||
+    snapshot.activityProtection ||
+    snapshot.historyProtection ||
+    snapshot.unstable ||
+    !responseEpisode(snapshot)
+  ) {
+    return false;
+  }
+  return comments.some((comment) =>
+    [...rules, issueInvalidRule, issueSpamRule].some(
+      (rule) =>
+        verifiedResponseReceipt(
+          snapshot,
+          comment.id,
+          responseClosureBody(snapshot, rule),
+          BARNACLE.get(event.actor.id),
+          true,
+        ) && Date.parse(comment.created_at) <= Date.parse(event.created_at),
+    ),
+  );
+}
 
 /** @type {Record<string, { color: string; description: string }>} */
 export const managedLabelSpecs = {
@@ -831,16 +912,92 @@ async function applyResponseRule(github, context, issueNumber, rule) {
     repo: context.repo.repo,
     issue_number: issueNumber,
   };
-  if (rule.message) {
-    await github.rest.issues.createComment({ ...target, body: rule.message });
+  const io = reader(github, github, context, 4500);
+  const live = await freshTarget(github, context, issueNumber);
+  const kind = live.head ? "pull-request" : "issue";
+  const observe = () => snapshotOf(github, github, io, issueNumber, kind, false);
+  const before = await observe();
+  const protection = (snapshot) =>
+    cheapProtection(snapshot.pr) ||
+    snapshot.ownershipProtection ||
+    snapshot.activityProtection ||
+    snapshot.historyProtection ||
+    snapshot.unstable ||
+    securityProtection(snapshot.comments, snapshot.pr);
+  if (protection(before)) {
+    return;
+  }
+  const body = responseClosureBody(before, rule);
+  const existing = before.comments.findLast((comment) =>
+    verifiedResponseReceipt(before, comment.id, body, context.barnacleAppId, true),
+  );
+  const { data: posted } = existing
+    ? { data: existing }
+    : await github.rest.issues.createComment({ ...target, body });
+  const { data: stored } = await github.rest.issues.getComment({
+    ...context.repo,
+    comment_id: posted.id,
+  });
+  if (!verifiedComment(stored, body, context.barnacleAppId, Boolean(existing))) {
+    throw new Error("Barnacle response readback mismatch; closure withheld");
+  }
+  const final = await observe();
+  if (
+    protection(final) ||
+    responseEpisode(final) !== responseEpisode(before) ||
+    !verifiedResponseReceipt(final, stored.id, body, context.barnacleAppId, Boolean(existing)) ||
+    admissionKey(before.pr) !== admissionKey(final.pr) ||
+    humanActivityAt(before) !== humanActivityAt(final)
+  ) {
+    throw new Error("Barnacle target changed after notice; closure withheld");
   }
   await github.rest.issues.update({
     ...target,
     state: "closed",
-    ...(rule.stateReason ? { state_reason: rule.stateReason } : {}),
+    state_reason: rule.stateReason ?? "not_planned",
   });
+  const terminal = await freshTarget(github, context, issueNumber);
+  const actor = [...BARNACLE].find(([, app]) => app === context.barnacleAppId)?.[0];
+  if (
+    terminal.state !== "closed" ||
+    terminal.merged ||
+    terminal.closed_by?.id !== actor ||
+    terminal.head?.sha !== live.head?.sha ||
+    (!live.head && terminal.state_reason !== (rule.stateReason ?? "not_planned"))
+  ) {
+    throw new Error("Barnacle closure terminal verification failed");
+  }
   if (rule.lock) {
+    const afterClose = await observe();
+    const lockTarget = await freshTarget(github, context, issueNumber);
+    if (
+      afterClose.pr.state !== "closed" ||
+      afterClose.pr.locked ||
+      responseEpisode(afterClose) !== responseEpisode(before) ||
+      !verifiedResponseReceipt(
+        afterClose,
+        stored.id,
+        body,
+        context.barnacleAppId,
+        Boolean(existing),
+      ) ||
+      admissionKey({ ...afterClose.pr, state: "open" }) !== admissionKey(before.pr) ||
+      humanActivityAt(afterClose) !== humanActivityAt(before) ||
+      afterClose.ownershipProtection ||
+      afterClose.activityProtection ||
+      afterClose.historyProtection ||
+      afterClose.unstable ||
+      securityProtection(afterClose.comments, afterClose.pr) ||
+      lockTarget.closed_by?.id !== actor ||
+      admissionKey(lockTarget) !== admissionKey(afterClose.pr)
+    ) {
+      throw new Error("Barnacle target changed before lock");
+    }
     await github.rest.issues.lock({ ...target, lock_reason: rule.lockReason });
+    const locked = await freshTarget(github, context, issueNumber);
+    if (!locked.locked || locked.state !== "closed") {
+      throw new Error("Barnacle lock readback mismatch");
+    }
   }
 }
 
@@ -868,6 +1025,112 @@ async function removeLabels(github, context, issueNumber, labels, labelSet) {
   }
 }
 
+export async function runBarnacleAutoResponse({ github, context, core = console, expectedAppId }) {
+  const target = context.payload.issue ?? context.payload.pull_request;
+  if (!target) {
+    return;
+  }
+  if (![...BARNACLE.values()].includes(expectedAppId)) {
+    throw new Error("A selected Barnacle app identity is required");
+  }
+  const io = reader(github, github, context, 4500);
+  let expectedTarget;
+  const admit = async () => {
+    const live = await freshTarget(github, context, target.number);
+    const reason = cheapProtection(live) || (await ownershipProtection(io, live));
+    if (reason) {
+      throw Object.assign(new Error(reason), { code: "BARNACLE_PROTECTED" });
+    }
+    if (expectedTarget && admissionKey(live) !== admissionKey(expectedTarget)) {
+      throw new Error("Barnacle target changed during response admission");
+    }
+    return live;
+  };
+  try {
+    const live = await admit();
+    expectedTarget = structuredClone(live);
+    const guarded = { ...github, rest: { ...github.rest, issues: { ...github.rest.issues } } };
+    for (const method of [
+      "addLabels",
+      "removeLabel",
+      "createComment",
+      "createLabel",
+      "updateLabel",
+      "update",
+    ]) {
+      guarded.rest.issues[method] = async (params) => {
+        if (method !== "createComment") {
+          await admit();
+          const response = await github.rest.issues[method](params);
+          if (method === "addLabels") {
+            const labels = new Set(expectedTarget.labels.map((label) => label.name ?? label));
+            for (const name of params.labels) {
+              labels.add(name);
+            }
+            expectedTarget.labels = [...labels].map((name) => ({ name }));
+          }
+          if (method === "removeLabel") {
+            expectedTarget.labels = expectedTarget.labels.filter(
+              (label) => (label.name ?? label) !== params.name,
+            );
+          }
+          return response;
+        }
+        const body = params.body.includes("<!-- barnacle-")
+          ? params.body
+          : `${params.body}\n\n<!-- barnacle-reply:v1 item=${target.number} event=${context.payload.comment?.id ?? context.payload.action} key=${createHash(
+              "sha256",
+            )
+              .update(JSON.stringify([live.head?.sha, live.body, params.body]))
+              .digest("hex")} -->\n`;
+        const previous = (
+          await io.pages(github.rest.issues.listComments, { issue_number: target.number })
+        ).findLast(
+          (comment) =>
+            trustedBarnacle(comment) &&
+            comment.body === body &&
+            comment.created_at === comment.updated_at,
+        );
+        // Pagination may outlive a new hold or changed target. Re-admit at
+        // publication, including receipt reuse, before this wrapper returns.
+        await admit();
+        const response = previous
+          ? { data: previous }
+          : await github.rest.issues.createComment({ ...params, body });
+        const { data: stored } = await io.call(github.rest.issues.getComment, {
+          comment_id: response.data.id,
+        });
+        if (!verifiedComment(stored, body, expectedAppId, Boolean(previous))) {
+          throw new Error("Barnacle comment readback mismatch");
+        }
+        return { data: stored };
+      };
+    }
+    const payload = {
+      ...context.payload,
+      [context.payload.issue ? "issue" : "pull_request"]: live,
+    };
+    // Label-trigger admission uses the live label set. Replayed/removed labels
+    // cannot turn an old event into a new product decision.
+    if (
+      payload.action === "labeled" &&
+      !live.labels.some((label) => (label.name ?? label) === payload.label?.name)
+    ) {
+      return;
+    }
+    await runAdmittedAutoResponse({
+      github: guarded,
+      context: { ...context, payload, barnacleAppId: expectedAppId },
+      core,
+    });
+  } catch (error) {
+    if (error.code !== "BARNACLE_PROTECTED") {
+      throw error;
+    }
+    core.info(`Skipping Barnacle #${target.number}: ${error.message}`);
+  }
+}
+
 /**
  * @param {{
  *   github: Record<string, unknown>;
@@ -875,7 +1138,7 @@ async function removeLabels(github, context, issueNumber, labels, labelSet) {
  *   core?: Pick<Console, "info">;
  * }} params
  */
-export async function runBarnacleAutoResponse({ github, context, core = console }) {
+async function runAdmittedAutoResponse({ github, context, core = console }) {
   const target = context.payload.issue ?? context.payload.pull_request;
   if (!target) {
     return;
@@ -1082,18 +1345,12 @@ export async function runBarnacleAutoResponse({ github, context, core = console 
   }
 
   if (issue && labelSet.has(spamLabel)) {
-    await applyResponseRule(github, context, issue.number, {
-      stateReason: "not_planned",
-      lock: true,
-      lockReason: "spam",
-    });
+    await applyResponseRule(github, context, issue.number, issueSpamRule);
     return;
   }
 
   if (issue && labelSet.has(invalidLabel)) {
-    await applyResponseRule(github, context, issue.number, {
-      stateReason: "not_planned",
-    });
+    await applyResponseRule(github, context, issue.number, issueInvalidRule);
     return;
   }
 

@@ -57,7 +57,11 @@ export function CronPageContent(props: { page: ReturnType<typeof createCronPage>
       />
       <CronRunTranscriptView transcript={props.page.runTranscript} revision={revision} />
       <SettingsWorkspace>
-        <CronView {...viewProps()} busy={props.page.saving() || viewProps().busy} />
+        <CronView
+          {...viewProps()}
+          busy={props.page.saving() || viewProps().busy}
+          toggleSavingJobId={props.page.toggleSavingJobId()}
+        />
       </SettingsWorkspace>
     </>
   );

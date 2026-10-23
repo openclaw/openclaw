@@ -11,13 +11,6 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-type SessionDisplayModelRow = Pick<
-  SessionEntry,
-  "model" | "modelProvider" | "modelOverride" | "providerOverride"
-> & {
-  key: string;
-};
-
 function normalizeCliRuntimeDisplayRef(
   cfg: OpenClawConfig,
   agentId: string | undefined,
@@ -61,7 +54,9 @@ function normalizeCliRuntimeDisplayRef(
 /** Resolves provider/model display metadata for a session row. */
 export function resolveSessionDisplayModelRef(
   cfg: OpenClawConfig,
-  row: SessionDisplayModelRow,
+  row: Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride"> & {
+    key: string;
+  },
   classifyCliProvider: CliProviderClassifier = (provider) => isCliProvider(provider, cfg),
   ownerAgentId?: string,
 ): ModelRef {

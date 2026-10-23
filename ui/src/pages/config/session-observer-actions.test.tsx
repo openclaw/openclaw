@@ -119,6 +119,7 @@ describe("Session Observer actions", () => {
           expect(page.request).toHaveBeenCalledWith("config.patch", expect.anything());
           expect(page.outlet.textContent).toContain("Saving…");
           expect(toggle.getAttribute("aria-disabled")).toBe("true");
+          expect(toggle.disabled).toBe(false);
           expect(toggle.checked).toBe(false);
         });
         expect(page.observerToggle()).toBe(toggle);
@@ -185,6 +186,7 @@ describe("Session Observer actions", () => {
       await choosePickerValue(page.picker(), "");
       await waitForSolid(() => expect(page.outlet.textContent).toContain("Saving…"));
       expect(page.picker().textContent).toContain("Disabled");
+      expect(page.observerToggle().disabled).toBe(true);
       const patch = page.request.mock.calls.find(([method]) => method === "config.patch");
       expect(patch?.[1]).toMatchObject({
         raw: JSON.stringify({
@@ -201,6 +203,7 @@ describe("Session Observer actions", () => {
       });
       await waitForSolid(() => expect(page.outlet.textContent).not.toContain("Saving…"));
       expect(page.picker().textContent).toContain("Disabled");
+      expect(page.observerToggle().disabled).toBe(false);
     } finally {
       await page.dispose();
     }

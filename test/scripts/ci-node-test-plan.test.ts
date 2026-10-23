@@ -345,7 +345,7 @@ describe("Control UI release-only inventories", () => {
 
   it("balances qualified real-Gateway work around the serial and desktop proof", () => {
     const desktop = "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts";
-    const serial = "ui/src/e2e/session-pr-reader-lifetime.real-gateway.e2e.test.ts";
+    const serial = "ui/src/e2e/mcp-app-conformance.e2e.test.ts";
     const parallel = [
       "ui/src/e2e/activity-run-inspector.real-gateway.e2e.test.ts",
       "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
