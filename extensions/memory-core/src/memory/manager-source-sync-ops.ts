@@ -281,9 +281,11 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
       if (!targetArchiveFiles) {
         return;
       }
+      // Retained predecessors of a live session are SQLite transcripts too;
+      // only archive targets may retire the live path of their session id.
       const activeCorpusPaths = new Set(
         corpusEntries
-          .filter((entry) => entry.artifactKind === "active-session")
+          .filter((entry) => entry.transcriptSource === "sqlite")
           .map((entry) => this.sessionPathForCorpusEntry(entry)),
       );
       const staleLivePaths = Array.from(targetArchiveFiles)

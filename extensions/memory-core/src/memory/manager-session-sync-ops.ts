@@ -665,9 +665,14 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
 function selectRetainedSessionLineage(
   entries: readonly SessionTranscriptCorpusEntry[],
 ): SessionTranscriptCorpusEntry[] {
-  const previousBySessionId = new Map(
-    entries.map((entry) => [entry.sessionId, entry.previousSessionId] as const),
-  );
+  // Archive artifacts share a session id with the SQLite row they were taken
+  // from but carry no lineage; only recorded links may define a predecessor.
+  const previousBySessionId = new Map<string, string>();
+  for (const entry of entries) {
+    if (entry.previousSessionId) {
+      previousBySessionId.set(entry.sessionId, entry.previousSessionId);
+    }
+  }
   const lineage = new Set<string>();
   for (const entry of entries) {
     let previous = entry.artifactKind === "active-session" ? entry.previousSessionId : undefined;
