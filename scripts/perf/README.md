@@ -632,7 +632,7 @@ node --import ./scripts/tsx.mjs scripts/bench-gateway-startup.ts \
   --output /path/to/result.json
 ```
 
-This fixture has 44 synthetic startup-active plugins, eight local agents, 4,096
+This fixture has 44 synthetic startup-active plugins, eight local agents, 5,000
 shared session entries, and 128 MiB of inert synthetic shared-state payload. It
 uses the normal database and session writers and keeps clean-close seals. It
 does not provision remote workers or make model/channel calls. Actual database
@@ -652,9 +652,10 @@ the corresponding startup capabilities; enabling a plugin alone does not
 override its lazy activation policy. Other root sections and `plugins.load`
 are rejected, preserving the benchmark's state, workspaces, auth, and disabled
 background jobs. Each bundled ID replaces one synthetic external plugin,
-keeping the total at 44. Include default slot plugins such as `memory-core` in
-the requested inventory. Include only synthetic configuration and credentials,
-disable scheduled external work, and deny external network access for the run.
+keeping the total at 44. The fixture disables implicit `memory-core` activation;
+include it in the requested inventory to enable it. Include only synthetic
+configuration and credentials, disable scheduled external work, and deny external
+network access for the run.
 Channels remain suppressed even when configured for plugin activation.
 The fixture metadata and result contain the full config fragment and external
 count; a run rejects configuration that differs from its seed or a loaded
