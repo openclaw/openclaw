@@ -679,7 +679,6 @@
 ["extensions/mattermost/src/mattermost/monitor.inbound-system-event.test.ts","./monitor-slash.js","b2bdf86c8ec9db3b5f7648679107c0e5981a2e7761d14f6939766a55bc6a25f6",1]
 ["extensions/mattermost/src/mattermost/monitor.reaction-thread-session.test.ts","../runtime.js","f3b19ed3246a6d6bf97e0169c1de390e2afbc133f98710c379e85bbc2e20070a",1]
 ["extensions/mattermost/src/mattermost/send.test.ts","../../runtime-api.js","70081f1c6ea34c19c38e182d38442f3c2b23cd102c4de462df022bf162f1b53f",1]
-["extensions/mattermost/src/mattermost/send.test.ts","./accounts.js","6611123046af781504b371e456f61978bad86c95b3357d9ef3123c01df122f5e",1]
 ["extensions/mattermost/src/mattermost/send.test.ts","./client.js","b0ed571f217f82f91eeedd5290602771074c304d5550ac4e7a27946cc8a4060d",1]
 ["extensions/mattermost/src/mattermost/send.test.ts","./runtime-api.js","1b04a96efca638f4da585c085951a3f46a5f86362b24303c297f8bdc168d0f79",1]
 ["extensions/mattermost/src/mattermost/send.test.ts","openclaw/plugin-sdk/markdown-table-runtime","b7e7164a417f62f43b374ffa00a0d66f67e3cc14ec7813aaed427cd0bf5e7e51",1]

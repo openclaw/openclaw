@@ -19,7 +19,7 @@ import type {
   MattermostChatTypeKey,
   MattermostReplyToMode,
 } from "../types.js";
-import { normalizeMattermostBaseUrl } from "./client.js";
+import { createMattermostClient, normalizeMattermostBaseUrl } from "./client.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 
 type MattermostTokenSource = "env" | "config" | "none";
@@ -132,6 +132,36 @@ export function resolveMattermostAccount(params: {
   accountId?: string | null;
 }): ResolvedMattermostAccount {
   return resolveMattermostAccountWithMode({ ...params, mode: "strict" });
+}
+
+export function createMattermostAccountClient(
+  account: ResolvedMattermostAccount,
+  overrides: { botToken?: string; baseUrl?: string },
+  assertRequestCurrent?: () => void,
+) {
+  const botToken =
+    normalizeOptionalString(overrides.botToken) ?? normalizeOptionalString(account.botToken);
+  if (!botToken) {
+    throw new Error(
+      `Mattermost bot token missing for account "${account.accountId}" (set channels.mattermost.accounts.${account.accountId}.botToken or MATTERMOST_BOT_TOKEN for default).`,
+    );
+  }
+  const baseUrl = normalizeMattermostBaseUrl(overrides.baseUrl ?? account.baseUrl);
+  if (!baseUrl) {
+    throw new Error(
+      `Mattermost baseUrl missing for account "${account.accountId}" (set channels.mattermost.accounts.${account.accountId}.baseUrl or MATTERMOST_URL for default).`,
+    );
+  }
+  return {
+    baseUrl,
+    botToken,
+    client: createMattermostClient({
+      baseUrl,
+      botToken,
+      allowPrivateNetwork: account.config.network?.dangerouslyAllowPrivateNetwork === true,
+      assertRequestCurrent,
+    }),
+  };
 }
 
 export function inspectMattermostAccount(params: {
