@@ -614,8 +614,8 @@ function renderShellRuntime(
     initialShellOptions.onboarding,
   );
   const view = <ApplicationShell host={owner} />;
-  const initialOnShell = untrack(() => props.onShell);
   onSettled(() => {
+    const initialOnShell = props.onShell;
     owner.connect();
     const unmountPresentation = owner.mountPresentation();
     initialOnShell?.(owner);

@@ -93,6 +93,10 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
 
     const directAnnounceResult = getGatewayAgentResult(directAnnounceResponse);
     const directAnnounceRecord = asOptionalRecord(directAnnounceResponse);
+    const effectiveReplyExpectation =
+      directAnnounceResult?.meta?.terminalReplyExpectation === "result-required"
+        ? "result-required"
+        : replyExpectation;
     if (parentOnly) {
       return resolvePrivateCompletionDeliveryResult(
         directAnnounceRecord,
@@ -128,7 +132,7 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
       !directAnnounceResult?.meta?.error &&
       !directAnnounceResult?.meta?.aborted;
     const acceptsIntentionalSilentCompletion =
-      replyExpectation !== "result-required" &&
+      effectiveReplyExpectation !== "result-required" &&
       requesterCompletedSuccessfully &&
       hasIntentionalSilentCompletionReply &&
       directAnnounceResult?.meta?.yielded !== true &&
@@ -286,7 +290,7 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
       if (
         !hasVisibleCompletionReply &&
         !acceptsIntentionalSilentCompletion &&
-        (replyExpectation === "result-required" ||
+        (effectiveReplyExpectation === "result-required" ||
           requiresSettleReply ||
           (params.expectsCompletionMessage &&
             (shouldDeliverAgentFinal ||

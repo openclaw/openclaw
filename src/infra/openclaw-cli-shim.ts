@@ -55,19 +55,12 @@ exec ${[invocation.command, ...args].map(quoteCliArg).join(" ")} "$@"
  * Materialize the exact running Gateway CLI as an agent-visible PATH command.
  * The generated launcher is a runtime tool contract, not persisted product state.
  */
-export async function prepareGatewayAgentCliShim(
-  options: {
-    env?: NodeJS.ProcessEnv;
-    invocation?: OpenClawCliInvocation;
-    platform?: NodeJS.Platform;
-    stateDir?: string;
-  } = {},
-): Promise<void> {
-  const env = options.env ?? process.env;
-  const platform = options.platform ?? process.platform;
-  const invocation = options.invocation ?? resolveCurrentOpenClawCliInvocation([]);
+export async function prepareGatewayAgentCliShim(): Promise<void> {
+  const env = process.env;
+  const platform = process.platform;
+  const invocation = resolveCurrentOpenClawCliInvocation([]);
   const profile = normalizeProfileName(env.OPENCLAW_PROFILE);
-  const binDir = path.join(options.stateDir ?? resolveStateDir(env), AGENT_CLI_BIN_DIR);
+  const binDir = path.join(resolveStateDir(env), AGENT_CLI_BIN_DIR);
   const executablePath = path.join(binDir, platform === "win32" ? "openclaw.cmd" : "openclaw");
   const content = renderCliShim(invocation, profile, platform === "win32");
 

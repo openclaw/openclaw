@@ -12,6 +12,7 @@ import { resolveSessionStableReplyMode } from "../../auto-reply/reply/session-st
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import {
+  buildRestartRecoveryClaimCleanupPatch,
   isMainRestartRecoveryCandidate,
   normalizeMainSessionRecoveryRunFences,
 } from "../../config/sessions/restart-recovery-state.js";
@@ -35,6 +36,7 @@ import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import { isInternalMessageChannel, resolveMessageChannel } from "../../utils/message-channel.js";
 import {
   buildCurrentRunRestartRecoveryClaim,
+  canReplaceTerminalCommandRecoveryClaim,
   prepareCommandHarnessCompletionRecovery,
 } from "../agent-command-restart-recovery.js";
 import { resolveAgentWorkspaceDir } from "../agent-scope-config.js";
@@ -57,10 +59,20 @@ export function prepareCommandSessionRecoveryEntry(
     isSessionRollover: boolean;
   },
 ) {
-  const { entry, sessionId, runId, opts, now, isSessionRollover } = params;
+  const { sessionId, runId, opts, now, isSessionRollover } = params;
+  const entry = canReplaceTerminalCommandRecoveryClaim(params.entry, runId)
+    ? {
+        ...params.entry,
+        ...buildRestartRecoveryClaimCleanupPatch({
+          entry: params.entry,
+          recordTerminalSource: false,
+        }),
+      }
+    : params.entry;
   const { harnessCompletion, guardedHarnessCompletion, sourceOptions, isCompletionCurrent } =
     prepareCommandHarnessCompletionRecovery({
       ...params,
+      entry,
       hasDeliveryContext: Boolean(params.deliveryContext),
     });
   const operatorSource =
