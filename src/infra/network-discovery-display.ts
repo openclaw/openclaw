@@ -2,6 +2,17 @@ import type { GatewayBindMode } from "../config/types.js";
 import { pickPrimaryLanIPv4, resolveGatewayBindHost } from "../gateway/net.js";
 import { pickPrimaryTailnetIPv4 } from "./tailnet.js";
 
+// Display helpers are best-effort wrappers around network discovery. Startup
+// and config output should keep rendering even when interface probes fail.
+function displayNetworkWarning(error: unknown, warningPrefix?: string): { warning?: string } {
+  const prefix = warningPrefix?.trim();
+  if (!prefix) {
+    return {};
+  }
+  const message = error instanceof Error ? error.message.trim() : "";
+  return { warning: `${prefix}: ${message || "network interface discovery failed"}.` };
+}
+
 function fallbackBindHostForDisplay(bindMode: GatewayBindMode, customBindHost?: string): string {
   if (bindMode === "lan") {
     return "0.0.0.0";
@@ -34,16 +45,17 @@ export function pickBestEffortPrimaryTailnetIPv4(): string | undefined {
 export async function resolveBestEffortGatewayBindHostForDisplay(params: {
   bindMode: GatewayBindMode;
   customBindHost?: string;
+  warningPrefix?: string;
 }): Promise<{ bindHost: string; warning?: string }> {
   try {
     return {
       bindHost: await resolveGatewayBindHost(params.bindMode, params.customBindHost),
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message.trim() : "";
+    const warning = displayNetworkWarning(error, params.warningPrefix);
     return {
       bindHost: fallbackBindHostForDisplay(params.bindMode, params.customBindHost),
-      warning: `Status is using fallback network details because interface discovery failed: ${message || "network interface discovery failed"}.`,
+      ...warning,
     };
   }
 }

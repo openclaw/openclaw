@@ -1,5 +1,14 @@
 import path from "node:path";
 
+/** Alias class for current packaged paths and legacy bundled extension paths. */
+type BundledPluginLoadPathAliasKind = "current" | "legacy";
+
+/** Load path alias used while resolving bundled plugins across package layouts. */
+type BundledPluginLoadPathAlias = {
+  kind: BundledPluginLoadPathAliasKind;
+  path: string;
+};
+
 /** Parsed path metadata for a bundled plugin in a packaged dist root. */
 type PackagedBundledPluginPath = {
   packageRoot: string;
@@ -10,6 +19,7 @@ type PackagedBundledPluginPath = {
 /** Parsed path metadata for a bundled plugin in the legacy extensions root. */
 type LegacyBundledPluginPath = {
   packageRoot: string;
+  legacyRoot: string;
   bundledLeaf: string;
 };
 
@@ -84,15 +94,19 @@ export function parseLegacyBundledPluginPath(localPath: string): LegacyBundledPl
   }
   return {
     packageRoot: legacy.packageRoot,
+    legacyRoot: legacy.bundledRoot,
     bundledLeaf: legacy.bundledLeaf,
   };
 }
 
 /** Builds current and legacy aliases for a packaged bundled plugin path. */
-export function buildBundledPluginLoadPathAliases(localPath: string): string[] {
+export function buildBundledPluginLoadPathAliases(localPath: string): BundledPluginLoadPathAlias[] {
   const legacyPath = buildLegacyBundledPath(localPath);
   if (!legacyPath) {
     return [];
   }
-  return [localPath, legacyPath];
+  return [
+    { kind: "current", path: localPath },
+    { kind: "legacy", path: legacyPath },
+  ];
 }

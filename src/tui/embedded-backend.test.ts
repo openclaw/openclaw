@@ -302,7 +302,7 @@ vi.mock("../gateway/server-constants.js", () => ({
 vi.mock("../gateway/server-methods/chat-history-budget.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../gateway/server-methods/chat-history-budget.js")>()),
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES: 100_000,
-  replaceOversizedChatHistoryMessages: ({ messages }: { messages: unknown[] }) => messages,
+  replaceOversizedChatHistoryMessages: ({ messages }: { messages: unknown[] }) => ({ messages }),
 }));
 
 // mock-isolation: The embedded backend fixture bypasses Gateway history presentation.

@@ -74,8 +74,10 @@ export async function resolveBareSessionResetResult(params: {
     | "threadId"
     | "bestEffortDeliver"
   >;
+  originMessageChannel?: string;
   runId: string;
   assertCurrent?: () => void;
+  ackText?: string;
 }) {
   params.assertCurrent?.();
   if (params.request.deliver !== true) {
@@ -130,6 +132,7 @@ export async function resolveBareSessionResetResult(params: {
     accountId: deliveryPlan.resolvedAccountId ?? deliveryPlan.baseDelivery.accountId,
     threadId: deliveryPlan.resolvedThreadId,
   };
+  const originMessageChannel = params.originMessageChannel ?? deliveryPlan.resolvedChannel;
   const { deliverAgentCommandResult } = await import("../../agents/command/delivery.runtime.js");
   params.assertCurrent?.();
   const result = buildBareSessionResetResult(params);
@@ -138,7 +141,7 @@ export async function resolveBareSessionResetResult(params: {
     deps: params.context.deps,
     runtime: withoutRuntimeOutput(defaultRuntime),
     opts: {
-      message: sessionResetAckText(params.reason),
+      message: params.ackText ?? sessionResetAckText(params.reason),
       ...(params.agentId ? { agentId: params.agentId } : {}),
       ...(params.sessionId ? { sessionId: params.sessionId } : {}),
       sessionKey: params.sessionKey,
@@ -153,9 +156,9 @@ export async function resolveBareSessionResetResult(params: {
       deliveryTargetMode: deliveryPlan.deliveryTargetMode ?? deliveryPlan.baseDelivery.mode,
       bestEffortDeliver,
       runId: params.runId,
-      messageChannel: deliveryPlan.resolvedChannel,
+      messageChannel: originMessageChannel,
       runContext: {
-        messageChannel: deliveryPlan.resolvedChannel,
+        messageChannel: originMessageChannel,
         accountId: request.replyAccountId ?? request.accountId,
         currentThreadTs: request.threadId != null ? String(request.threadId) : undefined,
       },

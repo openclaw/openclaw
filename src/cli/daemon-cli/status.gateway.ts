@@ -75,6 +75,7 @@ export async function resolveGatewayStatusSummary(params: {
   const { bindHost, warning: bindHostWarning } = await resolveBestEffortGatewayBindHostForDisplay({
     bindMode,
     customBindHost,
+    warningPrefix: "Status is using fallback network details because interface discovery failed",
   });
   // The local CLI uses loopback; custom and Tailnet binds also require that listener.
   const probeHost = "127.0.0.1";

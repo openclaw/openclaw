@@ -89,6 +89,8 @@ export async function drainFormattedSystemEvents(params: {
   isMainSession: boolean;
   isNewSession: boolean;
   events?: readonly SystemEvent[];
+  deferredEventIds?: readonly string[];
+  onEventsAdmitted?: (events: readonly SystemEvent[]) => void;
 }): Promise<string | undefined> {
   const systemLines: string[] = [];
   const queueKey = resolveSystemEventQueueKey(params.sessionKey, params.agentId);
@@ -98,7 +100,9 @@ export async function drainFormattedSystemEvents(params: {
     (params.events ?? peekDeliverableSystemEventEntries(queueKey)).filter(
       (event) => !isSystemEventTurnOwned(queueKey, event),
     ),
+    { deferredEventIds: params.deferredEventIds },
   );
+  params.onEventsAdmitted?.(queued);
   const sessionStateNotices = queued.flatMap((event) => {
     const targetSessionKey = event.contextKey
       ? decodeSessionStateNoticeContextKey(event.contextKey)

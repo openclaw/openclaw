@@ -251,6 +251,7 @@ function archiveFileOnDisk(filePath: string, reason: SessionArchiveReason): stri
 export function archiveSessionTranscriptPaths(opts: {
   paths: Iterable<string>;
   reason: SessionArchiveReason;
+  onArchiveError?: (err: unknown, sourcePath: string) => void;
 }): ArchivedSessionTranscript[] {
   const archived: ArchivedSessionTranscript[] = [];
   const paths = uniqueStrings(
@@ -265,8 +266,8 @@ export function archiveSessionTranscriptPaths(opts: {
         sourcePath,
         archivedPath: archiveFileOnDisk(sourcePath, opts.reason),
       });
-    } catch {
-      // A failed rename leaves the original transcript in place.
+    } catch (err) {
+      opts.onArchiveError?.(err, sourcePath);
     }
   }
   return archived;
@@ -283,6 +284,11 @@ export function archiveSessionTranscriptsDetailed(opts: {
    * This prevents maintenance operations from mutating paths outside the agent sessions dir.
    */
   restrictToStoreDir?: boolean;
+  /**
+   * Invoked when an individual transcript candidate fails to archive. The
+   * caller decides whether to log, warn-deliver, or escalate.
+   */
+  onArchiveError?: (err: unknown, sourcePath: string) => void;
 }): ArchivedSessionTranscript[] {
   const candidatePaths: string[] = [];
   const storeDir =
@@ -307,6 +313,7 @@ export function archiveSessionTranscriptsDetailed(opts: {
   return archiveSessionTranscriptPaths({
     paths: candidatePaths,
     reason: opts.reason,
+    onArchiveError: opts.onArchiveError,
   });
 }
 

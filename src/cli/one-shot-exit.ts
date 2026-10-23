@@ -21,22 +21,28 @@ export async function runCliWithExitFinalization(params: {
   onError: (error: unknown) => void | Promise<void>;
   /** Join caller-owned state after command cleanup and before process completion. */
   finalize?: () => Promise<void>;
+  runtime?: RuntimeEnv;
 }): Promise<void> {
+  const runtime = params.runtime ?? defaultRuntime;
   let finalizationFailure: { error: unknown } | undefined;
   try {
     await params.run();
   } catch (error) {
     if (error instanceof ExitError) {
-      requestExitAfterOneShotOutput(defaultRuntime, error.code);
+      if (!requestExitAfterOneShotOutput(runtime, error.code)) {
+        throw error;
+      }
     } else {
       await params.onError(error);
-      requestExitAfterOneShotOutput(defaultRuntime, resolveProcessExitCode(1));
+      requestExitAfterOneShotOutput(runtime, resolveProcessExitCode(1));
     }
   } finally {
     let signalExitCode = await waitForCliSignalExit();
-    // A disposer warning is not completion. Native writers must settle before
-    // finalizers close their databases, and before Node tears down the isolate.
-    await waitForPendingCliDisposers();
+    if (runtime === defaultRuntime) {
+      // A disposer warning is not completion. Native writers must settle before
+      // finalizers close their databases, and before Node tears down the isolate.
+      await waitForPendingCliDisposers();
+    }
     if (params.finalize) {
       try {
         await params.finalize();
@@ -46,25 +52,30 @@ export async function runCliWithExitFinalization(params: {
         } catch (reportError) {
           finalizationFailure = { error: reportError };
         }
-        requestExitAfterOneShotOutput(defaultRuntime, 1);
+        if (!requestExitAfterOneShotOutput(runtime, 1)) {
+          finalizationFailure ??= { error };
+        }
       }
     }
-    await waitForPendingCliDisposers();
-    signalExitCode = (await waitForCliSignalExit()) ?? signalExitCode;
-    const requestedCode = requestedExitCode;
-    requestedExitCode = undefined;
-    if (signalExitCode !== undefined) {
-      process.exitCode = signalExitCode;
-    } else if (requestedCode !== undefined) {
-      process.exitCode = requestedCode === "process" ? resolveProcessExitCode() : requestedCode;
+    if (runtime === defaultRuntime) {
+      await waitForPendingCliDisposers();
+      signalExitCode = (await waitForCliSignalExit()) ?? signalExitCode;
+      const requestedCode = requestedExitCode;
+      requestedExitCode = undefined;
+      if (signalExitCode !== undefined) {
+        process.exitCode = signalExitCode;
+      } else if (requestedCode !== undefined) {
+        process.exitCode = requestedCode === "process" ? resolveProcessExitCode() : requestedCode;
+      }
+      if (signalExitCode !== undefined || requestedCode !== undefined) {
+        // Explicit exits retain runtime.exit's terminal contract after owned cleanup.
+        // Ordinary command completion must not add ANSI bytes to its output.
+        restoreRuntimeTerminalState("CLI exit", { resumeStdinIfPaused: false });
+      }
+      // Node drains stdio and V8 compiler work naturally.
     }
-    if (signalExitCode !== undefined || requestedCode !== undefined) {
-      // Explicit exits retain runtime.exit's terminal contract after owned cleanup.
-      // Ordinary command completion must not add ANSI bytes to its output.
-      restoreRuntimeTerminalState("CLI exit", { resumeStdinIfPaused: false });
-    }
-    // Node drains stdio and V8 compiler work naturally.
   }
+  // A cleanup failure must not replace an embedded runtime's original exit.
   if (finalizationFailure) {
     throw finalizationFailure.error;
   }

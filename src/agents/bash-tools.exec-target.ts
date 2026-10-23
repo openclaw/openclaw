@@ -96,6 +96,8 @@ export function resolveExecTarget(params: {
     resolvedTarget === "auto" ? (params.sandboxAvailable ? "sandbox" : "gateway") : resolvedTarget;
   return {
     configuredTarget,
+    requestedTarget,
+    selectedTarget: resolvedTarget,
     effectiveHost,
   };
 }

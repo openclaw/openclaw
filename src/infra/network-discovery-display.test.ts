@@ -39,6 +39,8 @@ describe("network display discovery", () => {
     await expect(
       resolveBestEffortGatewayBindHostForDisplay({
         bindMode: "tailnet",
+        warningPrefix:
+          "Status is using fallback network details because interface discovery failed",
       }),
     ).resolves.toEqual({
       bindHost: "127.0.0.1",

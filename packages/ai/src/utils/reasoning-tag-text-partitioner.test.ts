@@ -411,6 +411,7 @@ describe("createReasoningTagTextPartitioner", () => {
   });
   it("reclassifies reasoning tags inside unclosed inline code on final flush", () => {
     expect(partitioner.pushVisible("Start `unclosed <think>secret</think> end")).toEqual([]);
+    expect(partitioner.isInsideReasoning()).toBe(false);
     expect(partitioner.flush()).toEqual([
       { kind: "text", text: "Start `unclosed " },
       { kind: "thinking", text: "secret" },

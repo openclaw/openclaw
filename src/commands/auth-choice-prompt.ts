@@ -19,6 +19,7 @@ type PromptAuthChoiceResult = AuthChoice | KeepCurrentAuthChoice;
 type AuthChoiceOrBack = PromptAuthChoiceResult | typeof BACK_VALUE;
 type PromptAuthChoiceGroupedParams = Parameters<typeof buildAuthChoiceGroups>[0] & {
   prompter: WizardPrompter;
+  allowedChoices?: ReadonlySet<string>;
   additionalGroups?: readonly AuthChoiceGroup[];
   allowKeepCurrentProvider?: boolean;
 };
@@ -73,7 +74,13 @@ export async function promptAuthChoiceGrouped(
   params: PromptAuthChoiceGroupedParams,
 ): Promise<PromptAuthChoiceResult> {
   const { groups, skipOption } = buildAuthChoiceGroups(params);
-  const availableBuiltInGroups = groups.filter((group) => group.options.length > 0);
+  const filteredGroups = params.allowedChoices
+    ? groups.map((group) => ({
+        ...group,
+        options: group.options.filter((option) => params.allowedChoices?.has(option.value)),
+      }))
+    : groups;
+  const availableBuiltInGroups = filteredGroups.filter((group) => group.options.length > 0);
   const additionalGroups = (params.additionalGroups ?? []).filter(
     (group) => group.options.length > 0,
   );

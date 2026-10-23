@@ -19,32 +19,38 @@ afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-function archive() {
+function archive(onArchiveError?: (err: unknown, sourcePath: string) => void) {
   return archiveSessionTranscriptsDetailed({
     sessionId,
     sessionFile,
     storePath: path.join(tmpDir, "store.json"),
     agentId: "main",
     reason: "reset",
+    onArchiveError,
   });
 }
 
 describe("archiveSessionTranscriptsDetailed failure surface", () => {
-  it("retains the original transcript when fs.renameSync fails", () => {
+  it("invokes onArchiveError when fs.renameSync fails and returns only successful entries", () => {
     const renameError = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
     const renameSpy = vi.spyOn(fs, "renameSync").mockImplementation(() => {
       throw renameError;
     });
 
-    const archived = archive();
+    const errors: Array<{ err: unknown; sourcePath: string }> = [];
+    const archived = archive((err, sourcePath) => {
+      errors.push({ err, sourcePath });
+    });
 
     renameSpy.mockRestore();
 
     expect(archived).toEqual([]);
+    expect(errors.length).toBeGreaterThan(0);
+    expect(expectDefined(errors[0], "errors[0] test invariant").err).toBe(renameError);
     expect(fs.existsSync(sessionFile)).toBe(true);
   });
 
-  it("archives an available transcript", () => {
+  it("archives normally when no onArchiveError is provided", () => {
     const archived = archive();
 
     expect(archived.length).toBe(1);
@@ -54,21 +60,29 @@ describe("archiveSessionTranscriptsDetailed failure surface", () => {
     expect(fs.existsSync(sessionFile)).toBe(false);
   });
 
-  it("retains the original transcript when directory permissions prevent archiving", () => {
+  it("surfaces real chmod archive failures through onArchiveError", () => {
     if (process.platform === "win32" || process.getuid?.() === 0) {
       return;
     }
 
     fs.chmodSync(tmpDir, 0o555);
 
+    const errors: Array<{ code?: string; sourcePath: string }> = [];
     let archived: ReturnType<typeof archiveSessionTranscriptsDetailed> = [];
     try {
-      archived = archive();
+      archived = archive((err, sourcePath) => {
+        const code = (err as NodeJS.ErrnoException | undefined)?.code;
+        errors.push({ code, sourcePath });
+      });
     } finally {
       fs.chmodSync(tmpDir, 0o755);
     }
 
     expect(archived).toEqual([]);
+    expect(errors.length).toBeGreaterThan(0);
+    const error = expectDefined(errors[0], "errors[0] test invariant");
+    expect(error.sourcePath).toBe(sessionFile);
+    expect(error.code).toMatch(/^(EACCES|EPERM)$/);
     expect(fs.existsSync(sessionFile)).toBe(true);
   });
 });

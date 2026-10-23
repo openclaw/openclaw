@@ -7,6 +7,7 @@ import {
   type AdmittedRunOperatorAuthority,
 } from "./admitted-run-context.js";
 import {
+  type ModelFallbackErrorHandler,
   type ModelFallbackRunResult,
   runFallbackAttempt,
   throwFallbackFailureSummary,
@@ -48,6 +49,7 @@ export function resolveAllowedImageFallbackCandidates(params: ImageFallbackSelec
 export async function runWithImageModelFallback<T>(
   params: ImageFallbackSelectionParams & {
     run: (provider: string, model: string) => Promise<T>;
+    onError?: ModelFallbackErrorHandler;
     abortSignal?: AbortSignal;
   },
 ): Promise<ModelFallbackRunResult<T>> {
@@ -85,6 +87,13 @@ export async function runWithImageModelFallback<T>(
       provider: candidate.provider,
       model: candidate.model,
       error: formatErrorMessage(err),
+    });
+    await params.onError?.({
+      provider: candidate.provider,
+      model: candidate.model,
+      error: err,
+      attempt: i + 1,
+      total: candidates.length,
     });
   }
 

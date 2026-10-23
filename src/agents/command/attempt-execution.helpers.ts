@@ -345,6 +345,7 @@ function formatFallbackTurns(
 /** Prefer the harvested summary, then retain recent turns within the fallback prompt budget. */
 export async function buildClaudeCliFallbackContextPrelude(params: {
   cliSessionId: string | undefined;
+  homeDir?: string;
 }): Promise<string> {
   const sessionId = params.cliSessionId?.trim();
   if (!sessionId) {
@@ -352,6 +353,7 @@ export async function buildClaudeCliFallbackContextPrelude(params: {
   }
   const seed = await readClaudeCliFallbackSeed({
     cliSessionId: sessionId,
+    homeDir: params.homeDir,
   });
   if (!seed) {
     return "";

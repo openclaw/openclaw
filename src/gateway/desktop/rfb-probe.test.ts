@@ -25,11 +25,11 @@ async function listenScriptedRfb(script: (socket: net.Socket) => void): Promise<
 }
 
 function probe(port: number, timeoutMs = 2_000) {
-  return probeRfbServer({ port, timeoutMs });
+  return probeRfbServer({ host: "127.0.0.1", port, timeoutMs });
 }
 
 async function connect(port: number, signal?: AbortSignal, securityTypes?: number[]) {
-  const result = await connectRfbServer({ port, timeoutMs: 2_000, signal });
+  const result = await connectRfbServer({ host: "127.0.0.1", port, timeoutMs: 2_000, signal });
   expect(result.kind).toBe("rfb");
   if (result.kind !== "rfb") {
     throw new Error("expected retained connection");

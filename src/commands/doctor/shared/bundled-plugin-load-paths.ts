@@ -54,7 +54,7 @@ export function scanBundledPluginLoadPathMigrations(
   for (const source of bundled.values()) {
     const target = { pluginId: source.pluginId, toPath: source.localPath };
     for (const alias of buildBundledPluginLoadPathAliases(source.localPath)) {
-      bundledPathMap.set(normalizeBundledLookupPath(alias), target);
+      bundledPathMap.set(normalizeBundledLookupPath(alias.path), target);
     }
     const packaged = parsePackagedBundledPluginPath(source.localPath);
     if (packaged) {

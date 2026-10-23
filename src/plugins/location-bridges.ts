@@ -104,7 +104,9 @@ export async function listPersistedBundledPluginRecoveryLocations(options: {
     if (record.origin !== "bundled" || !path.isAbsolute(rootDir)) {
       return [];
     }
-    const loadPaths = Array.from(new Set([rootDir, ...buildBundledPluginLoadPathAliases(rootDir)]));
+    const loadPaths = Array.from(
+      new Set([rootDir, ...buildBundledPluginLoadPathAliases(rootDir).map((alias) => alias.path)]),
+    );
     return [{ pluginId: record.pluginId, loadPaths }];
   });
 }

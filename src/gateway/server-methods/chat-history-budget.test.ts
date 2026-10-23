@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { replaceOversizedChatHistoryMessages } from "./chat-history-budget.js";
 
 function replace(messages: unknown[], maxSingleMessageBytes = 1_000) {
-  return replaceOversizedChatHistoryMessages({ messages, maxSingleMessageBytes });
+  return replaceOversizedChatHistoryMessages({ messages, maxSingleMessageBytes }).messages;
 }
 
 describe("replaceOversizedChatHistoryMessages", () => {

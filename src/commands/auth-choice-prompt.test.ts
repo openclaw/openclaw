@@ -124,7 +124,7 @@ describe("promptAuthChoiceGrouped", () => {
     ]);
   });
 
-  it("keeps featured providers first and groups secondary provider methods under More", async () => {
+  it("filters guided choices while keeping featured providers and grouped methods", async () => {
     const featuredOrder = new Map([
       ["openai", 0],
       ["anthropic", 1],
@@ -153,16 +153,19 @@ describe("promptAuthChoiceGrouped", () => {
     const result = await promptAuthChoiceGrouped({
       prompter,
       includeSkip: true,
+      allowedChoices: new Set([
+        "openai",
+        "openai-api-key",
+        "apiKey",
+        "minimax-global-oauth",
+        "minimax-cn-api",
+        "meta-api-key",
+      ]),
     });
 
     expect(optionValues(prompts[0])).toEqual(["openai", "anthropic", "__more", "skip"]);
     expect(optionValues(prompts[1])).toEqual(["meta", "minimax", "__back"]);
-    expect(optionValues(prompts[2])).toEqual([
-      "minimax-global-oauth",
-      "minimax-cn-api",
-      "minimax-legacy",
-      "__back",
-    ]);
+    expect(optionValues(prompts[2])).toEqual(["minimax-global-oauth", "minimax-cn-api", "__back"]);
     expect(result).toBe("minimax-cn-api");
   });
 

@@ -275,7 +275,7 @@ export function createPluginCommandRuntime(): PluginCommandRuntime {
 export function matchPluginCommandInvocation(
   runtime: PluginCommandRuntime,
   commandBody: string,
-  options: { channel: string },
+  options: { channel: string; provider?: string },
 ): PluginCommandInvocationMatch | null {
   const state = runtimeStates.get(runtime);
   if (!state) {
@@ -285,11 +285,12 @@ export function matchPluginCommandInvocation(
     throw new Error("Plugin command runtime is bound to a retired registry generation.");
   }
   const channel = normalizeOptionalLowercaseString(options.channel) ?? "";
+  const provider = normalizeOptionalLowercaseString(options.provider) ?? channel;
   const match = matchRegisteredPluginCommand({
     commands: state.commands,
     commandBody,
     channel,
-    aliasScope: { kind: "provider", provider: channel },
+    aliasScope: { kind: "provider", provider },
   });
   if (!match) {
     const owner = parsePluginInvocation(commandBody)
@@ -317,7 +318,7 @@ export function matchPluginCommandInvocation(
       requireAuth: true,
     };
   }
-  const metadata = projectPluginCommandNativeMetadata(match.command, channel);
+  const metadata = projectPluginCommandNativeMetadata(match.command, provider);
   return {
     dispatch: createSelectedPluginCommandDispatch(
       state,

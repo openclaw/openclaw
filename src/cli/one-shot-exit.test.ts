@@ -65,32 +65,32 @@ describe("one-shot CLI completion", () => {
       commandExit: 7,
       reporterRethrows: true,
     },
-  ])("records $outcome after finalization", async ({ commandExit, reporterRethrows }) => {
+  ])("leaves $outcome owned by the injected runtime", async ({ commandExit, reporterRethrows }) => {
     const commandFailure = commandExit === undefined ? undefined : new ExitError(commandExit);
     const cleanupFailure = new Error("state cleanup failed");
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
     const onError = vi.fn((error: unknown) => {
       if (reporterRethrows) {
         throw error;
       }
     });
-    const completion = runCliWithExitFinalization({
-      run: async () => {
-        if (commandFailure) {
-          throw commandFailure;
-        }
-      },
-      finalize: async () => {
-        throw cleanupFailure;
-      },
-      onError,
-    });
-    if (reporterRethrows) {
-      await expect(completion).rejects.toBe(cleanupFailure);
-    } else {
-      await expect(completion).resolves.toBeUndefined();
-    }
+    await expect(
+      runCliWithExitFinalization({
+        run: async () => {
+          if (commandFailure) {
+            throw commandFailure;
+          }
+        },
+        finalize: async () => {
+          throw cleanupFailure;
+        },
+        onError,
+        runtime,
+      }),
+    ).rejects.toBe(commandFailure ?? cleanupFailure);
     expect(onError).toHaveBeenCalledExactlyOnceWith(cleanupFailure);
-    expect(process.exitCode).toBe(1);
+    expect(runtime.exit).not.toHaveBeenCalled();
+    expect(process.exitCode).toBeUndefined();
   });
 
   it("does not finalize a long-lived command until its run settles", async () => {

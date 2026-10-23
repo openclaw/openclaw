@@ -146,21 +146,21 @@ export function replaceOversizedChatHistoryMessages(params: {
   byteCounter?: ReturnType<typeof createChatHistoryByteCounter>;
   messages: unknown[];
   maxSingleMessageBytes: number;
-}): unknown[] {
+}): { messages: unknown[]; replacedCount: number } {
   const { messages, maxSingleMessageBytes } = params;
   const byteCounter = params.byteCounter ?? createChatHistoryByteCounter();
-  let replaced = false;
+  let replacedCount = 0;
   const next = messages.map((message) => {
     if (byteCounter.messageBytes(message) <= maxSingleMessageBytes) {
       return message;
     }
-    replaced = true;
+    replacedCount += 1;
     const placeholder = buildOversizedHistoryPlaceholder(message);
     return byteCounter.messageBytes(placeholder) <= maxSingleMessageBytes
       ? placeholder
       : buildChatHistoryUnavailableSentinel();
   });
-  return replaced ? next : messages;
+  return { messages: replacedCount > 0 ? next : messages, replacedCount };
 }
 
 export function reportOmittedChatHistory(params: {

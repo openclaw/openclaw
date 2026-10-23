@@ -118,7 +118,7 @@ export async function readChatPendingInputs(
     maxSingleMessageBytes: Math.floor(
       PENDING_INPUT_DISPLAY_MAX_BYTES / Math.max(page.items.length, 1),
     ),
-  });
+  }).messages;
   return {
     ...page,
     ...(options.queuedRunIds ? { queuedCount: options.queuedRunIds.size } : {}),

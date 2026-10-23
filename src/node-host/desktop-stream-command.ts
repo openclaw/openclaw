@@ -114,6 +114,7 @@ async function runNodeDesktopStreamCommand(params: {
   }
   void params.emitStatus?.("checking local RFB server\n").catch(() => undefined);
   const probe = await connectRfbServer({
+    host: "127.0.0.1",
     port: params.port,
     timeoutMs: PROBE_TIMEOUT_MS,
     signal: params.signal,
