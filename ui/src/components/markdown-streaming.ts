@@ -5,6 +5,8 @@ import {
   findMarkdownCodeRegions,
 } from "../../../packages/markdown-core/src/reasoning-tags.js";
 import { pruneMapToMaxSize } from "../../../src/infra/map-size.ts";
+import { stripUnsupportedCitationControlMarkers } from "../../../src/shared/text/citation-control-markers.js";
+import type { MarkdownDomTree } from "../lib/markdown-dom-tree.ts";
 import {
   consumeMarkdownRawHtmlLine,
   findMarkdownRawHtmlRanges,
@@ -12,7 +14,17 @@ import {
   type MarkdownDetailsFrame,
   scanMarkdownDisclosureLine,
 } from "./markdown-details.ts";
+import type { IncrementalMarkdownSanitizer } from "./markdown-incremental.ts";
 import { createMarkdownParser } from "./markdown-parser.ts";
+import type { MarkdownRenderEnv } from "./markdown-render-options.ts";
+import { normalizeMarkdownLineBreaks } from "./markdown-text.ts";
+
+export type StreamingMarkdownPreparation = {
+  options: string;
+  render: (source: string, env: MarkdownRenderEnv) => string;
+  sanitizer: IncrementalMarkdownSanitizer;
+  tree?: MarkdownDomTree;
+};
 
 const FENCE_OPEN_RE = /^[ \t]{0,3}(`{3,}|~{3,})/;
 const FENCE_CONTAINER_PREFIX_RE = /^[ \t]{0,3}(?:(?:>\s?)|(?:(?:[-+*]|\d{1,9}[.)])[ \t]+))/;
@@ -114,8 +126,34 @@ type StreamingMarkdownState = {
   input?: { source: string; normalized: string };
   split?: StreamingMarkdownCacheEntry;
   rendered?: { options: string; markdown: string; html: string; hasHtml: boolean };
+  tail?: StreamingMarkdownPreparation;
 };
 const streamingCache = new Map<string, StreamingMarkdownState>();
+
+export function normalizeStreamingMarkdownInput(
+  markdown: string,
+  limit: number,
+  streamKey?: string,
+): string {
+  const source = stripUnsupportedCitationControlMarkers(markdown);
+  const state = streamingMarkdownState(streamKey);
+  const cached = state?.input;
+  let normalized: string;
+  if (cached && source.startsWith(cached.source)) {
+    const appended = source.slice(cached.source.length);
+    const normalizedAppend = normalizeMarkdownLineBreaks(appended);
+    normalized =
+      cached.source.endsWith("\r") && appended.startsWith("\n")
+        ? `${cached.normalized.slice(0, -1)}${normalizedAppend}`
+        : `${cached.normalized}${normalizedAppend}`;
+  } else {
+    normalized = normalizeMarkdownLineBreaks(source);
+  }
+  if (state) {
+    state.input = source.length <= limit ? { source, normalized } : undefined;
+  }
+  return normalized;
+}
 
 export function streamingMarkdownStableHtml(streamKey?: string): string {
   return streamKey ? (streamingCache.get(streamKey)?.rendered?.html ?? "") : "";

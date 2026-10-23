@@ -1,4 +1,5 @@
 import type { HumanMention } from "@openclaw/gateway-protocol";
+import { i18n } from "../i18n/index.ts";
 
 export type MarkdownHumanMentionToken = { marker: string; profileId: string; label: string };
 
@@ -24,6 +25,10 @@ export type MarkdownRenderEnv = Required<MarkdownRenderOptions> & {
   streamingOpenFence?: boolean;
   humanMentionTokens?: readonly MarkdownHumanMentionToken[];
 };
+
+export function markdownRenderKey(options: MarkdownRenderEnv): string {
+  return `${i18n.getLocale()}\0${options.assistantTranscriptRoleHeaders}\0${options.codeBlockChrome}\0${options.codeBlockInteraction}\0${options.fileLinks}\0${options.interactiveImages}\0${options.linkFavicons}\0${options.progressBars}\0${options.mode}\0${options.remoteImages}\0${options.sessionLinks}\0${options.tableInteractions}\0${JSON.stringify(options.humanMentionTokens ?? [])}`;
+}
 
 export function normalizeMarkdownRenderOptions(
   options: MarkdownRenderOptions = {},

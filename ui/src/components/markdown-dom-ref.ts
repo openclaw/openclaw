@@ -1,10 +1,11 @@
 import { createEffect, createSignal, onCleanup } from "solid-js";
 import { MarkdownDomReconciler, type MarkdownDomMedia } from "../lib/markdown-dom-reconciler.ts";
+import type { MarkdownHtmlParts } from "../lib/markdown-dom-tree.ts";
 import { registerSessionTitleTarget } from "./session-title-target-registration.ts";
 
 export type MarkdownContentValue =
   | string
-  | { messageKey: string; source: string; parts: readonly [string, string] };
+  | { messageKey: string; source: string; parts: Readonly<MarkdownHtmlParts> };
 
 /** Bind a sanitized Markdown island without letting Solid render inside it. */
 export function createMarkdownRef(

@@ -4,35 +4,37 @@ import { pruneMapToMaxSize } from "../../../src/infra/map-size.ts";
 import { stripUnsupportedCitationControlMarkers } from "../../../src/shared/text/citation-control-markers.js";
 import { routeIdFromPath } from "../app-route-paths.ts";
 import { resolveControlUiPaths } from "../app/browser.ts";
-import { i18n, t } from "../i18n/index.ts";
+import { t } from "../i18n/index.ts";
 import { truncateText } from "../lib/format.ts";
+import type { MarkdownHtmlParts } from "../lib/markdown-dom-tree.ts";
 import { parseGitHubLinkTarget } from "./github-link-target.ts";
-import { createAssistantTranscriptPlainTextFallback } from "./markdown-assistant-transcript.ts";
+import { createMarkdownPlainTextFallback } from "./markdown-assistant-transcript.ts";
 import {
   markdownHighlightingPending,
   markdownHighlightingReady,
   renderMarkdownCodeBlock,
 } from "./markdown-code-blocks.ts";
 import { isHostLocalMarkdownFileHref } from "./markdown-file-links.ts";
-import {
-  prepareMarkdownHumanMentions,
-  restoreMarkdownHumanMentions,
-} from "./markdown-human-mentions.ts";
+import { prepareMarkdownHumanMentions } from "./markdown-human-mentions.ts";
+import { IncrementalMarkdownSanitizer, incrementalMarkdownParser } from "./markdown-incremental.ts";
 import type { MarkdownJson } from "./markdown-json.ts";
 import { createMarkdownParser } from "./markdown-parser.ts";
 import { stripProgressCardRawContentBlocks } from "./markdown-raw-content.ts";
 import {
   MARKDOWN_PARSE_LIMIT,
+  markdownRenderKey,
   normalizeMarkdownRenderOptions,
   type MarkdownRenderEnv,
   type MarkdownRenderOptions,
 } from "./markdown-render-options.ts";
 import {
   hasStreamingMarkdownHtml,
+  normalizeStreamingMarkdownInput,
   repairStreamingMarkdownTail,
   splitStableStreamingMarkdown,
   streamingMarkdownStableHtml,
   streamingMarkdownState,
+  type StreamingMarkdownPreparation,
 } from "./markdown-streaming.ts";
 import { isMarkdownBlockArtText, normalizeMarkdownLineBreaks } from "./markdown-text.ts";
 
@@ -115,6 +117,8 @@ const progressSanitizeOptions = {
 };
 
 const sanitizers = new Map<typeof sanitizeOptions, ReturnType<typeof DOMPurify>>();
+// Same policy and hooks, applied only to cloned template-owned inert DOM.
+const inertSanitizeOptions = { ...sanitizeOptions, IN_PLACE: true as const };
 const MARKDOWN_CHAR_LIMIT = 140_000;
 // Covers several message-heavy sessions during rapid switching. Only inputs
 // up to 50k characters enter this 500-entry LRU, keeping memory bounded.
@@ -342,27 +346,6 @@ const APP_RESOURCE_PATH_PREFIXES = [
 const markdownCache = new Map<string, { html: string; highlighting?: boolean }>();
 const HIGHLIGHTABLE_CODE_RE = /<pre><code(?! class="markdown-block-art")/u;
 
-function normalizeStreamingMarkdownInput(markdownLocal: string, streamKey?: string): string {
-  const source = stripUnsupportedCitationControlMarkers(markdownLocal);
-  const state = streamingMarkdownState(streamKey);
-  const cached = state?.input;
-  let normalized: string;
-  if (cached && source.startsWith(cached.source)) {
-    const appended = source.slice(cached.source.length);
-    const normalizedAppend = normalizeMarkdownLineBreaks(appended);
-    normalized =
-      cached.source.endsWith("\r") && appended.startsWith("\n")
-        ? `${cached.normalized.slice(0, -1)}${normalizedAppend}`
-        : `${cached.normalized}${normalizedAppend}`;
-  } else {
-    normalized = normalizeMarkdownLineBreaks(source);
-  }
-  if (state) {
-    state.input = source.length <= MARKDOWN_CHAR_LIMIT ? { source, normalized } : undefined;
-  }
-  return normalized;
-}
-
 function isControlUiRoutePath(pathname: string): boolean {
   if (routeIdFromPath(pathname) !== null) {
     return true;
@@ -563,7 +546,11 @@ function renderSanitizedMarkdown(
   renderInput: string,
   renderOptions: MarkdownRenderEnv,
   blockArt?: boolean,
+  incremental?: StreamingMarkdownPreparation,
 ): string {
+  if (incremental) {
+    incremental.tree = undefined;
+  }
   const sanitizer = markdownSanitizer(
     renderOptions.progressBars ? progressSanitizeOptions : sanitizeOptions,
   );
@@ -583,15 +570,24 @@ function renderSanitizedMarkdown(
     // Large plain-text replies should stay readable without inheriting the
     // capped code-block chrome, while still preserving whitespace for logs
     // and other structured text that commonly trips the parse guard.
-    return sanitizer.sanitize(toPlainTextElement(input, renderOptions));
+    return sanitizer.sanitize(createMarkdownPlainTextFallback(input, renderOptions));
   }
   let rendered: string | HTMLDivElement;
   try {
-    rendered = markdownParser.render(input, renderOptions);
+    rendered = incremental
+      ? incremental.render(input, renderOptions)
+      : markdownParser.render(input, renderOptions);
   } catch (err) {
     // Fall back to escaped plain text when md.render() throws (#36213).
     console.warn("[markdown] md.render failed, falling back to plain text:", err);
-    rendered = toPlainTextElement(input, renderOptions);
+    rendered = createMarkdownPlainTextFallback(input, renderOptions);
+  }
+  if (incremental && typeof rendered === "string") {
+    const tree = incremental.sanitizer.render(rendered, (root) => {
+      markdownSanitizer(inertSanitizeOptions).sanitize(root);
+    });
+    incremental.tree = tree;
+    return tree.html;
   }
   return sanitizer.sanitize(rendered);
 }
@@ -651,17 +647,6 @@ export function toSanitizedMarkdownHtml(
   return cached.html;
 }
 
-function markdownRenderKey(options: MarkdownRenderEnv): string {
-  return `${i18n.getLocale()}\0${options.assistantTranscriptRoleHeaders}\0${options.codeBlockChrome}\0${options.codeBlockInteraction}\0${options.fileLinks}\0${options.interactiveImages}\0${options.linkFavicons}\0${options.progressBars}\0${options.mode}\0${options.remoteImages}\0${options.sessionLinks}\0${options.tableInteractions}\0${JSON.stringify(options.humanMentionTokens ?? [])}`;
-}
-
-function toPlainTextElement(value: string, options: MarkdownRenderEnv): HTMLDivElement {
-  return createAssistantTranscriptPlainTextFallback(
-    restoreMarkdownHumanMentions(normalizeMarkdownLineBreaks(value), options.humanMentionTokens),
-    options.assistantTranscriptRoleHeaders,
-  );
-}
-
 /** Keep late highlighting in the same mutable DOM owner, including stream finalization. */
 export function partitionMarkdownHtml(html: string, streamKey?: string): [string, string] {
   if (!HIGHLIGHTABLE_CODE_RE.test(html) || !markdownHighlightingPending()) {
@@ -676,13 +661,13 @@ export function toStreamingMarkdownParts(
   markdownLocal: string,
   options: MarkdownRenderOptions = {},
   streamKey?: string,
-): [stableHtml: string, tailHtml: string] {
+): MarkdownHtmlParts {
   const renderOptions = normalizeMarkdownRenderOptions(options);
   // Explicit selections are complete user input, not incremental assistant text.
   if (renderOptions.humanMentions.length) {
     return partitionMarkdownHtml(toSanitizedMarkdownHtml(markdownLocal, options), streamKey);
   }
-  const rawInput = normalizeStreamingMarkdownInput(markdownLocal, streamKey);
+  const rawInput = normalizeStreamingMarkdownInput(markdownLocal, MARKDOWN_CHAR_LIMIT, streamKey);
   if (isMarkdownBlockArtText(rawInput)) {
     return ["", renderSanitizedMarkdown(rawInput, renderOptions)];
   }
@@ -749,12 +734,27 @@ export function toStreamingMarkdownParts(
     return [stableHtml, ""];
   }
   // The whole input was classified above; an isolated tail is not block art.
+  // Progress permits raw HTML. Keep its whole-boundary sanitizer path; the
+  // incremental path is exclusively the ordinary Markdown renderer's HTML.
+  if (state && !renderOptions.progressBars && state.tail?.options !== renderKey) {
+    state.tail = {
+      options: renderKey,
+      render: incrementalMarkdownParser(createMarkdownParser()),
+      sanitizer: new IncrementalMarkdownSanitizer(),
+    };
+  }
+  const preparation = !renderOptions.progressBars ? state?.tail : undefined;
   const tailHtml = renderSanitizedMarkdown(
     tailRepairStart === null
       ? streamingTail
       : repairStreamingMarkdownTail(streamingTail, tailRepairStart - boundary),
     tailRepairStart === null ? { ...renderOptions, streamingOpenFence: true } : renderOptions,
     false,
+    preparation,
   );
-  return [stableHtml, tailHtml];
+  const parts: MarkdownHtmlParts = [stableHtml, tailHtml];
+  if (preparation?.tree) {
+    parts.tail = preparation.tree;
+  }
+  return parts;
 }
