@@ -49,7 +49,6 @@ ui/src/pages/model-setup/native-model-setup.tsx	1
 ui/src/pages/model-setup/rpc.ts	1
 ui/src/pages/new-session/new-session-page.tsx	1
 ui/src/pages/new-session/palette-session-settings-view.tsx	1
-ui/src/pages/plugin/logbook-state.ts	1
 ui/src/pages/plugin/plugin-page.tsx	1
 ui/src/pages/plugins/plugin-discovery.ts	2
 ui/src/pages/plugins/plugin-help.ts	1
