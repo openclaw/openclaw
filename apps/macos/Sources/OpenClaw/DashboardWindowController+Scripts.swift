@@ -9,6 +9,7 @@ extension DashboardWindowController {
         // toggles plus back/forward gestures and the Cmd-[/] menu items.
         let capabilityScript = """
         window.__OPENCLAW_NATIVE_WEB_CHROME__ = true;
+        window.__OPENCLAW_NATIVE_CONTROL_UI_CACHE_POLICY__ = 'reload';
         window.addEventListener('openclaw:native-commands-state', () => {
           window.webkit.messageHandlers.openclawCommands.postMessage({type: 'commands-state'});
         });

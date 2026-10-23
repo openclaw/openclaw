@@ -2,6 +2,10 @@ import { mountOpenClawApp } from "./app/app-root.tsx";
 import "./styles.css";
 import { unsupportedControlUiBrowser } from "./app/boot-capabilities.ts";
 import { bindControlUiDocumentHead } from "./app/control-ui-document-head.ts";
+import {
+  isOwnedControlUiServiceWorkerRegistration,
+  shouldRegisterControlUiServiceWorker,
+} from "./app/native-web-chrome.ts";
 import { inferControlUiPublicAssetPath } from "./app/public-assets.ts";
 import { isRemoteControlUiIngress } from "./app/remote-ingress.ts";
 import {
@@ -60,7 +64,11 @@ if (!unsupportedControlUiBrowser) {
       });
   }
 
-  if (isProd && !isRemoteControlUiIngress() && "serviceWorker" in navigator) {
+  if (
+    shouldRegisterControlUiServiceWorker(isProd) &&
+    !isRemoteControlUiIngress() &&
+    "serviceWorker" in navigator
+  ) {
     const swUrl = new URL(inferControlUiPublicAssetPath("sw.js"), window.location.origin);
     swUrl.searchParams.set("v", currentControlUiBuildId);
     if (document.documentElement.dataset.openclawProxySessionEntry === "true") {
@@ -93,12 +101,41 @@ if (!unsupportedControlUiBrowser) {
       .catch((error: unknown) => {
         console.warn("OpenClaw service worker registration failed.", error);
       });
-  } else if (!isProd && !isRemoteControlUiIngress() && "serviceWorker" in navigator) {
-    // Unregister any leftover dev SW to avoid stale cache issues.
-    void navigator.serviceWorker.getRegistrations().then((registrations) => {
-      for (const r of registrations) {
-        void r.unregister();
-      }
-    });
+  } else if (!isRemoteControlUiIngress() && "serviceWorker" in navigator) {
+    // Native WebKit hosts use a persistent data store but do not participate in
+    // the browser Control UI service-worker update lifecycle. Retire any worker
+    // left by an earlier build so it cannot keep serving an old app shell.
+    // Development follows the same cleanup path to avoid stale cache issues.
+    const controlUiWorkerUrl = new URL(
+      inferControlUiPublicAssetPath("sw.js"),
+      window.location.origin,
+    );
+    const pageUrl = new URL(window.location.href);
+    void navigator.serviceWorker
+      .getRegistrations()
+      .then((registrations) => {
+        for (const registration of registrations) {
+          if (isOwnedControlUiServiceWorkerRegistration(registration, controlUiWorkerUrl, pageUrl)) {
+            void registration
+              .unregister()
+              .then((unregistered) => {
+                if (!unregistered) {
+                  console.warn("OpenClaw Control UI service worker cleanup was not completed.", {
+                    scope: registration.scope,
+                  });
+                }
+              })
+              .catch((error: unknown) => {
+                console.warn("OpenClaw Control UI service worker cleanup failed.", {
+                  error,
+                  scope: registration.scope,
+                });
+              });
+          }
+        }
+      })
+      .catch((error: unknown) => {
+        console.warn("OpenClaw Control UI service worker cleanup lookup failed.", error);
+      });
   }
 }

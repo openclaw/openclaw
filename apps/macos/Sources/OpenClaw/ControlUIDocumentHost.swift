@@ -127,13 +127,13 @@ final class ControlUIDocumentHost {
         }
     }
 
-    func load(_ url: URL) {
+    func load(_ url: URL, cachePolicy: URLRequest.CachePolicy = .useProtocolCachePolicy) {
         self.retireInvalidNativeStartupCredentials()
         self.retirePendingLoad()
         self.hasLiveContent = false
         self.isShowingFailurePage = false
         guard let browserSessionLease else {
-            self.webView.load(URLRequest(url: url))
+            self.webView.load(URLRequest(url: url, cachePolicy: cachePolicy))
             return
         }
         let controller = self.webView.configuration.userContentController
@@ -144,7 +144,7 @@ final class ControlUIDocumentHost {
                     in: controller)
                 guard !Task.isCancelled, let self, self.isAvailable() else { return }
                 self.pendingLoad = nil
-                self.webView.load(URLRequest(url: url))
+                self.webView.load(URLRequest(url: url, cachePolicy: cachePolicy))
             } catch {
                 guard !Task.isCancelled, let self else { return }
                 self.pendingLoad = nil

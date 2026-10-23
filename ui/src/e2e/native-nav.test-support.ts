@@ -13,9 +13,11 @@ export async function installNativeEmbed(
 export async function installNativeWebChrome(page: Page): Promise<void> {
   await page.addInitScript(() => {
     const nativeWindow = window as Window & {
+      __OPENCLAW_NATIVE_CONTROL_UI_CACHE_POLICY__?: "reload";
       __OPENCLAW_NATIVE_WEB_CHROME__?: boolean;
       __OPENCLAW_NATIVE_HISTORY__?: { canGoBack: boolean; canGoForward: boolean };
     };
+    nativeWindow["__OPENCLAW_NATIVE_CONTROL_UI_CACHE_POLICY__"] = "reload";
     nativeWindow["__OPENCLAW_NATIVE_WEB_CHROME__"] = true;
     nativeWindow["__OPENCLAW_NATIVE_HISTORY__"] = {
       canGoBack: false,

@@ -28,6 +28,7 @@ export function createNativeNavPageOpener(suite: ReturnType<typeof createControl
     pathname?: string;
     readySelector?: string;
     scenario?: ControlUiMockGatewayScenario;
+    serviceWorkers?: "allow" | "block";
     webChrome?: boolean;
     width?: number;
   }) {
@@ -35,7 +36,7 @@ export function createNativeNavPageOpener(suite: ReturnType<typeof createControl
       colorScheme: options.colorScheme,
       hasTouch: options.hasTouch,
       locale: "en-US",
-      serviceWorkers: "block",
+      serviceWorkers: options.serviceWorkers ?? "block",
       viewport: { height: options.height ?? 900, width: options.width ?? 1280 },
     });
     const page = await context.newPage();

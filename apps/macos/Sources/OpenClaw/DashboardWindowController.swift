@@ -482,7 +482,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private func load(_ url: URL) {
         self.invalidateGatewayHealth()
         self.nativeCommandsReady = false
-        self.documentHost.load(url)
+        self.documentHost.load(url, cachePolicy: .reloadIgnoringLocalCacheData)
     }
 
     func reloadDashboard() {

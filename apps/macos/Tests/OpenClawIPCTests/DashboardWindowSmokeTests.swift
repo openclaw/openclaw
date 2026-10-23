@@ -738,7 +738,13 @@ extension DashboardWindowSmokeTests {
 
     @Test func `dashboard advertises web titlebar chrome before document load`() async throws {
         let server = try await DashboardHTTPFixture.start(
-            html: "<html><head><script>window.initialChrome = window.__OPENCLAW_NATIVE_WEB_CHROME__;</script></head></html>",
+            html: """
+            <html><head><script>
+            window.initialChrome = window.__OPENCLAW_NATIVE_WEB_CHROME__;
+            window.initialCachePolicy = window.__OPENCLAW_NATIVE_CONTROL_UI_CACHE_POLICY__;
+            window.initialEmbedAbsent = window.__OPENCLAW_NATIVE_EMBED__ === undefined;
+            </script></head></html>
+            """,
             contentSecurityPolicy: "default-src 'none'; script-src 'unsafe-inline'")
         defer { server.stop() }
         let controller = DashboardWindowController(
@@ -750,6 +756,8 @@ extension DashboardWindowSmokeTests {
         controller.show(url: controller.currentURL, auth: controller.auth)
         try await waitForNativeDashboardDocument(controller)
         #expect(try await controller.webView.evaluateJavaScript("window.initialChrome") as? Bool == true)
+        #expect(try await controller.webView.evaluateJavaScript("window.initialCachePolicy") as? String == "reload")
+        #expect(try await controller.webView.evaluateJavaScript("window.initialEmbedAbsent") as? Bool == true)
         #expect(controller.window?.titlebarAccessoryViewControllers.isEmpty == true)
         #expect(controller.webView.allowsBackForwardNavigationGestures)
     }

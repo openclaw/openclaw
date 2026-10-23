@@ -2379,7 +2379,6 @@ ui/src/app/native-bridge.ts	1
 ui/src/app/native-gateways.runtime.ts	4
 ui/src/app/native-notifications.ts	2
 ui/src/app/native-route-memory.ts	1
-ui/src/app/native-web-chrome.ts	2
 ui/src/app/overlays.ts	1
 ui/src/app/server-prefs-state.ts	1
 ui/src/app/settings.ts	2

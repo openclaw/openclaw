@@ -10,6 +10,7 @@ import { focusChatSidePanel, openChatSidePanelType } from "./chat-side-panel.tes
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { createNativeNavPageOpener } from "./native-nav-page.test-support.ts";
+import { installNativeWebChrome } from "./native-nav.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI native-nav sidebar toggle E2E",
@@ -123,6 +124,50 @@ const TOAST_SCENARIO: ControlUiMockGatewayScenario = {
 
 suite.define(() => {
   const openPage = createNativeNavPageOpener(suite);
+
+  it("preserves the desktop shell with the macOS startup capabilities", async () => {
+    const page = await openPage({ webChrome: true });
+
+    await expect.poll(() => page.locator(".shell-nav").isVisible()).toBe(true);
+    await expect.poll(() => page.locator("openclaw-app-topbar").count()).toBe(1);
+    await expect
+      .poll(() => page.locator("openclaw-macos-titlebar-controls").isVisible())
+      .toBe(true);
+    await expect
+      .poll(() =>
+        page.evaluate(() => ({
+          cachePolicy: window["__OPENCLAW_NATIVE_CONTROL_UI_CACHE_POLICY__"],
+          embedHost: window["__OPENCLAW_NATIVE_EMBED__"],
+          webChrome: window["__OPENCLAW_NATIVE_WEB_CHROME__"],
+        })),
+      )
+      .toEqual({ cachePolicy: "reload", embedHost: undefined, webChrome: true });
+  });
+
+  it("retires an owned worker on a native cache-policy startup", async () => {
+    const page = await openPage({ serviceWorkers: "allow" });
+    const controlUiWorker = () =>
+      page.evaluate(async () => {
+        const registrations = await navigator.serviceWorker.getRegistrations();
+        return registrations.filter((registration) => {
+          const workers = [registration.installing, registration.waiting, registration.active];
+          return workers.some(
+            (worker) => worker !== null && new URL(worker.scriptURL).pathname.endsWith("/sw.js"),
+          );
+        }).length;
+      });
+
+    await page.evaluate(async () => {
+      await navigator.serviceWorker.register("/sw.js?v=stale-profile");
+    });
+    await expect.poll(controlUiWorker).toBe(1);
+    await installNativeWebChrome(page);
+    await page.reload({ waitUntil: "load" });
+    await expect
+      .poll(() => page.evaluate(() => window["__OPENCLAW_NATIVE_CONTROL_UI_CACHE_POLICY__"]))
+      .toBe("reload");
+    await expect.poll(controlUiWorker).toBe(0);
+  });
 
   it("keeps sidebar rail toggles in plain browsers", async () => {
     const page = await openPage({ nativeNav: false });
