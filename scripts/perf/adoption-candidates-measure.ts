@@ -171,6 +171,10 @@ for (let index = 0; index < sessionCount; index++) {
       cwd: "/synthetic",
       connectionScope: "supervision",
       supervisionSourceThreadId: threadId,
+      preserveNativeModel: true,
+      conversationSourceTransferComplete: true,
+      model: "synthetic-native-model",
+      modelProvider: "openai",
     },
   });
   expected.set(`${sourceHomeId}\0${threadId}`, {
