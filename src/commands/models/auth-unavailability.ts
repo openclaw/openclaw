@@ -1,6 +1,9 @@
 import { buildAuthProfileUnusableHint } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
-import { readAuthProfileUsageStats } from "../../agents/auth-profiles/usage-state.js";
+import {
+  isActiveUnusableWindow,
+  readAuthProfileUsageStats,
+} from "../../agents/auth-profiles/usage-state.js";
 import { resolveProfileUnusableUntilForDisplay } from "../../agents/auth-profiles/usage.js";
 
 export function listUnavailableAuthProfiles(store: AuthProfileStore) {
@@ -14,7 +17,7 @@ export function listUnavailableAuthProfiles(store: AuthProfileStore) {
     const kind: "blocked" | "cooldown" | "disabled" =
       typeof stats?.disabledUntil === "number" && now < stats.disabledUntil
         ? "disabled"
-        : typeof stats?.blockedUntil === "number" && now < stats.blockedUntil
+        : isActiveUnusableWindow(stats?.blockedUntil, now)
           ? "blocked"
           : "cooldown";
     const reason =

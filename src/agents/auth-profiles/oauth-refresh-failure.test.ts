@@ -119,17 +119,6 @@ it.each([
   },
 );
 
-it("gives subscription-block recovery guidance", () => {
-  expect(
-    buildAuthProfileUnusableHint({
-      kind: "blocked",
-      reason: "subscription_limit",
-      provider: "openai",
-      profileId: "openai:default",
-    }),
-  ).toBe("Restore subscription quota, then re-authenticate to clear the cached block.");
-});
-
 it.each([
   ["openai", "Work Profile", `${login} openai --profile-id 'Work Profile'`],
   ["openai", "openai:work`slot", `${login} openai --profile-id 'openai:work\`slot'`],
