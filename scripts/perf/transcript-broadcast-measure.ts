@@ -77,6 +77,8 @@ const { values } = parseArgs({
     "worker-snapshots": { type: "boolean", default: false },
     "worker-retained-heap": { type: "boolean", default: false },
     "worker-heap-snapshot": { type: "boolean", default: false },
+    "worker-heap-done-file": { type: "string" },
+    "worker-heap-peer-done-file": { type: "string" },
     "worker-baseline-dir": { type: "string" },
     "baseline-owners": { type: "boolean", default: false },
     "stress-tools": { type: "boolean", default: false },
@@ -630,6 +632,28 @@ const workerHeapEvidence = {
   errors: [] as string[],
   workers: [] as WorkerHeapEvidence[],
 };
+const workerHeapDoneFile = values["worker-heap-done-file"];
+const workerHeapPeerDoneFile = values["worker-heap-peer-done-file"];
+if (
+  Boolean(workerHeapDoneFile) !== Boolean(workerHeapPeerDoneFile) ||
+  (workerHeapDoneFile &&
+    (!values["worker-retained-heap"] ||
+      scenario !== "memory-soak" ||
+      values["mixed-rpc"] ||
+      values["fingerprint-retention"] ||
+      !workerHeapEvidence.acceptanceTiming))
+) {
+  throw new Error(
+    "Worker heap pair markers require both paths and an unprofiled memory soak without mixed RPCs or fingerprint retention",
+  );
+}
+if (
+  workerHeapDoneFile &&
+  workerHeapPeerDoneFile &&
+  path.resolve(workerHeapDoneFile) === path.resolve(workerHeapPeerDoneFile)
+) {
+  throw new Error("Worker heap pair markers must use distinct paths");
+}
 async function workerHeapCommand(worker: WorkerHeapEvidence, operation: string) {
   const id = `${operation}-${randomUUID()}`;
   const commandPath = `${worker.prefix}.command.json`;
@@ -5205,6 +5229,16 @@ try {
     await delay(Math.max(0, durationMs - (Date.now() - measurementStartedAt)));
   }
   const wholeWorkloadDiagnostics = await finishWholeWorkloadDiagnostics?.();
+  if (workerHeapDoneFile && workerHeapPeerDoneFile) {
+    writeFileSync(workerHeapDoneFile, String(Date.now()));
+    const deadline = Date.now() + 120_000;
+    while (!existsSync(workerHeapPeerDoneFile)) {
+      if (Date.now() >= deadline) {
+        throw new Error("Worker heap peer did not finish its timing window");
+      }
+      await delay(100);
+    }
+  }
   if (values["dashboard-rpc"] && dashboardFixtureRequests === 0) {
     throw new Error("Dashboard GitHub preview never reached the synthetic transport");
   }

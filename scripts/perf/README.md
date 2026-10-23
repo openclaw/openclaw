@@ -1985,6 +1985,11 @@ GCProfiler does not expose promoted bytes.
 class, serially, after all measured windows and profiles have ended. Snapshots
 therefore do not affect the completed timing window. Keep these artifacts within
 the synthetic sandbox and check disk/dirty-memory budgets before capture.
+For paired unprofiled memory soaks without mixed RPCs or fingerprint retention, pass fresh, distinct
+`--worker-heap-done-file` and `--worker-heap-peer-done-file` paths to each side,
+reversing the paths on its peer. Each side publishes completion after its worker
+and whole-workload timing windows, then waits for its peer before collecting or
+snapshotting. Never reuse marker files from an earlier pair.
 For source-runtime comparisons in one checkout, `--worker-baseline-dir` selects
 mirrored baseline TypeScript files while retaining their original module URLs;
 the worker replies record which replacements were loaded. Use `--entry
