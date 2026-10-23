@@ -3072,7 +3072,11 @@ describe("active-memory plugin", () => {
         }),
     });
     plugin.register(api as unknown as OpenClawPluginApi);
-    runEmbeddedAgent.mockImplementationOnce(() => new Promise<never>(() => {}));
+    const recallStarted = createDeferred<void>();
+    runEmbeddedAgent.mockImplementationOnce(() => {
+      recallStarted.resolve();
+      return new Promise<never>(() => {});
+    });
 
     const resultPromise = runPromptBuild(
       { prompt: "what food do i usually order? delayed recall start" },
@@ -3081,18 +3085,7 @@ describe("active-memory plugin", () => {
       },
     );
     await vi.advanceTimersByTimeAsync(1_490);
-    const hasStartedRecall = () =>
-      vi
-        .mocked(api.logger.info)
-        .mock.calls.some((call: unknown[]) =>
-          String(call[0]).includes("session=agent:main:delayed-recall-start"),
-        );
-    for (let attempt = 0; attempt < 20 && !hasStartedRecall(); attempt += 1) {
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-    }
-    expect(hasStartedRecall()).toBe(true);
+    await recallStarted.promise;
     await vi.advanceTimersByTimeAsync(250);
     await vi.advanceTimersByTimeAsync(1_499);
 
