@@ -21,7 +21,7 @@ import { registerSignalExitOwner } from "../signal-exit-barrier.js";
 import { measureGatewayBootstrapStep } from "../startup-trace.js";
 import { createGatewayHostLifecycle } from "./host-lifecycle.js";
 import { installGatewayHostLifeline } from "./host-lifeline.js";
-import { createGatewayRunCleanup } from "./run-loop-cleanup.js";
+import { createGatewayRunCleanup, finishRestartActionAfterClose } from "./run-loop-cleanup.js";
 import { drainGatewayActiveWork } from "./run-loop-drain.js";
 import * as loopExit from "./run-loop-exit.js";
 import {
@@ -822,34 +822,19 @@ export async function runGatewayLoop(params: {
           if (!acceptedRequest.hostedStop) {
             await hostLifecycle?.retire();
           }
-          if (shutdownFailure) {
-            // A failed close leaves this process unable to resume in-process, and a
-            // schtasks-supervised run that exits nonzero is never relaunched (manual
-            // task starts ignore RestartOnFailure). The handoff observer waits for
-            // this PID to exit before /Run, so the replacement re-admits state fresh.
-            if (
-              (installationReplacement || supervisorMode === "schtasks") &&
-              !getManagedUpdateOwner()
-            ) {
-              writeStabilityBundle(
-                "gateway.restart_close_failed",
-                shutdownFailure.error,
-                shutdownFailure.step,
-              );
-              await handleRestartAfterServerClose(undefined, false, shutdownFailure);
-            } else {
-              // forceExitAfterStabilityBundle records the bundle itself; do not double-write.
-              await forceExitAfterStabilityBundle(
-                "gateway.restart_close_failed",
-                1,
-                shutdownFailure,
-              );
-            }
-          } else if (handoffClosed) {
-            await handleRestartAfterServerClose(
+          if (shutdownFailure || handoffClosed) {
+            await finishRestartActionAfterClose({
+              shutdownFailure,
+              handoffClosed,
               managedUpdateOwner,
-              managedUpdateCancellation === "restored-in-process",
-            );
+              resumeInProcess: managedUpdateCancellation === "restored-in-process",
+              hasInstallationReplacement: Boolean(installationReplacement),
+              supervisorMode,
+              getManagedUpdateOwner,
+              writeStabilityBundle,
+              handleRestartAfterServerClose,
+              forceExitAfterStabilityBundle,
+            });
           }
         } else if (acceptedRequest.hostedStop) {
           await handleHostedStopAfterServerClose(acceptedRequest.hostedStop, shutdownFailure);
