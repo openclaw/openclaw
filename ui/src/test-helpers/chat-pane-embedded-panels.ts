@@ -1,4 +1,4 @@
-import { onTestFinished, vi } from "vitest";
+import { expect, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { SessionWorkspaceGetResult, SessionWorkspaceListResult } from "../api/types.ts";
 import { sidebarPanelDefinitions } from "../pages/chat/chat-pane-embedded-panels.ts";
@@ -18,9 +18,14 @@ import "../pages/chat/components/chat-files-panel.tsx";
 import { createChatProps } from "../pages/chat/chat-view.test-helpers.ts";
 import "../pages/chat/components/chat-sidebar-region.runtime.tsx";
 import { createSessionWorkspaceProps } from "../pages/chat/components/chat-session-workspace.ts";
-import type { SidebarLayout, SidebarSlotId } from "../pages/chat/sidebar-layout.ts";
+import {
+  isSidebarSlotVisible,
+  type SidebarLayout,
+  type SidebarSlotId,
+} from "../pages/chat/sidebar-layout.ts";
 import { installResizeObserverStub } from "./resize-observer.ts";
 import { mountSolid } from "./solid-render.tsx";
+import { waitForSolid } from "./solid-settle.ts";
 
 const panelViews = new WeakMap<
   HTMLElement,
@@ -72,7 +77,27 @@ export async function renderPanelFixture(
       panelViews.delete(mount);
     });
   }
-  await mount.querySelector("openclaw-chat-sidebar-region")?.updateComplete;
+  if (layout.columns.length) {
+    await waitForSolid(() =>
+      expect(mount.querySelector("openclaw-chat-sidebar-region")).not.toBeNull(),
+    );
+    await mount.querySelector("openclaw-chat-sidebar-region")!.updateComplete;
+  }
+  for (const [slot, tag] of [
+    ["workspace", "openclaw-chat-files-panel"],
+    ["detail", "openclaw-chat-detail-panel"],
+  ] as const) {
+    const view = definitions.find((entry) => entry.slot === slot)?.view;
+    const kind = view?.detailContent?.kind;
+    if (
+      view &&
+      isSidebarSlotVisible(layout, slot) &&
+      (slot === "workspace" ||
+        (kind && kind !== "tool-output" && kind !== "loading" && kind !== "unavailable"))
+    ) {
+      await waitForSolid(() => expect(mount.querySelector(tag)).not.toBeNull());
+    }
+  }
   await mount.querySelector("openclaw-chat-files-panel")?.updateComplete;
   await Promise.all(
     [...mount.querySelectorAll("openclaw-chat-detail-panel")].map((panel) => panel.updateComplete),
