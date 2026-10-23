@@ -1,5 +1,28 @@
 # Team-shaped synthetic state
 
+## Owned directory events
+
+`owned-directory-events-measure.ts` opens real shared directory subscriptions and
+replays fixed native callbacks. Setup checks a missing descendant's event filter;
+the measured pass delivers 65 direct-root events per batch, with a one-millisecond
+yield between batches. It measures observer work, not filesystem or Gateway throughput.
+
+```sh
+node --expose-gc --trace-gc-nvp --import ./scripts/tsx.mjs \
+  scripts/perf/owned-directory-events-measure.ts \
+  --state-dir /path/to/new-state --operations 4000 --start-at <epoch-ms> \
+  --gc-log /path/to/capture.log --output /path/to/result.json > /path/to/capture.log 2>&1
+```
+
+Use `--owner /absolute/path/to/owned-directory-observation.baseline.ts` to load a
+baseline saved beside the current owner. Add `--allocations` for a separate paired
+pass including collected objects. Reports include bytes per event, batch latency,
+CPU, GC counts/tails/maxima, promotion, and event-loop tails with sample counts.
+Compare concurrent pairs under one quiet lock and the production guard, swapping
+interleaved CPU sets for the second pair. Apply the campaign's paired-delta,
+absolute-delta, GC-pause, and minimum-sample rules. Notifications must remain exact;
+lower allocation must not regress eligible CPU, GC/work, or latency metrics.
+
 ## Background result lifecycle wait
 
 `background-result-wait-measure.ts` holds a synthetic session turn open while
@@ -150,6 +173,43 @@ for a full unchanged comparison. GC reports totals per call, collection counts,
 maximum pauses and tails; all tails include sample counts. Apply the campaign's
 paired-delta, sample-count and absolute GC pause rules. RSS high water includes
 setup; retained state and allocation profiles are task-owned cleanup artifacts.
+
+## Codex adoption candidate preparation
+
+`adoption-candidates-measure.ts` calls the production adoption owner with 5,000
+synthetic session entries, including 16 valid adoptions. The main measurement
+uses `--team-shape`: the existing generator creates 5,000 persisted sessions,
+6,000 retained runs, approvals, cron jobs, and projects, with transcript payloads
+disabled. Setup reads the actual stored session entries through the plugin
+runtime and uses the first 4,984 alongside the 16 valid adoptions. Generation
+runs sequentially on preparation CPUs, before `ADOPTION_READY`. Without this
+flag, the smaller setup uses simple in-memory session rows. The real binding store
+and decoder read an in-memory fixture adapter; unexpected mutations fail. Each
+list gets a new snapshot revision by default; `--unchanged` retains the warmed
+revision. This measures candidate preparation and binding decoding, without
+Gateway transport, SQLite, or native App Server latency.
+
+```sh
+node --expose-gc --trace-gc-nvp --import ./scripts/tsx.mjs \
+  scripts/perf/adoption-candidates-measure.ts \
+  --team-shape --state-dir /path/to/new-state --operations 4000 --start-at <future-epoch-ms> \
+  --gc-log /path/to/capture.log --output /path/to/result.json > /path/to/capture.log 2>&1
+```
+
+Run on the approved benchmark host under the shared guard and one quiet lock,
+with concurrent baseline/candidate processes and swapped interleaved CPU sets
+in the second pair. `ADOPTION_READY` follows fixture preparation and warmup.
+`--owner /path/to/baseline-sibling.ts` substitutes an adoption module alongside
+its original imports. Add `--allocations` for separate paired allocation passes
+that retain samples of objects collected by minor and major GC.
+
+Every result must exactly match the independently constructed ordered adoption
+map. Compare the result and fixture digests across both sides. The report includes
+bytes per list for the full capture, owner stacks, and key-parser stacks, along
+with CPU, latency, GC time per list, promotion, and event-loop delay. All tails
+include sample counts and GC includes maximum pauses. Result verification and
+pacing are excluded from list latency but included in aggregate measurements.
+Apply the campaign's paired-delta, sample-count, and absolute pause rules.
 
 ## Gateway startup and restart acceptance
 
