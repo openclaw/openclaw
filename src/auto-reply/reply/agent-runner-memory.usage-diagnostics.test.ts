@@ -140,7 +140,6 @@ describe("private memory usage diagnostics", () => {
       sessionStore: { main: sessionEntry },
       sessionKey: "main",
       storePath,
-      isHeartbeat: false,
     });
     expect(result.outcome).toBe(isError ? "failed" : "completed");
     expect(events).toHaveLength(1);
