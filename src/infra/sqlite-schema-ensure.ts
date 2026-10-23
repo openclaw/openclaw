@@ -9,7 +9,10 @@ import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 export function createSqliteSchemaEnsurer(
   schemaSql: () => string,
   objects: { tables: readonly string[]; indexes?: readonly string[] },
-): (database: EngineConnection, runWrite?: (install: () => void) => void) => void {
+): (
+  database: EngineConnection,
+  runWrite?: (install: (database: EngineConnection) => void) => void,
+) => void {
   const present = (database: DatabaseSync): boolean => {
     const facts = getAdmittedSqliteSchemaFacts(database);
     return (
@@ -26,13 +29,13 @@ export function createSqliteSchemaEnsurer(
       if (present(database)) {
         return;
       }
-      const install = () => database.exec(schemaSql()); // sqlite-allow-raw -- Canonical additive DDL only.
+      const install = (db: EngineConnection) => db.exec(schemaSql()); // sqlite-allow-raw -- Canonical additive DDL only.
       if (runWrite) {
         runWrite(install);
       } else if (database.isTransaction) {
-        install();
+        install(database);
       } else {
-        runSqliteImmediateTransactionSync(database, install);
+        runSqliteImmediateTransactionSync(database, () => install(database));
       }
     });
   };

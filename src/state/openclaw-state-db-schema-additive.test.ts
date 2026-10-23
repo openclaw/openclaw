@@ -10,9 +10,11 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { stageSqliteCommittedPublication } from "../infra/sqlite-post-commit.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.test-support.js";
+import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { useSqliteSchemaTestFixture } from "../infra/sqlite-schema-facts.test-support.js";
 import { classifySqliteMutation } from "../infra/sqlite-schema-mutation.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { ensureMeetingTranscriptsSchema } from "../transcripts/sqlite-schema.js";
@@ -126,6 +128,31 @@ it("retries rolled-back feature DDL and publishes only its durable installation"
   expect(publications).toEqual([]);
   runOpenClawStateWriteTransaction(install, { database });
   expect(publications).toEqual([true]);
+});
+
+it("installs additive DDL on the write runner's connection and rolls it back there", () => {
+  const outer = openDatabase();
+  const writer = openDatabase();
+  const ensure = createSqliteSchemaEnsurer(() => "CREATE TABLE feature (id INTEGER)", {
+    tables: ["feature"],
+  });
+  const installed = (db: EngineConnection) =>
+    readRow(db, "SELECT name FROM sqlite_schema WHERE name = 'feature'") !== undefined;
+
+  expect(() =>
+    ensure(outer, (install) =>
+      runSqliteImmediateTransactionSync(writer, () => {
+        install(writer);
+        throw new Error("installation refused");
+      }),
+    ),
+  ).toThrow("installation refused");
+  expect(installed(outer)).toBe(false);
+  expect(installed(writer)).toBe(false);
+
+  ensure(outer, (install) => runSqliteImmediateTransactionSync(writer, () => install(writer)));
+  expect(installed(outer)).toBe(false);
+  expect(installed(writer)).toBe(true);
 });
 
 it.each([

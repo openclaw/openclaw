@@ -1,4 +1,5 @@
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
 import { ensureStatePostgresFragment } from "./openclaw-state-db-engine.js";
 import {
@@ -26,10 +27,12 @@ export function createOpenClawStateSchemaEnsurer(params: {
   });
   return (options = {}) => {
     const { db } = openOpenClawStateDatabase(options);
-    const runWrite = (install: () => void) =>
-      runOpenClawStateWriteTransaction(install, options, { operationLabel: params.operationLabel });
+    const runWrite = (install: (database: EngineConnection) => void) =>
+      runOpenClawStateWriteTransaction(({ db: txDb }) => install(txDb), options, {
+        operationLabel: params.operationLabel,
+      });
     if (isPostgresSqlConnection(db)) {
-      runWrite(() => ensureStatePostgresFragment(db, params.table));
+      runWrite((txDb) => ensureStatePostgresFragment(txDb, params.table));
     } else {
       ensure(db, runWrite);
     }
