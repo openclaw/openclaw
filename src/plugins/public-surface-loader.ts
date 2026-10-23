@@ -58,7 +58,6 @@ export function loadValidatedPublicSurfaceModule(params: {
 export function loadBundledPluginPublicArtifactModuleSync<T extends object>(params: {
   dirName: string;
   artifactBasename: string;
-  env?: NodeJS.ProcessEnv;
 }): T {
   const loaded = loadBundledPluginPublicArtifactModuleFromCandidatesSync<T>({
     ...params,
