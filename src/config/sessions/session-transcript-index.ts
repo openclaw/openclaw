@@ -20,7 +20,6 @@ import {
   withoutSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
-import type { TranscriptWindowUpdate } from "./session-accessor.sqlite-transcript-state.js";
 import {
   readSessionActorTransactionState,
   writableSessionActorMap,
@@ -306,7 +305,9 @@ export function createTranscriptIndexAppenderInTransaction(
 ): {
   append: (params: TranscriptIndexAppend) => boolean;
   flushRows: () => void;
-  flush: (windowUpdate?: TranscriptWindowUpdate) => void;
+  flush: (
+    windowUpdate?: import("./session-accessor.sqlite-transcript-state.js").TranscriptWindowUpdate,
+  ) => void;
 } {
   const actor = readSessionActorTransactionState({ db }, { sessionId });
   const initial = prepared ? prepared.state : readSessionTranscriptProjectionState(db, sessionId);
