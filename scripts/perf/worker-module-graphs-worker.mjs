@@ -74,7 +74,7 @@ if (!isMainThread) {
   port.on("message", async ({ id, operation, snapshot }) => {
     try {
       let value;
-      if (operation === "begin") {
+      if (operation === "prepare") {
         if (workerData.traceGc) {
           fs.writeSync(1, `WORKER_GC_IDENTIFY_BEGIN ${workerData.name}\n`);
           setFlagsFromString("--trace-gc-nvp");
@@ -82,6 +82,8 @@ if (!isMainThread) {
           setFlagsFromString("--no-trace-gc-nvp");
           fs.writeSync(1, `WORKER_GC_IDENTIFY_END ${workerData.name}\n`);
         }
+        value = { prepared: true };
+      } else if (operation === "begin") {
         observer.takeRecords();
         samples = [];
         loop.reset();

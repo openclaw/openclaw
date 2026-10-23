@@ -24,6 +24,8 @@ assert(values["state-dir"] && values.output, "--state-dir and --output are requi
 const state = path.resolve(values["state-dir"]);
 const samples = Number(values.samples);
 assert(Number.isSafeInteger(samples) && samples > 0);
+const startAt = values["start-at"] === undefined ? undefined : Number(values["start-at"]);
+assert(startAt === undefined || (Number.isSafeInteger(startAt) && startAt > 0));
 await fs.mkdir(state, { recursive: true });
 await fs.mkdir(path.dirname(path.resolve(values.output)), { recursive: true });
 for (const name of ["home", "tmp", "state", "repository", "plugin", "scratch"]) {
@@ -374,11 +376,15 @@ for (const [name, relative] of Object.entries(entries)) {
       "inspect",
       values.snapshots ? path.join(state, `${name}.heapsnapshot`) : undefined,
     );
-    if (values["start-at"]) {
-      await delay(Math.max(0, Number(values["start-at"]) - Date.now()));
+    await diagnose("prepare");
+    if (startAt !== undefined) {
+      const remaining = startAt - Date.now();
+      assert(remaining > 0, "Preparation missed the paired start deadline; discard and rerun");
+      await delay(remaining);
     }
     await diagnose("begin");
     const latency = [];
+    const startedAt = Date.now();
     const started = performance.now();
     for (let index = 0; index < samples; index++) {
       const before = performance.now();
@@ -405,6 +411,7 @@ for (const [name, relative] of Object.entries(entries)) {
       cold,
       warm,
       retained,
+      startedAt,
       elapsedMs,
       latencyMs: distribution(latency),
       ...diagnosticsResult,
