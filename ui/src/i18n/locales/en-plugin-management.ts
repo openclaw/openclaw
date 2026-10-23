@@ -417,6 +417,7 @@ const enPluginManagement = {
       transport: "Transport",
       authentication: "Authentication",
       scope: "Requested permissions",
+      description: "What this server does",
       unavailable: "Connection details are not included in this plugin’s catalog metadata.",
       auth: { oauth: "OAuth", "api-key": "API key", none: "None" },
     },

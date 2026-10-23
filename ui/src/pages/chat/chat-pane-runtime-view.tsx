@@ -21,7 +21,6 @@ import { chatGoalOperations } from "./chat-goals.ts";
 import { chatPanePropertyKeys } from "./chat-pane-inputs.ts";
 import { PaneLayout } from "./chat-pane-layout-view.tsx";
 import type { ChatPaneRuntime } from "./chat-pane-render.ts";
-import { lazySidebarElements } from "./chat-pane-sidebar-layout.ts";
 import {
   ChatProviderReviewDialog,
   createChatProviderReview,
@@ -241,7 +240,6 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       runtime.activeSessionResources,
       runtime.sessionCompanionThreads,
       nativeGatewaysCapability(),
-      lazySidebarElements,
     ].map((source) => source && projectOwner(source, (capability) => capability));
     onSettled(() => installChatComposerPickerDismissal(runtime.element.ownerDocument));
     // Relative labels tick only while this retained pane is presented.

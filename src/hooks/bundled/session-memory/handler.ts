@@ -23,6 +23,7 @@ import { resolveStateDir } from "../../../config/paths.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isVitestRuntimeEnv } from "../../../infra/env.js";
+import { withFileLock } from "../../../infra/file-lock.js";
 import { root } from "../../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../../process/gateway-work-admission.js";
@@ -295,9 +296,6 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
       slug = localTimestamp.timeSlug;
     }
 
-    const filename = await resolveAvailableMemoryFilename({ memoryDir, dateStr, slug });
-    const memoryFilePath = path.join(memoryDir, filename);
-
     const timeStr = localTimestamp.time;
 
     const sessionId = (sessionEntry.sessionId as string) || "unknown";
@@ -340,13 +338,28 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
       sessionKey: event.sessionKey,
       now: () => now.getTime(),
     });
-    const commit = () => memoryRoot.write(filename, entry, { encoding: "utf-8" });
-    await provenanceObserver.write({
-      absolutePath: memoryFilePath,
-      contentBefore: "",
-      contentAfter: entry,
-      commit,
-    });
+    // Allocation and provenance publication share one workspace lock: different
+    // slugs can also collide with another capture's numeric suffix. The existing
+    // lock owner recovers dead writers without making provenance rows reserve names.
+    const memoryFilePath = await withFileLock(
+      path.join(memoryDir, ".session-memory"),
+      {
+        retries: { retries: 1_200, factor: 1, minTimeout: 25, maxTimeout: 25 },
+        stale: 30_000,
+        staleRecovery: "remove-if-definitely-stale",
+      },
+      async () => {
+        const filename = await resolveAvailableMemoryFilename({ memoryDir, dateStr, slug });
+        const allocatedPath = path.join(memoryDir, filename);
+        await provenanceObserver.write({
+          absolutePath: allocatedPath,
+          contentBefore: "",
+          contentAfter: entry,
+          commit: () => memoryRoot.create(filename, entry, { encoding: "utf-8", atomic: true }),
+        });
+        return allocatedPath;
+      },
+    );
 
     const relPath = shortenHomePath(memoryFilePath);
     log.info(`Session context saved to ${relPath}`);

@@ -1073,13 +1073,22 @@ or rollback for it. Do not rewrite identities or delete recovery artifacts.
 
 ### Unfinished publication and rollback
 
-`openclaw update` automatically settles a `publication-complete` operation when
-the live candidate passes the same verification as repair, even when the update
-lease is unchanged. A dry run previews settlement without changing recovery
-artifacts. With an unchanged lease, other unfinished phases still require explicit
-repair.
+`openclaw update` automatically settles a `prepared`, `publishing`, or
+`publication-complete` operation when the live candidate passes the same
+verification as repair, even when the update lease is unchanged. It also retires
+an untouched preparation after verifying the original package and launchers.
+This does not republish files beneath a running Gateway. A dry run previews
+settlement without changing recovery artifacts. Unfinished publication that
+still needs file changes, pending rollback, and failed verification retain their
+recovery artifacts and report the repair command.
 
-For an external-helper operation stuck at `prepared`, `publishing`, or
+After a managed-service update fails before stopping the original Gateway,
+the handoff checks whether that original version is still serving and records
+the outcome. A stopped Gateway or unavailable health check is reported with
+its reason. This observation does not restart the service or mark the attempted
+update successful.
+
+To explicitly settle an external-helper operation stuck at `prepared`, `publishing`, or
 `publication-complete` whose live package already serves the candidate, run
 `openclaw update repair` from an independent terminal. Repair verifies the
 installed candidate's dist content inventory, manifest, launchers,

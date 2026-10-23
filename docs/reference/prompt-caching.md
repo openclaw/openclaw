@@ -73,10 +73,11 @@ identity when available. Retiring earlier history therefore preserves the IDs of
 retained failed-turn markers. Error diagnostics remain transcript metadata and do
 not enter the provider request.
 
-Internal browser conversations reuse their opaque session cache key for private
-subagent completions, so the completion does not switch to a different affinity
-key between chat turns. The key remains scoped to the agent, provider, model,
-and conversation and does not expose the conversation identifier.
+OpenAI requests use the session ID and the authoritative transcript's reset and
+compaction boundary count as their cache key unless the caller supplies an
+explicit key. Operator, WebChat, private subagent completion, requester-settle,
+and recovery turns share this session-boundary identity. The current client and
+reply delivery route do not select a different cache key.
 
 ## Primary knobs
 

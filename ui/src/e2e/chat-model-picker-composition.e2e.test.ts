@@ -78,7 +78,7 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}chat`);
-      const { picker, trigger } = modelPicker(page);
+      const { picker, trigger, search } = modelPicker(page);
       await trigger.click();
       await polledCount(picker.locator("[data-chat-model-provider-toggle]")).toBe(1);
       const account = picker.locator(".chat-controls__account-selection");
@@ -113,7 +113,11 @@ suite.define(() => {
         '[data-chat-account-option="account:openai:new-alternate"]',
       );
       await polledVisible(newAlternate).toBe(true);
+      await search.fill("Old alternate");
+      await polledVisible(picker.locator("[data-chat-model-search-empty]")).toBe(true);
       expect(await oldAlternate.count()).toBe(0);
+      await search.fill("New alternate");
+      await polledVisible(newAlternate).toBe(true);
     });
   });
 
@@ -171,7 +175,6 @@ suite.define(() => {
         expect(await beta.isVisible()).toBe(false);
         await search.fill("shared");
         await polledVisible(beta).toBe(true);
-        expect(await openai.getAttribute("aria-expanded")).toBe("true");
         for (const query of ["shared-beta", "ANTHROPIC/SHARED-BETA"]) {
           await search.fill(query);
           expect({ beta: await beta.isVisible(), alpha: await alpha.isVisible() }).toEqual({
@@ -182,6 +185,7 @@ suite.define(() => {
         await search.press("ControlOrMeta+A");
         await search.press("Backspace");
         expect(await search.inputValue()).toBe("");
+        await polledAttribute(openai, "aria-expanded").toBe("true");
         expect(await alpha.isVisible()).toBe(true);
         expect(await beta.isVisible()).toBe(false);
         await openai.click();
@@ -220,7 +224,7 @@ suite.define(() => {
           const { picker, trigger, search } = modelPicker(page);
           await polledAttribute(trigger, "aria-disabled").toBe("false");
           await trigger.click();
-          await polledCount(picker.locator("[data-chat-model-option]")).toBe(2);
+          await polledCount(picker.locator("[data-chat-model-option]")).toBe(1);
           await page.mouse.move(0, 0);
           const query = key.startsWith("Arrow") ? "" : "anthropic";
           if (key.startsWith("Arrow")) {
@@ -232,6 +236,9 @@ suite.define(() => {
             }
           }
           await search.fill(query);
+          await polledCount(picker.locator("[data-chat-model-option]")).toBe(
+            key.startsWith("Arrow") ? 2 : 1,
+          );
           await search.focus();
           // This exercises browser event ownership, not a native OS IME candidate window.
           const { prevented, highlightedBefore } = await search.evaluate(
@@ -282,6 +289,7 @@ suite.define(() => {
           }
           if (composition !== "none") {
             // Dismissal resets query/highlight; provider disclosure deliberately survives it.
+            await search.fill("");
             const otherProvider = picker.locator(
               '[data-chat-model-provider-group="anthropic"] [data-chat-model-provider-toggle]',
             );

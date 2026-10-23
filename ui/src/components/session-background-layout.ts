@@ -1,11 +1,16 @@
-import { onCleanup } from "solid-js";
+import { onSettled } from "solid-js";
 import type { SessionBackgroundLayoutTarget } from "./session-background-layout-context.tsx";
 
 /** Observe layout changes, never scrolling or animation frames. */
 export function createBackgroundFadeLayout(host: HTMLElement) {
-  const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+  let observer: ResizeObserver | null = null;
   let targets: Element[] = [];
   let layoutTargets: readonly SessionBackgroundLayoutTarget[] = [];
+  onSettled(() => {
+    observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    targets.forEach((node) => observer?.observe(node));
+    return disconnect;
+  });
 
   function findTarget(kind: SessionBackgroundLayoutTarget["kind"]) {
     let first: HTMLElement | undefined;
@@ -59,6 +64,5 @@ export function createBackgroundFadeLayout(host: HTMLElement) {
     observer?.disconnect();
     targets = [];
   }
-  onCleanup(disconnect);
   return { update };
 }

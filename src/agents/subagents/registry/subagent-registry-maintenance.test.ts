@@ -220,7 +220,8 @@ describe("subagent maintenance protection", () => {
     const runs = new Map<string, SubagentRunRecord>();
     const prepared = await prepareSessionMaintenancePreservation(storePath, { native: true });
     try {
-      expect(prepared.capture().providerKeys).toEqual([second.childSessionKey]);
+      const previous = prepared.capture();
+      expect(previous.providerKeys).toEqual([second.childSessionKey]);
       await mutateSubagentRuns(
         [first.runId],
         () => ({
@@ -239,6 +240,7 @@ describe("subagent maintenance protection", () => {
       } finally {
         observation.restore();
       }
+      expect(previous.providerKeys).toEqual([second.childSessionKey]);
       expect(await protectedKeys()).toEqual([first.childSessionKey, second.childSessionKey]);
       await mutateSubagentRuns(
         [first.runId],

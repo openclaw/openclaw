@@ -11,6 +11,7 @@ import {
 import { captureSessionEventTargetForHost } from "../../auto-reply/reply/session-event-target.js";
 import { resolveSessionStableReplyMode } from "../../auto-reply/reply/session-stable-reply-mode.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
+import { resolveSessionModelOverrideSource } from "../../config/sessions/model-override-provenance.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveCreatorSandbox } from "../../gateway/operator-role-policy.js";
 import { isCronSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
@@ -362,6 +363,10 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
       const cfgWithAgentDefaults = resolvedModelSelection.cfgWithAgentDefaults;
       const { useSubagentFallbacks, inheritDefaultFallbacksForAgentStringModel } =
         resolvedModelSelection;
+      const sessionModelOverrideSource =
+        resolvedModelSelection.modelSource === "session"
+          ? (resolveSessionModelOverrideSource(cronSession.sessionEntry) ?? undefined)
+          : undefined;
 
       const preflight = await resolveCronPreflight({
         cfg: cfgWithAgentDefaults,
@@ -371,6 +376,7 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
         model: resolvedModelSelection.model,
         useSubagentFallbacks,
         inheritDefaultFallbacksForAgentStringModel,
+        sessionModelOverrideSource,
       });
       if (!preflight.ok) {
         logWarn(`[cron:${input.job.id}] ${preflight.reason}`);
@@ -696,6 +702,7 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
           liveSelection,
           useSubagentFallbacks,
           inheritDefaultFallbacksForAgentStringModel,
+          sessionModelOverrideSource,
           modelFallbacksOverride,
           thinkingSelection,
           timeoutMs,
