@@ -321,7 +321,7 @@ async function waitStart(raw: string | undefined, label: string) {
     const name = label.slice(2);
     const startFile = path.join(directory, `${name}.start`);
     writeFileSync(path.join(directory, `${name}.${values.side}.ready`), "ready\n");
-    const deadline = Date.now() + 900_000;
+    const deadline = Date.now() + 2 * 60 * 60_000;
     while (!existsSync(startFile)) {
       assert(Date.now() < deadline, `${label} barrier timed out`);
       await delay(100);
@@ -347,7 +347,7 @@ try {
     await delay(250);
   }
   const sender = await connect(emails[0]!, -1);
-  const viewers = [];
+  const viewers: ReturnType<typeof createGatewayWsClient>[] = [];
   for (let index = 0; index < clients; index++) {
     viewers.push(await connect(emails[1]!, index));
   }
