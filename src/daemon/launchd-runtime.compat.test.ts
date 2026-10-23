@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseLaunchctlJob } from "./launchd-runtime.js";
+import { parseLaunchctlJob } from "./launchd-job-parser.js";
 
 describe("launchd update compatibility observation", () => {
   it("parses only the selected job root while retaining runtime and environment blocks", () => {

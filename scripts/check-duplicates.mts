@@ -36,7 +36,6 @@ const targets = [
   "tsdown.ai.config.ts",
   "tsdown.config.ts",
   "vitest.config.ts",
-  "worker-heap-flag.mjs",
 ];
 
 const sourceExtensions = new Set([".ts", ".tsx", ".js", ".mjs", ".cjs"]);

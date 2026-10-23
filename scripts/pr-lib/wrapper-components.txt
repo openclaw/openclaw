@@ -1299,7 +1299,6 @@ src/state/openclaw-agent-db-read-error.ts
 src/state/openclaw-agent-db-resources.ts
 src/state/openclaw-agent-db-schema-compatibility.ts
 src/state/openclaw-agent-db-validation-cache.ts
-src/state/openclaw-agent-db-validation-receipt.ts
 src/state/openclaw-agent-db.paths.ts
 src/state/openclaw-agent-goal-operations-schema.ts
 src/state/openclaw-agent-message-tool-outcome-schema.ts
