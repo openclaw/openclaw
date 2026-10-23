@@ -11,7 +11,6 @@ import type {
 } from "../../runtime.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import type { TempHomeEnv } from "../../test-utils/temp-home.js";
-import { VERSION } from "../../version.js";
 import type { updateFinalizeCommand as UpdateFinalizeCommand } from "./update-command-finalize.js";
 import type { updateCommand as UpdateCommand } from "./update-command.js";
 
@@ -46,11 +45,6 @@ export const recoveryObservationStep = (cwd = process.cwd()) => ({
     ),
   ],
 });
-export const recoveryVersionMismatch = {
-  check: "versionMatch",
-  code: "version-mismatch",
-  message: `Expected Gateway version ${VERSION}; observed 1.0.0.`,
-};
 export function registerForegroundFailureRecoveryTests(deps: {
   setupUpdatedRootRefresh: () => { root: string };
   spawn: Mock;
