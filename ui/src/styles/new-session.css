@@ -1026,12 +1026,6 @@ span.new-session-page__select {
   animation: btn-spinner-spin 2.25s linear infinite;
 }
 
-.new-session-page__start-submit--blocked {
-  cursor: var(--cursor-action);
-  filter: saturate(0.45);
-  opacity: 0.48;
-}
-
 /* Keep a long first prompt visible before scrolling. The shared auto-height
    controller measures content; this surface owns its ten-line visual cap. */
 /* No inset of its own: the editor's breathing room is the composer surface's
@@ -1324,6 +1318,10 @@ span.new-session-page__select {
   .new-session-page__composer {
     /* Keep privacy context above the writing surface, never below it. */
     order: 1;
+  }
+
+  .new-session-page__blocked-submit {
+    order: 2;
   }
 
   .new-session-page__composer .new-session-page__message {

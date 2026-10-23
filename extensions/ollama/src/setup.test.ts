@@ -69,9 +69,9 @@ describe("ollama setup", () => {
     fetchWithSsrFGuardMock.mockClear();
   });
 
-  it("Docker setup defaults to the host Ollama endpoint", async () => {
+  it("Docker setup hints the host Ollama endpoint and uses it for blank input", async () => {
     vi.stubEnv("OPENCLAW_DOCKER_SETUP", "1");
-    const text = vi.fn().mockResolvedValueOnce("http://host.docker.internal:11434");
+    const text = vi.fn().mockResolvedValueOnce("");
     const { result, fetchMock } = await configureInteractive({ tags: ["llama3:8b"] }, { text });
 
     const baseUrlPrompt = mockCallArg(text) as {
@@ -79,8 +79,9 @@ describe("ollama setup", () => {
       placeholder?: string;
       validate: (value: string) => string | undefined;
     };
+    expect(baseUrlPrompt.initialValue).toBeUndefined();
     expect(baseUrlPrompt).toMatchObject({
-      initialValue: "http://host.docker.internal:11434",
+      message: "Ollama base URL",
       placeholder: "http://host.docker.internal:11434",
     });
     expect(baseUrlPrompt.validate("https://ollama.com")).toContain("--auth-choice ollama-cloud");

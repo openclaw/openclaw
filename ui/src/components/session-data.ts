@@ -467,6 +467,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
       this.clearSessionCache();
     }
     publishSidebarSessionList(this, { ...snapshot, ...presentation });
+    publishSidebarSessionError(this, snapshot.error, "list");
     this.requestSessionDataUpdate();
   };
 

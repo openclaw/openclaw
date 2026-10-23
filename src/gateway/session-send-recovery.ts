@@ -1,5 +1,6 @@
 import { sha256HexPrefixCore } from "@openclaw/normalization-core/node-crypto";
 import pLimit from "p-limit";
+import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import { resolveNestedAgentLaneForSession } from "../agents/lanes.js";
 import { discoverRestartRecoveryStoreTargets } from "../agents/main-session-recovery/main-session-restart-recovery-shared.js";
 import { decodeRequesterOrigin } from "../agents/requester-origin.js";
@@ -30,6 +31,7 @@ import { AgentDatabaseAdmissionError } from "../state/agent-database-admission.j
 import { recoverAfterAgentDatabasePreparation } from "../state/agent-database-preparation-recovery.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { CHAT_INPUT_RECOVERY_MAX_AGE_MS } from "./chat-input-recovery-source.js";
+import { bindInProcessSessionRun } from "./in-process-session-run.js";
 import type { RestoredGatewayOperatorAuthority } from "./operator-run-recovery.js";
 import {
   createPendingInputRecoveryTrace,
@@ -113,7 +115,8 @@ async function recoverSessionSendDeliveriesForAgents(
       ? ("endpoint-replaced" as const)
       : error instanceof SessionSendRequesterUnavailableError
         ? ("requester-unavailable" as const)
-        : error instanceof SessionCommunicationDeniedError
+        : error instanceof SessionCommunicationDeniedError ||
+            (error instanceof GatewayClientRequestError && error.code === "FORBIDDEN")
           ? ("permission-denied" as const)
           : isTransient(error)
             ? ("transient-admission" as const)
@@ -394,23 +397,29 @@ async function recoverSessionSendDeliveriesForAgents(
                       await trace.measure("dispatchAckMs", () =>
                         withSessionSendDelivery({ delivery, acceptedMessage: input.message }, () =>
                           runtime.dispatchAgent(
-                            {
-                              agentId: delivery.target.agentId,
-                              sessionKey: delivery.target.sessionKey,
-                              expectedExistingSessionId: delivery.target.sessionId,
-                              expectedExistingSessionLifecycleRevision:
-                                delivery.target.lifecycleRevision ?? null,
-                              idempotencyKey: delivery.runId,
-                              message: delivery.message,
-                              ...(delivery.returnedResult
-                                ? { extraSystemPrompt: delivery.returnedResult.extraSystemPrompt }
-                                : {}),
-                              inputProvenance: input.message.provenance,
-                              deliver: false,
-                              sourceReplyDeliveryMode: "message_tool_only",
-                              channel: INTERNAL_MESSAGE_CHANNEL,
-                              lane: resolveNestedAgentLaneForSession(delivery.target.sessionKey),
-                            },
+                            // Recreate the live send's session binding after validating its source.
+                            bindInProcessSessionRun(
+                              {
+                                agentId: delivery.target.agentId,
+                                sessionKey: delivery.target.sessionKey,
+                                idempotencyKey: delivery.runId,
+                                message: delivery.message,
+                                ...(delivery.returnedResult
+                                  ? { extraSystemPrompt: delivery.returnedResult.extraSystemPrompt }
+                                  : {}),
+                                inputProvenance: input.message.provenance,
+                                deliver: false,
+                                sourceReplyDeliveryMode: "message_tool_only",
+                                channel: INTERNAL_MESSAGE_CHANNEL,
+                                lane: resolveNestedAgentLaneForSession(delivery.target.sessionKey),
+                              },
+                              {
+                                sessionKey: delivery.target.sessionKey,
+                                sessionId: delivery.target.sessionId,
+                                lifecycleRevision: delivery.target.lifecycleRevision ?? null,
+                                runId: delivery.runId,
+                              },
+                            ),
                             undefined,
                             {
                               signal,

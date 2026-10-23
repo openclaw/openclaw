@@ -153,6 +153,8 @@ export async function fixture() {
               client: client.client,
               parentThreadId: owner.parentThreadId,
               requesterSessionKey: identity.sessionKey,
+              requesterStorePath: resolveStorePath(undefined, { agentId: identity.agentId }),
+              agentId: identity.agentId,
               completionScope,
               historyOwner: owner,
               assignmentStore,

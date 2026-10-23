@@ -15,6 +15,7 @@ import {
   isPluginCandidateInstallOwnerAmbiguous,
   resolvePluginCandidateInstallOwner,
 } from "./candidate-install-owner.js";
+import { normalizePluginId, normalizePluginsConfig } from "./config-state.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import { enablePluginInConfig, prepareConfigForDisabledInstall } from "./enable.js";
 import type { ConfigSnapshotForInstallPersist } from "./install-config-mutation.js";
@@ -60,10 +61,11 @@ import {
 
 function removeInstalledPluginFromDenylist(cfg: OpenClawConfig, pluginId: string): OpenClawConfig {
   const deny = cfg.plugins?.deny;
-  if (!Array.isArray(deny) || !deny.includes(pluginId)) {
+  const policyId = normalizePluginId(pluginId);
+  if (!Array.isArray(deny) || !deny.some((id) => normalizePluginId(id) === policyId)) {
     return cfg;
   }
-  const nextDeny = deny.filter((id) => id !== pluginId);
+  const nextDeny = deny.filter((id) => normalizePluginId(id) !== policyId);
   const plugins = {
     ...cfg.plugins,
     ...(nextDeny.length > 0 ? { deny: nextDeny } : {}),
@@ -341,9 +343,10 @@ async function persistPluginInstallOwned(
 
       let next = reconciledConfig;
       const enabledPluginIds: string[] = [];
+      const policyEntries = normalizePluginsConfig(reconciledConfig.plugins).entries;
       for (const pluginId of ownedPluginIds) {
         const configEnablement = enablementByPluginId.get(pluginId) ?? { mode: "ready" as const };
-        const explicitlyDisabled = reconciledConfig.plugins?.entries?.[pluginId]?.enabled === false;
+        const explicitlyDisabled = policyEntries[normalizePluginId(pluginId)]?.enabled === false;
         if (configEnablement.mode === "missing") {
           next = prepareConfigForDisabledInstall(next, pluginId);
         }
