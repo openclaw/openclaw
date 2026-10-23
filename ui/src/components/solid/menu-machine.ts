@@ -62,7 +62,7 @@ export function useMenuMachine(
   let stopRuntime: (() => void) | undefined;
   let mounted = false;
   let loading = false;
-  let pending: Array<(loaded: MenuRuntime) => void> = [];
+  let pending: Array<{ run: (loaded: MenuRuntime) => void; keyboard?: boolean }> = [];
   const [revision, setRevision] = createSignal(0);
   const [error, setError] = createSignal<unknown>();
   const notify = () => setRevision((value) => value + 1);
@@ -74,7 +74,7 @@ export function useMenuMachine(
     if (runtime) {
       intent(runtime);
     } else if (overlay.open && loading) {
-      pending.push(intent);
+      pending.push({ run: intent });
     }
   };
   const load = async () => {
@@ -112,7 +112,7 @@ export function useMenuMachine(
       loading = false;
       notify();
       while (pending.length) {
-        pending.shift()?.(runtime);
+        pending.shift()?.run(runtime);
         // Vanilla queues the transition; Home/End queue the highlight again,
         // whose store notification publishes roving focus. Drain both before replay.
         await new Promise<void>((resolve) => {
@@ -212,21 +212,36 @@ export function useMenuMachine(
     const currentTarget = event.currentTarget;
     event.preventDefault();
     event.stopPropagation();
-    pending.push((loaded) => {
-      const replay = new KeyboardEvent(event.type, event);
-      Object.defineProperties(replay, {
-        target: {
-          value: target === "content" ? loaded.service.scope.getActiveElement() : originalTarget,
-        },
-        currentTarget: { value: currentTarget },
-      });
-      if (target === "content") {
-        loaded.content().onKeyDown(replay);
-      } else if (target === "trigger") {
-        loaded.trigger(parentRuntime()).onKeyDown(replay);
-      } else {
-        loaded.keydown(replay);
-      }
+    if (
+      target === "content" &&
+      options.surface !== "listbox" &&
+      ["Enter", " "].includes(event.key) &&
+      itemNodes.has(originalTarget) &&
+      !originalTarget.hasAttribute("aria-haspopup") &&
+      !pending.some((intent) => intent.keyboard)
+    ) {
+      // Leaf activation already has a native owner; only prior navigation needs replay.
+      originalTarget.click();
+      return;
+    }
+    pending.push({
+      keyboard: true,
+      run: (loaded) => {
+        const replay = new KeyboardEvent(event.type, event);
+        Object.defineProperties(replay, {
+          target: {
+            value: target === "content" ? loaded.service.scope.getActiveElement() : originalTarget,
+          },
+          currentTarget: { value: currentTarget },
+        });
+        if (target === "content") {
+          loaded.content().onKeyDown(replay);
+        } else if (target === "trigger") {
+          loaded.trigger(parentRuntime()).onKeyDown(replay);
+        } else {
+          loaded.keydown(replay);
+        }
+      },
     });
   };
   const keydown = (event: KeyboardEvent) =>
