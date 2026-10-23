@@ -87,6 +87,8 @@ const repositoryScriptEntries = [
   "scripts/bench-control-ui-document.ts!",
   // The channel-turn benchmark guide invokes this opt-in CLI by path.
   "scripts/bench-channel-turn.mts!",
+  // The guide's async-context census wrapper imports this preload before the channel-turn entry.
+  "scripts/perf/async-context-probe.cjs!",
   // docs/reference/test/performance.md invokes the Decision transport comparison driver.
   "scripts/bench-decision-transport.mts!",
   // docs/reference/test/performance.md invokes the frozen-revision benchmark builder.
