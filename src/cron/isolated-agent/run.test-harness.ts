@@ -11,11 +11,11 @@ import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type * as CronHelpers from "./helpers.js";
 // Isolated run test harness builds cron run inputs, mocks, and assertions.
 import { resetCronAutomationMocks } from "./run-automation.test-support.js";
+import { createCronPreparedModelRuntimeFixture } from "./run-prepared-runtime.test-support.js";
 
 // Central mock harness for isolated cron agent run orchestration tests.
 type CronSessionEntry = {
@@ -564,22 +564,9 @@ function resetRunConfigMocks(): void {
   loadModelCatalogMock.mockResolvedValue([]);
   preparedRunPluginRegistryMock.mockReturnValue(createEmptyPluginRegistry());
   loadPublishedReplyDispatchRuntimeMock.mockResolvedValue(undefined);
-  acquirePreparedModelRuntimeMock.mockImplementation(async (input, options) => {
-    const registry = preparedRunPluginRegistryMock();
-    const metadata =
-      options?.pluginGeneration?.pluginMetadataSnapshot ??
-      options?.pluginMetadataSnapshot ??
-      createPluginMetadataSnapshotFixture();
-    return {
-      snapshot: { ...input, metadataSnapshot: metadata, pluginRegistry: registry },
-      pluginGeneration: {
-        ...options?.pluginGeneration,
-        pluginMetadataSnapshot: metadata,
-        pluginRegistry: registry,
-      },
-      [Symbol.asyncDispose]: vi.fn(async () => {}),
-    };
-  });
+  acquirePreparedModelRuntimeMock.mockImplementation(async (input, options) =>
+    createCronPreparedModelRuntimeFixture(input, options, preparedRunPluginRegistryMock()),
+  );
   loadModelCatalogOwnerMock.mockImplementation(
     async (params: {
       agentId?: string;

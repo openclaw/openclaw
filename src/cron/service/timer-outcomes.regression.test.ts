@@ -119,7 +119,7 @@ it.each([
 it.each([
   { priorErrors: 2.5, delayMs: 60_000, nextErrors: 3 },
   { priorErrors: "invalid", delayMs: 30_000, nextErrors: 1 },
-  { priorErrors: NaN, delayMs: 30_000, nextErrors: 1 },
+  { priorErrors: Number.NaN, delayMs: 30_000, nextErrors: 1 },
   { priorErrors: Infinity, delayMs: 30_000, nextErrors: 1 },
   { priorErrors: 0, delayMs: 30_000, nextErrors: 1 },
   { priorErrors: undefined, delayMs: 30_000, nextErrors: 1 },

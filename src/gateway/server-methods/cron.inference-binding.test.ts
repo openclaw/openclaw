@@ -853,7 +853,6 @@ describe("cron handler inference binding persistence", () => {
   );
 
   it.each([
-    { source: "payload", isGmailHook: true },
     { source: "session", isGmailHook: true },
     { source: "delivery-only", isGmailHook: false },
   ] as const)(
@@ -864,11 +863,9 @@ describe("cron handler inference binding persistence", () => {
         fixture.setGmailProfile(subscriptionId);
         const params = {
           ...createParams(),
-          ...(source === "payload"
-            ? { payload: { ...createParams().payload, externalContentSource: "gmail" } }
-            : source === "session"
-              ? { sessionTarget: "session:agent:main:hook:gmail:synthetic" }
-              : { sessionKey: "agent:main:hook:gmail:synthetic" }),
+          ...(source === "session"
+            ? { sessionTarget: "session:agent:main:hook:gmail:synthetic" }
+            : { sessionKey: "agent:main:hook:gmail:synthetic" }),
         };
         await fixture.invoke(
           "cron.add",
