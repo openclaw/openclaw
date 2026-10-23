@@ -162,11 +162,6 @@ type SessionsSendDeliveryParams = {
   /** Communication binds an incarnation without claiming result ownership or forbidding Cron fallback. */
   preparedTargetSessionId?: string;
   retainAcceptance?: boolean;
-  /** Returned input retains the exact recipient generation through consumption. */
-  recipientGeneration?: { assertCurrent: () => void; release: () => void };
-  /** Visible source input when model-facing steering includes runtime instructions. */
-  transcriptText?: string;
-  onQueueAccepted?: (accepted: boolean) => void;
   captureReplyAdmission?: (runId: string) => SessionSendReplyAdmission;
   assertDispatchCurrent?: () => void;
   // Destination policy fences input commit, not an already accepted acknowledgment.
@@ -256,7 +251,6 @@ export async function trySessionsSendActiveRunDelivery(
         let accepted = false;
         const assertInputCurrent = () => {
           assertCurrent();
-          params.recipientGeneration?.assertCurrent();
           if (!accepted) {
             params.assertSendCurrent?.();
           }
@@ -278,17 +272,8 @@ export async function trySessionsSendActiveRunDelivery(
           onQueueAccepted: (value) => {
             // Accepted guidance belongs to the receiver, not the sender's later policy.
             accepted ||= value;
-            params.onQueueAccepted?.(value);
             lifecycle.onQueueAccepted?.(value);
           },
-          ...(params.recipientGeneration
-            ? {
-                onQueueSettled: () => {
-                  params.recipientGeneration?.release();
-                  lifecycle.onQueueSettled?.();
-                },
-              }
-            : {}),
           // Source-bound authority admits only guarded (V2) injection.
           ...(guarded
             ? {
@@ -305,7 +290,7 @@ export async function trySessionsSendActiveRunDelivery(
           userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
             assertOriginalInputCommit: assertInputCurrent,
             input: {
-              text: params.transcriptText ?? messageText,
+              text: messageText,
               provenance: inputProvenance,
               requesterOrigin,
               ...(inputProvenance.sourceRole === "subagent" ? { display: false as const } : {}),

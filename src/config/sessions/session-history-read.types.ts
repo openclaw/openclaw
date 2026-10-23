@@ -43,6 +43,11 @@ export type SessionModelContextLimits = {
   toolResultOverflow?: "omit";
 };
 
+/** Compaction keeps the complete semantic window, independent of replay byte limits. */
+export type SessionTranscriptContextSelection =
+  | { maxBytes: number; maxEvents: number }
+  | { compaction: true };
+
 export type SessionTranscriptModelContext = {
   events: TranscriptEvent[];
   version?: SessionTranscriptContextVersion;

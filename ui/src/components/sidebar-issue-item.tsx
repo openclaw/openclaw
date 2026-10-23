@@ -10,7 +10,7 @@ import type { UpdateProgress } from "../app/update-confirmation.ts";
 import { isUpdateActionable } from "../app/update-schedule-projection.ts";
 import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
-import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { handleNavigationClick, shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import type { PresenceViewer } from "../lib/presence-users.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
@@ -87,13 +87,11 @@ export function renderSidebarMentionItem(params: {
                     ref={sidebarAttentionFocusRef()}
                     class="sidebar-issues-panel__action sidebar-issues-panel__action--primary"
                     href={target().href}
-                    onClick={(event) => {
-                      if (!shouldHandleNavigationClick(event)) {
-                        return;
-                      }
-                      event.preventDefault();
-                      params.onNavigate("chat", target().options);
-                    }}
+                    onClick={(event) =>
+                      handleNavigationClick(event, () => {
+                        params.onNavigate("chat", target().options);
+                      })
+                    }
                   >
                     {t("attention.mentions.open")}
                   </a>
@@ -477,13 +475,9 @@ export function SidebarIssueItem(props: {
               class="sidebar-issues-panel__navigation-link"
               href={pathForRoute(action().routeId, props.handlers.basePath)}
               data-issue-row-focus
-              onClick={(event) => {
-                if (!shouldHandleNavigationClick(event)) {
-                  return;
-                }
-                event.preventDefault();
-                props.handlers.onNavigate(action().routeId);
-              }}
+              onClick={(event) =>
+                handleNavigationClick(event, () => props.handlers.onNavigate(action().routeId))
+              }
             >
               <SidebarIssueContent item={props.item} />
             </a>

@@ -24,7 +24,7 @@ describe("subagent target policy", () => {
     if (result.ok) {
       throw new Error("Expected target policy to reject other agent");
     }
-    expect(result.allowedText).toBe("main");
+    expect(result.error).toContain("allowed: main");
   });
 
   it("filters explicit allowlists to configured target ids", () => {
@@ -50,7 +50,6 @@ describe("subagent target policy", () => {
     if (result.ok) {
       throw new Error("Expected target policy to reject stale explicit target");
     }
-    expect(result.allowedText).toBe("planner");
     expect(result.error).toBe(
       'agentId "stale" is not in the configured agent registry (allowed: planner)',
     );

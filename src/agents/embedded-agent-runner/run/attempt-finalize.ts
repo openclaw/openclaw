@@ -10,7 +10,6 @@ import {
   projectAgentRunAttemptTerminal,
 } from "../../agent-run-terminal-outcome.js";
 import { FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE } from "../../bootstrap-files.js";
-import { isHeartbeatLifecycleRunKind } from "../../bootstrap-mode.js";
 import { hasAnyNonEmptyString } from "../../delivery-evidence-values.js";
 import { countActiveToolExecutions } from "../../embedded-agent-subscribe.handlers.tools.start.js";
 import { isSignalTimeoutReason } from "../../failover-error.js";
@@ -27,7 +26,8 @@ import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { hasCommittedMessagingToolDeliveryEvidence } from "../delivery-evidence.js";
 import { log } from "../logger.js";
 import { markActiveEmbeddedRunAbandoned, type EmbeddedAgentQueueHandle } from "../runs.js";
-import { buildEmbeddedAgentEndContext } from "./agent-end-context.js";
+import { buildEmbeddedForegroundPromptContext } from "./agent-end-context.js";
+import { buildEmbeddedAgentHookContext } from "./agent-hook-context.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
 import { readAttemptNestedToolActivity } from "./attempt-nested-tool-activity.js";
 import { buildAfterTurnRuntimeContextFromUsage } from "./attempt-prompt-helpers.js";
@@ -267,7 +267,6 @@ export async function completeEmbeddedAttemptAfterTurn(
         }),
       sessionManager,
       warn: (message) => log.warn(message),
-      isHeartbeat: isHeartbeatLifecycleRunKind(attempt.bootstrapContextRunKind),
     });
   }
 
@@ -361,14 +360,24 @@ export async function completeEmbeddedAttemptAfterTurn(
             await readAttemptNestedToolActivity(sessionManager, nestedToolActivityState),
           ),
       ),
-      ctx: buildEmbeddedAgentEndContext({
-        run: attempt,
-        agentId: sessionAgentId,
-        agentDir,
-        trace: freezeDiagnosticTraceContext(diagnosticTrace),
+      ctx: {
+        ...buildEmbeddedAgentHookContext(
+          attempt,
+          sessionAgentId,
+          freezeDiagnosticTraceContext(diagnosticTrace),
+        ),
+        modelProviderId: attempt.provider,
+        modelId: attempt.modelId,
+        modelContextWindowTokens: attempt.contextTokenBudget ?? attempt.model.contextWindow,
+        foregroundPromptContext: buildEmbeddedForegroundPromptContext(
+          { ...attempt, agentId: sessionAgentId },
+          agentDir,
+        ),
+        authProfileId: attempt.authProfileId,
         skillWorkshopAvailable,
         compacted: compactionOccurredThisAttempt,
-      }),
+        ...(attempt.config ? { config: attempt.config } : {}),
+      },
       hookRunner,
     });
   }

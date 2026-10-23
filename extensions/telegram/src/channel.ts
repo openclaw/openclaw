@@ -42,6 +42,11 @@ import {
   inspectTelegramAccount,
 } from "./account-inspect.js";
 import {
+  releaseRemovedTelegramAccountThrottler,
+  releaseRotatedTelegramAccountThrottler,
+  releaseStoppedTelegramAccountResources,
+} from "./account-throttler-lifecycle.js";
+import {
   resolveDefaultTelegramAccountId,
   resolveTelegramAccount,
   type ResolvedTelegramAccount,
@@ -88,12 +93,11 @@ import {
 } from "./normalize.js";
 import { createTelegramOutboundAdapter } from "./outbound-adapter.js";
 import { parseTelegramThreadId } from "./outbound-params.js";
-import { releaseStoppedTelegramPollingLease } from "./polling-lease.js";
 import type { TelegramProbe } from "./probe.js";
 import * as probeModule from "./probe.js";
 import { isTelegramTextOnlyChannelData } from "./prompt-context-projection.js";
 import { resolveTelegramStartupProbeTimeoutMs } from "./request-timeouts.js";
-import { getOptionalTelegramRuntime, getTelegramRuntime } from "./runtime.js";
+import { getTelegramRuntime } from "./runtime.js";
 import { telegramSecurityAdapter } from "./security.js";
 import { loadTelegramSendModule } from "./send-runtime.js";
 import {
@@ -120,12 +124,6 @@ const loadTelegramUpdateOffsetRuntime = createLazyRuntimeModule(
   () => import("../update-offset-runtime-api.js"),
 );
 
-function resolveTelegramProbe() {
-  return (
-    getOptionalTelegramRuntime()?.channel?.telegram?.probeTelegram ?? probeModule.probeTelegram
-  );
-}
-
 async function deleteStartupBotInfoCache(accountId: string): Promise<void> {
   await deleteCachedTelegramBotInfo({ accountId }).catch(() => undefined);
 }
@@ -146,7 +144,6 @@ function formatTelegramUnauthorizedTokenError(
 async function resolveTelegramSend(deps?: OutboundSendDeps): Promise<TelegramSendFn> {
   return (
     resolveOutboundSendDep<TelegramSendFn>(deps, "telegram") ??
-    getOptionalTelegramRuntime()?.channel?.telegram?.sendMessageTelegram ??
     (await loadTelegramSendModule()).sendMessageTelegram
   );
 }
@@ -671,19 +668,19 @@ export const telegramPlugin = createChatChannelPlugin({
     },
     lifecycle: {
       onAccountConfigChanged: async ({ prevCfg, nextCfg, accountId }) => {
-        const previousToken = resolveTelegramAccount({ cfg: prevCfg, accountId }).token.trim();
-        const nextToken = resolveTelegramAccount({ cfg: nextCfg, accountId }).token.trim();
-        if (previousToken !== nextToken) {
+        const rotated = await releaseRotatedTelegramAccountThrottler(prevCfg, nextCfg, accountId);
+        if (rotated) {
           // Startup needs the previous identity to reset that bot's ingress before replacement.
           await deleteStartupBotInfoCache(accountId);
         }
       },
-      onAccountRemoved: async ({ accountId }) => {
+      onAccountRemoved: async ({ accountId, prevCfg }) => {
         const { deleteTelegramUpdateOffset } = await loadTelegramUpdateOffsetRuntime();
         await Promise.all([
           deleteTelegramUpdateOffset({ accountId }),
           deleteStartupBotInfoCache(accountId),
         ]);
+        await releaseRemovedTelegramAccountThrottler(prevCfg, accountId);
       },
     },
     heartbeat: {
@@ -710,7 +707,7 @@ export const telegramPlugin = createChatChannelPlugin({
       collectStatusIssues: collectTelegramStatusIssues,
       buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
       probeAccount: async ({ account, timeoutMs }) =>
-        resolveTelegramProbe()(account.token, timeoutMs, {
+        probeModule.probeTelegram(account.token, timeoutMs, {
           accountId: account.accountId,
           proxyUrl: account.config.proxy,
           network: account.config.network,
@@ -740,11 +737,8 @@ export const telegramPlugin = createChatChannelPlugin({
         const groups =
           cfg.channels?.telegram?.accounts?.[account.accountId]?.groups ??
           cfg.channels?.telegram?.groups;
-        const collectGroupIds =
-          getOptionalTelegramRuntime()?.channel?.telegram?.collectTelegramUnmentionedGroupIds ??
-          auditModule.collectTelegramUnmentionedGroupIds;
         const { groupIds, unresolvedGroups, hasWildcardUnmentionedGroups } =
-          collectGroupIds(groups);
+          auditModule.collectTelegramUnmentionedGroupIds(groups);
         if (!groupIds.length && unresolvedGroups === 0 && !hasWildcardUnmentionedGroups) {
           return undefined;
         }
@@ -759,10 +753,7 @@ export const telegramPlugin = createChatChannelPlugin({
             elapsedMs: 0,
           };
         }
-        const auditMembership =
-          getOptionalTelegramRuntime()?.channel?.telegram?.auditTelegramGroupMembership ??
-          auditModule.auditTelegramGroupMembership;
-        const audit = await auditMembership({
+        const audit = await auditModule.auditTelegramGroupMembership({
           token: account.token,
           botId,
           groupIds,
@@ -846,7 +837,7 @@ export const telegramPlugin = createChatChannelPlugin({
         };
         try {
           const probe = await withTelegramStartupProbeSlot(ctx.abortSignal, () =>
-            resolveTelegramProbe()(token, resolveTelegramStartupProbeTimeoutMs(undefined), {
+            probeModule.probeTelegram(token, resolveTelegramStartupProbeTimeoutMs(undefined), {
               accountId: account.accountId,
               proxyUrl: account.config.proxy,
               network: account.config.network,
@@ -891,10 +882,7 @@ export const telegramPlugin = createChatChannelPlugin({
           throw new Error(unauthorizedTokenReason);
         }
         ctx.log?.info(`[${account.accountId}] starting provider${telegramBotLabel}`);
-        const monitor =
-          getOptionalTelegramRuntime()?.channel?.telegram?.monitorTelegramProvider ??
-          monitorModule.monitorTelegramProvider;
-        await monitor({
+        await monitorModule.monitorTelegramProvider({
           token,
           accountId: account.accountId,
           ownerAgentId,
@@ -914,15 +902,8 @@ export const telegramPlugin = createChatChannelPlugin({
       },
       stopAccount: async ({ account, accountId, log }) => {
         const token = (account.token ?? "").trim();
-        if (!token) {
-          return;
-        }
-        const released = await releaseStoppedTelegramPollingLease({
-          token,
-          accountId,
-        });
-        if (released) {
-          log?.info?.(`[${accountId}] released stopped Telegram polling lease`);
+        if (token) {
+          await releaseStoppedTelegramAccountResources({ token, accountId, log });
         }
       },
       logoutAccount: async ({ accountId, cfg }) => {
@@ -957,10 +938,7 @@ export const telegramPlugin = createChatChannelPlugin({
       message: PAIRING_APPROVED_MESSAGE,
       normalizeAllowEntry: createPairingPrefixStripper(/^(telegram|tg):/i),
       notify: async ({ cfg, id, message, accountId }) => {
-        const resolveToken =
-          getOptionalTelegramRuntime()?.channel?.telegram?.resolveTelegramToken ??
-          resolveTelegramToken;
-        const { token } = resolveToken(cfg, { accountId });
+        const { token } = resolveTelegramToken(cfg, { accountId });
         if (!token) {
           throw new Error("telegram token not configured");
         }

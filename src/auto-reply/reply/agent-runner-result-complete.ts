@@ -9,7 +9,6 @@ import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { getCommandOwnerAuthority } from "../command-owner-authority.js";
-import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -45,7 +44,6 @@ export async function completeReplyAgentRun(input: {
     activeSessionStore,
     cfg,
     followupRun,
-    isHeartbeat,
     opts,
     preflightCompactionApplied,
     queueKey,
@@ -156,7 +154,7 @@ export async function completeReplyAgentRun(input: {
 
   // Capture only policy-visible final payloads in session store to support
   // durable delivery retries. Hidden reasoning, message-tool-only replies,
-  // and sendPolicy-denied replies must not become heartbeat-replayable text.
+  // and sendPolicy-denied replies must not become replayable text.
   const isStrandedReplyRetryRun = followupRun.strandedReplyRetry === true;
   if (
     sessionKey &&
@@ -171,8 +169,6 @@ export async function completeReplyAgentRun(input: {
     const assistantFinalText = normalizeAssistantFinalDeliveryText(
       runResult.meta?.finalAssistantVisibleText ?? rawAssistantText ?? "",
     );
-    // Heartbeats already deliver fallback finals via sendDurableMessageBatch;
-    // recovering here would duplicate that message.
     const recovery =
       prepared.replyCompletion.outcome === "pending"
         ? { kind: "none" as const }
@@ -184,7 +180,6 @@ export async function completeReplyAgentRun(input: {
             sourceReplyDeliveryMode: recoverySourceReplyPolicy.sourceReplyDeliveryMode,
             sendPolicyDenied: recoverySourceReplyPolicy.sendPolicyDenied,
             successfulSourceReplyDelivery: completedSourceReplyDelivery,
-            isHeartbeat,
             isRoomEvent: sessionCtx.InboundEventKind === "room_event",
           });
     if (recovery.kind === "retry") {
@@ -217,16 +212,9 @@ export async function completeReplyAgentRun(input: {
     const recoverablePendingFinalText = buildRecoverablePendingFinalDeliveryText(
       normalizePendingFinalRecoveryPayloads(finalPayloads),
     );
-    let pendingText = recoverySourceReplyPolicy.suppressDelivery
+    const pendingText = recoverySourceReplyPolicy.suppressDelivery
       ? ""
       : (recoverablePendingFinalText ?? "");
-    if (isHeartbeat) {
-      const stripped = stripHeartbeatToken(pendingText, {
-        mode: "heartbeat",
-        maxAckChars: DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
-      });
-      pendingText = stripped.shouldSkip ? "" : stripped.text || pendingText;
-    }
     // Committed text/media needs no second delivery state machine; other parts still do.
     const canUseLocalTranscript =
       isInternalSourceReplyChannel(sessionCtx) && !prepared.reminderNoteAppended;
@@ -326,7 +314,6 @@ export async function completeReplyAgentRun(input: {
     !storePath ||
     !accounting.providerUsed ||
     !replyOperation.lifecycleGeneration ||
-    isHeartbeat ||
     accounting.preserveUserFacingSessionState ||
     context.execution.status !== "ok" ||
     accounting.fallbackExhausted ||

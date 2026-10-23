@@ -99,7 +99,6 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
     summaryLine?: string;
     strandedReplyRetry?: boolean;
     sendPolicyDenied?: boolean;
-    isHeartbeat?: boolean;
     chatType?: "direct" | "group";
     terminalReplyExpectation?: "required" | "optional";
     pendingContinuation?: boolean;
@@ -177,9 +176,7 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
         extraSystemPrompt: "Use message(action=send) for all visible replies.",
         terminalReplyExpectation:
           params.terminalReplyExpectation ??
-          (params.isHeartbeat || params.inboundEventKind === "room_event"
-            ? "optional"
-            : "required"),
+          (params.inboundEventKind === "room_event" ? "optional" : "required"),
       },
     });
 
@@ -220,7 +217,7 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
           opts: {
             runId,
             toolsAllow: queuedRun.toolsAllow,
-            isHeartbeat: params.isHeartbeat,
+
             onDeliberateSilentTerminalReply: params.onDeliberateSilentTerminalReply,
             onObservedReplyDelivery: params.onObservedReplyDelivery,
             onReplyOperationOwned: params.onReplyOperationOwned,

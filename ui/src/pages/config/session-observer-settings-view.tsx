@@ -185,9 +185,11 @@ export function SessionObserverSettings(props: { config: ConfigProps }) {
       <Show when={presentation().saving()}>
         <p role="status">{t("common.saving")}</p>
       </Show>
-      <Errored fallback={(error) => <p role="alert">{formatUiError(error())}</p>}>
-        <Loading>{outcome()}</Loading>
-      </Errored>
+      <Show when={!presentation().saving()}>
+        <Errored fallback={(error) => <p role="alert">{formatUiError(error())}</p>}>
+          <Loading>{outcome()}</Loading>
+        </Errored>
+      </Show>
     </>
   );
 }

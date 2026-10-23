@@ -3,7 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
-import type { AgentSelectElement } from "../../components/agent-select.ts";
+import type { AgentSelectElement } from "../../components/agent-select.tsx";
 import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
 import { writeSessionPlacementRecovery } from "../../lib/sessions/session-placement-recovery.ts";
 import * as toast from "../../lib/toast.ts";
@@ -46,7 +46,9 @@ describe("PaletteSessionDraft", () => {
       readers.push(this);
     });
     host.draft.setMessage("Carry my cold Send into the required worker");
-    host.draft.adoptImageFiles([new File(["cold attachment"], "cold.txt", { type: "text/plain" })]);
+    host.draft.adoptAttachmentFiles([
+      new File(["cold attachment"], "cold.txt", { type: "text/plain" }),
+    ]);
     await host.updateComplete;
     await waitForSolid(
       () =>
@@ -109,7 +111,7 @@ describe("PaletteSessionDraft", () => {
         failRead = () => this.dispatchEvent(new ProgressEvent("error"));
       });
       host.draft.setMessage("Keep this prompt after the attachment fails.");
-      host.draft.adoptImageFiles(
+      host.draft.adoptAttachmentFiles(
         [new File(["payload"], "unreadable.txt", { type: "text/plain" })],
         true,
       );

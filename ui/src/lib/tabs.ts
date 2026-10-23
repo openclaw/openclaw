@@ -97,6 +97,11 @@ export function createTabList(
     { active: null, value: undefined },
   );
 
+  const revealTab = (tab: HTMLElement) =>
+    typeof options.revealActive === "function"
+      ? options.revealActive(tab)
+      : tab.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+
   if (options.revealActive) {
     const layoutKey = createMemo(() =>
       JSON.stringify([active(), items().map((item) => item.value)]),
@@ -118,11 +123,7 @@ export function createTabList(
             if (!root().isConnected || !selected) {
               return;
             }
-            if (typeof options.revealActive === "function") {
-              options.revealActive(selected);
-            } else {
-              selected.scrollIntoView?.({ block: "nearest", inline: "nearest" });
-            }
+            revealTab(selected);
             // Keyed movement may blur a retained node; newer user focus always wins.
             if (focused === selected && focusNeedsRecovery(selected)) {
               selected.focus({ preventScroll: true });
@@ -208,11 +209,7 @@ export function createTabList(
       select(target, event, false);
     }
     target.focus({ preventScroll: true });
-    if (typeof options.revealActive === "function") {
-      options.revealActive(target);
-    } else {
-      target.scrollIntoView?.({ block: "nearest", inline: "nearest" });
-    }
+    revealTab(target);
   }
 
   return {

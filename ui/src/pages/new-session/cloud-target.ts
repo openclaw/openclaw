@@ -40,7 +40,6 @@ export type SessionMenuItemOptions = {
   description?: string;
   icon?: unknown;
   sub?: string;
-  facts?: readonly string[];
   checked: boolean;
   disabled?: boolean;
   title?: string;
@@ -72,7 +71,6 @@ export type CloudProfileMenuItemsOptions = {
   disabled?: boolean;
   disabledReason?: string;
   profileDisabledReason?: (profile: DraftCloudProfile) => string | undefined;
-  compact?: boolean;
   onSelect: (profileId: string, useDefaults?: boolean) => void;
 };
 

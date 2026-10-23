@@ -7,7 +7,6 @@ import {
   resolveBootstrapFilesForRun,
   resolveContextInjectionMode,
 } from "../../bootstrap-files.js";
-import { isHeartbeatLifecycleRunKind } from "../../bootstrap-mode.js";
 import {
   isPrimaryBootstrapRun,
   resolveWorkspaceBootstrapRouting,
@@ -89,7 +88,6 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
   const shouldProbeContinuationSkip =
     !suppressAmbientContext &&
     contextInjectionMode === "continuation-skip" &&
-    !isHeartbeatLifecycleRunKind(attempt.bootstrapContextRunKind) &&
     (await hasCompletedBootstrapTurnForAttempt());
   let preloadedBootstrapFiles: WorkspaceBootstrapFile[] | undefined;
   let bootstrapRouting =
@@ -112,11 +110,9 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
   const bootstrapContextMode = attempt.bootstrapContextMode;
   const bootstrapContextRunKind = attempt.bootstrapContextRunKind ?? "default";
   const deliversCompleteWorkspaceContext = bootstrapRouting.deliversCompleteWorkspaceContext;
-  const isHeartbeatLifecycleRun = isHeartbeatLifecycleRunKind(bootstrapContextRunKind);
   const isContinuationTurn =
     bootstrapMode !== "full" &&
     effectiveContextInjectionMode === "continuation-skip" &&
-    !isHeartbeatLifecycleRun &&
     (await hasCompletedBootstrapTurnForAttempt());
   const shouldSkipBootstrapInjection =
     effectiveContextInjectionMode === "never" || isContinuationTurn;
@@ -157,7 +153,6 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
   const shouldRecordCompletedBootstrapTurn =
     !shouldSkipBootstrapInjection &&
     bootstrapContextMode !== "lightweight" &&
-    !isHeartbeatLifecycleRun &&
     bootstrapContextRunKind !== "cron" &&
     deliversCompleteWorkspaceContext &&
     !hookAdjustedBootstrapFiles.some(isUnreadableWorkspaceBootstrapFile) &&

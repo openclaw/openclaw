@@ -323,7 +323,7 @@ async function setupTree(childCount: number, active = false) {
     const operation = archive();
     const actions = await waitForConfirmDialogActions();
     expect(batches).toHaveLength(0);
-    answerConfirmDialog(actions, "alternative");
+    answerConfirmDialog(actions, "confirm");
     const first = await dispatched.promise;
     expect(first.targets).toHaveLength(size);
     page.remove();
@@ -364,7 +364,7 @@ describe("Sessions page confirmed tree archive outcomes", () => {
     const operation = archive();
     const actions = await waitForConfirmDialogActions();
     expect(document.body.textContent).toContain("This selection contains active work.");
-    answerConfirmDialog(actions, "confirm");
+    answerConfirmDialog(actions, "alternative");
     await waitForSolid(() => expect(patches()).toHaveLength(1));
     await operation;
     expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();

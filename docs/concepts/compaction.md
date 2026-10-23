@@ -20,7 +20,7 @@ Built-in compaction summarizes the older history in one model request, whatever 
 
 The full conversation history stays on disk. Compaction only changes what the model sees on the next turn.
 
-Compaction loads the same bounded history window a turn loads: the entries after the latest reset or compaction boundary, plus the entries that boundary kept, under the [history hydration byte limit](#history-hydration-byte-limit). A session that keeps its session id across daily resets or `/new` does not load its archived history to compact, so the read that manual `/compact` and automatic compaction make no longer grows with how long the session has lived. The window keeps the latest boundary ahead of the newest turns: when the recent turns alone fill the cap, the oldest of them give way, so the previous summary is part of what the next compaction folds in whenever it fits the cap at all. A saved summary larger than the whole cap, which can happen after switching to a model with a far smaller window, stays out of the window for compaction as it already does for turns.
+Compaction loads the complete current context: the latest reset or compaction boundary, its retained messages and previous summary, and the following history. Obsolete history before that window stays on disk without being loaded again, even when daily resets or `/new` keep the same session ID. The history hydration byte limit for ordinary turns does not clip compaction input; the summarizer's existing input budget still applies.
 
 OpenAI Responses native compaction and checkpoint replay follow
 [context-engine compaction ownership](/concepts/context-engine#provider-compaction-ownership),
@@ -234,6 +234,8 @@ In safeguard mode, provider timeouts and rate limits from built-in summarization
 
 Compaction summarization requests exact opaque identifier retention by default (`agents.defaults.compaction.identifierPolicy: "strict"`). Degraded summaries may omit identifiers that cannot fit. Set `agents.defaults.compaction.identifierPolicy: "off"` to disable the retention guidance. Custom guidance belongs in a compaction provider's `summarize()` implementation.
 
+When a quality audit finds missing identifiers, corrective feedback names only complete values that fit its bounded request and reports how many were omitted. It does not send a cut-off identifier as if it were an exact value.
+
 ### Active transcript byte guard
 
 When `agents.defaults.compaction.maxActiveTranscriptBytes` is set, the built-in
@@ -288,9 +290,7 @@ This selection does not delete saved history, create a summary, run a memory
 flush, or trigger compaction notifications. Older context can therefore remain
 outside the model's view while the token budget has room. Chunking trades some
 immediate history for prefix-cache reuse; it does not solve that byte/token
-mismatch. Compaction summarizes that same window: `/compact` shortens what the
-model sees from here on, and older context the cap had already omitted stays on
-disk and in session history rather than being folded into the summary. The normal
+mismatch. Use `/compact` when you want semantic summarization. The normal
 compaction triggers and the opt-in active-transcript byte guard are unchanged.
 
 ### Compaction notices

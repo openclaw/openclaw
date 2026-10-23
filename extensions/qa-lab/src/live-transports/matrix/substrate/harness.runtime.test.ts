@@ -275,10 +275,7 @@ describe("matrix harness runtime", () => {
     expect(probeSignals[0]?.aborted).toBe(true);
   });
 
-  it.each([
-    [container, 25],
-    [host, 1_000],
-  ] as const)("returns %s without waiting for a stalled peer", async (healthy, timeoutMs) => {
+  it.each([container, host])("returns %s without waiting for a stalled peer", async (healthy) => {
     const { fetchImpl, probeSignals } = createStalledVersionsFetch(healthy);
     await expect(
       waitForReachableMatrixBaseUrl({
@@ -287,7 +284,6 @@ describe("matrix harness runtime", () => {
         fetchImpl,
         hostBaseUrl: host,
         sleepImpl: vi.fn(awake),
-        timeoutMs,
       }),
     ).resolves.toBe(healthy);
 

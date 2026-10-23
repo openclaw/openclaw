@@ -295,14 +295,31 @@ describe("buildScheduledExecutionContext parent lifecycle", () => {
   it.each([
     ["removed", { missing: true } as const],
     ["archived", { ...live, archived: true }],
-    ["reset", { ...live, sessionId: "new-session" }],
-    ["reset", { ...live, lifecycleRevision: "rev-2" }],
   ] as const)("pauses when the parent is %s", (reason, parentRow) => {
     expect(buildScheduledExecutionContext(parentLinked(), facts({ parentRow }))).toEqual({
       status: "pause",
       reason,
       parentSessionKey: PARENT_KEY,
     });
+  });
+
+  it.each([
+    ["session id", { ...live, sessionId: "new-session", sandboxRequired: true }],
+    ["lifecycle revision", { ...live, lifecycleRevision: "rev-2", sandboxRequired: true }],
+  ] as const)("runs unbound with legacy decisions when the parent's %s changed", (_, parentRow) => {
+    const result = buildScheduledExecutionContext(parentLinked(), facts({ parentRow }));
+    if (result.status !== "ready") {
+      throw new Error(`expected ready, got ${result.status}`);
+    }
+    const context = result.facts;
+    expect(context.principal).toEqual({ kind: "unbound-parent", parentSessionKey: PARENT_KEY });
+    expect(context.authority.basis).toBe("legacy");
+    expect(context.resources.memory).toEqual({ source: "run-session" });
+    expect(context.resources.boardSessionKey).toBe(context.resources.mediaSessionKey);
+    expect(context.resources.boardSessionKey).not.toBe(PARENT_KEY);
+    expect(context.resources.workspace).toEqual({ source: "run-session" });
+    expect(context.resources.sandbox.basis).not.toContain("parent-row");
+    expect(context.toolPolicy.automations).not.toMatchObject({ scope: "self-and-parent-wake" });
   });
 
   it("pauses when the parent's bound worktree is gone", () => {

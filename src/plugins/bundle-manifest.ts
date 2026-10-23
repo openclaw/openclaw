@@ -373,14 +373,7 @@ function resolveClaudeComponents(
   return { skills, settingsFiles, hooks, capabilities };
 }
 
-export function detectBundleManifestFormat(
-  rootDir: string,
-  hasPackageExtensions = false,
-): PluginBundleFormat | null {
-  // Explicit package entrypoints own native manifests; bundles only precede native fallback.
-  if (hasPackageExtensions && pluginCacheExistsSync(path.join(rootDir, PLUGIN_MANIFEST_FILENAME))) {
-    return null;
-  }
+export function detectBundleManifestFormat(rootDir: string): PluginBundleFormat | null {
   if (pluginCacheExistsSync(path.join(rootDir, CODEX_BUNDLE_MANIFEST_RELATIVE_PATH))) {
     return "codex";
   }

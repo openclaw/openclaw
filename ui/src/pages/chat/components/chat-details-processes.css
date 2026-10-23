@@ -95,7 +95,7 @@
   border-top-color: var(--accent);
   border-radius: 50%;
   corner-shape: round;
-  animation: details-processes-spin 1.5s linear infinite;
+  animation: btn-spinner-spin 1.5s linear infinite;
 }
 
 .chat-details-processes__name {
@@ -170,11 +170,5 @@
 @media (prefers-reduced-motion: reduce) {
   .chat-details-processes__spinner {
     animation: none;
-  }
-}
-
-@keyframes details-processes-spin {
-  to {
-    transform: rotate(360deg);
   }
 }

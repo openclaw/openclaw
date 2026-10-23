@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import os from "node:os";
-import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { resolveRuntimeOsLabel } from "../../infra/os-summary.js";
@@ -191,16 +190,6 @@ export async function buildPreparedCompactionRuntime(
       requestedTokenBudget: params.contextTokenBudget,
       fallbackTokenBudget: params.tokenBudget,
     });
-    // Transcript hydration follows the foreground session budget, never the summarizer's
-    // ceiling: a smaller summarization model must not shrink the window the next turn sees.
-    // Callers resolve that budget while they still hold the foreground model (the queued
-    // path, preflight, the Gateway runner); here provider and model may already be the
-    // summarizer's, so only the session's recorded window remains as a fallback.
-    const hydrationTokenBudget =
-      floorPositiveFiniteNumber(params.contextTokenBudget) ??
-      floorPositiveFiniteNumber(params.sessionEntry?.contextTokens) ??
-      floorPositiveFiniteNumber(params.tokenBudget) ??
-      contextTokenBudget;
     const modelWithAuth = applyAuthHeaderOverride(
       applyLocalNoAuthHeaderOverride(runtimeModel, { apiKey: runtimeApiKey }),
       // Skip header injection when runtime auth exchange produced a
@@ -579,7 +568,6 @@ export async function buildPreparedCompactionRuntime(
     return {
       ...prepared,
       contextTokenBudget,
-      hydrationTokenBudget,
       effectiveModel,
       runtimePlan,
       runtimePlanModelContext,

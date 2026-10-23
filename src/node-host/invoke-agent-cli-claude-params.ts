@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 import { decodeNodeInvokeParams } from "./invoke-payload.js";
@@ -199,11 +200,7 @@ export function requestsClaudeNodeSkillRuntime(raw?: string | null): boolean {
   if (!raw || Buffer.byteLength(raw, "utf8") > MAX_REQUEST_BYTES) {
     return false;
   }
-  try {
-    return asRecord(JSON.parse(raw))?.skillRuntime === true;
-  } catch {
-    return false;
-  }
+  return safeParseJsonRecord(raw)?.skillRuntime === true;
 }
 
 /** Resource bytes use the negotiated duplex, never argv or node filesystem paths. */

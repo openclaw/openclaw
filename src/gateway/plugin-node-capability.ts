@@ -266,7 +266,6 @@ export function hasAuthorizedClientPluginNodeCapabilityUrl(params: {
   client: PluginNodeCapabilityClient;
   surface: PluginNodeCapabilitySurface;
   url: string;
-  nowMs?: number;
 }): boolean {
   const storageKey = resolvePluginNodeCapabilityStorageKey(params.surface);
   const capability = pluginNodeCapabilityFromScopedHostUrl(params.url);
@@ -274,10 +273,9 @@ export function hasAuthorizedClientPluginNodeCapabilityUrl(params: {
     return false;
   }
   const entry = params.client.pluginNodeCapabilities?.[storageKey];
-  const nowMs = params.nowMs ?? Date.now();
   return Boolean(
     entry &&
-    isFutureDateTimestampMs(entry.expiresAtMs, { nowMs }) &&
+    isFutureDateTimestampMs(entry.expiresAtMs) &&
     safeEqualSecret(entry.capability, capability),
   );
 }
@@ -409,14 +407,13 @@ export function hasAuthorizedPluginNodeCapability(params: {
   clients: Iterable<PluginNodeCapabilityClient>;
   surface: PluginNodeCapabilitySurface;
   capability: string;
-  nowMs?: number;
 }) {
   const surface = normalizeOptionalString(params.surface.surface);
   const storageKey = resolvePluginNodeCapabilityStorageKey(params.surface);
   if (!surface || !storageKey) {
     return false;
   }
-  const nowMs = params.nowMs ?? Date.now();
+  const nowMs = Date.now();
   const nextExpiresAtMs = resolvePluginNodeCapabilityExpiresAtMs(params.surface, nowMs);
   if (nextExpiresAtMs === undefined) {
     return false;

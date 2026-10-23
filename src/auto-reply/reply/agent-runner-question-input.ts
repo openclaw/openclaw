@@ -49,7 +49,6 @@ export async function runReplyQuestionInput(
   if (
     !sessionKey ||
     params.steeringIntent?.kind === "new-execution" ||
-    opts?.isHeartbeat ||
     params.resetTriggered ||
     isExplicitFollowupCommandTurn(params.sessionCtx) ||
     opts?.messageInjectionDisposition === "accepted" ||

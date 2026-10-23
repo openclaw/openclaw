@@ -299,8 +299,8 @@ it.each([false, true])(
       }
       const loadCodec = publicSessionTokens.loadPublicSessionShareTokenCodec;
       vi.spyOn(publicSessionTokens, "loadPublicSessionShareTokenCodec").mockImplementationOnce(
-        async (options) => {
-          const codec = await loadCodec(options);
+        async () => {
+          const codec = await loadCodec();
           await upsertSessionEntryCore(scope, {
             sessionId: "replacement-generation",
           });

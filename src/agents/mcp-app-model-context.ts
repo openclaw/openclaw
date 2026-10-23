@@ -238,12 +238,10 @@ export function leaseMcpAppModelContextForTurn(params: {
       ? { structuredContent: snapshot.structuredContent }
       : {}),
   }));
-  const input = projectMcpAppModelContextInput(modelContext);
   let committed = false;
   return {
     // Harness adapters consume these as conversation input, including native image blocks.
     modelContext,
-    ...input,
     assertCurrent: () => {
       params.runtime.assertOwnerCurrent?.();
       if (

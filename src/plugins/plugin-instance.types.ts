@@ -60,7 +60,7 @@ export interface PluginInstanceResource {
 /** Captured code custody survives retiring a runtime until recovery consumes or releases it. */
 export type PluginModuleLoaderRecovery = {
   bind(instance: PluginModuleLoaderOwner): void;
-  dispose(): void;
+  dispose(): Promise<void>;
 };
 
 /** Runtime and setup loaders use the same instance-owned captured source. */

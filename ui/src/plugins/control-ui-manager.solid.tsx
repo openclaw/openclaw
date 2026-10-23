@@ -8,6 +8,7 @@ import {
   createOptimistic,
   createSignal,
   isPending,
+  onSettled,
 } from "solid-js";
 import { SettingsRow, SettingsSection } from "../components/solid/settings-ui.tsx";
 import { useApplication } from "../lib/reactive/context.ts";
@@ -29,6 +30,18 @@ export function PluginManager() {
     (gateway) => gateway.connectionRevision,
     Object.is,
   );
+  let reloadLifetime = Promise.withResolvers<void>();
+  onSettled(() => {
+    const stop = connection.subscribe(() => {
+      // Retire at the synchronous owner; reactive cleanup waits for the action.
+      reloadLifetime.resolve();
+      reloadLifetime = Promise.withResolvers<void>();
+    });
+    return () => {
+      stop();
+      reloadLifetime.resolve();
+    };
+  });
   const completion = createMemo(() => {
     const read = operationRead();
     return read?.revision === connection.read() ? read.result.then(() => null) : null;
@@ -39,9 +52,9 @@ export function PluginManager() {
     void result.catch(() => undefined);
     setOperationRead({ result, kind, revision: context.gateway.connectionRevision });
   };
-  const reload = action(function* () {
+  const reload = action(function* (result: Promise<void>, retired: Promise<void>) {
     setReloading(true);
-    yield source.read().reload();
+    yield Promise.race([result, retired]);
   });
   const replacements = createMemo(() => source.read().registrations("replacements"));
   const surfaces = createMemo(() => [
@@ -68,7 +81,10 @@ export function PluginManager() {
                     class="btn btn--sm oc-action oc-action-secondary"
                     type="button"
                     disabled={reloading()}
-                    onClick={() => observe(reload(), "reload")}
+                    onClick={() => {
+                      const retired = reloadLifetime.promise;
+                      observe(reload(source.read().reload(), retired), "reload");
+                    }}
                   >
                     {t("pluginUi.reload")}
                   </button>

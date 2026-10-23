@@ -14,6 +14,13 @@ and plugin inventory remain unchanged. If either changes or migrations remain
 unresolved, Doctor scans again without repeating preflight's detection notices
 or warnings.
 
+Legacy text imports require valid UTF-8. If a source contains malformed bytes,
+Doctor warns and skips that source instead of storing replacement characters.
+Independent migrations continue. The original bytes remain in the source or its
+reported `.migrated` archive; recover the text from a verified backup before
+retrying. Invalid Skill Workshop proposal or rollback files never restore text
+into workspace skills, and their bundles remain available for manual recovery.
+
 After an interrupted legacy session import, rerun `openclaw doctor --fix` against
 the same state directory. Doctor compares retained transcripts with the importer's
 repaired representation, including legacy provider names and duplicate session

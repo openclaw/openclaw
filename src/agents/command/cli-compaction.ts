@@ -39,7 +39,6 @@ import {
 } from "../embedded-agent-runner/compaction-successor.js";
 import { runContextEngineMaintenance } from "../embedded-agent-runner/context-engine-maintenance.js";
 import { shouldPreemptivelyCompactBeforePrompt } from "../embedded-agent-runner/run/preemptive-compaction.js";
-import { resolveEmbeddedSessionContextLimits } from "../embedded-agent-runner/run/session-context-limits.js";
 import { resolveLiveToolResultMaxChars } from "../embedded-agent-runner/tool-result-truncation.js";
 import type { EmbeddedAgentCompactResult } from "../embedded-agent-runner/types.js";
 import { isRecoverableNativeHarnessBindingFailure } from "../harness/compaction-recovery.js";
@@ -215,7 +214,7 @@ export async function runCliTurnCompactionLifecycle(
         storePath,
       },
       undefined,
-      resolveEmbeddedSessionContextLimits(contextTokenBudget),
+      { compaction: true },
       abortSignal,
     );
     assertActive();

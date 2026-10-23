@@ -23,6 +23,7 @@ import {
   mergeCanonicalUserProfiles,
   setCanonicalUserProfileAvatar,
 } from "../state/user-profile-writes.js";
+import { withEnv } from "../test-utils/env.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -225,7 +226,10 @@ describe("remote Control UI ingress production composition", () => {
     );
     Object.assign(requestContext, { resolveGatewayContext: () => requestContext });
     gatewayContext = requestContext as never;
-    const preauthConnectionBudget = createPreauthConnectionBudget(8);
+    const preauthConnectionBudget = withEnv(
+      { OPENCLAW_MAX_PREAUTH_CONNECTIONS_PER_IP: "8" },
+      createPreauthConnectionBudget,
+    );
     attachGatewayWsConnectionHandler({
       wss,
       clients,

@@ -1,77 +1,103 @@
 import { expect, it } from "vitest";
-import {
-  readSessionActorBoundedHistory,
-  type SessionActorTranscriptRow,
-} from "./session-actor-bounded-history.js";
+import { readSessionActorBoundedHistory } from "./session-actor-bounded-history.js";
 import type { SessionActorHotState } from "./session-actor-state.types.js";
 
 const timestamp = "2026-10-12T00:00:00.000Z";
-
-function message(id: string, parentId: string | null, role: "user" | "assistant") {
-  return { type: "message", id, parentId, timestamp, message: { role, content: id } };
-}
-
-function row(rawSeq: number, event: unknown, serializedBytes: number): SessionActorTranscriptRow {
-  return { rawSeq, event, serializedBytes };
-}
-
-const rows = [
-  row(0, { type: "session", id: "session", version: 3 }, 100),
-  row(1, message("old", null, "user"), 200),
-  row(
-    2,
-    {
-      type: "compaction",
-      id: "summary",
-      parentId: "old",
-      firstKeptEntryId: "old",
-      summary: "earlier work",
-      timestamp,
-      tokensBefore: 100,
-    },
-    150,
-  ),
-  row(3, message("middle", "summary", "user"), 200),
-  row(4, message("new", "middle", "assistant"), 300),
-];
-
-const hot: SessionActorHotState = {
-  target: { database: { kind: "memory", handle: "test", incarnation: "test" }, sessionKey: "k" },
-  version: { epoch: "epoch", sequence: 1 },
-  writeToken: "committed",
-  dependencySessionIds: ["session"],
-  entry: { sessionId: "session", updatedAt: 1 },
-  hasBoard: false,
-  participants: [],
-  members: [],
-  pendingInputs: [],
-  completionKeys: [],
-  transcript: {
-    watermark: { generation: "generation", maxSeq: 4 },
-    version: { generation: "generation", rawSeq: 4, updatedAt: 1 },
-    anchorsState: "resident",
-    anchors: [],
-    idempotency: [],
-    modelContext: { kind: "resident", entries: [] },
-  },
-};
-
-it("gives the latest boundary the tail's oldest bytes when the tail alone fills the cap", () => {
-  // Header, "middle" and "new" fill the cap exactly; the summary only fits once "middle" goes.
-  const { snapshot } = readSessionActorBoundedHistory(
-    { hot, events: rows },
-    {
-      maxBytes: 600,
-      maxEvents: 10,
-    },
-  );
-
-  expect(snapshot.events.map((event) => (event as { id: string }).id)).toEqual([
-    "session",
-    "summary",
-    "new",
-  ]);
-  expect(snapshot.truncated).toBe(true);
-  expect(snapshot.serializedBytes).toBe(550);
-  expect(snapshot.opaqueParents.get("middle")).toBe("summary");
+const message = (id: string, parentId: string | null, content = id) => ({
+  type: "message",
+  id,
+  parentId,
+  timestamp,
+  message: { role: "user", content },
 });
+
+it.each(["compaction", "reset"] as const)(
+  "hydrates the complete current window after %s without copying obsolete history",
+  (type) => {
+    const summary = "Previous work. ".repeat(100_000);
+    const archived = Array.from({ length: 32 }, (_, index) =>
+      message(`old-${index}`, index === 0 ? null : `old-${index - 1}`, "obsolete ".repeat(1000)),
+    );
+    const header = { type: "session", id: "session", version: 3 };
+    const retained = message("retained", "old-31");
+    const note = {
+      type: "custom_message",
+      id: "retained-note",
+      parentId: "retained",
+      customType: "note",
+      content: "Keep this earlier note when updating the summary.",
+      display: true,
+      timestamp,
+    };
+    const branch = {
+      type: "branch_summary",
+      id: "retained-branch",
+      parentId: "retained-note",
+      fromId: "old-0",
+      summary: "Earlier branch work.",
+      timestamp,
+    };
+    const boundary = {
+      type,
+      id: "boundary",
+      parentId: "retained-branch",
+      firstKeptEntryId: "retained",
+      timestamp,
+      ...(type === "compaction" ? { summary, tokensBefore: 100_000 } : { reason: "reset" }),
+    };
+    const current = message("current", "boundary");
+    const events = [header, ...archived, retained, note, branch, boundary, current];
+    const lastSeq = events.length - 1;
+    const hot: SessionActorHotState = {
+      target: {
+        database: { kind: "memory", handle: "test", incarnation: "test" },
+        sessionKey: "k",
+      },
+      version: { epoch: "epoch", sequence: 1 },
+      writeToken: "committed",
+      dependencySessionIds: ["session"],
+      entry: { sessionId: "session", updatedAt: 1 },
+      hasBoard: false,
+      participants: [],
+      members: [],
+      pendingInputs: [],
+      completionKeys: [],
+      transcript: {
+        watermark: { generation: "generation", maxSeq: lastSeq },
+        version: { generation: "generation", rawSeq: lastSeq, updatedAt: 1 },
+        anchorsState: "resident",
+        anchors: [],
+        idempotency: [],
+        modelContext: { kind: "unavailable", reason: "projection", generation: "generation" },
+      },
+    };
+    const { snapshot } = readSessionActorBoundedHistory(
+      {
+        hot,
+        events: events.map((event, rawSeq) => ({
+          rawSeq,
+          event,
+          serializedBytes: Buffer.byteLength(JSON.stringify(event)) + 1,
+        })),
+      },
+      { compaction: true },
+    );
+
+    expect(snapshot.events).toEqual([
+      header,
+      retained,
+      ...(type === "compaction" ? [note, branch] : []),
+      boundary,
+      current,
+    ]);
+    expect(snapshot.truncated).toBe(false);
+    expect(snapshot.activeLeafEntryId).toBe("current");
+    expect(snapshot.firstKeptRanges.get("boundary")).toEqual({
+      startIndex: 1,
+      endIndex: type === "compaction" ? 4 : 2,
+    });
+    if (type === "reset") {
+      expect(snapshot.opaqueParents.get("retained-branch")).toBe("retained");
+    }
+  },
+);

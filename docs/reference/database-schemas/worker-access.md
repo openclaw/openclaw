@@ -507,6 +507,12 @@ its pending exact reads instead of returning stale totals.
 
 ## Transactions and query shape
 
+Personal account mutations, approval operations, auth authorization enrollment,
+and auth usage writes obtain their initial host grant before `BEGIN IMMEDIATE`.
+They reread authoritative rows inside the transaction and retain final commit
+authorization. A busy host therefore cannot hold the writer during initial
+admission; commit admission still retains transaction custody.
+
 Use Kysely for ordinary queries. Raw SQL belongs to schema, migrations,
 bootstrap, or a justified engine-owned primitive. Prepare asynchronous inputs
 before a write transaction; its callback is synchronous and cannot await work.
@@ -3422,6 +3428,12 @@ missing store; idle agents still have no durable database until their first writ
 Session event capture retains the physical source reported by the worker after
 cold admission. A first writer that finishes before the read can supply that
 source; a file created after an absent read or replaced after capture is refused.
+Retained generation checks consume published session facts and the physical identity
+captured at admission. Existing files need one identity probe without rediscovering
+their canonical path; this still fences external tool effects after file replacement.
+Same-generation settings keep their published identity until permission mode or tool
+overrides change, so event guards compare policy once per settings revision. Every
+check still observes pending publications and current execution authority.
 No schema, durability, configuration, or update migration changes are required.
 
 Accepted chat input prepares fresh sharing and exact-row facts again before
@@ -4838,7 +4850,12 @@ cache updates and delivery acknowledgments compare the current payload inside
 the worker transaction. Only definite comparison conflicts retry, at most four
 times; failed reads never advance the audit cursor and uncertain writes never
 replay. Config observation captures its audit writer before filesystem reads and
-rechecks its health owner at transaction and commit admission. Cold synchronous
+rechecks its health owner at transaction and commit admission. Accepted config writes
+and rollback consume the health worker's conditional-write outcome without rereading
+their own writes. Only definite comparison conflicts refresh and reconsider, at
+most four times; unavailable reads and uncertain writes stop best-effort health
+bookkeeping without replay. Newer baselines and anomaly markers retain their
+existing compensation guards. This adds no schema or stored fields. Cold synchronous
 config loading retains native audit registration; Doctor and update inspection
 retain native tail reads. Schemas, audit collection and retention, stored payloads,
 prompt bytes, and update behavior are unchanged.

@@ -59,6 +59,10 @@ export class CustodianAutoSetup {
 
   constructor(private readonly changed: () => void) {}
 
+  get operationEpoch(): number {
+    return this.epoch;
+  }
+
   get ready(): boolean {
     return this.result?.status === "configured" || this.result?.status === "activated";
   }

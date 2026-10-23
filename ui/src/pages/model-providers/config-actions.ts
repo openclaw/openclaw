@@ -44,7 +44,7 @@ export function createModelProviderConfigActions(deps: {
   async function mutateApiKey(
     provider: string,
     configKey: string,
-    apiKey: string | null,
+    apiKey: string,
     action: "edit" | "add" = "edit",
   ) {
     const client = gateway.client;
@@ -59,7 +59,6 @@ export function createModelProviderConfigActions(deps: {
     clearProbe(provider);
     const result = await mutations.run(
       "apiKey",
-      key,
       () =>
         runModelProviderApiKeyMutation(
           {
@@ -91,11 +90,7 @@ export function createModelProviderConfigActions(deps: {
             provider: configKey,
             apiKey,
             success: t(
-              action === "add"
-                ? "modelProviders.add.saved"
-                : apiKey === null
-                  ? "modelProviders.apiKey.removed"
-                  : "modelProviders.apiKey.saved",
+              action === "add" ? "modelProviders.add.saved" : "modelProviders.apiKey.saved",
               { provider },
             ),
           },
@@ -129,7 +124,6 @@ export function createModelProviderConfigActions(deps: {
     }
     const capturedAgentEpoch = getAgentEpoch();
     const settled = await mutations.run(
-      "defaults",
       "defaults",
       () =>
         runModelProviderDefaultsMutation(context, gateway, {

@@ -1,6 +1,5 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createCliTimeoutError } from "../../agents/cli-runner/no-output-timeout-policy.js";
-import { HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { withSessionControllerOwner } from "../../sessions/session-controller.context.js";
@@ -455,45 +454,6 @@ describe("executeAgentTurn: primary probe routing", () => {
       ),
     ).toBe(false);
     expect(JSON.stringify(terminalLifecycleEvents)).not.toContain("raw provider detail");
-  });
-
-  it("surfaces an empty heartbeat terminal result through the normal reply path", async () => {
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [],
-      meta: {
-        error: {
-          kind: "tool_result_mismatch",
-          message: "Agent run reached a terminal error before reply delivery.",
-        },
-      },
-    });
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      outcome: "completed",
-      result: await params.run("anthropic", "claude", initialFallbackAttemptOptions(params)),
-      provider: "anthropic",
-      model: "claude",
-      attempts: [],
-    }));
-    const { replyOperation, failMock } = createMockReplyOperation();
-
-    const result = await execute(
-      { replyOperation },
-      {
-        isHeartbeat: true,
-      },
-    );
-
-    expect(result).toMatchObject({
-      kind: "success",
-      terminalFailurePayload: {
-        text: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
-        isError: true,
-      },
-      runResult: {
-        payloads: [],
-      },
-    });
-    expect(failMock).toHaveBeenCalledWith("run_failed", expect.any(Error));
   });
 
   it("reports exhausted CLI preserved earlier candidate without a success terminal", async () => {

@@ -26,6 +26,7 @@ import {
 import { ChatSubagentsMobileList, type ChatSubagentMobileItem } from "./chat-subagents-mobile.tsx";
 import "./chat-session-panels.css";
 import "./chat-subagents-panel.css";
+import { ChatSubagentsNative } from "./chat-subagents-native.tsx";
 import { ChatSubagentsPanelDesktop } from "./chat-subagents-panel-desktop.tsx";
 import { createSubagentsPresentation } from "./chat-subagents-presentation.ts";
 
@@ -65,10 +66,6 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
     const readiness = createSubagentsPresentation(data);
     const createMobileStop = (key: () => string) =>
       readiness.createStop(() => data().rows.find((row) => row.session.key === key()));
-    const consumeRead = () => {
-      latest(readiness.read);
-      return null;
-    };
     const FallbackShell = (fallbackProps: { loading?: boolean; children: JSX.Element }) => (
       <div
         class={
@@ -119,24 +116,26 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
             </FallbackShell>
           }
         >
-          {consumeRead()}
+          {(latest(readiness.read), null)}
           {readProps.children}
         </Loading>
       </Errored>
     );
     const Empty = () => (
-      <Show
-        when={isPending(readiness.read)}
-        fallback={
-          data().hasResult &&
-          !data().stopError && (
-            <div class="chat-subagents__empty" role="status">
-              {t("chat.subagentsPanel.empty")}
-            </div>
-          )
-        }
-      >
-        <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
+      <Show when={!data().nativeSnapshot && !data().nativeError}>
+        <Show
+          when={isPending(readiness.read)}
+          fallback={
+            data().hasResult &&
+            !data().stopError && (
+              <div class="chat-subagents__empty" role="status">
+                {t("chat.subagentsPanel.empty")}
+              </div>
+            )
+          }
+        >
+          <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
+        </Show>
       </Show>
     );
     // An applied request must not reopen detail after the user returns to the list.
@@ -259,28 +258,15 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
         title,
         status,
         statusLabel,
-        activity:
-          status === "queued" || status === "waiting"
-            ? statusLabel
-            : active
-              ? row.activity || row.toolDisplayName
-              : undefined,
-        calls:
-          row.callCount === undefined
-            ? undefined
-            : t(
-                !row.callCount.exact
-                  ? "chat.subagentsPanel.callsAtLeast"
-                  : row.callCount.count === 1
-                    ? "chat.subagentsPanel.callsOne"
-                    : "chat.subagentsPanel.callsMany",
-                { count: String(row.callCount.count) },
-              ),
         elapsed: renderElapsed(row),
-        elapsedLabel: t(active ? "chat.subagentsPanel.elapsed" : "chat.subagentsPanel.duration"),
         stop:
           active && row.session.activeRunIds?.length === 1
             ? {
+                target: JSON.stringify([
+                  row.session.key,
+                  row.session.sessionId,
+                  row.session.activeRunIds,
+                ]),
                 label: t(row.stopping ? "chat.subagentsPanel.stopping" : "chat.runControls.stop"),
                 accessibleLabel: row.stopping
                   ? t("chat.subagentsPanel.stopping")
@@ -336,21 +322,27 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
                   setSelected({ key, agentId: subagentAgentId(key) });
                 }}
                 notice={
-                  data().stopError && (
-                    <div class="chat-subagents__error" role="alert">
-                      <span>{data().stopError}</span>
-                      <button
-                        ref={(button) => {
-                          mobileRetry = button;
-                        }}
-                        class="btn btn--sm"
-                        type="button"
-                        onClick={() => void data().refresh()}
-                      >
-                        {t("common.retry")}
-                      </button>
-                    </div>
-                  )
+                  <>
+                    {data().stopError && (
+                      <div class="chat-subagents__error" role="alert">
+                        <span>{data().stopError}</span>
+                        <button
+                          ref={(button) => {
+                            mobileRetry = button;
+                          }}
+                          class="btn btn--sm"
+                          type="button"
+                          onClick={() => void data().refresh()}
+                        >
+                          {t("common.retry")}
+                        </button>
+                      </div>
+                    )}
+                    <ChatSubagentsNative
+                      snapshot={data().nativeSnapshot}
+                      error={data().nativeError}
+                    />
+                  </>
                 }
                 empty={<Empty />}
               />
@@ -366,6 +358,8 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
               loading={isPending(readiness.read)}
               error={data().stopError}
               hasResult={data().hasResult}
+              nativeSnapshot={data().nativeSnapshot}
+              nativeError={data().nativeError}
               active={!selected() && props.presented}
               doneExpanded={props.doneExpanded}
               onDoneExpandedChange={props.onDoneExpandedChange}
@@ -400,6 +394,10 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
                       </button>
                     </div>
                   )}
+                  <ChatSubagentsNative
+                    snapshot={data().nativeSnapshot}
+                    error={data().nativeError}
+                  />
                   <Show when={data().rows.length} fallback={<Empty />}>
                     <SessionPanelGroups
                       kind="subagents"

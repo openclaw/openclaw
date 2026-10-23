@@ -36,6 +36,12 @@ const systemNoticeKinds: Readonly<Record<string, SystemNoticeKind>> = {
       cancelled: "chat.systemNotice.restartRecovery.cancelled",
     },
   },
+  // Older scheduled conversation turns lack the run metadata for an activity row.
+  cron: {
+    icon: "cpu",
+    labelKey: "chat.messages.forwardedAutomation",
+    collapsedBody: true,
+  },
   cron_failure_repair: {
     icon: "cpu",
     labelKey: "chat.systemNotice.automationRecovery.label",

@@ -128,7 +128,6 @@ describe("exec safe bin trust", () => {
         expect(hits).toEqual([
           {
             dir: path.resolve(dir),
-            groupWritable: true,
             worldWritable: true,
           },
         ]);

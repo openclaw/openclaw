@@ -1,24 +1,23 @@
-import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
-import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { CronAddResult } from "../../../../packages/gateway-protocol/src/schema/cron.types.js";
-import { resolveCronTriggerMinIntervalMs } from "../../../../src/config/cron-limits.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CronJob, CronRunResult } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
 import { toNumber } from "../format.ts";
-import { parseCronDurationMs } from "./decimal.ts";
+import { parseFailureAlertCooldownMs } from "./decimal.ts";
+import { hasUnchangedCronSchedule, buildCronSchedule } from "./form-schedule.ts";
 import {
-  hasUnchangedCronSchedule,
-  buildCronSchedule,
-  parseCronScheduleAt,
-} from "./form-schedule.ts";
-import { isReadOnlyCronPayload, jobToForm, normalizeCronFormState } from "./form.ts";
+  hasCronFormErrors,
+  isReadOnlyCronPayload,
+  jobToForm,
+  normalizeCronFormState,
+  validateCronForm,
+} from "./form.ts";
 import { loadCronJobsPage } from "./jobs-full.ts";
 import { retireCronJobsRequest } from "./jobs.ts";
 import { buildCronPayload } from "./payload.ts";
-import { cronRunNotStartedMessage } from "./run-feedback.ts";
+import { cronRunNotStartedMessage, isCronRunNotStartedNotice } from "./run-feedback.ts";
 import { clearCronRunsPage, loadCronRuns, retireCronRunsRequest } from "./runs.ts";
 import {
   DEFAULT_CRON_FORM,
@@ -27,138 +26,24 @@ import {
   retireCronStatusFeedback,
   retireCronStatusRequest,
 } from "./state.ts";
-import type { CronFieldErrors, CronFormState, CronState } from "./types.ts";
-import { resolveCronWebhookDeliveryError } from "./webhook-url.ts";
+import type { CronFormState, CronState } from "./types.ts";
 
-export { normalizeCronFormState } from "./form.ts";
 export { createInitialCronState, loadCronStatus } from "./state.ts";
 export { loadCronScopeStats } from "./scope.ts";
 export { loadCronJobsPage } from "./jobs-full.ts";
-export { resolveConfiguredCronModelSuggestions } from "./model-suggestions.ts";
 
 const CRON_CHANNEL_LAST = "last";
 
-export function validateCronForm(form: CronFormState): CronFieldErrors {
-  const errors: CronFieldErrors = {};
-  if (!form.name.trim()) {
-    errors.name = "cron.errors.nameRequired";
-  }
-  if (form.scheduleKind === "event" && form.payloadKind !== "agentTurn") {
-    errors.payloadText = "cron.events.agentTurnRequired";
-  }
-  if (form.scheduleKind === "event" && form.eventSource === "mcp-events") {
-    if (!form.eventServer.trim()) {
-      errors.eventServer = "cron.events.eventServerRequired";
-    }
-    if (!form.eventName.trim()) {
-      errors.eventName = "cron.events.eventNameRequired";
-    }
-    if (!safeParseJsonRecord(form.eventArguments)) {
-      errors.eventArguments = "cron.events.eventArgumentsInvalid";
-    }
-  } else if (form.scheduleKind === "at") {
-    if (!parseCronScheduleAt(form.scheduleAt)) {
-      errors.scheduleAt = "cron.errors.scheduleAtInvalid";
-    }
-  } else if (form.scheduleKind === "every") {
-    const everyMs = parseCronDurationMs(form.everyAmount, form.everyUnit);
-    if (everyMs === undefined) {
-      errors.everyAmount = "cron.errors.everyAmountInvalid";
-    } else if (form.triggerEnabled && everyMs < resolveCronTriggerMinIntervalMs()) {
-      errors.everyAmount = "cron.errors.triggerIntervalTooShort";
-    }
-  } else if (form.scheduleKind === "cron") {
-    if (!form.cronExpr.trim()) {
-      errors.cronExpr = "cron.errors.cronExprRequired";
-    }
-    if (!form.scheduleExact) {
-      const staggerAmount = form.staggerAmount.trim();
-      if (staggerAmount && !parseCronDurationMs(staggerAmount, form.staggerUnit, true)) {
-        errors.staggerAmount = "cron.errors.staggerAmountInvalid";
-      }
-    }
-  }
-  if (form.triggerEnabled) {
-    if (form.payloadKind === "script") {
-      errors.triggerScript = "cron.errors.triggerScriptPayloadUnsupported";
-    } else if (
-      form.scheduleKind !== "every" &&
-      form.scheduleKind !== "cron" &&
-      form.scheduleKind !== "stream"
-    ) {
-      errors.triggerScript = "cron.errors.triggerScheduleUnsupported";
-    } else if (!form.triggerScript.trim()) {
-      errors.triggerScript = "cron.errors.triggerScriptRequired";
-    }
-  }
-  if (!form.payloadLocked && !form.payloadText.trim()) {
-    errors.payloadText =
-      form.payloadKind === "systemEvent"
-        ? "cron.errors.systemTextRequired"
-        : "cron.errors.agentMessageRequired";
-  }
-  if (!form.payloadLocked && form.payloadKind === "agentTurn") {
-    const timeoutRaw = form.timeoutSeconds.trim();
-    if (timeoutRaw) {
-      const timeout = toNumber(timeoutRaw, Number.NaN);
-      if (!Number.isFinite(timeout) || timeout < 0) {
-        errors.timeoutSeconds = "cron.errors.timeoutInvalid";
-      }
-    }
-  }
-  if (!form.deliveryMode) {
-    errors.deliveryMode = "cron.errors.deliveryModeRequired";
-  }
-  if (form.activeHoursEnabled) {
-    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(form.activeHoursStart)) {
-      errors.activeHoursStart = "cron.errors.activeHoursTime";
-    }
-    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(form.activeHoursEnd) && form.activeHoursEnd !== "24:00") {
-      errors.activeHoursEnd = "cron.errors.activeHoursTime";
-    }
-    const timezone = form.activeHoursTimezone.trim();
-    if (timezone && timezone !== "local" && timezone !== "user") {
-      try {
-        new Intl.DateTimeFormat("en", { timeZone: timezone }).format();
-      } catch {
-        errors.activeHoursTimezone = "cron.errors.activeHoursTimezone";
-      }
-    }
-  }
-  if (form.deliveryMode === "webhook") {
-    const error = resolveCronWebhookDeliveryError(form.deliveryTo);
-    if (error) {
-      errors.deliveryTo = error;
-    }
-  }
-  if (form.failureAlertMode === "custom") {
-    const afterRaw = form.failureAlertAfter.trim();
-    if (afterRaw) {
-      const after = toNumber(afterRaw, 0);
-      if (!Number.isFinite(after) || after < 1) {
-        errors.failureAlertAfter = "Failure alert threshold must be at least 1.";
-      }
-    }
-    const cooldownRaw = form.failureAlertCooldownSeconds.trim();
-    if (cooldownRaw && parseFailureAlertCooldownMs(cooldownRaw) === undefined) {
-      errors.failureAlertCooldownSeconds = "Cooldown must be finite and 0 or greater.";
-    }
-  }
-  return errors;
-}
-
-export function hasCronFormErrors(errors: CronFieldErrors): boolean {
-  return Object.keys(errors).length > 0;
-}
-
 const activeCronMutations = new WeakMap<CronState, object>();
+
+type CronFeedbackField = "cronError" | "cronNotice";
 
 async function withCronBusy(
   state: CronState,
   job: Pick<CronJob, "id" | "name" | "displayName"> | undefined,
   run: (
     client: GatewayBrowserClient,
-    reportFeedback: (message: string) => void,
+    reportFeedback: (message: string, field?: CronFeedbackField) => void,
     isCurrent: () => boolean,
   ) => Promise<void>,
 ): Promise<string | null | void> {
@@ -170,16 +55,17 @@ async function withCronBusy(
   const operation = {};
   activeCronMutations.set(state, operation);
   const isCurrent = () => activeCronMutations.get(state) === operation;
-  const reportFeedback = (message: string) => {
+  const reportFeedback = (message: string, field: CronFeedbackField = "cronError") => {
     if (!isCurrent()) {
       return;
     }
-    state.cronError =
+    state[field] =
       target && state.cronEditingJob?.id !== target.id ? `${target.name}: ${message}` : message;
   };
   retireCronStatusFeedback(state);
   state.cronBusy = true;
   state.cronError = null;
+  state.cronNotice = null;
   try {
     await run(client, reportFeedback, isCurrent);
   } catch (err) {
@@ -232,6 +118,7 @@ export function updateCronJobsFilter(
 function clearCronEditState(state: CronState) {
   retireCronSelectedJobRead(state);
   state.cronError = null;
+  state.cronNotice = null;
   state.cronEditingJob = null;
   state.cronCloningJob = null;
 }
@@ -253,20 +140,6 @@ function normalizePersistedDeliveryChannel(
     return undefined;
   }
   return channel;
-}
-
-function parseFailureAlertCooldownMs(value: string): number | undefined {
-  const raw = value.trim();
-  const seconds = toNumber(raw, Number.NaN);
-  if (!raw || !Number.isFinite(seconds) || seconds < 0) {
-    return undefined;
-  }
-  // Keep decimal precision; normalize other accepted Number spellings before the same scale.
-  const decimal =
-    seconds === 0 || parseStrictFiniteNumber(raw) === undefined ? String(seconds) : raw;
-  const [coefficient, exponent = "0"] = decimal.split(/[eE]/u);
-  const ms = Number(`${coefficient}e${Number(exponent) + 3}`);
-  return Number.isFinite(ms) && ms >= 0 ? Math.floor(ms) : undefined;
 }
 
 function buildFailureAlert(
@@ -584,7 +457,10 @@ export async function runCronJob(state: CronState, jobId: string, mode: "force" 
       return;
     }
     if (!result.ok || ("ran" in result && !result.ran)) {
-      reportFeedback(cronRunNotStartedMessage(result));
+      reportFeedback(
+        cronRunNotStartedMessage(result),
+        isCronRunNotStartedNotice(result) ? "cronNotice" : "cronError",
+      );
       // Invalid persisted specs create a skipped history entry with diagnostics;
       // true no-op outcomes have no new history to fetch.
       if ("reason" in result && result.reason === "invalid-spec") {
@@ -594,7 +470,7 @@ export async function runCronJob(state: CronState, jobId: string, mode: "force" 
     }
     await loadCronRuns(state);
     if ("enqueued" in result && result.enqueued) {
-      reportFeedback(`Run queued. Run ID: ${result.runId}`);
+      reportFeedback(`Run queued. Run ID: ${result.runId}`, "cronNotice");
     }
   });
 }
@@ -639,6 +515,7 @@ export function invalidateCronMutation(state: CronState) {
 function setCronEditState(state: CronState, job: CronJob, form: CronFormState) {
   retireCronSelectedJobRead(state);
   state.cronError = null;
+  state.cronNotice = null;
   state.cronEditingJob = job;
   state.cronCloningJob = null;
   state.cronRunsJobId = job.id;

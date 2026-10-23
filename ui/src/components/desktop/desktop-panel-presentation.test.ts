@@ -224,9 +224,9 @@ describe("desktop panel presentation lifecycle", () => {
       ...desktopEnvironment,
       worker: { ...desktopEnvironment.worker, desktopApps: ["browser"] },
     };
-    const request = vi.fn(async (method: string) => {
+    const request = vi.fn(async (method: string, params?: { environmentId?: string }) => {
       if (method === "environments.status") {
-        return environment;
+        return { ...environment, id: params?.environmentId ?? environment.id };
       }
       if (method === "desktop.observe") {
         return observed;
@@ -242,6 +242,7 @@ describe("desktop panel presentation lifecycle", () => {
     });
     await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
     const button = panel.querySelector<HTMLButtonElement>(".desktop-app-button")!;
+    const surface = panel.querySelector(".desktop-surface");
     button.click();
     button.click();
     expectRequests(request, "desktop.launch", 1);
@@ -250,6 +251,8 @@ describe("desktop panel presentation lifecycle", () => {
     await waitForSolid(() => {
       expect(panel.textContent).toContain("App launch unavailable");
       expect(button.disabled).toBe(false);
+      expect(panel.querySelector(".desktop-app-button")).toBe(button);
+      expect(panel.querySelector(".desktop-surface")).toBe(surface);
     });
 
     launch = createDeferred();
@@ -258,6 +261,12 @@ describe("desktop panel presentation lifecycle", () => {
       expect(button.getAttribute("aria-busy")).toBe("true");
       expect(panel.textContent).not.toContain("App launch unavailable");
     });
+    await update(panel, { requestedSource: "another-workstation" });
+    await waitForSolid(() =>
+      expect(request).toHaveBeenCalledWith("environments.status", {
+        environmentId: "another-workstation",
+      }),
+    );
     await unmountPanel(panel);
     launch.reject(new Error("Retired launch failure"));
     await launch.promise.catch(() => {});
@@ -292,10 +301,23 @@ describe("desktop panel presentation lifecycle", () => {
     const fullscreen = mockFullscreen();
     const panel = createPanel();
     const button = await openStandalone(panel);
+    const section = panel.querySelector("section.bp");
     fullscreen.request.mockRejectedValueOnce(new Error("Fullscreen permission denied"));
     button.click();
     await waitForSolid(() => expect(panel.textContent).toContain("Fullscreen permission denied"));
+    expect(panel.querySelector(".desktop-fullscreen-button")).toBe(button);
+    expect(panel.querySelector("section.bp")).toBe(section);
+    const retry = createDeferred();
+    fullscreen.request.mockImplementationOnce(async function (this: Element) {
+      await retry.promise;
+      fullscreen.change(this);
+    });
     button.click();
+    await waitForSolid(() =>
+      expect(panel.textContent).not.toContain("Fullscreen permission denied"),
+    );
+    expect(panel.querySelector("section.bp")).toBe(section);
+    retry.resolve();
     await waitForSolid(() => expect(button.getAttribute("aria-pressed")).toBe("true"));
     expect(panel.textContent).not.toContain("Fullscreen permission denied");
     await unmountPanel(panel);

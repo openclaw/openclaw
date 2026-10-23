@@ -29,7 +29,7 @@ describe("security audit rosterless configs", () => {
       configPath: path.join(stateDir, "openclaw.json"),
       env: {},
       includeFilesystem: true,
-      includeChannelSecurity: false,
+      plugins: [],
       ...options,
     });
   }
@@ -93,7 +93,7 @@ describe("security audit rosterless configs", () => {
       configPath: path.join(stateDir, "openclaw.json"),
       env: { HOME: rootDir },
       includeFilesystem: true,
-      includeChannelSecurity: false,
+      plugins: [],
     });
 
     const finding = report.findings.find(

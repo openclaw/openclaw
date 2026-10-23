@@ -16,6 +16,7 @@ import {
   historicalId as sessionId,
   maintenanceConfig,
 } from "../config/sessions/session-cold-storage.test-support.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -94,18 +95,16 @@ async function captureFixture(
     await provider.restoreFresh(snapshot.ref, targetPath);
   } else {
     const repositoryPath = path.join(root, "git-backups");
-    await createGitBackup({
-      repositoryPath,
-      stateDir,
-      databases: [{ path: sourcePath, identity }],
-      gitEnv: {
-        ...process.env,
+    await withEnvAsync(
+      {
         GIT_AUTHOR_NAME: "OpenClaw Backup Test",
         GIT_AUTHOR_EMAIL: "backup@example.invalid",
         GIT_COMMITTER_NAME: "OpenClaw Backup Test",
         GIT_COMMITTER_EMAIL: "backup@example.invalid",
       },
-    });
+      () =>
+        createGitBackup({ repositoryPath, stateDir, databases: [{ path: sourcePath, identity }] }),
+    );
     await restoreGitBackupDirectory({
       sourcePath: path.join(repositoryPath, "agents", "main"),
       targetPath,

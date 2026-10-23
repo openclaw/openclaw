@@ -110,11 +110,6 @@
   --shell-chrome-safe-area-left: calc(var(--shell-controls-width) + 18px);
 }
 
-/* Drawer shells keep the nav mounted offscreen; desktop collapse removes it. */
-.shell--nav-collapsed:not(.shell--mobile-nav) .shell-nav {
-  display: none;
-}
-
 /* The collapsed sidebar restores its controls in the content header. On
    native macOS hosts without the full strip, they sit below the drag region. */
 .shell-chrome-controls {
@@ -1026,7 +1021,7 @@ openclaw-settings-save-indicator:empty {
   min-height: 100%;
   overflow: visible;
   border-inline-end: var(--resize-handle-line-size) solid var(--resize-handle-rest-color);
-  transition: width var(--shell-focus-duration) var(--shell-focus-ease);
+  transition: clip-path var(--shell-focus-duration) var(--shell-focus-ease);
 }
 
 .shell-nav-backdrop {
@@ -1041,10 +1036,6 @@ openclaw-settings-save-indicator:empty {
   align-self: stretch;
   justify-self: end;
   z-index: 20;
-}
-
-.shell.shell--nav-resizing {
-  transition: grid-template-rows var(--shell-focus-duration) var(--shell-focus-ease);
 }
 
 .sidebar {
@@ -1187,6 +1178,7 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-sessions {
   position: relative;
+  margin-top: var(--sidebar-session-link-padding-block);
 }
 
 .sidebar-session-root-drop {
@@ -1315,6 +1307,11 @@ openclaw-settings-save-indicator:empty {
   margin-inline: -8px;
   /* Sessions are stateful app chrome, not navigation links. */
   cursor: var(--cursor-action);
+}
+
+/* Pinned renders in its own list container above the chip list or agent roster. */
+.sidebar-recent-sessions--pinned {
+  margin-block-end: var(--sidebar-group-gap);
 }
 
 .shell:not(.shell--mobile-nav) .sidebar-recent-sessions {
@@ -1873,7 +1870,7 @@ openclaw-settings-save-indicator:empty {
   align-items: center;
   min-width: 0;
   min-height: var(--sidebar-session-row-min-height);
-  padding-right: 2px;
+  padding-right: calc(2px + var(--sidebar-session-state-reserve, 0px));
   border-radius: var(--radius-md);
   color: var(--muted);
   cursor: var(--cursor-action);
@@ -1980,13 +1977,23 @@ openclaw-settings-save-indicator:empty {
   .sidebar-recent-session:not(.sidebar-recent-session--child)
   > .sidebar-recent-session__link
   > .sidebar-session-indicator {
-  order: 1;
-  /* Center the trailing status glyph in the 24px archive action column. */
-  margin-inline-end: calc((24px - var(--sidebar-lead)) / 2);
+  position: absolute;
+  inset-inline-end: calc(4px + (24px - var(--sidebar-lead)) / 2);
+  top: 50%;
+  transform: translateY(-50%);
 
   &:empty {
     display: none;
   }
+}
+
+/* Keep activity at the row edge, after hover actions and the child toggle.
+   Empty indicators leave the full title width available. */
+.sidebar-recent-sessions__group--inline-owner
+  .sidebar-recent-session:not(.sidebar-recent-session--child):has(
+    > .sidebar-recent-session__link > .sidebar-session-indicator:not(:empty)
+  ) {
+  --sidebar-session-state-reserve: 24px;
 }
 
 /* No section header separates the rows from the owner picker. */
@@ -2003,7 +2010,7 @@ openclaw-settings-save-indicator:empty {
 
 /* Row actions overlay the link's trailing edge (on hover, or always on the
    mobile drawer); reserve that space on the link instead of the title so the
-   trailing status slides left of them rather than hiding beneath them. */
+   text and metadata stay clear of them. Status has its own fixed row slot. */
 .shell:not(.shell--mobile-nav)
   .sidebar-recent-sessions__group--inline-owner
   .sidebar-recent-session:not(.sidebar-recent-session--child):is(:hover, :focus-within),
@@ -2203,7 +2210,7 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-recent-session:not(.sidebar-recent-session--child) > .sidebar-recent-session__aside {
   position: absolute;
-  inset: 50% 2px auto auto;
+  inset: 50% calc(2px + var(--sidebar-session-state-reserve, 0px)) auto auto;
   transform: translateY(-50%);
   pointer-events: none;
 }
@@ -2215,7 +2222,8 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-recent-session:not(.sidebar-recent-session--child, .sidebar-recent-session--single-line)
   > .sidebar-recent-session__aside {
-  inset: calc(1px + max(24px, var(--sidebar-title-line-height)) / 2) 2px auto auto;
+  inset: calc(1px + max(24px, var(--sidebar-title-line-height)) / 2)
+    calc(2px + var(--sidebar-session-state-reserve, 0px)) auto auto;
 }
 
 .sidebar-recent-session--child > .sidebar-recent-session__aside {
@@ -2232,7 +2240,9 @@ openclaw-settings-save-indicator:empty {
    same link-relative geometry as toggle-less rows, so one mask fits both. */
 .sidebar-recent-session:not(.sidebar-recent-session--child):has(> .sidebar-child-session-toggle)
   > .sidebar-recent-session__aside {
-  right: calc(var(--sidebar-child-session-toggle-width) + 4px);
+  right: calc(
+    var(--sidebar-child-session-toggle-width) + 4px + var(--sidebar-session-state-reserve, 0px)
+  );
 }
 
 .sidebar-recent-session:not(
@@ -3067,7 +3077,7 @@ a:is(
 
   .sidebar-recent-session:not(.sidebar-recent-session--child, .sidebar-recent-session--single-line)
     > .sidebar-recent-session__aside {
-    inset: 50% 2px auto auto;
+    inset: 50% calc(2px + var(--sidebar-session-state-reserve, 0px)) auto auto;
   }
 
   .sidebar-recent-session:not(.sidebar-recent-session--child) .sidebar-recent-session__text {
@@ -4159,7 +4169,8 @@ openclaw-tooltip.sidebar-hover-tooltip {
   outline: none;
 }
 
-.content > * + * {
+/* Child position preserves spacing without a universal sibling invalidation set. */
+.content > :where(:not(:first-child)) {
   margin-top: 20px;
 }
 
@@ -4178,8 +4189,8 @@ openclaw-tooltip.sidebar-hover-tooltip {
   padding-bottom: 0;
 }
 
-.content--chat > * + *,
-.content--custodian > * + * {
+.content--chat > :where(:not(:first-child)),
+.content--custodian > :where(:not(:first-child)) {
   margin-top: 0;
 }
 
@@ -4201,7 +4212,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
   padding-bottom: 0;
 }
 
-.content--workboard > * + * {
+.content--workboard > :where(:not(:first-child)) {
   margin-top: 14px;
 }
 

@@ -11,7 +11,7 @@ import {
 } from "solid-js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { registerChatComposerEnglish } from "../i18n/locales/en-chat-composer.ts";
-import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { presenceConnectionDescriptions } from "../lib/presence-connections.ts";
 import {
   presenceMatchesProfile,
@@ -42,7 +42,7 @@ import {
   HovercardControlsContext,
 } from "./portaled-hovercard-focus.ts";
 import { Icon } from "./solid/icon.tsx";
-import "./viewer-facepile.ts";
+import "./solid/viewer-facepile.tsx";
 
 registerEnglishCatalog(registerChatComposerEnglish);
 
@@ -150,12 +150,11 @@ function Sessions(props: {
                     ref={createHovercardControlRef()}
                     class="person-activity-card__session session-row-host"
                     href={target().href}
-                    onClick={(event) => {
-                      if (shouldHandleNavigationClick(event)) {
-                        event.preventDefault();
+                    onClick={(event) =>
+                      handleNavigationClick(event, () => {
                         props.input.openSession(session().row, session().agentId, target().options);
-                      }
-                    }}
+                      })
+                    }
                   >
                     <span class="person-activity-card__session-icon" aria-hidden="true">
                       <Icon name="messageSquare" />

@@ -14,6 +14,7 @@ import { ensureCustomElementDefined } from "../../../app/lazy-custom-element.ts"
 import type { OpenClawCanvasWidgetView } from "../../../components/canvas-widget-view.tsx";
 import { dispatchWidgetPrompt } from "../../../components/mcp-app-security.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerMcpAppEnglish } from "../../../i18n/locales/en-mcp-app.ts";
 import {
@@ -357,9 +358,29 @@ function PreviewFrame(props: {
   );
 }
 
-const loadMcpAppView = () => import("../../../components/mcp-app-view-registration.ts");
+const loadMcpAppView = () => import("../../../components/mcp-app-view.tsx");
 
 const loadCanvasWidgetView = () => import("../../../components/canvas-widget-view.tsx");
+
+function WidgetRegistration(props: { tagName: string; loadModule: () => Promise<unknown> }) {
+  const ready = createMemo(() =>
+    ensureCustomElementDefined(props.tagName, props.loadModule).then(() => null),
+  );
+  return (
+    <Errored
+      fallback={(error, reset) => (
+        <LazyViewError
+          error={error()}
+          onRetry={() => reset()}
+          actionLabel={t("common.retry")}
+          inline
+        />
+      )}
+    >
+      <Loading>{ready()}</Loading>
+    </Errored>
+  );
+}
 
 function WidgetContent(props: {
   preview: CanvasToolPreview;
@@ -402,55 +423,55 @@ function WidgetContent(props: {
           }
         >
           {(_managed) => {
-            void ensureCustomElementDefined(
-              "openclaw-canvas-widget-view",
-              loadCanvasWidgetView,
-            ).catch((error: unknown) =>
-              console.error("[openclaw] failed to load widget view", error),
-            );
             return (
-              <CanvasWidgetMount
-                onElement={props.onExportSource}
-                docId={props.preview.viewId!.trim()}
-                sessionKey={props.options?.sessionKey ?? ""}
-                messageTimestamp={props.options?.messageTimestamp}
-                title={props.preview.title?.trim() || t("chat.toolCards.canvas")}
-                preferredHeight={
-                  props.options?.widgetLayout?.read(`canvas:${props.preview.viewId!.trim()}`) ??
-                  props.preview.preferredHeight
-                }
-                onHeightChange={(height) =>
-                  props.options?.widgetLayout?.write(
-                    `canvas:${props.preview.viewId!.trim()}`,
-                    height,
-                  )
-                }
-                allowScripts={props.sandbox.includes("allow-scripts")}
-                connectionGeneration={getCanvasWidgetFrameConnectionGeneration()}
-              />
+              <>
+                <WidgetRegistration
+                  tagName="openclaw-canvas-widget-view"
+                  loadModule={loadCanvasWidgetView}
+                />
+                <CanvasWidgetMount
+                  onElement={props.onExportSource}
+                  docId={props.preview.viewId!.trim()}
+                  sessionKey={props.options?.sessionKey ?? ""}
+                  messageTimestamp={props.options?.messageTimestamp}
+                  title={props.preview.title?.trim() || t("chat.toolCards.canvas")}
+                  preferredHeight={
+                    props.options?.widgetLayout?.read(`canvas:${props.preview.viewId!.trim()}`) ??
+                    props.preview.preferredHeight
+                  }
+                  onHeightChange={(height) =>
+                    props.options?.widgetLayout?.write(
+                      `canvas:${props.preview.viewId!.trim()}`,
+                      height,
+                    )
+                  }
+                  allowScripts={props.sandbox.includes("allow-scripts")}
+                  connectionGeneration={getCanvasWidgetFrameConnectionGeneration()}
+                />
+              </>
             );
           }}
         </Show>
       }
     >
       {(app) => {
-        void ensureCustomElementDefined("mcp-app-view", loadMcpAppView).catch((error: unknown) => {
-          console.error("[openclaw] failed to load MCP App view", error);
-        });
         const key = () => `mcp:${app().viewId}`;
         const height = () =>
           props.options?.widgetLayout?.read(key()) ?? props.preview.preferredHeight ?? 600;
         return (
-          <mcp-app-view
-            prop:sessionKey={props.options?.sessionKey ?? ""}
-            prop:viewId={app().viewId}
-            prop:height={height()}
-            prop:onHeightChange={(nextHeight: number) =>
-              props.options?.widgetLayout?.write(key(), nextHeight)
-            }
-            style={{ display: "block", "min-height": `${height()}px` }}
-            title={props.preview.title?.trim() || t("mcpApp.title")}
-          />
+          <>
+            <WidgetRegistration tagName="mcp-app-view" loadModule={loadMcpAppView} />
+            <mcp-app-view
+              prop:sessionKey={props.options?.sessionKey ?? ""}
+              prop:viewId={app().viewId}
+              prop:height={height()}
+              prop:onHeightChange={(nextHeight: number) =>
+                props.options?.widgetLayout?.write(key(), nextHeight)
+              }
+              style={{ display: "block", "min-height": `${height()}px` }}
+              title={props.preview.title?.trim() || t("mcpApp.title")}
+            />
+          </>
         );
       }}
     </Show>

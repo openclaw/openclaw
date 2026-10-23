@@ -291,3 +291,5 @@ export class ShellNavigationOwner {
     this.navigate("chat");
   }
 }
+
+export type ShellNavigationCapability = Pick<ShellNavigationOwner, keyof ShellNavigationOwner>;

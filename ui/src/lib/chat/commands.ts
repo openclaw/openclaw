@@ -352,13 +352,11 @@ function getSlashCommandRelevance(command: SlashCommandDef, filter: string): num
 export function getSlashCommandCompletions(
   filter: string,
   options?: {
-    showAll?: boolean;
     inlineOnly?: boolean;
     allowImmediateInlineCommands?: boolean;
   },
 ): SlashCommandDef[] {
   const lower = normalizeLowercaseStringOrEmpty(filter);
-  const showAll = options?.showAll ?? false;
   let commands = options?.inlineOnly
     ? SLASH_COMMANDS.filter(
         (command) =>
@@ -371,10 +369,6 @@ export function getSlashCommandCompletions(
         (command) => getSlashCommandRelevance(command, lower) < NON_MATCHING_COMMAND_RANK,
       )
     : commands;
-
-  if (!lower && !showAll) {
-    commands = commands.filter((cmd) => (cmd.tier ?? "standard") !== "power");
-  }
 
   return commands.toSorted(
     (a, b) =>

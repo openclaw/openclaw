@@ -7,6 +7,7 @@ import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { showInputDialog } from "../../components/input-dialog.tsx";
 import * as sessionMenuWork from "../../components/session-menu-work.ts";
+import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import * as uiErrors from "../../lib/format-error.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
@@ -110,6 +111,38 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 describe("sessions page lifecycle", () => {
+  it("retries a retained agent identity on roster publication after reconnect backoff", async () => {
+    let now = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const readIdentity = vi
+      .fn()
+      .mockResolvedValueOnce({ agentId: "main", name: "Before", avatar: "" })
+      .mockRejectedValueOnce(new Error("Identity temporarily unavailable"))
+      .mockResolvedValueOnce({ agentId: "main", name: "After", avatar: "" });
+    const connection = createGateway(createTestGatewayClient(readIdentity));
+    const agentIdentity = createAgentIdentityCapability(connection.gateway);
+    const managed = createManagedSessions();
+    const context = { ...createContext(connection.gateway, managed.sessions), agentIdentity };
+    const row = sessionRow("webchat:identity");
+    const page = await createRenderedPage(context, sessionsResult([row], 1), "all");
+    const label = () => page.querySelector(".session-link")?.textContent;
+    await waitForFast(() => expect(label()).toContain("Before"));
+
+    connection.emit({ phase: "reconnecting" });
+    connection.emit({ phase: "connected" });
+    await agentIdentity.ensure(["main"]);
+    expect(readIdentity).toHaveBeenCalledTimes(2);
+    expect(label()).toContain("Before");
+
+    publishRows(managed, [row]);
+    await page.updateComplete;
+    expect(readIdentity).toHaveBeenCalledTimes(2);
+    now += 1_000;
+    publishRows(managed, [row]);
+    await waitForFast(() => expect(label()).toContain("After"));
+    expect(readIdentity).toHaveBeenCalledTimes(3);
+  });
+
   it("keeps a failed rename editable until a confirmed retry succeeds", async () => {
     const actual = await vi.importActual<typeof import("../../components/input-dialog.tsx")>(
       "../../components/input-dialog.tsx",
@@ -138,7 +171,7 @@ describe("sessions page lifecycle", () => {
       input.dispatchEvent(new Event("input", { bubbles: true }));
       form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
       await waitForFast(() => expect(patch).toHaveBeenCalledOnce());
-      expect(input.disabled).toBe(true);
+      await waitForFast(() => expect(input.disabled).toBe(true));
       pending.reject(new Error("Rename unavailable. Try again."));
       await waitForFast(() =>
         expect(modal.querySelector('[role="alert"]')?.textContent).toContain(

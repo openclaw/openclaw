@@ -38,13 +38,16 @@ async function loadSessionsRoute(
     statusFilter: expectedQuery.archivedFilter,
   });
   expect(
-    buildSessionsListQuery(context, {
-      statusFilter: data.statusFilter,
-      deepLinkSessionKey: data.expandedSessionKey,
-      includeGlobal: true,
-      includeUnknown: false,
-      limit: 50,
-    }),
+    buildSessionsListQuery(
+      context.agentSelection.state.scopeId,
+      {
+        statusFilter: data.statusFilter,
+        includeGlobal: true,
+        includeUnknown: false,
+        limit: "50",
+      },
+      data.expandedSessionKey,
+    ),
   ).toEqual({
     source: "sessions-page",
     rowMode: "compact",
@@ -76,3 +79,47 @@ it.each([
   "prepares sessions route %s in scope %s without issuing outside the page owner",
   loadSessionsRoute,
 );
+
+it.each([
+  {
+    name: "numeric form text",
+    activeMinutes: " 15 ",
+    limit: "25",
+    statusFilter: "active",
+    search: undefined,
+    expected: { activeMinutes: 15, limit: 25, search: "needle" },
+  },
+  {
+    name: "invalid numbers",
+    activeMinutes: "15 minutes",
+    limit: "0",
+    statusFilter: "active",
+    search: undefined,
+    expected: { activeMinutes: undefined, limit: 50, search: "needle" },
+  },
+  {
+    name: "archived rows with an explicitly cleared search",
+    activeMinutes: "15",
+    limit: "25",
+    statusFilter: "archived",
+    search: "",
+    expected: { activeMinutes: undefined, limit: 25, search: undefined },
+  },
+] as const)("normalizes $name at the list-query boundary", (testCase) => {
+  const query = buildSessionsListQuery(
+    "writer",
+    {
+      activeMinutes: testCase.activeMinutes,
+      limit: testCase.limit,
+      statusFilter: testCase.statusFilter,
+      includeGlobal: true,
+      includeUnknown: false,
+      searchQuery: " needle ",
+    },
+    null,
+    testCase.search,
+  );
+  expect({ activeMinutes: query.activeMinutes, limit: query.limit, search: query.search }).toEqual(
+    testCase.expected,
+  );
+});

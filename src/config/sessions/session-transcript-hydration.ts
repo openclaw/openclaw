@@ -24,6 +24,7 @@ import {
 } from "./session-actor-transcript-replica.js";
 import { readRestoredSessionTranscriptInWorker } from "./session-cold-storage-read.js";
 import type { SessionEntryCohortRequest } from "./session-entry-read.types.js";
+import type { SessionTranscriptContextSelection } from "./session-history-read.types.js";
 import type { SessionTranscriptMaintenanceRead } from "./session-transcript-hydration.types.js";
 import {
   resolveSessionTranscriptReadFence,
@@ -76,7 +77,7 @@ type SessionTranscriptHydrationReader = {
 /** Capture identity before queueing; a missing file remains the creation owner's responsibility. */
 export function prepareSessionTranscriptHydration(
   source: SessionTranscriptRuntimeTarget & { env?: NodeJS.ProcessEnv },
-  limits?: { maxBytes: number; maxEvents: number },
+  limits?: SessionTranscriptContextSelection,
   signal?: AbortSignal,
   lane?: SessionHistoryWorkerLane,
 ): SessionTranscriptHydrationReader {
@@ -173,9 +174,7 @@ export function prepareSessionTranscriptHydration(
     };
   }
   const target = captureSessionTranscriptTargetBinding(source);
-  const contextLimits = limits
-    ? { maxBytes: limits.maxBytes, maxEvents: limits.maxEvents }
-    : undefined;
+  const contextLimits = limits ? { ...limits } : undefined;
   const receipt = resolveSessionTranscriptReadFence(target);
   const admission = receipt ? { ...receipt } : undefined;
   signal?.throwIfAborted();
@@ -222,7 +221,7 @@ export function prepareSessionTranscriptHydration(
     }
   };
   const retainedRead = (selection?: NonNullable<SessionEntryCohortRequest["transcript"]>) => {
-    if (!contextLimits) {
+    if (!contextLimits || "compaction" in contextLimits) {
       return undefined;
     }
     const hot = readOwnedSessionTranscriptState(target);
@@ -258,7 +257,7 @@ export function prepareSessionTranscriptHydration(
     return prepared;
   };
   const retainRead = (prepared: PreparedSessionTranscriptHydration) => {
-    if (prepared.kind !== "bounded" || !contextLimits) {
+    if (prepared.kind !== "bounded" || !contextLimits || "compaction" in contextLimits) {
       return;
     }
     const hot = readOwnedSessionTranscriptState(target);

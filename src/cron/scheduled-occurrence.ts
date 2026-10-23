@@ -9,6 +9,7 @@ import type {
   ScheduledExecutionContextResult,
   ScheduledExecutionFacts,
 } from "./execution-context.js";
+import type { CronParentUnavailable } from "./types.js";
 
 export type ScheduledExecutionContext = ScheduledExecutionFacts &
   Readonly<{
@@ -37,6 +38,8 @@ export type MintedScheduledExecution = Readonly<{
 
 /** One admitted occurrence. Every scheduled agent run mints its context from it. */
 export type ScheduledOccurrence = Readonly<{
+  /** Set when the exact parent is removed or archived, or its bound worktree is gone. */
+  pause?: CronParentUnavailable;
   mint: (run: ScheduledOccurrenceRun) => MintedScheduledExecution;
   /** Releases the parent generation; the occurrence owner calls it once the occurrence settles. */
   release: () => void;
@@ -55,4 +58,22 @@ export function failedScheduledExecution(error: string): MintedScheduledExecutio
 /** An occurrence whose admission could not run; every run it mints is a `fail` result. */
 export function unadmittedScheduledOccurrence(error: string): ScheduledOccurrence {
   return { mint: () => failedScheduledExecution(error), release() {} };
+}
+
+/** The single notice a paused job sends; names the parent and the repair. */
+export function buildScheduledParentPauseNotice(params: {
+  job: { id: string; name?: string };
+  pause: CronParentUnavailable;
+}): string {
+  const name = (params.job.name || params.job.id).replace(/\s+/g, " ").trim().slice(0, 120);
+  const { pause } = params;
+  const cause =
+    pause.reason === "worktree-missing"
+      ? `its worktree \`${pause.worktreePath ?? "unknown"}\` no longer exists`
+      : `it was ${pause.reason}`;
+  return [
+    `⚠️ Automation "${name}" is paused because the conversation that created it, \`${pause.parentSessionKey}\`, is unavailable: ${cause}.`,
+    "Its runs used that conversation's access, and no other access is used in its place.",
+    `Restore the conversation and run \`openclaw automations enable ${params.job.id}\`, or recreate the automation from another conversation.`,
+  ].join("\n");
 }

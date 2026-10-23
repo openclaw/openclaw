@@ -179,6 +179,39 @@ describe("scheduled occurrence admission", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it.each(MATRIX)(
+    "a paused $kind occurrence on $sessionTarget (trigger: $withTrigger) runs nothing",
+    async ({ kind, sessionTarget, withTrigger }) => {
+      const { state, seen } = harness();
+      const pause = {
+        reason: "archived" as const,
+        parentSessionKey: "agent:main:dashboard:parent",
+      };
+      state.deps.admitScheduledOccurrence = async () => ({
+        ...unadmittedScheduledOccurrence("paused"),
+        pause,
+      });
+      const result = await executeJobCore(state, {
+        ...makeCronJob({ payload: payloadFor(kind), sessionTarget }),
+        ...(withTrigger ? { trigger: { script: "return { fire: true }" } } : {}),
+      });
+      if (kind === "command") {
+        // Command jobs do not pause on a missing parent; they still run with the occurrence.
+        expect(result).not.toHaveProperty("parentUnavailable");
+        if (sessionTarget !== "main") {
+          expect(seen.map((call) => call.executor)).toContain("runCommandJob");
+        }
+        return;
+      }
+      expect(seen).toEqual([]);
+      expect(result).toMatchObject({
+        status: "skipped",
+        parentUnavailable: pause,
+        executionStarted: false,
+      });
+    },
+  );
+
   it("gives every run a fail context when no admitter is configured", async () => {
     const { state, seen } = harness();
     delete state.deps.admitScheduledOccurrence;

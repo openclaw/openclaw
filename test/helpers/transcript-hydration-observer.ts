@@ -1,15 +1,13 @@
 import { vi } from "vitest";
 
 export type ObservedTranscriptHydration = {
-  limits: { maxBytes: number; maxEvents: number } | undefined;
   kind: string;
   events: number;
   totalEvents: number | undefined;
 };
 
 /**
- * Records every transcript hydration the history worker lane serves: the limits the caller
- * asked for, the prepared kind, and how many events it loaded against the session's total.
+ * Records how many events the history worker hydrates against the session's total.
  * Imports lazily so a test's module mocks apply before the lane is created.
  */
 export async function observeTranscriptHydrations() {
@@ -20,7 +18,7 @@ export async function observeTranscriptHydrations() {
   const hydrations: ObservedTranscriptHydration[] = [];
   const run = historyLane.pool.run.bind(historyLane.pool);
   const spy = vi.spyOn(historyLane.pool, "run").mockImplementation((input, options) => {
-    let request: { kind: string; limits?: { maxBytes: number; maxEvents: number } } | undefined;
+    let request: { kind: string } | undefined;
     return run(async () => {
       const prepared = typeof input === "function" ? await input() : input;
       request = prepared as typeof request;
@@ -35,7 +33,6 @@ export async function observeTranscriptHydrations() {
           snapshot?: { events: unknown[]; totalEvents: number };
         };
         hydrations.push({
-          limits: request.limits,
           kind: value.kind,
           events: value.snapshot?.events.length ?? value.eventCount ?? 0,
           totalEvents: value.snapshot?.totalEvents,

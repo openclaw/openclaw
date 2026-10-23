@@ -24,9 +24,6 @@ import type { SessionEntry } from "./session-manager-types.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-// Compaction opens the same bounded model-context view an attempt hydrates.
-const limits = { maxBytes: 1024 * 1024, maxEvents: 10_000 };
-
 async function withFixture(
   name: string,
   run: (fixture: {
@@ -279,7 +276,7 @@ it("prepares current compaction metadata and retained history in one worker read
     );
     const sql = observeHostDataSql();
     try {
-      const prepared = await SessionManager[sessionManagerOpenCompaction](target, limits);
+      const prepared = await SessionManager[sessionManagerOpenCompaction](target);
       await waitForDiagnosticEventsDrained();
       expect(requests).toEqual(["task"]);
       expect(sql.queries).toEqual([]);
@@ -319,7 +316,7 @@ it("keeps the requested entry separate from the persisted compaction window owne
     await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
     const manager = await SessionManager.openAsync(target, state.workspaceDir);
     const retained = await manager.appendMessageAsync(makeUserMessage("Window-owned content", 1));
-    const prepared = await SessionManager[sessionManagerOpenCompaction](requested, limits);
+    const prepared = await SessionManager[sessionManagerOpenCompaction](requested);
     expect(prepared.sessionTarget).toEqual(target);
     expect(prepared.entry).toMatchObject({ label: "Alias metadata" });
     expect(prepared.runtimeEntry?.label).toBeUndefined();

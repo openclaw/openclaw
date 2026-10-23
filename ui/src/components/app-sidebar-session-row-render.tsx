@@ -26,6 +26,7 @@ type RecentSessionParams = {
   host: SessionListHost;
   session: SidebarRecentSession;
   display?: CatalogBackingSessionDisplay;
+  pinReorder?: boolean;
   listItem?: boolean;
   icon?: JSX.Element;
 };
@@ -47,6 +48,12 @@ function renderRecentSessionRow(params: RecentSessionParams) {
   const personallyPinned = createMemo(() =>
     host().sessionOrganizer.isPersonalSessionPin(session().key),
   );
+  const pinDrop = createMemo(() => {
+    const target = host().sessionOrganizer.sidebarZoneDropTarget;
+    return params.pinReorder && target?.entry === `session:${session().key}`
+      ? target.position
+      : undefined;
+  });
   const archiveAccess = createMemo(() =>
     host().readSessionMutationAccess({
       method: "sessions.patch",
@@ -124,7 +131,8 @@ function renderRecentSessionRow(params: RecentSessionParams) {
       requiredScope: "operator.write",
     }),
   );
-  const rowDraggable = createMemo(() => groupWriteAccess().allowed);
+  // Personal pins and rail shortcuts do not mutate shared session groups.
+  const rowDraggable = createMemo(() => pinnable() || groupWriteAccess().allowed);
   const marqueeLabelTemplate = () => {
     const teamValue = team();
     const labelValue = label();
@@ -165,6 +173,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
       }}
       class={[
         "sidebar-recent-session session-row-host",
+        pinDrop() ? `sidebar-zone-entry--drop-${pinDrop()}` : undefined,
         {
           "sidebar-recent-session--team": team(),
           "sidebar-recent-session--colored": Boolean(color()),
@@ -205,6 +214,21 @@ function renderRecentSessionRow(params: RecentSessionParams) {
         }
       }}
       onDragEnd={() => host().sessionOrganizer.finishSessionDrag()}
+      onDragOver={(event: DragEvent) => {
+        if (params.pinReorder) {
+          host().sessionOrganizer.sectionDragOver(event, "pinned", undefined, session().key);
+        }
+      }}
+      onDragLeave={(event: DragEvent) => {
+        if (params.pinReorder) {
+          host().sessionOrganizer.handleSidebarZoneDragLeave(event);
+        }
+      }}
+      onDrop={(event: DragEvent) => {
+        if (params.pinReorder) {
+          host().sessionOrganizer.sectionDrop(event, "pinned", undefined, session().key);
+        }
+      }}
       onContextMenu={openMenuFromEvent}
       onKeyDown={openMenuFromEvent}
     >
@@ -422,6 +446,7 @@ export function renderChildSessionLoadError(host: () => SessionListHost, parentK
 export function renderSessionTree(params: {
   host: SessionListHost;
   session: SidebarRecentSession;
+  pinReorder?: boolean;
   listItem?: boolean;
   icon?: JSX.Element;
 }): JSX.Element {
@@ -445,7 +470,13 @@ export function renderSessionTree(params: {
       data-session-tree={session().key}
       role={listItem() ? "listitem" : undefined}
     >
-      <RecentSession host={host()} session={session()} listItem={false} icon={icon()} />
+      <RecentSession
+        host={host()}
+        session={session()}
+        pinReorder={params.pinReorder}
+        listItem={false}
+        icon={icon()}
+      />
       {expanded() ? (
         <div class="sidebar-session-tree__children">
           {visibleChildren().length > 0 ? (

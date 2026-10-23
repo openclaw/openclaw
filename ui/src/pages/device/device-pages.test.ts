@@ -262,8 +262,7 @@ it("switches Gateway hosting only when available and follows the native owner's 
   expect(toggleInput(hosting).checked).toBe(false);
   toggle(page, title, true);
   expect(set).toHaveBeenCalledExactlyOnceWith("app.keepGatewayRunning", true, expect.any(Function));
-  flush();
-  expect(toggleInput(hosting).disabled).toBe(true);
+  await waitForSolid(() => expect(toggleInput(hosting).disabled).toBe(true));
   const saved = createNativeDeviceSettingsSnapshot();
   saved.app.keepGatewayRunning = true;
   settle(0, saved);
@@ -274,12 +273,16 @@ it("switches Gateway hosting only when available and follows the native owner's 
   settle(1, saved, new Error("Gateway did not become ready."));
   await waitForSolid(() => expect(toggleInput(hosting).disabled).toBe(false));
   expect(toggleInput(hosting).checked).toBe(true);
-  expect(hosting.querySelector('[role="alert"]')?.textContent).toContain(
-    "Could not change Gateway hosting. Gateway did not become ready.",
+  await waitForSolid(() =>
+    expect(hosting.querySelector('[role="alert"]')?.textContent).toContain(
+      "Could not change Gateway hosting. Gateway did not become ready.",
+    ),
   );
   toggle(page, title, false);
   flush();
   expect(hosting.querySelector('[role="alert"]')).toBeNull();
+  await waitForSolid(() => expect(toggleInput(hosting).disabled).toBe(true));
+  expect(row(page, title)).toBe(hosting);
   // Native Cancel returns the accepted snapshot unchanged.
   settle(2, saved);
   await waitForSolid(() => expect(toggleInput(hosting).disabled).toBe(false));

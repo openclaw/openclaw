@@ -526,6 +526,26 @@ describe.each(["JSON", "JSONC"])(
       ).toEqual(backups);
     });
 
+    it("preserves malformed UTF-8 root catalogs without rewriting or lossy backups", async () => {
+      const { agentDir } = await seedAgent({
+        "claude-cli": anthropicBlock,
+        authored: { label: "broken" },
+      });
+      const sourcePath = path.join(agentDir, "models.json");
+      const source = fs.readFileSync(sourcePath);
+      source[source.indexOf("broken")] = 0xff;
+      fs.writeFileSync(sourcePath, source);
+      const params = migrationParams([agentDir]);
+
+      await maybeMigrateLegacyPluginModelCatalogs(params);
+
+      expect(fs.readFileSync(sourcePath)).toEqual(source);
+      expect(
+        fs.readdirSync(agentDir).filter((name) => name.startsWith("models.json.bak-")),
+      ).toEqual([]);
+      expect(params.runtime.error).toHaveBeenCalledWith(expect.stringContaining("UTF-8"));
+    });
+
     it("keeps edited copies and ids that config declares", async () => {
       const edited = {
         ...anthropicBlock,

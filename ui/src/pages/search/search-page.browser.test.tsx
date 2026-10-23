@@ -417,6 +417,63 @@ describe("Search settings", () => {
     },
   );
 
+  it("clears rejected test feedback during retry without replacing the controls", async () => {
+    const fixture = await mount();
+    const query = fixture.input("Search query");
+    const button = fixture.button("Test search");
+    fixture.setTestResponse(Promise.reject(new Error("Search transport unavailable")));
+    button.click();
+    await waitForSolid(() => {
+      expect(fixture.element.textContent).toContain("Search transport unavailable");
+      expect(fixture.statuses()).toContainEqual(expect.stringContaining("Search failed"));
+    });
+
+    const retry = createDeferred<unknown>();
+    fixture.setTestResponse(retry.promise);
+    button.click();
+    try {
+      await waitForSolid(() => {
+        expect(fixture.element.textContent).not.toContain("Search transport unavailable");
+        expect(fixture.statuses()).toContainEqual(expect.stringContaining("Searching…"));
+        expect(fixture.input("Search query")).toBe(query);
+        expect(query.disabled).toBe(true);
+        expect(fixture.button("Searching…")).toBe(button);
+      });
+    } finally {
+      retry.resolve({ provider: "searxng", status: "ok", latencyMs: 1, content: "Retry answer" });
+    }
+    await waitForSolid(() => {
+      expect(fixture.element.textContent).toContain("Retry answer");
+      expect(fixture.statuses()).toContainEqual(expect.stringContaining("Search succeeded"));
+      expect(fixture.button("Test search")).toBe(button);
+      expect(query.disabled).toBe(false);
+    });
+  });
+
+  it("runs a test search on Enter but not on the Enter that confirms IME input", async () => {
+    const fixture = await mount();
+    const query = fixture.input("Search query");
+    editInput(query, "東京", false);
+    query.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await fixture.settle();
+    expect(fixture.calls("webSearch.test")).toHaveLength(1);
+    expect(fixture.calls("webSearch.test")[0]?.[1]).toMatchObject({ query: "東京" });
+
+    editInput(query, "おおさか", false);
+    query.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true }),
+    );
+    flush();
+    expect(fixture.calls("webSearch.test")).toHaveLength(1);
+
+    // WebKit can deliver the committing Enter just after compositionend with both flags cleared.
+    editInput(query, "大阪", false);
+    query.dispatchEvent(new CompositionEvent("compositionend", { data: "大阪", bubbles: true }));
+    query.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    flush();
+    expect(fixture.calls("webSearch.test")).toHaveLength(1);
+  });
+
   it.each(["native", "external"] as const)(
     "routes %s search to chat and tests only managed credentials",
     async (kind) => {

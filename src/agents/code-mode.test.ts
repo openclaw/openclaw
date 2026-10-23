@@ -924,3 +924,26 @@ it.each(["aborted", "timeout"] as const)(
     await next.check('return (await load("key")) === undefined;', true);
   },
 );
+
+it("keeps an astral skill description whole at the skills.list cap", async () => {
+  const prefix = "a".repeat(511);
+  const skills = [
+    {
+      name: "boundary-guide",
+      description: `${prefix}😀tail`,
+      location: "/skills/boundary-guide/SKILL.md",
+      source: { filePath: "/skills/boundary-guide/SKILL.md" },
+    },
+  ];
+  const harness = createCatalogCodeModeHarness(createInstalledSkillTools(skills), {
+    codeModeSkills: skills,
+  });
+  const result = await harness.complete("return await skills.list(0);");
+  expectCompleted(result, [
+    {
+      name: "boundary-guide",
+      description: prefix,
+      location: "/skills/boundary-guide/SKILL.md",
+    },
+  ]);
+});

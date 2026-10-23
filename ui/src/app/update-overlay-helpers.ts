@@ -105,11 +105,6 @@ export type UpdateRestartStatusResponse = {
 
 type UpdateFailureCause = { step: string; detail: string };
 
-function readUpdateAttemptId(sentinel: UpdateRestartStatusResponse["sentinel"]): string | null {
-  const id = sentinel?.stats?.runId?.trim() || sentinel?.stats?.handoffId?.trim();
-  return id && id.length <= 256 ? id : null;
-}
-
 export function projectUpdateSentinel(sentinel: UpdateRestartStatusResponse["sentinel"]): {
   attempt: RecordedUpdateAttempt | null;
   banner: ApplicationStatusBanner | null;
@@ -124,7 +119,17 @@ export function projectUpdateSentinel(sentinel: UpdateRestartStatusResponse["sen
     reason: stats?.reason ?? undefined,
   });
   const showResult = outcome !== "succeeded" && outcome !== "pending";
-  const cause = showResult ? readUpdateFailureCause(sentinel) : null;
+  let cause: UpdateFailureCause | null = null;
+  if (showResult) {
+    const steps = sentinel?.stats?.steps;
+    // The run stops at its first failure, so the last non-zero exit is the cause.
+    const failed = Array.isArray(steps)
+      ? steps.findLast((step) => typeof step?.log?.exitCode === "number" && step.log.exitCode !== 0)
+      : undefined;
+    const detail = lastLogLine(failed?.log?.stderrTail) ?? lastLogLine(failed?.log?.stdoutTail);
+    const step = failed?.name?.trim();
+    cause = step && detail ? { step, detail } : null;
+  }
   const attempt =
     showResult && typeof sentinel.ts === "number"
       ? {
@@ -149,9 +154,10 @@ export function projectUpdateSentinel(sentinel: UpdateRestartStatusResponse["sen
   if (banner && outcome === "failed") {
     banner.text += ` ${t("updates.triage.hostHint")}`;
   }
+  const attemptId = sentinel?.stats?.runId?.trim() || sentinel?.stats?.handoffId?.trim();
   const record = {
     id:
-      readUpdateAttemptId(sentinel) ??
+      (attemptId && attemptId.length <= 256 ? attemptId : null) ??
       (typeof sentinel.ts === "number" ? `recorded:${sentinel.ts}` : null),
     timestampMs: sentinel.ts ?? null,
   };
@@ -170,19 +176,6 @@ function lastLogLine(tail: string | null | undefined): string | null {
     .filter(Boolean);
   const last = lines.at(-1);
   return last ? last.slice(0, MAX_UPDATE_FAILURE_CAUSE_CHARS) : null;
-}
-
-function readUpdateFailureCause(
-  sentinel: UpdateRestartStatusResponse["sentinel"],
-): UpdateFailureCause | null {
-  const steps = sentinel?.stats?.steps;
-  // The run stops at its first failure, so the last non-zero exit is the cause.
-  const failed = Array.isArray(steps)
-    ? steps.findLast((step) => typeof step?.log?.exitCode === "number" && step.log.exitCode !== 0)
-    : undefined;
-  const detail = lastLogLine(failed?.log?.stderrTail) ?? lastLogLine(failed?.log?.stdoutTail);
-  const step = failed?.name?.trim();
-  return step && detail ? { step, detail } : null;
 }
 
 export type UpdateRunResponse = {
@@ -279,22 +272,16 @@ export function projectUpdateStatusResponse(
   },
 ) {
   const result = projectUpdateSentinel(response.sentinel);
-  return {
-    failure: result?.failure ?? null,
-    updateStatusBanner: result ? result.banner : current.updateStatusBanner,
-    recordedUpdateAttempt: result ? result.attempt : current.recordedUpdateAttempt,
-    ...projectUpdateCheckoutResponse(response, current),
-  };
-}
-
-function projectUpdateCheckoutResponse(
-  response: UpdateRestartStatusResponse,
-  current: { heldUpdateCampaignId: string | null; updateSchedule?: UpdateScheduleState | null },
-) {
+  const failure = result?.failure ?? null;
+  const updateStatusBanner = result ? result.banner : current.updateStatusBanner;
+  const recordedUpdateAttempt = result ? result.attempt : current.recordedUpdateAttempt;
   const updateSchedule = Object.hasOwn(response, "schedule")
     ? (response.schedule ?? null)
     : undefined;
   return {
+    failure,
+    updateStatusBanner,
+    recordedUpdateAttempt,
     ...(Object.hasOwn(response, "updateAvailable")
       ? { updateAvailable: response.updateAvailable ?? null }
       : {}),

@@ -5,6 +5,7 @@ import { normalizeClawHubSha256Integrity } from "../infra/clawhub-integrity.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.js";
 import { computeDeclaredSurfaceHash } from "../plugins/capability-summary.js";
 import { installManagedPlugin } from "../plugins/management-mutations.js";
+import { uninstallPluginWithPolicy } from "../plugins/management-uninstall.js";
 import {
   preflightPluginInstall,
   resolveInstalledClawHubPlugin,
@@ -15,11 +16,11 @@ import {
   acquireClawPackageLifecycleLease,
   type ClawPackageLifecycleLease,
 } from "../state/claw-package-lifecycle-lease.js";
+import { readClawPackageRefsForAdd } from "./add-state-write.js";
 import type { InstallClawPackagesOptions } from "./package-install-options.js";
 import { packageFromAction } from "./package-plan-action.js";
 import { matchesPlannedPluginProbe } from "./package-plugin-probe-match.js";
 import { createStatelessClawPackageReceipt } from "./package-stateless-receipt.js";
-import { rollbackStatelessClawPackagesWithStamps } from "./package-stateless-rollback.js";
 import {
   inspectClawPluginCapabilities,
   probeClawPluginArtifact,
@@ -87,11 +88,79 @@ export async function rollbackStatelessClawPackages(
   packages: PersistedClawPackageRef[],
   options: Pick<InstallClawPackagesOptions, "assertCurrent" | "env" | "path" | "runtime"> = {},
 ): Promise<string[]> {
-  return await rollbackStatelessClawPackagesWithStamps(
-    packages,
-    options,
-    statelessPluginInstallStamps,
-  );
+  const errors: string[] = [];
+  const runtime = options.runtime ?? defaultRuntime;
+  for (const pkg of packages.toReversed()) {
+    if (pkg.kind !== "plugin" || pkg.origin !== "claw-introduced") {
+      continue;
+    }
+    const stamp = statelessPluginInstallStamps.get(pkg);
+    if (!stamp) {
+      continue;
+    }
+    let lease: ClawPackageLifecycleLease | null = null;
+    try {
+      const acquired = await acquireClawPackageLifecycleLease(
+        { kind: "plugin", source: "clawhub", ref: pkg.ref },
+        { env: options.env, path: options.path, required: true },
+      );
+      if (!acquired) {
+        throw new Error(`Could not acquire package lifecycle lease for ${pkg.ref}.`);
+      }
+      lease = acquired;
+      const owners = await readClawPackageRefsForAdd({
+        ...options,
+        kind: "plugin",
+        source: "clawhub",
+        ref: pkg.ref,
+        version: pkg.version,
+        integrity: pkg.integrity,
+      });
+      if (owners.some((owner) => owner.status === "pending" || owner.status === "complete")) {
+        continue;
+      }
+      const installed = await resolveInstalledClawHubPlugin({ clawhubPackage: pkg.ref });
+      if (
+        installed.status !== "found" ||
+        installed.pluginId !== stamp.pluginId ||
+        installed.record.installedAt !== stamp.installedAt ||
+        installed.installedVersion !== pkg.version ||
+        !installed.record.integrity ||
+        normalizeClawHubSha256Integrity(installed.record.integrity) !==
+          normalizeClawHubSha256Integrity(pkg.integrity)
+      ) {
+        continue;
+      }
+      const activeLease = lease;
+      // The Add batch may be closed; CLI uninstall schedules its own runtime restart.
+      const params: Parameters<typeof uninstallPluginWithPolicy>[0] = {
+        pluginId: installed.pluginId,
+        caller: "cli",
+        invalidateRuntimeCache: false,
+        clawManaged: true,
+        beforePersistentApply: () => {
+          activeLease.assertCurrent();
+          options.assertCurrent?.();
+        },
+        onWarning: (warning) => runtime.log(warning),
+      };
+      options.assertCurrent?.();
+      const removed = await uninstallPluginWithPolicy(params);
+      if (!removed.ok) {
+        throw new Error(removed.error);
+      }
+      pkg.status = "rolled_back";
+    } catch (error) {
+      errors.push(`plugin ${pkg.ref} cleanup failed: ${coerceErrorMessage(error)}`);
+    } finally {
+      try {
+        await lease?.release();
+      } catch (error) {
+        errors.push(`plugin ${pkg.ref} cleanup lease failed: ${coerceErrorMessage(error)}`);
+      }
+    }
+  }
+  return errors;
 }
 
 async function installClawPackagesUnlocked(

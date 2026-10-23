@@ -2,9 +2,10 @@ import { expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { prepareEmbeddedRunSession } from "../../agents/embedded-agent-runner/run/session-bootstrap.js";
 import { createTestReplyOperation } from "../../auto-reply/reply/reply-run-registry.test-helpers.js";
-import { bindReplyOperationDatabaseAdmission } from "../../auto-reply/reply/reply-turn-database-admission.js";
+import { bindReplyAdmissionRelease } from "../../auto-reply/reply/reply-turn-admission-lifecycle.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { getReplyOperationSessionReader } from "../../sessions/session-controller.session-reader.js";
+import { waitForReplyRunSuccessorAdmission } from "../../sessions/session-controller.wait.js";
 import * as readOnly from "../../state/openclaw-agent-db-readonly.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { createAgentWorkerTestLoaders } from "../../state/openclaw-agent-execution-operations.test-support.js";
@@ -542,16 +543,18 @@ it("prepares the admitted run target with its entry and refuses source loss afte
     replaceSessionEntrySync(scope, { sessionId: "bootstrap", updatedAt: 1 });
     const admission = await loadSessionEntryForAdmission(scope);
     const operation = createTestReplyOperation({ sessionKey, sessionId: "bootstrap" });
-    const bound = bindReplyOperationDatabaseAdmission(
+    bindReplyAdmissionRelease({
       operation,
-      { sessionKey },
-      undefined,
-      admission.databaseClaim,
-    );
+      sessionKey,
+      sessionId: operation.sessionId,
+      admission: undefined,
+      recoveryOwnerLease: undefined,
+      databaseClaim: admission.databaseClaim,
+    });
     const reader = getReplyOperationSessionReader(operation);
     if (!reader) {
-      await admission.databaseClaim.release();
       operation.complete();
+      await waitForReplyRunSuccessorAdmission(operation.key, null);
       throw new Error("Expected an admitted bootstrap reader");
     }
     const controller = new AbortController();
@@ -612,8 +615,11 @@ it("prepares the admitted run target with its entry and refuses source loss afte
     } finally {
       reads.mockRestore();
       requests.mockRestore();
-      await bound.releaseWorkerDatabaseClaim?.();
       operation.complete();
+      expect(await waitForReplyRunSuccessorAdmission(operation.key, null)).toMatchObject({
+        settled: true,
+      });
+      expect(admission.databaseClaim.isCurrent()).toBe(false);
     }
   });
 });

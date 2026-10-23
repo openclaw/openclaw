@@ -253,22 +253,20 @@ describe("gateway restart handoff", () => {
   });
 
   it("formats a concise, single-line diagnostic", () => {
+    using _ = vi.spyOn(Date, "now").mockReturnValue(12_500);
     expect(
-      formatGatewayRestartHandoffDiagnostic(
-        {
-          kind: "gateway-supervisor-restart-handoff",
-          version: 1,
-          intentId: "intent-1",
-          pid: 12_345,
-          createdAt: 10_000,
-          expiresAt: 70_000,
-          reason: "ok\nFake: bad",
-          source: "operator-restart",
-          restartKind: "full-process",
-          supervisorMode: "external",
-        },
-        12_500,
-      ),
+      formatGatewayRestartHandoffDiagnostic({
+        kind: "gateway-supervisor-restart-handoff",
+        version: 1,
+        intentId: "intent-1",
+        pid: 12_345,
+        createdAt: 10_000,
+        expiresAt: 70_000,
+        reason: "ok\nFake: bad",
+        source: "operator-restart",
+        restartKind: "full-process",
+        supervisorMode: "external",
+      }),
     ).toBe(
       "Recent restart handoff: full-process via external; source=operator-restart; reason=ok Fake: bad; pid=12345; age=2s; expiresIn=57s",
     );

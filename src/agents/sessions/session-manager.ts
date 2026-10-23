@@ -139,7 +139,12 @@ export class SessionManager extends SessionManagerBranching {
   async [sessionManagerReadInitialContext]() {
     const prepared = this.preparedInitialContext;
     this.preparedInitialContext = undefined;
-    if (!this.persistenceTarget || !this.boundedContextLimits || this.pendingDeliberateAppend) {
+    if (
+      !this.persistenceTarget ||
+      !this.boundedContextLimits ||
+      "compaction" in this.boundedContextLimits ||
+      this.pendingDeliberateAppend
+    ) {
       return this.buildSessionContext();
     }
     // A deliberate local branch owns its view; a concurrent selection must not
@@ -467,15 +472,13 @@ export class SessionManager extends SessionManagerBranching {
     );
   }
 
-  /**
-   * @internal Prepare legacy compaction on the same bounded model-context view an attempt
-   * hydrates, reading the session facts in that view's snapshot instead of hydrating again.
-   */
+  /** @internal Read complete current context and compaction facts in one owner snapshot. */
   static async [sessionManagerOpenCompaction](
     target: SessionTranscriptRuntimeTarget,
-    options: SessionManagerBoundedContextLimits & { cwd?: string; signal?: AbortSignal },
+    options: { cwd?: string; signal?: AbortSignal } = {},
   ) {
-    const { cwd, signal, ...limits } = options;
+    const { cwd, signal } = options;
+    const limits = { compaction: true } as const;
     const hydration = prepareSessionTranscriptHydration(target, limits, signal);
     const prepared = await hydration.read({ compaction: true });
     if (prepared.kind !== "bounded" || !prepared.compaction) {

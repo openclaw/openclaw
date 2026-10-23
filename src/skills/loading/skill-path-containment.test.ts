@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -57,6 +58,24 @@ afterEach(() => {
   setLoggerOverride(null);
   loggingState.rawConsole = null;
   resetLogger();
+});
+
+it("loads skills when the workspace path has different casing on disk", async ({ skip }) => {
+  const workspace = await fixture.createDir("CaseWorkspace");
+  const configuredWorkspace = path.join(
+    path.dirname(workspace),
+    path.basename(workspace).toLowerCase(),
+  );
+  if (!existsSync(configuredWorkspace)) {
+    skip("Requires a case-insensitive filesystem");
+  }
+  await skill(path.join(workspace, "skills", "case-skill"), "case-skill");
+  const warn = captureWarningLogger();
+
+  const entries = load(configuredWorkspace);
+
+  expect(warn).not.toHaveBeenCalled();
+  expect(entries.map((entry) => entry.skill.name)).toEqual(["case-skill"]);
 });
 
 it("rejects hardlinked workspace skills while preserving ordinary files", async () => {

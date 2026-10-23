@@ -30,6 +30,7 @@ import {
   resolveEffectiveCompactionMode,
 } from "../agent-settings.js";
 import { toToolDefinitions } from "../agent-tool-definition-adapter.js";
+import { isRealConversationMessage } from "../compaction-real-conversation.js";
 import { pickFallbackThinkingLevel } from "../embedded-agent-helpers/thinking.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
 import { resolveAgentRunSessionTarget } from "../run-session-target.js";
@@ -46,7 +47,6 @@ import { createAgentSession } from "../sessions/sdk.js";
 import { setSessionModelUsageSink } from "../sessions/session-model-usage.js";
 import { normalizeUsage, type UsageLike } from "../usage.js";
 import { isSummaryTimeoutFailure, resolveCompactionFailure } from "./compact-reasons.js";
-import { containsRealConversationMessages } from "./compaction-diagnostics.js";
 import { dedupeDuplicateUserMessagesForCompaction } from "./compaction-duplicate-user-messages.js";
 import {
   buildBeforeCompactionHookMetrics,
@@ -68,7 +68,6 @@ import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./run/attempt.model-diagnostic-events.js";
 import { readCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
 import { estimateLlmBoundaryTokenPressure } from "./run/preemptive-compaction.js";
-import { resolveEmbeddedSessionContextLimits } from "./run/session-context-limits.js";
 import { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
 import { collectRegisteredToolNames, toSessionToolAllowlist } from "./tool-name-allowlist.js";
 import { mapThinkingLevel, mapThinkingLevelForProvider } from "./utils.js";
@@ -96,7 +95,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
     effectiveWorkspace,
     effectiveCwd,
     contextTokenBudget,
-    hydrationTokenBudget,
     effectiveModel,
     runtimePlan,
     runtimePlanModelContext,
@@ -133,15 +131,14 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       memoryTranscript?.assertActive ?? captureOwnedTranscriptWriteAssertion(sessionTarget);
     assertActive();
     const transcriptPolicy = runtimePlan.transcript.resolvePolicy(runtimePlanModelContext);
-    // Compaction summarizes the model-context view; hydrating the whole retained
-    // transcript would read every pre-reset event under the history worker's budget.
+    // Exclude obsolete history without clipping the current context or previous summary.
     const preparedSessionManager =
       memoryTranscript?.sessionManager ??
       preparedSession?.sessionManager ??
       (await SessionManager.openAsync(
         sessionTarget,
         undefined,
-        resolveEmbeddedSessionContextLimits(hydrationTokenBudget),
+        { compaction: true },
         params.abortSignal,
       ));
     assertActive();
@@ -438,7 +435,11 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         const { messageCountOriginal, tokenCountBefore: limitedTranscriptTokensBefore } =
           beforeHookMetrics;
 
-        if (!containsRealConversationMessages(session.messages)) {
+        if (
+          !session.messages.some((message, index, allMessages) =>
+            isRealConversationMessage(message, allMessages, index),
+          )
+        ) {
           log.info(
             `[compaction] skipping — no real conversation messages (sessionKey=${params.sessionKey ?? params.sessionId})`,
           );

@@ -122,12 +122,12 @@ async function listSessionTranscriptFiles(sessionDirs: string[]): Promise<string
   return files.toSorted((a, b) => a.localeCompare(b));
 }
 
-export async function detectSessionTranscriptHealthIssues(params?: {
-  sessionDirs?: string[];
-}): Promise<SessionTranscriptHealthIssue[]> {
-  let sessionDirs = params?.sessionDirs;
+export async function detectSessionTranscriptHealthIssues(): Promise<
+  SessionTranscriptHealthIssue[]
+> {
+  let sessionDirs: string[];
   try {
-    sessionDirs ??= await resolveAgentSessionDirs(resolveStateDir(process.env));
+    sessionDirs = await resolveAgentSessionDirs(resolveStateDir(process.env));
   } catch {
     return [];
   }

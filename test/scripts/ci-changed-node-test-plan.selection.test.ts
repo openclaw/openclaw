@@ -26,6 +26,7 @@ it.each(["added", "renamed", "deleted", "import-edge"])(
       "test/scripts/update-restart-module-outcome.test.ts",
       "test/scripts/type-suppression-inventory.test.ts",
       "test/scripts/plugin-sdk-surface-report.test.ts",
+      "test/scripts/lint-suppressions.test.ts",
     ];
     const testOnly = "src/infra/own.test.ts";
     const cwd = fixture([...guards, ...(change === "deleted" ? [] : [source])]);
@@ -38,7 +39,9 @@ it.each(["added", "renamed", "deleted", "import-edge"])(
     const paths = change === "renamed" ? ["src/infra/old-module.ts", source] : [source];
     expect(select(cwd, paths)).toEqual(guards.toSorted());
     writeFiles(cwd, [testOnly]);
-    expect(select(cwd, [testOnly])).toEqual([testOnly]);
+    expect(select(cwd, [testOnly])).toEqual(
+      [testOnly, "test/scripts/lint-suppressions.test.ts"].toSorted(),
+    );
     expect(resolveCiCheckFamilyScope(paths).additionalGroups).toContain(
       "runtime-topology-architecture",
     );

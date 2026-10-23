@@ -467,8 +467,11 @@ suite.define(() => {
                     .soft(latest.policy?.locked, mode + ": " + stage + " follow lock")
                     .toBe(true);
                 } else {
-                  expect
-                    .soft(latest.distance, mode + ": " + stage + " follows")
+                  // A geometry pause can precede the history publication triggered by persistence.
+                  await expect
+                    .poll(() => chatThreadDistanceFromBottom(reader), {
+                      message: mode + ": " + stage + " follows",
+                    })
                     .toBeLessThanOrEqual(8);
                 }
               };

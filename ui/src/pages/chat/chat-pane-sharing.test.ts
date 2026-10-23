@@ -34,7 +34,7 @@ import type {
   PreparedChatSessionSharing,
   ChatSessionSharingState,
   ChatSessionSharingOutcome,
-} from "./components/chat-session-sharing.solid.tsx";
+} from "./components/chat-session-sharing-shared.tsx";
 
 const { confirmPublicShare, copyPublicShare } = vi.hoisted(() => ({
   confirmPublicShare: vi.fn<(...args: unknown[]) => Promise<boolean>>(),
@@ -275,7 +275,7 @@ describe("public session sharing", () => {
       await pane.loadSessionSharing(row, true);
       draw();
       const sharingMenu = header.querySelector(".chat-pane__sharing-menu")!;
-      await openNativeMenu(sharingMenu);
+      await openNativeMenu(sharingMenu, "public:copy");
       const copyButton = sharingMenu.querySelector<HTMLButtonElement>(
         '[data-value="public:copy"]',
       )!;

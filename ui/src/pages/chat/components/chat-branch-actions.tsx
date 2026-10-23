@@ -10,9 +10,7 @@ import {
   type MenuEntry,
   type MenuHandle,
 } from "../../../components/solid/menu.tsx";
-import type { PresentationValue } from "../../../lib/presentation.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { projectPresentation } from "../../../lib/reactive/presentation.ts";
 import {
   personalGitHubPublicationSelection,
   type GitHubPublicationView,
@@ -32,7 +30,7 @@ export function ChatBranchActions(props: {
   branchName: string;
   status: ControlUiSessionPullRequestSnapshot["status"];
   publication?: GitHubPublicationView;
-  presented?: PresentationValue;
+  presented: boolean;
   onDismiss?: (branch: ControlUiSessionBranch) => void;
 }) {
   const id = createUniqueId();
@@ -40,8 +38,8 @@ export function ChatBranchActions(props: {
   const dismissRef = controls.ref();
   let menu: MenuHandle | undefined;
   const parentPresented = useContext(ContentPresentation);
-  const presentation = createMemo(() => projectPresentation(props.presented ?? true));
-  const presented = () => parentPresented() && presentation().read();
+  const ownPresented = createMemo(() => props.presented);
+  const presented = () => parentPresented() && ownPresented();
 
   const menuPublication = createMemo(() => {
     const publication = props.publication;

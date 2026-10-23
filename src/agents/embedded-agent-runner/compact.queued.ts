@@ -1,4 +1,3 @@
-import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 import { projectExecutionSessionEntry } from "../../config/sessions/session-entry-projection.js";
@@ -32,7 +31,6 @@ import {
 import { runWithAsyncWorkResources } from "../../shared/async-work-resources.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
-import { resolveModelContextTokenProjection } from "../context.js";
 import { isRecoverableNativeHarnessBindingFailure } from "../harness/compaction-recovery.js";
 import { maybeCompactAgentHarnessSession } from "../harness/compaction.js";
 import { retainAgentHarnessCompactionSource } from "../harness/host-source-authority.js";
@@ -391,21 +389,6 @@ async function compactEmbeddedAgentSessionImpl(
       const params = admittedParams;
       const agentDir = params.agentDir;
       const preparedModelRuntime = lease.snapshot;
-      // The transcript window compaction loads follows the foreground conversation: the
-      // caller's budget, else the session's recorded window, else the foreground model's
-      // catalog projection, resolved before the summarizer selection below replaces the
-      // provider and model. A smaller summarizer must not shrink what the next turn sees.
-      const foregroundContextTokenBudget =
-        floorPositiveFiniteNumber(params.contextTokenBudget) ??
-        floorPositiveFiniteNumber(params.sessionEntry?.contextTokens) ??
-        floorPositiveFiniteNumber(
-          resolveModelContextTokenProjection({
-            cfg: params.config,
-            provider: params.provider,
-            model: params.model,
-            allowAsyncLoad: true,
-          }).contextTokens,
-        );
       const lockedHarnessRuntime = resolveSessionPinnedHarnessId(params.sessionEntry);
       if (lockedHarnessRuntime === "auto") {
         return lockedCompactionRuntimeFailure();
@@ -525,7 +508,6 @@ async function compactEmbeddedAgentSessionImpl(
       assertQueuedCompactionPreparationActive(params, host);
       const preparedParams: QueuedCompactionParams = {
         ...params,
-        contextTokenBudget: foregroundContextTokenBudget,
         provider: ceProvider,
         model: ceModelId,
         agentHarnessId: preparedHarnessRuntime,
