@@ -84,7 +84,7 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
     }
   }
   const references = new Map<string, RecoveryArtifactReference[]>();
-  const manifestPaths: string[] = [];
+  let manifestPaths: string[] = [];
   const artifacts: RecoveryCleanupArtifact[] = [];
   const missingOriginals = new Set<string>();
   const protectUnmanifested = (filePath: string, bytes: number, reason: string) => {
@@ -101,7 +101,7 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
       reason: "manifest-directory-alias",
     });
   } else {
-    manifestPaths.push(...listSessionSqliteMigrationManifestPaths(params.env));
+    manifestPaths = listSessionSqliteMigrationManifestPaths(params.env);
     for (const manifestPath of manifestPaths) {
       const stat = statMigrationPath(manifestPath);
       const manifest =
@@ -296,26 +296,25 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
     }
   }
   // Unknown files in known archive directories are visible, with no authority inferred from names.
+  const knownArchivePaths = new Set(artifacts.map((item) => item.path));
+  const pendingClaims = new Set<string>();
+  for (const refs of references.values()) {
+    for (const { move } of refs) {
+      if (move.artifact?.disposal.state === "pending-disposal") {
+        pendingClaims.add(move.artifact.disposal.claimPath);
+      }
+    }
+  }
   for (const directory of archiveDirs) {
     if (!statMigrationPath(directory)?.isDirectory() || hasSymbolicLinkInDirectoryPath(directory)) {
       continue;
     }
     for (const item of fs.readdirSync(directory, { withFileTypes: true })) {
       const filePath = path.join(directory, item.name);
-      if (references.has(filePath) || artifacts.some((artifact) => artifact.path === filePath)) {
+      if (knownArchivePaths.has(filePath) || pendingClaims.has(filePath)) {
         continue;
       }
-      if (
-        [...references.values()].some((refs) =>
-          refs.some(
-            ({ move }) =>
-              move.artifact?.disposal.state === "pending-disposal" &&
-              move.artifact.disposal.claimPath === filePath,
-          ),
-        )
-      ) {
-        continue;
-      }
+      knownArchivePaths.add(filePath);
       protectUnmanifested(
         filePath,
         item.isFile() ? fs.lstatSync(filePath).size : 0,

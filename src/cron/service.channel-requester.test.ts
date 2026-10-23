@@ -21,7 +21,7 @@ import {
   resolveMcpLoopbackClientGrant,
   revokeMcpLoopbackClientGrant,
 } from "../gateway/mcp-grant-store.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { cronTestDeps, cronTestInput } from "./service.fixture-builders.test-support.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import { loadCronStore } from "./store.js";
@@ -36,16 +36,7 @@ const { logger, makeStorePath } = setupCronServiceSuite({
 
 beforeEach(async () => {
   ({ storePath } = await makeStorePath());
-  cron = new CronService({
-    scheduler: createTestGatewayScheduler(),
-    nowMs: () => Date.now(),
-    storePath,
-    cronEnabled: false,
-    log: logger,
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
-    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-  });
+  cron = new CronService(cronTestDeps({ storePath, cronEnabled: false, log: logger }));
 });
 // Teardown hooks run in reverse registration order, before the store is closed.
 afterEach(() => cron?.stop());
@@ -103,25 +94,23 @@ const localAuthority = {
   toolsAllowProvenance: localProvenance,
 };
 
-const requesterDeclaration = (overrides: Partial<CronJobCreate> = {}): CronJobCreate => ({
-  name: "daily report",
-  declarationKey: "agent:ops:daily-report",
-  displayName: "Daily report",
-  enabled: true,
-  schedule: { kind: "every", everyMs: 60_000 },
-  sessionTarget: "isolated",
-  wakeMode: "next-heartbeat",
-  owner: requesterOwner,
-  sessionKey: requesterOwner.sessionKey,
-  payload: { kind: "agentTurn", message: "report", toolsAllow: ["message"] },
-  delivery: { mode: "none" },
-  ...overrides,
-});
+const requesterDeclaration = (overrides: Partial<CronJobCreate> = {}): CronJobCreate =>
+  cronTestInput({
+    name: "daily report",
+    declarationKey: "agent:ops:daily-report",
+    displayName: "Daily report",
+    owner: requesterOwner,
+    sessionKey: requesterOwner.sessionKey,
+    payload: { kind: "agentTurn", message: "report", toolsAllow: ["message"] },
+    delivery: { mode: "none" },
+    ...overrides,
+  });
 
 it("rejects a minted requester token at commit after its MCP capture is deactivated", async () => {
   const runId = "cron-requester-mcp-commit";
+  const config = {};
   const admission = prepareAgentRunAdmission({
-    cfg: {},
+    cfg: config,
     operationalRunInstance: createOperationalRunInstanceRef(runId),
     facts: {
       runId,
@@ -158,6 +147,7 @@ it("rejects a minted requester token at commit after its MCP capture is deactiva
         },
         runtimeOwnerToken: "cron-requester-mcp-commit-runtime",
         admittedRunContext: admitted,
+        toolPolicyConfig: config,
         cronRequesterGrantIssuer: expectDefined(
           captureCronRequesterGrantIssuer(runId),
           "native requester issuer",

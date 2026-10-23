@@ -7,11 +7,12 @@ import "../../styles/chat/grouped.css";
 import "../../styles/chat/working-indicator.css";
 import { beginNativeWindowDragFromTopInset } from "../../app/native-window-drag.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
+import { createBackgroundLayoutRef } from "../../components/session-background-layout-context.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
-import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
+import { resolveMessageSender } from "../../lib/chat/sender-label.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { resolveChatDefaultAvatarPlacement } from "../chat/components/chat-author-avatar.ts";
@@ -22,6 +23,9 @@ registerEnglishCatalog(registerNewSessionSetupEnglish);
 const NewSessionSubmission = lazy(() => import("./draft-submission-view.tsx"), {
   export: "NewSessionSubmission",
 });
+// Solid drops a rejected load, so the submit render retries a failed speculative fetch.
+export const preloadNewSessionSubmission = () =>
+  void NewSessionSubmission.preload().catch(() => undefined);
 
 type DraftAction = { label: string; onClick: () => void; disabled?: boolean };
 export type DraftErrorProps = { message: string; action?: DraftAction };
@@ -35,7 +39,6 @@ export type NewSessionBodyProps = {
   completion?: { label: string; onOpen?: () => void; disabled?: boolean };
   showDraft?: boolean;
   inChat?: boolean;
-  hideAnnouncement?: boolean;
   renderDraft: () => JSX.Element;
   onOpenImage: (item: ImageLightboxItem) => void;
 };
@@ -74,21 +77,23 @@ export function DraftError(props: DraftErrorProps) {
 }
 
 export function NewSessionBody(props: NewSessionBodyProps) {
+  const scrollRef = createBackgroundLayoutRef("scroll");
   const avatarPlacement = createMemo(() =>
     resolveChatDefaultAvatarPlacement(
       true,
-      props.pendingMessage && normalizeMessage(props.pendingMessage).sender ? props.userId : null,
+      props.pendingMessage && resolveMessageSender(props.pendingMessage["__openclaw"])
+        ? props.userId
+        : null,
     ),
   );
   // Late cleanup can fail while a replacement submission is still pending.
   return (
     <>
-      <Show when={!props.hideAnnouncement}>
-        <div class="sr-only" role="status" aria-live="polite">
-          {newSessionAnnouncement(props)}
-        </div>
-      </Show>
+      <div class="sr-only" role="status" aria-live="polite">
+        {newSessionAnnouncement(props)}
+      </div>
       <div
+        ref={scrollRef}
         class={[
           props.inChat ? "" : "new-session-page__scroll",
           {

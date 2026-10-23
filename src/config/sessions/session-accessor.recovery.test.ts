@@ -1,6 +1,9 @@
 import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { renderStorageFailureSummary } from "../../agents/failover/assistant-request-failure-copy.js";
+import { formatErrorMessageWithCode } from "../../infra/errors.js";
+import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import {
   isSqliteWorkerError,
   type SqliteWorkerOperations,
@@ -13,22 +16,23 @@ import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-even
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import {
-  closeOpenClawAgentDatabaseByPathAsync,
-  resolveOpenClawAgentSqlitePath,
+  closeOpenClawAgentDatabaseByPathAsync as closeDatabase,
+  resolveOpenClawAgentSqlitePath as resolvePath,
 } from "../../state/openclaw-agent-db.js";
 import * as agentExecution from "../../state/openclaw-agent-execution.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
-  loadSessionEntry,
-  loadTranscriptEvents,
-  recoverSessionEntryFromRestartTombstone,
+  loadSessionEntry as readEntry,
+  loadTranscriptEvents as readEvents,
+  patchSessionEntryCore,
+  recoverSessionEntryFromRestartTombstone as recover,
   replaceSessionEntry,
 } from "./session-accessor.js";
-import { readSessionTranscriptMessageEventPage } from "./session-accessor.sqlite-active-events.js";
-import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication.js";
+import { readSessionTranscriptMessageEventPage as readPage } from "./session-accessor.sqlite-active-events.js";
+import { readPreparedSessionEntryChange as readPublication } from "./session-accessor.sqlite-entry-cache-publication.js";
 import { resolveSqliteReadScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
-import { waitForSessionTranscriptIndexReconcilesInStateDir } from "./session-transcript-reconcile.js";
+import { waitForSessionTranscriptIndexReconcilesInStateDir as reconcile } from "./session-transcript-reconcile.js";
 import type { InternalSessionEntry } from "./types.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-recovery-");
@@ -90,7 +94,8 @@ async function createFixture() {
 describe("recoverSessionEntryFromRestartTombstone", () => {
   it("clones and publishes the atomic archived successor transition without host SQLite", async () => {
     const fixture = await createFixture();
-    await waitForSessionTranscriptIndexReconcilesInStateDir(fixture.root);
+    await patchSessionEntryCore(fixture.scope(), () => ({ label: "Latest source metadata" }));
+    await reconcile(fixture.root);
     const successorEntry = {
       sessionId: "successor-session",
       updatedAt: 20,
@@ -100,12 +105,12 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
     const params = { ...fixture.recoveryParams(), successorEntry };
 
     const createdKeys: string[] = [];
-    const publications: Array<ReturnType<typeof readPreparedSessionEntryChange>> = [];
+    const publications: Array<ReturnType<typeof readPublication>> = [];
     const changedKeys: string[] = [];
     const stopIdentity = onSessionIdentityMutation((mutation) => {
       if (mutation.kind === "create") {
         createdKeys.push(...mutation.current.sessionKeys);
-        publications.push(readPreparedSessionEntryChange(mutation, fixture.successorKey));
+        publications.push(readPublication(mutation, fixture.successorKey));
       }
     });
     const stopChanges = sessionChanges.subscribe((change) => {
@@ -115,7 +120,7 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
     });
     const sql = observeHostDataSql();
     try {
-      const created = await recoverSessionEntryFromRestartTombstone(params);
+      const created = await recover(params);
       expect(created).toMatchObject({ status: "created", successorKey: fixture.successorKey });
       expect(sql.queries).toEqual([]);
       expect(createdKeys).toEqual([fixture.successorKey]);
@@ -130,9 +135,9 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
       stopIdentity();
       stopChanges();
     }
-    await waitForSessionTranscriptIndexReconcilesInStateDir(fixture.root);
+    await reconcile(fixture.root);
     expect(
-      readSessionTranscriptMessageEventPage(
+      readPage(
         { ...fixture.scope(fixture.successorKey), sessionId: successorEntry.sessionId },
         { maxMessages: 10, offset: 0, readOnly: true },
       ),
@@ -141,9 +146,10 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
       totalMessages: 1,
       events: [{ event: { id: "user-1" } }],
     });
-    expect(loadSessionEntry(fixture.scope(fixture.sourceKey))).toMatchObject({
+    expect(readEntry(fixture.scope(fixture.sourceKey))).toMatchObject({
       archivedAt: expect.any(Number),
       archiveReason: "restart-recovery",
+      label: "Latest source metadata",
       mainRestartRecovery: {
         cycleId: "cycle-1",
         revision: 5,
@@ -153,8 +159,8 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
         },
       },
     });
-    expect(loadSessionEntry(fixture.scope(fixture.successorKey))).toMatchObject(successorEntry);
-    const recoveredEvents = await loadTranscriptEvents({
+    expect(readEntry(fixture.scope(fixture.successorKey))).toMatchObject(successorEntry);
+    const recoveredEvents = await readEvents({
       ...fixture.scope(fixture.successorKey),
       sessionId: successorEntry.sessionId,
     });
@@ -166,7 +172,7 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
     });
     expect(JSON.stringify(recoveredEvents)).toContain("preserve the whole transcript");
 
-    const repeated = await recoverSessionEntryFromRestartTombstone({
+    const repeated = await recover({
       ...params,
       successorEntry: { sessionId: "unused-session", updatedAt: 30 },
       successorTarget: {
@@ -186,7 +192,7 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
       { pluginOwnerId: "different-owner" },
     ]) {
       await expect(
-        recoverSessionEntryFromRestartTombstone({
+        recover({
           ...params,
           expected: { ...params.expected, ...changed },
         }),
@@ -199,13 +205,13 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
     ["lifecycle", { revision: 4, lifecycleRevision: "different-generation" }],
   ] as const)("does not archive or copy when the %s revision changed", async (_name, expected) => {
     const fixture = await createFixture();
-    const result = await recoverSessionEntryFromRestartTombstone({
+    const result = await recover({
       ...fixture.recoveryParams(),
       expected: { ...fixture.recoveryParams().expected, ...expected },
     });
     expect(result).toEqual({ status: "conflict", reason: "source-changed" });
-    expect(loadSessionEntry(fixture.scope(fixture.sourceKey))?.archivedAt).toBeUndefined();
-    expect(loadSessionEntry(fixture.scope(fixture.successorKey))).toBeUndefined();
+    expect(readEntry(fixture.scope(fixture.sourceKey))?.archivedAt).toBeUndefined();
+    expect(readEntry(fixture.scope(fixture.successorKey))).toBeUndefined();
   });
 
   it.each(["transaction", "commit"] as const)(
@@ -223,7 +229,7 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
       const stop = onSessionIdentityMutation(published);
       try {
         await expect(
-          recoverSessionEntryFromRestartTombstone({
+          recover({
             ...fixture.recoveryParams("refused-successor"),
             commitGuard: () => {
               if (!current) {
@@ -238,13 +244,13 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
         stop();
         intercepted.mockRestore();
       }
-      expect(loadSessionEntry(fixture.scope(fixture.sourceKey))).toMatchObject({
+      expect(readEntry(fixture.scope(fixture.sourceKey))).toMatchObject({
         pinnedAt: 5,
         mainRestartRecovery: { revision: 4 },
       });
-      expect(loadSessionEntry(fixture.scope(fixture.successorKey))).toBeUndefined();
+      expect(readEntry(fixture.scope(fixture.successorKey))).toBeUndefined();
       expect(
-        await loadTranscriptEvents({
+        await readEvents({
           ...fixture.scope(fixture.successorKey),
           sessionId: "refused-successor",
         }),
@@ -253,15 +259,19 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
   );
 
   it.each([
-    ["fences a missing receipt and result", true, false, true],
-    ["repairs a committed recovery after result loss", false, false, true],
-    ["preserves result loss after committed owner retirement", false, true, true],
-    ["preserves recovery success after committed owner retirement", false, true, false],
-  ] as const)("%s", async (_label, missingReceipt, retireOwner, loseResult) => {
+    ["fences a missing receipt and result", true, false, true, false],
+    ["preserves a distinct storage settlement failure after result loss", true, false, true, true],
+    ["repairs a committed recovery after result loss", false, false, true, false],
+    ["preserves result loss after committed owner retirement", false, true, true, false],
+    ["preserves recovery success after committed owner retirement", false, true, false, false],
+  ] as const)("%s", async (_label, missingReceipt, retireOwner, loseResult, storageSettlement) => {
     const fixture = await createFixture();
-    await waitForSessionTranscriptIndexReconcilesInStateDir(fixture.root);
+    await reconcile(fixture.root);
     const params = fixture.recoveryParams("settled-successor");
     const deliveryFailure = new Error("Recovery result delivery failed");
+    const settlementFailure = new Error("Recovery settlement failed", {
+      cause: Object.assign(new Error("database or disk is full"), { code: "SQLITE_FULL" }),
+    });
     const databaseOptions = toDatabaseOptions(resolveSqliteReadScope(fixture.scope()));
     let closing: Promise<boolean> | undefined;
     const restoreFaults: Array<() => void> = [];
@@ -317,10 +327,7 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
                   if (retireOwner && verifiedCommands === 1) {
                     // Retirement belongs to an independent caller after the native commit.
                     closing = runInDetachedAsyncContext(() =>
-                      closeOpenClawAgentDatabaseByPathAsync(
-                        resolveOpenClawAgentSqlitePath(databaseOptions),
-                        "main",
-                      ),
+                      closeDatabase(resolvePath(databaseOptions), "main"),
                     );
                     void closing.catch(() => undefined);
                     captures.forEach((capture) => capture.mockClear());
@@ -331,7 +338,7 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
                       .mockReturnValue(undefined);
                     const settlement = vi
                       .spyOn(nativeAdmission, "settlement", "get")
-                      .mockReturnValue({ kind: "completed" });
+                      .mockReturnValue({ kind: storageSettlement ? "unknown" : "completed" });
                     restoreFaults.push(
                       () => receipt.mockRestore(),
                       () => settlement.mockRestore(),
@@ -347,7 +354,16 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
             assertCurrent,
             createAdmission &&
               ((retained) => {
-                const owned = createAdmission(retained);
+                const owned = createAdmission(
+                  recovering && storageSettlement && dropReceipt
+                    ? {
+                        settled: retained.settled.then(() => ({
+                          kind: "unknown",
+                          error: settlementFailure,
+                        })),
+                      }
+                    : retained,
+                );
                 if (recovering) {
                   nativeAdmission = owned.admission;
                 }
@@ -357,12 +373,21 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
         },
       );
     try {
-      const { delivered, outcome } = await recoverSessionEntryFromRestartTombstone(params).then(
+      const { delivered, outcome } = await recover(params).then(
         (value) => ({ delivered: value, outcome: undefined }),
         (error: unknown) => ({ delivered: undefined, outcome: error }),
       );
       if (missingReceipt) {
         expect(isSqliteWorkerError(outcome, "outcome-unknown")).toBe(true);
+        if (storageSettlement) {
+          const diagnostic = formatErrorMessageWithCode(outcome);
+          expect(diagnostic).toContain("Recovery result delivery failed");
+          expect(diagnostic).toContain("Recovery settlement failed");
+          expect(diagnostic).toContain("database or disk is full");
+          expect(renderStorageFailureSummary(classifyGatewayStorageFailure(outcome))).toBe(
+            "OpenClaw couldn't save your conversation because the disk is full. Free up space on the computer running OpenClaw before continuing.",
+          );
+        }
       } else if (loseResult) {
         expect(outcome).toBe(deliveryFailure);
       } else {
@@ -374,12 +399,10 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
         captures.forEach((capture) => expect(capture).not.toHaveBeenCalled());
       }
       restoreCaptures();
-      expect(loadSessionEntry(fixture.scope(fixture.successorKey))).toMatchObject(
-        params.successorEntry,
-      );
-      await waitForSessionTranscriptIndexReconcilesInStateDir(fixture.root);
+      expect(readEntry(fixture.scope(fixture.successorKey))).toMatchObject(params.successorEntry);
+      await reconcile(fixture.root);
       const readProjection = () =>
-        readSessionTranscriptMessageEventPage(
+        readPage(
           { ...fixture.scope(fixture.successorKey), sessionId: params.successorEntry.sessionId },
           { maxMessages: 10, offset: 0, readOnly: true },
         );
@@ -391,9 +414,9 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
       restoreReceipts();
       dropReceipt = false;
       if (loseResult) {
-        await expect(recoverSessionEntryFromRestartTombstone(params)).rejects.toBe(deliveryFailure);
+        await expect(recover(params)).rejects.toBe(deliveryFailure);
       } else {
-        await expect(recoverSessionEntryFromRestartTombstone(params)).resolves.toMatchObject({
+        await expect(recover(params)).resolves.toMatchObject({
           status: "existing",
         });
       }

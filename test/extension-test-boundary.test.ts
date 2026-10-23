@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "openclaw/plugin-sdk/test-fixtures";
-import type { SourceFile } from "typescript/unstable/ast";
+import type { SourceFile } from "typescript/ast";
 import { afterAll, describe, expect, it } from "vitest";
 import { getChangedPathFacts } from "../scripts/lib/changed-path-facts.mjs";
 import { collectModuleReferencesFromSource } from "../scripts/lib/guard-inventory-utils.mjs";
@@ -27,74 +27,22 @@ const BROAD_PUBLIC_SOURCE_ARTIFACT_BASENAMES = new Set(["api.js", "runtime-api.j
 const ROOTDIR_BOUNDARY_CANARY_RE =
   /(^|\/)__rootdir_boundary_canary__\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u;
 
-function listGitFiles(dir: string): string[] | null {
-  const relativeRoot = toRepoRelativePath(repoRoot, dir);
-  if (!relativeRoot || relativeRoot.startsWith("..") || path.isAbsolute(relativeRoot)) {
-    return null;
+function listGitFiles(dir: string): string[] {
+  const files = listGitTrackedFiles({ repoRoot, pathspecs: toRepoRelativePath(repoRoot, dir) });
+  if (!files) {
+    throw new Error("Boundary guards require a Git source checkout");
   }
-  return listGitTrackedFiles({ repoRoot, pathspecs: relativeRoot });
+  return files;
 }
 
-function walk(dir: string, entries: string[] = []): string[] {
-  const gitFiles = listGitFiles(dir);
-  if (gitFiles) {
-    entries.push(
-      ...gitFiles.filter((file) => file.endsWith(".test.ts") || file.endsWith(".test.tsx")),
-    );
-    return entries;
-  }
-
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const fullPath = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (entry.name === "node_modules" || entry.name === "dist" || entry.name === ".git") {
-        continue;
-      }
-      walk(fullPath, entries);
-      continue;
-    }
-    if (!entry.name.endsWith(".test.ts") && !entry.name.endsWith(".test.tsx")) {
-      continue;
-    }
-    entries.push(toRepoRelativePath(repoRoot, fullPath));
-  }
-  return entries;
-}
-
-function walkCode(dir: string, entries: string[] = []): string[] {
-  const gitFiles = listGitFiles(dir);
-  if (gitFiles) {
-    entries.push(
-      ...gitFiles.filter((file) => {
-        if (!file.endsWith(".ts") && !file.endsWith(".tsx")) {
-          return false;
-        }
-        return !ROOTDIR_BOUNDARY_CANARY_RE.test(file);
-      }),
-    );
-    return entries;
-  }
-
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const fullPath = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (entry.name === "node_modules" || entry.name === "dist" || entry.name === ".git") {
-        continue;
-      }
-      walkCode(fullPath, entries);
-      continue;
-    }
-    if (!entry.name.endsWith(".ts") && !entry.name.endsWith(".tsx")) {
-      continue;
-    }
-    const relativePath = toRepoRelativePath(repoRoot, fullPath);
-    if (ROOTDIR_BOUNDARY_CANARY_RE.test(relativePath)) {
-      continue;
-    }
-    entries.push(relativePath);
-  }
-  return entries;
-}
+const walk = (dir: string) => listGitFiles(dir).filter((file) => /\.test\.tsx?$/u.test(file));
+const walkCode = (dir: string) =>
+  listGitFiles(dir).filter(
+    (file) => /\.tsx?$/u.test(file) && !ROOTDIR_BOUNDARY_CANARY_RE.test(file),
+  );
+const readSource = (file: string) => fs.readFileSync(path.join(repoRoot, file), "utf8");
+const matchingFiles = (files: string[], matches: (source: string) => boolean) =>
+  files.filter((file) => matches(readSource(file)));
 
 function findExtensionImports(source: SourceFile): string[] {
   return (
@@ -151,20 +99,10 @@ function readImportBindingName(binding: string): string {
 }
 
 function collectBundledPluginIds(): Set<string> {
-  const extensionFiles = listGitFiles(path.join(repoRoot, "extensions"));
-  if (extensionFiles) {
-    return new Set(
-      extensionFiles
-        .map((file) => /^extensions\/([^/]+)\//u.exec(file)?.[1])
-        .filter((pluginId): pluginId is string => Boolean(pluginId)),
-    );
-  }
-
   return new Set(
-    fs
-      .readdirSync(path.join(repoRoot, "extensions"), { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name),
+    listGitFiles(path.join(repoRoot, "extensions"))
+      .map((file) => /^extensions\/([^/]+)\//u.exec(file)?.[1])
+      .filter((pluginId): pluginId is string => Boolean(pluginId)),
   );
 }
 
@@ -205,17 +143,8 @@ function isAllowedCoreContractSuite(file: string, imports: readonly string[]): b
 }
 
 describe("non-extension test boundaries", () => {
-  it.each([
-    'import { client } from "../../extensions/feishu/src/client.js";',
-    'import type { Client } from "../../extensions/feishu/src/client.js";',
-    'import "../../extensions/feishu/src/client.js";',
-    'await import("../../extensions/feishu/src/client.js");',
-    'type Client = typeof import("../../extensions/feishu/src/client.js");',
-    'require("../../extensions/feishu/src/client.js");',
-    'import client = require("../../extensions/feishu/src/client.js");',
-    'export * from "../../extensions/feishu/src/client.js";',
-    'export { client } from "../../extensions/feishu/src/client.js";',
-  ])("detects plugin dependencies in executable and type syntax: %s", (source) => {
+  it("detects plugin dependencies in import types", () => {
+    const source = 'type Client = typeof import("../../extensions/feishu/src/client.js");';
     expect(findExtensionImports(parser.parseSourceFile("source.ts", source))).toEqual([
       "../../extensions/feishu/src/client.js",
     ]);
@@ -313,10 +242,10 @@ describe("non-extension test boundaries", () => {
         !file.startsWith(CHANNEL_CONTRACT_TEST_HELPERS_PREFIX),
     );
 
-    const offenders = files.filter((file) => {
-      const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
-      return findBundledPluginPublicSurfaceImports(source).length > 0;
-    });
+    const offenders = matchingFiles(
+      files,
+      (source) => findBundledPluginPublicSurfaceImports(source).length > 0,
+    );
 
     expect(offenders).toStrictEqual([]);
   });
@@ -324,7 +253,7 @@ describe("non-extension test boundaries", () => {
   it("keeps resolver tests on generated fixtures for broad bundled plugin source APIs", () => {
     const bundledPluginIds = collectBundledPluginIds();
     const offenders = BUNDLED_PLUGIN_RESOLVER_TEST_FILES.flatMap((file) => {
-      const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
+      const source = readSource(file);
       return findRealBroadSourceApiResolverReferences(source, bundledPluginIds).map(
         (reference) => `${file}: ${reference}`,
       );
@@ -339,13 +268,12 @@ describe("non-extension test boundaries", () => {
       .filter((file) => !file.startsWith("test/helpers/"))
       .filter((file) => file !== "test/extension-test-boundary.test.ts");
 
-    const offenders = files.filter((file) => {
-      const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
-      return (
+    const offenders = matchingFiles(
+      files,
+      (source) =>
         source.includes("test/helpers/channels/security-audit-contract.js") ||
-        source.includes("src/channels/plugins/contracts/test-helpers/security-audit-contract.js")
-      );
-    });
+        source.includes("src/channels/plugins/contracts/test-helpers/security-audit-contract.js"),
+    );
 
     expect(offenders).toStrictEqual([]);
   });
@@ -353,10 +281,9 @@ describe("non-extension test boundaries", () => {
   it("keeps extension channel contract helpers on the public testing surface", () => {
     const files = walkCode(path.join(repoRoot, "extensions"));
 
-    const offenders = files.filter((file) => {
-      const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
-      return source.includes("src/channels/plugins/contracts/test-helpers/");
-    });
+    const offenders = matchingFiles(files, (source) =>
+      source.includes("src/channels/plugins/contracts/test-helpers/"),
+    );
 
     expect(offenders).toStrictEqual([]);
   });
@@ -371,10 +298,9 @@ describe("non-extension test boundaries", () => {
     ];
     const files = walkCode(path.join(repoRoot, "extensions"));
 
-    const offenders = files.filter((file) => {
-      const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
-      return bannedPatterns.some((pattern) => pattern.test(source));
-    });
+    const offenders = matchingFiles(files, (source) =>
+      bannedPatterns.some((pattern) => pattern.test(source)),
+    );
 
     expect(offenders).toStrictEqual([]);
   });

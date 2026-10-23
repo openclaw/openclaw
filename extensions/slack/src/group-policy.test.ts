@@ -25,22 +25,22 @@ function channelConfig(
   return { channels: { slack: { ...overrides, channels } } };
 }
 
-const cfg: OpenClawConfig = {
-  channels: {
-    slack: {
-      botToken: "xoxb-test",
-      appToken: "xapp-test",
-      channels: {
-        alerts: {
-          requireMention: false,
-          tools: { allow: ["message.send"] },
-          toolsBySender: { "id:user:alice": { allow: ["sessions.list"] } },
-        },
-        "*": { requireMention: true, tools: { deny: ["exec"] } },
-      },
-    },
-  },
+const allowed = { allow: ["message.send"] };
+const denied = { deny: ["exec"] };
+const senderAllowed = { allow: ["sessions.list"] };
+const channelPolicy = {
+  requireMention: false,
+  tools: { allow: ["message.send"] },
+  toolsBySender: { "id:user:alice": { allow: ["sessions.list"] } },
 };
+const fallbackPolicy = { requireMention: true, tools: { deny: ["exec"] } };
+const cfg = channelConfig(
+  { alerts: channelPolicy, "*": fallbackPolicy },
+  {
+    botToken: "xoxb-test",
+    appToken: "xapp-test",
+  },
+);
 
 describe("slack group policy", () => {
   beforeEach(() => {
@@ -104,24 +104,14 @@ describe("slack group policy", () => {
     expectPolicies(params, true, { deny: ["exec"] });
   });
 
-  it("uses matched channel requireMention and wildcard fallback", () => {
-    expect(
-      resolveSlackGroupRequireMention({ cfg, groupId: "c01234567", groupChannel: "#alerts" }),
-    ).toBe(false);
-    expect(resolveSlackGroupRequireMention({ cfg, groupChannel: "#missing" })).toBe(true);
-  });
-
-  it("resolves sender override, then channel tools, then wildcard tools", () => {
-    const params = { cfg, groupId: "c01234567", groupChannel: "#alerts" };
-    expect(resolveSlackGroupToolPolicy({ ...params, senderId: "user:alice" })).toEqual({
-      allow: ["sessions.list"],
-    });
-    expect(resolveSlackGroupToolPolicy({ ...params, senderId: "user:bob" })).toEqual({
-      allow: ["message.send"],
-    });
-    expect(
-      resolveSlackGroupToolPolicy({ cfg, groupChannel: "#missing", senderId: "user:bob" }),
-    ).toEqual({ deny: ["exec"] });
+  it("resolves matched mention and sender policies before wildcard fallback", () => {
+    expectPolicies(
+      { cfg, groupId: "c01234567", groupChannel: "#alerts", senderId: "user:bob" },
+      false,
+      allowed,
+      senderAllowed,
+    );
+    expectPolicies({ cfg, groupChannel: "#missing", senderId: "user:bob" }, true, denied);
   });
 
   it.each([
@@ -132,41 +122,16 @@ describe("slack group policy", () => {
   ])(
     "applies $configuredChannelId channel and sender policies to session $groupId",
     ({ configuredChannelId, groupId }) => {
-      const channelPolicyCfg = {
-        channels: {
-          slack: {
-            channels: {
-              [configuredChannelId]: {
-                requireMention: false,
-                tools: { allow: ["message.send"] },
-                toolsBySender: {
-                  "id:user:alice": { allow: ["sessions.list"] },
-                },
-              },
-              "*": {
-                requireMention: true,
-                tools: { deny: ["exec"] },
-              },
-            },
-          },
-        },
-      } as OpenClawConfig;
-
-      expect(resolveSlackGroupRequireMention({ cfg: channelPolicyCfg, groupId })).toBe(false);
-      expect(
-        resolveSlackGroupToolPolicy({
-          cfg: channelPolicyCfg,
-          groupId,
-          senderId: "user:bob",
-        }),
-      ).toEqual({ allow: ["message.send"] });
-      expect(
-        resolveSlackGroupToolPolicy({
-          cfg: channelPolicyCfg,
-          groupId,
-          senderId: "user:alice",
-        }),
-      ).toEqual({ allow: ["sessions.list"] });
+      const channelPolicyCfg = channelConfig({
+        [configuredChannelId]: channelPolicy,
+        "*": fallbackPolicy,
+      });
+      expectPolicies(
+        { cfg: channelPolicyCfg, groupId, senderId: "user:bob" },
+        false,
+        allowed,
+        senderAllowed,
+      );
     },
   );
 
@@ -194,34 +159,15 @@ describe("slack group policy", () => {
 
   it("retains bare channel policy matching for workspace installs", () => {
     const installationState = registerSlackInstallationState("default", "workspace");
-    const workspaceCfg = {
-      channels: {
-        slack: {
-          channels: {
-            C01234567: {
-              requireMention: false,
-              tools: { allow: ["message.send"] },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
+    const workspaceCfg = channelConfig({ C01234567: channelPolicy });
 
     try {
-      expect(
-        resolveSlackGroupRequireMention({
-          cfg: workspaceCfg,
-          groupId: "C01234567",
-          groupSpace: "T11111111",
-        }),
-      ).toBe(false);
-      expect(
-        resolveSlackGroupToolPolicy({
-          cfg: workspaceCfg,
-          groupId: "C01234567",
-          groupSpace: "T11111111",
-        }),
-      ).toEqual({ allow: ["message.send"] });
+      expectPolicies(
+        { cfg: workspaceCfg, groupId: "C01234567", groupSpace: "T11111111" },
+        false,
+        allowed,
+        senderAllowed,
+      );
     } finally {
       installationState.release();
     }

@@ -586,6 +586,7 @@ async function main() {
               "--configLoader",
               "runner",
               "--reporter=json",
+              "--reporter=./scripts/lib/vitest-resource-reporter.mts",
               "--outputFile",
               reportFile,
               "--includeTaskLocation",
@@ -619,7 +620,10 @@ async function main() {
                   checkpoint.owners.endpointTap !== "owned",
               );
               try {
-                diagnostic.report = await readDesktopProofTestReport(reportFile);
+                diagnostic.report = await readDesktopProofTestReport(
+                  reportFile,
+                  path.join(privateRoot, `test-${carrier}.log`),
+                );
                 diagnostic.status = "available";
                 for (const file of diagnostic.report.files) {
                   for (const test of file.assertions) {

@@ -169,6 +169,7 @@ async function stageWorkerWorkspaceResult(
     root: string;
     stagingRoot: string;
     stagedResultRef: string;
+    buildCacheInputs?: string[];
     assertCurrent?: () => void;
   },
 ): Promise<string> {
@@ -203,20 +204,33 @@ async function stageWorkerWorkspaceResult(
   }
 }
 
-export async function readStagedWorkerWorkspaceResult(root: string, stagedResultRef: string) {
-  const { objectsByPath, ...snapshot } = await loadStagedWorkspaceManifest(root, stagedResultRef);
+export async function readStagedWorkerWorkspaceResult(
+  root: string,
+  stagedResultRef: string,
+  buildCacheInputs?: string[],
+) {
+  const { objectsByPath, ...snapshot } = await loadStagedWorkspaceManifest(
+    root,
+    stagedResultRef,
+    undefined,
+    buildCacheInputs,
+  );
   const readEntries = () =>
     readStagedWorkspaceManifestEntries({ root, objectsByPath, entries: snapshot.changedEntries });
   return { ...snapshot, readEntries };
 }
 
 export async function withStagedWorkerWorkspaceResult<T>(
-  params: { root: string; stagedResultRef: string },
+  params: { root: string; stagedResultRef: string; buildCacheInputs?: string[] },
   use: (
     snapshot: Awaited<ReturnType<typeof readStagedWorkerWorkspaceResult>> & { stagingRoot: string },
   ) => Promise<T>,
 ): Promise<T> {
-  const snapshot = await readStagedWorkerWorkspaceResult(params.root, params.stagedResultRef);
+  const snapshot = await readStagedWorkerWorkspaceResult(
+    params.root,
+    params.stagedResultRef,
+    params.buildCacheInputs,
+  );
   return await withMaterializedWorkerWorkspaceResult(snapshot, use);
 }
 

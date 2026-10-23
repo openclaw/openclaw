@@ -86,6 +86,21 @@ export type RetainedWorkerTransactionAdmission = {
   readonly settled: Promise<SqliteWorkerOperationSettlement>;
 };
 
+/** Observe each finish after the previously installed handler, including failure. */
+export function observeSqliteWorkerAdmissionFinish(
+  admission: { finish(): void },
+  observer: () => void,
+): void {
+  const finish = admission.finish.bind(admission);
+  admission.finish = () => {
+    try {
+      finish();
+    } finally {
+      observer();
+    }
+  };
+}
+
 export type CapturedSqliteWorkerCommitReceipt =
   | { kind: "inline"; facts: unknown; payloadBytes: number }
   | { kind: "oversized"; serialized: Uint8Array };

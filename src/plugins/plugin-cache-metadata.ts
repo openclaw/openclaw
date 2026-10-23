@@ -30,7 +30,6 @@ type CurrentPluginMetadataCacheState = {
   agentWorkspaceFingerprint: string | undefined;
   envFingerprint: string | undefined;
   defaultDiscoveryCompatible: boolean;
-  compatiblePolicyHashes: readonly string[] | undefined;
   compatibleConfigFingerprints: readonly string[] | undefined;
   revision: symbol;
   configIdentities: WeakSet<OpenClawConfig>;

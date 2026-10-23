@@ -882,27 +882,67 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     },
   );
 
-  it("skips prompt stat computation when diagnostics are disabled", async () => {
-    setDiagnosticsEnabledForProcess(false);
-    let promptInspected = false;
-    const streamContext = {
-      systemPrompt: "system",
-      get messages() {
-        promptInspected = true;
-        return [{ role: "user", content: "x", timestamp: 1 }];
-      },
-      get tools() {
-        promptInspected = true;
-        return [{ name: "lookup", description: "d", parameters: { type: "object" } }];
-      },
-    };
-    const wrapped = wrap((() =>
-      completedChunks({ type: "text_delta", delta: "ok" })) as unknown as StreamFn);
+  it.each(["disabled", "unobserved", "unrelated"] as const)(
+    "skips prompt stat computation when diagnostics are %s",
+    async (mode) => {
+      resetDiagnosticEventsForTest();
+      setDiagnosticsEnabledForProcess(mode !== "disabled");
+      if (mode === "unrelated") {
+        onInternalDiagnosticEvent(() => {}, { include: ["model.usage"] });
+      }
+      let promptInspected = false;
+      const streamContext = {
+        systemPrompt: "system",
+        get messages() {
+          promptInspected = true;
+          return [{ role: "user", content: "x", timestamp: 1 }];
+        },
+        get tools() {
+          promptInspected = true;
+          return [{ name: "lookup", description: "d", parameters: { type: "object" } }];
+        },
+      };
+      const wrapped = wrap((() =>
+        completedChunks({ type: "text_delta", delta: "ok" })) as unknown as StreamFn);
 
-    await drain(
-      wrapped({} as never, streamContext as never, {} as never) as AsyncIterable<unknown>,
-    );
+      await (await wrapped({} as never, streamContext as never, {})).result();
 
-    expect(promptInspected).toBe(false);
-  });
+      expect(promptInspected).toBe(false);
+    },
+  );
+
+  it.each(["model.call.started", "model.call.completed", "model.call.error"] as const)(
+    "preserves prompt stats for a listener interested only in %s",
+    async (type) => {
+      resetDiagnosticEventsForTest();
+      const events: DiagnosticEventPayload[] = [];
+      onTrustedInternalDiagnosticEvent((event) => events.push(event), { includeTrusted: [type] });
+      const wrapped = wrap(() => {
+        if (type === "model.call.error") {
+          throw new Error("synthetic provider failure");
+        }
+        const stream = createAssistantMessageEventStream();
+        stream.end(makeAssistantMessageFixture({ stopReason: "stop", errorMessage: undefined }));
+        return stream;
+      });
+      const context = { messages: [], systemPrompt: "system" };
+      if (type === "model.call.error") {
+        expect(() => wrapped({} as never, context)).toThrow("synthetic provider failure");
+      } else {
+        await (await wrapped({} as never, context)).result();
+      }
+      await waitForDiagnosticEventsDrained();
+      expect(events).toEqual([
+        expect.objectContaining({
+          type,
+          promptStats: {
+            inputMessagesCount: 0,
+            inputMessagesChars: 2,
+            systemPromptChars: 6,
+            totalChars: 8,
+          },
+        }),
+      ]);
+    },
+  );
 });

@@ -2,7 +2,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { computeBackoff } from "../infra/backoff.js";
 import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import { isStateDatabaseMaintenanceContention } from "../infra/gateway-state-owner-record.js";
-import type { EngineConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import type { SqliteTransactionOptions } from "../infra/sqlite-transaction.js";
@@ -73,6 +73,7 @@ export function withLeaseWriteTransaction<T>(
   operationLabel: string,
   operation: (db: EngineConnection) => T,
   busyTimeoutMs = 0,
+  singleStatement?: true,
 ): T {
   const transactionOptions = {
     operationLabel,
@@ -86,12 +87,19 @@ export function withLeaseWriteTransaction<T>(
       { ...transactionOptions, schemaSql: leaseSchema },
     );
   }
-  const stateDatabase = database.options?.database ?? openOpenClawStateDatabase(database.options);
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => operation(db),
-    { ...database.options, database: stateDatabase },
-    transactionOptions,
-  );
+  // Native renewal and release are lock primitives; their callers remain outside admission.
+  return withEngineStoreAdmission(() => {
+    const stateDatabase = database.options?.database ?? openOpenClawStateDatabase(database.options);
+    return runOpenClawStateWriteTransaction(
+      ({ db }) => operation(db),
+      { ...database.options, database: stateDatabase },
+      {
+        ...transactionOptions,
+        singleStatement:
+          singleStatement && !isPostgresSqlConnection(stateDatabase.db) ? true : undefined,
+      },
+    );
+  });
 }
 
 export const STATE_LEASE_WRITE_BACKOFF = {
@@ -154,9 +162,9 @@ export function verifyOpenClawStateLeaseOwnership(
     if (isStatePostgres() && maintenance?.ownsSchemaMaintenance) {
       // Doctor's synchronous lease check remains inside its admitted maintenance lifetime.
       maintenance.assertAdmission();
-      return withEngineStoreAdmission(read);
     }
-    return read();
+    // Admit only the synchronous lease check; protected operations retain their own SQL boundary.
+    return withEngineStoreAdmission(read);
   } catch (error) {
     throw toOpenClawStateLeaseVerificationError(params, error);
   }
@@ -172,6 +180,8 @@ export function releaseOpenClawStateLease(
     params.database,
     params.operationLabel === "state.lease" ? "state.lease.release" : params.operationLabel,
     (db) => releaseOpenClawStateLeaseInTransaction(db, params),
+    0,
+    true,
   );
 }
 

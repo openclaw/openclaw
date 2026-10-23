@@ -1,4 +1,4 @@
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 /**
  * Tool policy audit logging helpers.
  * Emits bounded, sanitized logs when allow/deny policy filters remove tools or
@@ -117,13 +117,11 @@ export function escapeControlCharsVisible(value: string): string {
 
 function sanitizeAuditField(value: string): string {
   const sanitized = escapeControlCharsVisible(value.trim());
-  if (!sanitized) {
-    return "(unknown)";
-  }
-  if (sanitized.length <= MAX_AUDIT_FIELD_LENGTH) {
-    return sanitized;
-  }
-  return `${truncateUtf16Safe(sanitized, MAX_AUDIT_FIELD_LENGTH)}...`;
+  return truncateWithMarker(sanitized || "(unknown)", MAX_AUDIT_FIELD_LENGTH, {
+    marker: "...",
+    reserve: 0,
+    trimEnd: false,
+  });
 }
 
 function matchedPolicyRules(params: {

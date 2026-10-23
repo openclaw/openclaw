@@ -16,6 +16,9 @@ export async function writeMockOpenAiResponsesHttp(
     if (dispatched.failure.retryAfterSeconds !== undefined) {
       res.setHeader("retry-after", String(dispatched.failure.retryAfterSeconds));
     }
+    if (dispatched.failure.retryAfterMs !== undefined) {
+      res.setHeader("retry-after-ms", String(dispatched.failure.retryAfterMs));
+    }
     writeJson(res, dispatched.failure.status, {
       error: {
         type: dispatched.failure.type,

@@ -8,13 +8,18 @@ import {
   stateEngineSchema,
 } from "../../state/openclaw-state-db-engine.js";
 import { assertOpenClawStateDatabaseForMaintenance } from "../../state/openclaw-state-db-maintenance.js";
+import { ensureAgentDeletionJournalPhaseSchema } from "../../state/openclaw-state-db-schema-additive.js";
+import { tableHasColumn } from "../../state/openclaw-state-db-schema-helpers.js";
 import { withLegacyStateHeadLayout } from "../../state/openclaw-state-db-schema-v26-layout.js";
 import { withLegacyStateWriteIndexes } from "../../state/openclaw-state-db-schema-v27-indexes.js";
+import { withLegacyPublicationDraft } from "../../state/openclaw-state-db-schema-v28-publication.js";
+import { withLegacyLocalWorkspaceManifests } from "../../state/openclaw-state-db-schema-v31-workspace-manifests.js";
 import { listOpenClawStateFeatureSchemas } from "../../state/openclaw-state-feature-schema.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
 import manifest from "../../state/postgres-schema.generated/manifest.json" with { type: "json" };
 import { statePostgresRuntime } from "../../state/postgres-schema.generated/runtime.js";
 import metadata from "../../state/postgres-schema.generated/state-port.json" with { type: "json" };
+import { CLIENT_CREDENTIAL_LEGACY_TABLES_SQL } from "../client-credential-schema.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../sqlite-schema-facts.js";
 import { extractSqliteTableSchema } from "../sqlite-schema-sql.js";
@@ -32,35 +37,64 @@ export async function loadStatePortDescriptor(
     if (backup?.version === sourceVersion && backup.id === "state") {
       return backup;
     }
-    // v24→27 preserves columns; only metadata, SQLite head storage and indexes change.
-    // Pin this shared catalog so future column changes need their own predecessor.
+    // v28 appends publication draft choices; v24-v26 additionally retain older indexes.
+    // v29 removes credential tables; v30 fences policies; v31 adds per-path workspace baselines.
     if (
       backup ||
-      OPENCLAW_STATE_SCHEMA_VERSION !== 27 ||
-      (sourceVersion !== 24 && sourceVersion !== 25 && sourceVersion !== 26)
+      OPENCLAW_STATE_SCHEMA_VERSION !== 31 ||
+      ![24, 25, 26, 27, 28, 29, 30].includes(sourceVersion)
     ) {
       throw new DatabasePortDataError(
         `Missing shared-state PostgreSQL backup descriptor for version ${sourceVersion}`,
       );
     }
   }
-  const catalog = statePostgresRuntime.expectedCatalog;
+  const source = sourceVersion < 29 ? statePostgresRuntime.clientCredentialSource : undefined;
   // The generated catalog owns these tagged facts; project only the copy fields.
-  const columns = catalog.filter(
-    (fact): fact is typeof fact & { value: PortTable["columns"][number] } => fact.kind === "column",
+  const isColumn = (
+    fact: (typeof statePostgresRuntime.expectedCatalog)[number],
+  ): fact is typeof fact & { value: PortTable["columns"][number] } => fact.kind === "column";
+  const historical = sourceVersion < 28;
+  const legacyWorkspace = sourceVersion < 31;
+  const catalog = [
+    ...statePostgresRuntime.expectedCatalog,
+    ...(source?.expectedCatalog ?? []),
+  ].filter(
+    (fact) =>
+      (!legacyWorkspace ||
+        (fact.table !== "local_workspace_manifest_nodes" &&
+          (fact.table !== "local_workspace_projections" ||
+            !isColumn(fact) ||
+            fact.value.name !== "checkpoint_json"))) &&
+      (!historical ||
+        !isColumn(fact) ||
+        fact.value.name !== "draft" ||
+        ![
+          "github_publication_requests",
+          "github_personal_publication_requests",
+          "github_repository_publication_requests",
+        ].includes(fact.table)),
   );
+  const columns = catalog.filter(isColumn);
   const keys = catalog.filter(
     (fact): fact is typeof fact & { value: string[] } => fact.kind === "primaryKey",
   );
+  const sourceSql = (sql: string) => {
+    const workspace = legacyWorkspace ? withLegacyLocalWorkspaceManifests(sql) : sql;
+    return historical ? withLegacyPublicationDraft(workspace) : workspace;
+  };
   const schema = (
     entry: Omit<typeof metadata, "fragments" | "sqliteRanges">,
     postgres: string,
     sqlite: string,
   ) => {
-    const names = new Set(entry.tables.map((table) => table.name));
+    const tables = entry.tables.filter(
+      (table) => !legacyWorkspace || table.name !== "local_workspace_manifest_nodes",
+    );
+    const names = new Set(tables.map((table) => table.name));
     return {
-      sqlite,
-      tables: entry.tables.map(({ name, identities }) => ({
+      sqlite: sourceSql(sqlite),
+      tables: tables.map(({ name, identities }) => ({
         name,
         identities,
         columns: columns
@@ -68,8 +102,8 @@ export async function loadStatePortDescriptor(
           .map((fact) => ({ name: fact.value.name, type: fact.value.type })),
         pk: keys.find((fact) => fact.table === name)?.value ?? [],
       })),
-      preData: postgres.slice(entry.preData[0], entry.preData[1]),
-      postData: postgres.slice(entry.postData[0], entry.postData[1]),
+      preData: sourceSql(postgres.slice(entry.preData[0], entry.preData[1])),
+      postData: sourceSql(postgres.slice(entry.postData[0], entry.postData[1])),
       expectedCatalog: catalog.filter((fact) => names.has(fact.table)),
     };
   };
@@ -79,17 +113,26 @@ export async function loadStatePortDescriptor(
   for (const table of DOCTOR_OWNED_STATE_TABLES) {
     sqliteFragments.set(table, extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, table));
   }
+  const eager = schema(
+    metadata,
+    statePostgresRuntime.eagerSql,
+    metadata.sqliteRanges
+      .map(([start, end]) => OPENCLAW_STATE_SCHEMA_SQL.slice(start, end))
+      .join("\n"),
+  );
+  if (source) {
+    const credentials = schema(source, source.sql, CLIENT_CREDENTIAL_LEGACY_TABLES_SQL);
+    eager.sqlite += `\n${credentials.sqlite}`;
+    eager.preData += `\n${credentials.preData}`;
+    eager.postData += `\n${credentials.postData}`;
+    eager.tables.push(...credentials.tables);
+    eager.expectedCatalog.push(...credentials.expectedCatalog);
+  }
   const descriptor: PortDescriptor = {
     id: "state",
     version: sourceVersion,
     minimumPostgresVersion: manifest.minimumPostgresVersion,
-    ...schema(
-      metadata,
-      statePostgresRuntime.eagerSql,
-      metadata.sqliteRanges
-        .map(([start, end]) => OPENCLAW_STATE_SCHEMA_SQL.slice(start, end))
-        .join("\n"),
-    ),
+    ...eager,
     fragments: metadata.fragments.map((fragment) => {
       const runtime = statePostgresRuntime.fragments.find((entry) => entry.id === fragment.id)!;
       return Object.assign(schema(fragment, runtime.sql, sqliteFragments.get(fragment.id)!), {
@@ -106,9 +149,29 @@ export async function loadStatePortDescriptor(
         );
       }
       assertOpenClawStateDatabaseForMaintenance(db, { pathname: "shared-state port source" });
-      return { version, migrationRequired: false, pendingColumns: {} };
+      const needsPhaseColumn =
+        tableHasColumn(db, "agent_deletion_journal", "agent_id") &&
+        !tableHasColumn(db, "agent_deletion_journal", "phase");
+      const pendingColumns: Record<string, readonly string[]> = needsPhaseColumn
+        ? { agent_deletion_journal: ["phase"] }
+        : {};
+      // First-use columns are valid absent; porting completes them in its private copy.
+      return { version, migrationRequired: false, pendingColumns };
+    },
+    migrateSqliteSource(file, _version, assertCurrent) {
+      using db = openNodeSqliteDatabase(file);
+      admitSqliteSchema(db);
+      if (tableHasColumn(db, "agent_deletion_journal", "agent_id")) {
+        assertCurrent();
+        ensureAgentDeletionJournalPhaseSchema(db);
+      }
     },
     async admit(file, input) {
+      // Historical SQLite images use their descriptor; restored PG anchors still
+      // require owner admission against the exact predecessor without migrating.
+      if (sourceVersion !== OPENCLAW_STATE_SCHEMA_VERSION && !input) {
+        return;
+      }
       return withEngineStoreAdmission(() => {
         using anchor = openNodeSqliteDatabase(file);
         const selected = openEngineStore({
@@ -120,6 +183,7 @@ export async function loadStatePortDescriptor(
           openSqlite: () => assertOpenClawStateDatabaseForMaintenance(anchor, { pathname: file }),
           admitPostgres: admitStatePostgres,
           existingOnly: true,
+          existingVersion: sourceVersion !== OPENCLAW_STATE_SCHEMA_VERSION,
         });
         if (selected !== anchor) {
           selected.close();
@@ -127,27 +191,31 @@ export async function loadStatePortDescriptor(
       });
     },
   };
+  if (sourceVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
+    return descriptor;
+  }
+  if (sourceVersion >= 27) {
+    return { ...descriptor, inspectSqliteSource: undefined, migrateSqliteSource: undefined };
+  }
   const historicalSqlite = withLegacyStateWriteIndexes(descriptor.sqlite);
   const legacyIndexes = statePostgresRuntime.preWriteIndexesV27Sql;
-  return sourceVersion === OPENCLAW_STATE_SCHEMA_VERSION
-    ? descriptor
-    : {
-        ...descriptor,
-        sqlite: sourceVersion < 26 ? withLegacyStateHeadLayout(historicalSqlite) : historicalSqlite,
-        postData:
-          descriptor.postData.replace(
-            /CREATE INDEX "idx_state_leases_owner"[^;]+;/u,
-            legacyIndexes.state_leases,
-          ) +
-          legacyIndexes.skill_usage +
-          legacyIndexes.acp_replay_events,
-        expectedCatalog: descriptor.expectedCatalog.map((fact) =>
-          fact.kind === "indexes" &&
-          (fact.table === "skill_usage" || fact.table === "acp_replay_events")
-            ? { table: fact.table, kind: fact.kind, value: Number(fact.value) + 1 }
-            : fact,
-        ),
-        inspectSqliteSource: undefined,
-        admit: undefined,
-      };
+  return {
+    ...descriptor,
+    sqlite: sourceVersion < 26 ? withLegacyStateHeadLayout(historicalSqlite) : historicalSqlite,
+    postData:
+      descriptor.postData.replace(
+        /CREATE INDEX "idx_state_leases_owner"[^;]+;/u,
+        legacyIndexes.state_leases,
+      ) +
+      legacyIndexes.skill_usage +
+      legacyIndexes.acp_replay_events,
+    expectedCatalog: descriptor.expectedCatalog.map((fact) =>
+      fact.kind === "indexes" &&
+      (fact.table === "skill_usage" || fact.table === "acp_replay_events")
+        ? { table: fact.table, kind: fact.kind, value: Number(fact.value) + 1 }
+        : fact,
+    ),
+    inspectSqliteSource: undefined,
+    migrateSqliteSource: undefined,
+  };
 }

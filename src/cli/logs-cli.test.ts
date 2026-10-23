@@ -1,6 +1,7 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { formatCliFailureLines } from "./failure-output.js";
 import {
   buildGatewayConnectionDetails,
   callGatewayFromCli,
@@ -20,7 +21,7 @@ vi.mock("../config/gateway-dispatch-config.js", () => ({
 }));
 
 function journalPage(line: string, cursor: string) {
-  return { stdout: `${line}\n-- cursor: s=${cursor}`, stderr: "", code: 0, truncated: false };
+  return { stdout: `${line}\n-- cursor: s=${cursor}`, code: 0, truncated: false };
 }
 
 const logFile = "/tmp/openclaw.log";
@@ -151,6 +152,7 @@ it("reports a byte-budget re-anchor without claiming rotation in JSON output", a
 it.each([
   { mode: "plain UTC", args: ["--utc", "--plain"], time: "2025-01-01T12:00:00.000Z" },
   { mode: "pretty local", args: [], time: "07:00:00-05:00" },
+  { mode: "pretty explicit local", args: ["--local-time"], time: "07:00:00-05:00" },
   { mode: "pretty UTC", args: ["--utc"], time: "12:00:00+00:00" },
 ])("renders $mode timestamps and preserves missing or malformed values", async ({ args, time }) => {
   await withEnvAsync({ TZ: "America/New_York" }, async () => {
@@ -183,6 +185,26 @@ it.each([
       ]);
     });
   });
+});
+
+it("rejects combining --local-time with --utc", async () => {
+  callGatewayFromCli.mockResolvedValue(logPage([]));
+  for (const flags of [
+    ["--local-time", "--utc"],
+    ["--utc", "--local-time"],
+  ]) {
+    const failure = await runLogsCli(["logs", ...flags]).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect(
+      formatCliFailureLines({
+        title: "The CLI command failed.",
+        error: failure,
+        argv: ["node", "openclaw", "logs", ...flags],
+        env: {},
+      }),
+    ).toContain("Pass only one of --local-time or --utc.");
+  }
+  expect(callGatewayFromCli).not.toHaveBeenCalled();
 });
 
 it("retains calendar log identity in text and JSON", async () => {

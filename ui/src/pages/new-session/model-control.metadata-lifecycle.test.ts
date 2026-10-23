@@ -10,6 +10,7 @@ import {
 import { invalidateModelCatalogCache } from "../../lib/model-catalog-cache.ts";
 import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { resetWorktreeMocks } from "./draft-worktree-checks.test-support.ts";
 import { identityPreferences } from "./draft-worktree-preferences.test-support.ts";
 import { disposeWorktreeDraft } from "./draft-worktree-submission.test-support.ts";
@@ -21,7 +22,7 @@ import {
   testModel,
   thinkingLevels,
 } from "./model-control-view-queries.test-support.ts";
-import { contextWith, renderControl } from "./model-control.test-support.ts";
+import { contextWith, renderControl, waitForModelControl } from "./model-control.test-support.ts";
 import type { NewSessionModelControl } from "./model-control.ts";
 import { loadNewSessionPreference } from "./preferences.ts";
 
@@ -106,10 +107,19 @@ function retainedAccountDraft(mode?: "retire" | "permitted-default" | "provider-
   }
   const draw = (id = "main") => renderControl(control, context, id, { ...agent, id });
   const find = (attribute: string, value?: string) => controlElement(draw(), attribute, value);
-  const select = (value: string) => find("account-option", value)!.click();
+  const select = (value: string) => {
+    if (!find("account-option", value)) {
+      find("account-group-toggle")!.click();
+      flush();
+    }
+    find("account-option", value)!.click();
+  };
   const chooseAccount = async () => {
-    await vi.waitFor(() => expect(control.modelUnavailableReason(agent)).toBe("missing-auth"));
-    const picker = draw().querySelector<HTMLButtonElement>("[data-chat-account-group-toggle]");
+    await vi.waitFor(() =>
+      expect(control.modelSelectionBlockedReason(agent)).toContain("No provider credential"),
+    );
+    const container = await waitForModelControl(control, context, "main", agent);
+    const picker = container.querySelector<HTMLButtonElement>("[data-chat-account-group-toggle]");
     expect(picker).not.toBeNull();
     picker!.click();
     await vi.waitFor(() => expect(draw().textContent).toContain(account.label));
@@ -139,7 +149,6 @@ function retainedAccountDraft(mode?: "retire" | "permitted-default" | "provider-
       await completion;
     },
     blocked: () => control.modelSelectionBlockedReason(agent),
-    unavailable: () => control.modelUnavailableReason(agent),
     model: () => control.modelForSubmission(),
     ready: () => control.accountSelectionReady(),
   };
@@ -252,7 +261,7 @@ it("does not complete a retained account preview before its replacement is accep
   const f = retainedAccountDraft();
   await f.connect();
   f.select("automatic");
-  await vi.waitFor(() => expect(f.unavailable()).toBe("missing-auth"));
+  await vi.waitFor(() => expect(f.blocked()).toContain("No provider credential"));
   invalidateModelCatalogCache(f.context.gateway.snapshot.client!, {
     agentId: "main",
     authProfileId: f.account.authProfileId,
@@ -379,7 +388,7 @@ it("selects a usable retained account after refresh failure without changing sav
   expect(f.model()).toBe(`anthropic/model@${f.account.authProfileId}`);
   expect(f.control.selected).toBe("");
   f.select("automatic");
-  await vi.waitFor(() => expect(f.unavailable()).toBe("missing-auth"));
+  await vi.waitFor(() => expect(f.blocked()).toContain("No provider credential"));
   expect(f.model()).toBe("");
   expect(f.find("account-group-toggle")?.textContent).toContain("Automatic");
   expect(f.savePreference).not.toHaveBeenCalled();
@@ -417,7 +426,7 @@ it("retires a pending personal-account preview when the user identity changes", 
   f.control.load(f.context, "main", true, { agent: f.agent });
   f.preview.resolve(f.connected);
   await completion;
-  await vi.waitFor(() => expect(f.unavailable()).toBe("missing-auth"));
+  await vi.waitFor(() => expect(f.blocked()).toContain("No provider credential"));
   expect(f.model()).toBe("");
   expect(f.find("account-group-toggle")?.textContent).toContain("Automatic");
 });
@@ -431,20 +440,24 @@ it("retains its neutral auth gate through pending, rejected and failed refreshes
   const { context, request, emitCatalogChanged, control, draw, find } = setupModel([model], agent);
   const client = context.gateway.snapshot.client!;
   control.load(context, "main", true, { agent });
-  await vi.waitFor(() => expect(control.modelUnavailableReason(agent)).toBe("missing-auth"));
+  await vi.waitFor(() =>
+    expect(control.modelSelectionBlockedReason(agent)).toContain("No provider credential"),
+  );
   const scope = { agentId: "main", sessionKey: "agent:main:locked" };
   const release = subscribeChatMetadata(client, scope, () => {});
   beginChatMetadataPublication(client, scope).publish({
     commands: [],
     models: [{ ...model, available: true, unavailableReason: undefined }],
   });
-  expect(control.modelUnavailableReason(agent)).toBe("missing-auth");
+  expect(control.modelSelectionBlockedReason(agent)).toContain("No provider credential");
   const pending = deferred<{ models: ModelCatalogEntry[] }>();
   request.mockReturnValueOnce(pending.promise);
   emitCatalogChanged();
-  expect(control.modelUnavailableReason(agent)).toBe("missing-auth");
+  expect(control.modelSelectionBlockedReason(agent)).toContain("No provider credential");
   pending.resolve({ models: [{ ...model, unavailableReason: "auth-failed" }] });
-  await vi.waitFor(() => expect(control.modelUnavailableReason(agent)).toBe("auth-failed"));
+  await vi.waitFor(() =>
+    expect(control.modelSelectionBlockedReason(agent)).toContain("Authentication failed"),
+  );
   request.mockRejectedValueOnce(new Error("transport failed"));
   emitCatalogChanged();
   await vi.waitFor(() => {
@@ -452,12 +465,12 @@ it("retains its neutral auth gate through pending, rejected and failed refreshes
     expect(find("model-select", "true")?.getAttribute("aria-busy")).toBe("false");
     expect(container.textContent).toContain("No models available");
   });
-  expect(control.modelUnavailableReason(agent)).toBe("auth-failed");
+  expect(control.modelSelectionBlockedReason(agent)).toContain("Authentication failed");
   request.mockResolvedValueOnce({
     models: [{ ...model, available: true, unavailableReason: undefined }],
   });
   emitCatalogChanged();
-  await vi.waitFor(() => expect(control.modelUnavailableReason(agent)).toBeUndefined());
+  await vi.waitFor(() => expect(control.modelSelectionBlockedReason(agent)).toBeUndefined());
   release();
 });
 

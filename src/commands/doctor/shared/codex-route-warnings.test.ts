@@ -50,7 +50,7 @@ function collectCodexRouteWarnings(cfg: OpenClawConfigWithLegacyRoster): string[
 }
 
 function maybeRepairCodexRoutes(cfg: OpenClawConfigWithLegacyRoster) {
-  return maybeRepairCodexRoutesUnderTest({ cfg, shouldRepair: true });
+  return maybeRepairCodexRoutesUnderTest({ cfg });
 }
 
 type Agents = NonNullable<OpenClawConfigWithLegacyRoster["agents"]>;
@@ -135,7 +135,7 @@ function disabledCodexPluginWarning(...routes: string[]): string {
 
 function codexCompactionWarning(...details: string[]): string {
   return [
-    "- Codex runtime uses native server-side compaction and ignores OpenClaw compaction summarizer overrides.",
+    "- Codex runtime ignores compaction.provider; compaction.model still applies to OpenClaw host summaries.",
     ...details,
   ].join("\n");
 }
@@ -397,16 +397,8 @@ describe("collectCodexRouteWarnings", () => {
     const result = repairFixture({
       defaults: { model: "openai-codex/gpt-5.6-sol" },
       providers: {
-        openai: {
-          baseUrl: "",
-          models: [{ ...MODEL_CATALOG_METADATA, id: "gpt-5.6-sol", api: "openai-responses" }],
-        },
-        "openai-codex": {
-          baseUrl: "",
-          models: [
-            { ...MODEL_CATALOG_METADATA, id: "gpt-5.6-sol", api: "openai-chatgpt-responses" },
-          ],
-        },
+        openai: catalogProvider("gpt-5.6-sol", { api: "openai-responses" }),
+        "openai-codex": catalogProvider("gpt-5.6-sol", { api: "openai-chatgpt-responses" }),
       },
       hooks: { mappings: [{ model: "codex/gpt-5.4-mini" }] },
     });
@@ -419,6 +411,30 @@ describe("collectCodexRouteWarnings", () => {
     );
   });
 
+  it.each([undefined, "custom-summary"])(
+    "preserves the host summary model during Codex repair (provider=%s)",
+    (provider) => {
+      const result = repairFixture({
+        defaults: {
+          model: "openai/gpt-5.5",
+          compaction: {
+            model: "anthropic/claude-sonnet-4-6",
+            keepRecentTokens: 10_000,
+            ...(provider ? { provider } : {}),
+          },
+        },
+        plugins: { entries: { codex: { enabled: true } } },
+      });
+
+      expect(result.cfg.agents?.defaults?.compaction).toEqual({
+        model: "anthropic/claude-sonnet-4-6",
+        keepRecentTokens: 10_000,
+      });
+      expect(result.warnings).toEqual([]);
+      expect(maybeRepairCodexRoutes(result.cfg).changes).toEqual([]);
+    },
+  );
+
   it("keeps doctor fix hint for agent-specific compaction overrides", () => {
     const warnings = collectCodexRouteWarnings(
       fixture({
@@ -427,7 +443,12 @@ describe("collectCodexRouteWarnings", () => {
           compaction: { model: "openai/gpt-5.4", provider: "custom-summary" },
         },
         list: [
-          { id: "codex", model: "openai/gpt-5.5", compaction: { model: "openai/gpt-5.4" } },
+          {
+            id: "codex",
+            model: "openai/gpt-5.5",
+            compaction: { model: "openai/gpt-5.4", provider: "agent-summary" },
+          },
+          { id: "inherited", model: "openai/gpt-5.5" },
           { id: "worker", model: "anthropic/claude-sonnet-4-6" },
         ],
       }),
@@ -436,10 +457,10 @@ describe("collectCodexRouteWarnings", () => {
     expect(warnings).toStrictEqual([
       codexCompactionWarning(
         "- agents.defaults.compaction.provider: custom-summary is ignored while this agent uses Codex runtime.",
-        "- Move or remove shared `agents.defaults.compaction.model/provider` settings manually; doctor keeps shared defaults while non-Codex agents can inherit them.",
+        "- Move or remove shared `agents.defaults.compaction.provider` manually; doctor keeps shared defaults while non-Codex agents can inherit them.",
       ),
       codexCompactionWarning(
-        "- agents.list.codex.compaction.model: openai/gpt-5.4 is ignored while this agent uses Codex runtime.",
+        "- agents.list.codex.compaction.provider: agent-summary is ignored while this agent uses Codex runtime.",
         "- Run `openclaw doctor --fix`: it removes unsupported Codex compaction overrides.",
       ),
     ]);
@@ -511,7 +532,7 @@ describe("collectCodexRouteWarnings", () => {
       primary: "openai/gpt-5.5",
       fallbacks: ["openai/gpt-5.4"],
     });
-    expect(result.cfg.agents?.defaults?.compaction?.model).toBeUndefined();
+    expect(result.cfg.agents?.defaults?.compaction?.model).toBe("openai/gpt-5.4");
     expect(result.cfg.agents?.defaults?.compaction?.memoryFlush?.model).toBe("openai/gpt-5.4-mini");
     expect(result.cfg.agents?.defaults?.mediaModels?.image).toEqual({
       primary: "openai/gpt-image-2",
@@ -602,17 +623,11 @@ describe("collectCodexRouteWarnings", () => {
       defaults: { model: "openai-codex/gpt-5.5" },
       plugins: {
         allow: ["brave", "discord", "whatsapp"],
-        entries: {
-          brave: { enabled: true },
-          discord: { enabled: true },
-          whatsapp: { enabled: true },
-        },
+        entries: Object.fromEntries(
+          ["brave", "discord", "whatsapp"].map((id) => [id, { enabled: true }]),
+        ),
       },
-      list: [
-        { id: "main", model: "openai-codex/gpt-5.5" },
-        { id: "meimei", model: "openai-codex/gpt-5.5" },
-        { id: "youyou-cli", model: "openai-codex/gpt-5.5" },
-      ],
+      list: ["main", "meimei", "youyou-cli"].map((id) => ({ id, model: "openai-codex/gpt-5.5" })),
     });
 
     expect(result.warnings).toStrictEqual([]);

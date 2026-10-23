@@ -158,9 +158,7 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
 
 function expectProviderFields(result: unknown, fields: Record<string, unknown>) {
   const provider = requireRecord(requireRecord(result, "catalog result").provider, "provider");
-  for (const [key, expected] of Object.entries(fields)) {
-    expect(provider[key]).toEqual(expected);
-  }
+  expect(provider).toEqual(expect.objectContaining(fields));
   return provider;
 }
 
@@ -180,29 +178,15 @@ function installDiscoveryHooks(options: DiscoveryContractOptions) {
         ...actual,
         DEFAULT_COPILOT_API_BASE_URL: "https://api.individual.githubcopilot.com",
         MINIMAX_OAUTH_MARKER: "minimax-oauth",
-        applyAuthProfileConfig: (config: OpenClawConfig) => config,
-        buildApiKeyCredential: (
-          provider: string,
-          key: unknown,
-          metadata?: Record<string, unknown>,
-        ) => ({
-          type: "api_key",
-          provider,
-          ...(typeof key === "string" ? { key } : {}),
-          ...(metadata ? { metadata } : {}),
-        }),
-        buildOauthProviderAuthResult: vi.fn(),
         buildCopilotIdeHeaders: vi.fn(() => ({
           "Editor-Version": "vscode/1.96.2",
           "User-Agent": "GitHubCopilotChat/0.26.7",
         })),
         coerceSecretRef: asNullableRecord,
-        ensureApiKeyFromOptionEnvOrPrompt: vi.fn(),
         ensureAuthProfileStore: ensureAuthProfileStoreMock,
         ensureAuthProfileStoreAsync: async (...args: unknown[]) =>
           ensureAuthProfileStoreMock(...args),
         listProfilesForProvider: listProfilesForProviderMock,
-        normalizeApiKeyInput: (value: unknown) => (typeof value === "string" ? value.trim() : ""),
         normalizeGithubCopilotDomain: (raw: unknown) => {
           const trimmed = typeof raw === "string" ? raw.trim().toLowerCase() : "";
           return trimmed === "github.com" || /^[a-z0-9-]+\.ghe\.com$/.test(trimmed)
@@ -212,8 +196,6 @@ function installDiscoveryHooks(options: DiscoveryContractOptions) {
         normalizeOptionalSecretInput: normalizeOptionalString,
         resolveNonEnvSecretRefApiKeyMarker: (source: unknown) =>
           typeof source === "string" ? source : "",
-        upsertAuthProfile: vi.fn(),
-        validateApiKeyInput: () => undefined,
       };
     });
     vi.doMock("../../plugins/provider-self-hosted-discovery.js", async (importOriginal) => {
@@ -320,51 +302,51 @@ export function describeGithubCopilotProviderDiscoveryContract(params: {
   });
 }
 
-export function describeVllmProviderDiscoveryContract(params: {
-  load: ProviderDiscoveryContractPluginLoader;
-}) {
-  describe("vllm provider discovery contract", () => {
-    const getProvider = installDiscoveryHooks({
-      providerIds: ["vllm"],
-      load: params.load,
-    });
+// The vLLM and SGLang contracts share these self-hosted cases. Keep discovery
+// defaults real: mock only model discovery, never provider constants or
+// provider construction. Keep the configured-transport and manual-discovery
+// cases for both providers.
+function describeSelfHostedDiscoveryContract(
+  params: { load: ProviderDiscoveryContractPluginLoader },
+  id: "vllm" | "sglang",
+  defaultUrl: string,
+) {
+  describe(`${id} provider discovery contract`, () => {
+    const getProvider = installDiscoveryHooks({ ...params, providerIds: [id] });
+    const routerUrl = `http://${id}-router.example/v1`;
+    const models = [{ id: "contract-model", name: "Contract Model" }];
 
     it("keeps self-hosted discovery provider-owned", async () => {
-      await expectSelfHostedCatalog(
-        getProvider("vllm"),
-        [{ id: "meta-llama/Meta-Llama-3-8B-Instruct", name: "Meta Llama 3" }],
-        "http://127.0.0.1:8000/v1",
-      );
+      await expectSelfHostedCatalog(getProvider(id), models, defaultUrl);
     });
 
     it("uses configured transport only for provider wildcard discovery", async () => {
       await expectSelfHostedCatalog(
-        getProvider("vllm"),
-        [{ id: "router-model", name: "Router Model" }],
-        "http://vllm-router.example/v1",
-        selfHostedConfig("vllm", "vllm/*", "http://vllm-router.example/v1"),
+        getProvider(id),
+        models,
+        routerUrl,
+        selfHostedConfig(id, `${id}/*`, routerUrl),
       );
     });
 
-    it("uses the provider default transport when wildcard config omits baseUrl", async () => {
-      await expectSelfHostedCatalog(
-        getProvider("vllm"),
-        [{ id: "default-transport-model", name: "Default Transport Model" }],
-        "http://127.0.0.1:8000/v1",
-        {
+    if (id === "vllm") {
+      it("uses the provider default transport when wildcard config omits baseUrl", async () => {
+        await expectSelfHostedCatalog(getProvider("vllm"), models, defaultUrl, {
           agents: { defaults: { models: { "vllm/*": {} } } },
           models: {
-            providers: { vllm: { apiKey: "VLLM_API_KEY", api: "openai-completions", models: [] } },
+            providers: {
+              vllm: { apiKey: "VLLM_API_KEY", api: "openai-completions", models: [] },
+            },
           },
-        } as unknown as OpenClawConfig,
-      );
-    });
+        } as unknown as OpenClawConfig);
+      });
+    }
 
     it("keeps explicit self-hosted provider config manual without wildcard visibility", async () => {
       await expect(
         runSelfHostedCatalog(
-          getProvider("vllm"),
-          selfHostedConfig("vllm", "vllm/manual-model", "http://vllm-router.example/v1"),
+          getProvider(id),
+          selfHostedConfig(id, `${id}/manual-model`, routerUrl),
         ),
       ).resolves.toBeNull();
       expect(discoverLocalModelsMock).not.toHaveBeenCalled();
@@ -372,42 +354,16 @@ export function describeVllmProviderDiscoveryContract(params: {
   });
 }
 
+export function describeVllmProviderDiscoveryContract(params: {
+  load: ProviderDiscoveryContractPluginLoader;
+}) {
+  describeSelfHostedDiscoveryContract(params, "vllm", "http://127.0.0.1:8000/v1");
+}
+
 export function describeSglangProviderDiscoveryContract(params: {
   load: ProviderDiscoveryContractPluginLoader;
 }) {
-  describe("sglang provider discovery contract", () => {
-    const getProvider = installDiscoveryHooks({
-      providerIds: ["sglang"],
-      load: params.load,
-    });
-
-    it("keeps self-hosted discovery provider-owned", async () => {
-      await expectSelfHostedCatalog(
-        getProvider("sglang"),
-        [{ id: "Qwen/Qwen3-8B", name: "Qwen3-8B" }],
-        "http://127.0.0.1:30000/v1",
-      );
-    });
-
-    it("uses configured transport only for provider wildcard discovery", async () => {
-      await expectSelfHostedCatalog(
-        getProvider("sglang"),
-        [{ id: "Qwen/Qwen3-32B", name: "Qwen3-32B" }],
-        "http://sglang-router.example/v1",
-        selfHostedConfig("sglang", "sglang/*", "http://sglang-router.example/v1"),
-      );
-    });
-
-    it("keeps explicit self-hosted provider config manual without wildcard visibility", async () => {
-      await expect(
-        runSelfHostedCatalog(
-          getProvider("sglang"),
-          selfHostedConfig("sglang", "sglang/Qwen/Qwen3-32B", "http://sglang-router.example/v1"),
-        ),
-      ).resolves.toBeNull();
-      expect(discoverLocalModelsMock).not.toHaveBeenCalled();
-    });
-  });
+  describeSelfHostedDiscoveryContract(params, "sglang", "http://127.0.0.1:30000/v1");
 }
 
 export function describeMinimaxProviderDiscoveryContract(

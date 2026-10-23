@@ -5,6 +5,7 @@ import {
 } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { getOrCreatePromise } from "../../../src/shared/lazy-promise.js";
 import { neutralMarkSvg } from "../components/neutral-mark-svg.ts";
+import { controlUiDocumentHead } from "./control-ui-document-head.ts";
 import { applyControlUiOperatorSeamColor } from "./control-ui-presentation.ts";
 import { currentThemeBranding } from "./theme-branding.ts";
 
@@ -150,8 +151,7 @@ export function syncControlUiFavicon(): void {
   if (!color) {
     faviconSources.clear();
   }
-  // Icon candidates belong to the static document head, outside the rendered app.
-  for (const icon of document.querySelectorAll<HTMLLinkElement>('link[rel="icon"]')) {
+  for (const icon of controlUiDocumentHead().favicons) {
     if (!faviconImage && !baseSvg && !color) {
       faviconRequests.delete(icon);
       if (icon.dataset.openclawOriginalFavicon) {

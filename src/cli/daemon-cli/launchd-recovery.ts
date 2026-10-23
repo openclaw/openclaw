@@ -13,12 +13,6 @@ const LAUNCH_AGENT_RECOVERY_MESSAGE =
 
 type LaunchAgentRecoveryAction = "started" | "restarted";
 
-type LaunchAgentRecoveryResult<TResult extends LaunchAgentRecoveryAction> = {
-  result: TResult;
-  loaded: true;
-  message: string;
-};
-
 /** Re-bootstrap an installed but unloaded LaunchAgent after a daemon start/restart command. */
 export async function recoverInstalledLaunchAgent<
   TResult extends LaunchAgentRecoveryAction,
@@ -26,7 +20,11 @@ export async function recoverInstalledLaunchAgent<
   result: TResult;
   deadline?: GatewayServiceControlArgs["deadline"];
   env?: Record<string, string | undefined>;
-}): Promise<LaunchAgentRecoveryResult<TResult> | null> {
+}): Promise<{
+  result: TResult;
+  loaded: true;
+  message: string;
+} | null> {
   if (process.platform !== "darwin") {
     return null;
   }

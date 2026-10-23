@@ -1,7 +1,7 @@
 // Serializes Chrome MCP operations and maps opaque targets/snapshot refs.
 import { randomUUID } from "node:crypto";
 import { SdkError } from "@modelcontextprotocol/client";
-import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
+import { createPermitPool } from "openclaw/plugin-sdk/concurrency-runtime";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -12,7 +12,6 @@ import {
   ChromeMcpReconnectRequiredError,
   type ChromeMcpCallOptions,
   type ChromeMcpOptionsInput,
-  type ChromeMcpOperationOptions,
   type ChromeMcpRoutingState,
   type ChromeMcpSession,
   type ChromeMcpSessionLease,
@@ -39,86 +38,13 @@ export function getChromeMcpRoutingState(session: ChromeMcpSession): ChromeMcpRo
   // local mappings and snapshot refs.
   session.routing ??= {
     sessionNonce: randomUUID().replaceAll("-", "").slice(0, 12),
-    withOperationLock: createAsyncLock(),
+    operationPermits: createPermitPool(1),
     targetIdByPageId: new Map(),
     nextTargetHandleId: 1,
     snapshotsByTarget: new Map(),
     nextSnapshotRefId: 1,
   };
   return session.routing;
-}
-
-async function withChromeMcpOperationLock<T>(
-  session: ChromeMcpSession,
-  options: ChromeMcpOperationOptions,
-  operation: () => Promise<T>,
-): Promise<T> {
-  const signal = options.signal;
-  if (signal?.aborted) {
-    throw signal.reason ?? new Error("aborted");
-  }
-
-  let started = false;
-  let cancelled = false;
-  let cancelReason: Error | undefined;
-  const queued = getChromeMcpRoutingState(session).withOperationLock(async () => {
-    if (cancelled) {
-      throw cancelReason ?? new Error("Chrome MCP operation cancelled before it started.");
-    }
-    started = true;
-    if (signal?.aborted) {
-      throw signal.reason ?? new Error("aborted");
-    }
-    return await operation();
-  });
-
-  const timeoutMs = options.timeoutMs;
-  if (!signal && !(timeoutMs !== undefined && timeoutMs > 0)) {
-    return await queued;
-  }
-
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let abortListener: (() => void) | undefined;
-  const cancelBeforeStart = new Promise<never>((_resolve, reject) => {
-    const cancel = (reason: unknown) => {
-      if (started || cancelled) {
-        return;
-      }
-      cancelled = true;
-      cancelReason = toErrorObject(reason, "Chrome MCP operation cancelled");
-      reject(cancelReason);
-    };
-    if (signal) {
-      abortListener = () => cancel(signal.reason ?? new Error("aborted"));
-      signal.addEventListener("abort", abortListener, { once: true });
-    }
-    if (timeoutMs !== undefined && timeoutMs > 0) {
-      timer = setTimeout(
-        () =>
-          cancel(
-            new Error(
-              `Chrome MCP operation timed out after ${timeoutMs}ms while waiting for another operation.`,
-            ),
-          ),
-        timeoutMs,
-      );
-      timer.unref?.();
-    }
-  });
-
-  try {
-    return await Promise.race([queued, cancelBeforeStart]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-    if (signal && abortListener) {
-      signal.removeEventListener("abort", abortListener);
-    }
-    if (cancelled) {
-      void queued.catch(() => {});
-    }
-  }
 }
 
 /** UID-only MCP actions cannot distinguish collisions between renderer documents. */
@@ -131,9 +57,8 @@ function validateChromeMcpSnapshotRefs(root: ChromeMcpSnapshotNode) {
   for (let current = pending.pop(); current; current = pending.pop()) {
     const role = current.node.role?.trim().toLowerCase();
     const document = role === "rootwebarea" ? current.node : current.document;
-    const documentUid =
-      role === "rootwebarea" ? normalizeOptionalString(current.node.id) : current.documentUid;
     const uid = normalizeOptionalString(current.node.id);
+    const documentUid = role === "rootwebarea" ? uid : current.documentUid;
     if (uid) {
       const previous = documents.get(uid);
       if (previous && previous.document !== document) {
@@ -306,7 +231,30 @@ export async function withChromeMcpLease<T>(
     options,
   );
   try {
-    return await withChromeMcpOperationLock(lease.session, options, async () => {
+    const signal = options.signal;
+    if (signal?.aborted) {
+      throw signal.reason ?? new Error("aborted");
+    }
+    const timeoutMs = options.timeoutMs;
+    const release = await getChromeMcpRoutingState(lease.session).operationPermits.acquire({
+      signal,
+      deadlineAtMs: timeoutMs !== undefined && timeoutMs > 0 ? Date.now() + timeoutMs : undefined,
+    });
+    if (!release) {
+      if (signal?.aborted) {
+        throw toErrorObject(
+          signal.reason ?? new Error("aborted"),
+          "Chrome MCP operation cancelled",
+        );
+      }
+      throw new Error(
+        `Chrome MCP operation timed out after ${timeoutMs}ms while waiting for another operation.`,
+      );
+    }
+    try {
+      if (signal?.aborted) {
+        throw signal.reason ?? new Error("aborted");
+      }
       if (
         !lease.temporary &&
         (!lease.owner.isCurrent(lease.session) || lease.session.transport.pid === null)
@@ -327,7 +275,9 @@ export async function withChromeMcpLease<T>(
             extractStructuredPages(await call("list_pages", {}, callOptions)),
           ),
       });
-    });
+    } finally {
+      release();
+    }
   } finally {
     await lease.release();
   }

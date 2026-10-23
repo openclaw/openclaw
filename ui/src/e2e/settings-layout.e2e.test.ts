@@ -2,6 +2,8 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Response } from "playwright";
 import { expect, it } from "vitest";
+import type { PresenceEntry } from "../../../packages/gateway-protocol/src/index.ts";
+import type { DevicePairingList } from "../../../src/gateway/device-pairing-list.types.js";
 import type { CronJob } from "../api/types.ts";
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
 import {
@@ -24,6 +26,12 @@ const suite = createControlUiE2eSuite({
 });
 
 const proofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+
+const emptyDeviceResponses = {
+  "node.list": { ts: 0, nodes: [] },
+  "device.pair.list": { pending: [], paired: [] } satisfies DevicePairingList,
+  "system-presence": [] satisfies PresenceEntry[],
+};
 
 const introRoutes = [
   "appearance",
@@ -96,15 +104,13 @@ const settingsRowRoutes = [
 
 const mobileSettingsRoutes = [...settingsRowRoutes, "logs"] as const satisfies readonly RouteId[];
 
-const mobileStandaloneSettingsPageRoutes = [
-  "usage",
-  "cron",
-  "memory-import",
-] as const satisfies readonly RouteId[];
+const mobileStandaloneSettingsPageRoutes = ["memory-import"] as const satisfies readonly RouteId[];
 
 const mobileGeometryCases = [
   { route: "sessions", contentSelector: ".settings-page" },
   { route: "worktrees", contentSelector: ".settings-page" },
+  { route: "usage", contentSelector: ".settings-page" },
+  { route: "cron", contentSelector: ".settings-page" },
   { route: "appearance", contentSelector: ".settings-page" },
   { route: "model-providers", contentSelector: ".settings-page" },
   { route: "memory", contentSelector: ".memory-page__panel .settings-page" },
@@ -357,7 +363,7 @@ suite.define(() => {
       viewport: { height: 844, width: 390 },
     });
     let page = await context.newPage();
-    await installMockGateway(page);
+    await installMockGateway(page, { methodResponses: emptyDeviceResponses });
 
     try {
       const readShellInsets = (route: RouteId) =>
@@ -814,7 +820,7 @@ suite.define(() => {
       viewport: { height: 900, width: 1440 },
     });
     const page = await context.newPage();
-    await installMockGateway(page);
+    await installMockGateway(page, { methodResponses: emptyDeviceResponses });
 
     try {
       if (proofEnabled) {

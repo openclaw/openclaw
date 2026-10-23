@@ -6,7 +6,6 @@ import {
   awaitGateBeforeSettlement as awaitGate,
   createDeferred,
 } from "../../../test/helpers/promise.js";
-import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import * as sessionStateEvents from "../../sessions/session-state-events.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import { getActiveAcpTurnCount, listActiveAcpSessionsForOwner } from "./active-turns.js";
@@ -22,6 +21,7 @@ import {
   flushMicrotasks,
   hoisted,
   installAcpSessionManagerTestLifecycle,
+  installMutableAcpSessionMetaUpsert,
   managerFixture,
   mockParentedAcpSessionEntries,
   readySessionMeta,
@@ -231,47 +231,17 @@ describe("AcpSessionManager", () => {
     });
   }, 300_000);
 
-  it("cancels a queued turn promptly when its caller aborts before the actor is free", async () => {
-    const f = fixture();
-    const { entered: firstTurnStarted, release: releaseFirstTurn } = holdTurn(f.runtimeState, "r1");
-    const first = f.run("first", "r1");
-    const abortController = new AbortController();
-    const events: AcpRuntimeEvent[] = [];
-    let second: Promise<void> | undefined;
-    try {
-      await Promise.race([firstTurnStarted.promise, first]);
-      second = f.run("second", "r2", {
-        admittedRunContext: createTestAdmittedRunContext("r2"),
-        signal: abortController.signal,
-        onEvent: (event) => {
-          events.push(event);
-        },
-      });
-      expect(f.manager.getObservabilitySnapshot().turns.queueDepth).toBe(2);
-      abortController.abort();
-      await second;
-      expect(f.manager.getObservabilitySnapshot().turns.queueDepth).toBe(2);
-      expect(events).toEqual([{ type: "done", status: "cancelled", stopReason: "cancel" }]);
-      expect(f.runtimeState.runTurn).toHaveBeenCalledOnce();
-      releaseFirstTurn.resolve();
-      await first;
-      await f.manager.getSessionStatus(target);
-      expect(f.manager.getObservabilitySnapshot().turns.queueDepth).toBe(0);
-    } finally {
-      abortController.abort();
-      releaseFirstTurn.resolve();
-      await Promise.allSettled([first, second]);
-    }
-  });
-
   it("times out a hung persistent turn after partial progress without closing the session and lets queued work continue", async () => {
     vi.useFakeTimers();
     try {
       await withStateDirEnv("openclaw-acp-manager-", async () => {
         const f = fixture();
+        const state = { currentMeta: readySessionMeta() };
+        installMutableAcpSessionMetaUpsert(state);
         mockParentedAcpSessionEntries({
           childSessionKey: target.sessionKey,
           parentSessionKey: "agent:main:main",
+          state,
         });
         const { entered: firstTurnStarted } = holdTurn(f.runtimeState, "r1", [
           { type: "text_delta", text: "Working on it..." },
@@ -286,7 +256,6 @@ describe("AcpSessionManager", () => {
         const second = f.run("second", "r2", { cfg });
         await flushMicrotasks();
         expect(f.runtimeState.runTurn).toHaveBeenCalledOnce();
-        expect(f.manager.getObservabilitySnapshot().turns.queueDepth).toBe(2);
         await vi.advanceTimersByTimeAsync(3_500);
         await expect(first).rejects.toMatchObject({
           code: "ACP_TURN_FAILED",
@@ -300,7 +269,7 @@ describe("AcpSessionManager", () => {
         const snapshot = f.manager.getObservabilitySnapshot();
         expect(snapshot.runtimeCache.activeSessions).toBe(1);
         expect(snapshot.errorsByCode.ACP_TURN_FAILED).toBe(1);
-        expect(snapshot.turns).toMatchObject({ active: 0, queueDepth: 0, completed: 1, failed: 1 });
+        expect(snapshot.turns).toMatchObject({ active: 0, completed: 1, failed: 1 });
         const states = extractStatesFromUpserts();
         expect(states).toContain("error");
         expect(states.at(-1)).toBe("idle");
@@ -549,13 +518,13 @@ describe("AcpSessionManager", () => {
         const reached = createDeferred();
         const release = createDeferred();
         const failure = new Error(`ACP preflight ${reason}`);
-        const read = manager.resolveSessionAsync.bind(manager);
-        const readSpy = vi.spyOn(manager, "resolveSessionAsync");
+        const read = hoisted.readAcpSessionEntryAsyncMock.getMockImplementation();
+        const readSpy = hoisted.readAcpSessionEntryAsyncMock;
         if (reason !== "signal failure") {
           readSpy.mockImplementationOnce(async (params) => {
             reached.resolve();
             await release.promise;
-            return await read(params);
+            return await read?.(params);
           });
         }
         const signalSpy =
@@ -574,6 +543,8 @@ describe("AcpSessionManager", () => {
         const outcome = Promise.allSettled([pending]);
         const successorStarted = createDeferred();
         const releaseSuccessor = createDeferred();
+        const successorReadReached = createDeferred();
+        const releaseSuccessorRead = createDeferred();
         let successor: Promise<void> | undefined;
         try {
           await awaitGate(reached.promise, outcome, "Turn settled before preflight");
@@ -596,18 +567,31 @@ describe("AcpSessionManager", () => {
               await releaseSuccessor.promise;
               yield { type: "done" as const };
             });
+            readSpy.mockImplementationOnce(async (params) => {
+              successorReadReached.resolve();
+              await releaseSuccessorRead.promise;
+              return await read?.(params);
+            });
             successor = run(input);
             void successor.catch(() => {});
+            await flushMicrotasks();
+            expect(runtime.ensureSession).not.toHaveBeenCalled();
+          }
+          const metadataWrites = hoisted.upsertAcpSessionMetaMock.mock.calls.length;
+          release.resolve();
+          expect(await outcome).toMatchObject([{ status: "rejected" }]);
+          if (successor) {
+            await successorReadReached.promise;
+          }
+          expect(hoisted.upsertAcpSessionMetaMock).toHaveBeenCalledTimes(metadataWrites);
+          releaseSuccessorRead.resolve();
+          if (successor) {
             await awaitGate(
               successorStarted.promise,
               successor,
               "Successor settled before starting its stream",
             );
           }
-          const metadataWrites = hoisted.upsertAcpSessionMetaMock.mock.calls.length;
-          release.resolve();
-          expect(await outcome).toMatchObject([{ status: "rejected" }]);
-          expect(hoisted.upsertAcpSessionMetaMock).toHaveBeenCalledTimes(metadataWrites);
           expect(getActiveAcpTurnCount()).toBe(successor ? 1 : 0);
           expect(listActiveAcpSessionsForOwner(parentSessionKey)).toEqual(
             successor ? [sessionKey] : [],
@@ -631,9 +615,12 @@ describe("AcpSessionManager", () => {
           }
         } finally {
           release.resolve();
+          releaseSuccessorRead.resolve();
           releaseSuccessor.resolve();
           await Promise.allSettled([pending, ...(successor ? [successor] : [])]);
-          readSpy.mockRestore();
+          if (read) {
+            readSpy.mockImplementation(read);
+          }
           signalSpy?.mockRestore();
         }
       });

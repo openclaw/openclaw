@@ -85,7 +85,6 @@ export async function ensureMatrixStartupVerification(params: {
   accountConfig: Pick<MatrixConfig, "startupVerification" | "startupVerificationCooldownHours">;
   env?: NodeJS.ProcessEnv;
   nowMs?: number;
-  stateDir?: string;
   stateFilePath?: string;
 }): Promise<MatrixStartupVerificationOutcome> {
   if (params.auth.encryption !== true || !params.client.crypto) {
@@ -98,14 +97,13 @@ export async function ensureMatrixStartupVerification(params: {
     const storagePaths = await resolveMatrixStoragePaths({
       ...params.auth,
       env: params.env,
-      stateDir: params.stateDir,
     });
     statePath = path.join(storagePaths.rootDir, STARTUP_VERIFICATION_STATE_FILENAME);
   }
   await assertMatrixSupportedStateFile(statePath);
   const stateLocation = {
     env: params.env,
-    stateDir: params.stateDir ?? path.dirname(statePath),
+    stateDir: path.dirname(statePath),
   };
   const stateKey = params.auth.accountId.trim() || "default";
   const mode = params.accountConfig.startupVerification ?? DEFAULT_STARTUP_VERIFICATION_MODE;

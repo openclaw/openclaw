@@ -90,7 +90,6 @@ import { getFeishuSyntheticDirectPreDispatchTarget } from "./synthetic-event-tar
 import {
   isFeishuGroupChatType,
   type FeishuMessageContext,
-  type FeishuMediaInfo,
   type FeishuMessageInfo,
 } from "./types.js";
 export type { FeishuBotAddedEvent, FeishuMessageEvent } from "./event-types.js";
@@ -103,45 +102,6 @@ function isFeishuTopicSessionScope(
   scope: ReturnType<typeof resolveConfiguredFeishuGroupSessionScope>,
 ): boolean {
   return scope === "group_topic" || scope === "group_topic_sender";
-}
-
-async function resolveFeishuAudioTranscript(params: {
-  cfg: ClawdbotConfig;
-  mediaList: FeishuMediaInfo[];
-  content: string;
-  messageType: string;
-  chatType: "direct" | "group";
-  log: (msg: string) => void;
-}): Promise<string | undefined> {
-  if (params.messageType !== "audio") {
-    return undefined;
-  }
-  const audioMedia = params.mediaList.filter(
-    (media) =>
-      Boolean(media.path) && (media.kind === "audio" || media.contentType?.startsWith("audio/")),
-  );
-  if (audioMedia.length === 0) {
-    return undefined;
-  }
-  // Audio content is the server transcript. Return it for the shared marker path,
-  // but only after the media check so failed downloads retain their notice.
-  if (params.content.trim()) {
-    return params.content;
-  }
-
-  try {
-    const { transcribeFirstAudio } = await import("openclaw/plugin-sdk/media-runtime");
-    return await transcribeFirstAudio({
-      ctx: {
-        media: audioMedia,
-        ChatType: params.chatType,
-      },
-      cfg: params.cfg,
-    });
-  } catch (err) {
-    params.log(`feishu: audio preflight transcription failed: ${String(err)}`);
-    return undefined;
-  }
 }
 
 export function parseFeishuMessageEvent(
@@ -414,7 +374,7 @@ export async function handleFeishuMessage(params: {
   // Resolve sender display name (best-effort) so the agent can attribute messages correctly.
   // Optimization: skip if disabled to save API quota (Feishu free tier limit).
   let permissionErrorForAgent: FeishuPermissionError | undefined;
-  if (feishuCfg?.resolveSenderNames ?? true) {
+  if (feishuCfg.resolveSenderNames) {
     if (ctx.senderType === "bot") {
       const senderName = await resolveFeishuBotName({
         account,
@@ -511,7 +471,7 @@ export async function handleFeishuMessage(params: {
   const isTopicSession =
     isGroup && isFeishuTopicSessionScope(groupSession?.groupSessionScope ?? "group");
   const groupHistoryKey = isGroup ? (groupSession?.peerId ?? ctx.chatId) : undefined;
-  const dmPolicy = feishuCfg?.dmPolicy ?? "pairing";
+  const dmPolicy = feishuCfg.dmPolicy;
   const configAllowFrom = feishuCfg?.allowFrom ?? [];
   const rawBroadcastAgents = isGroup ? resolveBroadcastAgents(cfg, ctx.chatId) : null;
   const broadcastAgents = rawBroadcastAgents
@@ -571,7 +531,6 @@ export async function handleFeishuMessage(params: {
     }
 
     ({ requireMention } = resolveFeishuReplyPolicy({
-      isDirectMessage: false,
       cfg,
       accountId: account.accountId,
       groupId: ctx.chatId,
@@ -669,7 +628,7 @@ export async function handleFeishuMessage(params: {
         cfg: candidateCfg,
         accountId: account.accountId,
       });
-      const candidateDmPolicy = candidateAccount.config.dmPolicy ?? "pairing";
+      const candidateDmPolicy = candidateAccount.config.dmPolicy;
       const candidateConfigAllowFrom = candidateAccount.config.allowFrom ?? [];
       const ingress = await resolveFeishuDmIngressAccess({
         cfg: candidateCfg,
@@ -962,14 +921,31 @@ export async function handleFeishuMessage(params: {
       return;
     }
 
-    const audioTranscript = await resolveFeishuAudioTranscript({
-      cfg: effectiveCfg,
-      mediaList,
-      content: ctx.content,
-      messageType: event.message.message_type,
-      chatType: isGroup ? "group" : "direct",
-      log,
-    });
+    let audioTranscript: string | undefined;
+    if (event.message.message_type === "audio") {
+      const audioMedia = mediaList.filter(
+        (media) =>
+          Boolean(media.path) &&
+          (media.kind === "audio" || media.contentType?.startsWith("audio/")),
+      );
+      if (audioMedia.length > 0) {
+        // Audio content is the server transcript. Use it for the shared marker path,
+        // but only after the media check so failed downloads retain their notice.
+        if (ctx.content.trim()) {
+          audioTranscript = ctx.content;
+        } else {
+          try {
+            const { transcribeFirstAudio } = await import("openclaw/plugin-sdk/media-runtime");
+            audioTranscript = await transcribeFirstAudio({
+              ctx: { media: audioMedia, ChatType: isGroup ? "group" : "direct" },
+              cfg: effectiveCfg,
+            });
+          } catch (err) {
+            log(`feishu: audio preflight transcription failed: ${String(err)}`);
+          }
+        }
+      }
+    }
     const transcribedAudioIndex =
       audioTranscript === undefined
         ? -1

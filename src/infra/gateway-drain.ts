@@ -8,7 +8,7 @@ export async function waitForGatewayDrain<Snapshot extends { idle: boolean }>(
     onSnapshot?: (snapshot: Snapshot) => void;
   },
 ): Promise<{ drained: boolean; elapsedMs: number; snapshot: Snapshot }> {
-  const startedAt = Date.now();
+  const startedAt = performance.now();
   const deadlineAt =
     typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
       ? startedAt + Math.max(0, Math.floor(timeoutMs))
@@ -16,8 +16,8 @@ export async function waitForGatewayDrain<Snapshot extends { idle: boolean }>(
   while (true) {
     const snapshot = inspect();
     options.onSnapshot?.(snapshot);
-    const elapsedMs = Date.now() - startedAt;
-    const remainingMs = deadlineAt === undefined ? undefined : deadlineAt - Date.now();
+    const elapsedMs = performance.now() - startedAt;
+    const remainingMs = deadlineAt === undefined ? undefined : deadlineAt - performance.now();
     if (snapshot.idle || (remainingMs !== undefined && remainingMs <= 0)) {
       return { drained: snapshot.idle, elapsedMs, snapshot };
     }

@@ -43,6 +43,26 @@ it("updates a keyed job row from a replacement owner snapshot", () => {
   );
 });
 
+it("does not reread retained jobs while typing and still dispatches current row actions", () => {
+  const job = createCronViewJob("retained");
+  const state = job.state;
+  const readState = vi.fn(() => state);
+  Object.defineProperty(job, "state", { get: readState });
+  const [props, setProps] = createSignal(
+    createCronViewProps({ jobs: [job, createCronViewJob("sibling")], jobsTotal: 2 }),
+  );
+  const view = mountSolid(() => <CronView {...props()} />);
+  const row = view.container.querySelector<HTMLElement>('[data-test-id="cron-row-retained"]')!;
+  const onSelectJob = vi.fn();
+  readState.mockClear();
+  setProps((previous) => ({ ...previous, jobsQuery: "daily", loading: true, onSelectJob }));
+  flush();
+  expect(readState).not.toHaveBeenCalled();
+  expect(view.container.querySelector('[data-test-id="cron-row-retained"]')).toBe(row);
+  row.click();
+  expect(onSelectJob).toHaveBeenCalledExactlyOnceWith(job);
+});
+
 it("publishes refreshed runtime facts from the mutable selected job", () => {
   const job = createCronViewJob("job-runtime", {
     trigger: { script: "json({ fire: false })" },
@@ -139,4 +159,54 @@ it("retains history controls and forwards the current transcript target after re
   );
   button.click();
   expect(onViewRunTranscript).toHaveBeenCalledExactlyOnceWith(refreshed, button);
+});
+
+it("keeps retained row controls current across pending queries and access changes", () => {
+  const job = createCronViewJob("retained-actions");
+  const initialRun = vi.fn();
+  const currentRun = vi.fn();
+  const [props, setProps] = createSignal(
+    createCronViewProps({ jobs: [job], jobsTotal: 1, onRun: initialRun }),
+  );
+  const view = mountSolid(() => <CronView {...props()} />);
+  const row = getElement(view.container, ".cron-table__row", HTMLDivElement);
+  const run = getElement(row, ".cron-row-run", HTMLButtonElement);
+  const toggle = getElement(row, "input.settings-toggle__input", HTMLInputElement);
+
+  setProps((previous) => ({ ...previous, jobsQuery: "retained", loading: true, busy: true }));
+  flush();
+  expect(view.container.querySelector(".cron-table__row")).toBe(row);
+  expect(run.disabled).toBe(true);
+  expect(toggle.disabled).toBe(true);
+
+  setProps((previous) => ({ ...previous, toggleSavingJobId: job.id }));
+  flush();
+  expect(run.disabled).toBe(true);
+  expect(toggle.disabled).toBe(false);
+  expect(toggle.getAttribute("aria-disabled")).toBe("true");
+
+  setProps((previous) => ({ ...previous, connected: false }));
+  flush();
+  expect(run.disabled).toBe(true);
+  expect(toggle.disabled).toBe(true);
+
+  setProps((previous) => ({
+    ...previous,
+    busy: false,
+    connected: true,
+    toggleSavingJobId: null,
+    onRun: currentRun,
+  }));
+  flush();
+  expect(row.querySelector(".cron-row-run")).toBe(run);
+  expect(run.disabled).toBe(false);
+  expect(toggle.getAttribute("aria-disabled")).toBeNull();
+  run.click();
+  expect(currentRun).toHaveBeenCalledExactlyOnceWith(job, "force");
+  expect(initialRun).not.toHaveBeenCalled();
+
+  setProps((previous) => ({ ...previous, canManage: false }));
+  flush();
+  expect(view.container.querySelector(".cron-table__row")).toBe(row);
+  expect(row.querySelector(".cron-table__actions")).toBeNull();
 });

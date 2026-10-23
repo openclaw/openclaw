@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -7,9 +6,9 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
-  beginSessionWorkAdmission,
-  runExclusiveSessionLifecycleMutation,
-} from "../../sessions/session-lifecycle-admission.js";
+  beginSessionEffect,
+  runSessionMutation,
+} from "../../sessions/session-controller.lifecycle.js";
 import {
   onSessionIdentityMutation,
   type SessionIdentityMutation,
@@ -39,47 +38,22 @@ import { observeSessionMaintenanceCompletion } from "./session-accessor.sqlite-m
 import * as maintenanceKick from "./session-accessor.sqlite-maintenance-kick.js";
 import { registerSessionMaintenancePreparationTests } from "./session-accessor.sqlite-maintenance-preparation.test-support.js";
 import { registerSessionMaintenanceProtectionTests } from "./session-accessor.sqlite-maintenance-protection.test-support.js";
-import { observeSessionMaintenancePlanningWorker } from "./session-accessor.sqlite-maintenance.test-support.js";
+import {
+  maintenanceFixture,
+  maintenancePolicy,
+  observeSessionMaintenancePlanningWorker,
+} from "./session-accessor.sqlite-maintenance.test-support.js";
 import * as reclamationRun from "./session-accessor.sqlite-reclamation-run.js";
 import * as reclamation from "./session-accessor.sqlite-reclamation.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
-import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 
 afterEach(() => vi.restoreAllMocks());
-
-function maintenanceFixture(state: OpenClawTestState) {
-  const storePath = path.join(state.sessionsDir(), "sessions.json");
-  const scope = (sessionKey: string) => ({ sessionKey, storePath });
-  const seed = (
-    sessionKey: string,
-    sessionId: string,
-    updatedAt = Date.now(),
-    fields: Partial<Parameters<typeof replaceSessionEntrySync>[1]> = {},
-  ) => {
-    const target = scope(sessionKey);
-    replaceSessionEntrySync(target, { sessionId, updatedAt, ...fields });
-    return target;
-  };
-  return { state, storePath, scope, seed, databaseOptions: { agentId: "main", env: state.env } };
-}
 
 function withMaintenanceFixture(
   run: (fixture: ReturnType<typeof maintenanceFixture>) => Promise<void>,
 ) {
   return withOpenClawTestState({ scenario: "minimal" }, (state) => run(maintenanceFixture(state)));
-}
-
-function maintenancePolicy(
-  pruneAfter = "1s",
-  overrides: Parameters<typeof resolveMaintenanceConfigFromInput>[0] = {},
-) {
-  return resolveMaintenanceConfigFromInput({
-    mode: "enforce",
-    maxEntries: 100,
-    pruneAfter,
-    ...overrides,
-  });
 }
 
 function observeMaintenance(
@@ -304,7 +278,7 @@ describe("automatic worker planning protections", () => {
       }
     };
     if (protection.startsWith("lifecycle")) {
-      await runExclusiveSessionLifecycleMutation("archive", {
+      await runSessionMutation({
         scope: storePath,
         identities: [protection.endsWith("-key") ? protectedKey : protectedId],
         run,
@@ -331,7 +305,7 @@ describe("automatic worker planning protections", () => {
       });
       release = () => clearAgentRunContext("maintenance-live-run");
     } else if (protection.startsWith("work")) {
-      const lease = await beginSessionWorkAdmission({
+      const lease = await beginSessionEffect({
         scope: storePath,
         identities: [protection.endsWith("-key") ? protectedKey : protectedId],
         assertAllowed: () => {},
@@ -510,7 +484,7 @@ it("retains a managed backdate during synchronous maintenance publication reentr
 });
 
 it("publishes exact archived keys without worktrees after Worker planning", async () => {
-  await withMaintenanceFixture(async ({ state, storePath, seed, databaseOptions }) => {
+  await withMaintenanceFixture(async ({ seed, databaseOptions, plan }) => {
     const active = seed("agent:main:keyed-active", "active");
     const stale = seed("agent:main:keyed-stale", "stale", 1);
     const database = openOpenClawAgentDatabase(databaseOptions);
@@ -520,18 +494,7 @@ it("publishes exact archived keys without worktrees after Worker planning", asyn
     try {
       const result = await reclamationRun.runSqliteSessionReclamation({
         diagnostics,
-        plan: {
-          kind: "maintenance-plan",
-          databaseOptions: reclamation.resolveSessionReclamationDatabaseOptions(databaseOptions),
-          materializedPlans: [],
-          input: {
-            activeSessionKey: active.sessionKey,
-            archiveDirectory: state.sessionsDir(),
-            maintenance: maintenancePolicy(),
-            preservation: { providerKeys: [], workIdentities: [], lifecycleIdentities: [] },
-            storePath,
-          },
-        },
+        plan: plan(active.sessionKey, maintenancePolicy()),
       });
       expect(diagnostics).toMatchObject({ workerThreadId: expect.any(Number) });
       expect(result).toMatchObject({

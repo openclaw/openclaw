@@ -1,11 +1,11 @@
 import { vi } from "vitest";
-import type { RunReplyAgentParams } from "./agent-runner-core.js";
-import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
 import type {
   ReplyBackendHandle,
   ReplyBackendMessageInjectionV2,
-} from "./reply-run-registry.contracts.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
+} from "../../sessions/session-controller.contracts.js";
+import type { ReplyOperation } from "../../sessions/session-controller.js";
+import type { RunReplyAgentParams } from "./agent-runner-core.js";
+import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
 import { createMockTypingController } from "./test-helpers.js";
 import { createTypingSignaler } from "./typing-mode.js";
 
@@ -54,10 +54,8 @@ export function createSteerParams(
     resolvedQueue: { mode: "steer", debounceMs: 0 },
     restartRecoverySourceTurnId: undefined,
     replyOperationRunState: undefined,
-    releaseAdmissionTicket() {},
     touchActiveSessionEntry: async () => {},
-    typing,
-    typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
+    typingSignals: createTypingSignaler({ typing, mode: "never" }),
     ...overrides,
   };
 }
@@ -71,6 +69,7 @@ export function attachSteerBackend(
   const { runId, cancel = vi.fn(), ...injection } = options;
   operation.attachBackend({
     kind: "embedded",
+    supportsTranscriptCommitWait: true,
     cancel,
     toolAuthorityFingerprint,
     messageInjectionV2: { version: 2, isAvailable: () => true, ...injection },

@@ -13,6 +13,7 @@ import {
 } from "./directory-durability.js";
 import { formatErrorMessage } from "./errors.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { pathEntryExists } from "./path-existence.js";
 import { backupNodeSqliteDatabase } from "./sqlite-backup.js";
 import { copySqliteFile } from "./sqlite-file-copy.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
@@ -85,15 +86,9 @@ async function assertRegularSourceFile(
 }
 
 async function assertTargetAbsent(targetPath: string): Promise<void> {
-  try {
-    await fs.lstat(targetPath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return;
-    }
-    throw error;
+  if (await pathEntryExists(targetPath)) {
+    throw new Error(`SQLite snapshot target already exists: ${targetPath}`);
   }
-  throw new Error(`SQLite snapshot target already exists: ${targetPath}`);
 }
 
 async function copyFileExclusive(
@@ -682,12 +677,6 @@ async function verifyAndPublishSqliteSnapshot(
               published.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF;");
               assertSqliteIntegrity(published, options.targetPath, options.integrity);
               options.validate?.(published, options.targetPath);
-              const publishedUserVersion = readSqliteUserVersion(published);
-              if (publishedUserVersion !== userVersion) {
-                throw new Error(
-                  `SQLite snapshot user_version changed during publication: expected ${userVersion}, got ${publishedUserVersion}`,
-                );
-              }
             } finally {
               published.close();
             }

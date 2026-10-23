@@ -163,6 +163,10 @@ function createTarballFromParts(parts: Buffer[]): Buffer {
   return gzipSync(Buffer.concat([...parts, Buffer.alloc(1024)]));
 }
 
+function stagePackage(entries: (marker: string) => TarEntry[]) {
+  return stageTarball((marker) => createTarball(entries(marker)));
+}
+
 function packageEntries(markerPath: string, overrides: Record<string, unknown> = {}): TarEntry[] {
   return [{ path: "package/", type: "5" }, manifestEntry(markerPath, {}, overrides)];
 }
@@ -990,22 +994,16 @@ describe("plugin publication artifact", () => {
 
   it("rejects ZIP traversal, additional files, and byte tampering", () => {
     const fixture = createFixture();
-    const manifest = readFileSync(fixture.created.manifestPath);
+    const tarball = zipFile(TARBALL_NAME, fixture.tarball);
+    const manifest = zipFile(
+      "plugin-publication-manifest.json",
+      readFileSync(fixture.created.manifestPath),
+    );
     const malformedArtifacts: Array<[RegExp, ZipFile[]]> = [
-      [
-        /Unsafe ZIP entry path/u,
-        [
-          zipFile(TARBALL_NAME, fixture.tarball),
-          zipFile("../plugin-publication-manifest.json", manifest),
-        ],
-      ],
+      [/Unsafe ZIP entry path/u, [tarball, { ...manifest, name: `../${manifest.name}` }]],
       [
         /must contain between 2 and 2 exact files/u,
-        [
-          zipFile(TARBALL_NAME, fixture.tarball),
-          zipFile("plugin-publication-manifest.json", manifest),
-          zipFile("extra.txt", "unexpected"),
-        ],
+        [tarball, manifest, zipFile("extra.txt", "unexpected")],
       ],
     ];
     for (const [expected, files] of malformedArtifacts) {
@@ -1120,14 +1118,12 @@ describe("plugin publication artifact", () => {
   });
 
   it("caps the number of tar headers before retaining their inventory", () => {
-    const { artifactDir } = stageTarball((markerPath) =>
-      createTarball([
-        ...packageEntries(markerPath),
-        ...Array.from({ length: 20_000 }, (_, index) => ({
-          path: `package/file-${index.toString().padStart(5, "0")}`,
-        })),
-      ]),
-    );
+    const { artifactDir } = stagePackage((markerPath) => [
+      ...packageEntries(markerPath),
+      ...Array.from({ length: 20_000 }, (_, index) => ({
+        path: `package/file-${index.toString().padStart(5, "0")}`,
+      })),
+    ]);
     expectTarballError(artifactDir, /exceeds the 20000 entry limit/u);
   });
 
@@ -1188,9 +1184,9 @@ describe("plugin publication artifact", () => {
       /canonical POSIX USTAR headers/u,
     ],
   ] as const)("rejects tar manifest ambiguity: %s", (kind, fields, content, message) => {
-    const { artifactDir, markerPath, tarballPath } = stageTarball((marker) => {
+    const { artifactDir, markerPath, tarballPath } = stagePackage((marker) => {
       const smuggled = kind === "whitespace prefix";
-      return createTarball([
+      return [
         { path: "package/", type: "5", content },
         manifestEntry(
           marker,
@@ -1198,7 +1194,7 @@ describe("plugin publication artifact", () => {
           smuggled ? { scripts: { postinstall: lifecycleScript(marker, "smuggled") } } : {},
         ),
         ...(smuggled ? [manifestEntry(marker)] : []),
-      ]);
+      ];
     });
     if (kind === "trailing slash") {
       expect(consumerTarEntries(tarballPath).at(-1)).toMatchObject({
@@ -1336,9 +1332,10 @@ describe("plugin publication artifact", () => {
       { linkPath: "package/package.json", path: "package/alias", type: "2" as const },
       { path: "package/device", type: "3" as const },
     ]) {
-      const { artifactDir, markerPath } = stageTarball((marker) =>
-        createTarball([...packageEntries(marker), badEntry]),
-      );
+      const { artifactDir, markerPath } = stagePackage((marker) => [
+        ...packageEntries(marker),
+        badEntry,
+      ]);
       expectTarballError(artifactDir);
       expect(existsSync(markerPath)).toBe(false);
     }
@@ -1350,12 +1347,10 @@ describe("plugin publication artifact", () => {
     [{ name: "@openclaw/not-meta" }, { packageName: "@openclaw/not-meta" }],
     [{}, { packageDir: "extensions/not-meta" }],
   ])("requires exact Meta identity and publication flags (%#)", (manifest, params) => {
-    const { artifactDir } = stageTarball((marker) =>
-      createTarball([
-        ...packageEntries(marker, manifest),
-        { content: '{"id":"meta"}\n', path: "package/openclaw.plugin.json" },
-      ]),
-    );
+    const { artifactDir } = stagePackage((marker) => [
+      ...packageEntries(marker, manifest),
+      { content: '{"id":"meta"}\n', path: "package/openclaw.plugin.json" },
+    ]);
     expectTarballError(
       artifactDir,
       /Meta publication requires extensions\/meta with npm and ClawHub enabled/u,

@@ -270,6 +270,28 @@ async function failingStatus() {
   }
   return { payload: json.payload, text: text.text };
 }
+
+it("keeps configured model controls out of text status while preserving JSON", async () => {
+  const primary = "anthropic/claude-sonnet-4-6";
+  const alias = "café\u001b[2J\nforged";
+  const fallback = "anthropic/fallback\u001b[2J\nforged";
+  mocks.loadConfig.mockReturnValue(
+    statusConfig(primary, [fallback], false, {
+      models: { [primary]: { alias }, [fallback]: {} },
+      imageModel: { primary: "openai/image", fallbacks: [fallback] },
+      utilityModel: "",
+    }),
+  );
+  const { text } = await textStatus();
+  expect(text).toContain("café\\nforged");
+  expect(text).toContain("anthropic/fallback\\nforged");
+  expect(text).not.toContain("\u001b[2J");
+  expect(text).not.toContain("\nforged");
+  const { payload } = await jsonStatus();
+  expect(payload.aliases[alias]).toBe(primary);
+  expect(payload.fallbacks).toEqual([fallback]);
+});
+
 function codexRoute(
   status: string,
   effective = { kind: "profiles", detail: "/tmp/openclaw-agent/auth-profiles.json" },

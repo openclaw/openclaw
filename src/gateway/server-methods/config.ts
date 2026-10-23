@@ -90,7 +90,7 @@ import {
 } from "./open-path.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 
 const configWriteRecovery = new WeakMap<
   GatewayConfigRevisionProjector,
@@ -714,25 +714,24 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     respond(true, loadGatewayRuntimeConfigSchema(), undefined);
   },
-  "config.schema.lookup": ({ params, respond }) => {
-    if (
-      !assertValidParams(params, validateConfigSchemaLookupParams, "config.schema.lookup", respond)
-    ) {
-      return;
-    }
-    const { path } = params;
-    const schema = loadGatewayRuntimeConfigSchema();
-    const result = lookupConfigSchema(schema, path, resolveConfigReloadMetadata);
-    if (!result) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "config schema path not found"),
-      );
-      return;
-    }
-    respond(true, result, undefined);
-  },
+  "config.schema.lookup": defineValidatedGatewayHandler(
+    "config.schema.lookup",
+    validateConfigSchemaLookupParams,
+    ({ params, respond }) => {
+      const { path } = params;
+      const schema = loadGatewayRuntimeConfigSchema();
+      const result = lookupConfigSchema(schema, path, resolveConfigReloadMetadata);
+      if (!result) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "config schema path not found"),
+        );
+        return;
+      }
+      respond(true, result, undefined);
+    },
+  ),
   "config.set": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateConfigSetParams, "config.set", respond)) {
       return;
@@ -948,6 +947,17 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!preparedSecretsSnapshot) {
       return;
     }
+    // Only explicit keyed nulls populate the writer's roster-removal grant.
+    const allowedAgentRosterRemovals: string[] = [];
+    const sourceEntries = sourceConfig.agents?.entries;
+    const patchEntries = normalizedPatch.agents?.entries;
+    if (!hashlessPatch && sourceEntries && patchEntries) {
+      for (const [id, entry] of Object.entries(patchEntries)) {
+        if (entry === null && Object.hasOwn(sourceEntries, id)) {
+          allowedAgentRosterRemovals.push(id);
+        }
+      }
+    }
     await commitConfigRestartWrite({
       requestParams: params,
       mode: "config.patch",
@@ -955,6 +965,7 @@ export const configHandlers: GatewayRequestHandlers = {
         ...writeSnapshot,
         writeOptions: {
           ...writeOptions,
+          allowedAgentRosterRemovals,
           // The committed policy may revoke this requester before canonical reread.
           // Admit publication synchronously; retain the writer's own guards through completion.
           assertBeforePublish: () => {

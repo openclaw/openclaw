@@ -7,129 +7,123 @@ import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execut
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
+import { readSqliteDatabaseIntegrityVerification } from "./sqlite-database-admission.js";
 import {
   assertSqliteIntegrity,
   assertSqliteTableIntegrity,
   isTerminalSqliteIntegrityError,
   runSqliteIntegrityOperationSync,
+  SqliteIntegrityError,
   sqliteIntegrityCheckSteps,
   type SqliteIntegrityDiagnostics,
   type SqliteIntegrityOperation,
 } from "./sqlite-integrity.js";
+import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-async function withMaintenanceCheck(check: "quick" | "full", run: () => void) {
+async function withMaintenanceCheck(
+  check: "quick" | "full" | undefined,
+  run: () => void | Promise<void>,
+) {
   const scope = createOpenClawDatabaseMaintenanceScope({
     schemaMaintenance: true,
     sqliteIntegrityCheck: check,
     assertOwnerCurrent() {},
   });
   try {
-    scope.run(run);
+    await scope.run(run);
   } finally {
     await scope.close();
   }
 }
 
+function tableFixture(sql = "CREATE TABLE items(value INTEGER)", withSibling = false) {
+  const filename = path.join(tempDirs.make("sqlite-table-integrity-"), "database.sqlite");
+  const database = openNodeSqliteDatabase(filename);
+  database.exec(sql);
+  const sibling = withSibling ? openNodeSqliteDatabase(filename) : undefined;
+  const observer = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+  return {
+    database,
+    sibling,
+    count: (statement: string) => observer.queries.filter((query) => query === statement).length,
+    [Symbol.dispose]() {
+      observer.restore();
+      sibling?.close();
+      database.close();
+    },
+  };
+}
+
 describe("maintenance table integrity", () => {
   it("shares passing table checks across handles until a write, and retains QUICK and FK", async () => {
-    const filename = path.join(tempDirs.make("sqlite-table-receipt-"), "database.sqlite");
-    using database = openNodeSqliteDatabase(filename);
-    database.exec("CREATE TABLE items(value INTEGER CHECK(value > 0))");
-    using sibling = openNodeSqliteDatabase(filename);
-    const observer = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-    const scoped = () =>
-      observer.queries.filter((sql) => sql === "PRAGMA integrity_check('items');");
-    try {
-      await withMaintenanceCheck("quick", () => {
-        for (const handle of [database, sibling]) {
-          assertSqliteIntegrity(handle, "items", { check: "quick", tables: ["items"] });
-        }
-        expect(scoped()).toHaveLength(1);
-        expect(observer.queries.filter((sql) => sql === "PRAGMA quick_check;")).toHaveLength(2);
-        expect(observer.queries.filter((sql) => sql === "PRAGMA foreign_key_check;")).toHaveLength(
-          2,
-        );
-        database.exec("PRAGMA ignore_check_constraints = ON; INSERT INTO items VALUES (-1)");
-        expect(() => assertSqliteTableIntegrity(sibling, "items", "items")).toThrow(
-          /CHECK constraint/u,
-        );
-        expect(scoped()).toHaveLength(2);
-        database.exec("DELETE FROM items");
-        assertSqliteTableIntegrity(sibling, "items", "items");
-        expect(scoped()).toHaveLength(3);
-      });
-      await withMaintenanceCheck("quick", () =>
-        assertSqliteTableIntegrity(database, "items", "items"),
+    using fixture = tableFixture("CREATE TABLE items(value INTEGER CHECK(value > 0))", true);
+    const { database, count } = fixture;
+    const sibling = fixture.sibling!;
+    await withMaintenanceCheck("quick", () => {
+      for (const handle of [database, sibling]) {
+        assertSqliteIntegrity(handle, "items", { check: "quick", tables: ["items"] });
+      }
+      expect(count("PRAGMA integrity_check('items');")).toBe(1);
+      expect(count("PRAGMA quick_check;")).toBe(2);
+      expect(count("PRAGMA foreign_key_check;")).toBe(2);
+      database.exec("PRAGMA ignore_check_constraints = ON; INSERT INTO items VALUES (-1)");
+      expect(() => assertSqliteTableIntegrity(sibling, "items", "items")).toThrow(
+        /CHECK constraint/u,
       );
-      expect(scoped()).toHaveLength(4);
-    } finally {
-      observer.restore();
-    }
+      expect(count("PRAGMA integrity_check('items');")).toBe(2);
+      database.exec("DELETE FROM items");
+      assertSqliteTableIntegrity(sibling, "items", "items");
+      expect(count("PRAGMA integrity_check('items');")).toBe(3);
+    });
+    await withMaintenanceCheck("quick", () =>
+      assertSqliteTableIntegrity(database, "items", "items"),
+    );
+    expect(count("PRAGMA integrity_check('items');")).toBe(4);
   });
 
   it("rechecks transaction-local writes, DDL, and rollback", async () => {
-    const filename = path.join(tempDirs.make("sqlite-table-transaction-"), "database.sqlite");
-    using database = openNodeSqliteDatabase(filename);
-    database.exec("CREATE TABLE items(value INTEGER)");
-    const observer = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-    const scoped = () =>
-      observer.queries.filter((sql) => sql === "PRAGMA integrity_check('items');");
+    using fixture = tableFixture();
+    const { database, count } = fixture;
     const check = () => assertSqliteTableIntegrity(database, "items", "items");
-    try {
-      await withMaintenanceCheck("quick", () => {
-        database.exec("BEGIN");
-        check();
-        check();
-        expect(scoped()).toHaveLength(1);
-        database.exec("INSERT INTO items VALUES (1)");
-        check();
-        expect(scoped()).toHaveLength(2);
-        database.exec("CREATE INDEX idx_items ON items(value)");
-        check();
-        expect(scoped()).toHaveLength(3);
-        database.exec("ROLLBACK");
-        check();
-        expect(scoped()).toHaveLength(4);
-        expect(database.prepare("SELECT * FROM items").all()).toEqual([]);
-      });
-    } finally {
-      observer.restore();
-    }
+    await withMaintenanceCheck("quick", () => {
+      database.exec("BEGIN");
+      check();
+      check();
+      expect(count("PRAGMA integrity_check('items');")).toBe(1);
+      database.exec("INSERT INTO items VALUES (1)");
+      check();
+      expect(count("PRAGMA integrity_check('items');")).toBe(2);
+      database.exec("CREATE INDEX idx_items ON items(value)");
+      check();
+      expect(count("PRAGMA integrity_check('items');")).toBe(3);
+      database.exec("ROLLBACK");
+      check();
+      expect(count("PRAGMA integrity_check('items');")).toBe(4);
+      expect(database.prepare("SELECT * FROM items").all()).toEqual([]);
+    });
   });
 
   it("retains every explicit FULL check", async () => {
-    const filename = path.join(tempDirs.make("sqlite-table-full-"), "database.sqlite");
-    using database = openNodeSqliteDatabase(filename);
-    database.exec("CREATE TABLE items(value INTEGER)");
-    const observer = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-    try {
-      await withMaintenanceCheck("full", () => {
-        for (let i = 0; i < 2; i += 1) {
-          assertSqliteIntegrity(database, "items", { check: "full", tables: ["items"] });
-          assertSqliteTableIntegrity(database, "items", "items");
-        }
-      });
-      expect(observer.queries.filter((sql) => sql === "PRAGMA integrity_check;")).toHaveLength(2);
-      expect(
-        observer.queries.filter((sql) => sql === "PRAGMA integrity_check('items');"),
-      ).toHaveLength(2);
-      expect(observer.queries.filter((sql) => sql === "PRAGMA foreign_key_check;")).toHaveLength(2);
-    } finally {
-      observer.restore();
-    }
+    using fixture = tableFixture();
+    const { database, count } = fixture;
+    await withMaintenanceCheck("full", () => {
+      for (let i = 0; i < 2; i += 1) {
+        assertSqliteIntegrity(database, "items", { check: "full", tables: ["items"] });
+        assertSqliteTableIntegrity(database, "items", "items");
+      }
+    });
+    expect(count("PRAGMA integrity_check;")).toBe(2);
+    expect(count("PRAGMA integrity_check('items');")).toBe(2);
+    expect(count("PRAGMA foreign_key_check;")).toBe(2);
   });
 });
 
 function withDatabase(sql: string, run: (database: DatabaseSync) => void) {
-  const database = new (requireNodeSqlite().DatabaseSync)(":memory:");
-  try {
-    database.exec(sql);
-    run(database);
-  } finally {
-    database.close();
-  }
+  using database = new (requireNodeSqlite().DatabaseSync)(":memory:");
+  database.exec(sql);
+  run(database);
 }
 
 function caught(run: () => unknown): unknown {
@@ -155,29 +149,30 @@ function taskOrphans(parent = "task_id", child = "task_id", action = "CASCADE", 
 }
 
 describe("assertSqliteIntegrity", () => {
-  it("refuses structural damage in a table outside the migration scope", () => {
-    const databasePath = path.join(tempDirs.make("sqlite-quick-damage-"), "database.sqlite");
-    const writer = new (requireNodeSqlite().DatabaseSync)(databasePath);
-    writer.exec(`
-      CREATE TABLE touched(value TEXT);
-      CREATE TABLE untouched(value TEXT);
-      INSERT INTO untouched VALUES ('retained');
-    `);
-    const pageSize = Number(writer.prepare("PRAGMA page_size").get()?.page_size);
-    const rootPage = Number(
-      writer.prepare("SELECT rootpage FROM sqlite_schema WHERE name='untouched'").get()?.rootpage,
+  it("retains every finding for offline repair without repeating the check", () => {
+    withDatabase(
+      `CREATE TABLE damaged (value INTEGER CHECK(value > 0));
+       PRAGMA ignore_check_constraints = ON;
+       WITH RECURSIVE rows(n) AS (VALUES(1) UNION ALL SELECT n + 1 FROM rows WHERE n < 105)
+       INSERT INTO damaged SELECT -n FROM rows;
+       PRAGMA ignore_check_constraints = OFF;`,
+      (database) => {
+        const observer = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+        try {
+          const failure = caught(() =>
+            assertSqliteIntegrity(database, "offline repair", { allFindings: true }),
+          );
+          expect(failure).toBeInstanceOf(SqliteIntegrityError);
+          if (!(failure instanceof SqliteIntegrityError)) {
+            throw new Error("Expected captured integrity findings");
+          }
+          expect(failure.findings).toHaveLength(105);
+          expect(observer.queries).toEqual(["PRAGMA integrity_check(2147483647);"]);
+        } finally {
+          observer.restore();
+        }
+      },
     );
-    writer.close();
-    const file = fs.openSync(databasePath, "r+");
-    try {
-      fs.writeSync(file, Buffer.from([0xff]), 0, 1, (rootPage - 1) * pageSize);
-    } finally {
-      fs.closeSync(file);
-    }
-    using database = new (requireNodeSqlite().DatabaseSync)(databasePath);
-    expect(() =>
-      assertSqliteIntegrity(database, "migration source", { check: "quick", tables: ["touched"] }),
-    ).toThrow(expect.objectContaining({ name: "SqliteIntegrityError" }));
   });
 
   it.each([
@@ -285,73 +280,40 @@ describe("assertSqliteIntegrity", () => {
     );
   });
 
-  function expectForeignKeyViolation(
-    sql: string,
-    expected: RegExp,
-    beforeCheck?: (database: DatabaseSync) => void,
-  ) {
-    withDatabase(sql, (database) => {
-      beforeCheck?.(database);
-      expect(() => assertSqliteIntegrity(database, "test database")).toThrow(expected);
-    });
-  }
-
-  it("reports violations deterministically without truncating 64-bit rowids", () => {
-    expectForeignKeyViolation(
-      `
-        PRAGMA foreign_keys = OFF;
-        CREATE TABLE parents (id INTEGER PRIMARY KEY);
-        CREATE TABLE children (
-          id INTEGER PRIMARY KEY,
-          parent_id INTEGER NOT NULL REFERENCES parents(id)
-        );
-        INSERT INTO children (id, parent_id)
-        VALUES (9007199254740993, 99), (1, 99);
-      `,
+  it.each([
+    [
+      "64-bit rowids in deterministic order",
+      "(9007199254740993, 99), (1, 99)",
       /children row 1 references parents \(foreign key 0\); children row 9007199254740993 references parents \(foreign key 0\)/u,
-    );
-  });
-
-  it("cannot be bypassed by a schema object shadowing the table-valued pragma", () => {
-    expectForeignKeyViolation(
-      `
-        PRAGMA foreign_keys = OFF;
-        CREATE TABLE parents (id INTEGER PRIMARY KEY);
-        CREATE TABLE children (
-          id INTEGER PRIMARY KEY,
-          parent_id INTEGER NOT NULL REFERENCES parents(id)
-        );
-        INSERT INTO children (id, parent_id) VALUES (1, 99);
-        CREATE TABLE pragma_foreign_key_check (
-          "table" TEXT NOT NULL,
-          rowid INTEGER,
-          parent TEXT NOT NULL,
-          fkid INTEGER NOT NULL
-        );
-      `,
+    ],
+    [
+      "a shadowing schema object",
+      "(1, 99)",
       /foreign_key_check failed for test database: children row 1 references parents \(foreign key 0\)/u,
-      (database) => {
-        expect(
-          database
-            .prepare('SELECT "table", rowid, parent, fkid FROM pragma_foreign_key_check')
-            .all(),
-        ).toEqual([]);
-      },
-    );
-  });
-
-  it("identifies violations in WITHOUT ROWID tables", () => {
-    expectForeignKeyViolation(
-      `
-        PRAGMA foreign_keys = OFF;
-        CREATE TABLE parents (id TEXT PRIMARY KEY);
-        CREATE TABLE children (
-          id TEXT PRIMARY KEY,
-          parent_id TEXT NOT NULL REFERENCES parents(id)
-        ) WITHOUT ROWID;
-        INSERT INTO children (id, parent_id) VALUES ('child-1', 'missing-parent');
-      `,
+    ],
+    [
+      "WITHOUT ROWID tables",
+      "('child-1', 'missing-parent')",
       /foreign_key_check failed for test database: children row without rowid references parents \(foreign key 0\)/u,
+    ],
+  ] as const)("reports foreign key violations with %s", (variant, rows, expected) => {
+    const withoutRowid = variant === "WITHOUT ROWID tables";
+    const type = withoutRowid ? "TEXT" : "INTEGER";
+    withDatabase(
+      `PRAGMA foreign_keys = OFF;
+       CREATE TABLE parents (id ${type} PRIMARY KEY);
+       CREATE TABLE children (id ${type} PRIMARY KEY, parent_id ${type} NOT NULL REFERENCES parents(id))
+         ${withoutRowid ? "WITHOUT ROWID" : ""};
+       INSERT INTO children (id, parent_id) VALUES ${rows};`,
+      (database) => {
+        if (variant === "a shadowing schema object") {
+          database.exec(
+            'CREATE TABLE pragma_foreign_key_check ("table" TEXT NOT NULL, rowid INTEGER, parent TEXT NOT NULL, fkid INTEGER NOT NULL)',
+          );
+          expect(database.prepare("SELECT * FROM pragma_foreign_key_check").all()).toEqual([]);
+        }
+        expect(() => assertSqliteIntegrity(database, "test database")).toThrow(expected);
+      },
     );
   });
 });
@@ -524,24 +486,142 @@ describe("integrity gate attribution", () => {
 
 describe("isTerminalSqliteIntegrityError", () => {
   it("distinguishes persistent damage from transient pragma failures", () => {
-    const corrupt = new Error("integrity check found damage");
-    corrupt.name = "SqliteIntegrityError";
-    const busy = new Error("integrity check could not run", {
-      cause: Object.assign(new Error("database is locked"), { errcode: 5 }),
-    });
-    busy.name = "SqliteIntegrityError";
-    const malformed = new Error("integrity check could not read the database", {
-      cause: Object.assign(new Error("database disk image is malformed"), { errcode: 11 }),
-    });
-    malformed.name = "SqliteIntegrityError";
-    const corruptIndex = new Error("integrity check found a corrupt index", {
-      cause: Object.assign(new Error("database index is malformed"), { errcode: 779 }),
-    });
-    corruptIndex.name = "SqliteIntegrityError";
+    for (const [message, errcode, terminal] of [
+      ["integrity check found damage", undefined, true],
+      ["database is locked", 5, false],
+      ["database disk image is malformed", 11, true],
+      ["database index is malformed", 779, true],
+    ] as const) {
+      const cause =
+        errcode === undefined ? undefined : Object.assign(new Error(message), { errcode });
+      const failure = Object.assign(new Error(message, { cause }), {
+        name: "SqliteIntegrityError",
+      });
+      expect(isTerminalSqliteIntegrityError(failure)).toBe(terminal);
+    }
+  });
+});
 
-    expect(isTerminalSqliteIntegrityError(corrupt)).toBe(true);
-    expect(isTerminalSqliteIntegrityError(busy)).toBe(false);
-    expect(isTerminalSqliteIntegrityError(malformed)).toBe(true);
-    expect(isTerminalSqliteIntegrityError(corruptIndex)).toBe(true);
+describe("captured maintenance integrity", () => {
+  afterEach(() => vi.restoreAllMocks());
+  type Capture = (check?: "quick" | "full") => Promise<unknown>;
+  async function withCapture(run: (sourcePath: string, capture: Capture) => Promise<void>) {
+    const directory = fs.realpathSync(tempDirs.make("sqlite-maintenance-integrity-"));
+    const sourcePath = path.join(directory, "source.sqlite");
+    {
+      using source = openNodeSqliteDatabase(sourcePath);
+      source.exec("PRAGMA journal_mode = WAL");
+      for (const table of ["touched", "untouched"]) {
+        source.exec(
+          `CREATE TABLE ${table}(value INTEGER CHECK(value > 0)); INSERT INTO ${table} VALUES(1);`,
+        );
+      }
+    }
+    // Doctor's header preflight leaves an empty WAL behind after a read-only open.
+    {
+      using source = openNodeSqliteDatabase(sourcePath, { readOnly: true });
+      source.prepare("PRAGMA user_version").get();
+    }
+    await withMaintenanceCheck(undefined, () =>
+      run(sourcePath, (check = "quick") =>
+        createVerifiedSqliteSnapshot({
+          sourcePath,
+          targetPath: path.join(directory, "backup.sqlite"),
+          preserveRowIds: true,
+          integrity: { check, tables: ["touched"] },
+          transform() {},
+        }),
+      ),
+    );
+  }
+
+  function checkSteps(
+    source: ReturnType<typeof openNodeSqliteDatabase>,
+    sourcePath: string,
+    check: "quick" | "full" = "quick",
+  ) {
+    return sqliteIntegrityCheckSteps(source, sourcePath, undefined, { check, tables: ["touched"] });
+  }
+
+  it.each(["quick", "full"] as const)(
+    "reuses only the captured QUICK source proof before migration (%s)",
+    async (check) => {
+      await withCapture(async (sourcePath, capture) => {
+        await capture(check);
+        using source = openNodeSqliteDatabase(sourcePath);
+        const prepare = vi.spyOn(source, "prepare");
+        runSqliteIntegrityOperationSync(checkSteps(source, sourcePath, check));
+        const checks = prepare.mock.calls.filter(([sql]) =>
+          /^PRAGMA (quick|integrity)_check;/.test(sql),
+        );
+        expect(checks).toHaveLength(check === "quick" ? 0 : 1);
+        expect(readSqliteDatabaseIntegrityVerification(source) !== undefined).toBe(
+          check === "full",
+        );
+      });
+    },
+  );
+
+  it("refuses untouched-table corruption before publishing a migration backup", async () => {
+    await withCapture(async (sourcePath, capture) => {
+      let offset: number;
+      {
+        using source = openNodeSqliteDatabase(sourcePath);
+        const root = source
+          .prepare("SELECT rootpage FROM sqlite_schema WHERE name = 'untouched'")
+          .get();
+        const page = source.prepare("PRAGMA page_size").get();
+        offset = (Number(root?.rootpage) - 1) * Number(page?.page_size);
+      }
+      const bytes = fs.readFileSync(sourcePath);
+      bytes[offset] = 0xff;
+      fs.writeFileSync(sourcePath, bytes);
+      {
+        using source = openNodeSqliteDatabase(sourcePath);
+        expect(() =>
+          assertSqliteIntegrity(source, "migration source", {
+            check: "quick",
+            tables: ["touched"],
+          }),
+        ).toThrow(expect.objectContaining({ name: "SqliteIntegrityError" }));
+      }
+      await expect(capture()).rejects.toThrow(/malformed|quick_check/);
+    });
+  });
+
+  it.each([false, true])(
+    "invalidates captured proof after an unscoped write (uncommitted=%s)",
+    async (uncommitted) => {
+      await withCapture(async (sourcePath, capture) => {
+        await capture();
+        using source = openNodeSqliteDatabase(sourcePath);
+        source.exec(
+          `PRAGMA ignore_check_constraints = ON; ${uncommitted ? "BEGIN;" : ""} INSERT INTO untouched VALUES(-1); PRAGMA ignore_check_constraints = OFF;`,
+        );
+        try {
+          expect(() => runSqliteIntegrityOperationSync(checkSteps(source, sourcePath))).toThrow(
+            /quick_check.*CHECK constraint failed in untouched/s,
+          );
+        } finally {
+          if (source.isTransaction) {
+            source.exec("ROLLBACK");
+          }
+        }
+      });
+    },
+  );
+
+  it("keeps the post-migration scoped FULL check after reusing source proof", async () => {
+    await withCapture(async (sourcePath, capture) => {
+      await capture();
+      using source = openNodeSqliteDatabase(sourcePath);
+      expect(checkSteps(source, sourcePath).next().done).toBe(true);
+      source.exec(
+        "PRAGMA ignore_check_constraints = ON; INSERT INTO touched VALUES(-1); PRAGMA ignore_check_constraints = OFF;",
+      );
+      expect(() => assertSqliteTableIntegrity(source, sourcePath, "touched")).toThrow(
+        /integrity_check.*CHECK constraint failed in touched/s,
+      );
+    });
   });
 });

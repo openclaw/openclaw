@@ -43,6 +43,12 @@ it.each(["pending", "loaded"] as const)(
       dispose = stop;
       return createChannelPluginPresentation({
         getContext: () => context,
+        getProps: () => {
+          throw new Error("This metadata fixture does not mount a Settings view");
+        },
+        getConnection: () => {
+          throw new Error("This metadata fixture does not start a Settings operation");
+        },
         getChannelIds: () => [],
         isConnected: () => gateway.snapshot.phase === "connected",
       });

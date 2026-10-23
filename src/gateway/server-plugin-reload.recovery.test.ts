@@ -1,3 +1,4 @@
+import "./server-startup-module-mocks.test-support.js";
 import assert from "node:assert/strict";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -40,6 +41,7 @@ import {
 } from "./server-plugin-reload.activation.test-support.js";
 import {
   verifyActiveCallDrainLease,
+  verifyAdmittedWorkBudgetIgnoresWallClockStep,
   verifyLateActiveCallDrainObservation,
 } from "./server-plugin-reload.active-call.test-support.js";
 import { verifyCancelledDrainRollbackLease } from "./server-plugin-reload.cancel-lease.test-support.js";
@@ -97,6 +99,28 @@ vi.mock("../config/io.plugin-metadata.js", async (importOriginal) => ({
 vi.mock("../plugins/plugin-lookup-table.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/plugin-lookup-table.js")>()),
   loadPluginLookUpTable: mocks.loadPluginLookUpTable,
+}));
+
+// mock-isolation: Transcript startup exercises real sidecar custody, not independent request preparation.
+vi.mock("../hooks/loader.js", () => ({
+  prepareInternalHooks: async () => ({ loadedCount: 0, commit: () => true }),
+}));
+vi.mock("../hooks/internal-hooks.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../hooks/internal-hooks.js")>()),
+  hasInternalHookListeners: () => false,
+}));
+vi.mock("./server-startup-model-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./server-startup-model-runtime.js")>()),
+  publishConfiguredModelRuntimeSnapshots: async () => {},
+}));
+// mock-isolation: Transcript reload startup does not execute config-driven replies or their agent-runtime graph.
+vi.mock("../auto-reply/reply/get-reply-from-config.runtime.js", () => ({
+  getReplyFromConfig: vi.fn(),
+  prewarmConfigDrivenReplyRuntime: async () => {},
+}));
+// mock-isolation: Transcript reload startup owns this import, not authenticated WebSocket connection dispatch.
+vi.mock("./server/ws-connection/message-handler.js", () => ({
+  attachGatewayWsMessageHandler: vi.fn(),
 }));
 
 // mock-isolation: Independent startup tasks do not participate in plugin replacement.
@@ -171,7 +195,6 @@ async function startDiscovery(fixture: RecoveryFixture, minimal = false) {
   const discovery = await startGatewayDiscovery({
     ...(minimal ? { discovery: { mdns: { mode: "minimal" as const } } } : {}),
     gatewayDiscoveryServices: fixture.previousRegistry.gatewayDiscoveryServices,
-    pluginRuntimeClaim: fixture.owner.currentClaim(),
     machineDisplayName: "fixture-gateway",
     port: 0,
     tailscaleMode: "off",
@@ -263,7 +286,6 @@ it.each(["commit", "rollback"] as const)(
         cronEnabled: false,
         log: mocks.log,
         enqueueSystemEvent: () => {},
-        requestHeartbeat: () => {},
         runIsolatedAgentJob: async () => ({ status: "ok" as const }),
       });
       const list = vi.spyOn(cron, "list").mockResolvedValue([]);
@@ -362,6 +384,9 @@ it.each([15_000, 70_000])(
 
 it("keeps restored plugins serving when an expired drain observation settles late", () =>
   verifyLateActiveCallDrainObservation(createRecoveryFixture));
+
+it("bounds the admitted-work drain budget across a wall-clock step", () =>
+  verifyAdmittedWorkBudgetIgnoresWallClockStep(createRecoveryFixture));
 
 it("keeps the lifecycle lease through cancelled drain rollback before admitting another writer", () =>
   verifyCancelledDrainRollbackLease(
@@ -735,8 +760,6 @@ it.for([
           if (outcome === "manual stop") {
             const tool = createTranscriptsTool({
               config,
-              stateDir,
-              logger: mocks.log,
               caller: { kind: "operator", source: "local" },
             });
             manualStop = withPluginRuntimeRegistryScope(fixture.registryOwner.registry, () =>

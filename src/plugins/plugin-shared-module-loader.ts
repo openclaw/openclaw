@@ -97,6 +97,7 @@ function createSharedModuleBinding(
   const captureRecovery = (): PluginModuleLoaderRecovery => {
     const recovery = sourceCustody?.capture();
     let released = false;
+    let disposal: Promise<void> | undefined;
     return {
       bind(target) {
         if (released) {
@@ -105,11 +106,12 @@ function createSharedModuleBinding(
         released = true;
         bind(target, recovery);
       },
-      dispose() {
+      async dispose() {
         if (!released) {
           released = true;
-          recovery?.dispose();
+          disposal = recovery?.dispose();
         }
+        await disposal;
       },
     };
   };

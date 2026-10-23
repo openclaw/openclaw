@@ -13,7 +13,10 @@ import {
   createPluginStateSyncKeyedStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginApi, type TestPluginApiInput } from "openclaw/plugin-sdk/plugin-test-api";
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createPluginRuntimeMock,
+  runInHarnessToolAuthorityForTest,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   ensureAuthProfileStore,
   ensureAuthProfileStoreAsync,
@@ -35,6 +38,7 @@ import {
   threadStartResult,
   turnStartResult,
 } from "./run-attempt-test-harness.js";
+import { DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT } from "./run-attempt.context-engine.test-support.js";
 import {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
   CODEX_APP_SERVER_BINDING_NAMESPACE,
@@ -131,10 +135,7 @@ it("attributes completed models and refreshes their selection on warm reuse", as
       supervisionSourceThreadId: "native-thread",
       conversationSourceTransferComplete: true,
       dynamicToolsFingerprint: codexDynamicToolsFingerprint([]),
-      webSearchThreadConfigFingerprint: JSON.stringify({
-        "features.standalone_web_search": false,
-        web_search: "disabled",
-      }),
+      webSearchThreadConfigFingerprint: DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT,
       historyCoveredThrough: new Date().toISOString(),
       rolloutPath,
       appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(
@@ -239,7 +240,8 @@ it("attributes completed models and refreshes their selection on warm reuse", as
     events.filter((event) => event.stream === "lifecycle" && event.data.phase === "model");
   const readyModelEvent = modelEvent("ready-native-model");
   const reroutedModelEvent = modelEvent("rerouted-model");
-  const run = registered.runAttempt(params);
+  const runAttempt = registered.runAttempt.bind(registered);
+  const run = runInHarnessToolAuthorityForTest(params, "codex", runAttempt);
   let next: typeof run | undefined;
   try {
     await beforeResult(modelPublished.promise, run, "model attribution");
@@ -286,7 +288,11 @@ it("attributes completed models and refreshes their selection on warm reuse", as
     }
     nativeModel = "changed-native-model";
     turnStarted = createDeferred<void>();
-    next = registered.runAttempt({ ...params, runId: "native-second-turn" });
+    next = runInHarnessToolAuthorityForTest(
+      { ...params, runId: "native-second-turn" },
+      "codex",
+      runAttempt,
+    );
     await beforeResult(turnStarted.promise, next, "second turn/start");
     sendTurn("completed", [
       { type: "agentMessage", id: "second-answer", text: "Second native answer." },

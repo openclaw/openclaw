@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
@@ -5,7 +6,6 @@ import { GatewayClient } from "../../../packages/gateway-client/src/index.js";
 import type { BoardSnapshot, RequestFrame } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { resetBoardEventNoticeStateForTest } from "../../boards/board-notices.js";
 import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.entry.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
@@ -41,6 +41,7 @@ import {
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
+import { gatewayTestTextTransport } from "../server/connection-transport.test-support.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
 import { createBoardHarness as createHarness } from "./board.test-support.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
@@ -122,7 +123,6 @@ describe("board gateway runtime boundaries", () => {
 
   beforeEach(() => {
     resetGatewayWorkAdmission();
-    resetBoardEventNoticeStateForTest();
     resetSystemEventsForTest();
     reviewWidgetApproval.mockReset();
     sessionList.mockReset();
@@ -237,28 +237,33 @@ describe("board gateway runtime boundaries", () => {
         responded = true;
         return response;
       });
-    await gate.entered;
-    expect(responded).toBe(false);
-    expect(harness.broadcast).not.toHaveBeenCalled();
-    if (outcome === "retired") {
-      harness.context.resolveGatewayContext = () => undefined;
-    }
-    gate.release();
-    const response = await pending;
-    const snapshot = await harness.store.getSnapshot({ sessionKey: "session", agentId: "main" });
-    expect(response.mock.calls[0]?.[0]).toBe(outcome === "commit");
-    expect(snapshot.tabs).toHaveLength(outcome === "commit" ? 1 : 0);
-    if (outcome === "commit") {
-      expect(harness.broadcast).toHaveBeenCalledWith(
-        "board.changed",
-        { sessionKey: "agent:main:session", revision: snapshot.revision },
-        { sessionKeys: ["agent:main:session"], agentId: "main" },
-      );
-    } else {
+    try {
+      await gate.entered;
+      expect(responded).toBe(false);
       expect(harness.broadcast).not.toHaveBeenCalled();
-      if (method === "board.get") {
-        expect(response.mock.calls[0]).toMatchObject([false, undefined, { code: "UNAVAILABLE" }]);
+      if (outcome === "retired") {
+        harness.context.resolveGatewayContext = () => undefined;
       }
+      gate.release();
+      const response = await pending;
+      const snapshot = await harness.store.getSnapshot({ sessionKey: "session", agentId: "main" });
+      expect(response.mock.calls[0]?.[0]).toBe(outcome === "commit");
+      expect(snapshot.tabs).toHaveLength(outcome === "commit" ? 1 : 0);
+      if (outcome === "commit") {
+        expect(harness.broadcast).toHaveBeenCalledWith(
+          "board.changed",
+          { sessionKey: "agent:main:session", revision: snapshot.revision },
+          { sessionKeys: ["agent:main:session"], agentId: "main" },
+        );
+      } else {
+        expect(harness.broadcast).not.toHaveBeenCalled();
+        if (method === "board.get") {
+          expect(response.mock.calls[0]).toMatchObject([false, undefined, { code: "UNAVAILABLE" }]);
+        }
+      }
+    } finally {
+      gate.release();
+      await Promise.allSettled([pending]);
     }
   });
 
@@ -297,7 +302,7 @@ describe("board gateway runtime boundaries", () => {
         const request = JSON.parse(rawDataToString(data)) as RequestFrame;
         if (request.method === "connect") {
           gatewayClient = {
-            socket,
+            socket: gatewayTestTextTransport(socket),
             connect: {
               role: "operator",
               scopes: ["operator.admin"],
@@ -341,6 +346,7 @@ describe("board gateway runtime boundaries", () => {
       onHelloOk: () => connected.resolve(),
       onConnectError: (error) => connected.reject(error),
     });
+    let requestOutcome: Promise<unknown> | undefined;
     try {
       client.start();
       await connected.promise;
@@ -355,7 +361,7 @@ describe("board gateway runtime boundaries", () => {
           unbounded ? { timeoutMs: null } : undefined,
         );
       const request = putCanvas("canvas", true);
-      const requestOutcome = request.catch((error: unknown) => error);
+      requestOutcome = request.catch((error: unknown) => error);
       await documentStarted.promise;
 
       resetGatewayWorkAdmission();
@@ -371,6 +377,8 @@ describe("board gateway runtime boundaries", () => {
       expect(await widgets(harness.store)).toMatchObject([{ name: "live" }]);
       expect(events).toContain("board.changed");
     } finally {
+      releaseDocument.resolve({ html: "<p>canvas</p>", cspSandbox: "scripts" });
+      await Promise.allSettled(requestOutcome ? [requestOutcome] : []);
       client.stop();
       gatewayClients.clear();
       await closeMinimalGatewayServer(server);
@@ -449,24 +457,25 @@ describe("board gateway runtime boundaries", () => {
   });
 
   it("caps board.event payloads and preserves Unicode at the notice boundary", async () => {
+    const sessionKey = `notice-${randomUUID()}`;
     const { invoke } = createHarness();
-    await invoke("board.widget.put", htmlWidget("counter"));
+    await invoke("board.widget.put", { ...htmlWidget("counter"), sessionKey });
     const clippedCodeUnits = 500 - "[dashboard] ".length - " on widget counter".length - 1;
     // JSON's opening quote places the emoji across the legacy slice boundary.
     const payload = `${"x".repeat(clippedCodeUnits - 2)}😀tail`;
-    await invoke("board.event", { sessionKey: "session", widget: "counter", payload });
-    const unicodeNotice = peekSystemEvents("agent:main:session")[0] ?? "";
+    await invoke("board.event", { sessionKey, widget: "counter", payload });
+    const unicodeNotice = peekSystemEvents(`agent:main:${sessionKey}`)[0] ?? "";
     expect(unicodeNotice.length).toBeLessThanOrEqual(500);
     expect(unicodeNotice).not.toContain(String.fromCharCode(0xd83d));
     expect(unicodeNotice).toMatch(/… on widget counter$/u);
     await invoke("board.event", {
-      sessionKey: "session",
+      sessionKey,
       widget: "counter",
       payload: "x".repeat(1_000),
     });
-    expect(peekSystemEvents("agent:main:session")[1]).toHaveLength(500);
+    expect(peekSystemEvents(`agent:main:${sessionKey}`)[1]).toHaveLength(500);
     const oversized = await invoke("board.event", {
-      sessionKey: "session",
+      sessionKey,
       widget: "counter",
       payload: "x".repeat(8_193),
     });

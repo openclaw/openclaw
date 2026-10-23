@@ -1,6 +1,5 @@
 import type {
   createTerminalDefaultColorQueryResponder,
-  CreateGhosttyTerminalOptions,
   GhosttyTerminalController,
 } from "@openclaw/libterminal/browser";
 import { parseCatalogSessionKey, type CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
@@ -10,6 +9,13 @@ import type { TerminalPanelUpload } from "./terminal-panel-upload.ts";
 import type { StartupInputBuffer } from "./terminal-startup-input.ts";
 import type { TerminalTabReadinessState } from "./terminal-tab-readiness.ts";
 
+export type TerminalStagedInput = {
+  text: string;
+  attachments: { name: string; path: string }[];
+};
+
+export type TerminalSessionListOptions = { preserveError?: boolean };
+
 export type TerminalPanelSessionTab = TerminalPanelTab &
   TerminalTabReadinessState & {
     gatewaySessionId: string;
@@ -18,6 +24,8 @@ export type TerminalPanelSessionTab = TerminalPanelTab &
     controller: GhosttyTerminalController;
     shell: string;
     host: HTMLDivElement;
+    /** Unsent presentation data follows this session through a native handoff. */
+    stagedInput?: TerminalStagedInput;
     pendingOpen?: TerminalPanelOpenAction;
     /** Retires only the queued intent that booted this placeholder. */
     cancelPendingIntent?: () => void;
@@ -28,6 +36,9 @@ export type TerminalPanelSessionTab = TerminalPanelTab &
 export type TerminalRouteTarget = { sessionId: string } | { catalog: CatalogSessionKey } | null;
 
 export type TerminalInputs = {
+  gatewayConnected: boolean;
+  /** Native mobile presentation supplied by the chat host, never pane width. */
+  mobile: boolean;
   client: TerminalGatewayClient | null;
   agentId: string | null;
   sessionKey: string | null;
@@ -41,11 +52,6 @@ export type TerminalInputs = {
   tabsInHeader: boolean;
   page: boolean;
   routeTarget: TerminalRouteTarget;
-  createTerminalController: (
-    options: CreateGhosttyTerminalOptions,
-    shouldFocusOnOpen?: () => boolean,
-  ) => Promise<GhosttyTerminalController>;
-  catalogReadyTimeoutMs: number;
 };
 
 export type TerminalOperation = {
@@ -80,7 +86,10 @@ export type TerminalPanelAction =
 
 export type TerminalPanelOpenAction = Extract<TerminalPanelAction, { kind: "catalog" | "open" }>;
 
-export type TerminalPanelError = { text: string; retryAction?: TerminalPanelOpenAction };
+export type TerminalPanelError = {
+  text: string;
+  retryAction?: TerminalPanelOpenAction | { kind: "resume" };
+};
 
 export type TerminalPanelSessionState = {
   tabs: TerminalPanelSessionTab[];

@@ -1,10 +1,11 @@
 import { createRouter } from "@openclaw/uirouter";
-import { onTestFinished, vi } from "vitest";
+import { expect, onTestFinished, vi } from "vitest";
 import type { RouteId } from "../../app-routes.ts";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { registerChatAttachmentPayload } from "../chat/attachment-payload-store.ts";
+import { CHAT_ROUTE_READY_EVENT } from "../chat/chat-history-events.ts";
 import { DraftGatewayState } from "./draft-gateway-state.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import { DraftPlaceState } from "./draft-place-state.ts";
@@ -13,6 +14,8 @@ import { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 import type { NewSessionRouteData } from "./location.ts";
 
 type FixtureOptions = {
+  onChange?: () => void;
+  updateComplete?: () => Promise<unknown>;
   gateway?: ApplicationContext["gateway"];
   takePreparedTitle?: () => string | undefined;
   retainForHandoff?: DraftSubmissionCallbacks["retainForHandoff"];
@@ -26,6 +29,24 @@ type FixtureOptions = {
   modelCatalog?: (params?: unknown) => Promise<unknown>;
   placementPolicy?: () => Promise<unknown>;
 };
+
+export const backgroundCreateOptions = {
+  reconciliation: "background",
+  signal: expect.any(AbortSignal),
+};
+
+export async function readyChatRoute() {
+  queueMicrotask(() => document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT)));
+}
+
+export function resetSubmissionMocks() {
+  document.body.replaceChildren();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  sessionStorage.clear();
+  localStorage.clear();
+}
 
 export function createDraftFixture(options: FixtureOptions = {}) {
   const request = vi.fn((method: string, params?: unknown) => {
@@ -155,8 +176,8 @@ export function createDraftFixture(options: FixtureOptions = {}) {
     }),
     {
       readAgents: () => context.agents,
-      changed: vi.fn(),
-      updateComplete: () => Promise.resolve(),
+      changed: vi.fn(options.onChange),
+      updateComplete: options.updateComplete ?? (() => Promise.resolve()),
       onInvalidate: vi.fn(),
       onVisibilityRetired: () => flow?.setVisibility("normal"),
       onCloudProfileCleared: () => place?.clearCloudProfile(),
@@ -172,7 +193,7 @@ export function createDraftFixture(options: FixtureOptions = {}) {
     gateway,
     () => ({ context, isAdmin: place?.isAdmin() ?? false }),
     {
-      changed: vi.fn(),
+      changed: vi.fn(options.onChange),
       updateComplete: () => Promise.resolve(),
       onProjectMissing: () => place?.clearProjectSelection(),
       onSelectProject: (projectId) => place?.selectProjectId(projectId),
@@ -190,12 +211,12 @@ export function createDraftFixture(options: FixtureOptions = {}) {
       pendingPlacementSessionKey: flow?.pendingPlacement.sessionKey ?? "",
     }),
     {
-      changed: vi.fn(),
+      changed: vi.fn(options.onChange),
       onError: (error) => flow?.setError(error),
       onClearError: (error) => flow?.clearError(error),
     },
   );
-  const changed = vi.fn();
+  const changed = vi.fn(options.onChange);
   const flow = new DraftSubmissionFlow(
     gateway,
     place,
@@ -225,6 +246,12 @@ export function stubObjectUrls(...urls: string[]) {
   const createObjectURL = vi.fn();
   urls.forEach((url) => createObjectURL.mockReturnValueOnce(url));
   const revokeObjectURL = vi.fn();
-  vi.stubGlobal("URL", { createObjectURL, revokeObjectURL });
+  vi.stubGlobal(
+    "URL",
+    class extends URL {
+      static override createObjectURL = createObjectURL;
+      static override revokeObjectURL = revokeObjectURL;
+    },
+  );
   return revokeObjectURL;
 }

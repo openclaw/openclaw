@@ -122,6 +122,10 @@ export function createGatewayMetadataObserver(
       return value;
     },
     synchronize(previous: ApplicationGatewaySnapshot, next: ApplicationGatewaySnapshot): boolean {
+      if (next.phase !== "connected") {
+        target = undefined;
+        read = undefined;
+      }
       const connectionChanged = previous.client !== next.client || previous.hello !== next.hello;
       if (
         previous.client &&

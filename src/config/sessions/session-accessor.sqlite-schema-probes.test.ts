@@ -1,7 +1,10 @@
 import path from "node:path";
 import { constants } from "node:sqlite";
 import { afterEach, expect, it, vi, describe } from "vitest";
-import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeHostDataSql,
+  trackSqliteStatementExecutions,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
@@ -32,6 +35,7 @@ import * as entryCache from "./session-accessor.sqlite-entry-cache.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntry } from "./session-accessor.sqlite-entry.js";
 import type { SessionMaintenanceMetadataResult } from "./session-accessor.sqlite-lifecycle-types.js";
+import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { runSessionEntryWorkerMutation } from "./session-accessor.sqlite-replacement-worker.js";
 import {
   measureSessionSchemaProbes,
@@ -437,6 +441,60 @@ function fixture(list: typeof listSessionEntriesReadOnly) {
     });
   return { database, hidden, options, read };
 }
+
+it("reads cron participants only after expiry selection and includes committed changes", () => {
+  const { database, options } = fixture(listSessionEntriesReadOnly);
+  const sessionKey = "agent:main:cron:job:run:selected";
+  const scope = {
+    agentId: options.agentId,
+    storePath: options.path,
+    env: options.env,
+    sessionKey,
+  };
+  const entry = {
+    sessionId: "selected",
+    updatedAt: 2,
+    skillsSnapshot: { prompt: "retained deletion candidate", skills: [] },
+  };
+  runOpenClawAgentWriteTransaction((db) => writeSessionEntry(db, sessionKey, entry), options);
+  recordSessionParticipant(scope, { identity: { type: "agent", id: "before" }, promptedAt: 1 });
+  const readExpired = () =>
+    listSessionEntriesReadOnly({
+      ...scope,
+      expiredCronRuns: { agentId: "main", updatedBefore: 2 },
+    });
+  const statements = trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(database.db),
+    ["participants"],
+    (sql) => (/^select\b.*\bfrom "session_participants"/isu.test(sql) ? "participants" : null),
+  );
+  try {
+    expect(readExpired()).toEqual([]);
+    expect(statements.counts.participants).toBe(0);
+  } finally {
+    statements.restore();
+  }
+  runOpenClawAgentWriteTransaction(
+    (db) => writeSessionEntry(db, sessionKey, { ...entry, updatedAt: 1 }),
+    options,
+  );
+  recordSessionParticipant(scope, { identity: { type: "agent", id: "after" }, promptedAt: 2 });
+  expect(readExpired()).toEqual([
+    {
+      sessionKey,
+      entry: {
+        ...entry,
+        updatedAt: 1,
+        delivery: { kind: "none" },
+        participants: [
+          { identity: { type: "agent", id: "before" } },
+          { identity: { type: "agent", id: "after" } },
+        ],
+        participantCount: 2,
+      },
+    },
+  ]);
+});
 
 it("retains unsplit snapshots on selected cron rows", () => {
   const { database, options, read } = fixture(listSessionEntriesReadOnly);

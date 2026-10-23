@@ -3,6 +3,7 @@ import { copyFileSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import lifecyclePaths from "../../scripts/e2e/lib/bun-only-runtime/preinstall-lifecycle-paths.json" with { type: "json" };
 import {
   detectLifecyclePackageManager,
   enforceSupportedNodeRuntime,
@@ -16,7 +17,7 @@ import { isSupportedNodeVersion } from "../../src/infra/runtime-guard.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const EXPECTED_NODE_ENGINE_RANGE = ">=24.16.0 <25 || >=26.1.0";
+const EXPECTED_NODE_ENGINE_RANGE = ">=24.22.1 <25 || >=26.12.1";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const testNodeExecPath = resolveTestNodeExecPath();
 const lifecyclePrefix = [
@@ -29,6 +30,7 @@ const probe = (options: Parameters<typeof probePackageCliNodeRuntime>[0]) =>
     cwd: "/work/openclaw",
     access: () => {},
     platform: "linux",
+    bunVersion: "1.4.3",
     ...options,
   });
 const enforce = (
@@ -40,8 +42,8 @@ function expectRejectedProbe(options: Parameters<typeof probe>[0]) {
   expect(probe({ ...options, run })).toBeNull();
   expect(run).not.toHaveBeenCalled();
 }
-function expectLauncher(npm_execpath: string, manager: string) {
-  expect(detectLifecyclePackageManager({ npm_execpath })).toBe(manager);
+function runtimeReply(execPath: string, version: string, bunVersion: string | null = null) {
+  return { status: 0, stdout: JSON.stringify({ version, bunVersion, execPath }) };
 }
 type LauncherCase = {
   name: string;
@@ -58,7 +60,7 @@ describe("install runtime enforcement", () => {
     expect(readPackageNodeEngine()).toBe(EXPECTED_NODE_ENGINE_RANGE);
   });
 
-  it.each(["v24.16.0+local.1"])("matches the CLI runtime guard for Node %s", (version) => {
+  it.each(["v24.22.1+local.1"])("matches the CLI runtime guard for Node %s", (version) => {
     expect(nodeVersionSatisfiesPackageEngine(version, EXPECTED_NODE_ENGINE_RANGE)).toBe(
       isSupportedNodeVersion(version),
     );
@@ -68,11 +70,26 @@ describe("install runtime enforcement", () => {
     const reportError = vi.fn();
     expect(
       enforce(
-        { version: "24.16.0", bunVersion: null, execPath: "/opt/node/bin/node" },
+        { version: "24.22.1", bunVersion: null, execPath: "/opt/node/bin/node" },
         reportError,
       ),
     ).toBe(true);
     expect(reportError).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["27.0.0", true],
+    ["v27.0.0-head", true],
+    ["27.0.0-nightly20261018f88a1d25e9", true],
+    ["24.22.1-rc.1", false],
+    ["26.12.1-rc.1", false],
+    ["27.0.0-nightly..1", false],
+  ] as const)("enforces the package engine for Node %s", (version, accepted) => {
+    const reportError = vi.fn();
+    expect(
+      enforce({ version, bunVersion: null, execPath: "/opt/node/bin/node" }, reportError),
+    ).toBe(accepted);
+    expect(reportError).toHaveBeenCalledTimes(accepted ? 0 : 1);
   });
 
   it("exits nonzero when the packed entrypoint sees an unsupported runtime", () => {
@@ -122,20 +139,33 @@ describe("install runtime enforcement", () => {
         error: "detected Node 24.14.1",
       },
       {
+        name: "persistent supported Node after the shim",
+        launcher: "/opt/bun/bin/bun",
+        bun: "1.4.2",
+        persistent: "supported-node",
+        accepted: true,
+        error: undefined,
+      },
+      {
         name: "same Bun-backed node before supported Node with marker",
         launcher: "/opt/bun/bin/bun",
         bun: "1.4.2",
         persistent: "same-bun",
       },
-    ].map((testCase): LauncherCase =>
-      Object.assign(
-        { bun: "1.4.3", accepted: false, shimMatchesBun: true, error: "detected Node missing" },
-        testCase,
-      ),
+    ].flatMap((testCase) =>
+      lifecyclePaths.map((layout): LauncherCase & { layout: typeof layout } => ({
+        bun: "1.4.3",
+        accepted: false,
+        shimMatchesBun: true,
+        error: "detected Node missing",
+        ...testCase,
+        layout,
+        name: `${testCase.name}, ${layout.name}`,
+      })),
     ),
   )(
     "enforces the explicit Bun launcher contract: $name",
-    ({ launcher, bun, persistent, shimMatchesBun, accepted, error }) => {
+    ({ launcher, bun, persistent, shimMatchesBun, accepted, error, layout }) => {
       const shimDirectory = "bun-node-ddfce5d01";
       const reportError = vi.fn();
       const run = vi.fn(
@@ -147,19 +177,12 @@ describe("install runtime enforcement", () => {
           expect(options.env).not.toHaveProperty("NODE_OPTIONS");
           expect(options.env).not.toHaveProperty("Node_Options");
           expect(options.timeout).toBe(10_000);
-          return {
-            status: 0,
-            stdout: JSON.stringify({
-              version:
-                _command === "/opt/node/bin/node"
-                  ? persistent === "old-node"
-                    ? "24.14.1"
-                    : "24.16.0"
-                  : "24.3.0",
-              bunVersion: _command === "/opt/node/bin/node" ? null : bun,
-              execPath: _command,
-            }),
-          };
+          const isNode = _command === "/opt/node/bin/node";
+          return runtimeReply(
+            _command,
+            isNode ? (persistent === "old-node" ? "24.14.1" : "24.22.1") : "24.3.0",
+            isNode ? null : bun,
+          );
         },
       );
       const result = enforce(
@@ -167,6 +190,7 @@ describe("install runtime enforcement", () => {
           bunVersion: "1.4.3",
           probeNodeRuntime: () =>
             probe({
+              bunVersion: layout.bunVersion,
               execPath: "/opt/bun/bin/bun",
               realpath: (candidate) =>
                 (candidate === `/tmp/${shimDirectory}/node` && shimMatchesBun) ||
@@ -174,15 +198,19 @@ describe("install runtime enforcement", () => {
                   ? "/opt/bun/bin/bun"
                   : candidate,
               env: {
+                ...layout.env,
                 OPENCLAW_PACKAGE_BUN_LAUNCHER: launcher,
                 NODE_OPTIONS: "--require=fixture.cjs",
                 Node_Options: "--require=other-fixture.cjs",
               },
               pathEnv: [
-                ...lifecyclePrefix,
+                ...layout.prefix,
                 ...(persistent === "same-bun" ? ["/opt/bun/bin", "/opt/node/bin"] : []),
                 `/tmp/${shimDirectory}`,
-                ...(persistent === "old-node" ? ["/opt/node/bin"] : []),
+                ...(persistent === "old-node" || persistent === "supported-node"
+                  ? ["/opt/node/bin"]
+                  : []),
+                ...layout.suffix,
               ].join(":"),
               run,
             }),
@@ -196,7 +224,7 @@ describe("install runtime enforcement", () => {
         expect(reportError).not.toHaveBeenCalled();
       }
       expect(run.mock.calls.map(([command]) => command)).toEqual(
-        persistent === "old-node"
+        persistent === "old-node" || persistent === "supported-node"
           ? ["/opt/node/bin/node"]
           : persistent === "same-bun"
             ? ["/opt/bun/bin/node"]
@@ -236,14 +264,7 @@ describe("install runtime enforcement", () => {
       }
       const run = vi.fn((command: string) =>
         command === executable
-          ? {
-              status: 0,
-              stdout: JSON.stringify({
-                version: "24.16.0",
-                bunVersion: null,
-                execPath: executable,
-              }),
-            }
+          ? runtimeReply(executable, "24.22.1")
           : { error: Object.assign(new Error("absent executable"), { code: "ENOENT" }) },
       );
       const reportError = vi.fn();
@@ -255,6 +276,7 @@ describe("install runtime enforcement", () => {
             probeNodeRuntime: () =>
               probePackageCliNodeRuntime({
                 cwd,
+                bunVersion: "1.4.3",
                 env: { OPENCLAW_PACKAGE_BUN_LAUNCHER: launcher },
                 pathEnv: [
                   ...prefix,
@@ -274,20 +296,20 @@ describe("install runtime enforcement", () => {
     },
   );
 
-  it("checks a duplicate lifecycle-looking entry inherited in the original PATH", () => {
+  it.each(lifecyclePaths)("checks a duplicate inherited entry: $name", (layout) => {
     const candidates: string[] = [];
     const runtime = probe({
-      pathEnv: [...lifecyclePrefix, "/work/openclaw/node_modules/.bin", "/opt/node/bin"].join(":"),
+      bunVersion: layout.bunVersion,
+      env: layout.env,
+      pathEnv: [
+        ...layout.prefix,
+        "/work/openclaw/node_modules/.bin",
+        "/opt/node/bin",
+        ...layout.suffix,
+      ].join(":"),
       run: (command) => {
         candidates.push(command);
-        return {
-          status: 0,
-          stdout: JSON.stringify({
-            version: "24.14.1",
-            bunVersion: null,
-            execPath: command,
-          }),
-        };
+        return runtimeReply(command, "24.14.1");
       },
     });
 
@@ -295,8 +317,62 @@ describe("install runtime enforcement", () => {
     expect(runtime?.version).toBe("24.14.1");
   });
 
-  it("fails closed when Bun's lifecycle PATH prefix cannot be proven", () => {
-    expectRejectedProbe({ pathEnv: "/unproven/node_modules/.bin:/opt/node/bin" });
+  it.each([["/work/node_modules/.bin"], ["/work/node_modules/.bin", "/node_modules/.bin"]])(
+    "preserves inherited ancestor bins before later Node paths: %j",
+    (...inherited) => {
+      const run = vi.fn((command: string) => runtimeReply(command, "24.14.1"));
+      const runtime = probe({
+        bunVersion: "1.4.4",
+        env: { npm_config_local_prefix: "/work" },
+        pathEnv: [
+          "/work/openclaw/node_modules/.bin",
+          ...inherited,
+          "/opt/node/bin",
+          "/work/node_modules/.bin",
+          "/node_modules/.bin",
+        ].join(":"),
+        run,
+      });
+      expect(run.mock.calls.map(([command]) => command)).toEqual(["/work/node_modules/.bin/node"]);
+      expect(
+        nodeVersionSatisfiesPackageEngine(runtime?.version ?? null, EXPECTED_NODE_ENGINE_RANGE),
+      ).toBe(false);
+    },
+  );
+
+  it.each(["1.4.3", "1.4.4"])(
+    "preserves an inherited ancestor suffix in a prefix-only Bun %s lifecycle",
+    (bunVersion) => {
+      const run = vi.fn((command: string) =>
+        runtimeReply(command, command === "/opt/node/bin/node" ? "24.22.1" : "24.14.1"),
+      );
+      const runtime = probe({
+        bunVersion,
+        env: { npm_config_local_prefix: "/work/openclaw" },
+        pathEnv: [
+          ...lifecyclePrefix,
+          "/opt/node/bin",
+          "/work/node_modules/.bin",
+          "/node_modules/.bin",
+        ].join(":"),
+        run,
+      });
+      expect(run.mock.calls.map(([command]) => command)).toEqual(["/opt/node/bin/node"]);
+      expect(runtime?.version).toBe("24.22.1");
+    },
+  );
+
+  it.each([
+    ["/unproven/node_modules/.bin", "/opt/node/bin"],
+    ["/work/openclaw/node_modules/.bin", "/opt/node/bin", "/node_modules/.bin"],
+    [
+      "/work/openclaw/node_modules/.bin",
+      "/opt/node/bin",
+      "/node_modules/.bin",
+      "/work/node_modules/.bin",
+    ],
+  ])("fails closed when the lifecycle directories cannot be proven: %j", (...entries) => {
+    expectRejectedProbe({ pathEnv: entries.join(":") });
   });
 
   it.each(["."])("fails closed before a relative PATH component %j", (relativeEntry) => {
@@ -343,20 +419,13 @@ describe("install runtime enforcement", () => {
 });
 
 describe("detectLifecyclePackageManager", () => {
-  it("detects npm cli launchers from npm_execpath", () => {
-    expectLauncher("C:\\Tools\\nodejs\\node_modules\\npm\\bin\\npm-cli.js", "npm");
-  });
-
-  it("detects yarnpkg launchers from npm_execpath", () => {
-    expectLauncher("C:\\Tools\\corepack\\yarnpkg.cmd", "yarn");
-  });
-
-  it("detects versioned Yarn release launchers from npm_execpath", () => {
-    expectLauncher("/work/project/.yarn/releases/yarn-4.5.0.cjs", "yarn");
-  });
-
-  it("ignores package manager names in npm_execpath parent directories", () => {
-    expectLauncher("/tmp/npm-cache/bin/yarn.js", "yarn");
+  it.each([
+    ["C:\\Tools\\nodejs\\node_modules\\npm\\bin\\npm-cli.js", "npm"],
+    ["C:\\Tools\\corepack\\yarnpkg.cmd", "yarn"],
+    ["/work/project/.yarn/releases/yarn-4.5.0.cjs", "yarn"],
+    ["/tmp/npm-cache/bin/yarn.js", "yarn"],
+  ])("detects %s without interpreting its parent directories", (npm_execpath, manager) => {
+    expect(detectLifecyclePackageManager({ npm_execpath })).toBe(manager);
   });
 });
 

@@ -138,10 +138,17 @@ test("keeps runtime phase parents explicit when observations arrive under anothe
     startedAt: Date.now() - 25,
     durationMs: 25,
   };
+  const providerEndedAt = Date.now() - 1_000;
   try {
     await context.with(trace.setSpan(context.active(), unrelated), async () => {
       await Promise.resolve();
-      emit({ ...phase, name: "sessions.catalog.list.provider", trace: requestTrace });
+      emit({
+        ...phase,
+        name: "sessions.catalog.list.provider",
+        trace: requestTrace,
+        startedAt: providerEndedAt - 25,
+        endedAt: providerEndedAt,
+      });
       emit({
         ...phase,
         name: "sessions.catalog.list.planning",
@@ -168,6 +175,11 @@ test("keeps runtime phase parents explicit when observations arrive under anothe
     const startup = spans.find((span) => span.attributes["openclaw.phase"] === "startup.fixture")!;
     expect(provider.parentSpanContext?.spanId).toBe(caller.spanContext().spanId);
     expect(provider.spanContext().traceId).toBe(caller.spanContext().traceId);
+    expect(provider.endTime).toEqual([
+      Math.floor(providerEndedAt / 1_000),
+      (providerEndedAt % 1_000) * 1_000_000,
+    ]);
+    expect(provider.duration).toEqual([0, 25_000_000]);
     expect(planning.parentSpanContext).toBeUndefined();
     expect(planning.spanContext().traceId).not.toBe(unrelated.spanContext().traceId);
     expect(planning.attributes["openclaw.phase.detail.threadCpuMs"]).toBe(1.25);

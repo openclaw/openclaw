@@ -15,7 +15,6 @@ import {
   type UserConfig,
 } from "vite";
 import { mermaidClassicBundlePlugin } from "../packages/mermaid-renderer/vite-plugin.ts";
-import { CONTROL_UI_LOCALE_ENTRIES } from "../scripts/lib/control-ui-i18n-config.ts";
 import {
   CONTROL_UI_BUILD_ID_ATTRIBUTE,
   isControlUiVersionedPublicAsset,
@@ -27,7 +26,6 @@ import {
 import {
   controlUiCodeSplitting,
   controlUiIsolatedDesktopRuntimePlugin,
-  controlUiLocaleConfigHintsChunkPrefix,
 } from "./config/control-ui-chunking.ts";
 import { createControlUiDevGateway } from "./config/control-ui-dev-gateway.ts";
 import { controlUiHoverGuardPlugin } from "./config/control-ui-hover-guard.ts";
@@ -80,14 +78,18 @@ const controlUiPrecompressedAssetExtensions = new Set([
 
 const compressBrotli = promisify(brotliCompress);
 
+function isControlUiPrecompressedAsset(fileName: string) {
+  return (
+    fileName.startsWith("assets/") &&
+    controlUiPrecompressedAssetExtensions.has(path.extname(fileName).toLowerCase())
+  );
+}
+
 export async function createControlUiPrecompressedAssetVariants(
   fileName: string,
   source: string | Uint8Array,
 ): Promise<Array<{ fileName: string; source: Buffer }>> {
-  if (
-    !fileName.startsWith("assets/") ||
-    !controlUiPrecompressedAssetExtensions.has(path.extname(fileName).toLowerCase())
-  ) {
+  if (!isControlUiPrecompressedAsset(fileName)) {
     return [];
   }
   const body = typeof source === "string" ? Buffer.from(source) : source;
@@ -95,7 +97,7 @@ export async function createControlUiPrecompressedAssetVariants(
     {
       fileName: `${fileName}.br`,
       source: await compressBrotli(body, {
-        params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 9 },
+        params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 10 },
       }),
     },
     {
@@ -106,46 +108,6 @@ export async function createControlUiPrecompressedAssetVariants(
     },
   ];
 }
-
-function escapeControlUiAssetRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-}
-
-const controlUiLocaleAssetPatterns = CONTROL_UI_LOCALE_ENTRIES.map(({ locale }) => ({
-  locale,
-  base: new RegExp(`^assets/${escapeControlUiAssetRegExp(locale)}-[^/]+\\.js$`, "u"),
-  configHints: new RegExp(
-    `^assets/${controlUiLocaleConfigHintsChunkPrefix}${escapeControlUiAssetRegExp(locale)}-[^/]+\\.js$`,
-    "u",
-  ),
-}));
-
-function controlUiLocaleFromAssetPath(file: string, kind: "base" | "configHints"): string | null {
-  return (
-    controlUiLocaleAssetPatterns.find(({ [kind]: pattern }) => pattern.test(file))?.locale ?? null
-  );
-}
-
-export const resolveControlUiModulePreloadDependencies: ResolveModulePreloadDependenciesFn = (
-  filename,
-  deps,
-  context,
-) => {
-  if (context.hostType !== "js") {
-    return deps;
-  }
-  const locale = controlUiLocaleFromAssetPath(filename, "base");
-  if (!locale) {
-    return deps;
-  }
-  const matchingHint = deps.find(
-    (dep) => controlUiLocaleFromAssetPath(dep, "configHints") === locale,
-  );
-  if (!matchingHint) {
-    return deps;
-  }
-  return deps.filter((dep) => dep !== filename && dep !== matchingHint);
-};
 
 function normalizeBase(input: string): string {
   const trimmed = input.trim();
@@ -625,7 +587,9 @@ function controlUiBuildOutputPlugin(
           lastProgressAt = now;
         }
       };
-      const outputs = Object.values(bundle);
+      const outputs = Object.values(bundle).filter((output) =>
+        isControlUiPrecompressedAsset(output.fileName),
+      );
       for (let index = 0; index < outputs.length; index += 4) {
         // Bound native compression memory and join every writer before failed-build cleanup.
         const results = await Promise.allSettled(
@@ -691,10 +655,24 @@ function collectControlUiPublicAssets(publicDir: string): { paths: string[]; has
   return { paths, hash: hash.digest("hex") };
 }
 
+export function controlUiRuntimeDefines(
+  command: "serve" | "build" | undefined,
+  buildInfo: ControlUiBuildInfo,
+) {
+  return {
+    "globalThis.OPENCLAW_UI_DEV_SERVER": JSON.stringify(command === "serve"),
+    ...(command === "serve"
+      ? { "globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO": JSON.stringify(buildInfo) }
+      : {}),
+  };
+}
+
 export default function controlUiViteConfig(
   options: { outDir?: string; command?: "serve" | "build"; buildInfo?: ControlUiBuildInfo } = {},
 ): UserConfig {
   const envBase = process.env.OPENCLAW_CONTROL_UI_BASE_PATH?.trim();
+  const polling = process.env.CHOKIDAR_USEPOLLING?.toLowerCase();
+  const usePolling = Boolean(polling && polling !== "false" && polling !== "0");
   const base = envBase ? normalizeBase(envBase) : "./";
   const bootstrapConfigPath =
     base === "./" ? "/control-ui-config.json" : `${base}control-ui-config.json`;
@@ -710,9 +688,8 @@ export default function controlUiViteConfig(
     deps,
     context,
   ) => {
-    const pending = resolveControlUiModulePreloadDependencies(filename, deps, context);
     if (context.hostType !== "js") {
-      return pending;
+      return deps;
     }
     // The executing importer has already loaded its whole static JS graph.
     // Keep the lazy target, its other dependencies, and Vite's CSS preloads.
@@ -724,7 +701,10 @@ export default function controlUiViteConfig(
         imports.push(...(staticImports.get(dependency) ?? []));
       }
     }
-    return pending.filter((dep) => !loaded.has(dep));
+    // Without stylesheet waits, import() immediately fetches its own target.
+    // Keep the target preload when CSS would otherwise delay that request.
+    const waitsForStyles = deps.some((dep) => dep.endsWith(".css"));
+    return deps.filter((dep) => !loaded.has(dep) && (waitsForStyles || dep !== filename));
   };
   return {
     base,
@@ -736,9 +716,7 @@ export default function controlUiViteConfig(
       },
     },
     define: {
-      ...(options.command === "serve"
-        ? { "globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO": JSON.stringify(buildInfo) }
-        : {}),
+      ...controlUiRuntimeDefines(options.command, buildInfo),
       "globalThis.OPENCLAW_UI_DEV_GATEWAY": devGateway
         ? JSON.stringify(devGateway.gateway)
         : "undefined",
@@ -764,11 +742,14 @@ export default function controlUiViteConfig(
       target: ["chrome147", "firefox150", "safari26.2"],
       outDir: options.outDir ?? outDir,
       emptyOutDir: true,
+      // The canonical sidecar performance report already measures shipped compressed bytes.
+      reportCompressedSize: false,
       // Release packages omit maps; keep generating them without advertising dead URLs.
       // Source builds retain automatic debugger discovery.
       sourcemap: buildInfo.release ? "hidden" : true,
       modulePreload: {
-        polyfill: true,
+        // Every supported browser has native modulepreload (see docs/web/control-ui.md).
+        polyfill: false,
         resolveDependencies: resolveModulePreloadDependencies,
       },
       rolldownOptions: {
@@ -787,6 +768,8 @@ export default function controlUiViteConfig(
       host: devGateway ? "127.0.0.1" : true,
       port: 5173,
       strictPort: true,
+      // Chokidar selects FSEvents before reading its environment override on macOS.
+      ...(usePolling ? { watch: { usePolling: true } } : {}),
       ...(devGateway ? { proxy: devGateway.proxy } : {}),
     },
     plugins: [

@@ -19,6 +19,7 @@ import {
   withSessionPage,
 } from "./session-page.test-support.ts";
 import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
+import { chooseSidebarMenuOption, closeSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -93,6 +94,8 @@ async function withGroupGateway(
 }
 
 async function openDefaults(page: Page) {
+  await chooseSidebarMenuOption(page, "Status", "All");
+  await closeSidebarMenu(page);
   const group = page.locator(groupSelector);
   await group.waitFor({ state: "visible", timeout: 10_000 });
   await group.locator(".sidebar-recent-sessions__head").hover();
@@ -381,25 +384,24 @@ suite.define(() => {
     );
   });
 
-  it("omits the group category for a legacy Gateway", async () => {
+  it("keeps the group category without saved folder defaults", async () => {
     await withGroupGateway(
       {
-        featureMethods: ["sessions.create", "sessions.groups.list"],
         methodResponses: {
-          "sessions.create": { key: "agent:main:legacy-group", runStarted: true },
+          "sessions.create": { key: "agent:main:group-without-defaults", runStarted: true },
         },
         workspaceGit: false,
       },
       async (page, gateway) => {
         await page.goto(`${suite.server.baseUrl}new?group=Client+work`);
-        await page.locator(".new-session-page__message").fill("start on an older Gateway");
+        await page.locator(".new-session-page__message").fill("start without folder defaults");
         await page.getByRole("button", { name: "Start session" }).click();
         const create = await gateway.waitForRequest("sessions.create");
         expect(create.params).toMatchObject({
           agentId: "main",
-          message: "start on an older Gateway",
+          message: "start without folder defaults",
+          category: "Client work",
         });
-        expect(create.params).not.toHaveProperty("category");
       },
     );
   });
@@ -507,6 +509,8 @@ suite.define(() => {
       savedGitGroup({ deferredMethods: ["sessions.groups.defaults"] }),
       async (page, gateway) => {
         await page.goto(`${suite.server.baseUrl}chat`);
+        await chooseSidebarMenuOption(page, "Status", "All");
+        await closeSidebarMenu(page);
         const group = page.locator(groupSelector);
         await group.waitFor({ state: "visible", timeout: 10_000 });
         await gateway.waitForRequest("sessions.groups.list");

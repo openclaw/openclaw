@@ -5,9 +5,9 @@ import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/sessi
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import { listAgentRunsForSession } from "../../../infra/agent-run-registry.js";
 import {
-  getSessionWorkAdmissionRelease,
-  isSessionWorkAdmissionActive,
-} from "../../../sessions/session-lifecycle-admission.js";
+  captureSessionControllerSettlement,
+  isSessionControllerWorkActive,
+} from "../../../sessions/session-controller.lifecycle.js";
 import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import {
@@ -21,11 +21,11 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 function retainSessionOwner(storePath: string, sessionKey: string, sessionId: string | undefined) {
   const isCurrent = () =>
     listAgentRunsForSession({ sessionKey, sessionId }).length > 0 ||
-    isSessionWorkAdmissionActive(storePath, [sessionKey, sessionId]);
+    isSessionControllerWorkActive(storePath, [sessionKey, sessionId]);
   return isCurrent()
     ? {
         isCurrent,
-        released: getSessionWorkAdmissionRelease({
+        released: captureSessionControllerSettlement({
           scope: storePath,
           identities: [sessionKey, sessionId],
         }),
@@ -33,17 +33,19 @@ function retainSessionOwner(storePath: string, sessionKey: string, sessionId: st
     : undefined;
 }
 
-export async function loadSubagentRecoverySession(params: {
-  entry: SubagentRunRecord;
-  isOwnerCurrent: () => boolean;
-}): Promise<{
+type SubagentRecoverySession = {
   agentId: string;
   storePath: string;
   sessionEntry: InternalSessionEntry | undefined;
   currentRead: ReturnType<typeof captureSessionEntryCurrentRead>;
   retained?: Extract<RestartRecoveryResult, { status: "handled" }>["retained"];
   replacementReason?: string;
-} | null> {
+};
+
+export async function loadSubagentRecoverySession(params: {
+  entry: SubagentRunRecord;
+  isOwnerCurrent: () => boolean;
+}): Promise<SubagentRecoverySession | null> {
   const sessionKey = params.entry.childSessionKey.trim();
   if (resolveSubagentChildAuthority(params.entry).status === "mismatch") {
     return null;
@@ -74,22 +76,31 @@ export async function loadSubagentRecoverySession(params: {
     return { agentId, storePath, sessionEntry, currentRead, replacementReason: authority.error };
   }
   const retained = retainSessionOwner(storePath, sessionKey, sessionEntry?.sessionId);
+  return { agentId, storePath, sessionEntry, currentRead, retained };
+}
+
+export async function markSubagentRecoverySessionInterrupted(params: {
+  entry: SubagentRunRecord;
+  session: SubagentRecoverySession;
+  isOwnerCurrent: () => boolean;
+}): Promise<SubagentRecoverySession | null> {
+  const { agentId, storePath, sessionEntry, currentRead, retained } = params.session;
   if (
-    authority.status === "legacy-unverified" ||
     retained ||
     params.entry.execution.restartRecovery ||
     sessionEntry?.abortedLastRun === true ||
     !isRetiredSubagentSessionOwner(params.entry, sessionEntry)
   ) {
-    return { agentId, storePath, sessionEntry, currentRead, retained };
+    return params.session;
   }
+  const sessionKey = params.entry.childSessionKey.trim();
   const { sessionId, lifecycleRevision, updatedAt } = sessionEntry;
   const target = { sessionKey, sessionId };
   const isCurrent = () =>
     params.isOwnerCurrent() &&
     isRetiredSubagentExecution(params.entry) &&
     listAgentRunsForSession(target).length === 0 &&
-    !isSessionWorkAdmissionActive(storePath, [sessionKey, sessionId]);
+    !isSessionControllerWorkActive(storePath, [sessionKey, sessionId]);
   const interrupted = await applySessionEntryExactReplacements<InternalSessionEntry | null>({
     agentId,
     storePath,
@@ -118,5 +129,5 @@ export async function loadSubagentRecoverySession(params: {
     },
     skipMaintenance: true,
   });
-  return interrupted ? { agentId, storePath, sessionEntry: interrupted, currentRead } : null;
+  return interrupted ? { ...params.session, sessionEntry: interrupted } : null;
 }

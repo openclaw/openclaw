@@ -8,7 +8,7 @@ import {
   MODEL_SELECTION_LOCK_REMOVAL_MESSAGE,
   resolveAgentHarnessSessionStoreEntryError,
 } from "../../sessions/agent-harness-session-key.js";
-import { collectActiveSessionWorkAdmissions } from "../../sessions/session-lifecycle-admission.js";
+import { collectSessionControllerTargets } from "../../sessions/session-controller.lifecycle.js";
 import { emitSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import {
   createOpenClawAgentDatabaseClaim,
@@ -79,6 +79,10 @@ import { applySessionResetInDatabase } from "./session-reset.kernel.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 // Single-target lifecycle owner: reset, guarded delete, and trusted rollback.
+
+function collectControllerIdentities(storePath: string): string[] {
+  return [...(collectSessionControllerTargets(undefined, storePath).get(storePath) ?? [])];
+}
 
 async function withCommittedHistoryMaintenance<T>(
   { agentId, env, storePath }: { agentId?: string; env?: NodeJS.ProcessEnv; storePath: string },
@@ -290,12 +294,12 @@ async function deleteSqliteSessionEntryLifecycleLocked(
         }
       : undefined;
   // An opened alias already selected its native owner; later retargeting cannot redirect this deletion.
-  const resolved = expectedIdentity
+  const preparedScope = expectedIdentity
     ? { ...requestedScope, path: expectedIdentity.nativeLocation }
     : requestedScope;
-  const databaseOptions = toDatabaseOptions(resolved);
+  const preparedDatabaseOptions = toDatabaseOptions(preparedScope);
   const reclamationOptions = useWorker
-    ? resolveSessionReclamationDatabaseOptions(databaseOptions)
+    ? resolveSessionReclamationDatabaseOptions(preparedDatabaseOptions)
     : undefined;
   const execution = reclamationOptions
     ? captureOpenClawAgentDatabaseExecution(
@@ -322,54 +326,61 @@ async function deleteSqliteSessionEntryLifecycleLocked(
       ? [{ sessionKey: params.target.canonicalKey, entry: params.expectedEntry }]
       : undefined;
   try {
-    return await withSqliteTranscriptArchiveSession(databaseOptions, async () => {
-      const {
-        commitGuard: _commitGuard,
-        env: _env,
-        expectedDatabaseIdentity: _expectedDatabaseIdentity,
-        ...deleteParams
-      } = params;
-      const preparation = metadataTarget
-        ? {
-            operation: "entry" as const,
+    const {
+      commitGuard: _commitGuard,
+      env: _env,
+      expectedDatabaseIdentity: _expectedDatabaseIdentity,
+      ...deleteParams
+    } = params;
+    const preparation = metadataTarget
+      ? {
+          operation: "entry" as const,
+          value: {
+            kind: "ready" as const,
             value: {
-              kind: "ready" as const,
-              value: {
-                archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
-                current: metadataTarget[0]!,
-                entryPlans: [],
-                historicalGenerationIds: [],
-                targetSnapshot: metadataTarget,
-              },
+              archiveDirectory: resolveSqliteTranscriptArchiveDirectory(preparedScope),
+              current: metadataTarget[0]!,
+              entryPlans: [],
+              historicalGenerationIds: [],
+              targetSnapshot: metadataTarget,
             },
-          }
-        : await runSessionDeletionPlanning(
-            resolved,
-            params,
-            {
-              operation: "entry",
-              input: {
-                deleteParams,
-                archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
-                admissionIdentities: [
-                  ...(collectActiveSessionWorkAdmissions().get(params.storePath) ?? []),
-                ],
-                allowLockedEntryRemoval,
-                expectedPluginOwnerId,
-              },
+          },
+        }
+      : await runSessionDeletionPlanning(
+          preparedScope,
+          params,
+          {
+            operation: "entry",
+            input: {
+              deleteParams,
+              archiveDirectory: resolveSqliteTranscriptArchiveDirectory(preparedScope),
+              admissionIdentities: collectControllerIdentities(params.storePath),
+              allowLockedEntryRemoval,
+              expectedPluginOwnerId,
             },
-            assertSourceCurrent,
-          );
-      if (preparation.value.kind === "missing") {
-        await publishSessionStateArchives(resolved, []);
-        return { archivedTranscripts: [], deleted: false };
+          },
+          assertSourceCurrent,
+        );
+    if (preparation.value.kind === "missing") {
+      await publishSessionStateArchives(preparedScope, []);
+      return { archivedTranscripts: [], deleted: false };
+    }
+    if (preparation.value.kind === "expected-entry-mismatch") {
+      await publishSessionStateArchives(preparedScope, []);
+      return expectedEntryMismatchResult([]);
+    }
+    const prepared = preparation.value.value;
+    let resolved = preparedScope;
+    if (execution && !metadataTarget) {
+      const native = execution.fileIdentity;
+      if (!native) {
+        throw new Error("Session deletion planning lost its admitted database identity");
       }
-      if (preparation.value.kind === "expected-entry-mismatch") {
-        await publishSessionStateArchives(resolved, []);
-        return expectedEntryMismatchResult([]);
-      }
-      const prepared = preparation.value.value;
-
+      // Planning already admitted this owner; archive requests must share its physical spelling.
+      resolved = { ...preparedScope, path: native.nativeLocation };
+    }
+    const databaseOptions = toDatabaseOptions(resolved);
+    return await withSqliteTranscriptArchiveSession(databaseOptions, async () => {
       return await withSqliteSessionDeletions(
         resolved,
         prepared.targetSnapshot,
@@ -409,9 +420,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
                   sessionId,
                   archiveDirectory: prepared.archiveDirectory,
                   archiveTranscript: params.archiveTranscript,
-                  admissionIdentities: [
-                    ...(collectActiveSessionWorkAdmissions().get(params.storePath) ?? []),
-                  ],
+                  admissionIdentities: collectControllerIdentities(params.storePath),
                 },
               },
               assertDeletionCurrent,
@@ -434,9 +443,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
                   input: {
                     validation: generationValidation,
                     sessionId,
-                    admissionIdentities: [
-                      ...(collectActiveSessionWorkAdmissions().get(params.storePath) ?? []),
-                    ],
+                    admissionIdentities: collectControllerIdentities(params.storePath),
                   },
                 },
                 assertDeletionCurrent,

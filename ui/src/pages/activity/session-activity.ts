@@ -115,7 +115,7 @@ export function reconcileSessionActivityRead(
   previous: SessionsListResult | undefined,
   provenance: ActivityRowProvenance,
   revision: number,
-): { result: SessionsListResult; requiresRefresh: boolean } {
+): SessionsListResult {
   const held = new Map(
     (previous?.sessions ?? []).flatMap((row) => {
       const identity = provenance.identity(row);
@@ -132,11 +132,8 @@ export function reconcileSessionActivityRead(
     return merged;
   });
   return {
-    result: {
-      ...incoming,
-      sessions: orderChanged ? sessions.toSorted(compareSessionActivity) : sessions,
-    },
-    requiresRefresh: false,
+    ...incoming,
+    sessions: orderChanged ? sessions.toSorted(compareSessionActivity) : sessions,
   };
 }
 
@@ -191,7 +188,7 @@ export function sessionActivityOwner(
   const agentId = normalizeOptionalString(row.agentId);
   return {
     id: normalizeOptionalString(actor?.id) ?? agentId ?? "system",
-    name: normalizeOptionalString(actor?.label) ?? agentId,
+    name: actor ? normalizeOptionalString(actor.label) : agentId,
     avatarUrl: actor
       ? normalizeOptionalString(actor.avatarUrl)
       : (resolveAgentAvatarUrl(

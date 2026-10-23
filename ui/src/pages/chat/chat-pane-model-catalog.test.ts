@@ -1,15 +1,17 @@
 /* @vitest-environment jsdom */
 
 import { createComponent, createMemo } from "solid-js";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { UsersListModelAccountsResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow, ModelCatalogResult } from "../../api/types.ts";
+import { createGatewayStoreTestStore } from "../../app/gateway-store.test-support.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import {
   beginChatMetadataPublication,
   subscribeChatMetadata,
 } from "../../lib/chat/chat-metadata-store.ts";
+import { resolveChatModelSelectState } from "../../lib/chat/model-select-state.ts";
 import {
   beginModelCatalogRead,
   invalidateModelCatalogCache,
@@ -19,6 +21,7 @@ import {
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { installModelPickerLayout } from "../../test-helpers/model-picker-layout.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -27,6 +30,7 @@ import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { renderPaneModelControl } from "./chat-pane-model-control.test-support.ts";
 import { ChatPaneModelControl } from "./chat-pane-model-control.tsx";
 import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
+import { createTestChatPane } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import {
   applyChatModelCatalogSnapshot,
@@ -35,6 +39,9 @@ import {
   refreshPageChat,
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
+import { expandModelProviders } from "./components/chat-model-picker.test-support.tsx";
+
+beforeEach(installModelPickerLayout);
 
 function composerControls(state: ChatPageHost) {
   return renderChatPaneComposerControls({
@@ -52,6 +59,119 @@ function composerControls(state: ChatPageHost) {
 
 describe("chat pane composer controls", () => {
   const cachedModels = [{ id: "cached-model", name: "Cached Model", provider: "openai" }];
+  it.each(["metadata", "picker"] as const)(
+    "retains model selection through a blip, fences late %s reads, and clears on client replacement",
+    async (kind) => {
+      const original: ModelCatalogResult = {
+        models: [{ id: "mock-1", name: "Mock 1", provider: "test", available: true }],
+        modelSelectionPolicy: { restricted: true, defaultModel: "test/mock-1" },
+        accountSelection: { kind: "personal", label: "Personal", authProfileId: "test:personal" },
+      };
+      const stale = createDeferred<ModelCatalogResult>();
+      const refreshed = createDeferred<ModelCatalogResult>();
+      const store = createGatewayStoreTestStore();
+      store.gateway.start();
+      let reads = 0;
+      const request = makeRequestMock({
+        "models.list": () =>
+          ++reads === 1 ? original : reads === 2 ? stale.promise : refreshed.promise,
+        "chat.metadata": { commands: [] },
+        "chat.startup": { messages: [], metadata: { commands: [] } },
+        "chat.history": { messages: [] },
+        "sessions.list": createSessionsListResult(),
+        "agents.list": {
+          defaultId: "main",
+          mainKey: "main",
+          scope: "per-sender",
+          agents: [{ id: "main" }],
+        },
+      });
+      store.current().request.mockImplementation(async (method, params) => request(method, params));
+      const hello = {
+        ...gatewayHelloForMethods(["chat.metadata", "chat.startup", "models.list"]),
+        snapshot: {
+          presence: [
+            { ts: 1, instanceId: store.current().instanceId, user: { id: "catalog-user" } },
+          ],
+        },
+      };
+      store.current().testOptions.onHello?.(hello);
+      const client = store.gateway.snapshot.client!;
+      const { pane, state } = createTestChatPane({ client });
+      pane.context = { ...pane.context, gateway: store.gateway };
+      state.loadAssistantIdentity = vi.fn(async () => undefined);
+      state.chatModelSwitchPromises = {};
+      pane.applyGatewaySnapshot(store.gateway.snapshot);
+      const unsubscribe = store.gateway.subscribe((snapshot) =>
+        pane.applyGatewaySnapshot(snapshot),
+      );
+      onTestFinished(() => {
+        unsubscribe();
+        store.gateway.stop();
+      });
+      const selection = () =>
+        resolveChatModelSelectState({
+          sessionKey: state.sessionKey,
+          sessionsResult: null,
+          modelOverrides: { [state.sessionKey]: "test/mock-1" },
+          chatModelCatalog: state.chatModelCatalog,
+          modelSelectionPolicy: state.chatModelSelectionPolicy,
+          catalogInitialized: state.chatModelCatalogInitialized,
+        });
+      const expectOriginal = () => {
+        expect(state.chatModelCatalog).toEqual(original.models);
+        expect(state.chatModelSelectionPolicy).toEqual(original.modelSelectionPolicy);
+        expect(state.chatAccountSelection).toEqual(original.accountSelection);
+        expect(selection()).toMatchObject({
+          currentOverride: "test/mock-1",
+          defaultLabel: "Default (Mock 1)",
+          options: [{ value: "test/mock-1", label: "Mock 1" }],
+        });
+      };
+      await refreshChatMetadata(state);
+      expectOriginal();
+      invalidateModelCatalogCache(client);
+      const pending =
+        kind === "picker" ? refreshChatModelCatalogOnDemand(state) : refreshChatMetadata(state);
+      expect(reads).toBe(2);
+
+      store
+        .current()
+        .testOptions.onClose?.({ code: 1006, reason: "network unavailable", willRetry: true });
+      await refreshChatMetadata(state);
+      expectOriginal();
+      expect(composerControls(state).model.modelCatalogState.status).toBe("offline");
+      expect(state.chatModelsLoading).toBe(false);
+      const readsBeforeReconnect = reads;
+      store.current().testOptions.onHello?.(hello);
+      await waitForFast(() => expect(reads).toBe(readsBeforeReconnect + 1));
+      expectOriginal();
+      stale.resolve({
+        models: [{ ...original.models[0]!, available: false, unavailableReason: "missing-auth" }],
+        accountSelection: { kind: "shared", label: "Old account", authProfileId: "test:old" },
+      });
+      await pending;
+      expectOriginal();
+
+      const fresh = {
+        ...original,
+        models: [{ ...original.models[0]!, name: "Fresh Mock 1" }],
+      };
+      refreshed.resolve(fresh);
+      await waitForFast(() => expect(state.chatModelCatalog).toEqual(fresh.models));
+      expect(selection().defaultLabel).toBe("Default (Fresh Mock 1)");
+      expect(selection().options).toEqual([{ value: "test/mock-1", label: "Fresh Mock 1" }]);
+      expect(state.chatModelCatalogError).toBeNull();
+
+      store.gateway.connect();
+      expect(state.chatModelCatalog).toEqual([]);
+      expect(state.chatModelCatalogInitialized).toBe(false);
+      expect(state.chatModelSelectionPolicy).toBeUndefined();
+      expect(state.chatAccountSelection).toBeNull();
+      expect(selection().defaultLabel).toBe("Default model");
+      expect(selection().options).toEqual([]);
+    },
+  );
 
   it("keeps a natively dismissed model picker closed when account loading settles", async () => {
     const accounts = createDeferred<UsersListModelAccountsResult>();
@@ -95,6 +215,9 @@ describe("chat pane composer controls", () => {
     flush();
     const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker")!;
     expect(picker.open).toBe(true);
+    await waitForSolid(() =>
+      expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
+    );
     container.querySelector<HTMLButtonElement>("[data-chat-account-group-toggle]")!.click();
     flush();
     expect(container.querySelector('[data-chat-account-option="loading"]')).not.toBeNull();
@@ -162,13 +285,14 @@ describe("chat pane composer controls", () => {
       const failureLabel = retained
         ? "Some models could not be refreshed. Open Models to try again."
         : "Models unavailable";
-      flush();
+      await waitForSolid(() =>
+        expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
+      );
+      expandModelProviders(container);
       expect(container.textContent).toContain(failureLabel);
 
       const refresh =
-        entry === "automatic"
-          ? refreshChatMetadata(state, { automatic: true })
-          : refreshChatModelCatalogOnDemand(state);
+        entry === "automatic" ? refreshChatMetadata(state) : refreshChatModelCatalogOnDemand(state);
       expect(applyChatModelCatalogSnapshot(state)).toBe(false);
       flush();
       expect(state.chatModelsLoading).toBe(true);
@@ -199,6 +323,7 @@ describe("chat pane composer controls", () => {
       request.mockResolvedValueOnce({ models: cachedModels });
       await refreshChatModelCatalogOnDemand(state);
       flush();
+      expandModelProviders(container);
       expect(container.textContent).toContain("Cached Model");
       expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
     },
@@ -273,6 +398,10 @@ describe("chat pane composer controls", () => {
       });
       expect(state.chatModelsLoading).toBe(!cachedCatalog);
       renderPaneModelControl(composerControls(state), container);
+      await waitForSolid(() =>
+        expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
+      );
+      expandModelProviders(container);
       if (cachedCatalog) {
         expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
         expect(
@@ -346,6 +475,10 @@ describe("chat pane composer controls", () => {
     expect(host.chatModelsLoading).toBe(false);
     const container = document.createElement("div");
     renderPaneModelControl(composerControls(host), container, true);
+    await waitForSolid(() =>
+      expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
+    );
+    expandModelProviders(container);
     expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
     expect(container.textContent).toContain("Cached Model");
     expect(container.textContent).not.toContain("Loading models…");

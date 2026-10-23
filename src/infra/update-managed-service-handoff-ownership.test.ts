@@ -204,7 +204,7 @@ function replaceRestartSentinelRow(env: NodeJS.ProcessEnv, sentinel: SentinelFix
 }
 
 function readRestartSentinelPayload(env: NodeJS.ProcessEnv, key = "current"): unknown {
-  const { db } = openOpenClawStateDatabase({ env });
+  using db = new DatabaseSync(resolveOpenClawStateSqlitePath(env), { readOnly: true });
   const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
   const row = executeSqliteQueryTakeFirstSync(
     db,

@@ -61,8 +61,8 @@ describe("config appearance preferences", () => {
       devices: [{ deviceId, label }],
       permissionRequired: false,
       selectedDeviceId: deviceId,
-      loading: false,
-      error: null,
+      discovery: null,
+      selection: null,
     };
   }
 
@@ -201,7 +201,6 @@ describe("config appearance preferences", () => {
 
     expect(onOpenCustomThemeImport).toHaveBeenCalledTimes(1);
     props.customThemeImportExpanded = true;
-    props.customThemeImportFocusToken = 1;
     renderConfigInto(props, container);
     const importButton = findButtonByText(container, "Import theme", false);
 
@@ -257,6 +256,11 @@ describe("config appearance preferences", () => {
     document.body.append(otherInput);
     const { container, props } = renderAppearance({ customThemeImportUrl: "amethyst-haze" });
     document.body.append(container);
+    props.onOpenCustomThemeImport = () => {
+      props.customThemeImportExpanded = true;
+      renderConfigInto(props, container);
+    };
+    renderConfigInto(props, container);
     const frames = new Map<number, FrameRequestCallback>();
     let frameId = 0;
     const requestFrame = vi
@@ -276,8 +280,7 @@ describe("config appearance preferences", () => {
       container.remove();
     });
 
-    props.customThemeImportExpanded = true;
-    props.customThemeImportFocusToken = 1;
+    findButtonByText(container, "Import").click();
     renderConfigInto(props, container);
     props.textScale = 110;
     renderConfigInto(props, container);
@@ -291,7 +294,7 @@ describe("config appearance preferences", () => {
     expect(input.selectionStart).toBe(0);
     expect(input.selectionEnd).toBe("amethyst-haze".length);
 
-    props.customThemeImportFocusToken = 2;
+    findButtonByText(container, "Import").click();
     renderConfigInto(props, container);
     expect(frames.size).toBe(1);
     cleanupSolid();
@@ -345,7 +348,11 @@ describe("config appearance preferences", () => {
     expect(props.setTextScale).toHaveBeenCalledWith(100);
   });
 
-  it("keeps authored visual defaults direct", () => {
+  it.each(["iPhone", "Windows"])("keeps authored defaults editable on %s", (userAgent) => {
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue(userAgent);
+    onTestFinished(() => {
+      vi.restoreAllMocks();
+    });
     const { container, props } = renderAppearance({
       theme: "claw",
       themeOverridden: true,
@@ -362,7 +369,19 @@ describe("config appearance preferences", () => {
 
     expect(normalizedText(themeSection)).toContain("Default: Claw");
     expect(normalizedText(themeSection)).toContain("Default: System");
-    expect(shortcutRow?.textContent).toContain("Default: Enter");
+    expect(shortcutRow.textContent).toContain("Default: Enter");
+    expect(shortcutRow.textContent).toContain(
+      "Desktop only. On mobile, Enter adds a new line; use the Send button to send.",
+    );
+    const shortcut = required(shortcutRow, "select", HTMLSelectElement);
+    expect(shortcut.value).toBe("enter");
+    expect(shortcut.disabled).toBe(false);
+    expect(props.onAppearanceChange).not.toHaveBeenCalled();
+    shortcut.value = "modifier-enter";
+    shortcut.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(props.onAppearanceChange).toHaveBeenCalledExactlyOnceWith({
+      chatSendShortcut: "modifier-enter",
+    });
     findButtonByText(themeSection, "Claw").click();
     themeSection
       .querySelector<HTMLInputElement>('.settings-segmented__input[value="system"]')
@@ -440,7 +459,7 @@ describe("config appearance preferences", () => {
       onMicrophoneSelect: vi.fn(),
       onMicrophoneRefresh,
       camera: mediaDevice("camera-1", "Desk Camera"),
-      onCameraSelect: vi.fn(),
+      onCameraSelect: vi.fn().mockResolvedValue(undefined),
       onCameraRefresh,
       composerHoldToRecord: true,
     });
@@ -493,14 +512,18 @@ describe("config appearance preferences", () => {
       const onRefresh = vi.fn();
       const state = {
         devices: [...devices],
-        loading,
+        discovery: loading ? new Promise<string | null>(() => {}) : null,
         permissionRequired: true,
         selectedDeviceId: "",
-        error: null,
+        selection: null,
       };
       const { container } = renderAppearance(
         device === "camera"
-          ? { camera: state, onCameraSelect: vi.fn(), onCameraRefresh: onRefresh }
+          ? {
+              camera: state,
+              onCameraSelect: vi.fn().mockResolvedValue(undefined),
+              onCameraRefresh: onRefresh,
+            }
           : { microphone: state, onMicrophoneSelect: vi.fn(), onMicrophoneRefresh: onRefresh },
       );
       const select = required(container, `[data-settings-${device}]`, HTMLSelectElement);
@@ -583,7 +606,10 @@ describe("config appearance preferences", () => {
   it("labels hidden session sections from the catalog and keeps ids as the fallback", () => {
     const { container, props } = renderAppearance({
       hiddenSessionCatalogIds: new Set(["claude", "offline-catalog"]),
-      hiddenSessionCatalogLabels: new Map([["claude", "Claude Code"]]),
+      hiddenSessionCatalogLabels: {
+        read: () => new Map([["claude", "Claude Code"]]),
+        scope: null,
+      },
     });
 
     const heading = Array.from(container.querySelectorAll("h3")).find(

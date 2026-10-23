@@ -4,19 +4,14 @@ import {
   GATEWAY_CLIENT_CAPS,
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
-  type ConnectParams,
 } from "@openclaw/gateway-client/browser";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import * as nodes from "../lib/nodes/index.ts";
-import { createStorageMock } from "../test-helpers/storage.ts";
-import {
-  getLatestWebSocket,
-  MockWebSocket,
-  stubWindowGlobals,
-  useNodeFakeTimers,
-  wsInstances,
-} from "./gateway-socket.test-support.ts";
-import { GatewayBrowserClient } from "./gateway.ts";
+import { startConnect, useHandshakeHarness } from "./gateway-handshake.test-support.ts";
+import { getLatestWebSocket, wsInstances } from "./gateway-socket.test-support.ts";
+import type { GatewayBrowserClient } from "./gateway.ts";
+
+const createClient = useHandshakeHarness();
 
 const CONTROL_UI_OPERATOR_SCOPES = [
   "operator.admin",
@@ -27,76 +22,65 @@ const CONTROL_UI_OPERATOR_SCOPES = [
   "operator.pairing",
 ] as const;
 
-async function startConnect(client: GatewayBrowserClient) {
-  client.start();
-  const ws = getLatestWebSocket();
-  ws.emitOpen();
+async function acceptConnect(
+  { ws, connectFrame }: Awaited<ReturnType<typeof startConnect>>,
+  auth: { role: string; scopes: string[] },
+) {
   ws.emitMessage({
-    type: "event",
-    event: "connect.challenge",
-    payload: { nonce: "handshake-challenge", ts: 1_800_000_000_000 },
+    type: "res",
+    id: connectFrame.id,
+    ok: true,
+    payload: { type: "hello-ok", protocol: PROTOCOL_VERSION, auth },
   });
   await vi.advanceTimersByTimeAsync(0);
-  const connectFrame = JSON.parse(ws.sent.at(-1) ?? "{}") as {
-    id: string;
-    method: string;
-    params: ConnectParams;
-  };
-  return { ws, connectFrame };
 }
 
 describe("GatewayBrowserClient shared-auth handshake", () => {
-  let client: GatewayBrowserClient | undefined;
+  let client: GatewayBrowserClient;
 
-  beforeEach(() => {
-    useNodeFakeTimers();
-    const storage = createStorageMock();
-    vi.stubGlobal("localStorage", storage);
-    stubWindowGlobals(storage);
-    vi.stubGlobal("WebSocket", MockWebSocket);
-    // Insecure browsers retain random IDs but have no device-proof crypto.
-    vi.stubGlobal("crypto", { randomUUID: () => "handshake-request" });
-    wsInstances.length = 0;
+  it("releases cached view work after connect is sent, before hello", async () => {
+    client = createClient({ url: "ws://scopes.example.test" });
+    client.start();
+    const ws = getLatestWebSocket();
+    const dispatch = vi.fn(() => {
+      expect(JSON.parse(ws.sent.at(-1) ?? "{}").method).toBe("connect");
+      expect(client?.hello).toBeNull();
+    });
+    const dispatched = client.initialConnectSent.then(dispatch);
+    ws.emitOpen();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(dispatch).not.toHaveBeenCalled();
+    ws.emitMessage({
+      type: "event",
+      event: "connect.challenge",
+      payload: { nonce: "handshake-challenge", ts: 1_800_000_000_000 },
+    });
+    await dispatched;
+    expect(dispatch).toHaveBeenCalledOnce();
   });
-  afterEach(() => {
-    client?.stop();
-    client = undefined;
-    vi.restoreAllMocks();
-    vi.useRealTimers();
-    vi.unstubAllGlobals();
+
+  it("does not strand cached view work when the connection stops before dispatch", async () => {
+    client = createClient({ url: "ws://scopes.example.test" });
+    client.start();
+    const dispatch = vi.fn();
+    void client.initialConnectSent.then(dispatch);
+    client.stop();
+    await client.initialConnectSent;
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(getLatestWebSocket().sent).toEqual([]);
   });
 
   it("publishes negotiated scopes without a device token and retires them on disconnect", async () => {
-    client = new GatewayBrowserClient({ url: "ws://scopes.example.test" });
+    client = createClient({ url: "ws://scopes.example.test" });
     const { ws, connectFrame } = await startConnect(client);
     const auth = { role: "operator", scopes: ["operator.sessions.read"] };
-    ws.emitMessage({
-      type: "res",
-      id: connectFrame.id,
-      ok: true,
-      payload: {
-        type: "hello-ok",
-        protocol: PROTOCOL_VERSION,
-        auth,
-      },
-    });
-    await vi.advanceTimersByTimeAsync(0);
+    await acceptConnect({ ws, connectFrame }, auth);
     expect(client.auth).toEqual(auth);
     ws.emitClose(1006, "disconnected");
     expect(client.auth).toBeNull();
     await vi.advanceTimersByTimeAsync(1_000);
     const next = await startConnect(client);
-    next.ws.emitMessage({
-      type: "res",
-      id: next.connectFrame.id,
-      ok: true,
-      payload: {
-        type: "hello-ok",
-        protocol: PROTOCOL_VERSION,
-        auth: { role: "operator", scopes: ["operator.admin"] },
-      },
-    });
-    await vi.advanceTimersByTimeAsync(0);
+    await acceptConnect(next, { role: "operator", scopes: ["operator.admin"] });
     expect(client.auth?.scopes).toEqual(["operator.admin"]);
     client.stop();
     expect(client.auth).toBeNull();
@@ -114,7 +98,7 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
       });
       vi.spyOn(nodes, "signDevicePayload").mockResolvedValue("signature");
       const onClose = vi.fn();
-      client = new GatewayBrowserClient({ url: "ws://pairing.example.test", onClose });
+      client = createClient({ url: "ws://pairing.example.test", onClose });
       const { ws, connectFrame } = await startConnect(client);
       const deviceId = connectFrame.params.device?.id;
       expect(deviceId).toBe("waiting-browser");
@@ -172,10 +156,11 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
   );
 
   it("requests full control ui operator scopes with explicit shared auth", async () => {
-    client = new GatewayBrowserClient({
+    client = createClient({
       url: "ws://127.0.0.1:18789",
       token: "shared-auth-token",
       clientBuildId: "build-a",
+      includeSessionMessageBodies: true,
     });
 
     const { connectFrame } = await startConnect(client);
@@ -184,6 +169,7 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
     expect(connectFrame.params?.minProtocol).toBe(MIN_CLIENT_PROTOCOL_VERSION);
     expect(connectFrame.params?.maxProtocol).toBe(PROTOCOL_VERSION);
     expect(connectFrame.params?.client.buildId).toBe("build-a");
+    expect(connectFrame.params?.includeSessionMessageBodies).toBe(true);
     expect(connectFrame.params?.caps).toEqual([
       GATEWAY_CLIENT_CAPS.AGENT_KIND,
       GATEWAY_CLIENT_CAPS.APPROVALS,
@@ -194,9 +180,13 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
       GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
       GATEWAY_CLIENT_CAPS.CHAT_ONLY_ASSISTANT_TEXT,
       GATEWAY_CLIENT_CAPS.HELLO_HEALTH_ON_DEMAND,
+      GATEWAY_CLIENT_CAPS.HEALTH_SUMMARY,
+      GATEWAY_CLIENT_CAPS.HELLO_PRESENCE_SELF,
       GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS,
       GATEWAY_CLIENT_CAPS.PRESENCE_DELTAS,
       GATEWAY_CLIENT_CAPS.SESSION_ROW_DELTAS,
+      GATEWAY_CLIENT_CAPS.SESSION_EVENT_FIELD_REFS,
+      GATEWAY_CLIENT_CAPS.ROSTER_MESSAGE_BODIES_OPTIONAL,
       GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
       GATEWAY_CLIENT_CAPS.MODEL_SELECTION_POLICY,
       GATEWAY_CLIENT_CAPS.MODEL_WAIT_STATUS,
@@ -208,8 +198,9 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
   });
 
   it("leaves the native-auth capability list unchanged", async () => {
-    client = new GatewayBrowserClient({
+    client = createClient({
       url: "ws://127.0.0.1:18789",
+      includeSessionMessageBodies: true,
       nativeConnectAuth: async ({ nonce, signedAt }) => ({
         client: { id: "openclaw-macos", mode: "ui", platform: "darwin", version: "test" },
         scopes: ["operator.read"],
@@ -219,6 +210,11 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
     });
     const { connectFrame } = await startConnect(client);
     expect(connectFrame.params.caps).not.toContain(GATEWAY_CLIENT_CAPS.SESSION_ROW_DELTAS);
+    expect(connectFrame.params.caps).not.toContain(GATEWAY_CLIENT_CAPS.SESSION_EVENT_FIELD_REFS);
+    expect(connectFrame.params.caps).not.toContain(
+      GATEWAY_CLIENT_CAPS.ROSTER_MESSAGE_BODIES_OPTIONAL,
+    );
+    expect(connectFrame.params).not.toHaveProperty("includeSessionMessageBodies");
     expect(connectFrame.params.client.id).toBe("openclaw-macos");
     expect(connectFrame.params.auth).toEqual({ deviceToken: "native-device-token" });
   });
@@ -231,7 +227,7 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
     vi.spyOn(Math, "random").mockReturnValue(draw);
     const onClose = vi.fn();
     const onReconnectScheduled = vi.fn();
-    client = new GatewayBrowserClient({
+    client = createClient({
       url: "ws://127.0.0.1:18789",
       token: "shared-auth-token",
       onClose,

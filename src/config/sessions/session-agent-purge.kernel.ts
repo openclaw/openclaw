@@ -31,9 +31,8 @@ export function prepareSessionAgentPurgeInDatabase(
   database: OpenClawAgentDatabase,
   input: SessionAgentPurgeSelection,
 ): SessionAgentPurgePlan {
-  const store = readSessionEntryStore(database);
-  const remainingStore = { ...store };
-  const entryRemovals = Object.entries(store).flatMap(([sessionKey, entry]) => {
+  const remainingStore = readSessionEntryStore(database);
+  const entryRemovals = Object.entries(remainingStore).flatMap(([sessionKey, entry]) => {
     if (!isDeletedAgentEntry(input, sessionKey)) {
       return [];
     }
@@ -54,7 +53,6 @@ export function prepareSessionAgentPurgeInDatabase(
       archiveDirectory: input.archiveDirectory,
       database,
       entry,
-      reason: "deleted",
       referencedSessionIds,
     }),
   );

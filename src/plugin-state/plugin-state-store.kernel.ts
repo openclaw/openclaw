@@ -1,5 +1,5 @@
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
-import type { Selectable } from "kysely";
+import type { Expression, Selectable } from "kysely";
 import { jsonPathValue } from "../infra/database-engine/json-values.js";
 import {
   createSqliteQueryCache,
@@ -88,6 +88,25 @@ export function rowToEntry(
 
 export function getPluginStateKysely(db: EngineConnection) {
   return getNodeSqliteKysely<PluginStateStoreDatabase>(db);
+}
+
+export function selectLivePluginStateRows(
+  db: EngineConnection,
+  params: {
+    pluginId: string | Expression<string>;
+    namespace?: string | Expression<string>;
+    now: number | Expression<number>;
+  },
+) {
+  let query = getPluginStateKysely(db)
+    .selectFrom("plugin_state_entries")
+    .where("plugin_id", "=", params.pluginId);
+  if (params.namespace !== undefined) {
+    query = query.where("namespace", "=", params.namespace);
+  }
+  return query.where((eb) =>
+    eb.or([eb("expires_at", "is", null), eb("expires_at", ">", params.now)]),
+  );
 }
 
 export function assertPluginStateKey(
@@ -203,13 +222,9 @@ const pluginStateEntryExistsQuery = createSqliteQueryCache((db: EngineConnection
     const namespace = parameter((value) => value.namespace);
     const key = parameter((value) => value.key);
     const now = parameter((value) => value.now);
-    return getPluginStateKysely(db)
-      .selectFrom("plugin_state_entries")
+    return selectLivePluginStateRows(db, { pluginId, namespace, now })
       .select("entry_key")
-      .where("plugin_id", "=", pluginId)
-      .where("namespace", "=", namespace)
-      .where("entry_key", "=", key)
-      .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", now)]));
+      .where("entry_key", "=", key);
   }),
 );
 
@@ -225,13 +240,9 @@ const pluginStateEntryQuery = createSqliteQueryCache((db: EngineConnection) =>
     const namespace = parameter((value) => value.namespace);
     const key = parameter((value) => value.key);
     const now = parameter((value) => value.now);
-    return getPluginStateKysely(db)
-      .selectFrom("plugin_state_entries")
+    return selectLivePluginStateRows(db, { pluginId, namespace, now })
       .select(["entry_key", "value_json", "created_at", "expires_at"])
-      .where("plugin_id", "=", pluginId)
-      .where("namespace", "=", namespace)
-      .where("entry_key", "=", key)
-      .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", now)]));
+      .where("entry_key", "=", key);
   }),
 );
 
@@ -249,12 +260,8 @@ export function iteratePluginStateEntries(
 ): IterableIterator<PluginStateReadRow> {
   return iterateSqliteQuerySync(
     db,
-    getPluginStateKysely(db)
-      .selectFrom("plugin_state_entries")
+    selectLivePluginStateRows(db, params)
       .select(["entry_key", "value_json", "created_at", "expires_at"])
-      .where("plugin_id", "=", params.pluginId)
-      .where("namespace", "=", params.namespace)
-      .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", params.now)]))
       .orderBy("created_at", "asc")
       .orderBy("entry_key", "asc"),
   );
@@ -266,14 +273,10 @@ export function selectPluginStateEntriesInKeyRange(
 ): PluginStateReadRow[] {
   assertPluginStateKey(db, params.keyStartInclusive, "entries");
   assertPluginStateKey(db, params.keyEndExclusive, "entries");
-  let query = getPluginStateKysely(db)
-    .selectFrom("plugin_state_entries")
+  let query = selectLivePluginStateRows(db, params)
     .select(["entry_key", "value_json", "created_at", "expires_at"])
-    .where("plugin_id", "=", params.pluginId)
-    .where("namespace", "=", params.namespace)
     .where("entry_key", ">=", params.keyStartInclusive)
-    .where("entry_key", "<", params.keyEndExclusive)
-    .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", params.now)]));
+    .where("entry_key", "<", params.keyEndExclusive);
   const filter = params.valueFilter;
   if (filter) {
     query = query.where((eb) =>
@@ -377,29 +380,11 @@ type PluginStateNamespaceCountParams = { pluginId: string; namespace: string; no
 export type PluginStateCountRow = { count: number | bigint };
 const pluginStateNamespaceCountQuery = createSqliteQueryCache((db: EngineConnection) =>
   prepareSqliteQuerySync<PluginStateNamespaceCountParams, PluginStateCountRow>(db, (parameter) =>
-    getPluginStateKysely(db)
-      .selectFrom("plugin_state_entries")
-      .select((eb) => eb.fn.countAll<number | bigint>().as("count"))
-      .where(
-        "plugin_id",
-        "=",
-        parameter((value) => value.pluginId),
-      )
-      .where(
-        "namespace",
-        "=",
-        parameter((value) => value.namespace),
-      )
-      .where((eb) =>
-        eb.or([
-          eb("expires_at", "is", null),
-          eb(
-            "expires_at",
-            ">",
-            parameter((value) => value.now),
-          ),
-        ]),
-      ),
+    selectLivePluginStateRows(db, {
+      pluginId: parameter((value) => value.pluginId),
+      namespace: parameter((value) => value.namespace),
+      now: parameter((value) => value.now),
+    }).select((eb) => eb.fn.countAll<number | bigint>().as("count")),
   ),
 );
 

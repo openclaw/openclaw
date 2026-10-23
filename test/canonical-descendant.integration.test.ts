@@ -27,7 +27,6 @@ import {
 import { log as embeddedAgentLog } from "../src/agents/embedded-agent-runner/logger.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../src/agents/harness/hook-helpers.js";
 import { createAgentHarnessHostCapabilities } from "../src/agents/harness/host-capability.js";
-import { listRegisteredAgentHarnesses } from "../src/agents/harness/registry.js";
 import { withGatewayToolCallerIdentity } from "../src/agents/tools/gateway-caller-context.js";
 import { setRuntimeConfigSnapshot } from "../src/config/runtime-snapshot.js";
 import {
@@ -121,6 +120,10 @@ function transcriptTarget(fixture: CanonicalForkFixture, sessionKey: string) {
 
 function sessionEntries(fixture: CanonicalForkFixture) {
   return listSessionEntriesCore({ agentId: "main", storePath: fixture.storePath });
+}
+
+function upstreamLink(key: string) {
+  return readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase().db, key, "main");
 }
 
 function requireSandbox(fixture: CanonicalForkFixture, sessionKey: string) {
@@ -492,11 +495,6 @@ async function withFixture(
           }),
         );
         const fork = async (sessionKey: string, entryId: string) => {
-          expect(
-            listRegisteredAgentHarnesses().map(
-              (entry) => entry.harness.sessionForkV2?.upstreamKinds,
-            ),
-          ).toEqual([["codex-app-server"]]);
           let result: { ok: boolean; key?: string; message?: string } | undefined;
           const request = { sessionKey, entryId };
           await expectDefined(
@@ -516,7 +514,7 @@ async function withFixture(
             // SAFETY: these are the complete Gateway collaborators used by the real fork handler.
             context: {
               getRuntimeConfig: () => config,
-              chatAbortControllers: new Map(),
+              rpcSources: new Map(),
               getSessionEventSubscriberConnIds: () => new Set(),
               broadcastToConnIds: () => {},
             } as unknown as GatewayRequestContext,
@@ -1110,18 +1108,8 @@ describe("canonical descendant lifecycle through real owners", () => {
       const before = await events();
       await runSessionUpstreamMonitorTick({ providers: [fixture.catalog] });
       expect(await events()).toEqual(before);
-      const link = expectDefined(
-        readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase().db, key, "main"),
-        "child link",
-      );
-      const root = expectDefined(
-        readSessionUpstreamLinkInDatabase(
-          openOpenClawStateDatabase().db,
-          source.sessionKey,
-          "main",
-        ),
-        "root link",
-      );
+      const link = expectDefined(upstreamLink(key), "child link");
+      const root = expectDefined(upstreamLink(source.sessionKey), "root link");
       expect(link).toMatchObject({
         threadId: root.threadId,
         upstreamRef: root.upstreamRef,
@@ -1240,14 +1228,8 @@ describe("canonical descendant lifecycle through real owners", () => {
               key.endsWith(`:${firstBinding.threadId}`),
             ),
           ).toBe(false);
-          const link = readSessionUpstreamLinkInDatabase(
-            openOpenClawStateDatabase().db,
-            source.sessionKey,
-            "main",
-          );
-          expect(
-            readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase().db, firstKey, "main"),
-          ).toMatchObject({
+          const link = upstreamLink(source.sessionKey);
+          expect(upstreamLink(firstKey)).toMatchObject({
             threadId: link?.threadId,
             marker: { turnId: null, userMessageCount: 0 },
           });

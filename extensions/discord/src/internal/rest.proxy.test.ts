@@ -65,27 +65,6 @@ describe("RequestClient proxy transport", () => {
     await abortExpectation;
   }, 1_000);
 
-  it("lets abortAllRequests cancel active proxied fetches", async () => {
-    const abortable = createAbortableFetchMock();
-
-    const client = new RequestClient("Bot test-token", {
-      fetch: abortable.fetch,
-      queueRequests: false,
-      timeout: 5_000,
-    });
-
-    const request = client.get("/channels/123/messages");
-    await vi.waitFor(() => expect(abortable.fetch).toHaveBeenCalledTimes(1));
-
-    client.abortAllRequests();
-
-    await expectAbortError(request);
-    if (!abortable.receivedSignal) {
-      throw new Error("Expected proxied fetch abort signal");
-    }
-    expect(abortable.receivedSignal.aborted).toBe(true);
-  });
-
   it("lets a caller signal cancel active proxied fetches", async () => {
     const abortable = createAbortableFetchMock();
     const controller = new AbortController();

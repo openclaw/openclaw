@@ -134,106 +134,6 @@ function renderDisplayLine(line: ChannelCapabilitiesDisplayLine) {
   }
 }
 
-async function resolveChannelReports(params: {
-  plugin: ChannelPlugin;
-  cfg: OpenClawConfig;
-  timeoutMs: number;
-  accountOverride?: string;
-  target?: string;
-}): Promise<ChannelCapabilitiesReport[]> {
-  const { plugin, cfg, timeoutMs } = params;
-  const accountIds = params.accountOverride
-    ? [params.accountOverride]
-    : (() => {
-        const ids = plugin.config.listAccountIds(cfg);
-        return ids.length > 0
-          ? ids
-          : [resolveChannelDefaultAccountId({ plugin, cfg, accountIds: ids })];
-      })();
-  const reports: ChannelCapabilitiesReport[] = [];
-
-  for (const accountId of accountIds) {
-    const resolvedAccount = await resolveChannelAccount({ plugin, cfg, accountId });
-    const configured = plugin.config.isConfigured
-      ? await plugin.config.isConfigured(resolvedAccount, cfg)
-      : Boolean(resolvedAccount);
-    const enabled = plugin.config.isEnabled
-      ? plugin.config.isEnabled(resolvedAccount, cfg)
-      : (resolvedAccount as { enabled?: boolean }).enabled !== false;
-    let probe: unknown;
-    if (configured && enabled && plugin.status?.probeAccount) {
-      probe = await runChannelCapabilitiesCheck({
-        timeoutMs,
-        failure: (error, timedOut) =>
-          timedOut
-            ? { ok: false, timedOut: true, error: `check timed out after ${timeoutMs}ms` }
-            : { ok: false, error: formatErrorMessage(error) },
-        run: () =>
-          plugin.status?.probeAccount?.({
-            account: resolvedAccount,
-            timeoutMs,
-            cfg,
-          }),
-      });
-    }
-
-    const diagnostics =
-      configured && enabled && plugin.status?.buildCapabilitiesDiagnostics
-        ? await runChannelCapabilitiesCheck<ChannelCapabilitiesDiagnostics | undefined>({
-            timeoutMs,
-            failure: (error, timedOut) => ({
-              lines: [
-                {
-                  text: timedOut
-                    ? `Diagnostics: timed out after ${timeoutMs}ms`
-                    : `Diagnostics: failed (${formatErrorMessage(error)})`,
-                  tone: "error",
-                },
-              ],
-              ...(timedOut ? { details: { timedOut: true } } : {}),
-            }),
-            run: () =>
-              plugin.status?.buildCapabilitiesDiagnostics?.({
-                account: resolvedAccount,
-                timeoutMs,
-                cfg,
-                probe,
-                target: params.target,
-              }),
-          })
-        : undefined;
-    const discoveredActions = (
-      await resolveMessageActionDiscoveryForPluginAsync({
-        pluginId: plugin.id,
-        actions: plugin.actions,
-        context: createMessageActionDiscoveryContext({
-          cfg,
-          accountId,
-        }),
-        includeActions: true,
-      })
-    ).actions;
-    const actions = Array.from(new Set<string>(["send", "broadcast", ...discoveredActions]));
-
-    reports.push({
-      plugin,
-      channel: plugin.id,
-      accountId,
-      accountName:
-        typeof (resolvedAccount as { name?: string }).name === "string"
-          ? normalizeOptionalString((resolvedAccount as { name?: string }).name)
-          : undefined,
-      configured,
-      enabled,
-      support: plugin.capabilities,
-      probe,
-      actions,
-      diagnostics,
-    });
-  }
-  return reports;
-}
-
 async function resolveCapabilitiesRuntimeConfig(config: OpenClawConfig, runtime: RuntimeEnv) {
   return (
     await resolveCommandConfigWithSecrets({
@@ -323,15 +223,95 @@ export async function channelsCapabilitiesCommand(
   const reports: ChannelCapabilitiesReport[] = [];
   for (const plugin of selected) {
     const accountOverride = normalizeOptionalString(opts.account);
-    reports.push(
-      ...(await resolveChannelReports({
+    const target = rawTarget || undefined;
+    const accountIds = accountOverride
+      ? [accountOverride]
+      : (() => {
+          const ids = plugin.config.listAccountIds(cfg);
+          return ids.length > 0
+            ? ids
+            : [resolveChannelDefaultAccountId({ plugin, cfg, accountIds: ids })];
+        })();
+
+    for (const accountId of accountIds) {
+      const resolvedAccount = await resolveChannelAccount({ plugin, cfg, accountId });
+      const configured = plugin.config.isConfigured
+        ? await plugin.config.isConfigured(resolvedAccount, cfg)
+        : Boolean(resolvedAccount);
+      const enabled = plugin.config.isEnabled
+        ? plugin.config.isEnabled(resolvedAccount, cfg)
+        : (resolvedAccount as { enabled?: boolean }).enabled !== false;
+      let probe: unknown;
+      if (configured && enabled && plugin.status?.probeAccount) {
+        probe = await runChannelCapabilitiesCheck({
+          timeoutMs,
+          failure: (error, timedOut) =>
+            timedOut
+              ? { ok: false, timedOut: true, error: `check timed out after ${timeoutMs}ms` }
+              : { ok: false, error: formatErrorMessage(error) },
+          run: () =>
+            plugin.status?.probeAccount?.({
+              account: resolvedAccount,
+              timeoutMs,
+              cfg,
+            }),
+        });
+      }
+
+      const diagnostics =
+        configured && enabled && plugin.status?.buildCapabilitiesDiagnostics
+          ? await runChannelCapabilitiesCheck<ChannelCapabilitiesDiagnostics | undefined>({
+              timeoutMs,
+              failure: (error, timedOut) => ({
+                lines: [
+                  {
+                    text: timedOut
+                      ? `Diagnostics: timed out after ${timeoutMs}ms`
+                      : `Diagnostics: failed (${formatErrorMessage(error)})`,
+                    tone: "error",
+                  },
+                ],
+                ...(timedOut ? { details: { timedOut: true } } : {}),
+              }),
+              run: () =>
+                plugin.status?.buildCapabilitiesDiagnostics?.({
+                  account: resolvedAccount,
+                  timeoutMs,
+                  cfg,
+                  probe,
+                  target,
+                }),
+            })
+          : undefined;
+      const discoveredActions = (
+        await resolveMessageActionDiscoveryForPluginAsync({
+          pluginId: plugin.id,
+          actions: plugin.actions,
+          context: createMessageActionDiscoveryContext({
+            cfg,
+            accountId,
+          }),
+          includeActions: true,
+        })
+      ).actions;
+      const actions = Array.from(new Set<string>(["send", "broadcast", ...discoveredActions]));
+
+      reports.push({
         plugin,
-        cfg,
-        timeoutMs,
-        accountOverride,
-        target: rawTarget || undefined,
-      })),
-    );
+        channel: plugin.id,
+        accountId,
+        accountName:
+          typeof (resolvedAccount as { name?: string }).name === "string"
+            ? normalizeOptionalString((resolvedAccount as { name?: string }).name)
+            : undefined,
+        configured,
+        enabled,
+        support: plugin.capabilities,
+        probe,
+        actions,
+        diagnostics,
+      });
+    }
   }
 
   if (opts.json) {

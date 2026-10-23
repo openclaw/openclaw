@@ -1,17 +1,22 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { recordStartupRecoveryStoreResult } from "../../agents/main-session-recovery/main-session-restart-recovery-diagnostics.js";
 import { setPreparedModelRuntimeStartupStatus } from "../../agents/prepared-model-runtime.startup-status.js";
 import { createGatewayHostLifecycle } from "../../cli/gateway-cli/host-lifecycle.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../../config/config.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import * as childRuntime from "../../infra/child-runtime-viability.js";
 import { beginLifecycleWriteCustody } from "../../infra/lifecycle-write-custody.js";
 import { recordStartupMigrationWarnings } from "../../infra/state-migrations.messages.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
+import { beginAgentDeletionJournal } from "../../test-utils/agent-deletion-journal.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { HealthSummary } from "../health/types.js";
 import type { GatewayHostLifecycle } from "../server-public.js";
+import * as processVitals from "../server/process-vitals.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { healthHandlers } from "./health.js";
 
@@ -36,8 +41,6 @@ async function callStatus(
     context: {
       hostLifecycle,
       cron: { getSuspensionBlockerCount: () => 0 },
-      chatAbortControllers: new Map(),
-      chatQueuedTurns: new Map(),
     } as never,
     client: { connect: { role: "operator", scopes } } as never,
     isWebchatConnect: () => false,
@@ -66,12 +69,14 @@ function healthSnapshot(stateDir: string, overrides: Partial<HealthSummary> = {}
 function createHealthReader(
   snapshot: HealthSummary,
   getEventLoopHealth?: () => HealthSummary["eventLoop"],
+  getReadiness?: import("../server/readiness.js").ReadinessChecker,
 ) {
   const context = {
     getHealthCache: () => snapshot,
     refreshHealthSnapshot: vi.fn(async () => snapshot),
     getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
     getEventLoopHealth,
+    getReadiness,
     logHealth: { error: vi.fn() },
   };
   return async (probe = false) => {
@@ -89,6 +94,69 @@ function createHealthReader(
 }
 
 describe("Gateway status owner routing", () => {
+  it.each([false, true])("publishes live core readiness with probe=%s", async (probe) => {
+    await withStateDirEnv("health-core-readiness-", async ({ stateDir }) => {
+      let coreReady = false;
+      const readHealth = createHealthReader(
+        healthSnapshot(stateDir, { coreReady: true }),
+        undefined,
+        () => ({
+          ready: coreReady,
+          coreReady,
+          failing: coreReady ? [] : ["chat-recovery"],
+          uptimeMs: 1,
+        }),
+      );
+      expect((await readHealth(probe)).mock.calls[0]?.[1]).toMatchObject({ coreReady: false });
+      coreReady = true;
+      expect((await readHealth(probe)).mock.calls[0]?.[1]).toMatchObject({ coreReady: true });
+    });
+  });
+
+  it("omits an agent deleted while the final worker-pool read is pending", async () => {
+    await withOpenClawTestState({ label: "status-worker-pool-publication" }, async (state) => {
+      const config: OpenClawConfig = {
+        agents: { ownership: "explicit", entries: { deleting: {}, survivor: {} } },
+      };
+      for (const id of ["deleting", "survivor"]) {
+        replaceSessionEntrySync(
+          { agentId: id, sessionKey: `agent:${id}:main` },
+          { sessionId: `${id}-session`, updatedAt: 1 },
+        );
+      }
+      const entered = createDeferred();
+      const release = createDeferred();
+      const readPools = processVitals.readGatewayWorkerPoolFacts;
+      vi.spyOn(processVitals, "readGatewayWorkerPoolFacts").mockImplementation(async () => {
+        const result = await readPools();
+        entered.resolve();
+        await release.promise;
+        return result;
+      });
+      const pending = callStatus(config, ["operator.admin"]);
+      try {
+        await awaitGateBeforeSettlement(entered.promise, pending, "Status bypassed worker pools");
+        beginAgentDeletionJournal({
+          agentId: "deleting",
+          operationId: "worker-pool-publication",
+          agentDir: state.agentDir("deleting"),
+          sessionsDir: state.sessionsDir("deleting"),
+          workspaceDir: state.workspaceDir,
+          deleteFiles: true,
+        });
+        release.resolve();
+        const response = await pending;
+        expect(response.sessions).toMatchObject({
+          count: 1,
+          byAgent: [{ agentId: "survivor", count: 1 }],
+        });
+      } finally {
+        release.resolve();
+        await pending.catch(() => {});
+      }
+    });
+  });
+
   it("reports only the current host's recorded shutdown budget and resident PID", async () => {
     await withStateDirEnv("openclaw-gateway-budget-status-", async ({ stateDir }) => {
       const config = {

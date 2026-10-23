@@ -2,8 +2,8 @@
 
 // Enforces Kysely and SQLite guardrails in infrastructure code.
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
-import type { Expression, ImportDeclaration, Node, SourceFile } from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
+import type { Expression, ImportDeclaration, Node, SourceFile } from "typescript/ast";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   collectFileViolations,
@@ -25,6 +25,8 @@ const nodeSqliteConstructorOwnerPaths = new Set([
   // Native conformance must observe raw driver close on disposable probe databases.
   "src/infra/bun-sqlite-close-probe.worker.ts",
   "src/infra/node-sqlite.ts",
+  // The native library probe opens only a disposable in-memory database.
+  "src/infra/sqlite-native-runtime.ts",
   "src/infra/sqlite-runtime-version.ts",
 ]);
 
@@ -163,7 +165,6 @@ const rawSqliteAllowPathGroups = {
     "src/infra/state-migrations.debug-proxy.ts",
     "src/infra/state-migrations.meeting-transcripts-detection.ts",
     "src/infra/state-migrations.meeting-transcripts-files.ts",
-    "src/infra/state-migrations.meeting-transcripts-verify.ts",
     "src/infra/state-migrations.media-persistence.ts",
     // Doctor FK PRAGMAs classify repair eligibility; row operations still use Kysely.
     "src/infra/state-migrations.session-window-repair.ts",

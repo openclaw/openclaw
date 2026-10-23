@@ -14,7 +14,10 @@ import {
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
+  addTestHook,
+  createEmptyPluginRegistry,
   createTestRegistry,
+  initializeGlobalHookRunner,
   resetGlobalHookRunner,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
@@ -31,7 +34,6 @@ import { setTelegramPluginStateRuntimeForTests } from "./runtime-state.test-supp
 import {
   clearTelegramRuntimeForTest,
   resetTelegramAccountThrottlersForTest,
-  resetTelegramReplyFenceForTest,
 } from "./runtime.test-support.js";
 
 type RecordedBotApiCall = { method: string; fields: Record<string, unknown> };
@@ -73,6 +75,22 @@ function respondJson(response: ServerResponse, result: unknown = true) {
 }
 function rejectJson(response: ServerResponse, error: { error_code: number; description: string }) {
   response.writeHead(error.error_code).end(JSON.stringify({ ok: false, ...error }));
+}
+
+export function installTelegramDispatchHook(
+  hook: Omit<Parameters<typeof addTestHook>[0], "registry" | "pluginId">,
+  pluginId = "http-policy",
+) {
+  const registry = createEmptyPluginRegistry();
+  addTestHook({ registry, pluginId, ...hook });
+  initializeGlobalHookRunner(registry);
+}
+
+export function telegramReplyId(fields: Record<string, unknown>) {
+  const reply = fields.reply_parameters;
+  return reply && typeof reply === "object" && "message_id" in reply
+    ? reply.message_id
+    : fields.reply_to_message_id;
 }
 
 export function createTelegramDispatchHttpFixture() {
@@ -290,7 +308,6 @@ export function createTelegramDispatchHttpFixture() {
     rejectNextQuote = false;
     nextMessageId = 0;
     resetPluginStateStoreForTests({ closeDatabase: false });
-    resetTelegramReplyFenceForTest();
     setTelegramPluginStateRuntimeForTests();
   });
 
@@ -538,7 +555,23 @@ export function createTelegramDispatchHttpFixture() {
     return work.finally(() => pendingDispatches.delete(work));
   }
 
+  const callsFor = (method: string) => calls.filter((call) => call.method === method);
+  const acceptedFor = (method: string) => acceptedCalls.filter((call) => call.method === method);
+  const waitForMethod = (method: string) => waitForBotApiCall((call) => call.method === method);
+  const waitForText = (text: string, method?: string) =>
+    waitForBotApiCall((call) => (!method || call.method === method) && call.fields.text === text);
+  const waitForContaining = (text: string, method?: string) =>
+    waitForBotApiCall(
+      (call) => (!method || call.method === method) && String(call.fields.text).includes(text),
+    );
+
   return {
+    callsFor,
+    acceptedFor,
+    waitForMethod,
+    waitForText,
+    waitForContaining,
+    texts: () => [...visibleMessages.values()],
     token: BOT_TOKEN,
     get apiRoot() {
       return apiRoot;

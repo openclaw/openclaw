@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createTestConfigSnapshot } from "../../commands/test-runtime-config-helpers.js";
+import { finishParams, updateResult } from "./update-command-maintenance-fixtures.test-support.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 
 const boundary = vi.hoisted(() => ({
@@ -39,9 +41,7 @@ vi.mock("./update-command-post-update.js", () => ({ finishUpdate: boundary.finis
 
 const { finishAlreadyCurrentUpdate } = await import("./update-command-noop.js");
 
-beforeEach(() => {
-  vi.resetAllMocks();
-});
+beforeEach(() => vi.resetAllMocks());
 afterEach(() => vi.restoreAllMocks());
 
 it.each([
@@ -77,28 +77,23 @@ it.each([
     boundary.maintenance.mockResolvedValue(before);
     const refuseUpdate = vi.fn();
     await finishAlreadyCurrentUpdate({
-      root,
       managedServiceRoot,
       managedServiceRootRedirect: null,
-      opts: { yes: true, json: true },
-      result: {
-        status: "skipped",
-        mode: "npm",
+      ...finishParams({
         root,
-        reason: "already-current",
-        before: { version: "2026.9.5" },
-        after: { version: "2026.9.5" },
-        steps: [],
-        durationMs: 0,
-      },
-      requestedChannel: null,
-      storedChannel: "stable",
-      channel: "stable",
-      shouldRestart: true,
-      updateStepTimeoutMs: 30_000,
+        configSnapshot: createTestConfigSnapshot({}),
+        result: updateResult({
+          status: "skipped",
+          root,
+          reason: "already-current",
+          before: { version: "2026.9.5" },
+          after: { version: "2026.9.5" },
+          durationMs: 0,
+        }),
+        opts: { yes: true, json: true },
+        startedAt: 0,
+      }),
       invocationCwd: root,
-      startedAt: 0,
-      controlPlaneUpdateSentinelMeta: null,
       stop: vi.fn(),
       refuseUpdate,
     });
@@ -106,17 +101,14 @@ it.each([
     expect(refuseUpdate).not.toHaveBeenCalled();
     const refresh = platform === "linux" && !foreground;
     expect(boundary.maintenance).toHaveBeenCalledTimes(refresh ? 1 : 0);
-    for (const [index, phase] of (refresh ? ["refresh"] : []).entries()) {
-      expect(boundary.maintenance).toHaveBeenNthCalledWith(
-        index + 1,
+    if (refresh) {
+      expect(boundary.maintenance).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
-          phase,
+          phase: "refresh",
           root: serviceRoot,
           expectedService: before,
+          handoffRoot: managedServiceRoot ? root : undefined,
         }),
-      );
-      expect(boundary.maintenance.mock.calls[index]?.[0].handoffRoot).toBe(
-        managedServiceRoot ? root : undefined,
       );
     }
     expect(boundary.finish).toHaveBeenCalledWith(

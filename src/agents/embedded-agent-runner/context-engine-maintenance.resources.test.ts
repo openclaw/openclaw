@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { setImmediate } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
@@ -16,163 +17,133 @@ import {
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
+import {
+  createBackgroundMaintenanceEngine as engine,
+  createMaintenanceGate as gate,
+} from "./context-engine-maintenance.fixtures.test-support.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 
 const unchanged = { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
-
-function engine(maintain: NonNullable<ContextEngine["maintain"]>): ContextEngine {
-  return {
-    info: { id: "resource-test", name: "Resource test", turnMaintenanceMode: "background" },
-    ingest: async () => ({ ingested: false }),
-    assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
-    compact: async () => ({ ok: true, compacted: false }),
-    maintain,
-  };
+const sessionKey = "agent:main:maintenance-resources";
+const wait = () => waitForSessionMaintenance(sessionKey);
+const read = (db: DatabaseSync) => db.prepare("SELECT value FROM probe").get()?.value;
+function observeCancellation(
+  context: AsyncLocalStorage<string>,
+  onAbort: (context: string | undefined, reason: unknown) => void,
+) {
+  const signal = getAsyncWorkSignal();
+  if (!signal) {
+    throw new Error("expected maintenance work signal");
+  }
+  signal.addEventListener("abort", () => onAbort(context.getStore(), signal.reason), {
+    once: true,
+  });
 }
 
 it("keeps SIGTERM cancellation attached through actual engine disposal", async () => {
   await withResources(async (db, schedule) => {
     const context = new AsyncLocalStorage<string>();
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
+    using disposal = gate();
     const cancelled = vi.fn();
     const disposed = vi.fn();
-    const keepTestProcessAlive = () => {};
-    process.on("SIGTERM", keepTestProcessAlive);
     let lifecycleSignal: AbortSignal | undefined;
     const contextEngine = engine(async ({ abortSignal }) => {
       lifecycleSignal = abortSignal;
       return unchanged;
     });
     contextEngine.dispose = async () => {
-      const signal = getAsyncWorkSignal();
-      if (!signal) {
-        throw new Error("expected disposer work signal");
-      }
-      signal.addEventListener("abort", () => cancelled(context.getStore(), signal.reason), {
-        once: true,
-      });
-      entered.resolve();
-      await release.promise;
-      disposed(db.prepare("SELECT value FROM probe").get()?.value);
+      observeCancellation(context, cancelled);
+      await disposal.run(() => disposed(read(db)));
     };
-    try {
-      await context.run("disposer", () => schedule(contextEngine));
-      await entered.promise;
-      context.run("unrelated", () => process.emit("SIGTERM", "SIGTERM"));
-      expect(lifecycleSignal?.aborted).toBe(true);
-      expect(cancelled).toHaveBeenCalledExactlyOnceWith("disposer", lifecycleSignal?.reason);
-      release.resolve();
-      await waitForSessionMaintenance("agent:main:maintenance-resources");
-      expect(disposed).toHaveBeenCalledExactlyOnceWith(42);
-    } finally {
-      release.resolve();
-      await waitForSessionMaintenance("agent:main:maintenance-resources");
-      process.off("SIGTERM", keepTestProcessAlive);
-    }
+    await context.run("disposer", () => schedule(contextEngine));
+    await disposal.entered.promise;
+    context.run("unrelated", () => process.emit("SIGTERM", "SIGTERM"));
+    expect(lifecycleSignal?.aborted).toBe(true);
+    expect(cancelled).toHaveBeenCalledExactlyOnceWith("disposer", lifecycleSignal?.reason);
+    disposal.release.resolve();
+    await wait();
+    expect(disposed).toHaveBeenCalledExactlyOnceWith(42);
   });
 });
 
+function scheduler(stateDir: string, pending: Promise<void>[]) {
+  return async (
+    contextEngine: ContextEngine,
+    onCompletion?: (work: Promise<void>) => void,
+    overrides: Partial<Parameters<typeof runContextEngineMaintenance>[0]> = {},
+  ) =>
+    runContextEngineMaintenance({
+      contextEngine,
+      sessionId: "resources",
+      sessionKey,
+      sessionFile: path.join(stateDir, "session.jsonl"),
+      reason: "turn",
+      disposeDeferredContextEngineAfterMaintenance: true,
+      onDeferredMaintenance: (promise) => {
+        pending.push(promise);
+        onCompletion?.(promise);
+      },
+      ...overrides,
+    });
+}
 async function withResources(
-  run: (
-    db: DatabaseSync,
-    schedule: (
-      contextEngine: ContextEngine,
-      onCompletion?: (work: Promise<void>) => void,
-    ) => Promise<void>,
-  ) => Promise<void>,
+  run: (db: DatabaseSync, schedule: ReturnType<typeof scheduler>) => Promise<void>,
 ) {
   await withStateDirEnv("openclaw-maintenance-resources-", async ({ stateDir }) => {
     resetCommandQueueStateForTest();
     const db = new DatabaseSync(path.join(stateDir, "registration.sqlite"));
     db.exec("CREATE TABLE probe(value INTEGER); INSERT INTO probe VALUES (42)");
     const pending: Promise<void>[] = [];
-    const schedule = async (
-      contextEngine: ContextEngine,
-      onCompletion?: (work: Promise<void>) => void,
-    ) => {
-      await runContextEngineMaintenance({
-        contextEngine,
-        sessionId: "resources",
-        sessionKey: "agent:main:maintenance-resources",
-        sessionFile: path.join(stateDir, "session.jsonl"),
-        reason: "turn",
-        disposeDeferredContextEngineAfterMaintenance: true,
-        onDeferredMaintenance: (promise) => {
-          pending.push(promise);
-          onCompletion?.(promise);
-        },
-      });
-    };
+    const keepAlive = () => {};
+    process.on("SIGTERM", keepAlive);
     try {
-      await run(db, schedule);
+      await run(db, scheduler(stateDir, pending));
     } finally {
       await Promise.allSettled(pending);
       if (db.isOpen) {
         db.close();
       }
       resetCommandQueueStateForTest();
+      process.off("SIGTERM", keepAlive);
     }
   });
 }
 
 it("refuses to reschedule during final disposal", async () => {
   await withResources(async (_db, schedule) => {
-    const disposalStarted = createDeferredCore();
-    const releaseDisposal = createDeferredCore();
-    const maintenanceStarted = createDeferredCore();
-    const releaseMaintenance = createDeferredCore();
+    using disposal = gate();
+    using maintenance = gate();
     const maintain = vi
       .fn(async () => unchanged)
-      .mockImplementationOnce(async () => {
-        maintenanceStarted.resolve();
-        await releaseMaintenance.promise;
-        return unchanged;
-      });
+      .mockImplementationOnce(() => maintenance.run(() => unchanged));
     const contextEngine = engine(maintain);
-    contextEngine.dispose = async () => {
-      disposalStarted.resolve();
-      await releaseDisposal.promise;
-    };
+    contextEngine.dispose = () => disposal.run(() => {});
     const admitted = vi.fn();
     const failed = vi.fn();
     const resources = { closeFactoryWork: vi.fn(async () => {}), release: vi.fn(async () => {}) };
-    const keepProcessAlive = () => {};
-    process.on("SIGTERM", keepProcessAlive);
-    try {
-      await schedule(engine(maintain));
-      await maintenanceStarted.promise;
-      await schedule(contextEngine);
-      // The pending engine is disposed in final cleanup, not by the active-run loop.
-      process.emit("SIGTERM", "SIGTERM");
-      releaseMaintenance.resolve();
-      await disposalStarted.promise;
-      await runContextEngineMaintenance({
-        contextEngine,
-        sessionId: "resources",
-        sessionKey: "agent:main:maintenance-resources",
-        sessionFile: "agent:main:maintenance-resources",
-        reason: "turn",
-        onDeferredMaintenance: admitted,
-        onDeferredMaintenanceFailure: failed,
-        factoryResources: resources,
-      });
-      expect(admitted).not.toHaveBeenCalled();
-      expect(failed).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          message: expect.stringContaining("finishing cleanup"),
-        }),
-      );
-      expect(resources.closeFactoryWork).not.toHaveBeenCalled();
-      expect(resources.release).not.toHaveBeenCalled();
-      releaseDisposal.resolve();
-      await waitForSessionMaintenance("agent:main:maintenance-resources");
-      expect(maintain).toHaveBeenCalledOnce();
-    } finally {
-      releaseMaintenance.resolve();
-      releaseDisposal.resolve();
-      process.off("SIGTERM", keepProcessAlive);
-    }
+    await schedule(engine(maintain));
+    await maintenance.entered.promise;
+    await schedule(contextEngine);
+    // The pending engine is disposed in final cleanup, not by the active-run loop.
+    process.emit("SIGTERM", "SIGTERM");
+    maintenance.release.resolve();
+    await disposal.entered.promise;
+    await schedule(contextEngine, undefined, {
+      onDeferredMaintenance: admitted,
+      onDeferredMaintenanceFailure: failed,
+      factoryResources: resources,
+    });
+    expect(admitted).not.toHaveBeenCalled();
+    expect(failed).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        message: expect.stringContaining("finishing cleanup"),
+      }),
+    );
+    expect(resources.closeFactoryWork).not.toHaveBeenCalled();
+    expect(resources.release).not.toHaveBeenCalled();
+    disposal.release.resolve();
+    await wait();
+    expect(maintain).toHaveBeenCalledOnce();
   });
 });
 
@@ -180,54 +151,39 @@ it.each(["maintenance", "disposal"] as const)(
   "joins actual %s descendants before maintenance completion",
   async (phase) => {
     await withResources(async (db, schedule) => {
-      const release = createDeferredCore();
-      const entered = createDeferredCore();
+      using descendant = gate();
       let tail: Promise<unknown> | undefined;
       let completion: Promise<void> | undefined;
-      let returned = false;
+      const completed = vi.fn(() => db.close());
       const startTail = () => {
-        tail = trackAsyncWork(async () => {
-          entered.resolve();
-          await release.promise;
-          return db.prepare("SELECT value FROM probe").get()?.value;
-        });
+        tail = trackAsyncWork(() => descendant.run(() => read(db)));
         void tail.catch(() => {});
       };
+      const dispose = vi.fn(async () => {
+        if (phase === "disposal") {
+          startTail();
+        }
+      });
       const contextEngine = engine(async () => {
         if (phase === "maintenance") {
           startTail();
         }
         return unchanged;
       });
-      const dispose = vi.fn(async () => {
-        if (phase === "disposal") {
-          startTail();
-        }
-      });
       contextEngine.dispose = dispose;
-      try {
-        await schedule(contextEngine, (promise) => {
-          completion = promise.then(() => {
-            returned = true;
-            db.close();
-          });
-        });
-        await entered.promise;
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-        expect.soft(returned).toBe(false);
-        if (phase === "maintenance") {
-          expect.soft(dispose).not.toHaveBeenCalled();
-        }
-        release.resolve();
-        await expect(tail).resolves.toBe(42);
-        await completion;
-        expect(dispose).toHaveBeenCalledOnce();
-      } finally {
-        release.resolve();
-        await Promise.allSettled([...(tail ? [tail] : []), ...(completion ? [completion] : [])]);
+      await schedule(contextEngine, (promise) => {
+        completion = promise.then(completed);
+      });
+      await descendant.entered.promise;
+      await setImmediate();
+      expect.soft(completed).not.toHaveBeenCalled();
+      if (phase === "maintenance") {
+        expect.soft(dispose).not.toHaveBeenCalled();
       }
+      descendant.release.resolve();
+      await expect(tail).resolves.toBe(42);
+      await completion;
+      expect(dispose).toHaveBeenCalledOnce();
     });
   },
 );
@@ -236,56 +192,39 @@ it("joins disposal of a superseded queued engine before reporting the active mai
   await withResources(async (db, schedule) => {
     const context = new AsyncLocalStorage<string>();
     const contexts: Array<string | undefined> = [];
-    const releaseActive = createDeferredCore();
-    const activeStarted = createDeferredCore();
-    const releaseDisposal = createDeferredCore();
-    const disposalStarted = createDeferredCore();
+    using activeWork = gate();
+    using disposal = gate();
     const finalRan = createDeferredCore();
     const disposed = vi.fn();
-    const active = engine(async () => {
+    const active = engine(() => {
       contexts.push(context.getStore());
-      activeStarted.resolve();
-      await releaseActive.promise;
-      return unchanged;
+      return activeWork.run(() => unchanged);
     });
     const superseded = engine(async () => unchanged);
-    superseded.dispose = async () => {
+    superseded.dispose = () => {
       contexts.push(context.getStore());
-      disposalStarted.resolve();
-      await releaseDisposal.promise;
-      disposed(db.prepare("SELECT value FROM probe").get()?.value);
+      return disposal.run(() => disposed(read(db)));
     };
     const latest = engine(async () => {
       contexts.push(context.getStore());
       finalRan.resolve();
       return unchanged;
     });
-    let allSettled = false;
-    let joined: Promise<void> | undefined;
-    try {
-      await context.run("active", () => schedule(active));
-      await activeStarted.promise;
-      await context.run("superseded", () => schedule(superseded));
-      await context.run("latest", () => schedule(latest));
-      await disposalStarted.promise;
-      joined = waitForSessionMaintenance("agent:main:maintenance-resources").then(() => {
-        allSettled = true;
-      });
-      releaseActive.resolve();
-      await finalRan.promise;
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect.soft(allSettled).toBe(false);
-      releaseDisposal.resolve();
-      await joined;
-      expect(disposed).toHaveBeenCalledExactlyOnceWith(42);
-      expect(contexts).toEqual(["active", "superseded", "latest"]);
-    } finally {
-      releaseActive.resolve();
-      releaseDisposal.resolve();
-      await joined;
-    }
+    const settled = vi.fn();
+    await context.run("active", () => schedule(active));
+    await activeWork.entered.promise;
+    await context.run("superseded", () => schedule(superseded));
+    await context.run("latest", () => schedule(latest));
+    await disposal.entered.promise;
+    const joined = wait().then(settled);
+    activeWork.release.resolve();
+    await finalRan.promise;
+    await setImmediate();
+    expect.soft(settled).not.toHaveBeenCalled();
+    disposal.release.resolve();
+    await joined;
+    expect(disposed).toHaveBeenCalledExactlyOnceWith(42);
+    expect(contexts).toEqual(["active", "superseded", "latest"]);
   });
 });
 
@@ -293,66 +232,36 @@ it("keeps accepted maintenance independent of parent completion until gateway re
   await withResources(async (db, schedule) => {
     const parent = new AsyncWorkScope();
     const context = new AsyncLocalStorage<string>();
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
+    const descendant = gate();
     const cancelled = vi.fn();
     let tail: Promise<unknown> | undefined;
     let maintenanceSignal: AbortSignal | undefined;
-    let parentClosed = false;
-    let closing: Promise<void> | undefined;
     let cancellationCheckpoint: Promise<void> | undefined;
-    let checkpointPassed = false;
+    const checkpointPassed = vi.fn();
     try {
-      await context.run("admitted", () =>
-        parent.track(() =>
-          schedule(
-            engine(async ({ abortSignal }) => {
-              maintenanceSignal = abortSignal;
-              const signal = getAsyncWorkSignal();
-              if (!signal) {
-                throw new Error("expected maintenance work cancellation");
-              }
-              signal.addEventListener(
-                "abort",
-                () => {
-                  cancelled(context.getStore(), signal.reason);
-                  cancellationCheckpoint = waitForSessionMaintenance(
-                    "agent:main:maintenance-resources",
-                  ).then(() => {
-                    checkpointPassed = true;
-                  });
-                },
-                { once: true },
-              );
-              tail = trackAsyncWork(async () => {
-                entered.resolve();
-                await release.promise;
-                return db.prepare("SELECT value FROM probe").get()?.value;
-              });
-              return unchanged;
-            }),
-          ),
-        ),
-      );
-      await entered.promise;
-      closing = context
-        .run("unrelated", () => parent.drain())
-        .then(() => {
-          parentClosed = true;
+      const contextEngine = engine(async ({ abortSignal }) => {
+        maintenanceSignal = abortSignal;
+        observeCancellation(context, (store, reason) => {
+          cancelled(store, reason);
+          cancellationCheckpoint = wait().then(checkpointPassed);
         });
-      await vi.waitFor(() => expect(parentClosed).toBe(true));
+        tail = trackAsyncWork(() => descendant.run(() => read(db)));
+        return unchanged;
+      });
+      await context.run("admitted", () => parent.track(() => schedule(contextEngine)));
+      await descendant.entered.promise;
+      await context.run("unrelated", () => parent.drain());
       expect.soft(maintenanceSignal?.aborted).toBe(false);
       expect.soft(cancelled).not.toHaveBeenCalled();
       context.run("unrelated", () => markGatewayRestartDraining());
       expect(maintenanceSignal?.aborted).toBe(true);
       expect(cancelled).toHaveBeenCalledExactlyOnceWith("admitted", maintenanceSignal?.reason);
-      await vi.waitFor(() => expect(checkpointPassed).toBe(true));
-      release.resolve();
+      await vi.waitFor(() => expect(checkpointPassed).toHaveBeenCalledOnce());
+      descendant.release.resolve();
       await expect(tail).resolves.toBe(42);
     } finally {
-      release.resolve();
+      descendant.release.resolve();
       await tail;
-      await closing;
       await parent.drain();
       await cancellationCheckpoint;
       resetGatewayWorkAdmission();

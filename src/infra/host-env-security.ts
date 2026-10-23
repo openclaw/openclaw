@@ -25,12 +25,65 @@ const NODE_SERVICE_ENV_KEYS = new Set([
   ...Object.keys(resolveNodeServiceIdentityEnvironment()),
   "OPENCLAW_GATEWAY_SERVICE_PID",
 ]);
+// The profile selects child CLI config and state too; it is not node daemon identity.
+NODE_SERVICE_ENV_KEYS.delete("OPENCLAW_PROFILE");
 const CARGO_TARGET_EXECUTABLE_OVERRIDE_ENV_KEY = /^CARGO_TARGET_[A-Z0-9_]+_(?:LINKER|RUNNER)$/;
 const GIT_ALLOW_PROTOCOL_ENV_KEY = "GIT_ALLOW_PROTOCOL";
 const GIT_PROTOCOL_FROM_USER_ENV_KEY = "GIT_PROTOCOL_FROM_USER";
 const GIT_PROTOCOL_FROM_USER_DISABLED_VALUE = "0";
 const GIT_DEFAULT_ALWAYS_ALLOWED_PROTOCOLS = new Set(["git", "http", "https", "ssh"]);
 const scopedBlockedInheritedEnvKeys = new AsyncLocalStorage<ReadonlySet<string>>();
+const gatewayCredentialEnvKeysByOwner = new Map<string, ReadonlySet<string>>();
+
+/**
+ * Publish, per owner, the env names the running Gateway reads its own credentials from (for
+ * example the `NAME` in `hooks.token: "${NAME}"`). Host exec children never inherit them.
+ */
+export function setGatewayCredentialEnvKeys(owner: string, keys: Iterable<string>): void {
+  const normalized = new Set<string>();
+  for (const key of keys) {
+    const trimmed = key.trim();
+    if (trimmed) {
+      normalized.add(trimmed.toUpperCase());
+    }
+  }
+  if (normalized.size > 0) {
+    gatewayCredentialEnvKeysByOwner.set(owner, normalized);
+  } else {
+    gatewayCredentialEnvKeysByOwner.delete(owner);
+  }
+}
+
+function isGatewayCredentialEnvVarName(key: string): boolean {
+  const upper = key.toUpperCase();
+  for (const keys of gatewayCredentialEnvKeysByOwner.values()) {
+    if (keys.has(upper)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Re-apply the currently published Gateway credential names to an env prepared earlier. A
+ * prepared env can outlive a reload (an exec waiting for approval), so launch drops every
+ * active name still carrying the Gateway's own value; a value the request supplied stays.
+ */
+export function omitGatewayCredentialEnv<T extends Record<string, string | undefined>>(env: T): T {
+  if (gatewayCredentialEnvKeysByOwner.size === 0) {
+    return env;
+  }
+  let result = env;
+  for (const [key, value] of Object.entries(env)) {
+    if (isGatewayCredentialEnvVarName(key) && value !== undefined && value === process.env[key]) {
+      if (result === env) {
+        result = { ...env };
+      }
+      delete result[key];
+    }
+  }
+  return result;
+}
 
 /** Run a bounded operation without forwarding selected inherited env vars to host exec. */
 export function withHostExecInheritedEnvOmitted<T>(keys: Iterable<string>, run: () => T): T {
@@ -234,7 +287,7 @@ export function sanitizeHostExecEnvWithDiagnostics(params?: {
     if (baseEnv.OPENCLAW_SERVICE_KIND === "node" && NODE_SERVICE_ENV_KEYS.has(key.toUpperCase())) {
       continue;
     }
-    if (isScopedBlockedHostExecEnvVarName(key)) {
+    if (isScopedBlockedHostExecEnvVarName(key) || isGatewayCredentialEnvVarName(key)) {
       continue;
     }
     const sanitized = sanitizeHostInheritedEnvValue(key, value);

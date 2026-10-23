@@ -56,12 +56,7 @@ function qaSummary(failed = 0) {
     counts: { failed, passed: 1 - failed, total: 1 },
     metrics: { gatewayCpuCoreRatio: 0, wallMs: 1 },
     run: { status: "completed" },
-    scenarios: [
-      {
-        status: failed > 0 ? "fail" : "pass",
-        ...(failed > 0 ? {} : { steps: [{}] }),
-      },
-    ],
+    scenarios: [{ status: failed > 0 ? "fail" : "pass", ...(failed > 0 ? {} : { steps: [{}] }) }],
   };
 }
 
@@ -89,15 +84,7 @@ it("rejects runs with every scenario family skipped", () => {
 
 it("accepts package-manager argument separators before script options", () => {
   expect(
-    testing.parseArgs([
-      "--",
-      "--startup-case",
-      "default",
-      "--qa-scenario",
-      "channel-chat-baseline",
-      "--runs",
-      "2",
-    ]),
+    testing.parseArgs(["--", "--startup-case", "default", ...qaFlags.slice(1), "--runs", "2"]),
   ).toMatchObject({
     qaScenarios: ["channel-chat-baseline"],
     runs: 2,
@@ -171,9 +158,7 @@ it("prepares CLI startup artifacts before running the startup bench", async () =
 });
 
 it("fails successful startup benches that write malformed reports", async () => {
-  const result = await runScenario(["--skip-qa"], {
-    reports: { startup: { results: [] } },
-  });
+  const result = await runScenario(["--skip-qa"], { reports: { startup: { results: [] } } });
 
   expect(result).toMatchObject({
     exitCode: 1,
@@ -210,8 +195,9 @@ it("does not prebuild private QA dist when the required entries already exist", 
   const outputDir = path.join(cwd, "out");
   const pluginSdkDist = path.join(cwd, "dist", "plugin-sdk");
   mkdirSync(pluginSdkDist, { recursive: true });
-  writeFileSync(path.join(pluginSdkDist, "qa-lab.js"), "export {};\n");
-  writeFileSync(path.join(pluginSdkDist, "qa-runtime.js"), "export {};\n");
+  for (const name of ["qa-lab", "qa-runtime"]) {
+    writeFileSync(path.join(pluginSdkDist, `${name}.js`), "export {};\n");
+  }
   const result = await runScenario(
     qaFlags,
     {

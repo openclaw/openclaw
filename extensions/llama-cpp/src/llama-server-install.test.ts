@@ -7,11 +7,11 @@ import path from "node:path";
 import * as fileDurability from "@openclaw/fs-safe/durability";
 import JSZip from "jszip";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import * as tar from "tar";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   execFile: vi.fn(),
-  extractWindowsVcRuntime: vi.fn(),
   fetchWithSsrFGuard: vi.fn(),
   resolveLlamaCppDataDir: vi.fn(),
 }));
@@ -28,13 +28,11 @@ vi.mock("./defaults.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./defaults.js")>()),
   resolveLlamaCppDataDir: mocks.resolveLlamaCppDataDir,
 }));
-vi.mock("./llama-server-vc-runtime.js", () => ({
-  extractWindowsVcRuntime: mocks.extractWindowsVcRuntime,
-}));
 
 import {
   LLAMA_SERVER_BUILD,
   LLAMA_SERVER_COMMIT,
+  LLAMA_SERVER_RELEASE,
   resolveManagedLlamaServerPaths,
   selectLlamaServerAsset,
   type LlamaServerAsset,
@@ -50,9 +48,12 @@ type FileHandle = Awaited<ReturnType<typeof fs.open>>;
 const tempRoots: string[] = [];
 const pinnedVersion = `version: 0.1.0-dev (build ${LLAMA_SERVER_BUILD}, commit ${LLAMA_SERVER_COMMIT.slice(0, 9)})`;
 const digest = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
+const expandCalls = () =>
+  mocks.execFile.mock.calls.filter(([file]) => file.endsWith("\\expand.exe"));
 
 function mockCommand(
   run: (command: string, args: string[], options: { timeout?: number }) => string | Promise<string>,
+  onExpand?: (filter: string, input: string) => Promise<void>,
 ) {
   mocks.execFile.mockImplementation(
     (
@@ -62,7 +63,22 @@ function mockCommand(
       callback: (error: unknown, stdout: string, stderr: string) => void,
     ) => {
       void Promise.resolve()
-        .then(() => run(command, args, options))
+        .then(async () => {
+          if (command.endsWith("\\expand.exe")) {
+            const filter = args[0]?.slice(3);
+            const destination = args[2];
+            if (!filter || !destination) {
+              throw new Error("Expected a named CAB extraction");
+            }
+            await onExpand?.(filter, args[1]!);
+            await fs.writeFile(
+              path.join(destination, filter),
+              `runtime:${filter.replace(/_(?:amd64|arm64)$/u, "")}`,
+            );
+            return "";
+          }
+          return run(command, args, options);
+        })
         .then(
           (output) => callback(null, output, ""),
           (error: unknown) => callback(error, "", ""),
@@ -95,7 +111,7 @@ function download(
 afterEach(async () => {
   vi.restoreAllMocks();
   mocks.execFile.mockReset();
-  mocks.extractWindowsVcRuntime.mockReset();
+  vi.unstubAllEnvs();
   mocks.fetchWithSsrFGuard.mockReset();
   mocks.resolveLlamaCppDataDir.mockReset();
   await Promise.all(
@@ -117,9 +133,9 @@ async function createInstalledServer(): Promise<string> {
   return command;
 }
 
-async function createCpuArchive() {
+async function createCpuArchive(arch: "arm64" | "x64" = "arm64") {
   const root = await createRoot("llama-cpu-install-", true);
-  const source = selectLlamaServerAsset("win32", "arm64", { kind: "cpu" });
+  const source = selectLlamaServerAsset("win32", arch, { kind: "cpu" });
   const runtime = source.dependencies![0]!;
   if (runtime.archive !== "vc-redist") {
     throw new Error("expected the Windows CPU asset to use the Visual C++ redistributable");
@@ -127,7 +143,10 @@ async function createCpuArchive() {
   const serverBytes = await new JSZip()
     .file(source.executable, "server")
     .generateAsync({ type: "nodebuffer" });
-  const runtimeBytes = Buffer.from("verified Visual C++ runtime bundle");
+  const runtimeBytes = Buffer.alloc(96, 0x5a);
+  runtimeBytes.write("MSCF", 32, "ascii");
+  runtimeBytes.writeUInt32LE(48, 40);
+  vi.stubEnv("SystemRoot", "C:\\Windows");
   const asset: LlamaServerAsset = {
     ...source,
     sha256: digest(serverBytes),
@@ -136,22 +155,16 @@ async function createCpuArchive() {
         ...runtime,
         sha256: digest(runtimeBytes),
         size: runtimeBytes.byteLength,
+        containerOffset: 32,
+        containerSize: 48,
       },
     ],
   };
-  mocks.extractWindowsVcRuntime.mockImplementation(
-    async ({ asset: dependency, destDir }: { asset: typeof runtime; destDir: string }) => {
-      for (const file of dependency.files) {
-        await fs.writeFile(path.join(destDir, file.target), `runtime:${file.target}`);
-      }
-      return destDir;
-    },
-  );
   mocks.fetchWithSsrFGuard.mockImplementation(async ({ url }: { url: string }) => ({
     response: new Response(new Uint8Array(url === runtime.url ? runtimeBytes : serverBytes)),
     release: vi.fn(),
   }));
-  return { root, asset, runtime };
+  return { root, asset, runtime, runtimeBytes };
 }
 
 function mockDownload(payload: Buffer): ReturnType<typeof vi.fn> {
@@ -190,6 +203,199 @@ function installWriteFileThroughWrite(handle: FileHandle): void {
     }
   }) as typeof handle.writeFile;
 }
+
+const TEST_ARCHIVE_ROOT = selectLlamaServerAsset("linux", "x64").archiveRoot;
+
+async function createTarArchive(
+  root: string,
+  build: (buildDir: string) => Promise<void>,
+  entries: readonly string[] = [TEST_ARCHIVE_ROOT],
+): Promise<{ archivePath: string; destDir: string }> {
+  const stageDir = path.join(root, "stage");
+  const buildDir = path.join(stageDir, TEST_ARCHIVE_ROOT);
+  await fs.mkdir(buildDir, { recursive: true });
+  await build(buildDir);
+  const archivePath = path.join(root, "asset.tar.gz");
+  // Keep tiny fixtures synchronous: node-tar's async hard-link queue can close gzip twice.
+  tar.c({ file: archivePath, cwd: stageDir, gzip: true, sync: true }, [...entries]);
+  const destDir = path.join(root, "dest");
+  await fs.mkdir(destDir, { recursive: true });
+  return { archivePath, destDir };
+}
+
+async function createZipArchive(
+  root: string,
+  entries: Record<string, string>,
+): Promise<{ archivePath: string; destDir: string }> {
+  const zip = new JSZip();
+  for (const [name, content] of Object.entries(entries)) {
+    zip.file(name, content);
+  }
+  const archivePath = path.join(root, "asset.zip");
+  await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
+  const destDir = path.join(root, "dest");
+  await fs.mkdir(destDir, { recursive: true });
+  return { archivePath, destDir };
+}
+
+function withoutAliases(asset: LlamaServerAsset): LlamaServerAsset {
+  return { ...asset, regularFileAliases: [] };
+}
+
+function installedPath(destDir: string, asset: LlamaServerAsset) {
+  return path.join(destDir, LLAMA_SERVER_RELEASE, `win32-${asset.arch}`, asset.executable);
+}
+
+async function installArchive(params: {
+  archivePath: string;
+  destDir: string;
+  asset: LlamaServerAsset;
+}) {
+  const bytes = await fs.readFile(params.archivePath);
+  mocks.resolveLlamaCppDataDir.mockReturnValue(params.destDir);
+  mockDownload(bytes);
+  mockCommand(() => pinnedVersion);
+  const { command } = await ensureLlamaServerInstalled({
+    asset: {
+      ...params.asset,
+      // Archive admission uses synthetic host metadata, independent of the host's
+      // glibc/macOS floor; the native version probe above is the only scripted step.
+      platform: "win32",
+      dependencies: [],
+      sha256: digest(bytes),
+    },
+  });
+  return command;
+}
+
+describe("managed installer archive admission", () => {
+  it("materializes the pinned SONAME manifest as regular files", async () => {
+    const root = await createRoot("llama-extract-", true);
+    const asset = selectLlamaServerAsset("linux", "x64");
+    const { archivePath, destDir } = await createTarArchive(root, async (buildDir) => {
+      await fs.writeFile(path.join(buildDir, asset.executable), "binary");
+      for (const [source, aliases] of asset.regularFileAliases) {
+        await fs.writeFile(path.join(buildDir, source), `contents:${source}`);
+        for (const alias of aliases) {
+          await fs.symlink(source, path.join(buildDir, alias));
+        }
+      }
+    });
+
+    await expect(installArchive({ archivePath, destDir, asset })).resolves.toBe(
+      installedPath(destDir, asset),
+    );
+
+    const buildDir = path.dirname(installedPath(destDir, asset));
+    for (const [source, aliases] of asset.regularFileAliases) {
+      for (const alias of aliases) {
+        expect((await fs.lstat(path.join(buildDir, alias))).isFile()).toBe(true);
+        expect(await fs.readFile(path.join(buildDir, alias), "utf8")).toBe(`contents:${source}`);
+      }
+    }
+  });
+
+  it("ignores archive-provided symlink targets outside the pinned manifest", async () => {
+    const root = await createRoot("llama-extract-", true);
+    const asset = withoutAliases(selectLlamaServerAsset("linux", "x64"));
+    const { archivePath, destDir } = await createTarArchive(root, async (buildDir) => {
+      await fs.writeFile(path.join(buildDir, asset.executable), "binary");
+      await fs.symlink("../../../escape.txt", path.join(buildDir, "unexpected-link"));
+    });
+
+    await installArchive({ archivePath, destDir, asset });
+
+    await expect(
+      fs.lstat(path.join(path.dirname(installedPath(destDir, asset)), "unexpected-link")),
+    ).rejects.toThrow();
+    await expect(fs.lstat(path.join(root, "escape.txt"))).rejects.toThrow();
+  });
+
+  it("does not publish archive-provided hard links", async () => {
+    const root = await createRoot("llama-extract-", true);
+    const asset = withoutAliases(selectLlamaServerAsset("linux", "x64"));
+    const { archivePath, destDir } = await createTarArchive(
+      root,
+      async (buildDir) => {
+        const executable = path.join(buildDir, asset.executable);
+        await fs.writeFile(executable, "binary");
+        await fs.link(executable, path.join(buildDir, "unexpected-hardlink"));
+      },
+      [
+        path.posix.join(TEST_ARCHIVE_ROOT, asset.executable),
+        path.posix.join(TEST_ARCHIVE_ROOT, "unexpected-hardlink"),
+      ],
+    );
+
+    await installArchive({ archivePath, destDir, asset });
+
+    await expect(
+      fs.lstat(path.join(path.dirname(installedPath(destDir, asset)), "unexpected-hardlink")),
+    ).rejects.toThrow();
+  });
+
+  it("rejects archives that exceed the llama.cpp entry budget", async () => {
+    const root = await createRoot("llama-extract-", true);
+    const asset = withoutAliases(selectLlamaServerAsset("linux", "x64"));
+    const { archivePath, destDir } = await createTarArchive(root, async (buildDir) => {
+      await Promise.all(
+        Array.from({ length: 1_000 }, (_, index) =>
+          fs.writeFile(path.join(buildDir, `component-${index}`), "metadata"),
+        ),
+      );
+    });
+
+    await expect(installArchive({ archivePath, destDir, asset })).rejects.toThrow(
+      /entry count exceeds limit/u,
+    );
+    expect(await fs.readdir(destDir)).toStrictEqual([]);
+  });
+
+  it("fails when a pinned regular-file alias source is absent", async () => {
+    const root = await createRoot("llama-extract-", true);
+    const baseAsset = selectLlamaServerAsset("linux", "x64");
+    const asset: LlamaServerAsset = {
+      ...baseAsset,
+      regularFileAliases: [["missing.so.1", ["missing.so"]]],
+    };
+    const { archivePath, destDir } = await createTarArchive(root, async (buildDir) => {
+      await fs.writeFile(path.join(buildDir, asset.executable), "binary");
+    });
+
+    await expect(installArchive({ archivePath, destDir, asset })).rejects.toThrow(
+      /does not contain regular alias source missing\.so\.1/u,
+    );
+  });
+
+  it("rejects a zip entry that escapes through Windows separators", async () => {
+    const root = await createRoot("llama-extract-", true);
+    const asset = selectLlamaServerAsset("win32", "x64");
+    const { archivePath, destDir } = await createZipArchive(root, {
+      "..\\..\\escape.txt": "owned",
+      [asset.executable]: "binary",
+    });
+
+    await expect(installArchive({ archivePath, destDir, asset })).rejects.toThrow();
+    expect(await fs.readdir(destDir)).toStrictEqual([]);
+    await expect(fs.stat(path.join(root, "escape.txt"))).rejects.toThrow();
+  });
+
+  it("extracts the flat Windows zip layout", async () => {
+    const root = await createRoot("llama-extract-", true);
+    const asset = selectLlamaServerAsset("win32", "x64");
+    const { archivePath, destDir } = await createZipArchive(root, {
+      [asset.executable]: "binary",
+      "ggml-base.dll": "library",
+    });
+
+    await expect(installArchive({ archivePath, destDir, asset })).resolves.toBe(
+      installedPath(destDir, asset),
+    );
+    expect(
+      (await fs.readdir(path.dirname(installedPath(destDir, asset)))).toSorted(),
+    ).toStrictEqual(["ggml-base.dll", asset.executable]);
+  });
+});
 
 describe("cached file integrity", () => {
   it("reuses unchanged verified bytes but detects replacement, edits, and deletion", async () => {
@@ -404,6 +610,90 @@ describe("downloadVerifiedFile", () => {
 });
 
 describe("ensureLlamaServerInstalled", () => {
+  it.each([
+    ["libssl.so.3", "OpenSSL 3", "libssl3t64"],
+    ["libcrypto.so.3", "OpenSSL 3", "libssl3t64"],
+    ["libgomp.so.1", "OpenMP", "libgomp1"],
+    ["libcustom.so.1", "libcustom.so.1", "system package manager"],
+  ])(
+    "diagnoses the missing %s runtime when reusing an installed server",
+    async (library, runtime, remedy) => {
+      const command = await createInstalledServer();
+      const detail = `${command}: error while loading shared libraries: ${library}: cannot open shared object file: No such file or directory`;
+      mockCommand(() => {
+        throw new Error(detail);
+      });
+      const failure = await ensureLlamaServerInstalled().catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(Error);
+      expect(failure).toMatchObject({ message: expect.stringContaining(detail) });
+      expect(failure).toMatchObject({ message: expect.stringContaining(runtime) });
+      expect(failure).toMatchObject({ message: expect.stringContaining(remedy) });
+      expect(failure).toMatchObject({ message: expect.stringContaining("rerun llama.cpp setup") });
+      if (library !== "libgomp.so.1") {
+        expect((failure as Error).message).not.toContain("OpenMP");
+      }
+      expect(await fs.readFile(command, "utf8")).toBe("");
+      expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
+    },
+  );
+
+  it("carves the pinned CAB and extracts only the named app-local DLLs", async () => {
+    const { asset, runtime, runtimeBytes } = await createCpuArchive("x64");
+    const carved: Buffer[] = [];
+    let launches = 0;
+    mockCommand(
+      () => {
+        if (++launches === 1) {
+          throw new Error("runtime missing");
+        }
+        return pinnedVersion;
+      },
+      async (filter, input) => {
+        if (filter === runtime.nestedCabinet) {
+          carved.push(await fs.readFile(input));
+        }
+      },
+    );
+    const controller = new AbortController();
+    const { command } = await ensureLlamaServerInstalled({ asset, signal: controller.signal });
+    expect(carved).toEqual([runtimeBytes.subarray(32, 80)]);
+    const expansions = expandCalls();
+    expect(expansions).toHaveLength(runtime.files.length + 1);
+    expect(expansions[0]).toEqual([
+      "C:\\Windows\\System32\\expand.exe",
+      [
+        `-F:${runtime.nestedCabinet}`,
+        expect.stringMatching(/[\\/]bundle\.cab$/u),
+        expect.stringMatching(/[\\/]nested$/u),
+      ],
+      expect.objectContaining({ timeout: 60_000, windowsHide: true, signal: controller.signal }),
+      expect.any(Function),
+    ]);
+    expect(expansions.map(([, args]) => args[0])).toEqual([
+      `-F:${runtime.nestedCabinet}`,
+      ...runtime.files.map((file) => `-F:${file.source}`),
+    ]);
+    for (const file of runtime.files) {
+      expect(await fs.readFile(path.join(path.dirname(command), file.target), "utf8")).toBe(
+        `runtime:${file.target}`,
+      );
+    }
+  });
+
+  it("rejects a bundle whose pinned range is not the expected CAB", async () => {
+    const { root, asset, runtimeBytes } = await createCpuArchive();
+    runtimeBytes.write("NOPE", 32, "ascii");
+    asset.dependencies![0]!.sha256 = digest(runtimeBytes);
+    mockCommand(() => {
+      throw new Error("runtime missing");
+    });
+    await expect(ensureLlamaServerInstalled({ asset })).rejects.toThrow(
+      "does not contain the pinned cabinet",
+    );
+    expect(expandCalls()).toEqual([]);
+    expect(await fs.readdir(root)).toEqual([]);
+  });
+
   it("cancels a queued setup without cancelling another installation or poisoning reuse", async () => {
     const command = await createInstalledServer();
     const started = createDeferred<void>();
@@ -428,7 +718,7 @@ describe("ensureLlamaServerInstalled", () => {
     expect(mocks.execFile.mock.calls.filter(([file]) => file === command)).toHaveLength(2);
   });
 
-  it("allows slow version initialization before publication, after publication, and on reuse", async () => {
+  it("allows slow version initialization during staging and on reuse", async () => {
     const { root, asset, runtime } = await createCpuArchive();
     const calls: Array<{ command: string; args: string[]; timeout?: number }> = [];
     mockCommand(async (command, args, options) => {
@@ -458,7 +748,7 @@ describe("ensureLlamaServerInstalled", () => {
         timeout: call.timeout,
       })),
     ).toEqual(
-      [false, false, true, true].map((published) => ({
+      [false, false, true].map((published) => ({
         published,
         args: ["--version"],
         timeout: 120_000,
@@ -500,7 +790,7 @@ describe("ensureLlamaServerInstalled", () => {
         );
         expect(await fs.readdir(root)).toEqual([]);
       }
-      expect(mocks.extractWindowsVcRuntime).not.toHaveBeenCalled();
+      expect(expandCalls()).toHaveLength(0);
       expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalledWith(
         expect.objectContaining({ url: runtime.url }),
       );
@@ -508,7 +798,7 @@ describe("ensureLlamaServerInstalled", () => {
   );
 
   it("preserves both launch errors when the VC runtime fallback cannot start the server", async () => {
-    const { root, asset } = await createCpuArchive();
+    const { root, asset, runtime } = await createCpuArchive();
     let attempt = 0;
     mockCommand((command) => {
       const detail = attempt++ === 0 ? "initial launch failed" : "fallback launch failed";
@@ -518,7 +808,7 @@ describe("ensureLlamaServerInstalled", () => {
     await expect(ensureLlamaServerInstalled({ asset })).rejects.toThrow(
       /Initial startup detail: .*initial launch failed.*Fallback detail: .*fallback launch failed/u,
     );
-    expect(mocks.extractWindowsVcRuntime).toHaveBeenCalledTimes(1);
+    expect(expandCalls()).toHaveLength(runtime.files.length + 1);
     expect(await fs.readdir(root)).toEqual([]);
   });
 
@@ -602,7 +892,7 @@ describe("ensureLlamaServerInstalled", () => {
       });
       const { command, installDir } = resolveManagedLlamaServerPaths(asset);
       if (outcome === "ready") {
-        await expect(result).resolves.toMatchObject({ command, asset: { backend: "cuda" } });
+        await expect(result).resolves.toMatchObject({ command });
         for (const file of runtime.files) {
           expect(await fs.readFile(path.join(installDir, file), "utf8")).toBe(`runtime:${file}`);
         }
@@ -611,8 +901,6 @@ describe("ensureLlamaServerInstalled", () => {
           validatedFiles.every((files) => runtime.files.every((file) => files.includes(file))),
         ).toBe(true);
         expect(commandCalls).toEqual([
-          { args: ["--version"], timeout: 120_000 },
-          { args: ["--list-devices"], timeout: 15_000 },
           { args: ["--version"], timeout: 120_000 },
           { args: ["--list-devices"], timeout: 15_000 },
         ]);
@@ -629,7 +917,7 @@ describe("ensureLlamaServerInstalled", () => {
             { args: ["--version"], timeout: 120_000 },
             { args: ["--list-devices"], timeout: 15_000 },
           ]);
-          expect(mocks.extractWindowsVcRuntime).not.toHaveBeenCalled();
+          expect(expandCalls()).toHaveLength(0);
           expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalledWith(
             expect.objectContaining({ url: vcRuntime.url }),
           );

@@ -13,15 +13,17 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   buildProjectedAgentRunIndex,
   clearAgentRunContext,
   registerAgentRunContext,
 } from "../../infra/agent-run-registry.js";
+import type { RpcSourceRef } from "../../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
-import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import { createSessionRowPlacementProjection } from "../session-row-placement-projection.js";
 import {
@@ -30,8 +32,15 @@ import {
 } from "../session-row-projection-access.js";
 import type { SessionRowProjection } from "../session-row-projection.js";
 import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
+import { replaceSessionRowFacts } from "../session-utils-row.js";
+import { claimRpcSourceForTest } from "../test-helpers.rpc-source.js";
 import { projectWorkerSessionPlacement } from "../worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
+import { activePlacement as makeActivePlacement } from "../worker-environments/placement-suite.test-support.js";
+import {
+  createActiveRpcSourceForTest,
+  registerRpcSourceForTest,
+} from "./rpc-source-fixtures.test-support.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -72,20 +81,27 @@ function holdExactPreparation(projection: SessionRowProjection, ...ready: Promis
 function createContext(
   receivers = new Set(["conn-1"]),
   config: OpenClawConfig = {},
-  chatAbortControllers: GatewayRequestContext["chatAbortControllers"] = new Map(),
+  sources: Iterable<readonly [string, RpcSourceRef]> = [],
 ) {
   setRuntimeConfigSnapshot(config);
+  rpcSourceTesting.reset(sources);
   const projection = {
     get state() {
       return { rowContext: { projectedAgentRuns: buildProjectedAgentRunIndex() } };
     },
     ensureMaterialized: async () => {},
-    withPreparedExactRows: async (_queries: unknown, consume: () => unknown) => consume(),
-    snapshot: ({ key }: { key: string }) => ({ row: mocks.loadRow(key) }),
+    withPreparedExactRows: async (_queries: unknown, consume: (read: unknown) => unknown) =>
+      consume(projection),
+    describe: ({ key, agentId }: { key: string; agentId: string }) => ({
+      key,
+      storeTarget: {
+        storePath: resolveSessionStorePathCore(config.session?.store, { agentId }),
+      },
+    }),
+    present: ({ key }: { key: string }) => mocks.loadRow(key),
   };
   return {
     broadcastToConnIds: vi.fn(),
-    chatAbortControllers,
     getRuntimeConfig: () => config,
     ...bindSessionRowProjection({}, () => projection as unknown as SessionRowProjection),
     getSessionEventSubscriberConnIds: () => receivers,
@@ -95,21 +111,6 @@ function createContext(
 
 function broadcasts(context: GatewayRequestContext) {
   return vi.mocked(context.broadcastToConnIds).mock.calls;
-}
-
-function activeRun(
-  sessionKey: string,
-  sessionId: string,
-  agentId?: string,
-): ChatAbortControllerEntry {
-  return {
-    ...(agentId ? { agentId } : {}),
-    sessionKey,
-    sessionId,
-    controller: new AbortController(),
-    expiresAtMs: 60_000,
-    startedAtMs: 0,
-  };
 }
 
 function fixedStoreConfig(retired = false): OpenClawConfig {
@@ -123,29 +124,27 @@ function fixedStoreConfig(retired = false): OpenClawConfig {
   };
 }
 
+async function contextWithRun(
+  config: OpenClawConfig,
+  runId: string,
+  identity: Parameters<typeof createActiveRpcSourceForTest>[1],
+) {
+  return createContext(new Set(["conn-1"]), config, [
+    [runId, await createActiveRpcSourceForTest({}, identity)],
+  ]);
+}
+
 function activePlacement(
   sessionKey: string,
 ): Extract<WorkerSessionPlacementRecord, { state: "active" }> {
-  return {
-    sessionId: `${sessionKey}-id`,
+  return makeActivePlacement(`${sessionKey}-id`, {
     sessionKey,
-    agentId: "main",
-    state: "active",
-    executionMode: "worker-turn",
     generation: 1,
-    createdAtMs: 1,
     updatedAtMs: 2,
     stateChangedAtMs: 2,
     environmentId: "worker-first",
     activeOwnerEpoch: 1,
     workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
-    remoteWorkspaceDir: "/workspace",
-    workerBundleHash: "a".repeat(64),
-    lastTranscriptAckCursor: null,
-    lastLiveEventAckCursor: null,
-    recoveryError: null,
-    terminalReason: null,
-    terminalAtMs: null,
     turnClaim: {
       owner: "worker",
       claimId: "private-turn-claim",
@@ -153,7 +152,7 @@ function activePlacement(
       generation: 1,
       ownerEpoch: 1,
     },
-  };
+  });
 }
 
 function preparePlacementProjection(
@@ -175,11 +174,9 @@ function preparePlacementProjection(
     }
     const placement = placements.get(record.entry.sessionId);
     // Simulate committed owner facts without reading the placement store during event snapshots.
-    if (placement) {
-      record.materialized.row.placement = projectWorkerSessionPlacement(placement);
-    } else {
-      delete record.materialized.row.placement;
-    }
+    record.materialized = replaceSessionRowFacts(record.materialized, {
+      placement: placement ? projectWorkerSessionPlacement(placement) : undefined,
+    });
   };
   update();
   return { update };
@@ -414,7 +411,6 @@ describe("sessions.changed coalescing", () => {
           { sessionKeys: [sessionKey] },
         ],
       ]);
-      expect(broadcasts(context)[0]?.[2]).toEqual(new Set(["conn-1"]));
       expect(bulk).toHaveBeenCalledOnce();
     } finally {
       unrelated.resolve();
@@ -604,18 +600,17 @@ describe("sessions.changed coalescing", () => {
   });
 
   it("does not adopt the compatibility owner's ownerless run for another agent", async () => {
-    const config = retainLegacyDefaultAgentId(
+    const config: OpenClawConfig = retainLegacyDefaultAgentId(
       {
         agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
       } satisfies OpenClawConfig,
       "ops",
     );
-    const sessionId = "agent:research:shared-session-id";
-    const context = createContext(
-      new Set(["conn-1"]),
-      config,
-      new Map([["compat-owner-run", activeRun("legacy-unscoped", sessionId)]]),
-    );
+    const context = await contextWithRun(config, "compat-owner-run", {
+      sessionId: "agent:research:shared-session-id",
+      sessionKey: "legacy-unscoped",
+      storeScope: resolveSessionStorePathCore(config.session?.store, { agentId: "ops" }),
+    });
 
     await emitAndSettleLeading(context, {
       reason: "update",
@@ -632,11 +627,12 @@ describe("sessions.changed coalescing", () => {
 
   it("projects active bare-global runs through the persisted fixed-store owner", async () => {
     const config = fixedStoreConfig();
-    const context = createContext(
-      new Set(["conn-1"]),
-      config,
-      new Map([["ops-global-run", activeRun("global", "global-id", "ops")]]),
-    );
+    const context = await contextWithRun(config, "ops-global-run", {
+      agentId: "ops",
+      storeScope: resolveSessionStorePathCore(config.session?.store, { agentId: "ops" }),
+      sessionId: "global-id",
+      sessionKey: "global",
+    });
 
     await emitAndSettleLeading(context, { reason: "update", sessionKey: "global" });
 
@@ -687,10 +683,15 @@ describe("sessions.changed coalescing", () => {
   it("tombstones exact run ids when lifecycle projection takes ownership", async () => {
     const sessionKey = "agent:main:projected";
     const sessionId = `${sessionKey}-id`;
-    const chatAbortControllers = new Map([
-      ["direct-run", activeRun(sessionKey, sessionId, "main")],
-    ]);
-    const context = createContext(new Set(["conn-1"]), {}, chatAbortControllers);
+    const context = createContext();
+    const registration = registerRpcSourceForTest({
+      runId: "direct-run",
+      agentId: "main",
+      storeScope: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+      sessionId,
+      sessionKey,
+    });
+    const release = await claimRpcSourceForTest(registration.entry);
 
     await emitAndSettleLeading(context, { reason: "update", sessionKey });
     expect(broadcasts(context)[0]?.[1]).toMatchObject({
@@ -698,7 +699,8 @@ describe("sessions.changed coalescing", () => {
       activeRunIds: ["direct-run"],
     });
 
-    chatAbortControllers.clear();
+    release();
+    await registration.entry.input.settlement.promise;
     registerAgentRunContext("hidden-worker-run", {
       isControlUiVisible: false,
       projectSessionActive: true,

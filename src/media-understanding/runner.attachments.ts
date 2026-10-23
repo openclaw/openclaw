@@ -32,6 +32,20 @@ export function createMediaAttachmentCache(
   return new MediaAttachmentCache(attachments, options);
 }
 
+/** Creates an inbound cache whose session-scoped read policy stays authoritative. */
+export function createScopedMediaAttachmentCache(
+  attachments: MediaAttachment[],
+  params: Parameters<typeof resolveMediaAttachmentLocalRoots>[0],
+): MediaAttachmentCache {
+  return createMediaAttachmentCache(attachments, {
+    localPathRoots: resolveMediaAttachmentLocalRoots(params),
+    // Do not re-grant sessionless workspace/sandbox parents after resolving scoped roots.
+    includeDefaultLocalPathRoots: false,
+    ssrfPolicy: params.cfg.tools?.web?.fetch?.ssrfPolicy,
+    workspaceDir: params.workspaceDir,
+  });
+}
+
 export function resolveMediaAttachmentLocalRoots(params: {
   cfg: OpenClawConfig;
   ctx: MsgContext;

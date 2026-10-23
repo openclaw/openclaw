@@ -15,7 +15,7 @@ import {
   sqliteSessionIdWriteScope,
   withSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import {
@@ -156,7 +156,7 @@ async function prepareSessionColdArchiveInWorker(
       };
       const opened = withOpenClawAgentDatabaseReadOnly(
         (database) =>
-          runSqliteDeferredTransactionSync(
+          runSqliteReadSnapshotSync(
             database.db,
             () => {
               if (
@@ -406,7 +406,7 @@ export async function prepareSessionColdBatchInWorker(
   if (included.length > 0) {
     const protection = withOpenClawAgentDatabaseReadOnly(
       (database) =>
-        runSqliteDeferredTransactionSync(
+        runSqliteReadSnapshotSync(
           database.db,
           () => [...readSessionAdmissionProtectionKeys(database, included)],
           { databaseLabel: database.path, operationLabel: "cold admission protection" },

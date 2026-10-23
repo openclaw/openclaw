@@ -8,11 +8,14 @@ import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../../config/conf
 import * as sessions from "../../../config/sessions/session-accessor.js";
 import * as generations from "../../../config/sessions/session-delivery-generation.js";
 import { SqliteWorkerError } from "../../../infra/sqlite-worker-contract.js";
-import { runExclusiveSessionLifecycleMutation } from "../../../sessions/session-lifecycle-admission.js";
-import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../../embedded-agent-runner/runs.js";
+import { runSessionMutation } from "../../../sessions/session-controller.lifecycle.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
 import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import * as killScope from "./subagent-control-kill-scope.js";
+import {
+  attachActiveEmbeddedRun,
+  detachActiveEmbeddedRun,
+} from "./subagent-control-native.test-support.js";
 import * as killSession from "./subagent-control-session.js";
 import {
   beginControlAdmission,
@@ -22,6 +25,7 @@ import {
   expectControlIdle,
 } from "./subagent-control.fixtures.test-support.js";
 import { killAllControlledSubagentRuns } from "./subagent-control.js";
+import type { KillScope } from "./subagent-control.types.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
@@ -57,11 +61,13 @@ const registerRun = (
     ...overrides,
   });
 
-it.for(["complete", "reject undefined"] as const)(
-  "coalesces fresh refresh batches in the enclosing scope before %s",
+it.for(["complete", "reject undefined", "native failure"] as const)(
+  "coalesces or retires refresh batches in the enclosing scope before %s",
   async (completion, { signal }) => {
     const rootKey = "agent:main:subagent:refresh-root";
     const sharedRawKey = completion === "complete";
+    const nativeFailure = completion === "native failure";
+    const failure = new SqliteWorkerError("discovery outcome unknown", "outcome-unknown");
     if (sharedRawKey) {
       const cfg = getRuntimeConfig();
       setRuntimeConfigSnapshot({
@@ -80,13 +86,14 @@ it.for(["complete", "reject undefined"] as const)(
       registerRun("refresh-" + id, key(id), id === "root" ? owner : rootKey, {
         childAgentId: agentId(id),
         requesterDisplayKey: "main",
+        ...(nativeFailure && id === "root" ? { controllerSessionKey: undefined } : {}),
       });
     for (const id of ["root", "first", "second"]) {
       await writeSession("refresh-" + id, key(id), agentId(id));
     }
     await register("root");
     const lane = new AsyncLocalStorage<string>();
-    const ready = createDeferred<killScope.KillScope>();
+    const ready = createDeferred<KillScope>();
     const finishRun = createDeferred();
     const runFinishing = createDeferred();
     const entered = Array.from({ length: 3 }, () => createDeferred());
@@ -116,6 +123,9 @@ it.for(["complete", "reject undefined"] as const)(
           if (index >= 0 && index < gates.length) {
             entered[index]!.resolve();
             await gates[index]!.promise;
+            if (nativeFailure && index === 0) {
+              throw failure;
+            }
             if (index === 2) {
               finalReadSettled = true;
             }
@@ -143,7 +153,7 @@ it.for(["complete", "reject undefined"] as const)(
           ready.resolve(scope);
           await finishRun.promise;
           runFinishing.resolve();
-          if (completion === "reject undefined") {
+          if (completion !== "complete") {
             const rejected = createDeferred<never>();
             rejected.reject();
             return await rejected.promise;
@@ -151,11 +161,8 @@ it.for(["complete", "reject undefined"] as const)(
           return "selected";
         },
         undefined,
-        {
-          prepare: async (publish) => {
-            publishedBeforeJoin ||= !finalReadSettled;
-            await publish();
-          },
+        () => {
+          publishedBeforeJoin ||= !finalReadSettled;
         },
       ),
     );
@@ -175,7 +182,26 @@ it.for(["complete", "reject undefined"] as const)(
         firstSettled = true;
         return count;
       });
+      void first.catch(() => {});
       await withinTest(entered[0]!.promise, signal);
+      if (nativeFailure) {
+        const results = Promise.allSettled([first, refresh("queued caller")]);
+        gates[0]!.resolve();
+        expect(await withinTest(results, signal)).toEqual([
+          { status: "rejected", reason: failure },
+          { status: "rejected", reason: failure },
+        ]);
+        expect(await Promise.allSettled([refresh("later caller")])).toEqual([
+          { status: "rejected", reason: failure },
+        ]);
+        expect(contexts).toEqual(["kill-scope"]);
+        finishRun.resolve();
+        await expect(stopped).rejects.toBeInstanceOf(AggregateError);
+        await expect(stopped).rejects.toMatchObject({ errors: [undefined, failure] });
+        await expect(scope.refresh()).rejects.toThrow("refresh scope is no longer active");
+        expect(contexts).toHaveLength(1);
+        return;
+      }
       await register("first");
       let middleSettled = false;
       const middle = Promise.all(
@@ -214,89 +240,6 @@ it.for(["complete", "reject undefined"] as const)(
     }
   },
 );
-
-it("retires queued refreshes after an escaping native failure and an undefined caller rejection", async ({
-  signal,
-}) => {
-  const rootKey = "agent:main:subagent:refresh-failure";
-  await writeSession("refresh-failure", rootKey);
-  await registerRun("refresh-failure", rootKey, owner, {
-    controllerSessionKey: undefined,
-    requesterDisplayKey: "main",
-  });
-  const ready = createDeferred<killScope.KillScope>();
-  const entered = createDeferred();
-  const finishRun = createDeferred();
-  const releaseRead = createDeferred();
-  const failure = new SqliteWorkerError("discovery outcome unknown", "outcome-unknown");
-  const accepted: Array<Promise<number>> = [];
-  let observing = false;
-  let reads = 0;
-  const release = () => {
-    finishRun.resolve();
-    releaseRead.resolve();
-  };
-  signal.addEventListener("abort", release, { once: true });
-  const read = registryState.withSubagentRunReadSnapshot;
-  vi.spyOn(registryState, "withSubagentRunReadSnapshot").mockImplementation(
-    (runs, select, consume, scope) => {
-      const index =
-        observing &&
-        scope !== "all" &&
-        "sessionKeys" in scope &&
-        scope.sessionKeys.includes(rootKey)
-          ? ++reads
-          : 0;
-      return read(runs, select, consume, scope).then(async (result) => {
-        if (index === 1) {
-          entered.resolve();
-          await releaseRead.promise;
-          throw failure;
-        }
-        return result;
-      });
-    },
-  );
-  const stopped = killScope.withSubagentKillScope(
-    { cfg: getRuntimeConfig(), runs: [subagentRuns.get("refresh-failure")!] },
-    async (scope) => {
-      observing = true;
-      ready.resolve(scope);
-      await finishRun.promise;
-      const rejected = createDeferred<never>();
-      rejected.reject();
-      return await rejected.promise;
-    },
-  );
-  void stopped.catch(() => {});
-  try {
-    const scope = await withinTest(ready.promise, signal);
-    const first = scope.refresh();
-    accepted.push(first);
-    void first.catch(() => {});
-    await withinTest(entered.promise, signal);
-    accepted.push(scope.refresh());
-    const results = Promise.allSettled(accepted);
-    releaseRead.resolve();
-    expect(await withinTest(results, signal)).toEqual([
-      { status: "rejected", reason: failure },
-      { status: "rejected", reason: failure },
-    ]);
-    const later = scope.refresh();
-    accepted.push(later);
-    expect(await Promise.allSettled([later])).toEqual([{ status: "rejected", reason: failure }]);
-    expect(reads, "native uncertainty retires the accepted successor batch").toBe(1);
-    finishRun.resolve();
-    await expect(stopped).rejects.toBeInstanceOf(AggregateError);
-    await expect(stopped).rejects.toMatchObject({ errors: [undefined, failure] });
-    await expect(scope.refresh()).rejects.toThrow("refresh scope is no longer active");
-    expect(reads).toBe(1);
-  } finally {
-    release();
-    await Promise.allSettled([...accepted, stopped]);
-    signal.removeEventListener("abort", release);
-  }
-});
 
 it("retains a captured child prefix when the next child's session preparation fails", async () => {
   const rootKey = "agent:main:subagent:prefix-root";
@@ -410,8 +353,8 @@ it.each([
     });
     const handleA = createEmbeddedRunHandle({ runId: "a", abort: abortA });
     const handleD = createEmbeddedRunHandle({ runId: "d", abort: abortD });
-    setActiveEmbeddedRun("a-session", handleA, aKey);
-    setActiveEmbeddedRun("d-session", handleD, dKey);
+    attachActiveEmbeddedRun("a-session", handleA, aKey);
+    attachActiveEmbeddedRun("d-session", handleD, dKey);
     const startG = vi.fn(async () => {
       expect(await startQueuedSubagentRun("g")).toBe(true);
     });
@@ -482,7 +425,7 @@ it.each([
         await awaitProgress(grandchildCancelled.promise, "grandchild cancellation publication");
         // Publication precedes G's abort-marker write. Join its mutation from
         // outside the observer's reentrant context before arming the next fault.
-        await runExclusiveSessionLifecycleMutation("subagent-kill", {
+        await runSessionMutation({
           scope: storePath,
           identities: [gKey, "g-session"],
           run: async () => {},
@@ -527,8 +470,8 @@ it.each([
         reader.mockRestore();
         releaseSwarmRun("d");
         releaseSwarmRun("g");
-        clearActiveEmbeddedRun("a-session", handleA, aKey);
-        clearActiveEmbeddedRun("d-session", handleD, dKey);
+        await detachActiveEmbeddedRun("a-session", handleA, aKey);
+        await detachActiveEmbeddedRun("d-session", handleD, dKey);
       }
       expectControlIdle();
     }

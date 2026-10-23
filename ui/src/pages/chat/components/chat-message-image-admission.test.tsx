@@ -480,8 +480,12 @@ it.each([
   unmount();
   await Promise.resolve();
   expect(loaded.parentNode).toBeNull();
-  expect(removeListener).toHaveBeenCalledWith("load", expect.any(Function));
-  expect(removeListener).toHaveBeenCalledWith("error", expect.any(Function));
+  expect(removeListener.mock.calls.map(([type, listener]) => [type, listener])).toEqual(
+    expect.arrayContaining([
+      ["load", expect.any(Function)],
+      ["error", expect.any(Function)],
+    ]),
+  );
   if (change === "expiry") {
     await vi.advanceTimersByTimeAsync(300_001);
   } else if (change === "connectionEpoch") {

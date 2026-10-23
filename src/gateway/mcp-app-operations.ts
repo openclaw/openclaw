@@ -6,8 +6,7 @@ import {
   ListResourceTemplatesRequestSchema,
   ListToolsRequestSchema,
   ReadResourceRequestSchema,
-  type Tool,
-} from "@modelcontextprotocol/sdk/types.js";
+} from "@modelcontextprotocol/core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import { peekSessionMcpRuntime } from "../agents/agent-bundle-mcp-manager-api.js";
@@ -77,7 +76,7 @@ function isAppCallableTool(
   );
 }
 
-function isAppCallableListedTool(tool: Tool): boolean {
+function isAppCallableListedTool(tool: { _meta?: Record<string, unknown> }): boolean {
   const visibility = asOptionalRecord(tool._meta?.ui)?.visibility;
   return !Array.isArray(visibility) || visibility.includes("app");
 }
@@ -88,6 +87,15 @@ export async function requireMcpAppInteraction(view: McpAppViewLease): Promise<v
   }
   if (view.authorizeAppInteraction && !(await view.authorizeAppInteraction())) {
     throw new Error("MCP App widget grant is no longer active");
+  }
+}
+
+export async function supportsMcpAppInteraction(view: McpAppViewLease): Promise<boolean> {
+  try {
+    await requireMcpAppInteraction(view);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -442,7 +450,6 @@ export async function executeMcpAppOperation(
         if (!runtime.sessionKey) {
           throw new Error("MCP App session is unavailable");
         }
-        assertCurrent();
         return await callMcpAppToolWithElicitation({
           options: request.options,
           origin: {

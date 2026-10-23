@@ -3,32 +3,6 @@ import { clearActiveProgressLine } from "./progress-line.js";
 const RESET_SEQUENCE =
   "\x1b[0m\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[<u\x1b[>4;0m";
 
-type RestoreTerminalStateOptions = {
-  /**
-   * Resumes paused stdin after restoring terminal mode.
-   * Keep this off when the process should exit immediately after cleanup.
-   *
-   * Default: false (safer for "cleanup then exit" call sites).
-   */
-  resumeStdin?: boolean;
-
-  /**
-   * Alias for resumeStdin. Prefer this name to make the behavior explicit.
-   *
-   * Default: false.
-   */
-  resumeStdinIfPaused?: boolean;
-
-  /**
-   * Stream to write the ANSI reset sequence to.
-   * Callers that emit structured data to stdout should route the reset to
-   * stderr so parseable output stays clean.
-   *
-   * Default: process.stdout.
-   */
-  resetStream?: NodeJS.WriteStream;
-};
-
 function reportRestoreFailure(scope: string, err: unknown, reason?: string): void {
   const suffix = reason ? ` (${reason})` : "";
   const message = `[terminal] restore ${scope} failed${suffix}: ${String(err)}`;
@@ -41,7 +15,31 @@ function reportRestoreFailure(scope: string, err: unknown, reason?: string): voi
 
 export function restoreTerminalState(
   reason?: string,
-  options: RestoreTerminalStateOptions = {},
+  options: {
+    /**
+     * Resumes paused stdin after restoring terminal mode.
+     * Keep this off when the process should exit immediately after cleanup.
+     *
+     * Default: false (safer for "cleanup then exit" call sites).
+     */
+    resumeStdin?: boolean;
+
+    /**
+     * Alias for resumeStdin. Prefer this name to make the behavior explicit.
+     *
+     * Default: false.
+     */
+    resumeStdinIfPaused?: boolean;
+
+    /**
+     * Stream to write the ANSI reset sequence to.
+     * Callers that emit structured data to stdout should route the reset to
+     * stderr so parseable output stays clean.
+     *
+     * Default: process.stdout.
+     */
+    resetStream?: NodeJS.WriteStream;
+  } = {},
 ): void {
   // Docker TTY note: resuming stdin can keep a container process alive even
   // after the wizard is "done" (stdin_open: true), making installers appear hung.

@@ -75,8 +75,7 @@ instructions can be inherited by child agents. Managed relay connections retain
 parent-only personal-profile delivery. See [Codex workspace bootstrap files](/plugins/codex-harness-reference/workspace-bootstrap-files#skills-persona-and-memory-without-a-managed-relay).
 
 Files are refreshed on later turns. Reassigning the session changes personal
-context on the next new turn, not the running turn. Another participant can steer
-under the normal permission and queue rules without switching personal context.
+context on the next new turn, not the running turn. Another participant's message waits for a separate turn under their own permissions without switching the session's personal-context selection.
 Queued and collected messages from multiple people keep the session's selection;
 the current sender does not select a different file. Profile merges select the
 surviving primary ID; move the preferences to that directory yourself. OpenClaw
@@ -113,15 +112,30 @@ conversation history. Do not store secrets in these files.
 
 Your authenticated Gateway profile is separate from `USER.md`. Open **Settings → Profile → Identity** to set the display name and avatar shown to other people on the Gateway. A custom OpenClaw avatar remains authoritative when a GitHub account is verified. The Profile header follows your live user identity, including names cleared from another browser, even when several agents are configured. Unidentified connections retain the default-agent preview.
 
-Authenticated users can read their own profile with `operator.read`, `operator.sessions.read`, or their implied write/admin scopes, even when the shared People roster is unavailable. Refresh and reconnect read the current authenticated profile. Editing the name, avatar, or credit preference still requires `operator.write`; session access does not grant profile editing or access to other profiles. Profile image downloads retain their separate read permission and may display initials for session-only access.
+Authenticated users can read their own profile with `operator.read`, `operator.sessions.read`, or their implied write/admin scopes, even when the shared People roster is unavailable. Refresh and reconnect read the current authenticated profile. Those same grants allow members to edit their own display name, avatar, and Git co-author credit preference without general write or administrator access. Session-only users can download their own avatar, but cannot use this access to browse other people’s profile images or the People roster. The server checks the authenticated profile on every edit; selecting another profile ID does not grant access. Server-wide upload restrictions still apply.
+
+### Member and administrator controls
+
+| Members control for themselves                                   | Administrator or verified-provider controls                                |
+| ---------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Display name and avatar                                          | Editing another person’s profile                                           |
+| Git co-author credit consent and personal appearance preferences | Roles, permission ceilings, invitations, and server-wide settings          |
+| Personal instructions, where available                           | Shared agent instructions and defaults                                     |
+| Their own GitHub connection through verified sign-in             | Verified identity claims, email/channel identity links, and profile merges |
+
+A display name or avatar is presentation, not proof of identity or authority.
+Verified GitHub identity remains read-only; changing a personal connection does
+not change that identity or grant permissions. Personal model-account management
+keeps its existing write requirements; this change does not expand access to
+credentials, shared provider accounts, or billing.
 
 A single-user Gateway gives unidentified operator connections one durable local owner profile, shared across devices and tabs, including device-token reconnects. The Gateway host account's full name fills an unset display name. A saved name is never overwritten. If no full name is available, the sidebar and Profile header show **Owner** until you set a name. Login names are not used. The owner profile has no email and does not change permissions or identity scopes. It cannot be merged with a personal profile or assigned an operator role. Sign in with a personal identity for those operations. If a build older than v2026.9.2 merged the owner profile into a person, connections stay unidentified and log a repair hint. Run `openclaw doctor --fix`, then reconnect to restore the owner identity. The person keeps their emails, role, and GitHub identities.
 
-When `gateway.roles` is configured, unidentified operators receive the owner profile only with token or password authentication. Other connections need a profile-backed sign-in for personal identity. Node, ephemeral, and synthetic connections do not receive an owner profile.
+When `gateway.roles` is configured, unidentified operators receive the owner profile only with token or password authentication. Other connections need a profile-backed sign-in for personal identity. Authenticated ephemeral operator connections, including CLI clients, retain the same durable owner even when omitted from presence. Node and synthetic connections do not receive an owner profile.
 
 The Gateway prepares its shared owner profile during startup, before accepting requests, when its authentication configuration permits owner attribution. Connections reuse the admitted profile and receive committed name changes without rereading storage. If profile preparation fails, startup logs a warning and connection admission retries it.
 
-The Control UI labels this presence **Shared owner** in the People sidebar, activity card, session viewers, and person groups. The card explains that it is not a personal sign-in. Its connection and activity details remain visible. Your saved name on the Profile page is unchanged.
+The Control UI shows the saved Profile name with a **Shared owner** qualifier in the People sidebar, activity card, session viewers, and person groups (for example, **Alex · Shared owner**). Without a saved name, it shows **Shared owner**. The card explains that it is not a personal sign-in. Its connection and activity details remain visible. Editing the name changes presentation, not authentication or permissions.
 
 On macOS, an owner without a saved avatar uses the Gateway host account's user picture. Uploading an avatar in **Settings → Profile → Identity** overrides that default. The picture stays a local, process-cached default rather than a saved profile upload. Restart the Gateway after changing it in macOS. This applies only to the shared owner profile, not to people signed in with their own identities. Unavailable pictures fall back to initials.
 
@@ -155,11 +169,11 @@ When your authenticated profile has prompted a session before an agent run, comm
 
 Delegated tasks retain a separate snapshot of the originating session's human contributor profile IDs before the child starts. Nested delegations carry that snapshot forward, up to 32 unique profiles, retaining inherited contributors before adding direct source participants. This does not create child participation, increase prompt counts, or grant access. People who join the source later are not added to an existing child's snapshot. At use time, OpenClaw combines inherited credit with direct child contributions and checks current verified GitHub identities and credit preferences. Each GitHub account is credited once; direct contributors retain their usual ordering, followed by inherited contributors in snapshot order. Ordinary sidebar parent links do not transfer credit.
 
-Credit follows session participation, including earlier work in the same source conversation. Use a separate source conversation when work needs a distinct contributor set. Verified channel-to-profile linking and attribution to individual tasks are separate capabilities.
+Credit follows session participation, including earlier work in the same task conversation. The canonical main session is an exception: it can route unrelated DMs, groups, and threads, so its lifetime participant roster is not a task contributor set. Main-session requests use only the current host-verified requester for automatic credit and child snapshots. A linked channel requester does not need an administrative role to receive credit. If no verified requester is available, OpenClaw withholds inferred main-roster credit rather than attributing unrelated people. Ordinary collaborative task sessions and nested delegations retain their existing contributor snapshots. Use a separate task session to accumulate a distinct collaborative contributor set.
 
 The snapshot survives session resets and disappears with the child session. Incognito sessions do not retain it or publish credit. Existing delegated sessions without a snapshot are not automatically backfilled. This uses optional session metadata without a database-schema migration; older versions do not use it and can discard it when resetting a session.
 
-When a session has someone to credit, its system prompt lists the exact trailers once. It tells the agent to add them to commits it makes from the session. The Codex runtime receives the same block in its developer instructions. Nothing is added when there is nobody to credit, and incognito sessions never carry credit. The Gateway publication broker applies the same credit directly in its generated commits and pull requests. When the Gateway exposes an external HTTPS session URL, pull requests end with a link to that exact team session. The trailers are not exported through the process or shell environment. Direct Git commands remain ordinary shell execution. OpenClaw does not replace `git` or install repository hooks. The agent following that system-prompt instruction is therefore the enforcement boundary.
+When a task session has someone to credit, its system prompt lists the exact trailers once. It tells the agent to add them to commits it makes from the session. The Codex runtime receives the same block in its developer instructions. Main keeps stable, identity-free guidance instead; the current request’s verified trailers appear in per-turn runtime context and travel separately to child creation. Changing the requester does not rebuild main’s system or developer instructions. Nothing is added when there is nobody to credit, and incognito sessions never carry credit. For task sessions, the Gateway publication broker applies the same credit directly in its generated commits and pull requests. Direct publication from canonical main has no task contributor snapshot and adds no automatic human credit; publishing from the delegated task session preserves its verified contributor snapshot. When the Gateway exposes an external HTTPS session URL, pull requests end with a link to that exact team session. The trailers are not exported through the process or shell environment. Direct Git commands remain ordinary shell execution. OpenClaw does not replace `git` or install repository hooks. The agent following that system-prompt instruction is therefore the enforcement boundary.
 
 Turning **Git co-author credit** off stops attribution for future runs. Gateway-managed publication also checks contributor identity and consent before each pending commit, push, or pull request write. If eligibility changes during publication, it stops before the next write and asks you to review recorded effects before requesting publication again. It does not rewrite commits that already contain the public trailer.
 
@@ -277,8 +291,13 @@ When a newly spawned visible session starts agent-owned, the agent can assign it
 to the trusted requester profile and verify the stored owner with `sessions_list`.
 This changes responsibility, not creator attribution or access. Unlinked or
 asserted senders receive no requester profile: link the verified sender first
-rather than guessing from a name or pasted ID. Unlinking takes effect on
-subsequent turns without a restart.
+rather than guessing from a name or pasted ID. An owner-authorized agent can use
+`sessions` with `action: "owner_profiles"` and a verified `githubAccountIds` selection
+to resolve an existing canonical profile without visitor-management access. This
+lookup does not prove or create a Discord or Slack identity link. An unresolved
+assignee is a responsibility-metadata issue, not a permission denial: report it
+separately and continue independently authorized work in a prepared workspace.
+Unlinking takes effect on subsequent turns without a restart.
 
 ## GitHub connections
 
@@ -291,6 +310,8 @@ My GitHub requires an authenticated, durable Gateway profile, including the loca
 3. Check the connected account before using it. Personal connections use device authorization. The existing PAT alternative remains available for admin-managed shared connections.
 
 ### Publish with your account
+
+New publications create an open PR by default. Ask the agent to publish a draft to use `draft: true` on `github_publish`; omitting `draft` or setting it to `false` creates an open PR. This choice applies only when creating a PR. Publishing more changes to an existing PR preserves its current draft or open state.
 
 The account arrow beside **Publish PR** appears only when both shared and personal accounts are available. Its compact menu shows account names and the selected account; the effective shared account remains the default. With only a shared account, use **Publish PR** directly. With only **My GitHub**, the **Publish as @account** button explicitly selects that account and requests publication in one click; discovery alone never selects personal credentials. If the same account is connected through both routes, the menu labels them separately. Personal publication requires an idle session with a reconciled worktree or accepted repository checkpoint.
 

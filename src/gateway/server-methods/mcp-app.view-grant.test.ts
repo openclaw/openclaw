@@ -1,17 +1,11 @@
 import { randomUUID } from "node:crypto";
 import http from "node:http";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-  ReadResourceRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
-import { Type } from "typebox";
+import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
+import { Server } from "@modelcontextprotocol/server";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createSessionMcpRuntime } from "../../agents/agent-bundle-mcp-runtime.js";
-import type { McpToolCatalog, SessionMcpRuntime } from "../../agents/agent-bundle-mcp-types.js";
+import type { SessionMcpRuntime } from "../../agents/agent-bundle-mcp-types.js";
 import {
   fetchMcpAppView,
   getMcpAppViewLease,
@@ -47,6 +41,7 @@ import { SharedGatewaySessionGenerationState } from "../server-shared-auth-gener
 import { createTestRuntimeSecretsActivator } from "../server-startup-config.test-support.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
 import { mcpAppHandlers } from "./mcp-app.js";
+import { appCatalog } from "./mcp-app.test-support.js";
 import { createPluginApprovalHandlers } from "./plugin-approval.js";
 import { expectRpcError } from "./rpc-response.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -124,27 +119,15 @@ const persistApproval = approvalStore.resolveOperatorApproval;
 const resolveApproval = vi.spyOn(approvalStore, "resolveOperatorApproval");
 
 function createRuntime() {
-  const catalog: McpToolCatalog = {
-    version: 1,
-    generatedAt: 1,
-    servers: {
-      parts: {
-        serverName: "parts",
-        launchSummary: "parts",
-        toolCount: 2,
-        pluginId: "parts-plugin",
-      },
-    },
-    tools: ["search", "details"].map((toolName) => ({
-      serverName,
-      safeServerName: serverName,
+  const catalog = appCatalog(
+    serverName,
+    ["search", "details"].map((toolName) => ({
       toolName,
-      inputSchema: Type.Object({}),
-      fallbackDescription: toolName,
-      uiVisibility: ["app"],
+      uiVisibility: ["app" as const],
       codexAnnotations: { readOnlyHint: true },
     })),
-  };
+    { pluginId: "parts-plugin" },
+  );
   return {
     sessionId: "session-parts",
     sessionKey,
@@ -529,7 +512,7 @@ it("revalidates a cached App grant after HTTP transport preparation before writi
   );
   let toolCalls = 0;
   let posts = 0;
-  mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
+  mcp.setRequestHandler("tools/list", async () => ({
     tools: [
       {
         name: "search",
@@ -538,14 +521,14 @@ it("revalidates a cached App grant after HTTP transport preparation before writi
       },
     ],
   }));
-  mcp.setRequestHandler(ReadResourceRequestSchema, async ({ params }) => ({
+  mcp.setRequestHandler("resources/read", async ({ params }) => ({
     contents: [{ uri: params.uri, ...resourceContent }],
   }));
-  mcp.setRequestHandler(CallToolRequestSchema, async () => {
+  mcp.setRequestHandler("tools/call", async () => {
     toolCalls += 1;
     return toolResult("search");
   });
-  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: randomUUID });
+  const transport = new NodeStreamableHTTPServerTransport({ sessionIdGenerator: randomUUID });
   await mcp.connect(transport);
   const listener = await reserveTestPortListener({
     offsets: [0],

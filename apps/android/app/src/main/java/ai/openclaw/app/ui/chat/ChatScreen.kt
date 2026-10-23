@@ -2308,6 +2308,7 @@ internal fun ChatBubble(
           imagePage = currentImagePage,
           resolverReady = inlineWidgetResolverReady,
           loadImage = loadImageArtifact,
+          loadMedia = loadMediaArtifact,
         )
       } else {
         ChatMessageTextSurface(isUser) {

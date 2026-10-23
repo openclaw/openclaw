@@ -99,7 +99,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.21.0"
+  NODE_VERSION: "24.22.1"
 
 jobs:
   # PLEASE DON'T ADD LONG-RUNNING OR FLAKY CHECKS TO THE npm RELEASE PATH.
@@ -363,6 +363,9 @@ jobs:
     if: ${{ always() && !cancelled() && !inputs.preflight_only && needs.validate_publish_request.result == 'success' && (needs.approve_openclaw_npm_release.result == 'success' || (needs.approve_openclaw_npm_release.result == 'skipped' && needs.validate_publish_request.outputs.parent_approval == 'receipt')) }}
     runs-on: ubuntu-latest
     environment: npm-publish
+    outputs:
+      openclaw_publication: ${{ steps.publish.outputs.openclaw_publication }}
+      gateway_protocol_publication: ${{ steps.publish.outputs.gateway_protocol_publication }}
     permissions:
       actions: read
       attestations: read
@@ -966,6 +969,19 @@ jobs:
           if [[ -n "${publish_target}" ]]; then
             publish_target="./${publish_target}"
           fi
+          record_publication() {
+            case "$1" in
+              openclaw|@openclaw/gateway-protocol) ;;
+              *) return 0 ;;
+            esac
+            if ! node trusted-workflow/scripts/gateway-publication-notify.mjs \
+              record "$1" "$2" "$(git rev-parse HEAD)"; then
+              echo "::warning::Could not record the gateway publication notification; npm publication is unchanged. Windows nightly reconciliation remains active."
+              if ! echo "- Gateway publication notification could not be recorded; inspect the Publish step. Do not republish npm to retry a notification." >> "$GITHUB_STEP_SUMMARY"; then
+                echo "::warning::Could not write the notification warning summary; inspect the Publish step log. npm publication is unchanged."
+              fi
+            fi
+          }
           publish_if_missing() {
             local package_name="$1"
             local tarball_path="$2"
@@ -980,8 +996,52 @@ jobs:
               return 0
             fi
             bash trusted-workflow/scripts/openclaw-npm-publish.sh --publish "./${tarball_path}"
+            record_publication "$package_name" "./${tarball_path}"
           }
           while IFS=$'\t' read -r package_name tarball_name; do
             publish_if_missing "$package_name" "preflight-tarball/$tarball_name"
           done < <(jq -r '(.corePackageTarballs // [])[] | [.packageName, .tarballName] | @tsv' preflight-tarball/preflight-manifest.json)
           bash trusted-workflow/scripts/openclaw-npm-publish.sh --publish "${publish_target}"
+          record_publication openclaw "${publish_target}"
+
+  notify_gateway_publication:
+    name: Notify Windows of published Gateway packages
+    needs: publish_openclaw_npm
+    if: ${{ always() && !cancelled() && github.repository == 'openclaw/openclaw' && github.event_name == 'workflow_dispatch' && !inputs.preflight_only && (needs.publish_openclaw_npm.outputs.openclaw_publication != '' || needs.publish_openclaw_npm.outputs.gateway_protocol_publication != '') }}
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout trusted notification tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: scripts
+      - name: Setup trusted Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Create Windows publication notification token
+        id: notification_token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          client-id: Iv23liOECG0slfuhz093
+          private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
+          owner: openclaw
+          repositories: openclaw-windows-node
+          permission-contents: write
+      - name: Notify exact published packages
+        env:
+          GATEWAY_PUBLICATION_TOKEN: ${{ steps.notification_token.outputs.token }}
+          OPENCLAW_PUBLICATION: ${{ needs.publish_openclaw_npm.outputs.openclaw_publication }}
+          GATEWAY_PROTOCOL_PUBLICATION: ${{ needs.publish_openclaw_npm.outputs.gateway_protocol_publication }}
+        run: node scripts/gateway-publication-notify.mjs notify
+      - name: Record notification failure
+        if: ${{ failure() }}
+        run: |
+          echo "::warning::Gateway publication notification failed or is unconfirmed. npm publication remains complete. Inspect this job and Windows receiver runs; nightly reconciliation remains active."
+          echo "- Gateway publication notification: failed or unconfirmed. Do not republish npm or roll back a published version to retry notification. Check the existing ClawSweeper App installation and exact registry metadata." >> "$GITHUB_STEP_SUMMARY"

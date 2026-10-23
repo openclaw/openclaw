@@ -179,6 +179,11 @@
       "class": "default-runtime-initially",
       "risk": ["http-server", "large-transitive-cone"]
     },
+    "fast-uri": {
+      "owner": "core:mcp",
+      "class": "core-runtime",
+      "risk": ["schema-validation"]
+    },
     "file-type": {
       "owner": "core:media-admission",
       "class": "core-runtime",

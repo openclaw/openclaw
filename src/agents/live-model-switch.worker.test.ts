@@ -5,6 +5,7 @@ import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/sessio
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { withSessionActor } from "../config/sessions/session-actor-scope.js";
 import { buildRestartRecoveryExpectedState } from "../config/sessions/session-transcript-turn-state.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
@@ -22,81 +23,99 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("live model switch worker persistence", () => {
   const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-model-switch-worker-");
+  const selection = { provider: "openai", model: "gpt-5.4" };
+  const initialSelection = {
+    sessionId: "model-switch",
+    updatedAt: 1,
+    liveModelSwitchPending: true,
+    providerOverride: selection.provider,
+    modelOverride: selection.model,
+  };
+  function fixture() {
+    const storePath = path.join(sessionDirs.make(), "sessions.json");
+    return {
+      scope: { storePath, sessionKey: "agent:main:model-switch" },
+      cfg: { session: { store: storePath } },
+      defaultProvider: selection.provider,
+      defaultModel: selection.model,
+      providerUsed: selection.provider,
+      modelUsed: selection.model,
+    };
+  }
+
+  async function withoutHostSql(run: () => Promise<unknown>, forbidden: RegExp) {
+    const sql = observeHostDataSql();
+    try {
+      const result = await run();
+      expect(sql.queries.filter((query) => forbidden.test(query))).toEqual([]);
+      return result;
+    } finally {
+      sql.restore();
+    }
+  }
+
+  function completeSelection(
+    scope: { storePath: string; sessionKey: string },
+    commandId: string,
+    selectReducer: (entry: SessionEntry) => ReturnType<typeof prepareLiveModelSwitchAfterRun>,
+  ) {
+    const authority = { assertCurrent() {}, authorize() {} };
+    return withSessionActor(scope, { assertCurrent() {}, assertReadable() {} }, async (actor) => {
+      const snapshot = actor.snapshot(authority) ?? (await actor.read(authority));
+      const entry = snapshot.entry!;
+      const reducer = selectReducer(entry);
+      if (!reducer) {
+        return undefined;
+      }
+      const outcome = await actor.completeTurn(
+        {
+          commandId,
+          phaseId: "completion",
+          expected: snapshot.version,
+          bookkeeping: {
+            sessionId: entry.sessionId,
+            lifecycleRevision: entry.lifecycleRevision ?? null,
+            writerRunId: entry.activeWriterRunId,
+            expectedState: buildRestartRecoveryExpectedState(entry),
+          },
+          reducers: [reducer],
+        },
+        authority,
+      );
+      expect(outcome.kind).toBe("committed");
+      return outcome;
+    });
+  }
 
   it.each(["clear", "complete"] as const)(
     "%s consumes only the applied selection without host session SQL",
     async (operation) => {
-      const storePath = path.join(sessionDirs.make(), "sessions.json");
-      const scope = { storePath, sessionKey: "agent:main:model-switch" };
-      const cfg = { session: { store: storePath } };
-      const initial = {
-        sessionId: "model-switch",
-        updatedAt: 1,
-        label: "keep this label",
-        liveModelSwitchPending: true,
-        providerOverride: "openai",
-        modelOverride: "gpt-5.4",
-      };
+      const { scope, ...params } = fixture();
+      const initial = { ...initialSelection, label: "keep this label" };
       await replaceSessionEntry(scope, initial);
-      const authority = { assertCurrent() {}, authorize() {} };
       const apply = async () => {
         if (operation === "clear") {
           await clearLiveModelSwitchPending({
-            cfg,
-            sessionKey: scope.sessionKey,
+            ...params,
             agentId: "main",
-            defaultProvider: "openai",
-            defaultModel: "gpt-5.4",
-            expectedSelection: { provider: "openai", model: "gpt-5.4" },
+            sessionKey: scope.sessionKey,
+            expectedSelection: selection,
           });
           return;
         }
-        await withSessionActor(
-          scope,
-          { assertCurrent() {}, assertReadable() {} },
-          async (actor) => {
-            const snapshot = actor.snapshot(authority) ?? (await actor.read(authority));
-            const reducer = prepareLiveModelSwitchAfterRun({
-              cfg,
-              sessionKey: scope.sessionKey,
-              agentId: "main",
-              providerUsed: "openai",
-              modelUsed: "gpt-5.4",
-              entry: snapshot.entry!,
-            });
-            if (!reducer) {
-              return;
-            }
-            const outcome = await actor.completeTurn(
-              {
-                commandId: "complete-selection",
-                phaseId: "completion",
-                expected: snapshot.version,
-                bookkeeping: {
-                  sessionId: snapshot.entry!.sessionId,
-                  lifecycleRevision: snapshot.entry!.lifecycleRevision ?? null,
-                  writerRunId: snapshot.entry!.activeWriterRunId,
-                  expectedState: buildRestartRecoveryExpectedState(snapshot.entry!),
-                },
-                reducers: [reducer],
-              },
-              authority,
-            );
-            expect(outcome.kind).toBe("committed");
-          },
+        await completeSelection(scope, "complete-selection", (entry) =>
+          prepareLiveModelSwitchAfterRun({
+            ...params,
+            agentId: "main",
+            sessionKey: scope.sessionKey,
+            entry,
+          }),
         );
       };
-      const sql = observeHostDataSql();
-      try {
-        await apply();
-        expect(
-          sql.queries.filter((query) =>
-            /session_nodes|session_entry_snapshots|\b(?:BEGIN|COMMIT|ROLLBACK)\b/i.test(query),
-          ),
-        ).toEqual([]);
-      } finally {
-        sql.restore();
-      }
+      await withoutHostSql(
+        apply,
+        /session_nodes|session_entry_snapshots|\b(?:BEGIN|COMMIT|ROLLBACK)\b/i,
+      );
       expect(loadSessionEntry(scope)).toMatchObject({
         sessionId: initial.sessionId,
         label: initial.label,
@@ -131,57 +150,38 @@ describe("live model switch worker persistence", () => {
         liveModelSwitchPending: true,
         modelOverride: "gpt-5.5",
       });
-      const readSql = observeHostDataSql();
-      try {
-        expect(
-          await shouldSwitchToLiveModel({
-            ...scope,
-            cfg,
-            agentId: "main",
-            defaultProvider: "openai",
-            defaultModel: "gpt-5.4",
-            currentProvider: "openai",
-            currentModel: "gpt-5.4",
-          }),
-        ).toMatchObject({ provider: "openai", model: "gpt-5.5" });
-        expect(
-          readSql.queries.filter((query) =>
-            /session_nodes|session_entry_snapshots|session_participants|session_windows/i.test(
-              query,
-            ),
-          ),
-        ).toEqual([]);
-      } finally {
-        readSql.restore();
-      }
+      expect(
+        await withoutHostSql(
+          () =>
+            shouldSwitchToLiveModel({
+              ...scope,
+              ...params,
+              agentId: "main",
+              currentProvider: selection.provider,
+              currentModel: selection.model,
+            }),
+          /session_nodes|session_entry_snapshots|session_participants|session_windows/i,
+        ),
+      ).toMatchObject({ provider: "openai", model: "gpt-5.5" });
     },
   );
 
   it("keeps newer selections when a prepared terminal reducer reaches the actor", async () => {
-    const storePath = path.join(sessionDirs.make(), "sessions.json");
-    const scope = { storePath, sessionKey: "agent:main:model-switch" };
-    const cfg = { session: { store: storePath } };
+    const { scope, ...params } = fixture();
     const initial = {
-      sessionId: "model-switch",
-      updatedAt: 1,
-      liveModelSwitchPending: true,
-      providerOverride: "openai",
-      modelOverride: "gpt-5.4",
+      ...initialSelection,
       agentRuntimeOverride: "openclaw",
       authProfileOverride: "profile-a",
       authProfileOverrideSource: "user" as const,
     };
     const reducer = prepareLiveModelSwitchAfterRun({
-      cfg,
+      ...params,
       sessionKey: scope.sessionKey,
       entry: initial,
-      providerUsed: "openai",
-      modelUsed: "gpt-5.4",
     });
     if (!reducer) {
       throw new Error("Expected applied model selection");
     }
-    const authority = { assertCurrent() {}, authorize() {} };
     for (const newer of [
       { providerOverride: "other-provider" },
       { modelOverride: "gpt-5.5" },
@@ -190,27 +190,10 @@ describe("live model switch worker persistence", () => {
       { authProfileOverrideSource: "auto" as const },
     ]) {
       await replaceSessionEntry(scope, { ...initial, ...newer });
-      await withSessionActor(scope, { assertCurrent() {}, assertReadable() {} }, async (actor) => {
-        const snapshot = actor.snapshot(authority) ?? (await actor.read(authority));
-        const outcome = await actor.completeTurn(
-          {
-            commandId: "prepared-selection",
-            phaseId: "completion",
-            expected: snapshot.version,
-            bookkeeping: {
-              sessionId: snapshot.entry!.sessionId,
-              lifecycleRevision: snapshot.entry!.lifecycleRevision ?? null,
-              writerRunId: snapshot.entry!.activeWriterRunId,
-              expectedState: buildRestartRecoveryExpectedState(snapshot.entry!),
-            },
-            reducers: [reducer],
-          },
-          authority,
-        );
-        expect(outcome).toMatchObject({
-          kind: "committed",
-          receipt: { reducers: [{ kind: "live-model", changed: false }] },
-        });
+      const outcome = await completeSelection(scope, "prepared-selection", () => reducer);
+      expect(outcome).toMatchObject({
+        kind: "committed",
+        receipt: { reducers: [{ kind: "live-model", changed: false }] },
       });
       expect(loadSessionEntry(scope)).toMatchObject({ liveModelSwitchPending: true, ...newer });
     }

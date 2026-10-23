@@ -1,6 +1,7 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
+import { createMockGatewayService } from "../daemon/service.test-helpers.js";
 import {
   resolveStatusGatewayDiagnosticsSafe,
   resolveStatusGatewayHealthSafe,
@@ -13,8 +14,8 @@ const mocks = vi.hoisted(() => ({
   loadProviderUsageSummary: vi.fn(),
   runSecurityAudit: vi.fn(),
   callGateway: vi.fn(),
-  getDaemonStatusSummary: vi.fn(),
-  getNodeDaemonStatusSummary: vi.fn(),
+  resolveGatewayService: vi.fn(),
+  resolveNodeService: vi.fn(),
   resolveModelAuthLabelAsync: vi.fn(),
 }));
 
@@ -35,9 +36,17 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
 }));
 
-vi.mock("./status.daemon.js", () => ({
-  getDaemonStatusSummary: mocks.getDaemonStatusSummary,
-  getNodeDaemonStatusSummary: mocks.getNodeDaemonStatusSummary,
+vi.mock("../daemon/service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/service.js")>()),
+  resolveGatewayService: mocks.resolveGatewayService,
+}));
+vi.mock("../daemon/node-service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/node-service.js")>()),
+  resolveNodeService: mocks.resolveNodeService,
+}));
+vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/openclaw-root.js")>()),
+  resolveOpenClawPackageRoot: async () => null,
 }));
 
 function usageParams(runtime: "codex" | "openclaw" = "codex") {
@@ -92,8 +101,8 @@ describe("status-runtime-shared", () => {
     mocks.loadProviderUsageSummary.mockResolvedValue({ providers: [] });
     mocks.runSecurityAudit.mockResolvedValue({ summary: { critical: 0 }, findings: [] });
     mocks.callGateway.mockResolvedValue({ ok: true });
-    mocks.getDaemonStatusSummary.mockResolvedValue({ label: "LaunchAgent" });
-    mocks.getNodeDaemonStatusSummary.mockResolvedValue({ label: "node" });
+    mocks.resolveGatewayService.mockReturnValue(createMockGatewayService());
+    mocks.resolveNodeService.mockReturnValue(createMockGatewayService({ label: "node" }));
     mocks.resolveModelAuthLabelAsync.mockReturnValue(undefined);
   });
 
@@ -303,8 +312,8 @@ describe("status-runtime-shared", () => {
       usage: { providers: [] },
       health: { ok: true },
       lastHeartbeat: { ok: true },
-      gatewayService: { label: "LaunchAgent" },
-      nodeService: { label: "node" },
+      gatewayService: expect.objectContaining({ label: "LaunchAgent" }),
+      nodeService: expect.objectContaining({ label: "node" }),
     });
     expect(mocks.callGateway).toHaveBeenCalledWith({
       method: "health",
@@ -318,7 +327,6 @@ describe("status-runtime-shared", () => {
       deep: false,
       deepTimeoutMs: 1234,
       includeFilesystem: true,
-      includeChannelSecurity: true,
       loadPluginSecurityCollectors: false,
     });
   });

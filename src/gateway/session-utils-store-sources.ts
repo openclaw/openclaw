@@ -1,6 +1,5 @@
 import path from "node:path";
 import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
-import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import type { SessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
 import {
   captureSessionStoreReadCandidate,
@@ -14,11 +13,9 @@ import {
 } from "../config/sessions/targets.js";
 import { captureSessionTranscriptStorageEnvironment } from "../config/sessions/transcript-target-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { observeOwnedDirectory } from "../infra/owned-directory-observation.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import {
-  listOpenClawRegisteredAgentDatabases,
   prepareOpenClawAgentDatabaseRegistrySnapshotRead,
   readOpenClawAgentDatabaseRegistryToken,
 } from "../state/openclaw-agent-db-registry-listing.js";
@@ -27,14 +24,8 @@ import {
   openClawStateDatabaseCache,
   registerOpenClawStateDatabaseAsyncResource,
 } from "../state/openclaw-state-db-cache.js";
-import {
-  resolveGatewaySessionStoreReadSources,
-  sessionStoreRoutingConfig,
-} from "./session-utils-store-candidates.js";
-import type {
-  GatewaySessionStoreReadSources,
-  GatewaySessionStoreSourceRequest,
-} from "./session-utils-store.types.js";
+import { sessionStoreRoutingConfig } from "./session-utils-store-candidates.js";
+import type { GatewaySessionStoreSourceRequest } from "./session-utils-store.types.js";
 
 type SessionStoreRouting = GatewaySessionStoreSourceRequest["routing"];
 
@@ -50,56 +41,20 @@ function storeChanged(): Error {
   return new Error("Session store changed while preparing its metadata. Retry the request.");
 }
 
-/** Bind candidate addresses once; registry metadata uses its existing invalidation owner. */
-export function prepareGatewaySessionStoreReadSources(params: {
+type SourcePreparationParams = {
   cfg: OpenClawConfig;
   currentSource: SessionEntryReadSource;
   env: NodeJS.ProcessEnv;
   registryPath: string;
-}): { sources: GatewaySessionStoreReadSources; assertCurrent: () => void } {
-  const registryOptions = {
-    env: cloneEnvWithPlatformSemantics(params.env),
-    path: params.registryPath,
-    includeIncompatibleSchemaVersions: true,
-  };
-  let discoveryIsCurrent = () => true;
-  const sources = withAgentRosterFactsBatch(params.cfg, () => {
-    let registered: ReturnType<typeof listOpenClawRegisteredAgentDatabases>;
-    try {
-      registered = listOpenClawRegisteredAgentDatabases(registryOptions);
-    } catch {
-      return {};
-    }
-    const resolved = resolveGatewaySessionStoreReadSources({
-      routing: captureSessionStoreRouting(params.cfg),
-      currentSource: params.currentSource,
-      env: params.env,
-      registeredDatabases: registered,
-    });
-    discoveryIsCurrent = resolved.isCurrent;
-    return resolved.sources;
-  });
-  return {
-    sources,
-    assertCurrent() {
-      if (!discoveryIsCurrent()) {
-        throw storeChanged();
-      }
-    },
-  };
-}
-
-type SourcePreparation = {
-  request: GatewaySessionStoreSourceRequest | undefined;
-  assertCurrent: () => void;
 };
+
 type SourceMemo = {
   registry: symbol;
   registryIdentity: string | undefined;
   current: boolean;
   observations: Map<string, { close(): void }>;
-  /** Superseded generation whose watches stay until this one observes the same paths. */
-  replaced?: SourceMemo;
+  dirty?: boolean;
+  refreshing?: boolean;
   pathsCurrent?: () => boolean;
   observedThisTurn?: boolean;
   prepared: Promise<GatewaySessionStoreSourceRequest | undefined>;
@@ -121,16 +76,12 @@ function retireSourcePreparation(key: string, memo: SourceMemo): void {
     observation.close();
   }
   memo.observations.clear();
-  if (memo.replaced) {
-    retireSourcePreparation(key, memo.replaced);
-    memo.replaced = undefined;
-  }
   if (sourcePreparations.get(key) === memo) {
     sourcePreparations.delete(key);
   }
 }
 
-function observeSourcePath(memo: SourceMemo, pathname: string): void {
+function observeSourcePath(memo: SourceMemo, pathname: string, used: Set<string>): void {
   if (!memo.current) {
     return;
   }
@@ -142,124 +93,111 @@ function observeSourcePath(memo: SourceMemo, pathname: string): void {
     }
     const name = path.basename(child);
     const observationKey = JSON.stringify([directory, name]);
+    used.add(observationKey);
     if (!memo.observations.has(observationKey)) {
       memo.observations.set(
         observationKey,
-        observeOwnedDirectory(
-          directory,
-          (filename) => {
-            if (!memo.current || memo.observedThisTurn) {
-              return;
-            }
-            if (
-              filename === undefined ||
-              (process.platform === "win32"
-                ? filename.toLowerCase() === name.toLowerCase()
-                : filename === name)
-            ) {
-              // One fallback sweep can notify every ancestor of the same source.
-              memo.observedThisTurn = true;
-              queueMicrotask(() => {
-                memo.observedThisTurn = false;
-              });
-              // Invalidate only; the next preparation inherits these watches.
-              try {
-                if (memo.pathsCurrent && !memo.pathsCurrent()) {
-                  memo.current = false;
-                }
-              } catch {
-                memo.current = false;
+        observeOwnedDirectory(directory, (filename) => {
+          if (!memo.current || memo.observedThisTurn) {
+            return;
+          }
+          if (
+            filename === undefined ||
+            (process.platform === "win32"
+              ? filename.toLowerCase() === name.toLowerCase()
+              : filename === name)
+          ) {
+            // One fallback sweep can notify every ancestor of the same source.
+            memo.observedThisTurn = true;
+            queueMicrotask(() => {
+              memo.observedThisTurn = false;
+            });
+            // The next read refreshes facts without retiring shared watches.
+            try {
+              if (memo.pathsCurrent && !memo.pathsCurrent()) {
+                memo.dirty = true;
               }
+            } catch {
+              memo.dirty = true;
             }
-          },
-          { recoveryIntervalMs: 30_000 },
-        ),
+          }
+        }),
       );
     }
     child = directory;
   }
 }
 
-/** Retain discovery facts; registry receipts and directory observations revoke their generation. */
+/** Retain discovery facts and watches; ordinary reads refresh invalidated facts in place. */
 export async function prepareGatewaySessionStoreReadSourcesAsync(
-  params: Parameters<typeof prepareGatewaySessionStoreReadSources>[0],
-  signal?: AbortSignal,
-): Promise<SourcePreparation> {
-  signal?.throwIfAborted();
+  params: SourcePreparationParams,
+): Promise<{ request: GatewaySessionStoreSourceRequest | undefined }> {
   const routing = captureSessionStoreRouting(params.cfg);
   const env = captureSessionTranscriptStorageEnvironment(params.env);
   const registryOptions = { env, path: path.resolve(params.registryPath) };
   const registry = readOpenClawAgentDatabaseRegistryToken(registryOptions);
   const key = JSON.stringify([routing, env, params.currentSource, registryOptions.path]);
   let memo = sourcePreparations.get(key);
-  let replaced: SourceMemo | undefined;
-  if (memo && (!memo.current || memo.registry !== registry)) {
-    // Closing a native directory watch can block the main thread for seconds on
-    // macOS. Keep shared watches until the replacement observes the same paths.
-    replaced = memo;
-    replaced.current = false;
-    memo = undefined;
-  }
   if (!memo) {
-    const created: SourceMemo = {
+    memo = {
       registry,
       registryIdentity: openClawStateDatabaseCache.getKnownOpenClawStateDatabaseIdentity(
         registryOptions.path,
       )?.key,
       current: true,
       observations: new Map(),
-      replaced,
+      dirty: true,
       prepared: Promise.resolve(undefined),
     };
-    memo = created;
-    sourcePreparations.set(key, created);
-    created.prepared = prepareSourceRequest(
+    sourcePreparations.set(key, memo);
+  }
+  // One refresh owns the used-watch set; publications during it share its outcome.
+  if (!memo.refreshing && (memo.dirty || memo.registry !== registry)) {
+    const selected = memo;
+    const used = new Set<string>();
+    selected.refreshing = true;
+    selected.dirty = false;
+    selected.registry = registry;
+    selected.prepared = prepareSourceRequest(
       { ...params, registryPath: registryOptions.path },
       routing,
       env,
-      created,
-      (pathname) => observeSourcePath(created, pathname),
-    ).catch((error: unknown) => {
-      retireSourcePreparation(key, created);
-      throw error;
-    });
-    if (replaced) {
-      const releaseReplaced = () => {
-        if (created.replaced === replaced) {
-          created.replaced = undefined;
-          retireSourcePreparation(key, replaced);
-        }
-      };
-      void created.prepared.then(releaseReplaced, releaseReplaced);
-    }
+      selected,
+      (pathname) => observeSourcePath(selected, pathname, used),
+    )
+      .then(
+        (request) => {
+          // Reuse common watches before dropping paths absent from the refreshed roster.
+          for (const [observationKey, observation] of selected.observations) {
+            if (!used.has(observationKey)) {
+              observation.close();
+              selected.observations.delete(observationKey);
+            }
+          }
+          return request;
+        },
+        (error: unknown) => {
+          retireSourcePreparation(key, selected);
+          throw error;
+        },
+      )
+      .finally(() => {
+        selected.refreshing = false;
+      });
     while (sourcePreparations.size > 128) {
       const [oldestKey, oldest] = sourcePreparations.entries().next().value!;
       retireSourcePreparation(oldestKey, oldest);
     }
   }
-  const request = await racePromiseWithAbortSignal(
-    memo.prepared,
-    signal,
-    (aborted) => aborted.reason,
-  );
-  signal?.throwIfAborted();
-  const captured = memo;
-  const assertCurrent = () => {
-    if (
-      !captured.current ||
-      captured.registry !== readOpenClawAgentDatabaseRegistryToken(registryOptions)
-    ) {
-      // The next preparation replaces this generation and inherits its watches.
-      captured.current = false;
-      throw storeChanged();
-    }
-  };
-  assertCurrent();
-  return { request: request && structuredClone(request), assertCurrent };
+  const request = await memo.prepared;
+  if (!memo.current) {
+    throw storeChanged();
+  }
+  return { request };
 }
 
 async function prepareSourceRequest(
-  params: Parameters<typeof prepareGatewaySessionStoreReadSources>[0],
+  params: SourcePreparationParams,
   routing: SessionStoreRouting,
   env: NodeJS.ProcessEnv,
   memo: SourceMemo,
@@ -274,7 +212,7 @@ async function prepareSourceRequest(
     routing.agentIds,
     env,
   );
-  const currentSource = { ...params.currentSource };
+  const { currentSource } = params;
   paths(currentSource.path, currentSource.path);
   observe(currentSource.path);
   const candidates = new Map<string, SessionStoreReadCandidate>();

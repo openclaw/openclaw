@@ -1,12 +1,13 @@
 import crypto from "node:crypto";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { racePromiseWithAbortSignal } from "@openclaw/retry";
-import type { invokeNodeClaudeCliRun } from "../../gateway/node-agent-cli-runtime.js";
+import { invokeNodeClaudeCliRun } from "../../gateway/node-agent-cli-runtime.js";
 import { prepareNodeClaudeSkillRuntime } from "../../gateway/node-claude-skill-runtime.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import type { ExecAsk, ExecSecurity, SystemRunApprovalPlan } from "../../infra/exec-approvals.js";
 import type { RunExit } from "../../process/supervisor/types.js";
 import { runWithAgentToolSourceExecutionScope } from "../agent-tool-source-execution-guard.js";
-import type {
+import {
   registerExecApprovalRequestForHostOrThrow,
   resolveRegisteredExecApprovalDecision,
 } from "../bash-tools.exec-approval-request.js";
@@ -65,10 +66,7 @@ function parseNodeClaudePayload(result: {
   payload?: unknown;
   payloadJSON?: string | null;
 }): Record<string, unknown> | null {
-  const value = result.payloadJSON ? (JSON.parse(result.payloadJSON) as unknown) : result.payload;
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
+  return asNullableRecord(result.payloadJSON ? JSON.parse(result.payloadJSON) : result.payload);
 }
 
 function parseNodeClaudeResultPayload(record: Record<string, unknown> | null): {
@@ -131,12 +129,6 @@ export function createCliAbortError(): Error {
   return createAbortError("CLI run aborted");
 }
 
-type ExecuteNodeClaudeRunDeps = {
-  invokeNodeClaudeCliRun: typeof invokeNodeClaudeCliRun;
-  registerExecApprovalRequestForHostOrThrow: typeof registerExecApprovalRequestForHostOrThrow;
-  resolveRegisteredExecApprovalDecision: typeof resolveRegisteredExecApprovalDecision;
-};
-
 export async function executeNodeClaudeRun(params: {
   context: PreparedCliRunContext;
   nodePlacement: NodeClaudePlacement;
@@ -148,7 +140,6 @@ export async function executeNodeClaudeRun(params: {
   noOutputTimeoutMs: number;
   consumeStdout: (chunk: string) => void;
   consumeStderr: (chunk: string) => void;
-  deps: ExecuteNodeClaudeRunDeps;
 }): Promise<{
   result: RunExit;
   nodeRunAbortSignal: AbortSignal;
@@ -197,7 +188,7 @@ export async function executeNodeClaudeRun(params: {
       }
       assertCurrent();
       return await runWithAgentToolSourceExecutionScope(assertCurrent, () =>
-        params.deps.invokeNodeClaudeCliRun({
+        invokeNodeClaudeCliRun({
           assertCurrent,
           assertReadable: params.context.cliHistoryWriter?.assertReadable,
           nodeId: params.nodePlacement.nodeId,
@@ -236,7 +227,7 @@ export async function executeNodeClaudeRun(params: {
       const approvalId = crypto.randomUUID();
       const registration = await racePromiseWithAbortSignal(
         () =>
-          params.deps.registerExecApprovalRequestForHostOrThrow({
+          registerExecApprovalRequestForHostOrThrow({
             approvalId,
             command: approval.systemRunPlan.commandText,
             commandArgv: approval.systemRunPlan.argv,
@@ -258,8 +249,9 @@ export async function executeNodeClaudeRun(params: {
       );
       const decision = await racePromiseWithAbortSignal(
         () =>
-          params.deps.resolveRegisteredExecApprovalDecision({
+          resolveRegisteredExecApprovalDecision({
             approvalId: registration.id,
+            expiresAtMs: registration.expiresAtMs,
             preResolvedDecision: registration.finalDecision,
           }),
         skillRuntime?.signal ?? nodeAbortController.signal,

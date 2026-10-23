@@ -3,7 +3,6 @@ import {
   extractHumanNotesBlock,
   parseWikiMarkdown,
   preserveHumanNotesBlock,
-  renderWikiMarkdown,
   scanWikiPageSummary,
   slugifyWikiSegment,
   toWikiPageSummary,
@@ -53,86 +52,32 @@ describe("human Notes blocks", () => {
     expect(extractHumanNotesBlock(existing)).toBe(`${startMarker}\n${notes}\n${endMarker}`);
     expect(preserveHumanNotesBlock(rendered, existing)).toBe(existing);
   });
+
+  it.each([startMarker, endMarker])("rejects an unpaired producer-page marker %s", (marker) => {
+    const existing = `# Concept\n\n## Notes\n${marker}\nHandwritten note.\n`;
+
+    expect(() => preserveHumanNotesBlock(rendered, existing, { producerMarkdown: true })).toThrow(
+      "human Notes are missing",
+    );
+  });
+
+  it.each(["\n", "\r\n"])("preserves legacy Notes under an open producer fence (%j)", (newline) => {
+    const humanBlock = [startMarker, "Keep café and trailing spaces.  ", endMarker].join(newline);
+    const existing = `~~~sql${newline}SELECT 1${newline}## Notes${newline}${humanBlock}${newline}`;
+
+    expect(preserveHumanNotesBlock(rendered, existing, { producerMarkdown: true })).toBe(
+      rendered.replace(`${startMarker}\n${endMarker}`, () => humanBlock),
+    );
+  });
+
+  it("does not preserve a legacy producer's closed Notes example", () => {
+    const existing = `~~~markdown\n## Notes\n${startMarker}\nProducer example.\n${endMarker}\n~~~`;
+
+    expect(preserveHumanNotesBlock(rendered, existing, { producerMarkdown: true })).toBe(rendered);
+  });
 });
 
 describe("toWikiPageSummary", () => {
-  it("normalizes agent-facing people wiki metadata", () => {
-    const relationships = [
-      {
-        targetId: "entity.alice",
-        targetTitle: "Alice",
-        kind: "collaborates-with",
-        weight: 0.7,
-        confidence: 0.6,
-        evidenceKind: "discrawl-stat",
-        privacyTier: "local-private",
-      },
-    ];
-    const evidence = [
-      {
-        kind: "maintainer-whois",
-        sourceId: "source.maintainers",
-        confidence: 0.8,
-        privacyTier: "local-private",
-      },
-    ];
-    const raw = renderWikiMarkdown({
-      frontmatter: {
-        pageType: "entity",
-        entityType: "person",
-        id: "entity.brad",
-        title: "Brad Groux",
-        canonicalId: "maintainer.brad-groux",
-        aliases: ["brad", "bgroux"],
-        privacyTier: "local-private",
-        bestUsedFor: ["Microsoft ecosystem routing"],
-        notEnoughFor: ["legal approval"],
-        lastRefreshedAt: "2026-04-29T00:00:00.000Z",
-        personCard: {
-          handles: ["@bgroux"],
-          email: "brad@example.com",
-          lane: "Microsoft Teams",
-          confidence: 0.8,
-          privacyTier: "confirm-before-use",
-        },
-        relationships,
-        claims: [
-          {
-            id: "claim.brad.teams",
-            text: "Brad is useful for Microsoft Teams routing.",
-            confidence: 0.9,
-            evidence,
-          },
-        ],
-      },
-      body: "# Brad Groux\n",
-    });
-
-    const summary = toWikiPageSummary({
-      absolutePath: "/tmp/wiki/entities/brad.md",
-      relativePath: "entities/brad.md",
-      raw,
-    });
-    expect(summary).toMatchObject({
-      entityType: "person",
-      canonicalId: "maintainer.brad-groux",
-      aliases: ["brad", "bgroux"],
-      privacyTier: "local-private",
-      bestUsedFor: ["Microsoft ecosystem routing"],
-      notEnoughFor: ["legal approval"],
-      lastRefreshedAt: "2026-04-29T00:00:00.000Z",
-      personCard: expect.objectContaining({
-        handles: ["@bgroux"],
-        emails: ["brad@example.com"],
-        lane: "Microsoft Teams",
-        privacyTier: "confirm-before-use",
-      }),
-    });
-    expect(summary?.relationships).toEqual(relationships);
-    expect(summary?.claims[0]?.id).toBe("claim.brad.teams");
-    expect(summary?.claims[0]?.evidence).toEqual(evidence);
-  });
-
   it("reports and excludes sequence frontmatter roots from page scans", () => {
     const raw = "---\n- pageType: synthesis\n---\n\n# Invalid Root";
     const params = {
@@ -164,4 +109,28 @@ it.each([
   ],
 ])("excludes fenced link targets with a %s (#97945)", (_name, markdown, target) => {
   expect(scanWikiLinkTargets(markdown)).toEqual([target]);
+});
+
+it("keeps inline link filtering while parsing CommonMark destinations", () => {
+  const markdown = [
+    "[[Wiki target|Alias]]",
+    '[Plan](../syntheses/plan(v2).md?view=full#details "Project plan")',
+    "[Escaped](../syntheses/plan\\(v3\\).md)",
+    "![Image](../assets/diagram.png)",
+    "[External](https://example.com/page.md)",
+    "[Anchor](#details)",
+    "`[Inline code](inline.md)`",
+    "```markdown\n[Fenced code](fenced.md)\n```",
+    "<!-- openclaw:wiki:related:start -->",
+    "[Generated](generated.md)",
+    "<!-- openclaw:wiki:related:end -->",
+    "[Reference][ref]\n\n[ref]: reference.md",
+  ].join("\n\n");
+
+  expect(scanWikiLinkTargets(markdown)).toEqual([
+    "Wiki target",
+    "syntheses/plan(v2).md",
+    "syntheses/plan(v3).md",
+    "assets/diagram.png",
+  ]);
 });

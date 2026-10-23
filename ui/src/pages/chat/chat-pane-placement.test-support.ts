@@ -1,42 +1,15 @@
-import { vi } from "vitest";
-import type {
-  EnvironmentSummary,
-  SessionMoveTarget,
-} from "../../../../packages/gateway-protocol/src/index.js";
-import type { GatewaySessionRow } from "../../api/types.ts";
+import { expect, vi } from "vitest";
+import type { EnvironmentSummary } from "../../../../packages/gateway-protocol/src/index.js";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import type { createModalDialogTestFixture } from "../../test-helpers/modal-dialog.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createGatewayBrowserClientFixture,
   createSessionCapabilityFixture,
   createTestChatPane,
-  activePlacementSession,
 } from "./chat-pane.test-support.ts";
-
-export function retryPlacementSession(
-  target: SessionMoveTarget = { kind: "gateway" },
-  abandonSource?: true,
-): GatewaySessionRow {
-  const row = activePlacementSession();
-  return {
-    ...row,
-    sessionId: "retry-session",
-    label: "Retry release review",
-    placement: { ...row.placement, state: "draining", generation: 2 },
-    placementMove: {
-      target,
-      updatedAtMs: 2,
-      error: "Workspace reconciliation failed.",
-      retry: {
-        expected: { generation: 1, environmentId: "worker:one", ownerEpoch: 1 },
-        target,
-        ...(abandonSource ? { abandonSource } : {}),
-      },
-    },
-  };
-}
 
 export type AsyncRequest = (...args: Parameters<GatewayRequestHandler>) => Promise<unknown>;
 export function deviceFixture(
@@ -71,4 +44,21 @@ export function createPlacementPane(
   });
   fixture.pane.context.gateway.snapshot.hello = gatewayHelloForMethods(methods, scopes);
   return { ...fixture, request, reconcileMutation };
+}
+
+/** Select a displayed OS or machine through the native configuration menu. */
+export async function selectPlacementConfiguration(label: string, value: string) {
+  const trigger = document.body.querySelector<HTMLButtonElement>(
+    `button[aria-haspopup="menu"][aria-label="${label}"]`,
+  )!;
+  expect(trigger).not.toBeNull();
+  trigger.click();
+  await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
+  const menu = document.getElementById(trigger.getAttribute("aria-controls")!)!;
+  const choice = menu.querySelector<HTMLButtonElement>(
+    `[role="menuitemradio"][data-value="${value}"]`,
+  )!;
+  expect(choice).not.toBeNull();
+  choice.click();
+  flush();
 }

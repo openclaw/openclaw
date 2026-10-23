@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { afterEach, expect, it, vi } from "vitest";
 import type { PendingApprovalSnapshot } from "../../../packages/gateway-protocol/src/schema/approvals.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -40,58 +41,55 @@ it("shares approval replay across 64 subscribers during unrelated approval activ
       agentId: "main",
       allowedDecisions: ["allow-once", "deny"] as ("allow-once" | "deny")[],
     };
+    const snapshot = {
+      id,
+      presentation,
+      createdAtMs: 1000 + index,
+      expiresAtMs: 60_000,
+    };
     const inserted = await store.insertOperatorApproval({
       databaseOptions,
       approval: {
-        id,
+        ...snapshot,
         kind: "exec",
         runtimeEpoch: "synthetic-epoch",
-        createdAtMs: 1000 + index,
-        expiresAtMs: 60_000,
         source: { agentId: "main", sessionKey: sourceSessionKey },
         audienceSessionKeys: [sourceSessionKey],
         reviewerDeviceIds: ["reviewer"],
-        presentation,
       },
     });
-    if (inserted.outcome !== "inserted") {
-      throw new Error("Expected a new synthetic approval");
-    }
+    assert(inserted.outcome === "inserted", "Expected a new synthetic approval");
     if (index === 200) {
       unrelatedApproval = inserted.record;
       continue;
     }
     expected.push({
-      id,
+      ...snapshot,
       status: "pending",
-      presentation,
       urlPath: `/approve/${id}`,
-      createdAtMs: 1000 + index,
-      expiresAtMs: 60_000,
       sourceSessionKey: sessionKey,
     });
   }
+  assert(unrelatedApproval, "Expected the unrelated synthetic approval");
+  const unrelated = unrelatedApproval;
   const clients = Array.from({ length: 64 }, (_, index) => ({
     connId: `subscriber-${index}`,
     connect: { client: { id: "test" }, scopes: ["operator.admin"] },
   })) as GatewayClient[];
   const subscribers = createSessionMessageSubscriberRegistry();
+  vi.spyOn(Date, "now").mockReturnValue(5000);
   const runtime = createOperatorApprovalSessionEventRuntime({
     clients,
     sessionMessageSubscribers: subscribers,
     broadcastToConnIds: () => {},
     databaseOptions,
-    now: () => 5000,
   });
   const prepare = store.prepareOperatorApprovalReplay;
   const preparations = vi
     .spyOn(store, "prepareOperatorApprovalReplay")
     .mockImplementation(async (params) => {
       const result = await prepare(params);
-      if (!unrelatedApproval) {
-        throw new Error("Expected the unrelated synthetic approval");
-      }
-      runtime.publish({ phase: "pending", record: unrelatedApproval });
+      runtime.publish({ phase: "pending", record: unrelated });
       return result;
     });
   const context = {

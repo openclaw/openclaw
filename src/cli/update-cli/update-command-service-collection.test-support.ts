@@ -78,17 +78,15 @@ export function registerServiceCollectionTests() {
             }
             return structuredClone(command);
           },
-          readRuntime: async () => {
-            if (!running) {
-              // systemd can collect the stopped unit between its command and runtime reads.
-              return { status: "unknown" };
-            }
-            return {
-              status: running ? "running" : "stopped",
-              ...(running ? { pid: Math.max(process.pid, process.ppid) + 1 } : {}),
-              systemd: { managerUid: 2001, tasksCurrent: running ? 1 : 0 },
-            };
-          },
+          // systemd can collect the stopped unit between command and runtime reads.
+          readRuntime: async () =>
+            running
+              ? {
+                  status: "running",
+                  pid: Math.max(process.pid, process.ppid) + 1,
+                  systemd: { managerUid: 2001, tasksCurrent: 1 },
+                }
+              : { status: "unknown" },
           stop: vi.fn(async () => {
             running = false;
           }),
@@ -124,23 +122,16 @@ export function registerServiceCollectionTests() {
           });
           expect(service.stop, JSON.stringify(execution?.result)).toHaveBeenCalledOnce();
           expect(running).toBe(false);
-          expect(execution?.preManagedServiceStop).toMatchObject({ stopped: true, running: true });
-          if (revoked) {
-            expect(execution?.result).toMatchObject({
-              status: "error",
-              reason: "requester-revoked",
-            });
-            expect(execution?.mutationStarted).toBe(false);
-            expect(published).not.toHaveBeenCalled();
-          } else {
-            expect(execution?.result.status).toBe("ok");
-            expect(execution?.mutationStarted).toBe(true);
-            expect(published).toHaveBeenCalledOnce();
-          }
+          expect(execution).toMatchObject({
+            preManagedServiceStop: { stopped: true, running: true },
+            result: revoked ? { status: "error", reason: "requester-revoked" } : { status: "ok" },
+            mutationStarted: !revoked,
+          });
+          expect(published).toHaveBeenCalledTimes(revoked ? 0 : 1);
           expect(command).toEqual(originalCommand);
-          expect(service.install).not.toHaveBeenCalled();
-          expect(service.start).not.toHaveBeenCalled();
-          expect(service.restart).not.toHaveBeenCalled();
+          for (const operation of [service.install, service.start, service.restart]) {
+            expect(operation).not.toHaveBeenCalled();
+          }
         } finally {
           await closeStateDatabaseForTest();
         }

@@ -9,6 +9,7 @@ import {
   hasCanonicalAuditEventsSchema,
 } from "./openclaw-state-db-audit-migration.js";
 import {
+  CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION,
   OPENCLAW_STATE_STRICT_SCHEMA_VERSION,
   MEETING_TRANSCRIPT_START_TIME_SCHEMA_VERSION,
   type OpenClawStateDatabaseSchemaMigration,
@@ -74,10 +75,26 @@ export const STATE_SCHEMA_MIGRATION_READ_TABLES: Record<StateMigrationKind, read
   "subagent-operator-recovery-v25": [],
   "session-state-head-layout-v26": [],
   "state-write-indexes-v27": [],
+  "github-publication-draft-v28": [
+    "github_publication_requests",
+    "github_personal_publication_requests",
+    "github_repository_publication_requests",
+  ],
+  "local-client-credentials-v29": [
+    "device_identities",
+    "device_auth_tokens",
+    "gateway_origin_device_tokens",
+    "exec_approvals_config",
+  ],
   "predicate-columns-v21": [
     "meeting_transcript_sessions",
     "meeting_transcript_summaries",
     "delivery_queue_entries",
+  ],
+  "automation-policy-fence-v30": ["cron_jobs"],
+  "local-workspace-manifests-v31": [
+    "local_workspace_projections",
+    "local_workspace_manifest_nodes",
   ],
   "operator-approvals-system-agent": ["operator_approvals"],
   "session-watch-cursor-provenance-v4": ["session_watch_cursors"],
@@ -454,6 +471,18 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
   }
   if (userVersion < 27) {
     migrations.push({ kind: "state-write-indexes-v27", path: pathname });
+  }
+  if (userVersion < 28) {
+    migrations.push({ kind: "github-publication-draft-v28", path: pathname });
+  }
+  if (userVersion < CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION) {
+    migrations.push({ kind: "local-client-credentials-v29", path: pathname });
+  }
+  if (userVersion < 30) {
+    migrations.push({ kind: "automation-policy-fence-v30", path: pathname });
+  }
+  if (userVersion < 31) {
+    migrations.push({ kind: "local-workspace-manifests-v31", path: pathname });
   }
   if (!hasCanonicalAuditEventsSchema(db)) {
     migrations.push({ kind: "audit-events-v2", path: pathname });

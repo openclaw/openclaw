@@ -60,6 +60,7 @@ export function createConfigWriteCoordinator({
   let autoSaveRequiresExplicitSubmit = false;
   // Discard drains writes without resaving the draft it is about to remove.
   let suppressAutoSave = 0;
+  let draftRevision = 0;
   // Disconnect must release drains even when the orphaned transport never settles.
   let connectionWake = createDeferredCore();
   // Config writes and restarts must wait for the app updater to settle.
@@ -158,7 +159,7 @@ export function createConfigWriteCoordinator({
   };
   const invalidateConfigLoad = () => {
     resetConfigLoad();
-    nextRequestVersion(state, "config");
+    nextRequestVersion(state);
     state.configLoading = false;
   };
   const trackWrite = <T>(
@@ -326,7 +327,7 @@ export function createConfigWriteCoordinator({
             ? currentConfigRead(state)
             : null;
         if (reconnectRead) {
-          await Promise.race([reconnectRead.completion.promise, reconnectRead.invalidated.promise]);
+          await reconnectRead.settled;
         }
         // The updater can claim suspension while the preceding write drains.
         const connected = client && isCurrentConfigConnection(state, client, connectionEpoch);
@@ -367,6 +368,7 @@ export function createConfigWriteCoordinator({
   });
   let pluginGeneration = gateway.snapshot.pluginCapabilities?.generation;
   let canRead = hasOperatorReadAccess(gateway.snapshot.hello?.auth ?? null);
+  // Transport and authorization changes retire requests even when the client is reused.
   const stopGateway = gateway.subscribe((snapshot) => {
     const clientChanged = state.client !== snapshot.client;
     const connectionChanged = state.connected !== (snapshot.phase === "connected");
@@ -395,7 +397,6 @@ export function createConfigWriteCoordinator({
       resetLoads();
       // A retired flight cannot hold the replacement connection's FIFO.
       explicitOpQueue = null;
-      // Transport and authorization changes retire requests even when the client is reused.
       invalidateConfigConnection(state);
       cancelScheduledAutoSave();
       appliedRefresh.cancel();
@@ -480,6 +481,7 @@ export function createConfigWriteCoordinator({
     },
   });
   const mutateDraft = (mutation: () => void, path?: Array<string | number>) => {
+    draftRevision++;
     fieldDiscard.invalidate(path);
     mutate(mutation);
     reconcileAutoSaveDraftConnection();
@@ -534,9 +536,13 @@ export function createConfigWriteCoordinator({
     removeFormValue: (path) => mutateDraft(() => removeConfigFormValue(state, path), path),
     setRaw: (value) =>
       mutateDraft(() => updateConfigRawValue(state, value, hasUnacknowledgedDraftWrite())),
-    discardFormValue: fieldDiscard.discard,
+    discardFormValue: (path) => {
+      draftRevision++;
+      return fieldDiscard.discard(path);
+    },
     discardDraft: createConfigDraftDiscard({
       state,
+      currentDraftRevision: () => draftRevision,
       invalidateFieldDiscards: fieldDiscard.invalidate,
       hasInFlightWrite: () => inFlight !== null,
       holdAutoSave,
@@ -602,6 +608,7 @@ export function createConfigWriteCoordinator({
         return false;
       }
       fieldDiscard.invalidate(["agents"]);
+      draftRevision++;
       const changed = stageDefaultAgentConfigEntry(state, agentId);
       publish();
       reconcileAutoSaveDraftConnection();

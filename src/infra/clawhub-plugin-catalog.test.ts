@@ -1,8 +1,8 @@
 import { Value } from "typebox/value";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { PluginDiscoveryDetailSchema } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { joinClawHubPluginDetail } from "../plugins/catalog-discovery.js";
-import { jsonResponse, requestUrl } from "../test-helpers/http.js";
+import { jsonResponse } from "../test-helpers/http.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   fetchClawHubPluginCatalog,
@@ -11,6 +11,7 @@ import {
   fetchClawHubPluginVersionCategories,
   fetchClawHubPluginDetail,
 } from "./clawhub-plugin-catalog.js";
+import { captureClawHubJson as mockResponse } from "./clawhub.test-support.js";
 
 const listingMetadata = {
   displayName: "Memory Plus",
@@ -38,14 +39,6 @@ const remoteCategory = {
   order: 1,
 };
 
-function mockResponse(value: unknown) {
-  return vi.fn(async (_input: string | URL | Request) => jsonResponse(value));
-}
-
-function requestedUrl(fetchImpl: ReturnType<typeof mockResponse>) {
-  return new URL(requestUrl(fetchImpl.mock.calls[0]![0]));
-}
-
 async function catalog(
   options: Parameters<typeof fetchClawHubPluginCatalog>[0],
   response: unknown = { items: [remotePlugin] },
@@ -54,24 +47,23 @@ async function catalog(
   const result = await fetchClawHubPluginCatalog({
     baseUrl: "https://example.com",
     ...options,
-    fetchImpl,
   });
-  return { result, url: requestedUrl(fetchImpl), fetchImpl };
+  return { result, url: fetchImpl.url(), fetchImpl: fetchImpl.fetch };
 }
 
 function readCategories(categories: unknown[]) {
+  mockResponse({ categories });
   return fetchClawHubPluginCategories({
     baseUrl: "https://example.com",
-    fetchImpl: mockResponse({ categories }),
   });
 }
 
 function readDetail(value: Record<string, unknown>, version?: string) {
+  mockResponse({ package: remotePlugin, versions: { items: [] }, ...value });
   return fetchClawHubPluginDetail({
     packageName: "memory-plus",
     version,
     skipAuth: true,
-    fetchImpl: mockResponse({ package: remotePlugin, versions: { items: [] }, ...value }),
   });
 }
 
@@ -81,6 +73,8 @@ function joinDetail(remote: Awaited<ReturnType<typeof fetchClawHubPluginDetail>>
     local: { plugins: [], diagnostics: [], mutationAllowed: true },
   }).detail;
 }
+
+afterEach(() => vi.restoreAllMocks());
 
 it.each([false, true])("attributes search unless telemetry is disabled: %s", async (disabled) => {
   await withEnvAsync({ CLAWHUB_DISABLE_TELEMETRY: String(disabled) }, async () => {
@@ -107,11 +101,11 @@ it.each([false, true])(
       const fetchImpl = vi
         .fn(async () => jsonResponse({ results: [{ score: 9, package: remotePlugin }] }))
         .mockRejectedValueOnce(new TypeError("fetch failed"));
+      vi.spyOn(globalThis, "fetch").mockImplementation(fetchImpl);
       const result = fetchClawHubPluginCatalog({
         baseUrl: "https://example.com",
         query: "memory",
         searchSource: "openclaw-control-ui",
-        fetchImpl,
       });
       if (disabled) {
         await expect(result).resolves.toMatchObject({ items: [{ packageName: "memory-plus" }] });
@@ -140,14 +134,15 @@ it.each([
         authorization.push(new Headers(init?.headers).get("authorization"));
         return jsonResponse({ items: [remotePlugin], categories: [remoteCategory] });
       };
-      await read({ fetchImpl });
-      await read({ fetchImpl, skipAuth: false });
-      await read({ fetchImpl, token: "explicit-test-token" });
-      await read({ fetchImpl, baseUrl: "https://private.example/clawhub" });
-      await read({ fetchImpl, baseUrl: "https://private.example/clawhub", skipAuth: true });
+      vi.spyOn(globalThis, "fetch").mockImplementation(fetchImpl);
+      await read({});
+      await read({ skipAuth: false });
+      await read({ token: "explicit-test-token" });
+      await read({ baseUrl: "https://private.example/clawhub" });
+      await read({ baseUrl: "https://private.example/clawhub", skipAuth: true });
       for (const key of ["OPENCLAW_CLAWHUB_URL", "CLAWHUB_URL"]) {
         await withEnvAsync({ [key]: "https://private.example/clawhub" }, async () => {
-          await read({ fetchImpl });
+          await read({});
         });
       }
       expect(authorization).toEqual([
@@ -172,10 +167,9 @@ it("reads the bounded plugin overview in one request", async () => {
 
   const result = await fetchClawHubPluginOverview({
     baseUrl: "https://example.com",
-    fetchImpl,
   });
 
-  expect(requestedUrl(fetchImpl).pathname).toBe("/api/v1/plugins/overview");
+  expect(fetchImpl.url().pathname).toBe("/api/v1/plugins/overview");
   expect(result.categories).toEqual([remoteCategory]);
   expect(result.items).toEqual([
     expect.objectContaining({
@@ -184,7 +178,7 @@ it("reads the bounded plugin overview in one request", async () => {
       ...ranking,
     }),
   ]);
-  expect(fetchImpl).toHaveBeenCalledOnce();
+  expect(fetchImpl.fetch).toHaveBeenCalledOnce();
 });
 
 it("retains category priority identities from curated page metadata", async () => {
@@ -194,12 +188,6 @@ it("retains category priority identities from curated page metadata", async () =
     { items: [], categories: [category] },
   );
   expect(result).toEqual({ items: [], categories: [category] });
-});
-
-it("rejects ambiguous registry category priorities", async () => {
-  await expect(
-    readCategories([{ ...remoteCategory, pinnedPackages: ["@vendor/model", "@vendor/model"] }]),
-  ).rejects.toThrow("duplicate or invalid pinned package");
 });
 
 it("browses the combined plugin endpoint with an opaque cursor", async () => {
@@ -267,10 +255,11 @@ it("validates and restores canonical category ordering", async () => {
   expect(categories.map((category) => category.slug)).toEqual(["channels", "models"]);
 });
 
-it("rejects arbitrary category icon values", async () => {
-  await expect(readCategories([{ ...remoteCategory, icon: "lucide:wrench" }])).rejects.toThrow(
-    "invalid icon key",
-  );
+it.each([
+  [{ pinnedPackages: ["@vendor/model", "@vendor/model"] }, "duplicate or invalid pinned package"],
+  [{ icon: "lucide:wrench" }, "invalid icon key"],
+])("rejects invalid category %j", async (fields, error) => {
+  await expect(readCategories([{ ...remoteCategory, ...fields }])).rejects.toThrow(error);
 });
 
 it.each([
@@ -297,13 +286,13 @@ it("batch-reads current and legacy categories for exact package versions", async
     request = new Request(input, init);
     return jsonResponse({ packages: response });
   });
+  vi.spyOn(globalThis, "fetch").mockImplementation(fetchImpl);
 
   const result = await fetchClawHubPluginVersionCategories({
     baseUrl: "https://example.com",
     token: "private-token",
     skipAuth: true,
     packages,
-    fetchImpl,
   });
 
   expect(request?.method).toBe("POST");
@@ -411,12 +400,11 @@ it.each([
     baseUrl: "https://example.com",
     packageName: "memory-plus",
     version: "1.2.2",
-    fetchImpl,
   });
 
-  const url = requestedUrl(fetchImpl);
+  const url = fetchImpl.url();
   expect(`${url.pathname}${url.search}`).toBe("/api/v1/packages/memory-plus/detail?version=1.2.2");
-  expect(fetchImpl).toHaveBeenCalledOnce();
+  expect(fetchImpl.fetch).toHaveBeenCalledOnce();
   expect(detail).toMatchObject({
     packageName: "memory-plus",
     iconUrl: `https://example.com${remotePlugin.icon}`,
@@ -527,7 +515,6 @@ it.each([undefined, {}])("keeps unreleased detail with optional security: %s", a
     baseUrl: "https://example.com",
     packageName: "memory-plus",
     skipAuth: true,
-    fetchImpl,
   });
   expect(detail).toEqual(
     expect.objectContaining({
@@ -545,7 +532,7 @@ it.each([undefined, {}])("keeps unreleased detail with optional security: %s", a
   );
   expect(detail.readme).toBeUndefined();
   expect(detail.security).toBeUndefined();
-  expect(fetchImpl).toHaveBeenCalledOnce();
+  expect(fetchImpl.fetch).toHaveBeenCalledOnce();
 });
 it.each([
   { blocked: true, securityVersion: "1.0.0", expected: "unavailable" },

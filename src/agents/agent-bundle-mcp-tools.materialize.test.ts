@@ -9,12 +9,14 @@ import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
+import { fixtureCatalog, fixtureRuntime } from "./agent-bundle-mcp-fixture.test-support.js";
 import {
   buildBundleMcpToolsFromCatalog,
   createBundleMcpToolRuntime,
   materializeBundleMcpToolsForRun,
 } from "./agent-bundle-mcp-materialize.js";
 import type {
+  BundleMcpToolRuntime,
   McpCatalogTool,
   McpToolCatalog,
   SessionMcpRuntime,
@@ -26,10 +28,42 @@ import { isToolResultError } from "./tool-result-error.js";
 
 const MCP_APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 
-function expectTextContentBlock(block: unknown, text: string) {
-  const content = block as { type?: string; text?: string } | undefined;
-  expect(content?.type).toBe("text");
-  expect(content?.text).toBe(text);
+function firstTool(runtime: Pick<BundleMcpToolRuntime, "tools">) {
+  return expectDefined(runtime.tools[0], "first materialized tool");
+}
+
+function catalogTool(
+  serverName: string,
+  toolName: string,
+  overrides: Partial<McpCatalogTool> = {},
+): McpCatalogTool {
+  return {
+    serverName,
+    safeServerName: serverName,
+    toolName,
+    inputSchema: { type: "object", properties: {} },
+    fallbackDescription: toolName,
+    ...overrides,
+  };
+}
+
+function knowledgeCatalog(server: Partial<McpToolCatalog["servers"][string]> = {}): McpToolCatalog {
+  return {
+    version: 1,
+    generatedAt: 0,
+    tools: [],
+    servers: {
+      knowledge: {
+        serverName: "knowledge",
+        safeServerName: "knowledge",
+        launchSummary: "knowledge",
+        toolCount: 0,
+        resources: { listChanged: false },
+        prompts: { listChanged: false },
+        ...server,
+      },
+    },
+  };
 }
 
 function makeToolRuntime(
@@ -37,63 +71,45 @@ function makeToolRuntime(
     tools?: McpCatalogTool[];
     serverName?: string;
     result?: CallToolResult;
-    resultText?: string;
     supportsParallelToolCalls?: boolean;
   } = {},
 ): SessionMcpRuntime {
   const serverName = params.serverName ?? "bundleProbe";
   const tools = params.tools ?? [
-    {
-      serverName,
-      safeServerName: serverName,
-      toolName: "bundle_probe",
+    catalogTool(serverName, "bundle_probe", {
       description: "Bundle probe",
-      inputSchema: { type: "object", properties: {} },
       fallbackDescription: "Bundle probe",
-    },
+    }),
   ];
-  const peekCatalog = (): McpToolCatalog => ({
-    version: 1,
-    generatedAt: 0,
-    servers: {
-      [serverName]: {
-        serverName,
-        launchSummary: serverName,
-        toolCount: tools.length,
-        supportsParallelToolCalls: params.supportsParallelToolCalls ?? false,
-      },
-    },
-    tools,
-  });
-  return {
+  const peekCatalog = (): McpToolCatalog => {
+    const catalog = fixtureCatalog(serverName, tools);
+    catalog.servers[serverName]!.supportsParallelToolCalls =
+      params.supportsParallelToolCalls ?? false;
+    return catalog;
+  };
+  return fixtureRuntime(peekCatalog, {
     sessionId: "session-collision",
     workspaceDir: "/tmp",
     configFingerprint: "fingerprint",
     createdAt: 0,
     lastUsedAt: 0,
     markUsed: () => {},
-    getCatalog: async () => peekCatalog(),
     peekCatalog,
     callTool: async () =>
       params.result ?? {
-        content: [{ type: "text", text: params.resultText ?? "FROM-BUNDLE" }],
+        content: [{ type: "text", text: "FROM-BUNDLE" }],
         isError: false,
       },
     joinCleanup: async () => {},
     dispose: async () => {},
-  };
+  });
 }
 
 async function executeMcpToolResult(result: CallToolResult) {
   const runtime = await materializeBundleMcpToolsForRun({
     runtime: makeToolRuntime({ result }),
   });
-  return await expectDefined(runtime.tools[0], "runtime.tools[0] test invariant").execute(
-    "call-bundle-probe",
-    {},
-    undefined,
-    undefined,
-  );
+  return firstTool(runtime).execute("call-bundle-probe", {}, undefined, undefined);
 }
 
 describe("createBundleMcpToolRuntime", () => {
@@ -301,14 +317,10 @@ describe("createBundleMcpToolRuntime", () => {
   );
 
   it("attaches app previews without converting typed image results to text", async () => {
-    const tool: McpCatalogTool = {
-      serverName: "demo",
-      safeServerName: "demo",
-      toolName: "show",
+    const tool = catalogTool("demo", "show", {
       inputSchema: { type: "object" },
-      fallbackDescription: "show",
       uiResourceUri: "ui://demo/app",
-    };
+    });
     const sessionRuntime = makeToolRuntime({
       tools: [tool],
       serverName: "demo",
@@ -331,10 +343,7 @@ describe("createBundleMcpToolRuntime", () => {
     const materialized = await materializeBundleMcpToolsForRun({ runtime: sessionRuntime });
     materialized.restrictAppTools?.(materialized.tools);
 
-    const result = await expectDefined(
-      materialized.tools[0],
-      "materialized.tools[0] test invariant",
-    ).execute("call-1", {}, undefined, undefined);
+    const result = await firstTool(materialized).execute("call-1", {}, undefined, undefined);
     expect(result.content).toEqual([{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }]);
     expect(result.details).toMatchObject({
       mcpAppPreview: {
@@ -360,14 +369,10 @@ describe("createBundleMcpToolRuntime", () => {
   });
 
   it("never mints app views for tools from requester-scoped servers", async () => {
-    const tool: McpCatalogTool = {
-      serverName: "user-mail",
-      safeServerName: "user-mail",
-      toolName: "show",
+    const tool = catalogTool("user-mail", "show", {
       inputSchema: { type: "object" },
-      fallbackDescription: "show",
       uiResourceUri: "ui://user-mail/app",
-    };
+    });
     const sessionRuntime = makeToolRuntime({ tools: [tool], serverName: "user-mail" });
     sessionRuntime.mcpAppsEnabled = true;
     // View recovery (peek + transcript reconstruction) has no requester
@@ -375,11 +380,26 @@ describe("createBundleMcpToolRuntime", () => {
     sessionRuntime.isRequesterScopedServer = (serverName) => serverName === "user-mail";
     const materialized = await materializeBundleMcpToolsForRun({ runtime: sessionRuntime });
 
-    const result = await expectDefined(
-      materialized.tools[0],
-      "materialized.tools[0] test invariant",
-    ).execute("call-1", {}, undefined, undefined);
+    const result = await firstTool(materialized).execute("call-1", {}, undefined, undefined);
     expect(result.details ?? {}).not.toHaveProperty("mcpAppPreview");
+  });
+
+  it("carries server instructions onto resource and prompt utility tools", () => {
+    const tools = buildBundleMcpToolsFromCatalog({
+      catalog: knowledgeCatalog({ instructions: "Read the catalogue before citing a resource." }),
+    });
+
+    expect(tools.map((tool) => getPluginToolMeta(tool)?.mcp?.operation)).toEqual([
+      "prompts_get",
+      "prompts_list",
+      "resources_list",
+      "resources_read",
+    ]);
+    for (const tool of tools) {
+      expect(getPluginToolMeta(tool)?.mcp?.instructions).toBe(
+        "Read the catalogue before citing a resource.",
+      );
+    }
   });
 
   it("marks MCP tools parallel only when the server advertises parallel support", async () => {
@@ -389,9 +409,7 @@ describe("createBundleMcpToolRuntime", () => {
       }),
     });
 
-    expect(expectDefined(runtime.tools[0], "runtime.tools[0] test invariant").executionMode).toBe(
-      "parallel",
-    );
+    expect(firstTool(runtime).executionMode).toBe("parallel");
   });
 
   it("marks isError through the tool-result owner while preserving recovery text", async () => {
@@ -407,12 +425,14 @@ describe("createBundleMcpToolRuntime", () => {
     });
     expect(result.details).toMatchObject({
       status: "error",
+      mcpServer: "bundleProbe",
+      mcpTool: "bundle_probe",
       structuredContent: { retryable: true },
     });
     expect(isToolResultError(result)).toBe(true);
   });
 
-  it("coerces non-text/image MCP tool-result blocks to text (resource_link/resource/audio)", async () => {
+  it("coerces resource, audio, and malformed image blocks while preserving text and images", async () => {
     // resource_link/resource/audio blocks have no base64 image source; if they
     // leaked into the provider image branch Anthropic would 400 on an image with
     // undefined data/media_type and poison the whole session history (#90710).
@@ -440,6 +460,8 @@ describe("createBundleMcpToolRuntime", () => {
         },
         { type: "audio", data: "AAAA", mimeType: "audio/mpeg" },
         { type: "image", data: "iVBOR", mimeType: "image/png" },
+        // Malformed images must not leak into the provider image branch either.
+        { type: "image" } as unknown as CallToolResult["content"][number],
       ],
       isError: false,
     });
@@ -452,17 +474,9 @@ describe("createBundleMcpToolRuntime", () => {
       { type: "text", text: "blob://two" },
       { type: "text", text: "[audio audio/mpeg]" },
       { type: "image", data: "iVBOR", mimeType: "image/png" },
+      { type: "text", text: JSON.stringify({ type: "image" }) },
     ]);
-  });
-
-  it("coerces a malformed image block (missing base64 source) to text", async () => {
-    // A real-world poison case: image block with undefined data/media_type.
-    const result = await executeMcpToolResult({
-      content: [{ type: "image" } as unknown as CallToolResult["content"][number]],
-      isError: false,
-    });
-
-    expect(result.content).toEqual([{ type: "text", text: JSON.stringify({ type: "image" }) }]);
+    expect(result.details).toEqual({ mcpServer: "bundleProbe", mcpTool: "bundle_probe" });
   });
 
   it("disambiguates bundle MCP tools that collide with existing tool names", async () => {
@@ -482,14 +496,11 @@ describe("createBundleMcpToolRuntime", () => {
       runtime: makeToolRuntime({
         serverName: "demo",
         tools: [
-          {
-            serverName: "demo",
-            safeServerName: "demo",
-            toolName: "app_tool",
+          catalogTool("demo", "app_tool", {
             inputSchema: { type: "object" },
             fallbackDescription: "app",
             uiVisibility: ["app"],
-          },
+          }),
         ],
       }),
       reservedToolNames: reservedToolNames(),
@@ -504,22 +515,10 @@ describe("createBundleMcpToolRuntime", () => {
     const runtime = await materializeBundleMcpToolsForRun({
       runtime: {
         ...base,
-        getCatalog: async () => ({
-          version: 1,
-          generatedAt: 0,
-          servers: {
-            knowledge: {
-              serverName: "knowledge",
-              safeServerName: "knowledge",
-              launchSummary: "knowledge",
-              toolCount: 0,
-              resources: { listChanged: false },
-              prompts: { listChanged: false },
-              toolFilter: { include: ["resources_*"], exclude: ["resources_read"] },
-            },
-          },
-          tools: [],
-        }),
+        getCatalog: async () =>
+          knowledgeCatalog({
+            toolFilter: { include: ["resources_*"], exclude: ["resources_read"] },
+          }),
         listResources: async () => [],
         readResource: async () => ({ contents: [] }),
         listPrompts: async () => [],
@@ -532,21 +531,7 @@ describe("createBundleMcpToolRuntime", () => {
 
   it("projects resource and prompt utility tools for inventory-only catalogs", async () => {
     const tools = buildBundleMcpToolsFromCatalog({
-      catalog: {
-        version: 1,
-        generatedAt: 0,
-        servers: {
-          knowledge: {
-            serverName: "knowledge",
-            safeServerName: "knowledge",
-            launchSummary: "knowledge",
-            toolCount: 0,
-            resources: { listChanged: false },
-            prompts: { listChanged: false },
-          },
-        },
-        tools: [],
-      },
+      catalog: knowledgeCatalog(),
     });
 
     expect(tools.map((tool) => tool.name)).toEqual([
@@ -556,47 +541,21 @@ describe("createBundleMcpToolRuntime", () => {
       "knowledge__resources_read",
     ]);
     await expect(
-      expectDefined(tools[0], "tools[0] test invariant").execute(
-        "inventory-only",
-        {},
-        undefined,
-        undefined,
-      ),
+      firstTool({ tools }).execute("inventory-only", {}, undefined, undefined),
     ).rejects.toThrow("bundle-mcp catalog projection cannot execute tools");
   });
 
   it("projects session-denied tools only for read-only inventory", () => {
     const catalog = {
-      version: 1,
-      generatedAt: 0,
-      servers: {
-        knowledge: {
-          serverName: "knowledge",
-          safeServerName: "knowledge",
-          launchSummary: "knowledge",
-          toolCount: 0,
-          resources: { listChanged: false },
-          deniedToolNames: ["resources_read"],
-        },
-      },
+      ...knowledgeCatalog({ prompts: undefined, deniedToolNames: ["resources_read"] }),
       tools: [
-        {
-          serverName: "knowledge",
-          safeServerName: "knowledge",
-          toolName: "alpha?",
-          inputSchema: { type: "object", properties: {} },
-          fallbackDescription: "Enabled knowledge tool",
-        },
+        catalogTool("knowledge", "alpha?", { fallbackDescription: "Enabled knowledge tool" }),
       ],
       sessionDeniedTools: [
-        {
-          serverName: "knowledge",
-          safeServerName: "knowledge",
-          toolName: "alpha!",
-          inputSchema: { type: "object", properties: {} },
+        catalogTool("knowledge", "alpha!", {
           fallbackDescription: "Denied knowledge tool",
           deniedBySession: true,
-        },
+        }),
       ],
     } satisfies Parameters<typeof buildBundleMcpToolsFromCatalog>[0]["catalog"];
 
@@ -627,61 +586,6 @@ describe("createBundleMcpToolRuntime", () => {
     ]);
   });
 
-  it("materializes configured MCP tools through the session runtime boundary", async () => {
-    const runtimeModule = await import("./agent-bundle-mcp-runtime.js");
-    const created: Parameters<typeof runtimeModule.createSessionMcpRuntime>[0][] = [];
-    vi.spyOn(runtimeModule, "createSessionMcpRuntime").mockImplementationOnce((params) => {
-      created.push(params);
-      return makeToolRuntime({
-        serverName: "configuredProbe",
-        resultText: "FROM-CONFIG",
-      });
-    });
-    const runtime = await createBundleMcpToolRuntime({
-      workspaceDir: "/workspace",
-      cfg: {
-        mcp: {
-          servers: {
-            configuredProbe: {
-              command: "node",
-              args: ["configured-probe.mjs"],
-              env: {
-                BUNDLE_PROBE_TEXT: "FROM-CONFIG",
-              },
-            },
-          },
-        },
-      },
-    });
-
-    expect(created).toHaveLength(1);
-    expect(expectDefined(created[0], "created[0] test invariant").sessionId).toMatch(
-      /^bundle-mcp:/,
-    );
-    expect(expectDefined(created[0], "created[0] test invariant").workspaceDir).toBe("/workspace");
-    expect(
-      expectDefined(created[0], "created[0] test invariant").cfg?.mcp?.servers?.configuredProbe
-        ?.command,
-    ).toBe("node");
-    expect(
-      expectDefined(created[0], "created[0] test invariant").cfg?.mcp?.servers?.configuredProbe
-        ?.args,
-    ).toEqual(["configured-probe.mjs"]);
-
-    expect(runtime.tools.map((tool) => tool.name)).toEqual(["configuredProbe__bundle_probe"]);
-    const result = await expectDefined(runtime.tools[0], "runtime.tools[0] test invariant").execute(
-      "call-configured-probe",
-      {},
-      undefined,
-      undefined,
-    );
-    expectTextContentBlock(result.content[0], "FROM-CONFIG");
-    expect(result.details).toEqual({
-      mcpServer: "configuredProbe",
-      mcpTool: "bundle_probe",
-    });
-  });
-
   it("keeps root fields callable when an MCP input schema uses a root union (#128743)", async () => {
     const inputSchema = {
       type: "object",
@@ -692,8 +596,6 @@ describe("createBundleMcpToolRuntime", () => {
         thread_id: { type: "string", minLength: 1, maxLength: 128 },
         body: { anyOf: [{ type: "string" }, { type: "null" }], default: null },
         body_file: { anyOf: [{ type: "string" }, { type: "null" }], default: null },
-        task_id: { anyOf: [{ type: "string" }, { type: "null" }], default: null },
-        turn_grant_id: { anyOf: [{ type: "string" }, { type: "null" }], default: null },
       },
       anyOf: [
         { required: ["body"], properties: { body: { type: "string" } } },
@@ -704,33 +606,24 @@ describe("createBundleMcpToolRuntime", () => {
       runtime: makeToolRuntime({
         serverName: "aihub",
         tools: [
-          {
-            serverName: "aihub",
-            safeServerName: "aihub",
-            toolName: "messages_reply",
+          catalogTool("aihub", "messages_reply", {
             inputSchema,
             fallbackDescription: "Reply to a message",
-          },
+          }),
         ],
       }),
     });
-    const tool = expectDefined(runtime.tools[0], "runtime.tools[0] test invariant");
+    const tool = firstTool(runtime);
 
-    expect(() =>
-      validateToolArguments(tool, {
-        type: "toolCall",
-        id: "call-inline-body",
-        name: tool.name,
-        arguments: { thread_id: "thread-1", body: "hello" },
-      }),
-    ).not.toThrow();
-    expect(() =>
-      validateToolArguments(tool, {
-        type: "toolCall",
-        id: "call-body-file",
-        name: tool.name,
-        arguments: { thread_id: "thread-1", body_file: "/tmp/body.md" },
-      }),
-    ).not.toThrow();
+    for (const args of [{ body: "hello" }, { body_file: "/tmp/body.md" }]) {
+      expect(() =>
+        validateToolArguments(tool, {
+          type: "toolCall",
+          id: "call-body",
+          name: tool.name,
+          arguments: { thread_id: "thread-1", ...args },
+        }),
+      ).not.toThrow();
+    }
   });
 });

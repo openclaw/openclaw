@@ -8,14 +8,17 @@ import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import * as sessions from "../../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { withExecRequestTurn } from "../../infra/exec-request-context.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
+import { claimRpcSourceForTest } from "../test-helpers.rpc-source.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
 import { createActiveRun } from "./chat.abort.test-helpers.js";
+import { captureRpcTargetForTest } from "./rpc-source-fixtures.test-support.js";
 import { sessionAbortHandlers } from "./sessions-abort.js";
 import { expectAbortFailure, revocableAuthority } from "./sessions.abort-lifecycle.test-support.js";
 
@@ -86,7 +89,7 @@ async function seedAdmittedSession(runId: string, profileId: string) {
 
 async function admitSessionRun(runId: string, interrupted?: () => void) {
   const { controller, onInterrupt } = interruptRun(runId, interrupted);
-  const admission = await beginSessionWorkAdmission({
+  const admission = await beginSessionEffect({
     scope: resolveSessionStorePathCore(getRuntimeConfig().session?.store, { agentId: "main" }),
     identities: [parentKey, parentId],
     run: { ...identity, runId },
@@ -132,13 +135,25 @@ async function exerciseAdmittedStop(
   const registration =
     mode === "controller-backed"
       ? registerChatAbortController({
-          chatAbortControllers: context.chatAbortControllers,
+          target: captureRpcTargetForTest({
+            ...identity,
+            storeScope: resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
+              agentId: "main",
+            }),
+          }),
           runId,
           ...identity,
           timeoutMs: 30_000,
         })
       : undefined;
+  const releaseExecution = registration?.entry
+    ? await claimRpcSourceForTest(registration.entry)
+    : undefined;
+  registration?.initializeTiming();
   registration?.markExecutionStarted();
+  registration?.controller.signal.addEventListener("abort", () => releaseExecution?.(), {
+    once: true,
+  });
   const controllerAbort = vi.fn();
   registration?.controller.signal.addEventListener("abort", controllerAbort, { once: true });
   let ack: ReturnType<typeof sessions.loadSessionEntry>;
@@ -147,7 +162,7 @@ async function exerciseAdmittedStop(
   });
   try {
     await withExecRequestTurn({ identity: run }, async () => {
-      const admission = await beginSessionWorkAdmission({
+      const admission = await beginSessionEffect({
         scope: resolveSessionStorePathCore(getRuntimeConfig().session?.store, { agentId: "main" }),
         identities: [parentKey, run.sessionId],
         run,
@@ -186,6 +201,7 @@ async function exerciseAdmittedStop(
     }
     expect(controllerAbort).toHaveBeenCalledTimes(mode === "controller-backed" ? 1 : 0);
   } finally {
+    releaseExecution?.();
     registration?.cleanup();
   }
 }
@@ -253,14 +269,16 @@ it.each(["before signal", "after signal", "between admissions"] as const)(
         ? undefined
         : createActiveRun(parentKey, {
             ...identity,
+            queued: true,
+            runId: "authorized-queued",
             owner: { connId: client.connId },
           });
     if (queued) {
-      context.chatQueuedTurns.set("authorized-queued", queued);
+      rpcSourceTesting.set("authorized-queued", queued);
     }
     const authority = revocableAuthority("admitted Stop authority revoked");
     if (timing === "before signal") {
-      queued?.controller.signal.addEventListener("abort", authority.revoke, { once: true });
+      queued?.input.abortSignal.addEventListener("abort", authority.revoke, { once: true });
     }
     const first = await admitSessionRun(runId, () => {
       if (timing !== "before signal") {
@@ -279,15 +297,14 @@ it.each(["before signal", "after signal", "between admissions"] as const)(
           sessionMutationCommitGuard: authority.assertCurrent,
         }),
       ).rejects.toEqual(
-        timing === "before signal"
-          ? authority.error
-          : expect.objectContaining({
-              message: "Chat cancellation and persistence failed",
-              errors: [authority.error, authority.error],
-            }),
+        expect.objectContaining({
+          message: "Chat cancellation and persistence failed",
+          cause: authority.error,
+          errors: [authority.error, authority.error],
+        }),
       );
       if (queued) {
-        expect(queued.controller.signal.aborted).toBe(true);
+        expect(queued.input.abortSignal.aborted).toBe(true);
       }
       expect(first.onInterrupt).toHaveBeenCalledTimes(timing === "before signal" ? 0 : 1);
       if (second) {

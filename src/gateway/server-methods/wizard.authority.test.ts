@@ -101,7 +101,6 @@ it.each([
             sourceConfig: config,
             runConfig: config,
           },
-          deps: {},
         });
         if (!probe.ok) {
           throw new Error(probe.error);

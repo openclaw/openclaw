@@ -8,6 +8,7 @@ import {
   observeSqliteWorkerCommittedFacts,
   type SqliteWorkerAdmissionFactory,
 } from "../infra/sqlite-worker-operation-admission.js";
+import { observeSqliteWorkerAdmissionFinish } from "../infra/sqlite-worker-operation-settlement.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import type { GitHubPublicationSessionLifecycle } from "./github-publication-read.types.js";
 import { registerOpenClawStateDatabaseLifecycleListener } from "./openclaw-state-db-cache.js";
@@ -267,17 +268,12 @@ function withGitHubPublicationReceipt(
     } finally {
       lifecycleOwner.pendingDeletion = previousDeletion;
     }
-    const finish = owner.admission.finish.bind(owner.admission);
-    owner.admission.finish = () => {
-      try {
-        finish();
-      } finally {
-        if (owner.admission.settlement) {
-          const confirmed = owner.admission.settlement.kind === "completed";
-          pending.finish(confirmed, confirmed && !owner.admission.committed);
-        }
+    observeSqliteWorkerAdmissionFinish(owner.admission, () => {
+      if (owner.admission.settlement) {
+        const confirmed = owner.admission.settlement.kind === "completed";
+        pending.finish(confirmed, confirmed && !owner.admission.committed);
       }
-    };
+    });
     void operation.settled.then((outcome) => {
       const known = outcome.kind !== "unknown";
       pending.finish(known, known && !owner.admission.committed);

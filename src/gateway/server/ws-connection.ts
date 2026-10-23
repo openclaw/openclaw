@@ -78,11 +78,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         "unsupported ws permessage-deflate extension; compressed frames use the slower ws path",
       );
     }
-    const transport = createGatewayWebSocketTransport(
-      socket,
-      upgradeReq.socket,
-      compression?.acceptsDeflatedSegments ?? false,
-    );
+    const transport = createGatewayWebSocketTransport(socket, upgradeReq.socket, compression);
     const ingressSocket = socket as GatewayIngressWebSocket;
     const connectionKind = ingressSocket[GATEWAY_WS_CONNECTION_KIND_PROPERTY] ?? "gateway";
     const publicWorkerIngress =
@@ -174,6 +170,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
           return attachWorkerWsMessageHandler({
             ...lifecycle,
             socket,
+            transport,
             service: params.workerConnectionService,
             publicAdmission: publicWorkerIngress,
           });

@@ -20,9 +20,6 @@ function createChatEvents() {
         listener = undefined;
       };
     }),
-    emit(payload: unknown) {
-      listener?.({ event: "chat", payload });
-    },
     reply(text: string) {
       this.final({ role: "assistant", provider: "openclaw", model: "delivery-mirror", text });
     },
@@ -62,13 +59,12 @@ function consultFixture(
   return {
     request,
     submit,
-    start: (options: Partial<Pick<ConsultParams, "args" | "emitTalkEvent">> = {}) =>
+    start: () =>
       submitRealtimeTalkConsult({
         ctx: consultContext({ request, addEventListener: events.addEventListener }),
         callId: "call-1",
         args: { question: "Check status" },
         submit,
-        ...options,
       }),
   };
 }
@@ -158,9 +154,13 @@ describe("RealtimeTalkSession consult handoff", () => {
     expect(submit).toHaveBeenCalledOnce();
   });
 
-  it.each(["agent:voice:home", "global"])(
-    "keeps the acknowledgement alive and cancels its exact %s target",
-    async (agentSessionKey) => {
+  it.each([
+    { agentSessionKey: "agent:voice:home", abortFails: false },
+    { agentSessionKey: "global", abortFails: false },
+    { agentSessionKey: "agent:voice:home", abortFails: true },
+  ])(
+    "settles cancellation for $agentSessionKey even if the abort RPC fails: $abortFails",
+    async ({ agentSessionKey, abortFails }) => {
       type Acknowledgement = { runId: string; agentId: string; agentSessionKey: string };
       const pendingAcknowledgement = createDeferred<Acknowledgement>();
       const request = vi.fn(
@@ -170,6 +170,9 @@ describe("RealtimeTalkSession consult handoff", () => {
             return await pendingAcknowledgement.promise;
           }
           if (method === "chat.abort") {
+            if (abortFails) {
+              throw new Error("Gateway disconnected during abort");
+            }
             return { ok: true, aborted: true };
           }
           throw new Error(`unexpected request: ${method}`);
@@ -313,50 +316,17 @@ describe("RealtimeTalkSession consult handoff", () => {
     expect(submit).toHaveBeenCalledWith("call-1", { error: expected });
   });
 
-  it("emits Talk progress from chat tool events while waiting for the consult result", async () => {
-    const { start } = consultFixture((events) => {
-      setImmediate(() => {
-        events.emit({
-          runId: "run-1",
-          stream: "tool",
-          data: { phase: "start", name: "read", toolCallId: "tool-1" },
-        });
-        events.final({ text: "Done." });
-      });
-    });
-    const emitTalkEvent = vi.fn();
-
-    await start({ args: { question: "Check files" }, emitTalkEvent });
-
-    expect(emitTalkEvent).toHaveBeenCalledWith({
-      type: "tool.progress",
-      callId: "tool-1",
-      payload: { runId: "run-1", name: "read", phase: "start" },
-    });
-  });
-
   it("routes active consult steering through Gateway control endpoints", async () => {
     const { request, ctx } = steeringFixture(false);
-
-    const emitTalkEvent = vi.fn();
 
     await steerRealtimeTalkActiveConsult({
       ctx,
       text: "use the safer path",
-      emitTalkEvent,
     });
 
     expect(request).toHaveBeenCalledWith("talk.client.steer", {
       sessionKey: "agent:main:main",
       text: "use the safer path",
-    });
-    expect(emitTalkEvent).toHaveBeenCalledWith({
-      type: "tool.progress",
-      payload: {
-        name: "openclaw_agent_control",
-        result: expect.objectContaining({ mode: "steer" }),
-      },
-      final: false,
     });
   });
 
@@ -382,7 +352,6 @@ describe("RealtimeTalkSession consult handoff", () => {
       } as never,
       text: "cancel that",
       speakControlResult,
-      suppressSpeechForModes: ["cancel"],
     });
 
     expect(request).toHaveBeenCalledWith("talk.client.steer", {

@@ -124,9 +124,11 @@ suite.define(() => {
       await expectUnreserved(effortPicker);
 
       await gateway.emitGatewayEvent("chat.metadata.changed", {});
+      await composer.locator('[data-chat-model-select="true"]').click();
       await expect
         .poll(() => composer.locator("[data-chat-model-catalog-state]").textContent())
         .toContain("Some models could not be refreshed");
+      await page.keyboard.press("Escape");
       const retryAfter = await gateway.deferNext("models.list");
       await composer.locator('[data-chat-model-select="true"]').click();
       await gateway.waitForRequest("models.list", { after: retryAfter });
@@ -170,7 +172,7 @@ suite.define(() => {
           await expect.poll(() => model.getAttribute("aria-busy")).toBe("false");
           await model.click();
           const available = composer.locator('[data-chat-model-option="openai/gpt-5.4"]');
-          await revealChatModelOption(available);
+          await revealChatModelOption(composer, "openai/gpt-5.4");
           await expect.poll(() => available.isVisible()).toBe(true);
           expect(await composer.locator("[data-chat-model-catalog-state]").count()).toBe(0);
           await model.click();

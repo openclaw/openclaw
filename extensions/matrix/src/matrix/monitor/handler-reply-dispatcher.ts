@@ -1,8 +1,15 @@
 import {
+  createAcceptedChannelDeliveryResult,
+  createChannelPartialDeliveryError,
+  isChannelPartialDeliveryError,
+} from "openclaw/plugin-sdk/channel-inbound";
+import {
+  createChannelDeliveryAccumulator,
   createPreviewMessageReceipt,
   createReplyPrefixOptions,
   createTypingCallbacks,
   type MessageReceipt,
+  type LivePreviewDeliveryResult,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
   buildTtsSupplementMediaPayload,
@@ -11,25 +18,76 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-chunking";
 import { resolveMatrixExtraContent } from "../../outbound.js";
+import { getMatrixRuntime } from "../../runtime.js";
 import type { CoreConfig, MatrixStreamingMode, ReplyToMode } from "../../types.js";
 import type { MatrixClient } from "../sdk.js";
-import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "../send/types.js";
+import { sendMessageMatrix } from "../send.js";
+import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY, type MatrixSendResult } from "../send/types.js";
 import type { createMatrixDraftController } from "./handler-draft-controller.js";
 import {
   loadMatrixSendModule,
   matrixTextWouldActivateMentions,
   type MatrixDraftStreamHandle,
 } from "./handler-runtime.js";
-import {
-  deliverMatrixReplies,
-  mergeMatrixReplyDeliveryResults,
-  toMatrixPartialDeliveryError,
-  type MatrixReplyDeliveryResult,
-} from "./replies.js";
 
 type MatrixDraftController = Awaited<ReturnType<typeof createMatrixDraftController>>;
+type MatrixReplyDeliveryResult = LivePreviewDeliveryResult;
+
+function mergeMatrixReplyDeliveryResults(
+  results: readonly MatrixReplyDeliveryResult[],
+): MatrixReplyDeliveryResult {
+  const single = results.length === 1 ? results[0] : undefined;
+  if (single?.visibleReplySent) {
+    return single;
+  }
+  const visibleResults = results.filter((result) => result.visibleReplySent);
+  if (visibleResults.length === 0) {
+    return { visibleReplySent: false, suppression: { reason: "no_visible_result" } };
+  }
+  const content = visibleResults
+    .map((result) => result.content)
+    .filter(Boolean)
+    .join("\n");
+  if (visibleResults.some((result) => result.receipt || result.messageIds?.length)) {
+    return createAcceptedChannelDeliveryResult({ deliveryResults: visibleResults, content });
+  }
+  return { visibleReplySent: true, content };
+}
+
+function toMatrixPartialDeliveryError(
+  error: unknown,
+  settled: readonly MatrixReplyDeliveryResult[],
+): unknown {
+  const failedPartial = isChannelPartialDeliveryError(error) ? error.deliveryResult : undefined;
+  const merged = mergeMatrixReplyDeliveryResults([
+    ...settled,
+    ...(failedPartial ? [failedPartial] : []),
+  ]);
+  return merged.visibleReplySent
+    ? createChannelPartialDeliveryError(error, { ...merged, visibleReplySent: true })
+    : error;
+}
+
+function resolveVisibleMatrixReplyText(text?: string): string | undefined {
+  if (typeof text !== "string") {
+    return undefined;
+  }
+  const trimmedStart = text.trimStart();
+  if (!trimmedStart) {
+    return text;
+  }
+  if (normalizeLowercaseStringOrEmpty(trimmedStart).startsWith("reasoning:")) {
+    return undefined;
+  }
+  const visibleText = stripReasoningTagsFromText(text, { mode: "strict", trim: "none" });
+  return visibleText.trim() ? visibleText : undefined;
+}
 
 export function createMatrixReplyDispatcher(config: {
   cfg: CoreConfig;
@@ -71,28 +129,78 @@ export function createMatrixReplyDispatcher(config: {
   } = config;
   const quietDraftStreaming = streaming === "quiet" || streaming === "progress";
   // Tool, block, and final payloads are delivered separately but share one first-reply slot.
-  const hasRepliedRef = { value: false };
-  const deliverPayload = (reply: ReplyPayload) =>
-    deliverMatrixReplies({
-      cfg,
-      replies: [reply],
-      roomId,
-      client,
-      runtime,
-      replyToMode,
-      hasRepliedRef,
-      threadId: threadTarget,
-      replyToId: threadTarget ?? replyToEventId ?? undefined,
-      accountId,
-      mediaLocalRoots,
-    });
+  let hasReplied = false;
+  const deliverPayload = async (reply: ReplyPayload): Promise<MatrixReplyDeliveryResult> => {
+    const core = getMatrixRuntime();
+    const logVerbose = (message: string) => {
+      if (core.logging.shouldLogVerbose()) {
+        runtime.log?.(message);
+      }
+    };
+    const accepted = createChannelDeliveryAccumulator();
+    const visibleText = resolveVisibleMatrixReplyText(reply.text);
+    const { hasMedia, hasText, mediaUrls } = resolveSendableOutboundReplyParts(reply);
+    if (reply.isReasoning === true || (!hasMedia && reply.text && visibleText === undefined)) {
+      logVerbose("matrix reply suppressed as reasoning-only");
+      return accepted.result();
+    }
+    if (!hasText && !hasMedia) {
+      if (reply.audioAsVoice) {
+        logVerbose("matrix reply has audioAsVoice without media/text; skipping");
+      } else {
+        runtime.error?.("matrix reply missing text/media");
+      }
+      return accepted.result();
+    }
+    const explicitReplyToId =
+      reply.replyToTag || reply.replyToCurrent ? reply.replyToId?.trim() : undefined;
+    const ambientReplyToId = threadTarget ?? replyToEventId;
+    const replyToIdForReply =
+      explicitReplyToId ||
+      (!threadTarget && replyToMode !== "off" && (replyToMode === "all" || !hasReplied)
+        ? (reply.replyToId ?? ambientReplyToId)?.trim()
+        : undefined);
+    const fallbackReplyToId = threadTarget
+      ? (reply.replyToId ?? ambientReplyToId)?.trim()
+      : undefined;
+    const onDeliveryResult = (result: MatrixSendResult) => {
+      // A concrete event consumes the first-reply slot even when a later event fails.
+      accepted.add({ receipt: result.receipt }, result.content);
+      if (replyToIdForReply) {
+        hasReplied = true;
+      }
+    };
+    // The reply's own event fields ride its first event, not a later chunk.
+    const extraContent = resolveMatrixExtraContent(reply);
+    const targets = mediaUrls.length > 0 ? mediaUrls : [undefined];
+    try {
+      for (const [index, mediaUrl] of targets.entries()) {
+        await sendMessageMatrix(roomId, index === 0 ? (visibleText ?? "") : "", {
+          client,
+          cfg,
+          ...(mediaUrl !== undefined
+            ? { mediaUrl, mediaLocalRoots, audioAsVoice: reply.audioAsVoice }
+            : {}),
+          replyToId: replyToIdForReply,
+          fallbackReplyToId,
+          threadId: threadTarget,
+          accountId,
+          extraContent: index === 0 ? extraContent : undefined,
+          onDeliveryResult,
+        });
+      }
+    } catch (error: unknown) {
+      throw toMatrixPartialDeliveryError(error, [accepted.result()]);
+    }
+    return accepted.result();
+  };
   const { previewLifecycle } = draftController;
   let nonFinalReplyDeliveryFailed = false;
   const beginNextBlockDraft = () => {
     // Each block owns a new draft generation; prior retained/consumed state must not
     // suppress settlement or cleanup for the next provider-visible event.
     draftController.beginDraftGeneration();
-    draftController.advanceDraftBlockBoundary({ fallbackToLatestEnd: true });
+    draftController.advanceDraftBlockBoundary();
     draftStream?.reset();
     draftController.resetReplyToIdForNextBlock();
     draftController.updateDraftFromLatestFullText();
@@ -202,7 +310,6 @@ export function createMatrixReplyDispatcher(config: {
                     prepareMatrixSingleText(edit.text, {
                       cfg,
                       accountId,
-                      preserveWhitespace: true,
                     }).convertedText,
                   );
                 },

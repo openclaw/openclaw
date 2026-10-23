@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi, type Mock } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import {
   resetGatewaySuspendCoordinatorForLifecycleRestart,
@@ -15,6 +15,8 @@ import {
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
+import { retireSessionControllerInput } from "../sessions/session-controller.mailbox.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
@@ -32,6 +34,7 @@ import type { GatewayRequestContext, GatewayRequestHandler } from "./server-meth
 import { GatewayRequestEntryLifetime } from "./server-request-entry.js";
 import { TerminalSessionManager } from "./terminal/session-manager.js";
 import { baseOpenRequest, makeFakePty } from "./terminal/session-manager.test-helpers.js";
+import { createRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 type DispatchOptions = Omit<
   Parameters<typeof dispatchSuspensionRequest>[0],
@@ -59,7 +62,6 @@ async function startHeldWork(method: string, payload: Record<string, unknown>) {
 
 function createSuspendContext(
   terminalSessions: { size: number },
-  chatAbortControllers: GatewayRequestContext["chatAbortControllers"] = new Map(),
   logGateway: { warn: Mock; info?: Mock } = {
     warn: vi.fn(),
   },
@@ -74,8 +76,6 @@ function createSuspendContext(
     cron,
     logGateway,
     terminalSessions,
-    chatAbortControllers,
-    chatQueuedTurns: new Map(),
   } as unknown as GatewayRequestContext;
   return { context, cron };
 }
@@ -97,6 +97,30 @@ async function suspensionRpc(
   return result.respond;
 }
 
+/** Retain terminal write custody after execution retires so suspension can observe it. */
+async function registerTerminalPersistenceFixture(
+  runId: string,
+  identity: { sessionId: string; sessionKey: string },
+) {
+  const terminalPersistence = createDeferredCore();
+  const source = createRpcSourceForTest(
+    {
+      controlUiVisible: true,
+      projectSessionTerminalPending: true,
+      onSettled: () => terminalPersistence.promise,
+    },
+    { ...identity, runId },
+  );
+  rpcSourceTesting.set(runId, source);
+  retireSessionControllerInput(source.input);
+  const settle = async () => {
+    terminalPersistence.resolve();
+    await source.input.settlement.promise;
+  };
+  onTestFinished(settle);
+  return { source, settle };
+}
+
 beforeEach(() => {
   resetGatewaySuspendCoordinatorForLifecycleRestart();
   resetGatewayWorkAdmission();
@@ -111,14 +135,12 @@ afterEach(() => {
 const restartTarget = { pid: process.pid, ownerId: "gateway-owner", port: 18_789 };
 
 describe("gateway request suspension admission", () => {
-  registerSuspensionHandoffLifecycleTests();
-
   it.each([false, true])(
     "reopens user RPCs after an abandoned drain, even with renewal: %s",
     async (renew) => {
       vi.useFakeTimers();
       const log = { warn: vi.fn(), info: vi.fn() };
-      const { context, cron } = createSuspendContext({ size: 1 }, new Map(), log);
+      const { context, cron } = createSuspendContext({ size: 1 }, log);
       const params = { requestId: "abandoned-controller", drain: true };
       const prepare = () => suspensionRpc(context, "prepare", params, true);
       const read = () =>
@@ -221,6 +243,7 @@ describe("gateway request suspension admission", () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
+  registerSuspensionHandoffLifecycleTests();
   registerSuspensionHandoffAuthorizationTests();
 
   it("keeps a facade continuation on the same admitted root", async () => {
@@ -275,12 +298,13 @@ describe("gateway request suspension admission", () => {
           captureGatewayRootWorkAdmissionContinuationScope(),
           "admitted observation",
         );
-        child = trackAsyncWork(async () => {
+        const acceptedChild = trackAsyncWork(async () => {
           signal.addEventListener("abort", () => draining.resolve(), { once: true });
           await finishChild.promise;
           admission.runSync(settledChild);
         });
-        void child.catch(() => {});
+        child = acceptedChild;
+        void acceptedChild.catch(() => {});
         respond(true, { status: "ok" });
       },
       { core: true, requestParams: { runId: "observed-run" } },
@@ -356,17 +380,12 @@ describe("gateway request suspension admission", () => {
         spawn: async () => pty,
       });
       await terminalSessions.open(baseOpenRequest());
-      const pendingRun = {
-        controller: new AbortController(),
+      rpcSourceTesting.reset();
+      const terminalPersistence = await registerTerminalPersistenceFixture("reply-pending", {
         sessionId: "session-pending",
         sessionKey: "agent:main:session-pending",
-        startedAtMs: 1,
-        expiresAtMs: 2,
-        registrationCleanupRequested: true,
-        projectSessionTerminalPending: true,
-      };
-      const chatAbortControllers = new Map([["reply-pending", pendingRun]]);
-      const { context, cron } = createSuspendContext(terminalSessions, chatAbortControllers, {
+      });
+      const { context, cron } = createSuspendContext(terminalSessions, {
         warn: vi.fn(),
         info: vi.fn(),
       });
@@ -436,7 +455,7 @@ describe("gateway request suspension admission", () => {
           writeCustody: [{ phase: "terminal-persistence", count: 1 }],
         });
 
-        chatAbortControllers.clear();
+        await terminalPersistence.settle();
         const ready = await suspensionRpc(context, "status", lease);
         expect(ready).toHaveBeenCalledWith(true, {
           status: "ready",

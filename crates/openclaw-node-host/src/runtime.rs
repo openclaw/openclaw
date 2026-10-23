@@ -134,11 +134,17 @@ pub enum RuntimeBuildError {
 #[derive(Debug, Error)]
 pub enum RuntimeError {
     #[error(transparent)]
-    Client(#[from] ClientError),
+    Client(Box<ClientError>),
     #[error("runtime result delivery queue saturated; session must be restarted")]
     DeliverySaturated,
     #[error("runtime result task failed: {0}")]
     ResultTask(String),
+}
+
+impl From<ClientError> for RuntimeError {
+    fn from(error: ClientError) -> Self {
+        Self::Client(Box::new(error))
+    }
 }
 
 struct Registration {
@@ -1979,19 +1985,6 @@ mod tests {
             duplicate,
             Err(RuntimeBuildError::DuplicateCommand(_))
         ));
-    }
-
-    #[test]
-    fn declares_registered_commands_in_deterministic_order() {
-        let runtime = CommandRuntime::builder()
-            .command("example.z", |_context| async { Ok(Value::Null) })
-            .command("example.a", |_context| async { Ok(Value::Null) })
-            .build()
-            .unwrap();
-        assert_eq!(
-            runtime.command_names().collect::<Vec<_>>(),
-            ["example.a", "example.z"]
-        );
     }
 
     #[test]

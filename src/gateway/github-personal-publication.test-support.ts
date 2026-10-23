@@ -185,7 +185,7 @@ export async function createPersonalPublicationFixture() {
     return await fallback(argv, options);
   });
   const client: GatewayClient = {
-    connId: "direct-human",
+    connId: `direct-human-${generation}`,
     authenticatedUserProfile: {
       profileId: owner,
       displayName: null,

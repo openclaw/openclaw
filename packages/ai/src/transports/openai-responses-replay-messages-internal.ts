@@ -199,13 +199,18 @@ function orderResponsesAsyncToolResults(source: Context["messages"]): Context["m
 
 function parseOpenAIResponsesTextSignature(
   signature: string | undefined,
-): { id?: string; phase?: "commentary" | "final_answer" } | undefined {
+): { id?: string; phase?: "commentary" | "final_answer"; sources?: string } | undefined {
   if (!signature) {
     return undefined;
   }
   if (signature.startsWith("{")) {
     try {
-      const parsed = JSON.parse(signature) as { v?: unknown; id?: unknown; phase?: unknown };
+      const parsed = JSON.parse(signature) as {
+        v?: unknown;
+        id?: unknown;
+        phase?: unknown;
+        sources?: unknown;
+      };
       if (parsed.v === 1) {
         const id = typeof parsed.id === "string" ? parsed.id : undefined;
         const phase =
@@ -214,7 +219,11 @@ function parseOpenAIResponsesTextSignature(
             : undefined;
         // A reasoning-dropped replay keeps the phase but omits the paired id.
         if (id !== undefined || phase !== undefined) {
-          return { id, phase };
+          return {
+            id,
+            phase,
+            ...(typeof parsed.sources === "string" ? { sources: parsed.sources } : {}),
+          };
         }
         return undefined;
       }
@@ -257,7 +266,6 @@ export { createAssistantOutput as createOpenAIResponsesAssistantOutput } from ".
 
 type ConvertResponsesMessagesOptions = {
   includeSystemPrompt?: boolean;
-  replayReasoningItems?: boolean;
   replayResponsesItemIds?: boolean;
   sessionId?: string;
   authProfileId?: string;
@@ -274,7 +282,6 @@ function convertResponsesMessagesWithStyle(
 ): ResponseInput {
   const messages: ResponseInput = [];
   const providerStyle = conversionStyle === "provider";
-  const shouldReplayReasoningItems = options?.replayReasoningItems ?? true;
   const shouldReplayResponsesItemIds = options?.replayResponsesItemIds ?? true;
   const replayContext = buildProviderReplayContext(model, {
     sessionId: options?.sessionId,
@@ -458,7 +465,6 @@ function convertResponsesMessagesWithStyle(
       for (const block of msg.content) {
         if (block.type === "thinking") {
           if (
-            shouldReplayReasoningItems &&
             block.thinkingSignature &&
             (providerStyle || block.thinkingSignature.startsWith("{"))
           ) {
@@ -512,13 +518,20 @@ function convertResponsesMessagesWithStyle(
             textFallbackOrdinal += 1;
           }
           msgId = normalizeResponsesReplayItemId(msgId);
+          // Source links are OpenClaw's rendering, not provider output. Replaying the
+          // provider text keeps history equal to the stored response for continuation.
+          const sources = textSignature?.sources;
+          const providerText =
+            sources && block.text.endsWith(sources)
+              ? block.text.slice(0, -sources.length)
+              : block.text;
           const messageItem: ReplayableResponseOutputMessage = {
             type: "message",
             role: "assistant",
             content: [
               {
                 type: "output_text",
-                text: sanitizeTransportPayloadText(block.text),
+                text: sanitizeTransportPayloadText(providerText),
                 annotations: [],
               },
             ],
@@ -649,14 +662,7 @@ export function convertProviderResponsesMessages<TApi extends Api>(
   model: Model<TApi>,
   context: Context,
   allowedToolCallProviders: ReadonlySet<string>,
-  options?: {
-    includeSystemPrompt?: boolean;
-    replayResponsesItemIds?: boolean;
-    sessionId?: string;
-    authProfileId?: string;
-    replayMode?: OpenAIResponsesReplayMode;
-    retainUserProvenance?: boolean;
-  },
+  options?: ConvertResponsesMessagesOptions,
 ): ResponseInput {
   return convertResponsesMessagesWithStyle(
     model,

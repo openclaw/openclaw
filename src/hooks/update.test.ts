@@ -1,4 +1,3 @@
-// Hook update tests cover updating installed hook records and config.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -19,7 +18,7 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
-import type { HookNpmIntegrityDriftParams, installHooksFromNpmSpec } from "./install.js";
+import type { installHooksFromNpmSpec } from "./install.js";
 import { readHookInstalls, recordHookInstall } from "./installs.js";
 
 const installHooksFromNpmSpecMock = vi.fn();
@@ -53,20 +52,25 @@ async function runHookUpdate(
   });
 }
 
-function createHookInstallConfig(params: {
-  hookId: string;
-  spec: string;
-  integrity?: string;
-  installPath?: string;
-}): OpenClawConfig {
+function createHookInstallConfig(
+  params: {
+    spec?: string;
+    integrity?: string;
+    installPath?: string;
+  } = {},
+): OpenClawConfig {
   recordHookInstall({
-    hookId: params.hookId,
+    hookId: "demo-hooks",
     source: "npm",
-    spec: params.spec,
-    installPath: params.installPath ?? `/tmp/hooks/${params.hookId}`,
+    spec: params.spec ?? "@openclaw/demo-hooks",
+    installPath: params.installPath ?? "/tmp/hooks/demo-hooks",
     ...(params.integrity ? { integrity: params.integrity } : {}),
   });
   return {};
+}
+
+function installedPack(version: string, targetDir = "/tmp/hooks/demo-hooks") {
+  return { ok: true as const, hookPackId: "demo-hooks", hooks: ["demo"], targetDir, version };
 }
 
 const tempDirs = createTrackedTempDirs();
@@ -95,7 +99,7 @@ describe("updateNpmInstalledHookPacks", () => {
   });
 
   it("refuses mutation without both the retained lease and compensation sink", async () => {
-    const config = createHookInstallConfig({ hookId: "demo-hooks", spec: "@openclaw/demo-hooks" });
+    const config = createHookInstallConfig();
     await expect(updateNpmInstalledHookPacks({ config })).rejects.toThrow(
       "hook update lifecycle lease",
     );
@@ -109,11 +113,9 @@ describe("updateNpmInstalledHookPacks", () => {
 
   it("aborts exact pinned hook pack updates on integrity drift by default", async () => {
     const warn = vi.fn();
+    const error = "aborted: npm package integrity drift detected for @openclaw/demo-hooks@1.0.0";
     installHooksFromNpmSpecMock.mockImplementation(
-      async (params: {
-        spec: string;
-        onIntegrityDrift?: (drift: HookNpmIntegrityDriftParams) => boolean | Promise<boolean>;
-      }) => {
+      async (params: Parameters<typeof installHooksFromNpmSpec>[0]) => {
         const proceed = await params.onIntegrityDrift?.({
           spec: params.spec,
           expectedIntegrity: "sha512-old",
@@ -124,55 +126,33 @@ describe("updateNpmInstalledHookPacks", () => {
             version: "1.0.0",
           },
         });
-        if (proceed === false) {
-          return {
-            ok: false,
-            error: "aborted: npm package integrity drift detected for @openclaw/demo-hooks@1.0.0",
-          };
-        }
-        return {
-          ok: true,
-          hookPackId: "demo-hooks",
-          hooks: ["demo"],
-          targetDir: "/tmp/hooks/demo-hooks",
-          version: "1.0.0",
-        };
+        return proceed === false ? { ok: false, error } : installedPack("1.0.0");
       },
     );
 
     const config = createHookInstallConfig({
-      hookId: "demo-hooks",
       spec: "@openclaw/demo-hooks@1.0.0",
       integrity: "sha512-old",
     });
-    const result = await runHookUpdate({
-      config,
-      hookIds: ["demo-hooks"],
-      logger: { warn },
-    });
+    const result = await runHookUpdate({ config, hookIds: ["demo-hooks"], logger: { warn } });
 
     expect(warn).toHaveBeenCalledWith(
       'Integrity drift for hook pack "demo-hooks" (@openclaw/demo-hooks@1.0.0): expected sha512-old, got sha512-new',
     );
-    expect(result.changed).toBe(false);
     expect(result.config).toBe(config);
+    expect(result.changed).toBe(false);
     expect(result.outcomes).toEqual([
       {
         hookId: "demo-hooks",
         status: "error",
-        message:
-          'Failed to update hook pack "demo-hooks": aborted: npm package integrity drift detected for @openclaw/demo-hooks@1.0.0',
+        message: `Failed to update hook pack "demo-hooks": ${error}`,
       },
     ]);
   });
 
   it("preserves hook pack update selector and records npm resolution metadata after update", async () => {
     installHooksFromNpmSpecMock.mockResolvedValue({
-      ok: true,
-      hookPackId: "demo-hooks",
-      hooks: ["demo"],
-      targetDir: "/tmp/hooks/demo-hooks",
-      version: "1.2.3",
+      ...installedPack("1.2.3"),
       npmResolution: {
         name: "@openclaw/demo-hooks",
         version: "1.2.3",
@@ -183,21 +163,11 @@ describe("updateNpmInstalledHookPacks", () => {
       },
     });
 
-    const config = createHookInstallConfig({
-      hookId: "demo-hooks",
-      spec: "@openclaw/demo-hooks",
-    });
-    const result = await runHookUpdate({
-      config,
-      hookIds: ["demo-hooks"],
-    });
+    const config = createHookInstallConfig();
+    const result = await runHookUpdate({ config, hookIds: ["demo-hooks"] });
 
     expect(installHooksFromNpmSpecMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config,
-        expectedHookPackId: "demo-hooks",
-        mode: "update",
-      }),
+      expect.objectContaining({ config, expectedHookPackId: "demo-hooks", mode: "update" }),
     );
     expect(result.changed).toBe(true);
     expect(readHookInstalls()["demo-hooks"]).toEqual({
@@ -223,19 +193,8 @@ describe("updateNpmInstalledHookPacks", () => {
     "reports hook pack installs that move backwards as downgrades (dryRun: $dryRun)",
     async ({ dryRun, message }) => {
       const installPath = await createInstalledHookPackDir("1.2.3");
-      installHooksFromNpmSpecMock.mockResolvedValue({
-        ok: true,
-        hookPackId: "demo-hooks",
-        hooks: ["demo"],
-        targetDir: installPath,
-        version: "1.2.2",
-      });
-
-      const config = createHookInstallConfig({
-        hookId: "demo-hooks",
-        spec: "@openclaw/demo-hooks",
-        installPath,
-      });
+      installHooksFromNpmSpecMock.mockResolvedValue(installedPack("1.2.2", installPath));
+      const config = createHookInstallConfig({ installPath });
       const result = await runHookUpdate({ config, hookIds: ["demo-hooks"], dryRun });
 
       expect(result.outcomes).toEqual([
@@ -253,11 +212,7 @@ describe("updateNpmInstalledHookPacks", () => {
   it("restores the payload and record when the caller rolls back its config update", async () => {
     const installPath = await createInstalledHookPackDir("1.0.0");
     const sourceDir = await createInstalledHookPackDir("2.0.0");
-    const config = createHookInstallConfig({
-      hookId: "demo-hooks",
-      spec: "@openclaw/demo-hooks",
-      installPath,
-    });
+    const config = createHookInstallConfig({ installPath });
     const previousInstalls = readHookInstalls();
     installHooksFromNpmSpecMock.mockImplementation(
       async (params: Parameters<typeof installHooksFromNpmSpec>[0]) => {
@@ -273,15 +228,7 @@ describe("updateNpmInstalledHookPacks", () => {
             beforePersistentApply: params.beforePersistentApply,
           }),
         );
-        return result.ok
-          ? {
-              ...result,
-              hookPackId: "demo-hooks",
-              hooks: ["demo"],
-              targetDir: installPath,
-              version: "2.0.0",
-            }
-          : result;
+        return result.ok ? { ...result, ...installedPack("2.0.0", installPath) } : result;
       },
     );
 

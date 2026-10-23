@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import { request, type IncomingMessage, type ServerResponse } from "node:http";
 import { connect, createServer, type ListenOptions, type Socket } from "node:net";
@@ -10,12 +11,13 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
+import { withTimeout } from "../infra/fs-safe.js";
 import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { withEnv } from "../test-utils/env.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import { withTimeout } from "../utils/with-timeout.js";
 import { createGatewayAuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { DESKTOP_OBSERVE_PATH, mintDesktopObserverToken } from "./desktop/observe-bridge.js";
@@ -240,7 +242,13 @@ function makeWsClient(
   params: { role?: "node" | "operator"; mode?: "node" | "webchat"; expiresAtMs?: number } = {},
 ): GatewayWsClient {
   return {
-    socket: {} as unknown as WebSocket,
+    socket: Object.assign(new EventEmitter(), {
+      readyState: WebSocket.OPEN,
+      bufferedAmount: 0,
+      send: vi.fn(),
+      close: vi.fn(),
+      terminate: vi.fn(),
+    }),
     connect: {
       role: params.role ?? "node",
       client: { mode: params.mode ?? "node" },
@@ -323,7 +331,10 @@ async function withCanvasGatewayHarness(
       return true;
     },
     ...shared,
-    preauthConnectionBudget: createPreauthConnectionBudget(8),
+    preauthConnectionBudget: withEnv(
+      { OPENCLAW_MAX_PREAUTH_CONNECTIONS_PER_IP: "8" },
+      createPreauthConnectionBudget,
+    ),
     desktopSessionRegistry: params.desktopSessionRegistry,
   });
 

@@ -18,7 +18,6 @@ import {
   assertStateReadSchema,
   openOpenClawStateReadOnlyLocation,
 } from "./openclaw-state-db-read-connection.js";
-import { isExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import { isManagedStateTransaction } from "./openclaw-state-db-transaction.js";
 import { allowsMaintenanceLiveAuthorityReads } from "./openclaw-state-maintenance-context.js";
 import type { OpenClawStateReadOnlyDatabase } from "./openclaw-state-read.types.js";
@@ -119,9 +118,7 @@ export function withCachedOpenClawStateDatabaseReadOnly<T>(
         }
         try {
           // Cache admission and the consuming read share this operation's fresh revision.
-          if (isExistingOpenClawStateSchema(pathname, opened.db)) {
-            assertStateReadSchema(opened.db, pathname);
-          }
+          assertStateReadSchema(opened.db, pathname);
           observeOpenClawDatabaseMaintenanceResource(opened.db);
           const value = operation(opened);
           if (ownedTransaction && isPromiseLike(value)) {

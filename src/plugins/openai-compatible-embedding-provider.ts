@@ -27,6 +27,10 @@ import { readResponseTextPrefix } from "../infra/http-body.js";
 import { fetchWithRuntimeDispatcher } from "../infra/net/runtime-fetch.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { appendConfigPathSegment } from "../shared/dot-path.js";
+import {
+  OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID,
+  OPENAI_COMPATIBLE_MODEL_APIS,
+} from "./embedding-provider-config.js";
 import type {
   EmbeddingInput,
   EmbeddingProvider,
@@ -35,9 +39,6 @@ import type {
   EmbeddingProviderCreateOptions,
 } from "./embedding-provider-types.js";
 
-/** Provider id for OpenAI-compatible remote embedding servers. */
-const OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID = "openai-compatible";
-const OPENAI_COMPATIBLE_MODEL_APIS = new Set(["openai-completions", "openai-responses"]);
 const EMBEDDING_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const EMBEDDING_ERROR_BODY_MAX_CHARS = 1_000;
 const EMBEDDING_ERROR_TRUNCATED_SUFFIX = "... [truncated]";
@@ -111,6 +112,33 @@ function normalizeDimensions(value: number): number {
     throw new Error("openai-compatible embeddings: dimensions must be a positive integer.");
   }
   return value;
+}
+
+// Servers that ignore `dimensions` return the model's native size instead of failing.
+// Accepting those vectors would index them under an identity that records the requested size.
+function assertRequestedDimensions(
+  vectors: number[][],
+  dimensions: number | undefined,
+  errorPrefix: string,
+): void {
+  if (dimensions === undefined) {
+    return;
+  }
+  const index = vectors.findIndex((vector) => vector.length !== dimensions);
+  if (index === -1) {
+    return;
+  }
+  const actual = vectors[index]?.length;
+  throw Object.assign(
+    new Error(
+      `${errorPrefix}: expected ${dimensions} dimensions, got ${actual} at index ${index}; the endpoint did not honor the requested dimensions. Remove memory.search.outputDimensionality or request dimensions, or use a server that supports them.`,
+    ),
+    {
+      code: "INVALID_EMBEDDING_RESPONSE",
+      expectedDimensions: dimensions,
+      actualDimensions: actual,
+    },
+  );
 }
 
 function resolveRequestInputType(
@@ -392,6 +420,7 @@ async function postEmbeddingRequest(params: {
             input.length,
             context,
           );
+          assertRequestedDimensions(vectors, client.dimensions, context);
           callOptions?.onUsage?.(extractEmbeddingUsage(payload));
           return vectors;
         } catch (error) {

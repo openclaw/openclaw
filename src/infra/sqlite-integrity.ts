@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
+import type { SqliteCleanCloseSealRefusal } from "./sqlite-clean-close-seal.js";
 import { recordSqliteDatabaseIntegrity } from "./sqlite-database-admission.js";
 import { isSqliteCorruptionError } from "./sqlite-error-diagnostics.js";
 import {
@@ -36,7 +37,7 @@ export type SqliteIntegrityDiagnostics = {
     | "stale-lease-full"
     | "process-death"
     | "dirty-receipt"
-    | "no-proof"
+    | SqliteCleanCloseSealRefusal
     | "lease-class";
   integrityGateMode?: "quick" | "full" | "deferred";
   integrityGateMs?: number;
@@ -123,6 +124,7 @@ export function runSqliteIntegrityCheckSync(check: SqliteIntegrityCheck): void {
 export function runSqliteIntegrityOperationSync<T>(
   operation: SqliteIntegrityOperation<T>,
   beforeResume?: () => void,
+  repairIntegrityError?: (check: SqliteIntegrityCheck, error: unknown) => boolean,
 ): T {
   beforeResume?.();
   let step = operation.next();
@@ -135,6 +137,19 @@ export function runSqliteIntegrityOperationSync<T>(
     }
     // A blocking check can outlive its caller; both success and failure resume schema work.
     beforeResume?.();
+    if (failure && repairIntegrityError) {
+      const original = failure.error;
+      try {
+        if (repairIntegrityError(step.value, original)) {
+          failure = undefined;
+        }
+      } catch (repairError) {
+        // Keep the original corruption verdict so failed repair retains quarantine policy.
+        if (original instanceof Error) {
+          original.message += ` Startup FTS repair failed: ${String(repairError)}`;
+        }
+      }
+    }
     step = failure ? operation.throw(failure.error) : operation.next();
   }
   return step.value;
@@ -192,10 +207,19 @@ export function isTerminalSqliteIntegrityError(error: Error): boolean {
 export function assertSqliteIntegrity(
   database: DatabaseSync,
   databaseLabel: string,
-  options: SqliteIntegrityCheckOptions = {},
+  options: SqliteIntegrityCheckOptions & {
+    /** Offline repair classification must not omit findings beyond SQLite's default limit. */
+    allFindings?: boolean;
+  } = {},
 ): SqliteIntegrityChecks {
   const check = options.check === "quick" ? "quick_check" : "integrity_check";
-  const integrityCheck = runSqliteCheck(database, databaseLabel, check);
+  const integrityCheck = runSqliteCheck(
+    database,
+    databaseLabel,
+    check,
+    undefined,
+    options.allFindings,
+  );
   if (check === "quick_check" && options.tables?.length) {
     const existing = new Set(
       readSqliteSchemaObjects(database)
@@ -229,29 +253,52 @@ export function assertSqliteTableIntegrity(
   checked?.add(tableName);
 }
 
+/** Maintenance must see every finding before deciding that only derived indexes need repair. */
+export function readSqliteIntegrityFindings(database: DatabaseSync): unknown[] {
+  return readSqliteCheckFindings(database, "integrity_check", undefined, true);
+}
+
+function readSqliteCheckFindings(
+  database: DatabaseSync,
+  pragma: SqliteCheckPragma,
+  tableName?: string,
+  allFindings = false,
+): unknown[] {
+  const argument = tableName
+    ? `('${tableName.replaceAll("'", "''")}')`
+    : allFindings
+      ? "(2147483647)"
+      : "";
+  const rows = database.prepare(`PRAGMA ${pragma}${argument};`).all();
+  return rows.map((row) => row[pragma] ?? Object.values(row)[0]);
+}
+
 function runSqliteCheck(
   database: DatabaseSync,
   databaseLabel: string,
   pragma: SqliteCheckPragma,
   tableName?: string,
+  allFindings = false,
 ): "ok" {
-  const argument = tableName ? `('${tableName.replaceAll("'", "''")}')` : "";
-  let rows: Array<Record<string, unknown>>;
+  let results: unknown[];
   try {
-    rows = database.prepare(`PRAGMA ${pragma}${argument};`).all() as Array<Record<string, unknown>>;
+    results = readSqliteCheckFindings(database, pragma, tableName, allFindings);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw createSqliteIntegrityError(
+    throw new SqliteIntegrityError(
       `SQLite ${pragma} failed for ${databaseLabel}: ${message}`,
       error,
     );
   }
-  const results = rows.map((row) => row[pragma] ?? Object.values(row)[0]);
   if (results.length === 1 && results[0] === "ok") {
     return "ok";
   }
   const details = results.map((result) => String(result)).join("; ") || "no result";
-  throw createSqliteIntegrityError(`SQLite ${pragma} failed for ${databaseLabel}: ${details}`);
+  throw new SqliteIntegrityError(
+    `SQLite ${pragma} failed for ${databaseLabel}: ${details}`,
+    undefined,
+    results,
+  );
 }
 
 function runSqliteForeignKeyCheck(database: DatabaseSync, databaseLabel: string): void {
@@ -279,7 +326,7 @@ function runSqliteForeignKeyCheck(database: DatabaseSync, databaseLabel: string)
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw createSqliteIntegrityError(
+    throw new SqliteIntegrityError(
       `SQLite foreign_key_check failed for ${databaseLabel}: ${message}`,
       error,
     );
@@ -295,7 +342,7 @@ function runSqliteForeignKeyCheck(database: DatabaseSync, databaseLabel: string)
   if (violationCount > MAX_REPORTED_FOREIGN_KEY_VIOLATIONS) {
     details.push("additional violations omitted");
   }
-  throw createSqliteIntegrityError(
+  throw new SqliteIntegrityError(
     `SQLite foreign_key_check failed for ${databaseLabel}: ${details.join("; ")}`,
   );
 }
@@ -319,15 +366,20 @@ function readTaskDeliveryCascadeForeignKeyId(database: DatabaseSync): bigint | u
     : undefined;
 }
 
-function createSqliteIntegrityError(message: string, cause?: unknown): Error {
-  const error =
-    cause === undefined
-      ? new Error(
-          `${message}. Stop the Gateway, run "openclaw doctor --fix" to inspect and repair this database, and restart. Only if Doctor still cannot repair the offline database, preserve the database and WAL and restore a verified backup.`,
-        )
-      : new Error(message, { cause });
-  error.name = "SqliteIntegrityError";
-  return error;
+export class SqliteIntegrityError extends Error {
+  constructor(
+    message: string,
+    cause?: unknown,
+    readonly findings?: readonly unknown[],
+  ) {
+    super(
+      cause === undefined
+        ? `${message}. Stop the Gateway, run "openclaw doctor --fix" to inspect and repair this database, and restart. Only if Doctor still cannot repair the offline database, preserve the database and WAL and restore a verified backup.`
+        : message,
+      cause === undefined ? undefined : { cause },
+    );
+    this.name = "SqliteIntegrityError";
+  }
 }
 
 function retainSortedForeignKeyViolation(

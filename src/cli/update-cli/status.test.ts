@@ -1,6 +1,6 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as configModule from "../../config/config.js";
 import { recordDeferredPluginMigrations as recordMigrations } from "../../infra/deferred-plugin-migrations.js";
@@ -327,6 +327,12 @@ it.each([true, false])(
     const recorded = createUpdateRun({ trigger: "cli" });
     await closeState();
     closeStateForTest();
+    const workerThreads = process.getBuiltinModule("node:worker_threads");
+    const admissionKey = "openclaw.sqliteNativeRuntimeAdmission";
+    const inheritedAdmission = workerThreads.getEnvironmentData(admissionKey);
+    onTestFinished(() => workerThreads.setEnvironmentData(admissionKey, inheritedAdmission));
+    // Module resets retain worker admission; force this fixture to observe its unsafe library.
+    workerThreads.setEnvironmentData(admissionKey, undefined);
     vi.resetModules();
     const sqlitePrototype: {
       prepare: (this: DatabaseSync, sql: string) => ReturnType<DatabaseSync["prepare"]>;
@@ -401,12 +407,12 @@ it.each([true, false])(
 );
 
 it.each([
-  { version: "24.15.0", state: "admitted" },
+  { version: "24.22.1", state: "admitted" },
   { version: "26.0.0", state: "unsupported" },
 ])("reports $state service Node $version", async ({ version, state }) => {
   vi.stubGlobal("process", {
     ...process,
-    versions: { ...process.versions, node: "26.8.1" },
+    versions: { ...process.versions, node: "26.12.1" },
   });
   service.readCommand.mockResolvedValue({
     programArguments: ["/fixture/node", "openclaw.mjs", "gateway"],
@@ -416,9 +422,6 @@ it.each([
     version,
     sqliteVersion: state === "unsupported" ? "3.50.2" : "3.53.0",
     nodeSharedSqlite: false,
-    ...(state === "admitted"
-      ? { note: "Node 24.15.0: unsupported version, capability check passed." }
-      : {}),
   });
   if (state === "unsupported") {
     await updateStatus({ json: true });
@@ -427,7 +430,7 @@ it.each([
         {
           source: "gateway-service",
           message: expect.stringContaining(version),
-          requirement: expect.stringContaining(">=24.16.0 <25, or >=26.1.0"),
+          requirement: expect.stringContaining(">=24.22.1 <25, or >=26.12.1"),
           fixHint: expect.stringContaining("https://openclaw.ai/install.sh"),
         },
       ],
@@ -435,8 +438,7 @@ it.each([
   }
   await updateStatus({});
   if (state === "admitted") {
-    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("capability check passed"));
-    expect(runtime.log).not.toHaveBeenCalledWith(undefined);
+    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("nvm install 26"));
   } else {
     expectOutput(version, "npm", "nvm install 26");
   }

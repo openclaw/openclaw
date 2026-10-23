@@ -74,6 +74,7 @@ const messageEvent = (id: string, parentId: string | null, content: string, role
 const readers: Array<
   [string, (scope: SessionTranscriptReadScope & { agentId: string }) => unknown]
 > = [
+  ["raw stats", readTranscriptStatsSync],
   ["active stats", readActiveTranscriptStats],
   ["display delta", (scope) => readTranscriptDisplayDelta(scope, { maxBytes: 1024 })],
   ["visible delta", (scope) => readVisible(scope, { maxBytes: 1024 })],
@@ -134,7 +135,11 @@ it.each(readers)("sizes %s without reading transcript overflow payloads", async 
     const spy = vi.spyOn(db, "prepare").mockImplementation((query) => {
       const statement = prepare(query);
       const columns = new Set(statement.columns().map(({ name }) => name));
-      if (["size_bytes", "serialized_bytes", "event_bytes"].some((name) => columns.has(name))) {
+      if (
+        ["sizeBytes", "size_bytes", "serialized_bytes", "event_bytes"].some((name) =>
+          columns.has(name),
+        )
+      ) {
         sizingQueries.push(query);
       }
       if (
@@ -167,6 +172,13 @@ it.each(readers)("sizes %s without reading transcript overflow payloads", async 
     }
     for (const query of sizingQueries) {
       const instructions = prepare(`EXPLAIN ${query}`).all() as SqliteInstruction[];
+      if (_name === "raw stats" || _name === "active stats") {
+        // Event counts and newline-byte accounting must share one per-row accumulator.
+        expect(
+          instructions.filter((op) => op.opcode === "AggStep" && op.p4?.startsWith("count("))
+            .length,
+        ).toBeLessThanOrEqual(1);
+      }
       const transcriptCursors = new Set(
         instructions
           .filter((op) => op.opcode === "OpenRead" && op.p2 === table?.rootpage)

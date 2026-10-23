@@ -1,5 +1,4 @@
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
-/** Doctor repair for stale plugin-owned routing state persisted in session entries. */
 import { normalizeOptionalString as normalizeString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntriesLower } from "@openclaw/normalization-core/string-normalization";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
@@ -23,6 +22,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { updateLegacySessionStore } from "../infra/state-migrations.legacy-session-store.js";
 import { listPluginDoctorSessionRouteStateOwners } from "../plugins/doctor-contract-registry.js";
 import type { DoctorSessionRouteStateOwner } from "../plugins/doctor-session-route-state-owner-types.js";
+import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import { isValidAgentHarnessSessionStoreEntry } from "../sessions/agent-harness-session-key.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
@@ -534,18 +534,6 @@ function applySessionRouteStateRepair(params: {
   return changed;
 }
 
-function groupByOwnerLabel<T extends { ownerLabel: string }>(
-  items: readonly T[],
-): Map<string, T[]> {
-  const grouped = new Map<string, T[]>();
-  for (const item of items) {
-    const group = grouped.get(item.ownerLabel) ?? [];
-    group.push(item);
-    grouped.set(item.ownerLabel, group);
-  }
-  return grouped;
-}
-
 type DoctorSessionStateStore =
   | { kind: "legacy"; path: string }
   | { kind: "sqlite"; agentId: string; path: string };
@@ -559,7 +547,7 @@ export async function runPluginSessionStateDoctorRepairs(params: {
   changes: string[];
 }): Promise<void> {
   const { scan } = params;
-  for (const [ownerLabel, repairs] of groupByOwnerLabel(scan.repairs)) {
+  for (const [ownerLabel, repairs] of groupRecords(scan.repairs, (repair) => repair.ownerLabel)) {
     const staleCount = countLabel(repairs.length, "session");
     params.warnings.push(
       [
@@ -615,7 +603,7 @@ export async function runPluginSessionStateDoctorRepairs(params: {
       }
     }
   }
-  for (const [ownerLabel, hits] of groupByOwnerLabel(scan.manualReview)) {
+  for (const [ownerLabel, hits] of groupRecords(scan.manualReview, (hit) => hit.ownerLabel)) {
     params.warnings.push(
       [
         `- Found explicit ${ownerLabel} model overrides in ${countLabel(

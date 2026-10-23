@@ -4,9 +4,11 @@ import { buildKnownAgentRunFailureReplyPayload } from "../../../auto-reply/reply
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { buildRealtimeVoiceAgentErrorProviderResult } from "../../../talk/agent-run-control.js";
 import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
-import { formatBillingErrorMessage } from "../../embedded-agent-helpers.js";
 import { FailoverError } from "../../failover-error.js";
-import { AUTH_INVALID_TOKEN_USER_TEXT } from "../../failover/user-copy.js";
+import {
+  AUTH_INVALID_TOKEN_USER_TEXT,
+  formatBillingErrorMessage,
+} from "../../failover/user-copy.js";
 import { runWithModelFallback } from "../../model-fallback-runner.js";
 import { resolveAgentRunErrorLifecycleFields } from "../../run-termination.js";
 import { log } from "../logger.js";
@@ -72,6 +74,7 @@ describe("assistant failure recovery", () => {
   });
 
   it.each([
+    { errorMessage: "Model prompt projection lost its canonical user turn" },
     { errorMessage: "Pending input is no longer active in its admitted transcript" },
     { errorMessage: "400 malformed input item", errorType: "invalid_request_error" },
     { errorMessage: "Request rejected by content policy", errorType: "invalid_request_error" },
@@ -81,9 +84,11 @@ describe("assistant failure recovery", () => {
       errorCode: "invalid_prompt",
     },
   ])("stops unchanged retries and model fallback for $errorMessage", async (fields) => {
+    let attempts = 0;
     const run = vi.fn(async () => {
       const input = makeInput({ ...fields, content: [] });
       for (;;) {
+        attempts += 1;
         const outcome = await handleEmbeddedAssistantFailure(input);
         if (outcome.action !== "retry") {
           throw new Error("failure was not surfaced");
@@ -103,6 +108,7 @@ describe("assistant failure recovery", () => {
       }),
     ).rejects.toThrow();
     expect(run).toHaveBeenCalledOnce();
+    expect(attempts).toBe(1);
     expect(log.warn).toHaveBeenCalledWith(
       "Assistant attempt failed",
       expect.objectContaining({

@@ -56,7 +56,6 @@ function collectUniqueSlackMentionIds(texts: Array<string | undefined>): string[
     if (!text) {
       continue;
     }
-    SLACK_USER_MENTION_RE.lastIndex = 0;
     for (const match of text.matchAll(SLACK_USER_MENTION_RE)) {
       const userId = match[1];
       if (userId) {
@@ -74,7 +73,6 @@ function renderSlackUserMentions(
   if (!text || renderedMentions.size === 0) {
     return text;
   }
-  SLACK_USER_MENTION_RE.lastIndex = 0;
   return text.replace(SLACK_USER_MENTION_RE, (full, userId: string) => {
     const rendered = renderedMentions.get(userId);
     return rendered ?? full;
@@ -104,10 +102,6 @@ export async function resolveSlackMessageContent(params: {
   client?: SlackWebClient;
   mediaMaxBytes: number;
   resolveUserName?: (userId: string) => Promise<{ name?: string }>;
-  mediaReadIdleTimeoutMs?: number;
-  mediaTotalTimeoutMs?: number;
-  abortSignal?: AbortSignal;
-  assertCurrent?: () => void;
   preloadedMedia?: ReadonlyMap<SlackFile, SlackMediaResult>;
 }): Promise<SlackResolvedMessageContent | null> {
   const ownFiles = filterInheritedParentFiles({
@@ -125,10 +119,6 @@ export async function resolveSlackMessageContent(params: {
             client: params.client,
             token: params.botToken,
             maxBytes: params.mediaMaxBytes,
-            readIdleTimeoutMs: params.mediaReadIdleTimeoutMs,
-            totalTimeoutMs: params.mediaTotalTimeoutMs,
-            abortSignal: params.abortSignal,
-            assertCurrent: params.assertCurrent,
             preloadedMedia: params.preloadedMedia,
           }),
         )

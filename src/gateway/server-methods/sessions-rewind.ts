@@ -9,12 +9,11 @@ import {
   type SessionsRewindParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { ErrorCode } from "../../../packages/gateway-protocol/src/schema/error-codes.js";
-import { clearSessionLifecycleQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import type {
   SessionBranchSwitchMutationResult,
   SessionMessageCutMutationResult,
 } from "../../config/sessions/session-accessor.js";
-import { mutateSessionAtMessageWithPreconditions } from "../../config/sessions/session-accessor.sqlite-message-cut.js";
+import { mutateSqliteSessionAtMessage } from "../../config/sessions/session-accessor.sqlite-message-cut.js";
 import {
   getSessionActorStorageBinding,
   runWithSessionActorStorage,
@@ -23,12 +22,18 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { ModelSelectionLockedError } from "../../sessions/model-overrides.js";
+import {
+  captureSessionTarget,
+  isCompetingSessionControllerWorkActive,
+  runSessionMutation,
+} from "../../sessions/session-controller.lifecycle.js";
+import {
+  cancelCapturedSessionControllerSource,
+  captureSessionControllerStop,
+  type SessionControllerStopCapture,
+} from "../../sessions/session-controller.stop.js";
 import { recordSessionCreated } from "../../sessions/session-created.js";
 import { withSessionInitializationSource } from "../../sessions/session-initialization.js";
-import {
-  isCompetingSessionWorkAdmissionActive,
-  runExclusiveSessionLifecycleMutation,
-} from "../../sessions/session-lifecycle-admission.js";
 import {
   captureSessionUpstreamLinkReadSource,
   prepareSessionUpstreamPresence,
@@ -53,7 +58,7 @@ import {
   resolveSessionWorkerPlacementMutationError,
 } from "../worker-environments/session-placement-lifecycle.js";
 import { forkSessionRepositoryWorkspace } from "../worker-environments/session-repository-checkpoints.js";
-import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
+import { createSessionMessageCutRunProjector } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { prepareSessionForkFilesystemRoot } from "./session-create-root.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
@@ -254,28 +259,47 @@ async function mutatePreparedSessionAtMessage({
     signal: options.signal,
   });
   let blockedByActiveRun = false;
-  await runExclusiveSessionLifecycleMutation(action, {
-    scope: initial.storePath,
-    identities: lifecycleIdentities,
+  const controllerTarget = captureSessionTarget({
+    storeScope: initial.storePath,
+    sessionKey: initial.canonicalKey ?? sessionKey,
+    aliases: lifecycleIdentities,
+    incarnation: initialSessionId,
+    agentId: requestedAgentId,
+  });
+  let queuedWork: SessionControllerStopCapture | undefined;
+  await runSessionMutation({
+    target: controllerTarget,
     prepare: async () => {
       const current = await loadCurrent();
+      const projectActiveRun = createSessionMessageCutRunProjector(context.resolveGatewayContext);
       // A message cut cannot disturb its source or invalidate queued work on failure.
       // Reject live work before transcript mutation instead of interrupting it.
       blockedByActiveRun =
         !terminalSettled ||
-        isCompetingSessionWorkAdmissionActive(initial.storePath, lifecycleIdentities) ||
+        isCompetingSessionControllerWorkActive(
+          initial.storePath,
+          lifecycleIdentities,
+          controllerTarget.agentId,
+        ) ||
         (getWorkerInferenceSessionControl(context.workerEnvironmentService)?.hasSession(
           initialSessionId,
         ) ??
           false) ||
-        resolveVisibleActiveSessionRunState({
-          context,
+        projectActiveRun({
+          storePath: current.storePath,
+          resolveGatewayContext: context.resolveGatewayContext,
           requestedKey: sessionKey,
           canonicalKey: current.canonicalKey,
           sessionId: initialSessionId,
           agentId: requestedAgentId,
           defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, sessionKey),
         }).active;
+      queuedWork = captureSessionControllerStop({
+        targets: [controllerTarget],
+        includeActive: false,
+        includeQueued: true,
+        resolveGatewayContext: context.resolveGatewayContext,
+      });
     },
     run: async () => {
       // A queued sharing mutation can revoke participation without rotating the source identity.
@@ -544,7 +568,7 @@ async function mutatePreparedSessionAtMessage({
           forkWorkspace: forkWorkspace?.value,
           creation: { ...creation, sandbox },
         };
-        result = await mutateSessionAtMessageWithPreconditions(
+        result = await mutateSqliteSessionAtMessage(
           action === "fork" ? forkParams : { ...mutationParams, entryId },
           action,
           memory ? undefined : expectedState,
@@ -619,14 +643,10 @@ async function mutatePreparedSessionAtMessage({
                 )),
               ];
         if (action !== "fork") {
-          clearSessionLifecycleQueues({
-            keys: lifecycleIdentities,
-            agentId: current.agentId,
-            sessionKey: current.canonicalKey,
-            sessionId: initialSessionId,
-            // History is committed; settling its original queues must finish after revocation.
-            assertCurrent: () => {},
-          });
+          // The committed cut retires captured inputs while the mutation still fences claims.
+          if (queuedWork) {
+            cancelCapturedSessionControllerSource(queuedWork);
+          }
         } else {
           await recordSessionCreated(cfg, {
             sessionKey: committedResult.key,

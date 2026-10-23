@@ -19,6 +19,14 @@ on:
           - release
           - testflight
           - screenshots
+      resource_diagnostics:
+        description: Collect the temporary resource timeline (screenshots operation only)
+        type: boolean
+        default: true
+      startup_probe:
+        description: Observe idle host and iPhone simulator before screenshots (temporary, no upload)
+        type: boolean
+        default: false
 
 permissions: {}
 
@@ -29,7 +37,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.21.0"
+  NODE_VERSION: "24.22.1"
 
 jobs:
   screenshots:
@@ -59,7 +67,7 @@ jobs:
       - name: Setup Ruby
         uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a # v1.329.0
         with:
-          ruby-version: "3.4.11"
+          ruby-version: "4.0.7"
           bundler: "4.0.22"
           bundler-cache: false
           working-directory: apps/ios
@@ -70,7 +78,7 @@ jobs:
           set -euo pipefail
           bundle _4.0.22_ install --jobs 4 --retry 3
           bundle _4.0.22_ check
-          test "$(bundle _4.0.22_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.240.1"
+          test "$(bundle _4.0.22_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.241.0"
 
       - name: Select Xcode and install pinned native tools
         run: |
@@ -90,7 +98,20 @@ jobs:
       - name: Capture iPhone, iPad, and Watch screenshots
         env:
           OPENCLAW_SNAPSHOT_DIAGNOSTICS: "1"
-        run: pnpm ios:screenshots
+          OPENCLAW_IOS_RESOURCE_DIAGNOSTICS: ${{ (inputs.resource_diagnostics || inputs.startup_probe) && '1' || '0' }}
+          OPENCLAW_SNAPSHOT_STARTUP_PROBE: ${{ inputs.startup_probe && '1' || '0' }}
+          OPENCLAW_SNAPSHOT_DEVICE_FAMILY: ${{ inputs.startup_probe && 'iphone' || '' }}
+          OPENCLAW_SNAPSHOT_SKIP_WATCH: ${{ inputs.startup_probe && '1' || '0' }}
+        run: |
+          node scripts/ios-resource-timeline.mjs --output "$RUNNER_TEMP/ios-resource-timeline.jsonl" -- \
+            pnpm ios:screenshots
+
+      - name: Compare Spotlight eligibility of build products
+        if: inputs.startup_probe
+        run: |
+          node scripts/ios-spotlight-probe.mjs \
+            --source apps/ios/build/SnapshotDerivedData \
+            --output "$RUNNER_TEMP/ios-spotlight-probe.json"
 
       - name: Retain screenshots and sanitized diagnostics
         if: always()
@@ -101,6 +122,8 @@ jobs:
             apps/ios/fastlane/screenshots/en-US/*.png
             apps/ios/build/SnapshotTestResults/capture-attempts.json
             apps/ios/build/screenshot-diagnostics.json
+            ${{ runner.temp }}/ios-resource-timeline.jsonl
+            ${{ runner.temp }}/ios-spotlight-probe.json
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
@@ -160,7 +183,7 @@ jobs:
       - name: Setup Ruby
         uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a # v1.329.0
         with:
-          ruby-version: "3.4.11"
+          ruby-version: "4.0.7"
           bundler: "4.0.22"
           bundler-cache: false
           working-directory: apps/ios
@@ -171,7 +194,7 @@ jobs:
           set -euo pipefail
           bundle _4.0.22_ install --jobs 4 --retry 3
           bundle _4.0.22_ check
-          test "$(bundle _4.0.22_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.240.1"
+          test "$(bundle _4.0.22_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.241.0"
 
       - name: Select Xcode
         run: |
@@ -247,10 +270,12 @@ jobs:
           OPENCLAW_TESTFLIGHT_GROUP_ID: ${{ vars.OPENCLAW_TESTFLIGHT_GROUP_ID }}
           SCAN_APP_NAME: OpenClaw
           SCAN_DEPLOYMENT_TARGET_VERSION: "18.0"
+          OPENCLAW_SNAPSHOT_DIAGNOSTICS: "1"
         run: |
           set -euo pipefail
           gh auth setup-git
-          pnpm ios:release:upload -- \
+          node scripts/ios-resource-timeline.mjs --output "$RUNNER_TEMP/ios-resource-timeline.jsonl" -- \
+            pnpm ios:release:upload -- \
             --destination "$IOS_RELEASE_DESTINATION" \
             --recovery-dir "$RUNNER_TEMP/ios-release-recovery"
 
@@ -290,8 +315,11 @@ jobs:
           path: |
             ${{ runner.temp }}/ios-release-recovery/screenshot-diagnostics/screenshots/*.png
             ${{ runner.temp }}/ios-release-recovery/screenshot-diagnostics/capture-attempts.json
+            ${{ runner.temp }}/ios-release-recovery/screenshot-diagnostics/screenshot-diagnostics.json
             ${{ runner.temp }}/ios-release-recovery/source/apps/ios/fastlane/screenshots/en-US/*.png
             ${{ runner.temp }}/ios-release-recovery/source/apps/ios/build/SnapshotTestResults/capture-attempts.json
+            ${{ runner.temp }}/ios-release-recovery/source/apps/ios/build/screenshot-diagnostics.json
+            ${{ runner.temp }}/ios-resource-timeline.jsonl
           if-no-files-found: ignore
           compression-level: 0
           retention-days: 30

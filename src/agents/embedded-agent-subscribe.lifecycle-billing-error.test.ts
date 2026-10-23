@@ -13,9 +13,10 @@ import {
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import type { ProviderFailoverErrorContext } from "../plugins/types.js";
+import { createReplyOperation } from "../sessions/session-controller.js";
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
 import { prepareCatalogExecutor } from "./embedded-agent-runner/run/attempt-stream-prepare.test-support.js";
-import { clearActiveEmbeddedRun } from "./embedded-agent-runner/runs.js";
+import { clearTestEmbeddedRun as clearActiveEmbeddedRun } from "./embedded-agent-runner/runs.test-support.js";
 import {
   createSubscribedSessionHarness,
   emitAssistantLifecycleErrorAndEnd,
@@ -148,6 +149,12 @@ it("preserves the prepared custom-route owner through real terminal dispatch", a
       }),
     );
     const { session } = await createTestSession({ model });
+    const replyOperation = createReplyOperation({
+      sessionKey,
+      sessionId,
+      agentId: "main",
+      resetTriggered: false,
+    });
     const stream = prepareCatalogExecutor({
       activeSession: session,
       diagnosticOwner,
@@ -159,6 +166,7 @@ it("preserves the prepared custom-route owner through real terminal dispatch", a
         runId,
         sessionId,
         sessionKey,
+        replyOperation,
         sessionFile: sessionKey,
         config,
         model,
@@ -190,6 +198,7 @@ it("preserves the prepared custom-route owner through real terminal dispatch", a
     } finally {
       stream.subscription.unsubscribe();
       clearActiveEmbeddedRun(sessionId, stream.queueHandle, sessionKey, sessionKey);
+      replyOperation.complete();
     }
   });
 });

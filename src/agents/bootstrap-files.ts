@@ -4,6 +4,7 @@ import type { ChatType } from "../channels/chat-type.js";
 import { prepareSessionTranscriptHydration } from "../config/sessions/session-transcript-hydration.js";
 import type { AgentContextInjection } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { rememberBoundedKey } from "../infra/dedupe.js";
 import { isMemoryOriginEligibleForAutomaticInjection } from "../memory-host-sdk/host/types.js";
 import { classifyActiveMemoryWorkspacePaths } from "../plugins/memory-runtime.js";
 import { resolveUserPath } from "../utils.js";
@@ -17,6 +18,7 @@ import { getAgentWorkspaceAccess } from "./workspace-access.js";
 import { resolveWorkspaceBootstrapPath } from "./workspace-bootstrap-policy.js";
 import { loadPersonalUserBootstrapFile } from "./workspace-personal-bootstrap.js";
 import {
+  DEFAULT_AGENTS_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
   DEFAULT_MEMORY_FILENAME,
   DEFAULT_USER_FILENAME,
@@ -34,22 +36,6 @@ const CONTINUATION_SCAN_MAX_RECORDS = 500;
 export const FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE = "openclaw:bootstrap-context:full";
 const BOOTSTRAP_WARNING_DEDUPE_LIMIT = 1024;
 const seenBootstrapWarnings = new Set<string>();
-
-function rememberBootstrapWarning(key: string): boolean {
-  // Warning keys include workspace/session/message so repeated setup failures
-  // stay quiet without hiding distinct bootstrap problems.
-  if (seenBootstrapWarnings.has(key)) {
-    return false;
-  }
-  if (seenBootstrapWarnings.size >= BOOTSTRAP_WARNING_DEDUPE_LIMIT) {
-    const oldest = seenBootstrapWarnings.values().next().value;
-    if (oldest) {
-      seenBootstrapWarnings.delete(oldest);
-    }
-  }
-  seenBootstrapWarnings.add(key);
-  return true;
-}
 
 /** Resolves the effective bootstrap injection mode for a session agent. */
 export function resolveContextInjectionMode(
@@ -104,8 +90,9 @@ export function makeBootstrapWarn(params: {
   }
   const workspacePrefix = params.workspaceDir ?? "";
   return (message: string, dedupeKey?: string) => {
+    // Keep distinct workspace/session/message problems independently visible.
     const key = dedupeKey ?? `${workspacePrefix}\u0000${params.sessionLabel}\u0000${message}`;
-    if (!rememberBootstrapWarning(key)) {
+    if (!rememberBoundedKey(seenBootstrapWarnings, key, BOOTSTRAP_WARNING_DEDUPE_LIMIT)) {
       return;
     }
     warn(`${message} (sessionKey=${params.sessionLabel})`);
@@ -275,6 +262,7 @@ async function resolveIneligibleAutomaticMemoryFiles(params: {
 type BootstrapFileResolutionParams = {
   bootstrapUserProfileId?: string;
   workspaceDir: string;
+  executionWorkspaceDir?: string;
   config?: OpenClawConfig;
   sessionKey?: string;
   sessionId?: string;
@@ -299,7 +287,27 @@ export async function resolveBootstrapFilesForPreparation(
 export async function resolveBootstrapFilesForRun(
   params: BootstrapFileResolutionParams,
 ): Promise<WorkspaceBootstrapFile[]> {
-  return resolveBootstrapFiles(params, "registered");
+  const bootstrapFiles = await resolveBootstrapFiles(params, "registered");
+  const executionWorkspaceDir =
+    params.executionWorkspaceDir && resolveUserPath(params.executionWorkspaceDir);
+  if (executionWorkspaceDir && executionWorkspaceDir !== resolveUserPath(params.workspaceDir)) {
+    const executionAgentsPath = path.join(executionWorkspaceDir, DEFAULT_AGENTS_FILENAME);
+    // Execution projects contribute instructions, never agent identity or memory.
+    for (const file of await resolveBootstrapFiles(
+      { ...params, workspaceDir: executionWorkspaceDir },
+      "registered",
+    )) {
+      if (
+        file.name === DEFAULT_AGENTS_FILENAME &&
+        !file.missing &&
+        path.resolve(file.path) === executionAgentsPath
+      ) {
+        file.origin = { kind: "execution-project", rootPath: executionWorkspaceDir };
+        bootstrapFiles.push(file);
+      }
+    }
+  }
+  return bootstrapFiles;
 }
 
 async function resolveBootstrapFiles(
@@ -318,6 +326,9 @@ async function resolveBootstrapFiles(
     params.readOnlyState,
   );
   const rawFiles = await loadWorkspaceBootstrapFiles(params.workspaceDir);
+  for (const file of rawFiles) {
+    file.origin = { kind: "agent-workspace", rootPath: resolveUserPath(params.workspaceDir) };
+  }
   const personalFile = await loadPersonalUserBootstrapFile(
     params.workspaceDir,
     params.bootstrapUserProfileId,
@@ -355,7 +366,7 @@ async function resolveBootstrapFiles(
     workspaceSetupCompleted,
     params.workspaceDir,
   );
-  // Heartbeat scratch is runner-owned; all lightweight runs omit bootstrap context.
+  // Lightweight runs omit bootstrap context.
   const bootstrapFiles = params.contextMode === "lightweight" ? [] : sessionFiles;
 
   const hooked =

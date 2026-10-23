@@ -20,6 +20,8 @@ import {
   focusDocument,
   preloadUsage,
   refreshButton,
+  selectUsageSession,
+  changeUsageControl,
 } from "./usage-page.test-support.ts";
 
 afterEach(cleanupUsagePageTest);
@@ -35,28 +37,25 @@ function usageRequest(
 
 describe("UsagePage cache convergence", () => {
   it("shows an exhausted empty page as partial and clears its message after refresh", async () => {
-    vi.useFakeTimers();
-    focusDocument();
     const message =
       "Usage request exceeded its 15-second budget; narrow the date range or select a session.";
     let result: SessionsUsageResult = {
       ...cacheSnapshot("partial").result,
       partial: { reason: "time-budget", message },
     };
-    const request = vi.fn(async (method: string) =>
-      method === "usage.status" ? { updatedAt: 1, providers: [] } : result,
-    );
-    const client = { request } as unknown as GatewayBrowserClient;
-    const page = await createPage(client, true, contextWithClient(client));
-    await preloadUsage(page);
-    expect(page.querySelector(".callout.danger")?.textContent).toBe(message);
+    const request = usageRequest(() => result);
+    const { page } = await loadUsagePage(request);
+    expect(page.querySelector(".callout.danger")).toBeNull();
+    expect(
+      page.querySelector(".usage-lower-bound:not(.usage-lower-bound--off)")?.textContent,
+    ).toContain(message);
     expect(page.textContent).not.toContain("Select a date range and click Refresh");
 
     result = cacheSnapshot("fresh").result;
     refreshButton(page).click();
     await vi.advanceTimersByTimeAsync(0);
     await page.updateComplete;
-    expect(page.querySelector(".callout.danger")).toBeNull();
+    expect(page.querySelector(".usage-lower-bound")?.classList).toContain("usage-lower-bound--off");
   });
 
   beforeEach(() => {
@@ -133,9 +132,12 @@ describe("UsagePage cache convergence", () => {
 
       expect(Boolean(page.querySelector(".usage-loading-card"))).toBe(!committed);
       expect(Boolean(page.querySelector(".usage-overview-card"))).toBe(committed);
-      expect(Boolean(page.querySelector(".usage-header-metrics .usage-metric-badge"))).toBe(
-        committed,
-      );
+      // Badges keep their slots; uncomputed totals show placeholders, never values.
+      expect(
+        [...page.querySelectorAll(".usage-summary-strip .usage-metric-badge strong")].every(
+          (node) => node.textContent === "—",
+        ),
+      ).toBe(!committed);
       expect(page.querySelector(".usage-cache-warning.warning")).toBeNull();
       expect(page.textContent).not.toContain("Select a date range and click Refresh");
 
@@ -199,8 +201,7 @@ describe("UsagePage cache convergence", () => {
     await page.updateComplete;
     expect(page.querySelector(".usage-cache-warning.warning")).not.toBeNull();
     const input = page.querySelector<HTMLInputElement>("input.usage-date-input")!;
-    input.value = "2026-08-01";
-    input.dispatchEvent(new Event("change", { bubbles: true }));
+    changeUsageControl(input, "2026-08-01");
     await vi.advanceTimersByTimeAsync(400);
     expect(usageCalls(request)).toHaveLength(2);
     await page.updateComplete;
@@ -362,12 +363,12 @@ it("does not transfer a manual detail refresh to a replacement selection", async
     return { providers: [] };
   });
   const { page } = await loadUsagePage(request);
-  page.querySelectorAll<HTMLButtonElement>(".session-bar-selection")[0]!.click();
+  selectUsageSession(page);
   await vi.waitFor(() => expect(textOf(page, ".session-log-content")).toBe(keys[0]));
 
   refreshing = true;
   refreshButton(page).click();
-  page.querySelectorAll<HTMLButtonElement>(".session-bar-selection")[1]!.click();
+  selectUsageSession(page, 1);
   await vi.waitFor(() => expect(textOf(page, ".session-log-content")).toBe(keys[1]));
   manual.resolve(result);
   await vi.waitFor(() => expect(refreshButton(page).disabled).toBe(false));
@@ -419,6 +420,28 @@ describe("UsagePage provider usage outcome", () => {
     },
   );
 
+  it("keeps a failed session read stale after provider plans load", async () => {
+    const request = vi.fn(async (method: string): Promise<unknown> =>
+      method === "usage.status" ? { updatedAt: 1, providers: [] } : cacheSnapshot("fresh").result,
+    );
+    const { page } = await createUsagePageFixture(request, false);
+    page.routeData = {
+      ...createPendingUsageRouteData(page.context.gateway, "2026-08-07"),
+      // The route's session read failed, so it carries no loaded timestamp.
+      loadedAtMs: null,
+      error: "usage unavailable",
+    };
+    await page.updateComplete;
+    await vi.waitFor(() => expect(usageCalls(request, "usage.status")).toHaveLength(1));
+    await page.updateComplete;
+    const sessionReads = usageCalls(request, "sessions.usage").length;
+    // Provider plans finishing must not mark the failed session read fresh.
+    window.dispatchEvent(new Event("focus"));
+    await vi.waitFor(() =>
+      expect(usageCalls(request, "sessions.usage").length).toBeGreaterThan(sessionReads),
+    );
+  });
+
   it.each([
     { loadSource: "direct", failed: true, aggregateFails: false },
     { loadSource: "preload", failed: true, aggregateFails: false },
@@ -446,26 +469,21 @@ describe("UsagePage provider usage outcome", () => {
       const { page } = await createUsagePageFixture(request, false);
       page.routeData = {
         ...createPendingUsageRouteData(page.context.gateway, "2026-08-07"),
-        providerUsage:
-          loadSource === "preload"
-            ? {
-                state: "settled",
-                result: { ok: false, error: { kind: "request-failed" } },
-              }
-            : { state: "pending" },
+        // A preload leaves fresh session usage; the page still reads provider plans itself.
         loadedAtMs: loadSource === "preload" ? Date.now() : null,
       };
       await page.updateComplete;
       if (loadSource === "direct") {
         await page.refresh();
-        await vi.waitFor(() => {
-          if (failed) {
-            expect(page.read().data.providerUsageUnavailable).toBe(true);
-          } else {
-            expect(page.read().data.providerUsage).toEqual(summary.providers);
-          }
-        });
       }
+      // Provider plans load on the page for both entry paths.
+      await vi.waitFor(() => {
+        if (failed) {
+          expect(page.read().data.providerUsageUnavailable).toBe(true);
+        } else {
+          expect(page.read().data.providerUsage).toEqual(summary.providers);
+        }
+      });
       const previousCalls = usageCalls(request, "usage.status").length;
       phase = 2;
       if (aggregateFails) {

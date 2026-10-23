@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
+import type { OAuthClientProvider } from "@modelcontextprotocol/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { McpServerConfig } from "../config/types.mcp.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { handleMcpOAuthCallback } from "../gateway/mcp-oauth-callback.js";
 import { createRequest, createResponse } from "../gateway/server-http.test-harness.js";
 import {
@@ -16,14 +17,14 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
 import {
   readMcpOAuthPendingAuthorization as readPending,
-  readMcpOAuthStore,
+  readMcpOAuthStore as readStoreFor,
 } from "./mcp-oauth-store.js";
 import {
   completeMcpOAuthAuthorization,
   countMcpOAuthPrincipals,
   readMcpOAuthCredentialsStatus,
   recordMcpOAuthAuthorizationRequired,
-  resolveMcpOAuthAccessToken,
+  resolveMcpOAuthAccessToken as resolveToken,
   startMcpOAuthAuthorization,
 } from "./mcp-oauth.js";
 import { requesterIdentity, withTempHome as withBaseTempHome } from "./mcp-oauth.test-harness.js";
@@ -39,7 +40,13 @@ const ROTATED_ACCESS = "gateway-token";
 const REMOTE_IDENTITY = operatorMcpOAuthIdentity("Remote Docs", "https://mcp.example.com/mcp");
 const CALENDLY_IDENTITY = operatorMcpOAuthIdentity("Calendly", "https://mcp.calendly.com/");
 const metadataUrl = () => new URL("https://mcp.example.com/.well-known/oauth-protected-resource");
-const readStore = () => readMcpOAuthStore(REMOTE_IDENTITY.storeKey);
+const readStore = () => readStoreFor(REMOTE_IDENTITY.storeKey);
+const storedTokens = () => withProvider(async (provider) => provider.tokens());
+const loginInstruction =
+  "Sign in again from Settings: select Connect on the plugin's page, or Sign in on the MCP page.";
+
+const resolveRemoteToken = (options: Omit<Parameters<typeof resolveToken>[0], "identity"> = {}) =>
+  resolveToken({ identity: REMOTE_IDENTITY, ...options });
 
 const startAuthorization = () =>
   startMcpOAuthAuthorization(REMOTE_IDENTITY, resolvedOAuthConfig(REMOTE_IDENTITY), {});
@@ -160,7 +167,10 @@ function authorizationCode(authorizationUrl: string): string {
   return code;
 }
 
-vi.mock("@modelcontextprotocol/sdk/client/auth.js", () => ({ auth: authMock }));
+vi.mock("@modelcontextprotocol/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@modelcontextprotocol/client")>()),
+  auth: authMock,
+}));
 
 function withTempHome<T>(run: (home: string) => T | Promise<T>, prefix: string) {
   return withBaseTempHome(run, {
@@ -205,23 +215,37 @@ describe("MCP OAuth provider", () => {
     }, "openclaw-mcp-oauth-existing-session-");
   });
 
+  it("names terminal sign-in only for servers defined under mcp.servers", async () => {
+    await withTempHome(async () => {
+      const url = "https://mcp.example.com/mcp";
+      const missingToken = (cfg: OpenClawConfig) =>
+        resolveToken({ identity: operatorMcpOAuthIdentity("Remote Docs", url, cfg) });
+      await expect(missingToken({ mcp: { servers: { "Remote Docs": { url } } } })).rejects.toThrow(
+        `MCP server "Remote Docs" requires OAuth authorization. Sign in from Settings → MCP, or from the Gateway's terminal: stop the Gateway with openclaw gateway stop, run openclaw mcp login 'Remote Docs', then start the Gateway again.`,
+      );
+      // A plugin-declared server is absent from mcp.servers; the CLI cannot resolve it.
+      await expect(missingToken({})).rejects.toThrow(
+        `MCP server "Remote Docs" requires OAuth authorization. Select Connect on the plugin's page in Settings to sign in again.`,
+      );
+    }, "openclaw-mcp-oauth-sign-in-hint-");
+  });
+
   it("preserves insufficient scope and forces the next login through authorization", async () => {
     await withTempHome(async () => {
       await saveTokens(makeTokens("decoy-token", "test-auth-token"));
 
       await expect(
-        resolveMcpOAuthAccessToken({
-          identity: REMOTE_IDENTITY,
+        resolveRemoteToken({
           authorizationChallenge: true,
           interactiveAuthorizationRequired: true,
           rejectedAccessToken: "decoy-token",
           scope: "docs.write",
         }),
       ).rejects.toThrow(
-        'MCP server "Remote Docs" requires additional OAuth authorization. Run openclaw mcp login Remote Docs.',
+        `MCP server "Remote Docs" requires additional OAuth authorization. Sign in again from Settings: select Connect on the plugin's page, or Sign in on the MCP page.`,
       );
       expect(authMock).not.toHaveBeenCalled();
-      expect(await withProvider(async (provider) => await provider.tokens())).toMatchObject({
+      expect(await storedTokens()).toMatchObject({
         access_token: "decoy-token",
         refresh_token: "test-auth-token",
       });
@@ -235,14 +259,12 @@ describe("MCP OAuth provider", () => {
 
       const storeKey = REMOTE_IDENTITY.storeKey;
       seedMcpOAuthStoreForTest(storeKey, {
-        ...(await readMcpOAuthStore(storeKey)),
+        ...(await readStore()),
         tokenExpiresAt: 0,
       });
-      await expect(resolveMcpOAuthAccessToken({ identity: REMOTE_IDENTITY })).rejects.toThrow(
-        "requires additional OAuth authorization",
-      );
+      await expect(resolveRemoteToken()).rejects.toThrow("requires additional OAuth authorization");
       expect(authMock).not.toHaveBeenCalled();
-      expect(await readMcpOAuthStore(storeKey)).toMatchObject({
+      expect(await readStore()).toMatchObject({
         tokens: { access_token: "decoy-token" },
         tokenExpiresAt: 0,
         pendingAuthorizationChallenge: { requiresAuthorization: true, scope: "docs.write" },
@@ -257,7 +279,7 @@ describe("MCP OAuth provider", () => {
         status: "redirect",
         state: "state-1234567890",
       });
-      expect(await withProvider(async (provider) => await provider.tokens())).toMatchObject({
+      expect(await storedTokens()).toMatchObject({
         access_token: "decoy-token",
       });
 
@@ -268,7 +290,7 @@ describe("MCP OAuth provider", () => {
       await expect(completeAuthorization("expired-code")).rejects.toThrow(
         "replacement authorization failed",
       );
-      expect(await readMcpOAuthStore(storeKey)).toMatchObject({
+      expect(await readStore()).toMatchObject({
         tokens: { access_token: "decoy-token" },
         tokenExpiresAt: 0,
         pendingAuthorizationChallenge: { requiresAuthorization: true },
@@ -276,10 +298,10 @@ describe("MCP OAuth provider", () => {
 
       authMock.mockImplementationOnce(authorize);
       await expect(completeAuthorization("valid-code")).resolves.toBe("authorized");
-      expect(await readMcpOAuthStore(storeKey)).toMatchObject({
+      expect(await readStore()).toMatchObject({
         tokens: { access_token: ROTATED_ACCESS },
       });
-      expect((await readMcpOAuthStore(storeKey)).pendingAuthorizationChallenge).toBeUndefined();
+      expect((await readStore()).pendingAuthorizationChallenge).toBeUndefined();
     }, "openclaw-mcp-oauth-insufficient-scope-");
   });
 
@@ -294,11 +316,9 @@ describe("MCP OAuth provider", () => {
           scope: "docs.read",
         }),
       ).resolves.toBe(true);
-      await expect(resolveMcpOAuthAccessToken({ identity: REMOTE_IDENTITY })).rejects.toThrow(
-        "requires additional OAuth authorization",
-      );
+      await expect(resolveRemoteToken()).rejects.toThrow("requires additional OAuth authorization");
       expect(authMock).not.toHaveBeenCalled();
-      expect(await withProvider(async (provider) => await provider.tokens())).toMatchObject({
+      expect(await storedTokens()).toMatchObject({
         access_token: "replacement-token",
       });
 
@@ -309,7 +329,7 @@ describe("MCP OAuth provider", () => {
           rejectedAccessToken: "replacement-token",
         }),
       ).resolves.toBe(false);
-      expect(await withProvider(async (provider) => await provider.tokens())).toMatchObject({
+      expect(await storedTokens()).toMatchObject({
         access_token: "newer-token",
       });
     }, "openclaw-mcp-oauth-terminal-rejection-");
@@ -328,8 +348,7 @@ describe("MCP OAuth provider", () => {
       authMock.mockRejectedValueOnce(new Error("scope refresh rejected"));
 
       await expect(
-        resolveMcpOAuthAccessToken({
-          identity: REMOTE_IDENTITY,
+        resolveRemoteToken({
           authorizationChallenge: true,
           rejectedAccessToken: "decoy-token",
           resourceMetadataUrl,
@@ -359,7 +378,7 @@ describe("MCP OAuth provider", () => {
       const resourceMetadataUrl = metadataUrl();
       await saveTokens(makeTokens("legacy-access", "legacy-refresh"));
       seedMcpOAuthStoreForTest(storeKey, {
-        ...(await readMcpOAuthStore(storeKey)),
+        ...(await readStore()),
         tokenExpiresAt: 0,
         pendingAuthorizationChallenge: {
           resourceMetadataUrl: resourceMetadataUrl.toString(),
@@ -372,10 +391,8 @@ describe("MCP OAuth provider", () => {
         return "AUTHORIZED";
       });
 
-      await expect(resolveMcpOAuthAccessToken({ identity: REMOTE_IDENTITY })).resolves.toBe(
-        ROTATED_ACCESS,
-      );
-      expect((await readMcpOAuthStore(storeKey)).pendingAuthorizationChallenge).toBeUndefined();
+      await expect(resolveRemoteToken()).resolves.toBe(ROTATED_ACCESS);
+      expect((await readStore()).pendingAuthorizationChallenge).toBeUndefined();
     }, "openclaw-mcp-oauth-doctor-challenge-");
   });
 
@@ -383,20 +400,16 @@ describe("MCP OAuth provider", () => {
     await withTempHome(async () => {
       await saveTokens(makeTokens("example", "test-auth-token"));
       const storeKey = REMOTE_IDENTITY.storeKey;
-      const legacyStore = await readMcpOAuthStore(storeKey);
+      const legacyStore = await readStore();
       delete legacyStore.tokenExpiresAt;
       seedMcpOAuthStoreForTest(storeKey, legacyStore);
 
-      await expect(
-        resolveMcpOAuthAccessToken({ identity: REMOTE_IDENTITY, acceptUnknownExpiry: true }),
-      ).resolves.toBe("example");
+      await expect(resolveRemoteToken({ acceptUnknownExpiry: true })).resolves.toBe("example");
       expect(authMock).not.toHaveBeenCalled();
 
       authMock.mockImplementationOnce(authorize);
 
-      await expect(resolveMcpOAuthAccessToken({ identity: REMOTE_IDENTITY })).resolves.toBe(
-        ROTATED_ACCESS,
-      );
+      await expect(resolveRemoteToken()).resolves.toBe(ROTATED_ACCESS);
       expect(authMock).toHaveBeenCalledOnce();
     }, "openclaw-mcp-oauth-legacy-token-");
   });
@@ -416,13 +429,12 @@ describe("MCP OAuth provider", () => {
       );
 
       await expect(
-        resolveMcpOAuthAccessToken({
-          identity: REMOTE_IDENTITY,
+        resolveRemoteToken({
           authorizationChallenge: true,
           resourceMetadataUrl,
           scope: "docs.read",
         }),
-      ).rejects.toThrow("Run openclaw mcp login Remote Docs.");
+      ).rejects.toThrow(loginInstruction);
       expect(authMock).not.toHaveBeenCalled();
       expect(await readStore()).toMatchObject({
         codeVerifier: "existing-verifier",
@@ -513,7 +525,7 @@ describe("MCP OAuth provider", () => {
       expect(authMock.mock.calls[1]?.[0]?.clientMetadata.redirect_uris).toEqual([
         "http://localhost:8989/oauth/callback",
       ]);
-      expect(await readMcpOAuthStore(CALENDLY_IDENTITY.storeKey)).toMatchObject({
+      expect(await readStoreFor(CALENDLY_IDENTITY.storeKey)).toMatchObject({
         codeVerifier: "verifier",
         redirectUrl: "http://localhost:8989/oauth/callback",
       });
@@ -530,7 +542,7 @@ describe("MCP OAuth provider", () => {
           code: "code-123",
         }),
       ).resolves.toBe("authorized");
-      expect(await readMcpOAuthStore(CALENDLY_IDENTITY.storeKey)).not.toMatchObject({
+      expect(await readStoreFor(CALENDLY_IDENTITY.storeKey)).not.toMatchObject({
         codeVerifier: expect.anything(),
         redirectUrl: expect.anything(),
       });
@@ -540,13 +552,11 @@ describe("MCP OAuth provider", () => {
   it("does not start hidden authorization flows without an authorization callback", async () => {
     await withTempHome(async () => {
       await withProvider(async (provider) => {
-        await expect(provider.state?.()).rejects.toThrow("Run openclaw mcp login Remote Docs.");
-        expect(() => provider.saveCodeVerifier?.("verifier")).toThrow(
-          "Run openclaw mcp login Remote Docs.",
-        );
+        await expect(provider.state?.()).rejects.toThrow(loginInstruction);
+        expect(() => provider.saveCodeVerifier?.("verifier")).toThrow(loginInstruction);
         await expect(
           provider.redirectToAuthorization?.(new URL("https://auth.example.com/authorize")),
-        ).rejects.toThrow("Run openclaw mcp login Remote Docs.");
+        ).rejects.toThrow(loginInstruction);
       });
     }, "openclaw-mcp-oauth-noninteractive-");
   });
@@ -554,8 +564,8 @@ describe("MCP OAuth provider", () => {
   it("resumes authorization after restart, retains failures, and supersedes older starts", async () => {
     await withTempHome(async () => {
       const { auth: realAuth } = await vi.importActual<
-        typeof import("@modelcontextprotocol/sdk/client/auth.js")
-      >("@modelcontextprotocol/sdk/client/auth.js");
+        typeof import("@modelcontextprotocol/client")
+      >("@modelcontextprotocol/client");
       authMock.mockImplementation(realAuth);
       const fixture = await startAuthorizationServer();
       const rawServer = {
@@ -573,7 +583,7 @@ describe("MCP OAuth provider", () => {
       try {
         const first = await startMcpOAuthAuthorization(identity, config, {});
         assert(first.status === "redirect", "expected first MCP OAuth redirect");
-        expect(await readMcpOAuthStore(identity.storeKey)).toMatchObject({
+        expect(await readStoreFor(identity.storeKey)).toMatchObject({
           codeVerifier: expect.any(String),
           lastAuthorizationUrl: first.authorizationUrl,
           redirectUrl: first.redirectUrl,
@@ -593,10 +603,10 @@ describe("MCP OAuth provider", () => {
         expect(callbacks.map(({ res }) => res.statusCode).toSorted((a, b) => a - b)).toEqual([
           200, 404,
         ]);
-        expect(await readMcpOAuthStore(identity.storeKey)).toMatchObject({
+        expect(await readStoreFor(identity.storeKey)).toMatchObject({
           tokens: { access_token: expect.any(String) },
         });
-        expect(await readMcpOAuthStore(identity.storeKey)).not.toHaveProperty("codeVerifier");
+        expect(await readStoreFor(identity.storeKey)).not.toHaveProperty("codeVerifier");
 
         const secondIdentity = requesterIdentity("fixture", config.url, "sender-b");
         const second = await startMcpOAuthAuthorization(secondIdentity, config, {});
@@ -604,12 +614,12 @@ describe("MCP OAuth provider", () => {
         await expect(
           completeMcpOAuthAuthorization(secondIdentity, config, { code: "wrong-code" }),
         ).rejects.toThrow();
-        expect(await readMcpOAuthStore(secondIdentity.storeKey)).toMatchObject({
+        expect(await readStoreFor(secondIdentity.storeKey)).toMatchObject({
           lastAuthorizationUrl: second.authorizationUrl,
           redirectUrl: second.redirectUrl,
           codeVerifier: expect.any(String),
         });
-        expect(await readMcpOAuthStore(secondIdentity.storeKey)).not.toHaveProperty("tokens");
+        expect(await readStoreFor(secondIdentity.storeKey)).not.toHaveProperty("tokens");
 
         const third = await startMcpOAuthAuthorization(secondIdentity, config, {});
         assert(third.status === "redirect", "expected third MCP OAuth redirect");
@@ -621,7 +631,7 @@ describe("MCP OAuth provider", () => {
             code: authorizationCode(second.authorizationUrl),
           }),
         ).rejects.toThrow();
-        expect((await readMcpOAuthStore(secondIdentity.storeKey)).lastAuthorizationUrl).toBe(
+        expect((await readStoreFor(secondIdentity.storeKey)).lastAuthorizationUrl).toBe(
           third.authorizationUrl,
         );
         await expect(

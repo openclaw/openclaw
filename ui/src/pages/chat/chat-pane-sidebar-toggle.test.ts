@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { registerModalSurface } from "../../components/overlay-registry.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { createChatPaneRails } from "./chat-pane-rails.ts";
@@ -23,12 +24,8 @@ const panelCases = [
   { key: "e", slot: "detail", altKey: true },
 ] as const;
 
-function dispatchPanelShortcut(
-  pane: TestChatPane,
-  shortcut: (typeof panelCases)[number],
-  modifiers: KeyboardEventInit = {},
-) {
-  const event = new KeyboardEvent("keydown", {
+function panelShortcut(shortcut: (typeof panelCases)[number], modifiers: KeyboardEventInit = {}) {
+  return new KeyboardEvent("keydown", {
     cancelable: true,
     key: shortcut.altKey ? shortcut.key.toUpperCase() : "ж",
     code: `Key${shortcut.key.toUpperCase()}`,
@@ -37,8 +34,6 @@ function dispatchPanelShortcut(
     altKey: shortcut.altKey,
     ...modifiers,
   });
-  pane.handleDocumentKeydown(event);
-  return event;
 }
 
 function shortcutPane() {
@@ -48,7 +43,14 @@ function shortcutPane() {
   });
   result.pane.active = true;
   result.state.browserPanelAvailable = true;
-  return result;
+  return {
+    ...result,
+    dispatch: (shortcut: (typeof panelCases)[number], modifiers?: KeyboardEventInit) => {
+      const event = panelShortcut(shortcut, modifiers);
+      result.pane.handleDocumentKeydown(event);
+      return event.defaultPrevented;
+    },
+  };
 }
 
 afterEach(() => document.body.replaceChildren());
@@ -115,7 +117,7 @@ describe("chat pane sidebar toggles", () => {
 
   it.each(panelCases)("toggles the available $slot in the active pane", (shortcut) => {
     const { slot } = shortcut;
-    const { pane, state } = shortcutPane();
+    const { pane, state, dispatch } = shortcutPane();
     state.connected = true;
     pane.context.gateway.snapshot.phase = "connected";
     pane.context.gateway.snapshot.hello = gatewayHelloForMethods(["desktop.observe", "board.get"]);
@@ -124,16 +126,14 @@ describe("chat pane sidebar toggles", () => {
     state.sidebarLayout = openSlot(openSlot({ columns: [] }, slot), "terminal");
 
     expect(isSidebarSlotVisible(state.sidebarLayout, slot)).toBe(false);
-    expect(dispatchPanelShortcut(pane, shortcut).defaultPrevented).toBe(true);
+    expect(dispatch(shortcut)).toBe(true);
     expect(state.sidebarLayout.columns[0]?.panels.map((panel) => panel.slot)).toEqual([
       slot,
       "terminal",
     ]);
     expect(isSidebarSlotVisible(state.sidebarLayout, slot)).toBe(true);
     // Ctrl is also supported; visible panels close, retaining their sibling.
-    expect(
-      dispatchPanelShortcut(pane, shortcut, { metaKey: false, ctrlKey: true }).defaultPrevented,
-    ).toBe(true);
+    expect(dispatch(shortcut, { metaKey: false, ctrlKey: true })).toBe(true);
     expect(state.sidebarLayout.columns[0]?.panels.map((panel) => panel.slot)).toEqual(["terminal"]);
 
     for (const gate of ["inactive", "hidden", "consumed", "composing", "modal"] as const) {
@@ -141,17 +141,13 @@ describe("chat pane sidebar toggles", () => {
       pane.presented = gate !== "hidden";
       const modal = document.createElement("nav");
       modal.className = "shell-nav";
+      const releaseModal = registerModalSurface(modal);
       if (gate === "modal") {
         modal.setAttribute("aria-modal", "true");
         document.body.append(modal);
       }
-      const event = new KeyboardEvent("keydown", {
-        cancelable: true,
+      const event = panelShortcut(shortcut, {
         key: shortcut.key,
-        code: `Key${shortcut.key.toUpperCase()}`,
-        metaKey: true,
-        shiftKey: true,
-        altKey: shortcut.altKey,
         isComposing: gate === "composing",
       });
       if (gate === "consumed") {
@@ -159,6 +155,7 @@ describe("chat pane sidebar toggles", () => {
       }
       pane.handleDocumentKeydown(event);
       expect(isSidebarSlotVisible(state.sidebarLayout, slot), gate).toBe(false);
+      releaseModal();
       modal.remove();
     }
     pane.active = true;
@@ -166,19 +163,19 @@ describe("chat pane sidebar toggles", () => {
     // Existing panel chords work from the composer; the new chords keep that contract.
     const input = document.body.appendChild(document.createElement("textarea"));
     input.focus();
-    expect(dispatchPanelShortcut(pane, shortcut).defaultPrevented).toBe(true);
+    expect(dispatch(shortcut)).toBe(true);
     expect(isSidebarSlotVisible(state.sidebarLayout, slot)).toBe(true);
-    dispatchPanelShortcut(pane, shortcut);
+    dispatch(shortcut);
 
     if (slot === "dashboard") {
       const compactPane = pane as TestChatPane & { compact: boolean };
       compactPane.compact = true;
-      expect(dispatchPanelShortcut(pane, shortcut).defaultPrevented).toBe(false);
+      expect(dispatch(shortcut)).toBe(false);
       compactPane.compact = false;
     }
     if (slot === "discussion") {
       state.connected = false;
-      expect(dispatchPanelShortcut(pane, shortcut).defaultPrevented).toBe(false);
+      expect(dispatch(shortcut)).toBe(false);
       state.connected = true;
     }
 
@@ -186,7 +183,7 @@ describe("chat pane sidebar toggles", () => {
     pane.context.gateway.snapshot.hello = gatewayHelloForMethods([], ["operator.read"]);
     pane.sessionDiscussion.record(state.sessionKey.trim(), "none");
     if (["browser", "desktop", "discussion", "dashboard"].some((gated) => gated === slot)) {
-      expect(dispatchPanelShortcut(pane, shortcut).defaultPrevented).toBe(false);
+      expect(dispatch(shortcut)).toBe(false);
       expect(isSidebarSlotVisible(state.sidebarLayout, slot)).toBe(false);
     }
   });

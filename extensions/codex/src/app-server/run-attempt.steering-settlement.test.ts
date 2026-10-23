@@ -3,14 +3,23 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { resolveActiveEmbeddedRunSessionId } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
+  createPluginRecord,
+  createPluginRegistry,
+  createPluginRuntimeMock,
+  disposePluginRegistryInstances,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
   appendSessionTranscriptMessageByIdentity,
   withSessionTranscriptWriteLock,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createCodexAppServerAgentHarness } from "../../harness.js";
 import type { CodexSteeringQueueOptions } from "./attempt-steering.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS } from "./attempt-timeouts.js";
 import { nativeCommandItem } from "./codex-app-server.test-fixtures.js";
+import { prepareCodexServerNotification } from "./protocol-validators.js";
 import { isJsonObject, type CodexServerNotification, type JsonObject } from "./protocol.js";
 import { itemNotification, turnCompleted } from "./protocol.test-helpers.js";
 import {
@@ -23,6 +32,8 @@ import {
   setupRunAttemptTestHooks,
   tempDir,
 } from "./run-attempt-test-harness.js";
+import { createSteeringRecorder } from "./run-attempt.steering.test-support.js";
+import { testCodexAppServerBindingStore } from "./session-binding.test-helpers.js";
 import {
   attachSqliteSessionTarget,
   readTranscriptMessagesByIdentity,
@@ -50,7 +61,6 @@ async function createFixture() {
     sessionId: params.sessionId,
     sessionKey: expectDefined(params.sessionKey, "steering session key"),
   };
-  params.toolAuthorityFingerprint = "steering-settlement-authority";
   params.timeoutMs = 60 * 60_000;
   const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
   const message = {
@@ -60,27 +70,17 @@ async function createFixture() {
     idempotencyKey: "steer-source:user",
   };
   let persisted = false;
-  const recorder = {
+  const recorder = createSteeringRecorder(
     message,
-    resolveMessage: async () => message,
-    getAdmissionReceipt: () => undefined,
-    markRuntimePersistencePending: vi.fn(),
-    markRuntimePersisted: vi.fn(),
-    markBlocked: vi.fn(),
-    isBlocked: () => false,
-    hasRuntimePersistencePending: () => false,
-    waitForRuntimePersistence: async () => {},
-    persistBlocked: async () => undefined,
-    persistFallback: async () => undefined,
-    hasPersisted: () => persisted,
-    persistApproved: vi.fn(async () => {
+    async () => {
       if (!persisted) {
         const committed = await appendSessionTranscriptMessageByIdentity({ ...target, message });
         persisted = Boolean(committed);
       }
       return undefined;
-    }),
-  } satisfies NonNullable<CodexSteeringQueueOptions["userTurnTranscriptRecorder"]>;
+    },
+    () => persisted,
+  );
   const started = createDeferred<void>();
   const prefixCompleted = createDeferred<void>();
   const abort = new AbortController();
@@ -99,8 +99,30 @@ async function createFixture() {
       prefixCompleted.resolve();
     }
   };
+  const registration = createPluginRegistry({
+    runtime: createPluginRuntimeMock({ config: { current: () => params.config ?? {} } }),
+    logger: { info() {}, warn() {}, error() {}, debug() {} },
+    activateGlobalSideEffects: false,
+  });
+  const record = createPluginRecord({
+    id: "codex",
+    origin: "bundled",
+    source: path.join(tempDir, "bundled-codex", "index.js"),
+    rootDir: path.join(tempDir, "bundled-codex"),
+  });
+  registration.registry.plugins.push(record);
+  registration
+    .createApi(record, { config: params.config ?? {} })
+    .registerAgentHarness(
+      createCodexAppServerAgentHarness({ bindingStore: testCodexAppServerBindingStore }),
+    );
+  setActivePluginRegistry(registration.registry);
+  const registeredHarness = expectDefined(
+    registration.registry.agentHarnesses[0]?.harness,
+    "registrar-owned bundled Codex harness",
+  );
   const harness = createStartedThreadHarness();
-  const run = runCodexAppServerAttempt(params);
+  const run = runCodexAppServerAttempt(params, { registeredHarness });
   const accepted = vi.fn();
   let lock: ReturnType<typeof holdTranscript> | undefined;
   const notifications: Promise<unknown>[] = [];
@@ -129,8 +151,11 @@ async function createFixture() {
       await prefixCompleted.promise;
     },
     item: (item: JsonObject) => notify(itemNotification("item/completed", item)),
-    complete: (items: JsonObject[]) =>
-      notify(turnCompleted({ id: "turn-1", status: "completed", items })),
+    complete: (items: JsonObject[]) => {
+      const notification = turnCompleted({ id: "turn-1", status: "completed", items });
+      expect(prepareCodexServerNotification(notification).completedTurn).toBeDefined();
+      return notify(notification);
+    },
     hold: async () => {
       lock = holdTranscript(target);
       await lock.acquired;
@@ -140,11 +165,15 @@ async function createFixture() {
       lock?.release();
       abort.abort("test cleanup");
       vi.useRealTimers();
-      await Promise.allSettled([run, ...notifications, ...(lock ? [lock.writer] : [])]);
-      closeHost();
+      try {
+        await Promise.allSettled([run, ...notifications, ...(lock ? [lock.writer] : [])]);
+      } finally {
+        closeHost();
+        await disposePluginRegistryInstances(registration.registry);
+      }
     },
     readMessages: () => readTranscriptMessagesByIdentity(params),
-    queue: () =>
+    queue: (options: Partial<CodexSteeringQueueOptions> = {}) =>
       queueActiveRunMessageForTest(params.sessionId, steerText, {
         debounceMs: 0,
         isInboundUserMessage: true,
@@ -152,6 +181,7 @@ async function createFixture() {
         userTurnTranscriptRecorder: recorder,
         waitForTranscriptCommit: true,
         onQueueAccepted: accepted,
+        ...options,
       }),
   };
 }
@@ -299,4 +329,71 @@ it("keeps one steering prefix and source through degraded tainted native complet
     __openclaw: { turnTainted: true, settlementWarning: expect.any(Object) },
   });
   expect(resolveActiveEmbeddedRunSessionId(f.target.sessionKey)).toBeUndefined();
+});
+
+it("persists a controller-adapted human steer before native dispatch", async () => {
+  const release = createDeferred<void>();
+  const persist = expectDefined(
+    f.recorder.persistApproved.getMockImplementation(),
+    "recorder persistence",
+  );
+  f.recorder.persistApproved.mockImplementation(async () => {
+    await release.promise;
+    return await persist();
+  });
+  try {
+    expect(
+      f.queue({
+        isInboundUserMessage: true,
+        allowPendingUserInputAnswer: false,
+      }),
+    ).toBe(true);
+    await vi.waitFor(() => expect(f.recorder.persistApproved).toHaveBeenCalledOnce(), fastWait);
+    expect(f.harness.requests.filter((request) => request.method === "turn/steer")).toHaveLength(0);
+    expect(f.accepted).not.toHaveBeenCalled();
+    release.resolve();
+    await vi.waitFor(() => expect(f.accepted).toHaveBeenCalledExactlyOnceWith(true), fastWait);
+    expect(f.harness.requests.filter((request) => request.method === "turn/steer")).toHaveLength(1);
+    expect(f.recorder.hasPersisted()).toBe(true);
+    const steer = expectDefined(
+      f.harness.requests.find((request) => request.method === "turn/steer"),
+      "native steer",
+    );
+    const clientId = expectDefined(
+      isJsonObject(steer.params) && typeof steer.params.clientUserMessageId === "string"
+        ? steer.params.clientUserMessageId
+        : undefined,
+      "native steer correlation",
+    );
+    const userItem = {
+      id: "adapted-human",
+      type: "userMessage",
+      clientId,
+      content: [{ type: "text", text: steerText, text_elements: [] }],
+    };
+    await f.item(userItem);
+    expect(f.recorder.persistApproved).toHaveBeenCalledOnce();
+    expect(
+      (await f.readMessages()).filter((message) => messageText(message) === steerText),
+    ).toHaveLength(1);
+    const finalItem = f.item({
+      id: "adapted-human-final",
+      type: "agentMessage",
+      phase: "final_answer",
+      text: codaText,
+    });
+    await f.complete([
+      prefix,
+      userItem,
+      { id: "adapted-human-final", type: "agentMessage", phase: "final_answer", text: codaText },
+    ]);
+    await finalItem;
+    expect(readAttemptTerminal(await f.run)).toMatchObject(successfulTerminal);
+    expect(f.recorder.persistApproved).toHaveBeenCalledOnce();
+    expect(
+      (await f.readMessages()).filter((message) => messageText(message) === steerText),
+    ).toHaveLength(1);
+  } finally {
+    release.resolve();
+  }
 });

@@ -11,7 +11,7 @@ import * as entryPatch from "../../config/sessions/session-entry-patch.js";
 import { readSessionMembersInWorker } from "../../config/sessions/session-sharing-store.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
-import * as lifecycle from "../../sessions/session-lifecycle-admission.js";
+import * as lifecycle from "../../sessions/session-controller.lifecycle.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   runOpenClawAgentWriteTransaction,
@@ -167,32 +167,30 @@ it.each(["caller", "revoked grant", "deleted row", "replaced generation"] as con
   (revoked) =>
     withFixture(async (f) => {
       await readSessionMembersInWorker(f.scope);
-      const run = lifecycle.runExclusiveSessionLifecycleMutation;
+      const run = lifecycle.runSessionMutation;
       let acknowledgedShareId: string | undefined;
-      vi.spyOn(lifecycle, "runExclusiveSessionLifecycleMutation").mockImplementationOnce(
-        async (operation, params) => {
-          const result = await run(operation, params);
-          const committed = (await readSessionMembersInWorker(f.scope)).entry?.publicShare;
-          expect(committed?.sessionId).toBe(f.sessionId);
-          acknowledgedShareId = committed?.id;
-          if (revoked === "caller") {
-            f.client.invalidated = true;
-          } else if (revoked === "deleted row") {
-            runOpenClawAgentWriteTransaction(
-              (database) => deleteSessionEntryRows(database, f.scope.sessionKey),
-              f.scope,
-            );
-          } else {
-            await upsertSessionEntryCore(
-              f.scope,
-              revoked === "revoked grant"
-                ? { publicShare: undefined }
-                : { sessionId: "replacement-session" },
-            );
-          }
-          return result;
-        },
-      );
+      vi.spyOn(lifecycle, "runSessionMutation").mockImplementationOnce(async (params) => {
+        const result = await run(params);
+        const committed = (await readSessionMembersInWorker(f.scope)).entry?.publicShare;
+        expect(committed?.sessionId).toBe(f.sessionId);
+        acknowledgedShareId = committed?.id;
+        if (revoked === "caller") {
+          f.client.invalidated = true;
+        } else if (revoked === "deleted row") {
+          runOpenClawAgentWriteTransaction(
+            (database) => deleteSessionEntryRows(database, f.scope.sessionKey),
+            f.scope,
+          );
+        } else {
+          await upsertSessionEntryCore(
+            f.scope,
+            revoked === "revoked grant"
+              ? { publicShare: undefined }
+              : { sessionId: "replacement-session" },
+          );
+        }
+        return result;
+      });
       const respond = vi.fn<RespondFn>();
       const refusal = {
         caller: "session ownership changed before sharing mutation",

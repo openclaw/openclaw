@@ -717,6 +717,7 @@ describe("Code Mode swarm host bridge", () => {
         queuedLaunch: error
           ? undefined
           : {
+              requesterRecovery: {},
               request: {},
               timeoutMs: 1,
               schedulerGroupKey: "group",

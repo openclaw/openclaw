@@ -595,9 +595,15 @@ export async function hydrateModelCatalogFromModelsDev(options: {
     const ownedProviders = new Set((manifest.providers ?? []).map(normalizeModelCatalogProviderId));
     const catalog = normalizeModelCatalog(manifest.modelCatalog, { ownedProviders });
     for (const [provider, source] of Object.entries(catalog?.modelsDev ?? {})) {
-      if (catalog?.providers?.[provider] && options.bundle.providers[provider]) {
-        mappings.set(provider, source);
+      // A runtime-discovered provider declares no static rows, which normalization
+      // drops; its raw declaration still supplies the transport for models.dev rows.
+      const declared =
+        catalog?.providers?.[provider] ?? manifest.modelCatalog?.providers?.[provider];
+      if (!isRecord(declared)) {
+        continue;
       }
+      options.bundle.providers[provider] ??= { ...declared, models: [] };
+      mappings.set(provider, source);
     }
     // Endpoint-specific rules remain runtime-owned. Another plugin cannot veto
     // an owner's imports through an unowned shared-catalog suppression.
@@ -693,8 +699,9 @@ const PROVIDER_MODEL_INVENTORIES: Readonly<
   novita: { url: "https://api.novita.ai/openai/v1/models", caseInsensitive: true },
   nvidia: { url: "https://integrate.api.nvidia.com/v1/models" },
   opencode: { url: "https://opencode.ai/zen/v1/models" },
-  "opencode-go": { url: "https://opencode.ai/zen/go/v1/models" },
+  "opencode-go": { url: "https://opencode.ai/inference/go/v1/models" },
   venice: { url: "https://api.venice.ai/api/v1/models" },
+  "vercel-ai-gateway": { url: "https://ai-gateway.vercel.sh/v1/models" },
 };
 
 /** Marks published rows a provider's live inventory no longer lists as deprecated. */
@@ -1486,6 +1493,11 @@ export async function runPublishModelCatalog(
   }
   const loadSource = createModelCatalogSourceLoader(options.fetchImpl);
   const hydrationResult = await hydrateModelCatalogFromModelsDev({ bundle, manifests, loadSource });
+  for (const [providerId, provider] of Object.entries(bundle.providers)) {
+    if (provider.models.length === 0) {
+      delete bundle.providers[providerId];
+    }
+  }
   const retirementResult = await retireUnservedModels({ bundle, loadSource });
   const featuredResult =
     args.outV2 || args.outV3 ? await resolveProviderFeaturedModels({ bundle, loadSource }) : {};

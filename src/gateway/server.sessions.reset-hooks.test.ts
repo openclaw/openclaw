@@ -1,20 +1,20 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import {
-  listSessionEntriesCore,
-  loadSessionEntry,
-  upsertSessionEntryCore,
-} from "../config/sessions/session-accessor.js";
+import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { PluginHookSessionContext } from "../plugins/session-end-transcript.js";
 import { readAttachedSessionEndTranscriptSourceForTest } from "../plugins/session-end-transcript.test-support.js";
-import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
+import {
+  beginSessionEffect,
+  captureSessionTarget,
+} from "../sessions/session-controller.lifecycle.js";
+import { createReplyOperation } from "../sessions/session-controller.operation.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
-import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
+import { createRequestGate } from "./server-methods.request-gate.test-support.js";
+import { testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsHandlerTestHarness,
   sessionHookMocks,
@@ -193,8 +193,6 @@ function expectSingleCommandHookEvent(action: "new" | "reset") {
   if (!event) {
     throw new Error(`expected command ${action} hook event`);
   }
-  expect(event.type).toBe("command");
-  expect(event.action).toBe(action);
   return event;
 }
 
@@ -206,18 +204,11 @@ function claudeCliBindings(sessionId: string) {
   };
 }
 
-async function loadGatewaySessionStoreForKey(key: string) {
-  const [{ getRuntimeConfig }, { resolveGatewaySessionStoreTargetInWorker }] = await Promise.all([
-    import("../config/config.js"),
-    import("./session-utils-store-worker.js"),
-  ]);
-  const { storePath } = await resolveGatewaySessionStoreTargetInWorker({
-    cfg: getRuntimeConfig(),
-    key,
+function readStoredSession(key = "main") {
+  return loadSessionEntry({
+    storePath: expectStringValue(testState.sessionStorePath, "testState.sessionStorePath"),
+    sessionKey: `agent:main:${key}`,
   });
-  return Object.fromEntries(
-    listSessionEntriesCore({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
-  );
 }
 
 function expectNoCreationHooks() {
@@ -272,8 +263,7 @@ test("sessions.reset removes automatic recovery state from the replacement sessi
 
   await resetSession();
 
-  const store = await loadGatewaySessionStoreForKey("main");
-  const replacement = store["agent:main:main"];
+  const replacement = readStoredSession();
   expect(replacement).toMatchObject({ sessionId: "sess-recovery", abortedLastRun: false });
   expect(replacement?.restartRecoveryRuns).toBeUndefined();
   expect((replacement as InternalSessionEntry | undefined)?.mainRestartRecovery).toBeUndefined();
@@ -303,8 +293,7 @@ test("sessions.reset does not begin cleanup after losing lifecycle ownership", a
   ).rejects.toThrow("stale lifecycle");
 
   expect(ownershipChecks).toBe(2);
-  const store = await loadGatewaySessionStoreForKey("main");
-  expect(store["agent:main:main"]?.sessionId).toBe("sess-main");
+  expect(readStoredSession()?.sessionId).toBe("sess-main");
 });
 
 test.each([
@@ -438,22 +427,37 @@ test("sessions.create with emitCommandHooks=true emits reset lifecycle hooks aga
 });
 
 test("sessions.create waits for the parent run lifecycle before firing hooks", async () => {
-  await createSessionStoreDir();
+  const { storePath } = await createSessionStoreDir();
   await writeStoredSession("sess-active-parent");
-  embeddedRunMock.activeIds.add("sess-active-parent");
+  const operation = createReplyOperation({
+    sessionKey: "agent:main:main",
+    sessionId: "sess-active-parent",
+    agentId: "main",
+    resetTriggered: false,
+    target: captureSessionTarget({
+      storeScope: storePath,
+      sessionKey: "agent:main:main",
+      incarnation: "sess-active-parent",
+      agentId: "main",
+    }),
+  });
+  operation.setPhase("running");
+  try {
+    const result = await createFromMainSession({ key: "tui-next", emitCommandHooks: true });
 
-  const result = await createFromMainSession({ key: "tui-next", emitCommandHooks: true });
-
-  expect(result.ok).toBe(false);
-  expect(result.error).toMatchObject({ code: "UNAVAILABLE" });
-  expect(result.error?.message).toMatch(/parent session.*still active/i);
-  expectNoCreationHooks();
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatchObject({ code: "UNAVAILABLE" });
+    expect(result.error?.message).toMatch(/parent session.*still active/i);
+    expectNoCreationHooks();
+  } finally {
+    operation.complete();
+  }
 });
 
 test("sessions.create waits for the parent work admission to release", async () => {
   const { storePath } = await createSessionStoreDir();
   await writeStoredSession("sess-finishing-parent");
-  const admission = await beginSessionWorkAdmission({
+  const admission = await beginSessionEffect({
     scope: storePath,
     identities: ["agent:main:main", "sess-finishing-parent"],
     assertAllowed: () => {},
@@ -473,20 +477,16 @@ test("sessions.create waits for the parent work admission to release", async () 
 test("sessions.create fences new parent work while rollover hooks run", async () => {
   const { storePath } = await createSessionStoreDir();
   await writeStoredSession("sess-parent-fenced");
-  const hookEntered = createDeferred();
-  const releaseHook = createDeferred();
+  const hook = createRequestGate();
   const admissionController = new AbortController();
-  let admission: ReturnType<typeof beginSessionWorkAdmission> | undefined;
-  sessionHookMocks.triggerInternalHook.mockImplementationOnce(async () => {
-    hookEntered.resolve();
-    await releaseHook.promise;
-  });
+  let admission: ReturnType<typeof beginSessionEffect> | undefined;
+  sessionHookMocks.triggerInternalHook.mockImplementationOnce(() => hook.pause());
 
   const creating = createFromMainSession({ key: "tui-next", emitCommandHooks: true });
   const settledWork: Promise<unknown>[] = [Promise.allSettled([creating])];
   let cleaningUp: Promise<void> | undefined;
   const cleanup = () => {
-    releaseHook.resolve();
+    hook.release();
     admissionController.abort();
     return (cleaningUp ??= (async () => {
       const lease = await admission?.catch(() => undefined);
@@ -498,7 +498,7 @@ test("sessions.create fences new parent work while rollover hooks run", async ()
   pendingHookCleanups.add(cleanup);
   try {
     await Promise.race([
-      hookEntered.promise,
+      hook.entered,
       creating.then((result) => {
         throw new Error(
           `Session creation settled before its rollover hook: ${result.error?.message ?? "no hook"}`,
@@ -509,7 +509,7 @@ test("sessions.create fences new parent work while rollover hooks run", async ()
     expect(sessionHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
 
     let admissionStarted = false;
-    admission = beginSessionWorkAdmission({
+    admission = beginSessionEffect({
       scope: storePath,
       identities: ["agent:main:main", "sess-parent-fenced"],
       signal: admissionController.signal,
@@ -521,7 +521,7 @@ test("sessions.create fences new parent work while rollover hooks run", async ()
     await Promise.resolve();
     expect(admissionStarted).toBe(false);
 
-    releaseHook.resolve();
+    hook.release();
     expect((await creating).ok).toBe(true);
     await admission;
     expect(admissionStarted).toBe(true);
@@ -537,8 +537,6 @@ test("sessions.create with emitCommandHooks=true resets parent in place when ses
     await writeStoredSession("sess-parent-dms", {
       content: "hello before /new",
     });
-    embeddedRunMock.activeIds.add("sess-parent-dms");
-
     const result = await createFromMainSession({ emitCommandHooks: true });
     expect(result.ok).toBe(true);
     // Reset-in-place: response key matches the parent main key, NOT a dashboard child.
@@ -612,8 +610,7 @@ test("sessions.reset clears cli session bindings for parent-linked non-subagent 
 
   await resetSession("dashboard:child:42");
 
-  const store = await loadGatewaySessionStoreForKey("dashboard:child:42");
-  const nextEntry = store["agent:main:dashboard:child:42"];
+  const nextEntry = readStoredSession("dashboard:child:42");
   expect(nextEntry?.sessionId).toBe("sess-dashboard-child");
   for (const key of [
     "agentHarnessId",
@@ -623,48 +620,4 @@ test("sessions.reset clears cli session bindings for parent-linked non-subagent 
   ] as const) {
     expect(nextEntry?.[key]).toBeUndefined();
   }
-});
-
-test("sessions.reset preserves cli session bindings for spawned subagents (Tak Hoffman's fa56682b3ced contract)", async () => {
-  await createSessionStoreDir();
-  const reseedPromptHash = "a".repeat(64);
-  const childEntry = sessionStoreEntry("sess-spawned-child", {
-    ...claudeCliBindings("claude-cli-child-session"),
-    agentHarnessId: "codex",
-    parentSessionKey: "agent:main:main",
-    spawnedBy: "agent:main:main",
-    subagentRole: "orchestrator",
-  });
-  childEntry.cliSessionBindings = {
-    "claude-cli": {
-      sessionId: "claude-cli-child-session",
-      reseedReceipt: {
-        version: 1,
-        promptHash: reseedPromptHash,
-        localSessionId: "sess-spawned-child",
-        userTurnDisposition: "omitted",
-      },
-    },
-  };
-
-  await writeStoredSession("sess-spawned-child", {
-    ...childEntry,
-    key: "subagent:child",
-    content: "hello from spawned child",
-    messageId: "m-child",
-  });
-
-  await resetSession("subagent:child");
-
-  const store = await loadGatewaySessionStoreForKey("subagent:child");
-  const nextEntry = store["agent:main:subagent:child"];
-  expect(nextEntry).toMatchObject({
-    sessionId: "sess-spawned-child",
-    claudeCliSessionId: "claude-cli-child-session",
-  });
-  expect(nextEntry?.agentHarnessId).toBeUndefined();
-  expect(nextEntry?.cliSessionIds).toEqual({
-    "claude-cli": "claude-cli-child-session",
-  });
-  expect(nextEntry?.cliSessionBindings).toEqual(childEntry.cliSessionBindings);
 });

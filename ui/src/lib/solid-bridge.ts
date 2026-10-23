@@ -1,17 +1,10 @@
 import { insert, render, spread } from "@solidjs/web";
-import {
-  createComponent,
-  createRenderEffect,
-  createRoot,
-  createSignal,
-  onCleanup,
-  runWithOwner,
-} from "solid-js";
+import { createRoot, createSignal, onCleanup } from "solid-js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
+import { registerRouteElement } from "../app/route-elements.ts";
 import { shellLayoutOwnerForHost } from "../app/shell-layout-owner.ts";
-import { ShellLayoutProvider } from "../app/shell-layout-traits-solid.tsx";
 import type { JSX } from "../types/solid-elements.d.ts";
-import { ApplicationProvider } from "./reactive/context.ts";
+import { renderSolidBridgeView } from "./solid-bridge-view.tsx";
 
 type Property<T> = {
   default: T;
@@ -70,6 +63,7 @@ export function defineSolidBridge<Props extends object, Methods extends object =
     #publish = new Map<string, () => void>();
     #dispose?: () => void;
     #unsubscribe?: () => void;
+    #unregisterRouteElement?: () => void;
     #application?: ApplicationContext;
     #mountedApplication?: ApplicationContext;
     #content?: DocumentFragment;
@@ -157,9 +151,16 @@ export function defineSolidBridge<Props extends object, Methods extends object =
 
     connectedMoveCallback() {
       // Atomic parking keeps the existing provider and owned child tree.
+      this.#registerRouteElement();
+    }
+
+    #registerRouteElement() {
+      this.#unregisterRouteElement?.();
+      this.#unregisterRouteElement = registerRouteElement(this);
     }
 
     connectedCallback() {
+      this.#registerRouteElement();
       if (this.#solidOwned) {
         spec.connected?.(this.#host);
         return;
@@ -195,6 +196,8 @@ export function defineSolidBridge<Props extends object, Methods extends object =
     }
 
     disconnectedCallback() {
+      this.#unregisterRouteElement?.();
+      this.#unregisterRouteElement = undefined;
       spec.disconnected?.(this.#host);
       if (!this.#solidOwned) {
         // Reparenting within a turn keeps the root (and the live sidebar) intact.
@@ -215,7 +218,7 @@ export function defineSolidBridge<Props extends object, Methods extends object =
             this.#connectContext();
           }
           if (!this.#dispose) {
-            runWithOwner(null, () => this.#mount());
+            this.#mount();
           }
         }
         return true;
@@ -238,12 +241,8 @@ export function defineSolidBridge<Props extends object, Methods extends object =
       this.#mountedApplication = this.#application;
       const layout = !this.#solidOwned ? shellLayoutOwnerForHost(this) : undefined;
       const view = () => {
-        const props = {
-          ...defaults,
-          get children() {
-            return children ? children() : source;
-          },
-        };
+        // Spreading defaults can let V8 retain old view getters through shared descriptors.
+        const props: Record<string, unknown> = {};
         for (const [key] of properties) {
           // Wrap callable values so Solid treats callbacks as data, not computations.
           const [value, setValue] = createSignal(
@@ -252,31 +251,28 @@ export function defineSolidBridge<Props extends object, Methods extends object =
           );
           this.#publish.set(key, () => setValue({ value: this.#values.get(key) }));
           Object.defineProperty(props, key, {
+            enumerable: true,
+            configurable: true,
             get: () => {
               value();
               return this.#values.get(key);
             },
           });
         }
-        // Provider child memos must not subscribe to component setup reads.
-        const renderContent = () => createComponent(() => content(props, this.#host), {});
-        const contentView = () =>
-          layout
-            ? createComponent(ShellLayoutProvider, {
-                value: { owner: layout, host: this },
-                get children() {
-                  return renderContent();
-                },
-              })
-            : renderContent();
-        return this.#application
-          ? createComponent(ApplicationProvider, {
-              value: this.#application,
-              get children() {
-                return contentView();
-              },
-            })
-          : contentView();
+        if (!declarations.has("children")) {
+          Object.defineProperty(props, "children", {
+            enumerable: true,
+            configurable: true,
+            get: () => (children ? children() : source),
+          });
+        }
+        return renderSolidBridgeView(
+          // SAFETY: Each declared property was materialized with its live getter above.
+          () => content(props as Props & { children?: JSX.Element }, this.#host),
+          this.#application,
+          layout,
+          this,
+        );
       };
       // A nested top-level render would flush child effects under the parent's render owner.
       this.#dispose = this.#solidOwned
@@ -308,18 +304,26 @@ export function defineSolidBridge<Props extends object, Methods extends object =
     static render(props: ComponentProps<Props, Methods>): JSX.Element {
       const host = new BridgeElement();
       host.#solidOwned = true;
-      spread(host, props, true, (key) => declarations.has(key));
-      const absent = Symbol("absent bridge property");
-      for (const [key, property] of properties) {
-        createRenderEffect(
-          () => (Reflect.has(props, key) ? Reflect.get(props, key) : absent),
-          (value) => {
-            if (value !== absent) {
-              Reflect.set(host, key, value === undefined ? property.default : value);
+      // The renderer owns property binding timing, including the first mount.
+      spread(
+        host,
+        () => {
+          const bindings: Record<string, unknown> = {};
+          for (const key of Object.keys(props)) {
+            if (key !== "children" && !declarations.has(key)) {
+              bindings[key] = Reflect.get(props, key);
             }
-          },
-        );
-      }
+          }
+          for (const [key, property] of properties) {
+            const value = Reflect.has(props, key)
+              ? Reflect.get(props, key)
+              : Reflect.get(host, key);
+            bindings[`prop:${key}`] = value === undefined ? property.default : value;
+          }
+          return bindings;
+        },
+        true,
+      );
       host.#mount(() => props.children);
       onCleanup(() => host.#disposeRoot());
       return host;

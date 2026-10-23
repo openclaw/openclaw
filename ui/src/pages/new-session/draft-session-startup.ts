@@ -15,10 +15,6 @@ export type DraftStartupResumption = {
   background: boolean;
 };
 
-type DraftSessionStartupResume =
-  | { kind: "wait" | "expired" | "owner-changed" }
-  | ({ kind: "resume" } & DraftStartupResumption);
-
 export class DraftSessionStartup {
   private pending: DraftSessionStartupIntent | null = null;
 
@@ -69,7 +65,9 @@ export class DraftSessionStartup {
     return true;
   }
 
-  resume(): DraftSessionStartupResume {
+  resume():
+    | { kind: "wait" | "expired" | "owner-changed" }
+    | ({ kind: "resume" } & DraftStartupResumption) {
     if (!this.pending?.interrupted) {
       return { kind: "wait" };
     }

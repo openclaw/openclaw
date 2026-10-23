@@ -1,12 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as realSetTimeout } from "node:timers";
-import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
-import {
-  fixtureReceiptClientSource,
-  openFixtureReceiptChannel,
-  type FixtureReceiptChannel,
-} from "../../test/helpers/fixture-receipts.js";
+import { afterEach, expect, it, vi } from "vitest";
+import { z } from "zod";
+import { fixtureReceiptClientSource } from "../../test/helpers/fixture-receipts.js";
 import { isProcessAlive } from "../../test/helpers/process-wait.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -17,13 +14,21 @@ import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
 import { measureUpdateStateFiles } from "./update-candidate-io.js";
-import { prepareUpdateCandidateStateSnapshot } from "./update-candidate-snapshot.js";
+import {
+  useStateReceipts,
+  stateClock,
+  snapshotFixture,
+  captureStateOperation,
+} from "./update-candidate-state-fixtures.test-support.js";
+import {
+  parseUpdateStateInspectionWorker,
+  runUpdateStateInspectionWorker,
+} from "./update-candidate-state.inspection.js";
 import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
 import { readUpdateStateDatabaseSizes } from "./update-candidate-state.sizes.js";
-import {
-  captureUpdateCandidateDeadline,
-  materializeUpdateCandidateStateWorker,
-} from "./update-candidate-state.test-support.js";
+import { materializeUpdateCandidateStateWorker } from "./update-candidate-state.test-support.js";
+import { createUpdateErrorFact } from "./update-failure-facts.js";
+import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 
 let cleanupFixture: (() => Promise<void>) | undefined;
 const tempDirs = useAutoCleanupTempDirTracker((cleanupDirs) =>
@@ -39,13 +44,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanupDirs) =>
     }
   }),
 );
-let receipts: FixtureReceiptChannel;
-beforeAll(async () => {
-  receipts = await openFixtureReceiptChannel();
-});
-afterAll(async () => {
-  await receipts.close();
-});
+const receipts = useStateReceipts();
 
 // Receipts and command settlement travel independently. The fixture publishes the
 // complete marker before it can reply, so that record decides a settlement race.
@@ -165,8 +164,9 @@ it.for([undefined, 600_000])(
       }
       if (timeoutMs !== undefined) {
         expect(() => process.kill(pid, 0)).not.toThrow();
+        await fs.writeFile(release, "continue");
       }
-      await fs.writeFile(release, "continue");
+      // Keep the default worker blocked until the deferred timeout decision settles.
       if (timeoutMs === undefined) {
         expect(await operation).toMatchObject({
           error: expect.objectContaining({
@@ -283,10 +283,7 @@ it.for([
     `,
     );
 
-    const now = Date.now.bind(Date);
-    let elapsed = 0;
-    vi.spyOn(Date, "now").mockImplementation(() => now() + elapsed);
-    const expireDeadline = captureUpdateCandidateDeadline();
+    const advanceClock = stateClock();
     const controller = new AbortController();
     const result = readUpdateStateSchemaVersions({
       root,
@@ -322,9 +319,9 @@ it.for([
           fixtureEventBeforeSettlement(ready, receipts.waitFor(ready, "ready"), result),
           signal,
         );
-        elapsed = elapsedMs;
+        advanceClock(elapsedMs);
         if (!completes) {
-          expireDeadline();
+          advanceClock(elapsedMs, true);
           await result;
         }
       } else {
@@ -367,14 +364,7 @@ it.each([false, true])(
         cleanup: "uncertain",
       };
     });
-    const operation = prepareUpdateCandidateStateSnapshot({
-      config: {},
-      stateDir,
-      candidateRoot: root,
-      env: { TMPDIR: root },
-      workerEnv: () => ({ ...process.env, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }),
-      signal: controller.signal,
-    });
+    const operation = snapshotFixture(root, stateDir, controller.signal);
     try {
       await expect(operation).rejects.toThrow(/cleanup.*confirmed|settlement.*uncertain/);
       const retained = (await fs.readdir(root)).filter((name) =>
@@ -428,16 +418,17 @@ it.each(["stdout", "stderr"] as const)(
       controller.abort(new Error("test output deadline"));
     }, 10_000);
     try {
-      await expect(
-        prepareUpdateCandidateStateSnapshot({
-          config: {},
-          stateDir: path.join(root, "source"),
-          candidateRoot: root,
-          env: { TMPDIR: root },
-          workerEnv: () => ({ ...process.env }),
-          signal: controller.signal,
-        }),
-      ).rejects.toThrow(/^Update state snapshot failed \(output-limit\):/);
+      const failure = await snapshotFixture(
+        root,
+        path.join(root, "source"),
+        controller.signal,
+        () => ({ ...process.env }),
+      ).catch((error: unknown) => error);
+      expect(failure).toMatchObject({
+        code: "output-limit",
+        message: expect.stringMatching(/^Update state snapshot failed \(output-limit\):/),
+      });
+      expect(createUpdateErrorFact("candidate-state-snapshot", failure).code).toBe("output-limit");
       expect(deadlineReached).toBe(false);
       // Snapshot rejection follows the command owner's process-tree settlement.
       const pid = Number(await fs.readFile(pidPath, "utf8"));
@@ -451,6 +442,127 @@ it.each(["stdout", "stderr"] as const)(
     }
   },
 );
+
+it.for([false, true])(
+  "reports a real inspection output limit through the public report (warnings=%s)",
+  async (warnings, { signal }) => {
+    const root = await fs.realpath(tempDirs.make("inspection-output-limit-"));
+    const worker = path.join(
+      root,
+      "dist",
+      runtimeProcessEntrypoints.updateCandidateState.distWorkerPath,
+    );
+    await fs.mkdir(path.dirname(worker), { recursive: true });
+    await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ type: "module" }));
+    await fs.writeFile(
+      worker,
+      `
+    for await (const chunk of process.stdin) {}
+    setInterval(() => {}, 1000);
+    process.stdout.write("private-machine-payload".repeat(4));
+  `,
+    );
+    const result = await runUpdateStateInspectionWorker({
+      input: { mode: "runtime-retention", stateDir: root, config: {} },
+      root,
+      nodeRunner: process.execPath,
+      sourceEnv: {},
+      stagingRoot: root,
+      databases: [],
+      sources: [root],
+      maxOutputBytes: 64,
+      ioBudget: "deadline",
+      signal,
+    });
+    expect(result).toMatchObject({ termination: "signal", outputLimitExceeded: true });
+    if (process.platform !== "win32") {
+      expect(result.signal).toBe("SIGTERM");
+    }
+    let failure: unknown;
+    try {
+      // Separate pipes have no observation order. Keep the real process outcome,
+      // then supply captured warnings at the parser boundary deterministically.
+      parseUpdateStateInspectionWorker(
+        {
+          ...result,
+          stderr: warnings ? "ExperimentalWarning: private-customer warning\nSQLITE_BUSY\n" : "",
+        },
+        z.unknown(),
+      );
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toMatchObject({
+      code: "output-limit",
+      message: expect.stringContaining("Worker output exceeded its capture limit"),
+    });
+    expect(failure).toHaveProperty(
+      "message",
+      expect.not.stringMatching(/host crash|supervisor|free space|private-machine-payload/),
+    );
+    if (result.signal) {
+      expect(failure).toHaveProperty("message", expect.stringContaining(`signal ${result.signal}`));
+    }
+    const report = await prepareUpdateFailureReport(
+      {
+        attemptId: "inspection-output-limit",
+        result: {
+          status: "error",
+          mode: "git",
+          reason: "update-failed",
+          durationMs: 1,
+          steps: [
+            {
+              name: "updater-runtime-retention",
+              command: "inspection",
+              cwd: root,
+              durationMs: 1,
+              exitCode: 1,
+              failureFacts: [
+                createUpdateErrorFact("git update", failure, { OPENCLAW_STATE_DIR: root }),
+              ],
+            },
+          ],
+        },
+      },
+      { env: { OPENCLAW_STATE_DIR: root } },
+    );
+    expect(report.body).toContain("Failing check git update (output-limit)");
+    expect(report.body).not.toMatch(/private-customer|ExperimentalWarning|private-machine-payload/);
+    expect(report.body).not.toContain(root);
+  },
+);
+
+it("preserves an inventory worker output limit without blaming the process supervisor", async ({
+  signal,
+}) => {
+  const root = await fs.realpath(tempDirs.make("inventory-output-limit-"));
+  const file = path.join(root, "source.sqlite");
+  await fs.writeFile(file, "source");
+  const run = commands.runUtf8CommandWithTimeout;
+  vi.spyOn(commands, "runUtf8CommandWithTimeout").mockImplementation((argv, options) => {
+    if (typeof options === "number") {
+      throw new Error("Expected inventory capture options");
+    }
+    // Exercise the real inventory child and runner without a megabyte of paths.
+    return run(argv, { ...options, maxOutputBytes: { stdout: 1, stderr: 20_000 } });
+  });
+  const failure = await readUpdateStateDatabaseSizes([file], {
+    nodeRunner: process.execPath,
+    sourceEnv: {},
+    stagingRoot: root,
+    signal,
+  }).catch((error: unknown) => error);
+  expect(failure).toMatchObject({
+    code: "output-limit",
+    message: expect.stringContaining("Worker output exceeded its capture limit"),
+  });
+  expect(failure).toHaveProperty(
+    "message",
+    expect.not.stringMatching(/host crash|supervisor|free space/),
+  );
+  expect(await fs.readFile(file, "utf8")).toBe("source");
+});
 
 it("refuses a grown WAL family at the post-inventory capacity gate", async () => {
   const root = await fs.realpath(tempDirs.make("rehearsal-wal-growth-"));
@@ -489,18 +601,7 @@ it("refuses a grown WAL family at the post-inventory capacity gate", async () =>
       return result;
     });
     const controller = new AbortController();
-    const operation = prepareUpdateCandidateStateSnapshot({
-      config: {},
-      stateDir,
-      candidateRoot: root,
-      env: { TMPDIR: root },
-      workerEnv: () => ({ ...process.env, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }),
-      signal: controller.signal,
-    });
-    const outcome = operation.then(
-      (value) => ({ value }),
-      (error: unknown) => ({ error }),
-    );
+    const outcome = captureStateOperation(snapshotFixture(root, stateDir, controller.signal));
     try {
       expect(await outcome).toMatchObject({
         error: {

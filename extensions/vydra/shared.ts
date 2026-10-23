@@ -128,7 +128,6 @@ export async function downloadVydraAsset(params: {
   url: string;
   kind: VydraMediaKind;
   timeoutMs?: ProviderOperationTimeoutMs;
-  fetchFn: typeof fetch;
   maxBytes: number;
   requestPolicy: VydraRequestPolicy;
 }): Promise<{ buffer: Buffer; mimeType: string; fileName: string }> {
@@ -157,7 +156,7 @@ export async function downloadVydraAsset(params: {
       ...(headers ? { headers } : {}),
     },
     resolveTimeoutMs(),
-    params.fetchFn,
+    fetch,
     {
       ...(ssrfPolicy ? { ssrfPolicy } : {}),
       ...(policy.dispatcherPolicy ? { dispatcherPolicy: policy.dispatcherPolicy } : {}),
@@ -312,7 +311,6 @@ export async function runVydraGeneration(params: {
           defaultTimeoutMs: DEFAULT_HTTP_TIMEOUT_MS,
         })
       : params.timeoutMs,
-    fetchFn,
     maxBytes:
       params.kind === "image"
         ? resolveGeneratedImageDownloadMaxBytes(params.cfg)

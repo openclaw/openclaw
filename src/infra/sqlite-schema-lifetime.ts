@@ -12,7 +12,10 @@ export function observeSchemaLifetime(
   snapshot: object | undefined,
 ): boolean {
   if (owner.snapshot && owner.snapshot !== snapshot) {
-    invalidate(owner);
+    // Ending an inner pin does not release the outer transaction's native catalog.
+    if (!database.isTransaction || !owner.transactionCatalogBound) {
+      invalidate(owner);
+    }
     owner.snapshot = undefined;
     owner.qualifiedSnapshot = undefined;
   }
@@ -21,12 +24,11 @@ export function observeSchemaLifetime(
     owner.processRevision !== undefined && owner.processRevision !== processRevision;
   if (
     scopeChanged &&
-    owner.facts &&
     !owner.transactionalSchema &&
     ((database.isTransaction && owner.transactionCatalogBound) ||
-      (snapshot && owner.qualifiedSnapshot === snapshot))
+      (owner.facts && snapshot && owner.qualifiedSnapshot === snapshot))
   ) {
-    // An active SQLite snapshot keeps the catalog it admitted, even after a sibling publishes DDL.
+    // The native transaction stays historical even when local invalidation clears its facts.
     owner.transactionalFacts ||= database.isTransaction;
     owner.snapshot = snapshot;
     return false;

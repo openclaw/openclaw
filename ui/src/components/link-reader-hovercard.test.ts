@@ -65,7 +65,7 @@ function connect(
   provider: LinkReaderHovercardProvider,
   request = vi.fn().mockResolvedValue(preview()),
 ) {
-  provider.client = { request } as unknown as GatewayBrowserClient;
+  provider.client = { request, connected: true } as unknown as GatewayBrowserClient;
   return request;
 }
 function card() {
@@ -377,7 +377,6 @@ describe("openclaw-link-reader-hovercard-provider", () => {
     leave(anchor);
     await vi.advanceTimersByTimeAsync(250);
     expect(card()).toBeNull();
-    Object.assign(provider.client!, { connected: true });
     const signal = new AbortController().signal;
     // Fill the same cache without creating 100 disposable hovercard portals.
     for (let index = 1; index <= 100; index++) {

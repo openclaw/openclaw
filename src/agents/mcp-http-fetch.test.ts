@@ -1,15 +1,9 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { parseErrorResponse } from "@modelcontextprotocol/sdk/client/auth.js";
-import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { parseErrorResponse } from "@modelcontextprotocol/client";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import {
-  buildMcpHttpFetch,
-  buildMcpOAuthHttpFetch,
-  withoutMcpAuthorizationHeader,
-  withSameOriginMcpHttpHeaders,
-} from "./mcp-http-fetch.js";
+import { buildMcpHttpFetch, buildMcpOAuthHttpFetch } from "./mcp-http-fetch.js";
 import { withMcpOAuthBearer } from "./mcp-oauth-fetch.js";
 import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
 
@@ -132,36 +126,6 @@ describe("MCP HTTP fetch helpers", () => {
       rejectUnauthorized: false,
     });
     expect(connectOptions(fetchCalls[1])?.["rejectUnauthorized"]).toBeUndefined();
-  });
-
-  it("removes static Authorization headers for OAuth-backed runtime requests", () => {
-    expect(
-      withoutMcpAuthorizationHeader({
-        Authorization: "Bearer static",
-        "X-Tenant": "docs",
-      }),
-    ).toEqual({
-      "X-Tenant": "docs",
-    });
-  });
-
-  it("adds MCP headers only to same-origin OAuth requests", async () => {
-    const fetchFn = vi.fn<FetchLike>(async () => new Response("ok"));
-    const fetch = withSameOriginMcpHttpHeaders({
-      fetchFn,
-      resourceUrl: "https://mcp.example.com/mcp",
-      headers: { "X-Tenant": "docs" },
-    });
-
-    await fetch("https://mcp.example.com/.well-known/oauth-protected-resource", {
-      headers: { "MCP-Protocol-Version": "2025-06-18" },
-    });
-    await fetch("https://auth.example.com/token");
-
-    const headers = new Headers(fetchFn.mock.calls[0]?.[1]?.headers);
-    expect(headers.get("x-tenant")).toBe("docs");
-    expect(headers.get("mcp-protocol-version")).toBe("2025-06-18");
-    expect(fetchFn.mock.calls[1]?.[1]?.headers).toBeUndefined();
   });
 
   it("preserves POST bodies and bearer headers through the production OAuth fetch stack", async () => {

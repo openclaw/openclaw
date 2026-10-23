@@ -1,17 +1,11 @@
-import type {
-  CommittedCompactionBoundary,
-  PreparedCompactionAppend,
-} from "../../agents/sessions/session-compaction-persistence.js";
+import type { PreparedCompactionAppend } from "../../agents/sessions/session-compaction-persistence.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { readSessionEntryRow, writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
-import {
-  ensureSessionEntryInTransaction,
-  ensureSessionEntrySync,
-} from "./session-accessor.sqlite-initial-entry.js";
+import { ensureSessionEntryInTransaction } from "./session-accessor.sqlite-initial-entry.js";
 import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
@@ -54,27 +48,11 @@ type CompactionWorkerContext = {
   admit(stage: "transaction" | "commit"): void;
 };
 
-/** Commits one compaction boundary and its session accounting as one SQLite write. */
-export function persistCompactionBoundaryWithSessionEntrySync(
-  scope: CompactionScope,
-  params: CompactionParams,
-): CommittedCompactionBoundary {
-  return persistCompactionBoundary(scope, params).committed;
-}
-
-/** The metadata worker borrows its canonical connection for the same atomic boundary. */
+/** The metadata worker borrows its canonical connection for the atomic boundary. */
 export function persistCompactionBoundaryWithSessionEntryInWorker(
   scope: CompactionScope,
   params: CompactionParams & { initialWriterRunId?: string },
-  context: CompactionWorkerContext,
-): CompactionBoundaryOperations["session.transcript.compactionBoundary"]["output"] {
-  return persistCompactionBoundary(scope, params, context);
-}
-
-function persistCompactionBoundary(
-  scope: CompactionScope,
-  params: CompactionParams & { initialWriterRunId?: string },
-  worker?: CompactionWorkerContext,
+  worker: CompactionWorkerContext,
 ): CompactionBoundaryOperations["session.transcript.compactionBoundary"]["output"] {
   const fencedScope = withOwnedSessionTranscriptWriterFence(scope);
   const resolved = resolveSqliteTranscriptScope(fencedScope);
@@ -93,27 +71,25 @@ function persistCompactionBoundary(
   }
   return runOpenClawAgentWriteTransaction(
     (database) => {
-      if (worker && database.db !== worker.database) {
+      if (database.db !== worker.database) {
         throw new Error("Session compaction lost its borrowed canonical connection");
       }
-      worker?.admit("transaction");
+      worker.admit("transaction");
       let initialEntry: InitialSessionEntryCommit | undefined;
       if (params.prepared.initializeEntry) {
         const entry = { sessionId: resolved.sessionId, updatedAt: Date.now() };
-        if (worker) {
-          initialEntry = ensureSessionEntryInTransaction(
-            database,
-            preparedTarget,
-            preparedScope,
-            entry,
-            params.initialWriterRunId,
-          );
-          if (initialEntry.fence) {
-            Object.assign(fencedScope, initialEntry.fence);
-            Object.assign(preparedScope, initialEntry.fence);
-          }
+        initialEntry = ensureSessionEntryInTransaction(
+          database,
+          preparedTarget,
+          preparedScope,
+          entry,
+          params.initialWriterRunId,
+        );
+        if (initialEntry.fence) {
+          Object.assign(fencedScope, initialEntry.fence);
+          Object.assign(preparedScope, initialEntry.fence);
         }
-        if (!(worker ? initialEntry?.owned : ensureSessionEntrySync(preparedScope, entry))) {
+        if (!initialEntry.owned) {
           throw new Error("Session transcript header was not persisted");
         }
         getOwnedSessionTranscriptInitialWriter({ sessionTarget: preparedScope })?.assertActive();
@@ -131,14 +107,15 @@ function persistCompactionBoundary(
         preparedScope,
         event,
         { expectedMutationAt: params.prepared.expectedMutationAt },
-        worker
-          ? {
-              scheduleProjectionReconcile: false,
-              onProjectionReconcileNeeded: () => {
-                projectionNeedsReconcile = true;
-              },
-            }
-          : undefined,
+        {
+          scheduleProjectionReconcile: false,
+          onProjectionReconcileNeeded: () => {
+            projectionNeedsReconcile = true;
+          },
+        },
+        undefined,
+        // Catching an inner failure and continuing requires a savepoint on PostgreSQL.
+        database,
       );
       const committed = requireTranscriptEventAppendSnapshot(
         appended,
@@ -158,7 +135,7 @@ function persistCompactionBoundary(
         previousEntry: fresh,
         canonicalPreviousEntry: fresh,
       });
-      worker?.admit("commit");
+      worker.admit("commit");
       return {
         committed: {
           entry: committedEntry,

@@ -152,7 +152,7 @@ function createToolPairCutResolver(messages: AgentMessage[], entryIndexes: numbe
     }
     return entryIndex;
   };
-  for (const frame of classifyToolUseResultPairing(messages).frames) {
+  for (const frame of classifyToolUseResultPairing(messages)) {
     const start = entryIndexAt(frame.startIndex);
     let end = start;
     for (const occurrence of frame.occurrences) {

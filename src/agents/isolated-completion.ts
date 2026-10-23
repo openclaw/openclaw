@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { adjustMaxTokensForThinking } from "@openclaw/ai/internal/shared";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 /**
@@ -15,14 +14,12 @@ import type { ThinkLevel } from "../auto-reply/thinking.js";
 import { requiredWorkerHelperError } from "../config/required-worker-profile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
-import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import type { Model } from "../llm/types.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { scheduleAbsoluteDeadline } from "../utils/absolute-deadline.js";
-import { estimateAggregateUsageCost } from "../utils/usage-format.js";
 import {
   assertOperatorModelAllowed,
   prepareSystemAgentRunAdmission,
@@ -35,21 +32,27 @@ import { normalizeCliModel } from "./cli-runner/helpers.js";
 import { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
 import type {
-  AgentHarness,
   AgentHarnessIsolatedCompletionAuthorization,
   AgentHarnessIsolatedCompletionParamsV2,
   AgentHarnessIsolatedCompletionResult,
 } from "./harness/types.js";
 import {
   createIsolatedCompletionDiagnostics,
+  emitIsolatedCompletionUsage,
   type IsolatedCompletionDiagnostics,
 } from "./isolated-completion-diagnostics.js";
-import { createIsolatedCompletionModelAuthority } from "./isolated-completion-model-authority.js";
+import {
+  createIsolatedCompletionModelAuthority,
+  prepareIsolatedHostAuthorization,
+  resolveIsolatedStreamParams,
+  type AgentHarnessIsolatedCompletionParams,
+} from "./isolated-completion-model-authority.js";
 import {
   hasCliSideEffectEvidence,
   IsolatedCompletionError,
   isRetryableIsolatedQuotaFailure,
   requireIsolatedAssistantText,
+  type IsolatedCompletionResult,
 } from "./isolated-completion-output.js";
 import type { IsolatedCompletionPurpose } from "./isolated-completion-purpose.js";
 import {
@@ -69,10 +72,6 @@ import {
   acquireAgentRunPreparedModelRuntime,
   acquireReadOnlyPreparedModelRuntime,
 } from "./prepared-model-runtime.js";
-import {
-  unwrapModelHeaderSentinelsForProviderEgress,
-  unwrapSecretSentinelsForProviderEgress,
-} from "./provider-secret-egress.js";
 import { materializePreparedRuntimeModel } from "./runtime-plan/materialize-model.js";
 import {
   canRunPreparedAgentRuntimeAuthAttempt,
@@ -82,12 +81,7 @@ import {
 } from "./runtime-plan/prepare-auth.js";
 import { scopeAuthProfileStoreToPreparedPlan } from "./runtime-plan/resolve-auth.js";
 import { prepareSimpleCompletionModel } from "./simple-completion-runtime.js";
-import {
-  hasObservedModelUsage,
-  normalizeUsage,
-  toDiagnosticUsage,
-  type UsageLike,
-} from "./usage.js";
+export type { IsolatedCompletionResult } from "./isolated-completion-output.js";
 
 type RunIsolatedCompletionParams = {
   purpose?: IsolatedCompletionPurpose;
@@ -104,6 +98,8 @@ type RunIsolatedCompletionParams = {
   systemPrompt: string;
   prompt: string;
   timeoutMs: number;
+  /** Adapt the owner's deadline reason to the caller's error contract. */
+  timeoutError?: Error;
   abortSignal?: AbortSignal;
   /** Private credential directories must remain outside the configured Gateway owner. */
   preparedModelRuntimeMode?: "isolated-read-only";
@@ -122,231 +118,6 @@ type RunIsolatedCompletionParams = {
   streamParams?: AgentHarnessIsolatedCompletionParamsV2["streamParams"];
 };
 
-export type IsolatedCompletionResult = {
-  text: string;
-  provider: string;
-  model: string;
-  owner: { kind: "cli" | "harness"; id: string };
-  /** CLI runtimes may not report token usage; absence must not be projected as zero. */
-  usage?: UsageLike;
-  /** Terminal cumulative CLI turn usage; diagnostics prefer it over `usage`. */
-  diagnosticUsage?: UsageLike;
-};
-
-type AgentHarnessIsolatedCompletionParams = Parameters<
-  NonNullable<AgentHarness["runIsolatedCompletion"]>
->[0];
-
-function resolveIsolatedStreamParams(
-  { answerTokenBudget, streamParams, thinkLevel }: RunIsolatedCompletionParams,
-  model?: Model,
-): RunIsolatedCompletionParams["streamParams"] {
-  let maxTokens = answerTokenBudget ?? streamParams?.maxTokens;
-  if (maxTokens === undefined) {
-    return streamParams;
-  }
-  const modelMaxTokens = model?.maxTokens ?? Number.POSITIVE_INFINITY;
-  if (answerTokenBudget !== undefined && model?.reasoning && thinkLevel !== "off") {
-    maxTokens = adjustMaxTokensForThinking(answerTokenBudget, modelMaxTokens, "medium").maxTokens;
-  }
-  return {
-    ...streamParams,
-    maxTokens: Math.min(maxTokens, modelMaxTokens, streamParams?.maxTokens ?? maxTokens),
-  };
-}
-
-async function runCliIsolatedCompletion(
-  request: RunIsolatedCompletionParams & {
-    config: OpenClawConfig;
-    agentId: string;
-    agentDir: string;
-    workspaceDir: string;
-  },
-  provider: string,
-  modelProvider: string,
-  diagnostics: IsolatedCompletionDiagnostics,
-  remainingTimeoutMs: () => number,
-): Promise<IsolatedCompletionResult> {
-  return await withTempWorkspace(
-    { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-isolated-completion-" },
-    async ({ dir }) => {
-      const { runCliAgent } = await import("./cli-runner.runtime.js");
-      request.assertCurrent?.();
-      const { cliBackendAcceptsAuthProfileForwarding, resolveCliExecutionAuthProfileId } =
-        await import("./cli-execution-auth.js");
-      request.assertCurrent?.();
-      // Fresh completions use the same account order as new CLI sessions.
-      const authProfileId = cliBackendAcceptsAuthProfileForwarding({
-        provider,
-        config: request.config,
-        agentId: request.agentId,
-      })
-        ? await resolveCliExecutionAuthProfileId({
-            cliExecutionProvider: provider,
-            authProfileProvider: modelProvider,
-            config: request.config,
-            agentDir: request.agentDir,
-            selected: { authProfileId: request.authProfileId },
-          })
-        : request.authProfileId;
-      request.assertCurrent?.();
-      const sessionId = `isolated-completion-${randomUUID()}`;
-      const config = request.config;
-      const preparedRunAdmission = prepareSystemAgentRunAdmission(
-        config,
-        sessionId,
-        request.agentId,
-        "isolated-completion",
-        request.assertCurrent,
-        request.operatorAuthority,
-      );
-      try {
-        request.assertCurrent?.();
-        const dispatch = () =>
-          runCliAgent({
-            preparedRunAdmission,
-            sessionId,
-            sessionFile: path.join(dir, "session.json"),
-            workspaceDir: request.workspaceDir,
-            cwd: dir,
-            agentDir: request.agentDir,
-            agentId: request.agentId,
-            config,
-            prompt: request.prompt,
-            extraSystemPrompt: request.systemPrompt,
-            timeoutMs: remainingTimeoutMs(),
-            runId: sessionId,
-            provider,
-            modelProvider,
-            requesterModel: { provider: modelProvider, model: request.model },
-            model: request.model,
-            authProfileId,
-            thinkLevel: request.thinkLevel,
-            streamParams: resolveIsolatedStreamParams(request),
-            abortSignal: request.abortSignal,
-            assertCurrent: request.assertCurrent,
-            mapOperatorAuthorizationError: request.mapOperatorAuthorizationError,
-            executionMode: "side-question",
-            cliToolAvailability: { native: [], openClaw: [] },
-            disableTools: true,
-            disableCliLiveSession: true,
-            cleanupCliLiveSessionOnRunEnd: true,
-            cleanupBundleMcpOnRunEnd: true,
-            requireExplicitMessageTarget: true,
-            isolatedCompletion: true,
-            isolatedCompletionPurpose: request.purpose ?? "isolated-completion",
-            outputTextPolicy: request.outputTextPolicy,
-          });
-        const result = await (diagnostics ? diagnostics.dispatch("cli", dispatch) : dispatch());
-        if (hasCliSideEffectEvidence(result)) {
-          throw new IsolatedCompletionError(
-            "output-rejected",
-            "Isolated CLI completion returned side-effect evidence; result rejected.",
-          );
-        }
-        const payloads = result.payloads ?? [];
-        if (
-          payloads.some(
-            (payload) =>
-              payload.isError ||
-              payload.mediaUrl ||
-              payload.mediaUrls?.length ||
-              payload.audioAsVoice ||
-              payload.channelData,
-          )
-        ) {
-          throw new IsolatedCompletionError(
-            "output-rejected",
-            "Isolated CLI completion returned non-text output; result rejected.",
-          );
-        }
-        const text = payloads
-          .filter((payload) => !payload.isReasoning && payload.text !== undefined)
-          .map((payload) => payload.text ?? "")
-          .join("\n")
-          .trim();
-        const backend = resolveCliBackendConfig(provider, request.config, {
-          agentId: request.agentId,
-        });
-        if (!backend) {
-          throw new IsolatedCompletionError(
-            "runtime-unavailable",
-            `CLI backend ${provider} became unavailable after execution.`,
-          );
-        }
-        const { usage, diagnosticUsage } = result.meta?.agentMeta ?? {};
-        return {
-          text,
-          provider: modelProvider,
-          model: normalizeCliModel(request.model, backend.config),
-          owner: { kind: "cli", id: provider },
-          ...(usage ? { usage } : {}),
-          ...(diagnosticUsage ? { diagnosticUsage } : {}),
-        };
-      } finally {
-        preparedRunAdmission.close();
-      }
-    },
-  );
-}
-
-function prepareIsolatedHostAuthorization<
-  T extends Pick<AgentHarnessIsolatedCompletionParams, "model" | "auth">,
->(harness: AgentHarness, authorization: T): T {
-  if (harness.id === "openclaw") {
-    return authorization;
-  }
-  // External harnesses are the provider egress boundary. Keep credentials
-  // sentinelized until this owner is selected, then hand it usable values.
-  const boundary = "plugin harness isolated completion handoff";
-  const apiKey = authorization.auth.apiKey
-    ? unwrapSecretSentinelsForProviderEgress(authorization.auth.apiKey, boundary)
-    : authorization.auth.apiKey;
-  const model = unwrapModelHeaderSentinelsForProviderEgress(authorization.model, boundary);
-  if (apiKey === authorization.auth.apiKey && model === authorization.model) {
-    return authorization;
-  }
-  return {
-    ...authorization,
-    model,
-    auth: { ...authorization.auth, apiKey },
-  };
-}
-
-/** Plugin completions finalize usage with host-plugin attribution; core callers have no other path. */
-function emitIsolatedCompletionUsage(params: {
-  config: OpenClawConfig;
-  agentId: string;
-  agentDir: string;
-  purpose?: IsolatedCompletionPurpose;
-  result: IsolatedCompletionResult;
-}): void {
-  const { config, result } = params;
-  if (params.purpose === "plugin-completion" || !isDiagnosticsEnabled(config)) {
-    return;
-  }
-  const usage = normalizeUsage(result.diagnosticUsage ?? result.usage);
-  if (!hasObservedModelUsage(usage)) {
-    return;
-  }
-  emitTrustedDiagnosticEvent({
-    type: "model.usage",
-    agentId: params.agentId,
-    provider: result.provider,
-    model: result.model,
-    purpose: params.purpose ?? "isolated-completion",
-    runtimeKind: result.owner.kind,
-    usage: toDiagnosticUsage(usage),
-    costUsd: estimateAggregateUsageCost({
-      usage,
-      provider: result.provider,
-      model: result.model,
-      config,
-      agentDir: params.agentDir,
-    }),
-  });
-}
-
 /** Run one fresh completion with the selected runtime's documented isolation boundary. */
 export async function runIsolatedCompletion(
   params: RunIsolatedCompletionParams,
@@ -358,7 +129,8 @@ export async function runIsolatedCompletion(
   const signal = abortSignal ? AbortSignal.any([abortSignal, timeout.signal]) : timeout.signal;
   const expire = () =>
     timeout.abort(
-      new IsolatedCompletionError("runtime-unavailable", "Isolated completion timed out."),
+      params.timeoutError ??
+        new IsolatedCompletionError("runtime-unavailable", "Isolated completion timed out."),
     );
   const remainingTimeoutMs = () => {
     const remaining = deadline - performance.now();
@@ -528,12 +300,127 @@ async function runIsolatedCompletionOwned(
         ...context,
       });
       if (cliOwner) {
-        return await runCliIsolatedCompletion(
-          request,
-          cliOwner,
-          provider,
-          diagnostics,
-          remainingTimeoutMs,
+        return await withTempWorkspace(
+          { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-isolated-completion-" },
+          async ({ dir }) => {
+            const { runCliAgent } = await import("./cli-runner.runtime.js");
+            request.assertCurrent?.();
+            const { cliBackendAcceptsAuthProfileForwarding, resolveCliExecutionAuthProfileId } =
+              await import("./cli-execution-auth.js");
+            request.assertCurrent?.();
+            // Fresh completions use the same account order as new CLI sessions.
+            const authProfileId = cliBackendAcceptsAuthProfileForwarding({
+              provider: cliOwner,
+              config: request.config,
+              agentId: request.agentId,
+            })
+              ? await resolveCliExecutionAuthProfileId({
+                  cliExecutionProvider: cliOwner,
+                  authProfileProvider: provider,
+                  config: request.config,
+                  agentDir: request.agentDir,
+                  selected: { authProfileId: request.authProfileId },
+                })
+              : request.authProfileId;
+            request.assertCurrent?.();
+            const sessionId = `isolated-completion-${randomUUID()}`;
+            const preparedRunAdmission = prepareSystemAgentRunAdmission(
+              config,
+              sessionId,
+              request.agentId,
+              "isolated-completion",
+              request.assertCurrent,
+              request.operatorAuthority,
+            );
+            try {
+              request.assertCurrent?.();
+              const dispatch = () =>
+                runCliAgent({
+                  preparedRunAdmission,
+                  sessionId,
+                  sessionFile: path.join(dir, "session.json"),
+                  workspaceDir: request.workspaceDir,
+                  cwd: dir,
+                  agentDir: request.agentDir,
+                  agentId: request.agentId,
+                  config,
+                  prompt: request.prompt,
+                  extraSystemPrompt: request.systemPrompt,
+                  timeoutMs: remainingTimeoutMs(),
+                  runId: sessionId,
+                  provider: cliOwner,
+                  modelProvider: provider,
+                  requesterModel: { provider, model: request.model },
+                  model: request.model,
+                  authProfileId,
+                  thinkLevel: request.thinkLevel,
+                  streamParams: resolveIsolatedStreamParams(request),
+                  abortSignal: request.abortSignal,
+                  assertCurrent: request.assertCurrent,
+                  mapOperatorAuthorizationError: request.mapOperatorAuthorizationError,
+                  executionMode: "side-question",
+                  cliToolAvailability: { native: [], openClaw: [] },
+                  disableTools: true,
+                  disableCliLiveSession: true,
+                  cleanupCliLiveSessionOnRunEnd: true,
+                  cleanupBundleMcpOnRunEnd: true,
+                  requireExplicitMessageTarget: true,
+                  isolatedCompletion: true,
+                  isolatedCompletionPurpose: request.purpose ?? "isolated-completion",
+                  outputTextPolicy: request.outputTextPolicy,
+                });
+              const result = await (diagnostics
+                ? diagnostics.dispatch("cli", dispatch)
+                : dispatch());
+              if (hasCliSideEffectEvidence(result)) {
+                throw new IsolatedCompletionError(
+                  "output-rejected",
+                  "Isolated CLI completion returned side-effect evidence; result rejected.",
+                );
+              }
+              const payloads = result.payloads ?? [];
+              if (
+                payloads.some(
+                  (payload) =>
+                    payload.isError ||
+                    payload.mediaUrl ||
+                    payload.mediaUrls?.length ||
+                    payload.audioAsVoice ||
+                    payload.channelData,
+                )
+              ) {
+                throw new IsolatedCompletionError(
+                  "output-rejected",
+                  "Isolated CLI completion returned non-text output; result rejected.",
+                );
+              }
+              const text = payloads
+                .filter((payload) => !payload.isReasoning && payload.text !== undefined)
+                .map((payload) => payload.text ?? "")
+                .join("\n")
+                .trim();
+              const backend = resolveCliBackendConfig(cliOwner, request.config, {
+                agentId: request.agentId,
+              });
+              if (!backend) {
+                throw new IsolatedCompletionError(
+                  "runtime-unavailable",
+                  `CLI backend ${cliOwner} became unavailable after execution.`,
+                );
+              }
+              const { usage, diagnosticUsage } = result.meta?.agentMeta ?? {};
+              return {
+                text,
+                provider,
+                model: normalizeCliModel(request.model, backend.config),
+                owner: { kind: "cli", id: cliOwner },
+                ...(usage ? { usage } : {}),
+                ...(diagnosticUsage ? { diagnosticUsage } : {}),
+              };
+            } finally {
+              preparedRunAdmission.close();
+            }
+          },
         );
       }
 

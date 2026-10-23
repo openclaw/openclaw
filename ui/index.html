@@ -9,12 +9,38 @@
     <title>OpenClaw Control</title>
     <meta name="color-scheme" content="dark light" />
     <!-- These mirror the claw theme's --bg tokens for first paint; runtime theme application keeps them synchronized. -->
-    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#faf9f7" />
-    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1015" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
-    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
-    <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials" />
+    <meta
+      id="openclaw-theme-color-light"
+      name="theme-color"
+      media="(prefers-color-scheme: light)"
+      content="#faf9f7"
+    />
+    <meta
+      id="openclaw-theme-color-dark"
+      name="theme-color"
+      media="(prefers-color-scheme: dark)"
+      content="#0e1015"
+    />
+    <link id="openclaw-favicon-svg" rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link
+      id="openclaw-favicon-png"
+      rel="icon"
+      type="image/png"
+      sizes="32x32"
+      href="/favicon-32.png"
+    />
+    <link
+      id="openclaw-apple-touch-icon"
+      rel="apple-touch-icon"
+      sizes="180x180"
+      href="/apple-touch-icon.png"
+    />
+    <link
+      id="openclaw-manifest"
+      rel="manifest"
+      href="/manifest.webmanifest"
+      crossorigin="use-credentials"
+    />
     <script data-cfasync="false">
       // Configure Zod before module evaluation so its JIT probe cannot violate strict CSP.
       globalThis.__zod_globalConfig ??= {};

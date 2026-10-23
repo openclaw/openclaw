@@ -65,7 +65,6 @@ describe("Matrix reaction scenarios", () => {
     const observedEvents: Parameters<typeof observeReactionScenario>[0]["observedEvents"] = [];
     const result = await observeReactionScenario({
       accessToken: "driver-token",
-      actorId: "driver",
       actorUserId: "@driver:matrix-qa.test",
       baseUrl,
       observedEvents,

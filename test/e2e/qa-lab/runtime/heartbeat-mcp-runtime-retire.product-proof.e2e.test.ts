@@ -15,14 +15,10 @@ import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../../../helpers/fixture-receipts.js";
-import { writeOpenAiResponsesSse } from "../../../helpers/openai-responses-sse.js";
 import { createDeferred, withinTest } from "../../../helpers/promise.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
-import {
-  closeNativeProvider,
-  createNativeProvider,
-  listenNativeProvider,
-} from "./native-provider-proof-fixture.js";
+import { writeFixtureReply } from "./gateway-recovery.test-support.js";
+import { startMemoryProofProvider } from "./memory-product-proof.test-support.js";
 
 // #143381: each isolated heartbeat leaked its fresh session's MCP stdio child.
 const MODEL_REF = "mock-openai/gpt-5.6-luna";
@@ -59,33 +55,14 @@ type CronJob = {
 };
 type CronRunEntry = { error?: string; runId?: string; status?: string };
 type ProbeCount = { count: number; pids: number[] };
-type ProofCount = ProbeCount & { stage: string };
 
 function writeTextResponse(response: ServerResponse, text: string): void {
-  const message = {
-    type: "message",
-    id: `hb-mcp-retire-${randomUUID()}`,
-    role: "assistant",
-    status: "completed",
-    content: [{ type: "output_text", text, annotations: [] }],
-  };
-  writeOpenAiResponsesSse(response, [
-    {
-      type: "response.output_item.added",
-      output_index: 0,
-      item: { ...message, status: "in_progress", content: [] },
-    },
-    { type: "response.output_item.done", output_index: 0, item: message },
-    {
-      type: "response.completed",
-      response: {
-        id: `hb-mcp-retire-response-${randomUUID()}`,
-        status: "completed",
-        output: [message],
-        usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
-      },
-    },
-  ]);
+  writeFixtureReply(
+    response,
+    text,
+    `hb-mcp-retire-${randomUUID()}`,
+    `hb-mcp-retire-response-${randomUUID()}`,
+  );
 }
 
 async function startMockProvider() {
@@ -99,50 +76,14 @@ async function startMockProvider() {
     responseGate = createDeferred();
     return responseEntered.promise;
   };
-  const server = createNativeProvider(
-    async (request, response, body) => {
-      const json = (data: unknown) => {
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify(data));
-      };
-      if (request.method === "GET" && request.url === "/v1/models") {
-        json({ data: [{ id: "gpt-5.6-luna", object: "model" }] });
-        return;
-      }
-      if (request.method === "POST" && request.url === "/v1/embeddings") {
-        const inputs = JSON.parse(body) as { input?: string | string[] };
-        const texts = Array.isArray(inputs.input) ? inputs.input : [inputs.input ?? ""];
-        json({
-          object: "list",
-          model: "text-embedding-3-small",
-          data: texts.map((_text, index) => ({
-            object: "embedding",
-            index,
-            embedding: Array.from({ length: 64 }, (_slot, dimension) => (dimension === 0 ? 1 : 0)),
-          })),
-          usage: { prompt_tokens: 1, total_tokens: 1 },
-        });
-        return;
-      }
-      if (request.method !== "POST" || request.url !== "/v1/responses") {
-        response.writeHead(404).end();
-        return;
-      }
-      responsesRequests += 1;
-      responseEntered.resolve();
-      await responseGate.promise;
-      writeTextResponse(response, RESPONSE_TEXT);
-    },
-    (error, response) => {
-      if (!response.headersSent) {
-        response.writeHead(500);
-      }
-      response.end(error instanceof Error ? error.message : String(error));
-    },
-  );
-  const baseUrl = await listenNativeProvider(server);
+  const provider = await startMemoryProofProvider(async (response) => {
+    responsesRequests += 1;
+    responseEntered.resolve();
+    await responseGate.promise;
+    writeTextResponse(response, RESPONSE_TEXT);
+  });
   return {
-    baseUrl,
+    ...provider,
     get responsesRequests() {
       return responsesRequests;
     },
@@ -150,7 +91,7 @@ async function startMockProvider() {
     releaseResponse: () => responseGate.resolve(),
     stop: async () => {
       responseGate.resolve();
-      await closeNativeProvider(server);
+      await provider.stop();
     },
   };
 }
@@ -159,8 +100,8 @@ async function writeMcpProbeScript(repoRoot: string, marker: string, receiptEndp
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hb-mcp-probe-"));
   cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
   const require = createRequire(path.join(repoRoot, "package.json"));
-  const mcpUrl = pathToFileURL(require.resolve("@modelcontextprotocol/sdk/server/mcp.js")).href;
-  const stdioUrl = pathToFileURL(require.resolve("@modelcontextprotocol/sdk/server/stdio.js")).href;
+  const mcpUrl = pathToFileURL(require.resolve("@modelcontextprotocol/server")).href;
+  const stdioUrl = pathToFileURL(require.resolve("@modelcontextprotocol/server/stdio")).href;
   const scriptPath = path.join(dir, `${marker}.mjs`);
   await fs.writeFile(
     scriptPath,
@@ -212,15 +153,6 @@ it.runIf(process.env.OPENCLAW_HEARTBEAT_MCP_RETIRE_PROOF === "1")(
     const provider = await startMockProvider();
     cleanups.push(() => provider.stop());
 
-    const counts: ProofCount[] = [];
-    const record = async (stage: string, probe?: ProbeCount) => {
-      const entry = {
-        stage,
-        ...(probe ?? (await countProbeProcesses(marker))),
-      };
-      counts.push(entry);
-      return entry;
-    };
     // Settlement doesn't prove process closure; poll until the signal aborts.
     const settle = async (stage: string, isExpected: (probe: ProbeCount) => boolean) => {
       let probe: ProbeCount | undefined;
@@ -229,16 +161,13 @@ it.runIf(process.env.OPENCLAW_HEARTBEAT_MCP_RETIRE_PROOF === "1")(
           signal.throwIfAborted();
           probe = await withinTest(countProbeProcesses(marker, signal), signal);
           if (isExpected(probe)) {
-            return record(stage, probe);
+            return probe;
           }
           await sleep(100, undefined, { signal });
         }
       } catch (error) {
         if (!signal.aborted) {
           throw error;
-        }
-        if (probe) {
-          await record(stage, probe);
         }
         throw new Error(
           `MCP process census aborted during ${stage}; last census=${probe ? JSON.stringify(probe) : "unavailable"}`,
@@ -254,7 +183,6 @@ it.runIf(process.env.OPENCLAW_HEARTBEAT_MCP_RETIRE_PROOF === "1")(
       return probe.count === (VARIANT === "fixed" ? 0 : run);
     };
 
-    await record("before-gateway-start");
     const gatewayOwner = createQaGatewayChild();
     cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
     const gateway = await gatewayOwner.start({
@@ -297,7 +225,6 @@ it.runIf(process.env.OPENCLAW_HEARTBEAT_MCP_RETIRE_PROOF === "1")(
         return config;
       },
     });
-    await record("after-gateway-start");
     const call = <T>(method: string, params: Record<string, unknown>) =>
       gateway.call(method, params, { timeoutMs: 15_000 }) as Promise<T>;
 
@@ -356,40 +283,29 @@ it.runIf(process.env.OPENCLAW_HEARTBEAT_MCP_RETIRE_PROOF === "1")(
         }
       }
       sharedPid ??= peak.pids[0];
-      await record(`during-heartbeat-${run}-peak`, peak);
+      expect(peak.count, `heartbeat ${run} should observe the MCP child mid-run`).toBeGreaterThan(
+        0,
+      );
+      if (SESSION_MODE === "shared") {
+        expect(sharedPid).toBeDefined();
+        expect(peak.pids).toEqual([sharedPid]);
+      }
       const status = {
         status: entry?.status,
         providerRequests: provider.responsesRequests - requestsBefore,
       };
       expect(status.status).toBe("ok");
       expect(status.providerRequests).toBeGreaterThan(0);
-      await settle(`after-heartbeat-${run}`, expectedAfterRun(run));
+      const settled = await settle(`after-heartbeat-${run}`, expectedAfterRun(run));
+      if (SESSION_MODE === "shared") {
+        expect(settled.pids).toEqual([sharedPid]);
+      } else {
+        expect(settled.count).toBe(VARIANT === "fixed" ? 0 : run);
+      }
     }
 
     await stopQaGatewayFixture(gatewayOwner);
-    await settle("after-gateway-stop", (probe) => probe.count === 0);
-
-    const afterRuns = counts.filter((entry) => entry.stage.startsWith("after-heartbeat-"));
-    const peaks = counts.filter((entry) => entry.stage.startsWith("during-heartbeat-"));
-    expect(afterRuns).toHaveLength(HEARTBEAT_RUNS);
-    expect(peaks).toHaveLength(HEARTBEAT_RUNS);
-    for (const entry of peaks) {
-      expect(entry.count, `${entry.stage} should observe the MCP child mid-run`).toBeGreaterThan(0);
-    }
-    if (SESSION_MODE === "shared") {
-      expect(sharedPid).toBeDefined();
-      for (const entry of [...peaks, ...afterRuns]) {
-        expect(entry.pids, `${entry.stage} should reuse the shared MCP child`).toEqual([sharedPid]);
-      }
-    } else if (VARIANT === "fixed") {
-      for (const entry of afterRuns) {
-        expect(entry.count, `${entry.stage} should retire the MCP child`).toBe(0);
-      }
-    } else {
-      for (const [index, entry] of afterRuns.entries()) {
-        expect(entry.count, `${entry.stage} should leak one child per run`).toBe(index + 1);
-      }
-    }
-    expect(counts.at(-1)?.count, "gateway shutdown must reap every probe").toBe(0);
+    const stopped = await settle("after-gateway-stop", (probe) => probe.count === 0);
+    expect(stopped.count, "gateway shutdown must reap every probe").toBe(0);
   },
 );

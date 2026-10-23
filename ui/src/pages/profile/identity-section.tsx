@@ -13,7 +13,7 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { registerProfileEnglish } from "../../i18n/locales/en-profile.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
-import "../../components/viewer-facepile.ts";
+import "../../components/solid/viewer-facepile.tsx";
 import { projectApplicationConfig } from "../../lib/reactive/application.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { uploadsEnabled } from "../../lib/uploads.ts";
@@ -196,7 +196,12 @@ export function IdentitySection(props: IdentitySectionProps) {
               : t("profilePage.identity.gitCoauthorDescription")
           }
           checked={!isOwnerProfile() && props.gitCoauthorEnabled}
-          disabled={!canWrite() || props.busy !== null || isOwnerProfile()}
+          disabled={
+            !canWrite() ||
+            (props.busy !== null && props.busy !== "git-coauthor") ||
+            isOwnerProfile()
+          }
+          saving={props.busy === "git-coauthor"}
           onChange={props.onGitCoauthorChange}
         />
         <Show when={props.error}>

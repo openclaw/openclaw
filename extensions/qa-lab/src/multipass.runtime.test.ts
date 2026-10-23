@@ -232,10 +232,11 @@ describe("qa multipass runtime", () => {
   });
 
   it.skipIf(process.platform === "win32").each([
-    ["missing", "24.99.0"],
-    ["24.15.0", "24.99.0"],
-    ["24.16.0", "24.16.0"],
-  ])("bootstraps a runnable guest toolchain from Node %s", async (version, expectedVersion) => {
+    ["missing", "24.99.0", false],
+    ["24.15.0", "24.99.0", false],
+    ["24.22.1", "24.22.1", false],
+    ["missing", "24.99.0", true],
+  ])("Node %s/%s, link failure %s", async (version, expectedVersion, failLink) => {
     const { executableScript } = await guestScripts(
       {
         outputDirName: "multipass-node-" + version,
@@ -288,6 +289,8 @@ describe("qa multipass runtime", () => {
             '  case "$1" in',
             "    -E|mkdir|mount|rm|tar) return 0 ;;",
             "    ln)",
+            '      printf "%s %s\\n" "$3" "$4" >> "$QA_TEST_NODE_LINKS"',
+            '      [[ "$QA_TEST_FAIL_LINK" != true ]] || return 1',
             '      if [[ "$4" == /usr/local/bin/node ]]; then',
             '        printf "%s" "$3" | sed -E "s|.*/node-v([^-]+)-.*|\\1|" > "$QA_TEST_NODE_VERSION"',
             "      fi ;;",
@@ -321,6 +324,7 @@ describe("qa multipass runtime", () => {
         const commandsPath = workspace.path("commands");
         const suiteArgsPath = workspace.path("suite-args");
         const probeExitsPath = workspace.path("node-probe-exits.jsonl");
+        const linksPath = workspace.path("node-links");
         const result = spawnSync("bash", [scriptPath], {
           encoding: "utf8",
           timeout: 10_000,
@@ -336,8 +340,23 @@ describe("qa multipass runtime", () => {
             QA_TEST_COMMANDS: commandsPath,
             QA_TEST_SUITE_ARGS: suiteArgsPath,
             QA_TEST_NODE_PROBE_EXITS: probeExitsPath,
+            QA_TEST_NODE_LINKS: linksPath,
+            QA_TEST_FAIL_LINK: String(failLink),
           },
         });
+        const expectedLinks = ["node", "npm", "npx", "corepack"].map(
+          (binary) =>
+            `/usr/local/lib/nodejs/node-v24.99.0-linux-x64/bin/${binary} /usr/local/bin/${binary}`,
+        );
+        expect(fs.existsSync(linksPath) ? readLines(linksPath) : []).toEqual(
+          failLink ? expectedLinks.slice(0, 1) : version === expectedVersion ? [] : expectedLinks,
+        );
+        if (failLink) {
+          expect(result.status, result.stderr).toBe(1);
+          expect(fs.existsSync(pnpmSpecPath)).toBe(false);
+          expect(fs.existsSync(commandsPath)).toBe(false);
+          return;
+        }
         expect(result.status, result.stderr).toBe(0);
         const probeExits = readLines(probeExitsPath).map((line) => JSON.parse(line));
         expect(probeExits).toEqual([

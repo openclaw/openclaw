@@ -96,14 +96,6 @@ export function createShouldEmitVerboseProgress(params: {
   };
 }
 
-export function resolveTurnModelOverride(
-  replyOptions: { isHeartbeat?: boolean; heartbeatModelOverride?: string } | undefined,
-): string | undefined {
-  return replyOptions?.isHeartbeat === true
-    ? normalizeOptionalString(replyOptions.heartbeatModelOverride)
-    : undefined;
-}
-
 /**
  * Resolves the configured visible-replies mode plus the guarded harness
  * default. One owner for dispatch and synthetic-turn binding facts: both must

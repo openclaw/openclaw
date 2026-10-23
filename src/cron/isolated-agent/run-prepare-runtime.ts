@@ -2,24 +2,31 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import { hasAnyAuthProfileStoreSourceAsync } from "../../agents/auth-profiles/source-check.js";
-import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import type { SessionEventTarget } from "../../auto-reply/reply/session-event-contract.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { CronCompletionDeliveryFence } from "../delivery-attempt-fence.js";
+import type { CronIdleAdmissionWait } from "../service/state.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
   CronJob,
   CronStoredJob,
 } from "../types.js";
-import type { MutableCronSession } from "./run-session-state.js";
+import type { CronSessionRowWriter, MutableCronSession } from "./run-session-state.js";
 import { logWarn } from "./run.runtime.js";
 import type { CronLaneWaitCallback, RunCronAgentTurnResult } from "./run.types.js";
 
 export type RunCronAgentTurnParams = {
+  /** The occurrence admitted by the cron service, or by a hook or join-intro caller. */
+  occurrence: import("../scheduled-occurrence.js").ScheduledOccurrence;
+  waitForIdle?: CronIdleAdmissionWait;
+  assertCurrent?: () => void;
   admissionSource?: import("../../agents/admitted-run-context.js").AdmittedRunContext["admissionSource"];
   cfg: OpenClawConfig;
+  /** Gateway-selected cron partition; standalone callers resolve it from config. */
+  cronStorePath?: string;
   deps: CliDeps;
   job: CronStoredJob;
   /** Trusted caller classification; stored jobs default to cron, not their payload or audit ingress. */
@@ -44,18 +51,76 @@ export type WithRunSession = (
 const sessionAccessorRuntimeLoader = createLazyImportLoader(
   () => import("../../config/sessions/session-accessor.js"),
 );
-const cronExternalContentRuntimeLoader = createLazyImportLoader(
-  () => import("./run-external-content.runtime.js"),
-);
 const cronAuthProfileRuntimeLoader = createLazyImportLoader(
   () => import("./run-auth-profile.runtime.js"),
 );
-export async function loadSessionAccessorRuntime() {
+async function loadSessionAccessorRuntime() {
   return await sessionAccessorRuntimeLoader.load();
 }
 
-export async function loadCronExternalContentRuntime() {
-  return await cronExternalContentRuntimeLoader.load();
+export function createCronSessionRowWriter(params: {
+  agentId: string;
+  agentSessionKey: string;
+  assertCurrent?: () => void;
+  resultTarget: SessionEventTarget;
+  cronSession: MutableCronSession;
+}): CronSessionRowWriter {
+  const { agentId, agentSessionKey } = params;
+  let baseSessionMaintenanceStarted = false;
+  return async ({ storePath, sessionKey, operation, resetBoundary, assertCommitAllowed }) => {
+    const assertCurrent = () => {
+      params.assertCurrent?.();
+      assertCommitAllowed?.();
+    };
+    if (resetBoundary) {
+      const [{ applySessionEntryLifecycleMutation }, { projectCronSessionEntry }] =
+        await Promise.all([
+          loadSessionAccessorRuntime(),
+          import("../../config/sessions/session-entry-patch-operation.js"),
+        ]);
+      let entry = operation.next;
+      await applySessionEntryLifecycleMutation({
+        activeSessionKey: sessionKey,
+        agentId,
+        storePath,
+        commitGuard: assertCurrent,
+        upserts: [
+          {
+            sessionKey,
+            resetBoundary,
+            buildEntry: ({ currentEntry }) =>
+              (entry = projectCronSessionEntry(operation, currentEntry)),
+          },
+        ],
+        skipMaintenance: true,
+      });
+      const { resultTarget, cronSession } = params;
+      if (
+        resultTarget.agentId === agentId &&
+        resultTarget.sessionKey === sessionKey &&
+        resultTarget.storePath === storePath &&
+        resultTarget.sessionId === cronSession.initialSessionEntry?.sessionId &&
+        resultTarget.lifecycleRevision === cronSession.initialSessionEntry?.lifecycleRevision
+      ) {
+        resultTarget.sessionId = entry.sessionId;
+        resultTarget.lifecycleRevision = entry.lifecycleRevision;
+      }
+      return entry;
+    }
+    const { applySessionEntryOperation } =
+      await import("../../config/sessions/session-accessor.sqlite-entry.js");
+    const entry = await applySessionEntryOperation({ storePath, sessionKey, agentId }, operation, {
+      fallbackEntry: operation.next,
+      replaceEntry: true,
+      // The maintenance owner follows later writes through its receipt subscription.
+      skipMaintenance: baseSessionMaintenanceStarted || sessionKey !== agentSessionKey,
+      workerGuard: { assertCurrent },
+    });
+    if (sessionKey === agentSessionKey) {
+      baseSessionMaintenanceStarted = true;
+    }
+    return entry;
+  };
 }
 
 function hasConfiguredAuthProfiles(cfg: OpenClawConfig): boolean {
@@ -127,16 +192,4 @@ export async function retireRolledCronSessionMcpRuntime(params: {
       );
     },
   });
-}
-
-export function appendCronUnattendedRunPreamble(
-  commandBody: string,
-  opts: { externalHook: boolean },
-) {
-  // Keep the suffix static for prompt caching. External hooks cannot override
-  // this trusted guidance or gain permission to remove jobs through fenced content.
-  const core = `This is an unattended scheduled run. Nobody is present to clarify or approve, so complete the task with what you have. Your final reply is the deliverable — not a plan, an acknowledgement, or a request for input. If nothing needs doing, reply with exactly ${SILENT_REPLY_TOKEN} as the entire final answer. ${SILENT_REPLY_TOKEN} discards anything written this turn that was not sent, so send confirmations before ending silently. If you cannot complete the task, explain what blocked it and what you tried.`;
-  const trustedExtra =
-    " Where the job's own instructions conflict with this preamble, the job's instructions win (a question or plan the job explicitly requests is a valid deliverable). If this job is no longer needed, remove it if your available tools allow.";
-  return `${commandBody}\n\n${core}${opts.externalHook ? "" : trustedExtra}`;
 }

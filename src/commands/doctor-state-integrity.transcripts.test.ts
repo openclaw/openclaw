@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as terminalNote from "../../packages/terminal-core/src/note.js";
 import { INTERNAL_WAKE_TRANSCRIPT_PROMPTS } from "../auto-reply/heartbeat.js";
 import type * as BundledIds from "../channels/plugins/bundled-ids.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -40,10 +41,23 @@ vi.mock("../channels/plugins/bundled-ids.js", async (importOriginal) => ({
   ...(await importOriginal<typeof BundledIds>()),
   listBundledChannelIds: () => ["matrix", "whatsapp"],
 }));
-vi.mock("../channels/plugins/persisted-auth-state.js", () => ({
-  listBundledChannelIdsWithPersistedAuthState: () => ["matrix", "whatsapp"],
-  hasBundledChannelPersistedAuthState: () => false,
-}));
+vi.mock("../channels/plugins/package-state-probes.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../channels/plugins/package-state-probes.js")>();
+  return {
+    ...actual,
+    listBundledChannelIdsForPackageState: (
+      ...args: Parameters<typeof actual.listBundledChannelIdsForPackageState>
+    ) =>
+      args[0] === "persistedAuthState"
+        ? ["matrix", "whatsapp"]
+        : actual.listBundledChannelIdsForPackageState(...args),
+    hasBundledChannelPackageState: (
+      params: Parameters<typeof actual.hasBundledChannelPackageState>[0],
+    ) =>
+      params.metadataKey !== "persistedAuthState" && actual.hasBundledChannelPackageState(params),
+  };
+});
 const routeStateOwnerState = vi.hoisted(() => ({ owners: [] as Array<Record<string, unknown>> }));
 vi.mock("../plugins/doctor-contract-registry.js", async () => {
   const actual = await vi.importActual<typeof import("../plugins/doctor-contract-registry.js")>(
@@ -65,7 +79,7 @@ describe("doctor transcript and heartbeat session repairs", () => {
     message.startsWith("Move heartbeat-owned main session"),
   );
   const run = (cfg: OpenClawConfig = {}) =>
-    noteStateIntegrity(cfg, { confirmRuntimeRepair: approveMove, note: noteMock });
+    noteStateIntegrity(cfg, { confirmRuntimeRepair: approveMove });
   const readLegacy = () =>
     JSON.parse(
       fs.readFileSync(resolveSessionStorePathCore(undefined, { agentId: "main" }), "utf8"),
@@ -125,6 +139,7 @@ describe("doctor transcript and heartbeat session repairs", () => {
     fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
     routeStateOwnerState.owners = [];
     noteMock.mockClear();
+    vi.spyOn(terminalNote, "note").mockImplementation(noteMock);
     approveMove.mockClear();
   });
   afterEach(async () => {
@@ -169,7 +184,6 @@ describe("doctor transcript and heartbeat session repairs", () => {
         );
         return true;
       },
-      note: noteMock,
     });
     expect(await listSessionEntryKeysReadOnly(scope)).toEqual([key]);
     expect(loadSessionEntryReadOnly({ ...scope, sessionKey: key })?.lastInteractionAt).toBe(2);
@@ -206,7 +220,6 @@ describe("doctor transcript and heartbeat session repairs", () => {
       confirmRuntimeRepair: async ({ message }) =>
         message.startsWith("Clear stale Codex") ||
         message.startsWith("Move heartbeat-owned main session"),
-      note: noteMock,
     });
     const keys = await listSessionEntryKeysReadOnly(scope);
     expect(keys).not.toContain(key);

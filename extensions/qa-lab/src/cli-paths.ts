@@ -42,6 +42,20 @@ export function resolveRepoRelativeOutputDir(repoRoot: string, outputDir?: strin
   return resolved.path;
 }
 
+export function resolveTimestampedQaOutputDir(
+  repoRoot: string,
+  outputDir: string | undefined,
+  startedAt: Date,
+  prefix: string,
+) {
+  const configured = resolveRepoRelativeOutputDir(repoRoot, outputDir);
+  if (configured !== undefined) {
+    return configured;
+  }
+  const stamp = startedAt.toISOString().replace(/[:.]/gu, "-");
+  return path.join(repoRoot, ".artifacts", "qa-e2e", `${prefix}-${stamp}`);
+}
+
 export async function ensureRepoBoundDirectory(
   repoRoot: string,
   targetDir: string,

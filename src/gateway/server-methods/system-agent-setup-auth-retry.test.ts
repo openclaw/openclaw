@@ -1,16 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { Compile } from "typebox/compile";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type {
-  SystemAgentSetupAuthStartParams,
-  WizardNextParams,
-  WizardNextResult,
-} from "../../../packages/gateway-protocol/src/index.js";
-import { WizardNextResultSchema } from "../../../packages/gateway-protocol/src/schema/wizard.js";
+import type { SystemAgentSetupAuthStartParams } from "../../../packages/gateway-protocol/src/index.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { WizardSession } from "../../wizard/session.js";
+import type { WizardPrompter } from "../../wizard/prompts.js";
+import type { WizardSession } from "../../wizard/session.js";
 import { whenAdmittedWizardSessionSettled } from "./setup-admission.js";
+import { callWizardNext, makeContext } from "./system-agent-setup.test-support.js";
 import { systemAgentHandlers } from "./system-agent.js";
 import type {
   GatewayClient,
@@ -23,20 +19,6 @@ const setupInferenceMocks = vi.hoisted(() => ({ activateSetupInference: vi.fn() 
 vi.mock("../../system-agent/setup-inference.js", () => ({
   activateSetupInference: setupInferenceMocks.activateSetupInference,
 }));
-const validateWizardResult = Compile(WizardNextResultSchema);
-
-function makeContext() {
-  const wizardSessions = new Map<string, WizardSession>();
-  return {
-    wizardSessions,
-    context: {
-      wizardSessions,
-      findRunningWizard: () => undefined,
-      purgeWizardSession: (id: string) => wizardSessions.delete(id),
-    } as unknown as GatewayRequestContext,
-  };
-}
-
 function makeRespond() {
   const calls: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
   return {
@@ -98,26 +80,20 @@ async function settleAuthRequests(
   }
 }
 
-async function callWizardNext(
-  context: GatewayRequestContext,
-  params: WizardNextParams,
-): Promise<WizardNextResult> {
-  const { calls, respond } = makeRespond();
-  await expectDefined(
-    wizardHandlers["wizard.next"],
-    "wizard.next handler",
-  )({
-    params,
-    respond,
-    context,
-  } as never);
-  expect(calls).toHaveLength(1);
-  expect(calls[0]?.ok).toBe(true);
-  const payload = calls[0]?.payload;
-  if (!validateWizardResult.Check(payload)) {
-    throw new Error("wizard.next returned an invalid result");
-  }
-  return payload;
+const signedIn = { ok: true, modelRef: "github-copilot/test", latencyMs: 1, lines: [] };
+async function signIn(prompter: WizardPrompter, message: string) {
+  await prompter.note(message);
+  return signedIn;
+}
+
+function expectRunning(calls: ReturnType<typeof makeRespond>["calls"], sessionId: string) {
+  expect(calls).toEqual([
+    { ok: true, payload: { sessionId, done: false, status: "running" }, error: undefined },
+  ]);
+}
+
+async function expectPrompt(context: GatewayRequestContext, sessionId: string, message: string) {
+  expect((await callWizardNext(context, { sessionId })).step?.message).toBe(message);
 }
 
 describe("openclaw.setup auth retries", () => {
@@ -141,10 +117,9 @@ describe("openclaw.setup auth retries", () => {
             await cleanupReleased.promise;
           }
         })
-        .mockImplementationOnce(async (params) => {
-          await params.prompter.note("Complete the replacement sign-in");
-          return { ok: true, modelRef: "github-copilot/test", latencyMs: 1, lines: [] };
-        });
+        .mockImplementationOnce((params) =>
+          signIn(params.prompter, "Complete the replacement sign-in"),
+        );
       const first = startAuthRequest(context, "auth-first");
       const requests = [first.pending];
       try {
@@ -171,16 +146,8 @@ describe("openclaw.setup auth retries", () => {
         await replacement.pending;
         const sessionId = "auth-replacement";
         expect(wizardSessions.has("auth-first")).toBe(false);
-        expect(replacement.calls).toEqual([
-          {
-            ok: true,
-            payload: { sessionId, done: false, status: "running" },
-            error: undefined,
-          },
-        ]);
-        expect((await callWizardNext(context, { sessionId })).step?.message).toBe(
-          "Complete the replacement sign-in",
-        );
+        expectRunning(replacement.calls, sessionId);
+        await expectPrompt(context, sessionId, "Complete the replacement sign-in");
         expect(setupInferenceMocks.activateSetupInference).toHaveBeenCalledTimes(2);
       } finally {
         await settleAuthRequests(wizardSessions, requests, () => cleanupReleased.resolve());
@@ -213,10 +180,9 @@ describe("openclaw.setup auth retries", () => {
             }
           }
         })
-        .mockImplementation(async (params) => {
-          await params.prompter.note("Complete the live replacement sign-in");
-          return { ok: true, modelRef: "github-copilot/test", latencyMs: 1, lines: [] };
-        });
+        .mockImplementation((params) =>
+          signIn(params.prompter, "Complete the live replacement sign-in"),
+        );
       const first = startAuthRequest(context, "auth-first");
       const requests: Array<Promise<unknown>> = [first.pending];
       try {
@@ -269,9 +235,7 @@ describe("openclaw.setup auth retries", () => {
         });
         expect(original.signal.aborted).toBe(true);
         expect(wizardSessions.has("auth-first")).toBe(false);
-        expect((await callWizardNext(context, { sessionId: "auth-live" })).step?.message).toBe(
-          "Complete the live replacement sign-in",
-        );
+        await expectPrompt(context, "auth-live", "Complete the live replacement sign-in");
         expect(setupInferenceMocks.activateSetupInference).toHaveBeenCalledTimes(2);
       } finally {
         await settleAuthRequests(wizardSessions, requests, () => cleanupReleased.resolve());
@@ -290,12 +254,11 @@ describe("openclaw.setup auth retries", () => {
         await releasePreparation.promise;
         params.onPreparationComplete();
         await params.prompter.note("Complete the original sign-in");
-        return { ok: true, modelRef: "github-copilot/test", latencyMs: 1, lines: [] };
+        return signedIn;
       })
-      .mockImplementationOnce(async (params) => {
-        await params.prompter.note("Complete the replacement sign-in");
-        return { ok: true, modelRef: "github-copilot/test", latencyMs: 1, lines: [] };
-      });
+      .mockImplementationOnce((params) =>
+        signIn(params.prompter, "Complete the replacement sign-in"),
+      );
     const first = startAuthRequest(context, "auth-first");
     const requests = [first.pending];
     try {
@@ -319,24 +282,14 @@ describe("openclaw.setup auth retries", () => {
       expect(setupInferenceMocks.activateSetupInference).toHaveBeenCalledOnce();
 
       releasePreparation.resolve();
-      expect((await callWizardNext(context, { sessionId: "auth-first" })).step?.message).toBe(
-        "Complete the original sign-in",
-      );
+      await expectPrompt(context, "auth-first", "Complete the original sign-in");
       const replacement = startAuthRequest(context, "auth-replacement");
       requests.push(replacement.pending);
       await replacement.pending;
-      expect(replacement.calls).toEqual([
-        {
-          ok: true,
-          payload: { sessionId: "auth-replacement", done: false, status: "running" },
-          error: undefined,
-        },
-      ]);
+      expectRunning(replacement.calls, "auth-replacement");
       expect(session.signal.aborted).toBe(true);
       expect(wizardSessions.has("auth-first")).toBe(false);
-      expect((await callWizardNext(context, { sessionId: "auth-replacement" })).step?.message).toBe(
-        "Complete the replacement sign-in",
-      );
+      await expectPrompt(context, "auth-replacement", "Complete the replacement sign-in");
       expect(setupInferenceMocks.activateSetupInference).toHaveBeenCalledTimes(2);
     } finally {
       await settleAuthRequests(wizardSessions, requests, () => releasePreparation.resolve());
@@ -360,7 +313,7 @@ describe("openclaw.setup auth retries", () => {
       }
       await params.prompter.note("Sign-in still owns setup");
       await released.promise;
-      return { ok: true, modelRef: "github-copilot/test", latencyMs: 1, lines: [] };
+      return signedIn;
     });
     const first = startAuthRequest(context, "auth-first");
     const requests = [first.pending];
@@ -371,17 +324,17 @@ describe("openclaw.setup auth retries", () => {
       const replacement = startAuthRequest(
         context,
         "auth-replacement",
-        difference === "choice"
-          ? { authChoice: "xai" }
-          : difference === "agent"
-            ? { agentId: "other-agent" }
-            : difference === "workspace"
-              ? { workspace: "/tmp/other-auth-workspace" }
-              : difference === "modelTarget"
-                ? { modelTarget: "utility" }
-                : difference === "nativeSessionCatalogsEnabled"
-                  ? { nativeSessionCatalogsEnabled: true }
-                  : {},
+        (
+          {
+            choice: { authChoice: "xai" },
+            agent: { agentId: "other-agent" },
+            workspace: { workspace: "/tmp/other-auth-workspace" },
+            modelTarget: { modelTarget: "utility" as const },
+            nativeSessionCatalogsEnabled: { nativeSessionCatalogsEnabled: true },
+            owner: {},
+            commit: {},
+          } satisfies Record<typeof difference, Partial<SystemAgentSetupAuthStartParams>>
+        )[difference],
         difference === "owner"
           ? {
               ...authClient,

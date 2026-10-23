@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { createRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
@@ -34,27 +33,23 @@ it("joins an accepted pairing reader through the real Gateway close prelude", as
           if (command.type !== "pairing.allowFrom") {
             return transport;
           }
-          const cleanup = createRetainedOperation<void>(() => {});
-          let started = false;
+          let cleanup: Promise<void> | undefined;
           return {
             ...transport,
             startRead(location, authority) {
               const operation = transport.startRead(location, authority);
-              void operation.result.then(
+              void operation.then(
                 (outcome) => observed.push(outcome),
                 (error: unknown) => observed.push(error),
               );
               return operation;
             },
             startClose() {
-              if (!started) {
-                started = true;
+              return (cleanup ??= (async () => {
                 cleanupEntered.resolve();
-                void releaseCleanup.promise
-                  .then(() => transport.startClose().result)
-                  .then(cleanup.resolve, cleanup.reject);
-              }
-              return cleanup.operation;
+                await releaseCleanup.promise;
+                await transport.startClose();
+              })());
             },
           };
         },

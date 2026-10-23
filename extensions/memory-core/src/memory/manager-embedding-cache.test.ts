@@ -44,10 +44,13 @@ describe("memory embedding cache", () => {
       now?: number;
     } = {},
   ) {
-    const { identity: provider = defaultIdentity, ...rest } = options;
+    const { identity: provider = defaultIdentity, cacheSize, ...rest } = options;
     return upsertMemoryEmbeddingCache({
       db,
-      cacheSize: options.cacheSize ?? countMemoryEmbeddingCache(db),
+      cacheSize: {
+        size: cacheSize ?? countMemoryEmbeddingCache(db),
+        exact: cacheSize === undefined,
+      },
       provider: { id: provider.provider, model: provider.model },
       providerKey: provider.providerKey,
       entries: () => values.map(([hash, embedding]) => ({ hash, embedding })),
@@ -361,12 +364,136 @@ describe("memory embedding cache", () => {
     const hashes = Array.from({ length: 103 }, (_, index) => String(index));
     write(db, vectors(hashes, [1]), { now: 1 });
     db.exec("BEGIN IMMEDIATE");
-    expect(pruneMemoryEmbeddingCache(db, 103, 2)).toBe(3);
+    expect(pruneMemoryEmbeddingCache(db, { size: 103, exact: true }, 2)).toEqual({
+      size: 3,
+      exact: true,
+    });
     expect(read()).toEqual(["100", "101", "102"].map((hash) => ({ hash })));
     db.exec("COMMIT; BEGIN IMMEDIATE");
-    expect(pruneMemoryEmbeddingCache(db, 3, 2)).toBe(2);
+    expect(pruneMemoryEmbeddingCache(db, { size: 3, exact: true }, 2)).toEqual({
+      size: 2,
+      exact: true,
+    });
     db.exec("COMMIT");
     expect(read()).toEqual(["101", "102"].map((hash) => ({ hash })));
+  });
+
+  function seedEviction(
+    db: Database,
+    cache: Array<[provider: string, providerKey: string, hash: string, updatedAt: number]>,
+    chunks: Array<[hash: string, updatedAt: number]>,
+  ) {
+    const vector = encodeMemoryEmbedding([0.1, 0.2]);
+    const insert = db.prepare(
+      "INSERT INTO memory_embedding_cache (provider, model, provider_key, hash, embedding, dims, updated_at) VALUES (?, 'm', ?, ?, ?, 2, ?)",
+    );
+    for (const [provider, providerKey, hash, updatedAt] of cache) {
+      insert.run(provider, providerKey, hash, vector, updatedAt);
+    }
+    const chunk = db.prepare(
+      "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, 'a.md', 'memory', 1, 1, ?, 'm', 't', ?, ?)",
+    );
+    for (const [hash, updatedAt] of chunks) {
+      chunk.run(`chunk-${hash}`, hash, vector, updatedAt);
+    }
+    return () =>
+      rows(db, "SELECT hash FROM memory_embedding_cache ORDER BY hash").map((row) => row.hash);
+  }
+
+  it("evicts unreferenced rows of the preferred identities older than every published chunk first", () => {
+    using db = new DatabaseSync(":memory:");
+    initialize(db);
+    // Live rows are the oldest, so plain oldest-first eviction would take them first.
+    // pending-at-fence is not older than the oldest published chunk: possibly a retry's
+    // or another sync's unpublished work.
+    const remaining = seedEviction(
+      db,
+      [
+        ["openai", "k", "live", 1],
+        ["openai", "k", "live-session", 1],
+        ["openai", "k", "orphan-newer", 50],
+        ["openai", "k", "orphan-older", 40],
+        ["openai", "other-key", "orphan-other-key", 2],
+        ["local", "k", "orphan-other-provider", 3],
+        ["openai", "k", "pending-at-fence", 100],
+      ],
+      [
+        ["live", 100],
+        ["live-session", 150],
+      ],
+    );
+    const preference = { identities: [{ provider: "openai", model: "m", providerKey: "k" }] };
+
+    // Seven rows against a cap of six: one eviction, the oldest preferred row.
+    expect(pruneMemoryEmbeddingCache(db, { size: 7, exact: true }, 6, preference)).toEqual({
+      size: 6,
+      exact: true,
+    });
+    expect(remaining()).not.toContain("orphan-older");
+    // Two more evictions: one preferred row remains, then plain oldest-first.
+    expect(pruneMemoryEmbeddingCache(db, { size: 6, exact: true }, 4, preference)).toEqual({
+      size: 4,
+      exact: true,
+    });
+    expect(remaining()).toEqual([
+      "live-session",
+      "orphan-other-key",
+      "orphan-other-provider",
+      "pending-at-fence",
+    ]);
+  });
+
+  it("reserves insertion capacity from preferred unreferenced rows before the oldest rows", () => {
+    using db = new DatabaseSync(":memory:");
+    initialize(db);
+    const remaining = seedEviction(
+      db,
+      [
+        ["openai", "k", "live", 1],
+        ["openai", "k", "orphan", 5],
+        ["openai", "k", "pending", 10],
+      ],
+      [["live", 10]],
+    );
+    upsertMemoryEmbeddingCache({
+      db,
+      cacheSize: { size: 3, exact: true },
+      provider: { id: "openai", model: "m" },
+      providerKey: "k",
+      entries: () => [{ hash: "new", embedding: [0.3, 0.4] }],
+      maxEntries: 3,
+      unreferencedFirst: { identities: [{ provider: "openai", model: "m", providerKey: "k" }] },
+      now: 20,
+    });
+    // Plain oldest-first would take the live row; the one reserved slot comes
+    // from the unreferenced row older than the published chunk.
+    expect(remaining()).toEqual(["live", "new", "pending"]);
+  });
+
+  it("falls back to plain oldest-first order without preferred identities or a published index, and prefers every listed identity", () => {
+    const run = (identities: Identity[], published: boolean, maxEntries = 3) => {
+      using db = new DatabaseSync(":memory:");
+      initialize(db);
+      const remaining = seedEviction(
+        db,
+        [
+          ["openai", "k", "live", 1],
+          ["openai", "k", "orphan-a", 5],
+          ["local", "k2", "orphan-b", 6],
+          ["openai", "k", "pending", 20],
+        ],
+        published ? [["live", 10]] : [],
+      );
+      pruneMemoryEmbeddingCache(db, { size: 4, exact: true }, maxEntries, { identities });
+      return remaining();
+    };
+    const a = identity("m", "k", "openai");
+    const b = identity("m", "k2", "local");
+    // One eviction: plain oldest-first takes the live row unless a preferred row exists.
+    expect(run([], true)).toEqual(["orphan-a", "orphan-b", "pending"]);
+    expect(run([a, b], false)).toEqual(["orphan-a", "orphan-b", "pending"]);
+    // Two evictions: both listed identities are preferred before the live row.
+    expect(run([a, b], true, 2)).toEqual(["live", "pending"]);
   });
 
   it.each([

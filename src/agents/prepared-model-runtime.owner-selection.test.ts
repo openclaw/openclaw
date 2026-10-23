@@ -70,10 +70,10 @@ function holdNextCatalogWrite() {
   const started = createDeferred();
   const release = createDeferred();
   const pending: (() => Promise<unknown>)[] = [];
-  mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, agentDir) => {
+  mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, _agentDir) => {
     started.resolve();
     await release.promise;
-    return { agentDir: String(agentDir), wrote: false };
+    return {};
   });
   return {
     started,
@@ -155,6 +155,34 @@ describe("prepared model runtime owner selection", () => {
       }
     },
   );
+
+  it("keeps explicit empty selections exact for raw published reads", async () => {
+    const input = fixture.agentInput("default", {});
+    const workspaceDir = "/tmp/explicit-published-workspace";
+    const published = await publishPreparedModelRuntimeSnapshot(
+      {
+        ...input,
+        workspaceDir,
+        runtimePluginSelections: [{ provider: "openai", modelId: "gpt-5.5", runtime: "openclaw" }],
+      },
+      { provenance: "configured", catalogMode: "static" },
+    );
+
+    for (const requestedWorkspace of [workspaceDir, ""]) {
+      const request = {
+        ...input,
+        workspaceDir: requestedWorkspace,
+        runtimePluginSelections: [],
+      };
+      await expect(prepareModelRuntimeSnapshot(request)).rejects.toThrow(
+        "prepared model runtime owner was not published",
+      );
+      await expect(loadPreparedModelRuntimeSnapshot(request)).resolves.toBe(published);
+      await expect(
+        prepareModelRuntimeSnapshot({ ...request, runtimePluginSelections: undefined }),
+      ).resolves.toBe(published);
+    }
+  });
 
   it("prepares prompt-only runtime owners separately from the configured agent generation", async () => {
     const config = gatewayConfig();
@@ -575,8 +603,8 @@ describe("prepared model runtime snapshots", () => {
     const refreshError = new Error("queued auth refresh failed");
     await using configWrite = holdNextCatalogWrite();
     mocks.ensureOpenClawModelsJson
-      .mockResolvedValueOnce({ agentDir: fixture.state.agentDir("secondary"), wrote: false })
-      .mockResolvedValueOnce({ agentDir: fixture.state.agentDir("default"), wrote: false })
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({})
       .mockRejectedValueOnce(refreshError);
 
     const refresh = configWrite.track(refreshPreparedModelRuntimeSnapshots({}));
@@ -608,7 +636,7 @@ describe("prepared model runtime snapshots", () => {
       return { entries: [] };
     });
     mocks.ensureOpenClawModelsJson
-      .mockResolvedValueOnce({ agentDir: fixture.state.agentDir("default"), wrote: false })
+      .mockResolvedValueOnce({})
       .mockRejectedValueOnce(new Error("unexpected auth replay"));
 
     await expect(publishGateway({}, { catalogMode: "static" })).resolves.toBeUndefined();

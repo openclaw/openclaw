@@ -9610,9 +9610,95 @@ surfaces:
       - name: Access and Identity
         id: access-and-identity
         features:
-          - name: Access and Identity
-            coverageIds: [regional-channels.access-and-identity]
-            description: Evidence scope for Access and Identity.
+          - name: Feishu/Lark bot WebSocket
+            coverageIds: [regional-channels.feishu-bot-websocket]
+            description: >-
+              Feishu/Lark bot SDK WebSocket discovery, authentication, reconnect, and cancellation,
+              attributed to the actual realm and account. Webhook proof does not qualify this transport,
+              and Feishu proof does not automatically qualify Lark. Bind this claim's scenario
+              occurrence, assertion, cell, package/source/runtime, account/protocol, and proof class.
+              Fixture, local-protocol, packaged, and live evidence stay distinct; missing attribution
+              remains UNKNOWN/unscored.
+          - name: Feishu/Lark bot signed webhook
+            coverageIds: [regional-channels.feishu-bot-signed-webhook]
+            description: >-
+              Feishu/Lark bot signed/encrypted webhook admission for the actual realm and account,
+              separate from SDK WebSocket discovery and lifecycle. Feishu proof does not automatically
+              qualify Lark. Bind this claim's scenario occurrence, assertion, cell,
+              package/source/runtime, account/protocol, and proof class. Fixture, local-protocol,
+              packaged, and live evidence stay distinct; missing attribution remains UNKNOWN/unscored.
+          - name: Consumer WeChat/Weixin account pairing
+            coverageIds: [regional-channels.wechat-consumer-account-pairing]
+            description: >-
+              Consumer WeChat/Weixin account pairing, scanner and secondary-sender behavior,
+              revocation, and account isolation under the existing consumer-channel owner. Bind the
+              actual package and host rather than inferring support from another WeChat account type.
+              Bind this claim's scenario occurrence, assertion, cell, package/source/runtime,
+              account/protocol, and proof class. Fixture, local-protocol, packaged, and live evidence
+              stay distinct; missing attribution remains UNKNOWN/unscored.
+          - name: WeCom AI bot WebSocket
+            coverageIds: [regional-channels.wecom-ai-bot-websocket]
+            description: >-
+              WeCom AI bot WebSocket ingress with actual selected-mode and account evidence;
+              bot credentials take precedence over webhook configuration in the accepted contract.
+              JSON bot webhooks and enterprise-app XML webhooks are separate claims. Bind native
+              account/message/stream identity and this claim's scenario occurrence, assertion, cell,
+              package/source/runtime, account/protocol, and proof class. Fixture, local-protocol,
+              packaged, and live evidence stay distinct; missing attribution remains UNKNOWN/unscored.
+          - name: WeCom AI bot JSON webhook
+            coverageIds: [regional-channels.wecom-ai-bot-json-webhook]
+            description: >-
+              WeCom AI bot JSON webhook ingress with actual selected-mode and account evidence;
+              configured webhook values alone do not establish selection when bot credentials take
+              precedence. WebSocket bot and enterprise-app XML ingress stay separate. Bind native
+              account/message/stream identity and this claim's scenario occurrence, assertion, cell,
+              package/source/runtime, account/protocol, and proof class. Fixture, local-protocol,
+              packaged, and live evidence stay distinct; missing attribution remains UNKNOWN/unscored.
+          - name: WeCom enterprise-app XML webhook
+            coverageIds: [regional-channels.wecom-enterprise-app-xml-webhook]
+            description: >-
+              WeCom enterprise-app XML webhook admission for its actual account and selected mode,
+              independently of AI bot WebSocket or JSON webhook ingress. Preserve native account and
+              message identity. Bind this claim's scenario occurrence, assertion, cell,
+              package/source/runtime, account/protocol, and proof class. Fixture, local-protocol,
+              packaged, and live evidence stay distinct; missing attribution remains UNKNOWN/unscored.
+          - name: QQ bot WebSocket
+            coverageIds: [regional-channels.qq-bot-websocket]
+            description: >-
+              Official QQ bot WebSocket authentication and resume with separately attributed C2C and
+              group account cells. QR provisioning creates bot credentials, not consumer identity;
+              Ed25519 webhook evidence and guild behavior do not qualify this claim. Bind native
+              message identity and this claim's scenario occurrence, assertion, cell,
+              package/source/runtime, account/protocol, and proof class. Fixture, local-protocol,
+              packaged, and live evidence stay distinct; missing attribution remains UNKNOWN/unscored.
+          - name: QQ bot Ed25519 webhook
+            coverageIds: [regional-channels.qq-bot-ed25519-webhook]
+            description: >-
+              Official QQ bot Ed25519 webhook admission with separately attributed C2C and group
+              account cells. QR provisioning is bot-credential setup, not consumer identity;
+              WebSocket authentication/resume and guild behavior do not qualify this claim. Bind
+              native message identity and this claim's scenario occurrence, assertion, cell,
+              package/source/runtime, account/protocol, and proof class. Fixture, local-protocol,
+              packaged, and live evidence stay distinct; missing attribution remains UNKNOWN/unscored.
+          - name: Yuanbao bot proprietary Protobuf WebSocket
+            coverageIds: [regional-channels.yuanbao-bot-protobuf-websocket]
+            description: >-
+              Yuanbao bot proprietary Protobuf WebSocket and signed-token route with C2C/group and
+              native message identity bound explicitly. Push ACK or response code=0 does not establish
+              durable adoption or recipient delivery. Old-catalog/latest-package or host-floor
+              mismatch remains UNKNOWN. Bind this claim's scenario occurrence, assertion, cell,
+              package/source/runtime, account/protocol, and proof class. Fixture, local-protocol,
+              packaged, and live evidence stay distinct; missing attribution remains UNKNOWN/unscored.
+          - name: DingTalk enterprise Stream candidate
+            coverageIds: [regional-channels.dingtalk-enterprise-stream-candidate]
+            description: >-
+              Noncatalog DingTalk enterprise Stream candidate, not an installation or support
+              commitment. Bind enterprise bot, DM, and group separately from optional user
+              authorization. Stream ACK, business message ID, adoption, and reply receipt are
+              distinct; owner/package/source acceptance is required. Bind this claim's scenario
+              occurrence, assertion, cell, package/source/runtime, account/protocol, and proof class.
+              Fixture, local-protocol, packaged, and live evidence stay distinct; missing attribution
+              remains UNKNOWN/unscored.
         docs: []
         search_anchors:
           - feishu, qq bot, wechat, yuanbao, zalo, zalo personal, regional channels access and identity
@@ -9622,9 +9708,96 @@ surfaces:
       - name: Conversation Routing and Delivery
         id: conversation-routing-and-delivery
         features:
-          - name: Conversation Routing and Delivery
-            coverageIds: [regional-channels.conversation-routing-and-delivery]
-            description: Evidence scope for Conversation Routing and Delivery.
+          - name: Feishu/Lark bot native reply
+            coverageIds: [regional-channels.feishu-bot-native-reply]
+            description: >-
+              Join actual Feishu/Lark bot ingress through Gateway to an accepted native reply for the
+              named realm, account, and ingress protocol. Feishu does not automatically qualify Lark;
+              transport admission alone does not prove a reply. Bind this claim's scenario occurrence,
+              assertion, cell, package/source/runtime, account/protocol, and proof class. Fixture,
+              local-protocol, packaged, and live evidence stay distinct; missing attribution remains
+              UNKNOWN/unscored.
+          - name: Consumer WeChat/Weixin iLink custody
+            coverageIds: [regional-channels.wechat-consumer-ilink-custody]
+            description: >-
+              Consumer WeChat/Weixin iLink poll/send custody distinguishes cursor advancement,
+              adoption, conversation context, and send acceptance under the existing owner. No
+              inferred group, thread, or exactly-once guarantee. Bind the actual package/host and this
+              claim's scenario occurrence, assertion, cell, package/source/runtime, account/protocol,
+              and proof class. Fixture, local-protocol, packaged, and live evidence stay distinct;
+              missing attribution remains UNKNOWN/unscored.
+          - name: WeCom AI bot reply
+            coverageIds: [regional-channels.wecom-ai-bot-reply]
+            description: >-
+              WeCom AI bot ingress through Gateway to an accepted bot reply, preserving native
+              account/message/stream identity and actual selected WebSocket or JSON mode. App reply
+              and bot-to-app fallback egress are separate claims; API acceptance is not recipient
+              observation. Bind this claim's scenario occurrence, assertion, cell,
+              package/source/runtime, account/protocol, and proof class. Fixture, local-protocol,
+              packaged, and live evidence stay distinct; missing attribution remains UNKNOWN/unscored.
+          - name: WeCom enterprise-app reply
+            coverageIds: [regional-channels.wecom-enterprise-app-reply]
+            description: >-
+              WeCom enterprise-app ingress through Gateway to its accepted app reply, with native
+              account/message identity and actual XML-ingress/app-egress binding. Agent API acceptance
+              is not recipient observation; bot replies do not qualify app delivery. Bind this claim's
+              scenario occurrence, assertion, cell, package/source/runtime, account/protocol, and proof
+              class. Fixture, local-protocol, packaged, and live evidence stay distinct; missing
+              attribution remains UNKNOWN/unscored.
+          - name: WeCom bot-to-app fallback
+            coverageIds: [regional-channels.wecom-bot-to-app-fallback]
+            description: >-
+              WeCom AI bot ingress and enterprise-app fallback egress are independently attributed,
+              preserving the actual selected modes and native account/message/stream identity.
+              Ordinary bot or app replies do not qualify this transition, and Agent API acceptance is
+              not recipient observation. Bind this claim's scenario occurrence, assertion, cell,
+              package/source/runtime, account/protocol, and proof class. Fixture, local-protocol,
+              packaged, and live evidence stay distinct; missing attribution remains UNKNOWN/unscored.
+          - name: QQ bot native reply
+            coverageIds: [regional-channels.qq-bot-native-reply]
+            description: >-
+              Official QQ bot ingress through Gateway to accepted native sends, with message identity
+              and separately attributed C2C/group account and WebSocket/Ed25519-webhook cells. No
+              consumer-account or guild qualification. Bind this claim's scenario occurrence,
+              assertion, cell, package/source/runtime, account/protocol, and proof class. Fixture,
+              local-protocol, packaged, and live evidence stay distinct; missing attribution remains
+              UNKNOWN/unscored.
+          - name: QQ bot native actions
+            coverageIds: [regional-channels.qq-bot-native-actions]
+            description: >-
+              Official QQ bot native interactions preserve message/interaction identity, actor, and
+              stale-action rejection for separately attributed C2C/group accounts and actual
+              WebSocket/Ed25519-webhook transport. No consumer-account or guild qualification. Bind
+              this claim's scenario occurrence, assertion, cell, package/source/runtime,
+              account/protocol, and proof class. Fixture, local-protocol, packaged, and live evidence
+              stay distinct; missing attribution remains UNKNOWN/unscored.
+          - name: Yuanbao bot native reply
+            coverageIds: [regional-channels.yuanbao-bot-native-reply]
+            description: >-
+              Yuanbao bot C2C/group ingress through Gateway to accepted native replies, binding the
+              signed-token route and native message identity. Push ACK or response code=0 is not
+              durable adoption or recipient delivery; quote and recall stay distinct, with no thread
+              claim. Old-catalog/latest-package or host-floor mismatch remains UNKNOWN. Bind this
+              claim's scenario occurrence, assertion, cell, package/source/runtime, account/protocol,
+              and proof class. Fixture, local-protocol, packaged, and live evidence stay distinct;
+              missing attribution remains UNKNOWN/unscored.
+          - name: Zalo Bot native reply
+            coverageIds: [regional-channels.zalo-bot-native-reply]
+            description: >-
+              Zalo Bot API account/protocol ingress through Gateway to an accepted native reply,
+              independently of Zalo Personal or other channels. Unbound package/runtime remains
+              UNKNOWN. Bind this claim's scenario occurrence, assertion, cell, package/source/runtime,
+              account/protocol, and proof class. Fixture, local-protocol, packaged, and live evidence
+              stay distinct; missing attribution remains UNKNOWN/unscored.
+          - name: Zalo Personal completed reply
+            coverageIds: [regional-channels.zalo-personal-completed-reply]
+            description: >-
+              Zalo Personal account delivery binds the native ordinary-message receipt. Completed-reply
+              block streaming, when enabled, implies neither token streaming nor default enablement;
+              existing experimental/unofficial judgments remain. Zalo Bot proof gives no credit here.
+              Bind this claim's scenario occurrence, assertion, cell, package/source/runtime,
+              account/protocol, and proof class. Fixture, local-protocol, packaged, and live evidence
+              stay distinct; missing attribution remains UNKNOWN/unscored.
         docs: []
         search_anchors:
           - feishu, qq bot, wechat, yuanbao, zalo, zalo personal, regional channels conversation routing and delivery
@@ -9634,9 +9807,59 @@ surfaces:
       - name: Media and Rich Content
         id: media-and-rich-content
         features:
-          - name: Media and Rich Content
-            coverageIds: [regional-channels.media-and-rich-content]
-            description: Evidence scope for Media and Rich Content.
+          - name: Feishu/Lark bot media bytes
+            coverageIds: [regional-channels.feishu-bot-media-bytes]
+            description: >-
+              Feishu/Lark bot media requires account-bound byte equality and actual realm/transport
+              attribution; Feishu proof does not automatically qualify Lark. Static cards and CardKit
+              streaming stay separate from media bytes. Bind this claim's scenario occurrence,
+              assertion, cell, package/source/runtime, account/protocol, and proof class. Fixture,
+              local-protocol, packaged, and live evidence stay distinct; missing attribution remains
+              UNKNOWN/unscored.
+          - name: Feishu/Lark bot CardKit streaming
+            coverageIds: [regional-channels.feishu-bot-cardkit-streaming]
+            description: >-
+              Feishu/Lark bot CardKit streaming requires its own native streaming evidence for the
+              actual realm and account; static-card success is not streaming proof and Feishu does
+              not automatically qualify Lark. Bind this claim's scenario occurrence, assertion, cell,
+              package/source/runtime, account/protocol, and proof class. Fixture, local-protocol,
+              packaged, and live evidence stay distinct; missing attribution remains UNKNOWN/unscored.
+          - name: Consumer WeChat/Weixin encrypted media
+            coverageIds: [regional-channels.wechat-consumer-encrypted-media]
+            description: >-
+              Consumer WeChat/Weixin encrypted media requires actual package/host binding and
+              account-bound byte, expiry, and abort evidence under the existing consumer-channel
+              owner. No inferred group or thread support. Bind this claim's scenario occurrence,
+              assertion, cell, package/source/runtime, account/protocol, and proof class. Fixture,
+              local-protocol, packaged, and live evidence stay distinct; missing attribution remains
+              UNKNOWN/unscored.
+          - name: WeCom mode-bound media
+            coverageIds: [regional-channels.wecom-mode-bound-media]
+            description: >-
+              WeCom media bytes name the actual AI bot or enterprise-app mode, ingress, and egress,
+              including independently attributed bot-to-app fallback when used. Preserve native
+              account/message/stream identity; Agent API acceptance is not recipient observation.
+              Bind this claim's scenario occurrence, assertion, cell, package/source/runtime,
+              account/protocol, and proof class. Fixture, local-protocol, packaged, and live evidence
+              stay distinct; missing attribution remains UNKNOWN/unscored.
+          - name: QQ bot media bytes
+            coverageIds: [regional-channels.qq-bot-media-bytes]
+            description: >-
+              Official QQ bot media requires native byte equality and message identity for separately
+              attributed C2C/group account and WebSocket/Ed25519-webhook cells. QR provisioning does
+              not establish consumer identity, and this row gives no guild qualification. Bind this
+              claim's scenario occurrence, assertion, cell, package/source/runtime, account/protocol,
+              and proof class. Fixture, local-protocol, packaged, and live evidence stay distinct;
+              missing attribution remains UNKNOWN/unscored.
+          - name: Yuanbao bot media bytes
+            coverageIds: [regional-channels.yuanbao-bot-media-bytes]
+            description: >-
+              Yuanbao bot media requires actual byte evidence for the C2C/group account, signed-token
+              route, and native message identity; push ACK or code=0 is not durable adoption or
+              recipient delivery. Old-catalog/latest-package or host-floor mismatch remains UNKNOWN.
+              Bind this claim's scenario occurrence, assertion, cell, package/source/runtime,
+              account/protocol, and proof class. Fixture, local-protocol, packaged, and live evidence
+              stay distinct; missing attribution remains UNKNOWN/unscored.
         docs: []
         search_anchors:
           - feishu, qq bot, wechat, yuanbao, zalo, zalo personal, regional channels media and rich content

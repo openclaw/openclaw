@@ -1,4 +1,4 @@
-import { assert, describe, expect, it, vi } from "vitest";
+import { assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { OAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { AUTH_PROFILE_COOLDOWN_ERROR_CODE } from "../../agents/failover/error.js";
@@ -8,11 +8,26 @@ import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal
 
 const { emitAgentEvent } = vi.hoisted(() => ({ emitAgentEvent: vi.fn() }));
 
-vi.mock("../../infra/agent-events.js", () => ({ emitAgentEvent }));
+vi.mock("../../infra/agent-events.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/agent-events.js")>()),
+  emitAgentEvent,
+}));
 
 describe("createAgentLifecycleTerminalBackstop", () => {
+  beforeEach(() => emitAgentEvent.mockClear());
+
+  function createTerminal(
+    overrides: Partial<Parameters<typeof createAgentLifecycleTerminalBackstop>[0]> = {},
+  ) {
+    return createAgentLifecycleTerminalBackstop({
+      runId: "run",
+      getLifecycleGeneration: () => "generation",
+      resolveTerminationFields: () => ({}),
+      ...overrides,
+    });
+  }
+
   it("publishes a preparation failure once instead of its cancellation side effect", async () => {
-    emitAgentEvent.mockClear();
     const preparation: { failure?: Error } = {};
     const terminal = await runWithAgentWorkspaceReadiness(
       {
@@ -22,10 +37,9 @@ describe("createAgentLifecycleTerminalBackstop", () => {
         getFailure: () => preparation.failure,
       },
       async () =>
-        createAgentLifecycleTerminalBackstop({
+        createTerminal({
           runId: "preparing",
           sessionKey: "agent:main:preparing",
-          getLifecycleGeneration: () => "generation",
           resolveTerminationFields: () => ({ aborted: true, stopReason: "aborted" }),
         }),
     );
@@ -40,22 +54,13 @@ describe("createAgentLifecycleTerminalBackstop", () => {
     terminal.emit("error", failure);
     expect(emitAgentEvent).toHaveBeenCalledOnce();
     const data = emitAgentEvent.mock.calls[0]?.[0]?.data;
-    expect(data).toMatchObject({
-      phase: "error",
-      error: failure.message,
-      executionSettled: true,
-    });
+    expect(data).toMatchObject({ phase: "error", error: failure.message, executionSettled: true });
     expect(data).not.toHaveProperty("aborted");
     expect(data).not.toHaveProperty("stopReason");
   });
 
   it.each([false, true])("keeps only the selected attempt receipt (retry=%s)", (retry) => {
-    emitAgentEvent.mockClear();
-    const terminal = createAgentLifecycleTerminalBackstop({
-      runId: "run",
-      getLifecycleGeneration: () => "generation",
-      resolveTerminationFields: () => ({}),
-    });
+    const terminal = createTerminal();
     terminal.note({
       stream: "lifecycle",
       data: {
@@ -79,13 +84,7 @@ describe("createAgentLifecycleTerminalBackstop", () => {
   });
 
   it.each([false, true])("replaces pending or captured attempt facts (captured=%s)", (captured) => {
-    emitAgentEvent.mockClear();
-    const terminal = createAgentLifecycleTerminalBackstop({
-      runId: "recovered",
-      startedAt: 100,
-      getLifecycleGeneration: () => "generation",
-      resolveTerminationFields: () => ({}),
-    });
+    const terminal = createTerminal({ runId: "recovered", startedAt: 100 });
     terminal.note({
       stream: "lifecycle",
       data: {
@@ -126,7 +125,6 @@ describe("createAgentLifecycleTerminalBackstop", () => {
   });
 
   it("publishes the provider-owned OAuth summary instead of the wrapped diagnostic", () => {
-    emitAgentEvent.mockClear();
     const summary =
       "Your refresh token has already been used to generate a new access token. Please try signing in again.";
     const rawDiagnostic = `OAuth token refresh failed for openai: {"error":{"message":"${summary}"}}`;
@@ -139,10 +137,9 @@ describe("createAgentLifecycleTerminalBackstop", () => {
       summary,
     });
     const error = new Error("wrapped OAuth refresh failure", { cause: oauthError });
-    const terminal = createAgentLifecycleTerminalBackstop({
+    const terminal = createTerminal({
       runId: "oauth-refresh-failure",
       getLifecycleGeneration: () => "test-generation",
-      resolveTerminationFields: () => ({}),
     });
 
     terminal.emit("error", error);
@@ -161,58 +158,50 @@ describe("createAgentLifecycleTerminalBackstop", () => {
 
   it.each(
     (["typed", "raw"] as const).flatMap((kind) => [
-      {
+      [
         kind,
-        code: "selected_auth_profile_unavailable",
-        expected:
-          "This saved login isn't available. Choose another login under Models in the Control UI or run `openclaw configure`.",
-      },
-      {
+        "selected_auth_profile_unavailable",
+        "This saved login isn't available. Choose another login under Models in the Control UI or run `openclaw configure`.",
+      ],
+      [
         kind,
-        code: AUTH_PROFILE_COOLDOWN_ERROR_CODE,
-        expected: "⚠️ The AI service needs a short break. Please try again in a few minutes.",
-      },
+        AUTH_PROFILE_COOLDOWN_ERROR_CODE,
+        "⚠️ The AI service needs a short break. Please try again in a few minutes.",
+      ],
     ]),
-  )(
-    "publishes bounded $code recovery from $kind failures without discovering providers",
-    ({ kind, code, expected }) => {
-      const classifyProvider = vi
-        .spyOn(providerFailover, "classifyProviderFailoverSignalWithPlugin")
-        .mockImplementation(() => {
-          throw new Error("Terminal presentation must not discover providers");
-        });
-      emitAgentEvent.mockClear();
-      try {
-        const profileId = "openai:private-profile";
-        const rawCause = `Codex app-server auth profile "${profileId}" was not found`;
-        const terminal = createAgentLifecycleTerminalBackstop({
-          runId: "missing-selected-profile",
-          sessionKey: "agent:main:test",
-          getLifecycleGeneration: () => "test-generation",
-          resolveTerminationFields: () => ({}),
-        });
+  )("sanitizes %s auth failure %s without provider discovery", (kind, code, expected) => {
+    const classifyProvider = vi
+      .spyOn(providerFailover, "classifyProviderFailoverSignalWithPlugin")
+      .mockImplementation(() => {
+        throw new Error("Terminal presentation must not discover providers");
+      });
+    try {
+      const profileId = "openai:private-profile";
+      const rawCause = `Codex app-server auth profile "${profileId}" was not found`;
+      const terminal = createTerminal({
+        runId: "missing-selected-profile",
+        sessionKey: "agent:main:test",
+        getLifecycleGeneration: () => "test-generation",
+      });
 
-        const error =
-          kind === "typed"
-            ? new FailoverError(rawCause, {
-                reason: "auth",
-                code,
-                profileId,
-                cause: new Error(rawCause),
-              })
-            : Object.assign(new Error(rawCause), {
-                code,
-              });
-        terminal.emit("error", error);
+      const error =
+        kind === "typed"
+          ? new FailoverError(rawCause, {
+              reason: "auth",
+              code,
+              profileId,
+              cause: new Error(rawCause),
+            })
+          : Object.assign(new Error(rawCause), { code });
+      terminal.emit("error", error);
 
-        const event = emitAgentEvent.mock.calls[0]?.[0];
-        expect(event.data.error).toBe(expected);
-        expect(JSON.stringify(event)).not.toContain(profileId);
-        expect(JSON.stringify(event)).not.toContain(rawCause);
-        expect(classifyProvider).not.toHaveBeenCalled();
-      } finally {
-        classifyProvider.mockRestore();
-      }
-    },
-  );
+      const event = emitAgentEvent.mock.calls[0]?.[0];
+      expect(event.data.error).toBe(expected);
+      expect(JSON.stringify(event)).not.toContain(profileId);
+      expect(JSON.stringify(event)).not.toContain(rawCause);
+      expect(classifyProvider).not.toHaveBeenCalled();
+    } finally {
+      classifyProvider.mockRestore();
+    }
+  });
 });

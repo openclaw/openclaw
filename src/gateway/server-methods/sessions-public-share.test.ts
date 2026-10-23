@@ -7,6 +7,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
+  assignSessionOwner,
   loadSessionEntry,
   patchSessionEntryCore,
   upsertSessionEntryCore,
@@ -15,13 +16,15 @@ import { projectPublicSessionEntry } from "../../config/sessions/session-entry-p
 import * as sharingStore from "../../config/sessions/session-sharing-store.js";
 import { isSecretValueRegisteredForRedaction } from "../../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redaction-registry.test-support.js";
-import * as sharingLifecycle from "../../sessions/session-lifecycle-admission.js";
+import * as sharingLifecycle from "../../sessions/session-controller.lifecycle.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { isPublicSessionShareActive } from "../control-ui-public-session-read.js";
 import * as publicSessionTokens from "../control-ui-public-session-token.js";
+import { createTestProjection } from "../session-row-projection.read-fixture.test-support.js";
 import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import { sessionSharingHandlers } from "./sessions-sharing.js";
 import { identifiedClient, sessionSharingTestContext } from "./sessions-sharing.test-support.js";
@@ -64,13 +67,11 @@ async function call(
 }
 
 function beforeWrite(change: () => unknown) {
-  const run = sharingLifecycle.runExclusiveSessionLifecycleMutation;
-  vi.spyOn(sharingLifecycle, "runExclusiveSessionLifecycleMutation").mockImplementationOnce(
-    async (operation, params) => {
-      await change();
-      return run(operation, params);
-    },
-  );
+  const run = sharingLifecycle.runSessionMutation;
+  vi.spyOn(sharingLifecycle, "runSessionMutation").mockImplementationOnce(async (params) => {
+    await change();
+    return run(params);
+  });
 }
 
 async function expectToken(share: { token: string } | undefined, shareId: string) {
@@ -94,6 +95,43 @@ function withSession(run: () => Promise<void>, sessionScope = scope) {
 async function setPublic(enabled: boolean, client?: GatewayClient, expectedSessionId = sessionId) {
   return call("session.publicShare.set", { ...scope, expectedSessionId, enabled }, client);
 }
+
+it("keeps explicit publication with the causal creator through a cold reopen", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot(cfg);
+    await upsertSessionEntryCore(scope, {
+      ...ownerEntry,
+      createdActor: {
+        type: "human",
+        source: "profile",
+        id: "isolation-owner",
+        delegatedBy: ownerEntry.createdActor,
+      },
+    });
+    assignSessionOwner(scope, {
+      owner: { type: "human", id: "assignee" },
+      assignedBy: ownerEntry.createdActor,
+    });
+    expect(loadSessionEntry(scope)?.publicShare).toBeUndefined();
+    for (const id of ["isolation-owner", "assignee"]) {
+      expect((await setPublic(true, identifiedClient(id)))?.[0]).toBe(false);
+    }
+    const published = publication(await setPublic(true));
+    const saved = grant();
+    await closeOpenClawAgentDatabasesAsync();
+    await expectToken(published, saved.id);
+    const locator = expectDefined(await resolveToken(published), "published locator");
+    using projection = await createTestProjection({ cfg, modelCatalog: [] });
+    await projection.ensureMaterialized();
+    expect(isPublicSessionShareActive(cfg, locator, projection)).toBe(true);
+    const retained = loadSessionEntry(scope)!;
+    expect(retained.createdActor?.id).toBe("isolation-owner");
+    expect(projectPublicSessionEntry(retained).createdActor).toEqual(ownerEntry.createdActor);
+    expect((await setPublic(false))?.[0]).toBe(true);
+    await projection.ensureMaterialized();
+    expect(isPublicSessionShareActive(cfg, locator, projection)).toBe(false);
+    expect(loadSessionEntry(scope)?.publicShare).toBeUndefined();
+  }));
 
 it("publishes, reuses, revokes and rotates links independently of team visibility", () =>
   withSession(async () => {
@@ -261,8 +299,8 @@ it.each([false, true])(
       }
       const loadCodec = publicSessionTokens.loadPublicSessionShareTokenCodec;
       vi.spyOn(publicSessionTokens, "loadPublicSessionShareTokenCodec").mockImplementationOnce(
-        async (options) => {
-          const codec = await loadCodec(options);
+        async () => {
+          const codec = await loadCodec();
           await upsertSessionEntryCore(scope, {
             sessionId: "replacement-generation",
           });

@@ -9,6 +9,7 @@ import * as sessionActors from "../../config/sessions/session-actor.js";
 import { recordSessionParticipantInWorker } from "../../config/sessions/session-sharing-store.async.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import { runOutsideStoreWriterContext } from "../../shared/store-writer-queue.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -19,7 +20,6 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.paths.js";
 import { withAgentTurnCompletion } from "./agent-runner-completion.js";
-import { createReplyOperation } from "./reply-run-registry.js";
 import { prepareSessionUsageUpdate } from "./session-usage.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -74,6 +74,7 @@ describe("session actor usage accounting", () => {
           );
         } finally {
           operation.complete();
+          await operation.ownerSettlement;
         }
       },
       read,
@@ -211,26 +212,6 @@ describe("session actor usage accounting", () => {
       update: producingUpdate,
       expected: committedModel,
       absent: ["agentHarnessId"],
-    },
-    {
-      name: "preserves the displayed session model when heartbeat usage uses a heartbeat model",
-      seed: { modelProvider: "openai", model: "gpt-5.4" },
-      update: {
-        isHeartbeat: true,
-        usage: { input: 1_200, output: 100, cacheRead: 300, cacheWrite: 10 },
-        lastCallUsage: { input: 900, output: 80, cacheRead: 200, cacheWrite: 5 },
-        providerUsed: "openai",
-        modelUsed: "gpt-5.1-codex-mini",
-        contextTokensUsed: 128_000,
-      },
-      expected: {
-        modelProvider: "openai",
-        model: "gpt-5.4",
-        inputTokens: 1_200,
-        outputTokens: 100,
-        cacheRead: 200,
-        totalTokens: 1_105,
-      },
     },
 
     {

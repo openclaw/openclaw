@@ -12,7 +12,6 @@ import {
 
 export type CurrentWorkChange = NonNullable<ReturnType<typeof parseSessionChangedEvent>>[0] & {
   snapshot?: unknown;
-  eventTs?: number;
   parentKeys: readonly string[];
   ancestorSnapshots?: readonly unknown[];
 };
@@ -56,9 +55,6 @@ export function readCurrentWorkChange(payload: unknown): CurrentWorkChange | nul
       parsed?.[2].controlOwnerSessionKey,
       parsed?.[2].parentSessionKey,
     ].filter((key): key is string => typeof key === "string" && Boolean(key)),
-    ...(typeof parsed?.[1].ts === "number" && Number.isFinite(parsed[1].ts)
-      ? { eventTs: parsed[1].ts }
-      : {}),
     ...(snapshot ? { snapshot } : {}),
   };
 }

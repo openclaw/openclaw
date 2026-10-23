@@ -29,6 +29,7 @@ type MessageToolTerminalRoute = Omit<
   "send" | "deliveredPayload"
 > & {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  messageToolFinalByDefault?: boolean;
   currentMessageId?: string | number;
   replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
@@ -125,7 +126,7 @@ export function installMessageToolTerminalHook(
     nestedCompletion.observe(context.result);
     const toolName = context.toolCall.name;
     const toolArgs = argsRecordForToolCall(context);
-    const final = resolveMessageToolSourceReplyFinal(toolArgs);
+    const final = resolveMessageToolSourceReplyFinal(toolArgs, params.messageToolFinalByDefault);
     const extractionArgs =
       toolName === "message" &&
       params.currentProvider &&

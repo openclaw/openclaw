@@ -279,7 +279,6 @@ export function createWebOnMessageHandler(params: {
           backgroundTasks: params.backgroundTasks,
           storeAgentId: route.agentId,
           sessionKey: route.sessionKey,
-          channel: "whatsapp",
           to: conversationId,
           accountId: route.accountId,
           ctx: metaCtx,

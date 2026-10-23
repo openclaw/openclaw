@@ -125,7 +125,6 @@ export async function finishGatewayStartup(params: {
     getPluginMetadataSnapshot,
     getPluginNodeCapabilities,
   } = runtime;
-  const startupPluginRuntimeClaim = kernel.pluginRuntimeGeneration.currentClaim();
   const databaseStartupAdmission = getAgentDatabaseStartupAdmission();
   const databasePreparationReady = createDeferredCore();
   const getReadiness = runtime.createHttpTransportOptions().getReadiness;
@@ -176,21 +175,6 @@ export async function finishGatewayStartup(params: {
   await startupTrace.measure("http.listen", () => runtime.startListening());
   startupTrace.mark("http.bound");
   const mainSessionRecoveryStartupCheckedStorePaths = new Set<string>();
-  const mainSessionOrphansReady =
-    minimalTestGateway || opts.updateCanary
-      ? Promise.resolve()
-      : import("./server-startup-observers.js").then(({ markGatewayStartupMainSessionOrphans }) =>
-          markGatewayStartupMainSessionOrphans(
-            {
-              gatewayPluginConfigAtStart,
-              isRestartRecoverySuppressed: () => channelManager.getAutostartSuppression() !== null,
-              scheduler: runtime.scheduler,
-              startupTrace,
-              log,
-            },
-            mainSessionRecoveryStartupCheckedStorePaths,
-          ),
-        );
   // Join independent preparation before channels start or failure cleanup retires its owners.
   const requestRuntimeReady = runtime.ensureRequestRuntimeReady().then(() => {
     kernel.setDispatchReady(true);
@@ -208,10 +192,9 @@ export async function finishGatewayStartup(params: {
     }
   });
   const earlyRuntimeReady = runtime.startEarlyRuntime();
-  await Promise.allSettled([requestRuntimeReady, earlyRuntimeReady, mainSessionOrphansReady]);
+  await Promise.allSettled([requestRuntimeReady, earlyRuntimeReady]);
   await requestRuntimeReady;
   const earlyRuntime = await earlyRuntimeReady;
-  await mainSessionOrphansReady;
   const sessionDeliveryRecoveryMaxEnqueuedAt = Date.now();
   let postAttachRuntimeReturned = false;
   let scheduledServicesActivated = false;
@@ -236,7 +219,7 @@ export async function finishGatewayStartup(params: {
         cfgAtStart,
         deps,
         sessionDeliveryRecoveryMaxEnqueuedAt,
-        cronEnabled: runtimeState.cronState.cronEnabled,
+        sessionRecoveryReady: postAttachHandles.subagentRecoverySettled,
         log,
         resolveGatewayContext: resolvePluginGatewayContext,
       });
@@ -275,10 +258,10 @@ export async function finishGatewayStartup(params: {
           activationSourceConfig: startupActivationSourceConfig,
           pluginManifestRecords,
           ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
-          pluginRuntimeClaim: startupPluginRuntimeClaim,
           getCurrentPluginRegistry: () => pluginRuntime.registry,
-          getCurrentPluginServices: () => kernel.pluginRuntimeGeneration.currentServices(),
-          getCurrentPluginMetadataSnapshot: getPluginMetadataSnapshot,
+          shouldStartPluginServices: () =>
+            kernel.pluginRuntimeGeneration.currentServices() === null &&
+            kernel.pluginRuntimeGeneration.getReloadStatus() === undefined,
           ambientEnvTriggers,
           pluginRegistry: pluginRuntime.registry,
           defaultWorkspaceDir,
@@ -286,6 +269,7 @@ export async function finishGatewayStartup(params: {
           startChannels,
           recoveryRuntime: gatewayInstanceRuntime.recovery,
           mainSessionRecoveryStartupCheckedStorePaths,
+          isRestartRecoverySuppressed: () => channelManager.getAutostartSuppression() !== null,
           resolveGatewayContext: gatewayRequestContext.resolveGatewayContext!,
           logHooks,
           logChannels,
@@ -306,8 +290,6 @@ export async function finishGatewayStartup(params: {
               startupTrace,
               ambientEnvTriggers,
               resolveGatewayContext: resolvePluginGatewayContext,
-              pluginRuntimeClaim: startupPluginRuntimeClaim,
-              getCurrentPluginRegistry: () => pluginRuntime.registry,
             });
           },
           onStartupPluginsLoading: () => {
@@ -319,12 +301,10 @@ export async function finishGatewayStartup(params: {
               activationCleanup.push(completion),
             );
             try {
-              if (
-                lifecycle.closePreludeStarted ||
-                !startupPluginRuntimeClaim.publish(prepared.publish)
-              ) {
+              if (lifecycle.closePreludeStarted) {
                 return false;
               }
+              prepared.publish();
               startupState.pendingReason = "startup-sidecars";
               prepared.afterCommit();
               // Nodes can finish their handshake before deferred plugins attach.
@@ -334,10 +314,7 @@ export async function finishGatewayStartup(params: {
               for (const client of clients) {
                 reconcileClientPluginNodeCapabilities(client, nodeCapabilitySurfaces);
               }
-              await runtime.refreshAttachedGatewayDiscovery(
-                loaded.pluginRegistry,
-                startupPluginRuntimeClaim,
-              );
+              await runtime.refreshAttachedGatewayDiscovery(loaded.pluginRegistry);
               return true;
             } finally {
               await Promise.allSettled(activationCleanup);
@@ -346,33 +323,28 @@ export async function finishGatewayStartup(params: {
           getCronService: kernel.getCronService,
           onChannelsStarted: releaseStartupAccountStarts,
           onPluginServices: (pluginServices) =>
-            kernel.pluginRuntimeGeneration.publishServices(
-              startupPluginRuntimeClaim,
-              pluginServices,
-            ),
+            kernel.pluginRuntimeGeneration.setServices(pluginServices),
           onPostReadySidecars: registerPostReadySidecars,
           onGatewayLifetimeSidecars: registerGatewayLifetimeSidecars,
           trackStartupWork,
           unregisterConnectionDependentSidecar,
-          ...(workerPlacementRuntime
-            ? {
-                startWorkerEnvironmentRuntime: async () => {
-                  if (lifecycle.closePreludeStarted) {
-                    return null;
-                  }
-                  databasePreparationReady.resolve(); // Plugins are attached; worker recovery awaits admission.
-                  return await workerPlacementRuntime.startRuntime({
-                    isClosePreludeStarted: () => lifecycle.closePreludeStarted,
-                    // Close must see the drain handle before reconciliation can yield.
-                    registerSidecar: registerConnectionDependentSidecars,
-                    unregisterSidecar: unregisterConnectionDependentSidecar,
-                  });
-                },
-              }
-            : {}),
+          startWorkerEnvironmentRuntime: async () => {
+            if (lifecycle.closePreludeStarted) {
+              return null;
+            }
+            databasePreparationReady.resolve(); // Plugins are attached; worker recovery awaits admission.
+            return workerPlacementRuntime
+              ? await workerPlacementRuntime.startRuntime({
+                  startupTrace,
+                  isClosePreludeStarted: () => lifecycle.closePreludeStarted,
+                  // Close must see the drain handle before reconciliation can yield.
+                  registerSidecar: registerConnectionDependentSidecars,
+                  unregisterSidecar: unregisterConnectionDependentSidecar,
+                })
+              : null;
+          },
           onSidecarsReady: () => {
             kernel.markSidecarsReady();
-            databasePreparationReady.resolve();
             activateScheduledServicesWhenReady();
           },
           getReadiness,
@@ -507,7 +479,6 @@ export async function finishGatewayStartup(params: {
     getState: kernel.getReloadState,
     setState: (nextState) => {
       kernel.setReloadHookState(nextState);
-      kernel.setHeartbeatRunner(nextState.heartbeatRunner);
       const previousCronState = kernel.swapCronState(nextState.cronState);
       if (previousCronState !== nextState.cronState) {
         cronStartState.handled = true;

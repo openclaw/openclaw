@@ -1,4 +1,9 @@
+import { toErrorObject } from "@openclaw/normalization-core";
+import { fetchControlUiResource } from "../../../app/browser-http.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
+import { safeMediaAttachmentHref, safePlainTextAttachmentHref } from "./chat-attachment-href.ts";
 import {
   ASSISTANT_ATTACHMENT_MEDIA_TICKET_MAX_REFRESH_RETRIES,
   ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS,
@@ -15,6 +20,7 @@ import {
 } from "./chat-message-local-media.ts";
 import {
   isChatMediaResourceCurrent,
+  releaseChatMediaResourceOwner,
   notifyChatMediaResourceSubscribers,
   observeChatMediaResource,
   scheduleChatMediaResourceRefresh,
@@ -23,6 +29,9 @@ import {
   type ChatMediaResource,
   type ImageRenderOptions,
 } from "./chat-message-media.ts";
+import { readResponseBytesWithinLimit } from "./chat-response-bytes.ts";
+
+registerChatComposerEnglish();
 
 type ManagedAttachmentAvailability =
   | { status: "checking"; refreshAfter?: number; refreshAttempts?: number }
@@ -329,4 +338,78 @@ export function resolveAttachmentSource(
       height: assistantAvailability.height ?? attachment.height,
     },
   };
+}
+
+/** Resolve fresh authorization at the media owner, then read within the caller's attachment budget. */
+export async function readAttachmentSource(
+  attachment: AttachmentItem["attachment"],
+  options: ImageRenderOptions,
+  signal: AbortSignal,
+  maxBytes: number,
+): Promise<Blob | null> {
+  if (signal.aborted) {
+    return null;
+  }
+  let changed = () => {};
+  let stopAbort = () => {};
+  let resolved: ReturnType<typeof resolveAttachmentSource> | null;
+  try {
+    resolved = await new Promise<ReturnType<typeof resolveAttachmentSource> | null>(
+      (resolve, reject) => {
+        changed = () => {
+          try {
+            const source = resolveAttachmentSource(attachment, {
+              ...options,
+              onMediaChange: changed,
+            });
+            if (source.status !== "checking") {
+              resolve(source);
+            }
+          } catch (error) {
+            reject(toErrorObject(error, t("chat.attachments.unavailable")));
+          }
+        };
+        stopAbort = listen(signal, "abort", () => resolve(null), { once: true });
+        if (signal.aborted) {
+          resolve(null);
+        } else {
+          changed();
+        }
+      },
+    );
+  } finally {
+    stopAbort();
+    releaseChatMediaResourceOwner(changed);
+  }
+  if (signal.aborted || !resolved) {
+    return null;
+  }
+  if (resolved.status !== "available") {
+    throw new Error(resolved.reason ?? t("chat.attachments.unavailable"));
+  }
+  const url =
+    attachment.kind === "audio" || attachment.kind === "video"
+      ? safeMediaAttachmentHref(resolved.source.src, attachment.kind)
+      : safePlainTextAttachmentHref(resolved.source.src);
+  if (!url) {
+    throw new Error(t("chat.attachments.unavailable"));
+  }
+  const response = await fetchControlUiResource(url, {
+    credentials: "same-origin",
+    redirect: "error",
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(t("chat.attachments.unavailable"));
+  }
+  const bytes = await readResponseBytesWithinLimit(response, maxBytes);
+  if (signal.aborted) {
+    return null;
+  }
+  if (!bytes) {
+    throw new Error(t("chat.attachments.tooLargeToast"));
+  }
+  return new Blob([bytes], {
+    type: attachment.mimeType || response.headers.get("content-type") || "application/octet-stream",
+  });
 }

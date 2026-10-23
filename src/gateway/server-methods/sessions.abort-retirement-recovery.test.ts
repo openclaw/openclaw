@@ -21,6 +21,7 @@ import {
 import * as lifecycleState from "../session-lifecycle-state.js";
 import {
   abortContext,
+  expectCancelledSession,
   registerYieldedChild,
   seedYieldedSession,
   stopSession,
@@ -83,6 +84,25 @@ async function stopParent() {
   return respond.mock.calls[0];
 }
 
+function expectStop(status = "aborted") {
+  return stopParent().then((response) => {
+    expect(response?.slice(0, 2)).toEqual([true, { ok: true, abortedRunId: null, status }]);
+  });
+}
+
+async function expectRetiredParent() {
+  expect(child()?.execution.outcome?.status).toBe("ok");
+  expect(child()?.requesterSettleWake).toBeUndefined();
+  expectCancelledSession(parent(), parentRunId);
+  await fixture.settle();
+  expect(
+    await markStartupOrphanedMainSessionsForRecovery({
+      cfg: getRuntimeConfig(),
+      stateDir: fixture.stateDir,
+    }),
+  ).toMatchObject({ marked: 0 });
+}
+
 function killChildren(beforeKill?: () => boolean) {
   return killAllControlledSubagentRuns({
     cfg: getRuntimeConfig(),
@@ -100,29 +120,10 @@ function killChildren(beforeKill?: () => boolean) {
 }
 
 it("persists the yielded parent's cancellation after retiring a successful child's wake", async () => {
-  expect((await stopParent())?.slice(0, 2)).toEqual([
-    true,
-    { ok: true, abortedRunId: null, status: "aborted" },
-  ]);
-  expect(child()?.execution.outcome?.status).toBe("ok");
-  expect(child()?.requesterSettleWake).toBeUndefined();
-  expect(parent()).toMatchObject({
-    status: "killed",
-    abortedLastRun: true,
-    lastRunId: parentRunId,
-  });
-  await fixture.settle();
-  expect(
-    await markStartupOrphanedMainSessionsForRecovery({
-      cfg: getRuntimeConfig(),
-      stateDir: fixture.stateDir,
-    }),
-  ).toMatchObject({ marked: 0 });
+  await expectStop();
+  await expectRetiredParent();
   const terminalParent = parent();
-  expect((await stopParent())?.slice(0, 2)).toEqual([
-    true,
-    { ok: true, abortedRunId: null, status: "no-active-run" },
-  ]);
+  await expectStop("no-active-run");
   expect(parent()).toEqual(terminalParent);
 });
 
@@ -207,13 +208,14 @@ it.each(["replacement revision", "unknown outcome"] as const)(
   },
 );
 
-it("preserves a newer wake generation instead of reporting its retirement", async () => {
-  const parentBefore = parent();
-  const oldGeneration = child()!.requesterSettleWake!.rearmGeneration ?? 0;
-  const cancel = registry.cancelSubagentRequesterSettleWake;
+it("full-session Stop retires a wake rearmed during retirement preparation", async () => {
+  const oldGeneration = subagentRuns.get(childRunId)!.requesterSettleWake!.rearmGeneration ?? 0;
+  const retire = registry.retireSubagentObligations;
   const gate = vi
-    .spyOn(registry, "cancelSubagentRequesterSettleWake")
-    .mockImplementationOnce(async (entry, assertCurrent) => {
+    .spyOn(registry, "retireSubagentObligations")
+    .mockImplementationOnce(async (entry, assertCurrent, options) => {
+      // Parent pending-input selection already ran; the same completed child's
+      // retirement mutation has not yet selected its current wake.
       await mutateSubagentRuns([entry.runId], (rows) => {
         const current = rows.get(entry.runId)!;
         const next = {
@@ -225,13 +227,15 @@ it("preserves a newer wake generation instead of reporting its retirement", asyn
         };
         return { value: undefined, postimages: new Map([[entry.runId, next]]) };
       });
-      await cancel(entry, assertCurrent);
+      expect(subagentRuns.get(childRunId)?.requesterSettleWake?.rearmGeneration).toBe(
+        oldGeneration + 1,
+      );
+      await retire(entry, assertCurrent, options);
     });
   try {
-    expect((await stopParent())?.[0]).toBe(false);
-    expect(child()?.requesterSettleWake?.rearmGeneration).toBe(oldGeneration + 1);
-    expect(child()?.execution.outcome?.status).toBe("ok");
-    expect(parent()).toEqual(parentBefore);
+    await expectStop();
+    expect(gate).toHaveBeenCalledOnce();
+    await expectRetiredParent();
   } finally {
     gate.mockRestore();
   }

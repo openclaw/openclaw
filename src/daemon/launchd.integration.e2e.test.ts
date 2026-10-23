@@ -9,11 +9,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
+import { withTimeout } from "../infra/fs-safe.js";
 import { LOOPBACK_PORT_PROBE_HOSTS, probePortUsage } from "../infra/ports-probe.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { waitForPidToExit } from "../test-utils/process-tree.js";
-import { withTimeout } from "../utils/with-timeout.js";
 import {
   installLaunchAgent,
   readLaunchAgentRuntime,
@@ -96,6 +96,35 @@ describeLaunchdIntegration("launchd integration", () => {
     launchEnv: GatewayServiceEnv,
     programArguments = [process.execPath, "-e", "setInterval(() => {}, 1000);"],
   ) => ({ env: launchEnv, stdout, programArguments });
+
+  it("recovers registered services after their plists are deleted", async () => {
+    const fixture = await launchFixture(`missing-plist-${randomUUID().slice(0, 8)}`);
+    const plist = resolveLaunchAgentPlistPath(fixture.env);
+    try {
+      await installLaunchAgent(launchArgs(fixture.env));
+      await waitForRunningRuntime(fixture.env);
+      await fs.unlink(plist);
+
+      await uninstallLaunchAgent({ env: fixture.env, stdout });
+      await waitForNotRunningRuntime(fixture.env);
+
+      await installLaunchAgent(launchArgs(fixture.env));
+      const previous = await waitForRunningRuntime(fixture.env);
+      await fs.unlink(plist);
+      const warnings: string[] = [];
+
+      await installLaunchAgent({
+        ...launchArgs(fixture.env),
+        warn: (message) => warnings.push(message),
+      });
+
+      await expectRuntimePidReplaced(fixture.env, previous.pid);
+      expect(warnings.some((message) => message.includes("plist is missing"))).toBe(true);
+    } finally {
+      await uninstallLaunchAgent({ env: fixture.env, stdout });
+      await fs.rm(fixture.homeDir, { recursive: true, force: true });
+    }
+  });
 
   it("real launchctl: node-host LaunchAgent stop/restart survives a co-located busy Gateway port (#124296)", async () => {
     // #124296: real launchctl jobs and TCP probes, with no port-inspection mocks.

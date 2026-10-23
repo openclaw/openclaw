@@ -2,13 +2,14 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import { resolveEffectiveToolPolicy, resolveGroupToolPolicy } from "./agent-tools.policy.js";
 import { resolveRequesterToolPolicies } from "./requester-tool-policy.js";
-import type { SandboxToolPolicy } from "./sandbox.js";
+import type { SandboxToolPolicy } from "./sandbox/types.js";
 import {
   resolveScheduledToolCallerContext,
   type ScheduledToolPolicyContext,
 } from "./scheduled-tool-policy.js";
 import { resolveSenderToolPolicy } from "./sender-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "./subagents/announce/subagent-announce-handoff.js";
+import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
 import { isRuntimeToolAllowed, isToolAllowedByPolicies } from "./tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "./tool-policy.js";
 
@@ -45,6 +46,13 @@ type WebSearchToolPolicyResolution = {
   allowed: boolean;
   persistentAllowed: boolean;
 };
+
+/** Prepares stored session capability facts, so callers need no warm Gateway projection. */
+export function resolveWebSearchToolPolicyAsync(
+  params: WebSearchToolPolicyParams,
+): Promise<WebSearchToolPolicyResolution> {
+  return withPreparedSessionCapabilityRead(() => resolveWebSearchToolPolicy(params));
+}
 
 /** Resolves current and sender-independent policy for the managed web_search tool. */
 export function resolveWebSearchToolPolicy(

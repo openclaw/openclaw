@@ -10,13 +10,6 @@ export type SessionListPhase =
   | "response"
   | "handlerExit";
 
-type SessionListProjectionTiming = {
-  prepareSyncMs: number;
-  rowSyncMs: number;
-  yieldWaitMs: number;
-  yieldCount: number;
-};
-
 export type SessionListDiagnostics = {
   startSyncCpu: () => NodeJS.CpuUsage | undefined;
   finishSyncCpu: (
@@ -24,7 +17,12 @@ export type SessionListDiagnostics = {
     started: NodeJS.CpuUsage | undefined,
   ) => void;
   mark: (phase: SessionListPhase) => void;
-  projection: SessionListProjectionTiming & {
+  projection: {
+    prepareSyncMs: number;
+    rowSyncMs: number;
+    yieldWaitMs: number;
+    yieldCount: number;
+  } & {
     selectedRowCount: number;
     dirtyRowCount: number;
     materializedRowCount: number;

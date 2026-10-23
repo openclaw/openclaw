@@ -228,7 +228,7 @@ function createHarness(
           assertCurrent: () => {
             assertPreparedResultCurrent?.();
             if (!isDeepStrictEqual(captured, findPlacement(sessionId))) {
-              throw new WorkerPlacementInventoryChangedError(new Set([sessionId]));
+              throw new WorkerPlacementInventoryChangedError();
             }
           },
           release: () => {},
@@ -339,20 +339,36 @@ describe("node workspace retain coordinator", () => {
     });
   });
 
-  it("keeps prior retention nodes compatible without sending a status query", async () => {
-    const { invoke, acceptBundleStatus } = await startHarness({
-      node: {
-        ...node,
-        workerHost: { ...node.workerHost, bundleStatus: undefined },
-      },
-      environments: [environment({ bootstrapReceipt: receipt(previousHash) })],
+  it.each([
+    { bundleRetention: 1, bundleStatus: undefined },
+    { bundleRetention: undefined, bundleStatus: undefined },
+  ] as const)("keeps retention compatible with older capabilities %j", async (capabilities) => {
+    const currentBuild = vi.fn(async () => receipt(currentHash, "2026.9.3"));
+    const { invoke, acceptBundleStatus, warn } = await startHarness({
+      node: { ...node, workerHost: { ...node.workerHost, ...capabilities } },
+      environments: [
+        environment(
+          capabilities.bundleRetention ? { bootstrapReceipt: receipt(previousHash) } : {},
+        ),
+      ],
+      bundleRetention: capabilities.bundleRetention
+        ? undefined
+        : { currentBuild, isEnvironmentOwnedNode: () => false },
     });
-
-    expect(invoke.mock.calls[0]?.[0].params).toMatchObject({
-      bundleHashes: ["b".repeat(64)],
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(invoke.mock.calls[0]?.[0].params).toEqual({
+      version: 1,
+      gatewayNamespace: "gateway-test",
+      controllerId: expect.any(String),
+      sequence: 1,
+      retain: [retainEntry],
+      ...(capabilities.bundleRetention ? { bundleHashes: [previousHash] } : {}),
     });
-    expect(invoke.mock.calls[0]?.[0].params).not.toHaveProperty("bundleStatusHash");
+    if (!capabilities.bundleRetention) {
+      expect(currentBuild).not.toHaveBeenCalled();
+    }
     expect(acceptBundleStatus).toHaveBeenCalledWith(expect.any(Object), undefined);
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("does not request another bundle inspection after accepting its installed status", async () => {
@@ -417,28 +433,6 @@ describe("node workspace retain coordinator", () => {
       }
     },
   );
-
-  it("keeps workspace retention compatible when bundle cleanup is not advertised", async () => {
-    const currentBuild = vi.fn(async () => receipt(currentHash, "2026.9.3"));
-    const { invoke, warn } = await startHarness({
-      node: {
-        ...node,
-        workerHost: { enabled: true, capacity: { total: 2, available: 2 } },
-      },
-      bundleRetention: { currentBuild, isEnvironmentOwnedNode: () => false },
-    });
-
-    expect(currentBuild).not.toHaveBeenCalled();
-    expect(invoke).toHaveBeenCalledOnce();
-    expect(invoke.mock.calls[0]?.[0].params).toEqual({
-      version: 1,
-      gatewayNamespace: "gateway-test",
-      controllerId: expect.any(String),
-      sequence: 1,
-      retain: [retainEntry],
-    });
-    expect(warn).not.toHaveBeenCalled();
-  });
 
   it("keeps cloud workspace retention running when current build preparation rejects", async () => {
     const currentBuild = vi.fn(async () => receipt(currentHash));
@@ -567,9 +561,7 @@ describe("node workspace retain coordinator", () => {
       const { coordinator, invoke, warn, placements } = createHarness({ placements: rows });
       const prepare = vi.spyOn(placements, "prepareRuntimeRefresh");
       if (phase === "initial placement read") {
-        prepare.mockRejectedValueOnce(
-          new WorkerPlacementInventoryChangedError(new Set(["session-1"])),
-        );
+        prepare.mockRejectedValueOnce(new WorkerPlacementInventoryChangedError());
       } else {
         const inventory = placements.prepareMaintenancePlacements;
         vi.spyOn(placements, "prepareMaintenancePlacements").mockImplementationOnce(async () => {
@@ -588,7 +580,7 @@ describe("node workspace retain coordinator", () => {
   it("does not retry a typed placement failure after invoking retention", async () => {
     const { invoke, warn } = await startHarness({
       onInvoke: () => {
-        throw new WorkerPlacementInventoryChangedError(new Set(["session-1"]));
+        throw new WorkerPlacementInventoryChangedError();
       },
     });
     expect(invoke).toHaveBeenCalledOnce();
@@ -617,7 +609,7 @@ describe("node workspace retain coordinator", () => {
         const capturedRevision = resultRevision;
         return () => {
           if (capturedRevision !== resultRevision) {
-            throw new WorkerPlacementInventoryChangedError(new Set(["session-1"]));
+            throw new WorkerPlacementInventoryChangedError();
           }
         };
       },

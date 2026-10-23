@@ -3,7 +3,7 @@ import type { AgentTabIconShape } from "../../../../packages/gateway-protocol/sr
 import { currentThemeBranding, subscribeThemeBranding } from "../../app/theme-branding.ts";
 import {
   IdentityAvatarImage,
-  identityAvatarState,
+  createIdentityAvatarPresentation,
 } from "../../components/solid/identity-avatar-image.tsx";
 import { ThemeBrandIcon } from "../../components/theme-brand-icon.tsx";
 import { projectSource } from "../../lib/reactive/projection.ts";
@@ -35,18 +35,19 @@ export function TabIconAvatar(props: {
   fallbackOnly?: boolean;
 }) {
   const view = createMemo(() => ({ imageUrl: props.imageUrl, pending: false }));
+  const presentation = createIdentityAvatarPresentation(view);
   return (
     <Show when={!props.fallbackOnly} fallback={<FallbackArtwork fallbackUrl={props.fallbackUrl} />}>
       <span
-        ref={identityAvatarState(view)}
-        class="identity-avatar--agent settings-tab-icon__preview"
+        data-avatar-state={presentation.state()}
+        class={["identity-avatar--agent settings-tab-icon__preview", presentation.classes()]}
         data-avatar-shape={props.shape ?? "square"}
         aria-hidden="true"
       >
         <Show when={Boolean(view().imageUrl)}>
           <IdentityAvatarImage
             view={view()}
-            fallbackSelector=".settings-tab-icon__preview"
+            onStateChange={presentation.onStateChange}
             class="identity-avatar__image"
           />
         </Show>

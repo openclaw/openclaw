@@ -1,4 +1,3 @@
-// Utilities for defining safe Commander placeholder descriptors.
 import type { Command } from "commander";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { dedupeByKey } from "../../shared/dedupe-by-key.js";

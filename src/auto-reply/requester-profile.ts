@@ -24,7 +24,7 @@ class RequesterProfile {
 
   constructor(context: MsgContext, profile: PreparedRequesterProfile) {
     this.#profile = Object.freeze({ ...profile });
-    this.#binding = Object.freeze(requesterBinding(context));
+    this.#binding = requesterBinding(context);
     Object.setPrototypeOf(this, null);
     Object.freeze(this);
   }

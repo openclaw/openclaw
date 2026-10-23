@@ -29,22 +29,6 @@ export function scrollRemainder(target: Locator) {
   );
 }
 
-export function readBox(target: Locator) {
-  return target.evaluate((element) => {
-    const style = getComputedStyle(element);
-    return {
-      display: style.display,
-      flexGrow: style.flexGrow,
-      overflowY: style.overflowY,
-      clientHeight: element.clientHeight,
-      scrollHeight: element.scrollHeight,
-      bottom: element.getBoundingClientRect().bottom,
-      documentHeight: document.documentElement.scrollHeight,
-      viewportHeight: innerHeight,
-    };
-  });
-}
-
 export function styles(target: Locator, properties: string[]) {
   return target.evaluate((element, names) => {
     const style = getComputedStyle(element);

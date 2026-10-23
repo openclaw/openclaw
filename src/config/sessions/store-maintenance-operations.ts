@@ -1,4 +1,3 @@
-// Storage-neutral session maintenance operations for the file-backed session store.
 import path from "node:path";
 import { enforceSessionDiskBudget } from "./disk-budget.js";
 import { planSessionEntryMaintenance } from "./store-maintenance-plan.js";
@@ -19,8 +18,6 @@ type RemovedSessionArtifactCleanup = {
     removedSessionFiles: Iterable<[string, string | undefined]>;
     referencedSessionIds: ReadonlySet<string>;
     storePath: string;
-    reason: "deleted";
-    restrictToStoreDir: true;
   }) => Promise<Set<string>>;
   cleanupArchivedSessionTranscripts: (params: {
     directories: string[];
@@ -58,8 +55,6 @@ async function cleanupRemovedSessionArtifacts(params: {
     removedSessionFiles: params.removedSessionFiles,
     referencedSessionIds: params.referencedSessionIds,
     storePath: params.operation.storePath,
-    reason: "deleted",
-    restrictToStoreDir: true,
   });
   // null retention keeps archived transcripts: they are conversation history,
   // and the disk budget (not a wall-clock timer) is the only eviction path.

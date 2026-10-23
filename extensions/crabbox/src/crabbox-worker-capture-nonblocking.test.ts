@@ -204,19 +204,25 @@ describe("Crabbox first capture without upload wait", () => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
       const entered = Promise.withResolvers<void>();
       const controller = new AbortController();
+      let monotonicMs = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => monotonicMs);
       const { options } = createProjectOptions([], controller);
       const { provider, calls } = pendingCapture(() => {
         entered.resolve();
+        if (monotonicMs > 0) {
+          // Fail promptly if the expired budget still permits another provider read.
+          throw new Error("checkpoint polled past capture deadline");
+        }
         return availability();
       });
       const provisioning = provider.provision(PROFILE, "interrupted-capture", options);
       const rejected = expect(provisioning).rejects.toThrow(
-        outcome === "timeout" ? "capture is unresolved" : `${outcome} capture`,
+        outcome === "timeout" ? "Crabbox waited checkpoint is not available" : `${outcome} capture`,
       );
-      await entered.promise;
+      await Promise.race([entered.promise, provisioning]);
       await vi.advanceTimersByTimeAsync(0);
       if (outcome === "timeout") {
-        vi.setSystemTime(Date.now() + 45 * 60_000);
+        monotonicMs = 45 * 60_000 + 1;
       } else if (outcome === "cancel") {
         controller.abort(new Error("cancel capture"));
       } else {

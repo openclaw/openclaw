@@ -23,14 +23,15 @@ import { withTimeout } from "../infra/fs-safe.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { registerProjectRegistry, removeProjectRegistry } from "../projects/project-registry.js";
 import {
-  getSessionWorkAdmissionRelease,
-  SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-} from "../sessions/session-lifecycle-admission.js";
+  captureSessionControllerSettlement,
+  isSessionMutationActive,
+  SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
+} from "../sessions/session-controller.lifecycle.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { createWorktreeSpawnRepositoryFixture } from "./server.sessions.create-worktree-spawn.test-support.js";
@@ -119,7 +120,6 @@ async function expectCreationError(request: Promise<unknown>, message: unknown, 
 }
 const runtimeContext = () => ({
   broadcast: vi.fn(),
-  chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
   dedupe: new Map(),
 });
 function mockDispatch() {
@@ -256,6 +256,8 @@ test.each([
     let creationError: unknown;
     try {
       const result = await spawn({
+        // Sandbox rejection must not await unrelated automatic title generation.
+        label: worktree ? "Selected project child" : "Rejected project child",
         ...(source === "registered"
           ? { projectId: project.id }
           : source === "github"
@@ -267,7 +269,6 @@ test.each([
             : {}),
         ...(worktree
           ? {
-              label: "Selected project child",
               worktree: true,
               worktreeName: "selected-child",
               worktreeBaseRef: "main",
@@ -280,7 +281,9 @@ test.each([
       if (isRecord(result?.details) && typeof result.details.childSessionKey === "string") {
         childKey = result.details.childSessionKey;
       }
-      await settleWorkspaceRuns(context, storePath, childKey);
+      if (childKey) {
+        await settleWorkspaceRuns(context, storePath, childKey);
+      }
       const child = childKey ? readEntry(childKey) : undefined;
       if (!worktree) {
         if (source === "registered") {
@@ -327,11 +330,30 @@ test.each([
       await expect(fs.stat(path.join(child!.spawnedCwd!, "setup-marker.txt"))).rejects.toThrow();
       expect(registerRun).toHaveBeenCalledOnce();
     } finally {
-      await settleWorkspaceRuns(context, storePath, childKey, true);
+      if (childKey) {
+        await settleWorkspaceRuns(context, storePath, childKey, true);
+      }
       dispatchInboundMessageMock.mockReset();
     }
   },
 );
+
+test("worktree spawns inherit the managed parent when the default workspace is unavailable", async () => {
+  const { entry: parent } = await createManagedProjectParent(true);
+  const defaultWorkspace = path.join(state.root, "non-git-workspace");
+  await fs.rmdir(defaultWorkspace);
+  await fs.writeFile(defaultWorkspace, "unavailable workspace");
+
+  const child = await createChild();
+  expect(readEntry(child.key)).toMatchObject({
+    parentSessionId: parent.sessionId,
+    sandbox: "required",
+    worktree: { id: child.worktree.id, repoRoot: repository },
+  });
+  expect(child.worktree.path).not.toBe(parent.spawnedCwd);
+  expect(await readReadme(child.worktree.path)).toBe("selected-project\n");
+  expect(await fs.readFile(defaultWorkspace, "utf8")).toBe("unavailable workspace");
+});
 
 test("required project preparation isolates host filters without rejecting the registered source", async () => {
   await createManagedProjectParent(true);
@@ -490,16 +512,46 @@ test.each(["empty metadata", "missing worktree target", "partial metadata"])(
 );
 
 test("keyed worktree creation reuses its recorded base after reopening the registry", async () => {
-  const { entry: parent } = await createManagedProjectParent();
-  const params = { ...parentCreateParams, cwd: repository };
+  await git("branch", "selected-base");
+  const params = {
+    ...parentCreateParams,
+    worktreeName: undefined,
+    worktreeBaseRef: "selected-base",
+    label: "Release planning",
+    cwd: repository,
+  };
+  const allocate = captureMethodCall("createWithOutcome")(ManagedWorktreeService.prototype);
+  using allocation = vi
+    .spyOn(ManagedWorktreeService.prototype, "createWithOutcome")
+    .mockImplementation(function (this: ManagedWorktreeService, input) {
+      expect(isSessionMutationActive(storePath, [input.ownerId])).toBe(true);
+      return allocate(this, input);
+    });
+  const created = await createSession(params);
+  const parent = created.entry;
+  expect(created.worktree).toMatchObject({ branch: "openclaw/release-planning" });
+  expect(parent).toMatchObject({
+    spawnedCwd: created.worktree.path,
+    sessionRoot: created.worktree.path,
+  });
+  expect(parent.permissionMode).toBeUndefined();
+  expect(readEntry(parentKey)?.permissionMode).toBeUndefined();
+  await git("branch", "-D", "selected-base");
   await closeStateDatabaseForTest();
   const reused = await createSession(params);
+  allocation.mockRestore();
   expect(reused).toMatchObject({
     entry: { sessionId: parent.sessionId },
     worktree: { id: parent.worktree?.id },
   });
   const recorded = await managedWorktrees.findLiveByOwner("session", parentKey);
-  expect(recorded?.baseRef).toBe("main");
+  expect(recorded).toMatchObject({
+    id: created.worktree.id,
+    path: created.worktree.path,
+    ownerKind: "session",
+    ownerId: parentKey,
+    baseRef: "selected-base",
+  });
 
   for (const changed of [{ worktreeBaseRef: "HEAD" }, { worktreeName: "other-name" }]) {
     await expectCreationError(
@@ -566,6 +618,7 @@ test("publishes a failed worktree spawn only after its durable session failure",
   const key = "agent:main:dashboard:failed-worktree-child";
   const target = { agentId: "main", sessionKey: key, storePath };
   const preparation = createDeferredCore<never>();
+  void preparation.promise.catch(() => {});
   const preparationStarted = createDeferredCore();
   const createWorktree = vi
     .spyOn(ManagedWorktreeService.prototype, "createWithOutcome")
@@ -615,49 +668,56 @@ test("publishes a failed worktree spawn only after its durable session failure",
     }),
   };
   const client = spawnClient();
-  const created = await createChild(
-    { key, label: "Failed worktree child", worktreeName: "failed-child", task: "Read README.md" },
-    parentKey,
-    { client: { ...client, connect: connection(true) }, context },
-  );
-  expect(created.runStarted).toBe(true);
-  const { runId, sessionId } = created;
-  const admittedRun = context.chatAbortControllers.get(runId)!;
-  registryStartedAt = Math.max(Date.now(), admittedRun.startedAtMs + 1);
-  const released = getSessionWorkAdmissionRelease({ scope: storePath, identities: [key] });
-  expect(released).toBeDefined();
-  expect(loadSessionEntry(target)?.pendingWorktree?.workspace).toBe(repository);
-  await preparationStarted.promise;
-  expect(createWorktree).toHaveBeenCalledOnce();
-  preparation.reject(failure);
-  await withTimeout(released!, SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS, "failed workspace proof");
-  await registryProjection;
+  try {
+    const created = await createChild(
+      { key, label: "Failed worktree child", worktreeName: "failed-child", task: "Read README.md" },
+      parentKey,
+      { client: { ...client, connect: connection(true) }, context },
+    );
+    expect(created.runStarted).toBe(true);
+    const { runId, sessionId } = created;
+    const admittedRun = rpcSourceTesting.get(runId)!;
+    expect(admittedRun.input.claim).toBeUndefined();
+    registryStartedAt = Date.now() + 1;
+    const released = captureSessionControllerSettlement({ scope: storePath, identities: [key] });
+    expect(released).toBeDefined();
+    expect(loadSessionEntry(target)?.pendingWorktree?.workspace).toBe(repository);
+    await preparationStarted.promise;
+    expect(createWorktree).toHaveBeenCalledOnce();
+    preparation.reject(failure);
+    await withTimeout(released!, SESSION_CONTROLLER_DRAIN_TIMEOUT_MS, "failed workspace proof");
+    await registryProjection;
 
-  expect.soft(publishedEntry).toMatchObject({
-    sessionId,
-    status: "failed",
-    lastRunId: runId,
-    lastRunError: expect.stringContaining("git ls-tree"),
-  });
-  expect.soft(loadSessionEntry(target)).toMatchObject({
-    status: "failed",
-    lastRunId: runId,
-    lastRunError: expect.stringContaining("timed out after 120 seconds"),
-  });
-  expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-  const notices = (await loadTranscriptEvents({ ...target, sessionId })).filter(
-    (event) => isRecord(event) && event.customType === "run-failed-before-reply",
-  );
-  expect(notices).toMatchObject([
-    { details: { runId, error: expect.stringContaining("git ls-tree") }, display: true },
-  ]);
-  const listed = await directSessionReq<{
-    sessions: Array<{ key: string; lastRunError?: string }>;
-  }>("sessions.list", { agentId: "main" }, adminRequest);
-  expect(listed.ok, JSON.stringify(listed.error)).toBe(true);
-  expect(listed.payload?.sessions.find((row) => row.key === key)).toMatchObject({
-    lastRunError: expect.stringContaining("git ls-tree"),
-  });
+    expect.soft(publishedEntry).toMatchObject({
+      sessionId,
+      status: "failed",
+      lastRunId: runId,
+      lastRunError: expect.stringContaining("git ls-tree"),
+    });
+    expect.soft(loadSessionEntry(target)).toMatchObject({
+      status: "failed",
+      lastRunId: runId,
+      lastRunError: expect.stringContaining("timed out after 120 seconds"),
+    });
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    const notices = (await loadTranscriptEvents({ ...target, sessionId })).filter(
+      (event) => isRecord(event) && event.customType === "run-failed-before-reply",
+    );
+    expect(notices).toMatchObject([
+      { details: { runId, error: expect.stringContaining("git ls-tree") }, display: true },
+    ]);
+    const listed = await directSessionReq<{
+      sessions: Array<{ key: string; lastRunError?: string }>;
+    }>("sessions.list", { agentId: "main" }, adminRequest);
+    expect(listed.ok, JSON.stringify(listed.error)).toBe(true);
+    expect(listed.payload?.sessions.find((row) => row.key === key)).toMatchObject({
+      lastRunError: expect.stringContaining("git ls-tree"),
+    });
+  } finally {
+    preparation.reject(failure);
+    await settleWorkspaceRuns(context, storePath, key, true);
+    await registryProjection;
+  }
 });
 
 test.each(["archive", "stale-child"] as const)(

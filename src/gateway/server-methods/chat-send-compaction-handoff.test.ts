@@ -6,10 +6,6 @@ import * as dispatch from "../../auto-reply/dispatch.js";
 import * as dispatchRuntimeLoaders from "../../auto-reply/reply/dispatch-from-config.runtime-loaders.js";
 import type { InternalGetReplyFromConfig } from "../../auto-reply/reply/get-reply.types.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
-import {
-  replyRunRegistry,
-  type ReplyOperation,
-} from "../../auto-reply/reply/reply-run-registry.js";
 import { admitReplyTurn } from "../../auto-reply/reply/reply-turn-admission.js";
 import { initSessionState } from "../../auto-reply/reply/session.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
@@ -18,6 +14,21 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
+import {
+  getSessionControllerOperation,
+  type ReplyOperation,
+} from "../../sessions/session-controller.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import {
+  claimSessionControllerTask,
+  releaseSessionControllerClaim,
+  reserveSessionControllerSource,
+  retireSessionControllerInput,
+  type SessionControllerInput,
+  type SessionControllerMailboxClaim,
+} from "../../sessions/session-controller.mailbox.js";
+import { getRpcSourceIdentity } from "../../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createGatewayRequestContext } from "../server-request-context.js";
@@ -106,7 +117,6 @@ it.each([
       const releasePreparation = createDeferred();
       const capturedSuccessor = createDeferred();
       const releaseRuntimePlugins = createDeferred();
-      const originalDispatch = dispatch.dispatchInboundMessageWithProjectedDispatcher;
       const originalLoadRuntimePlugins = dispatchRuntimeLoaders.loadRuntimePlugins;
       const holdRuntimePlugins =
         scenario === "successive-compactions"
@@ -116,12 +126,16 @@ it.each([
               return await originalLoadRuntimePlugins();
             })
           : undefined;
+
+      const originalDispatch = dispatch.dispatchInboundMessageWithProjectedDispatcher;
       const observeChatDispatch = vi.spyOn(chatDispatch, "startChatDispatch");
       let owned: ChatDispatchParams | undefined;
       let successor: ReplyOperation | undefined;
-      let originalRegistration: ChatDispatchParams["admission"]["sessionBinding"] | undefined;
+      let successorInput: SessionControllerInput | undefined;
+      let successorClaim: SessionControllerMailboxClaim | undefined;
+      let sourceRef: ChatDispatchParams["admission"]["sourceRef"] | undefined;
       const resolver = vi.fn<InternalGetReplyFromConfig>(async (ctx, options, replyConfig) => {
-        if (!options || !replyConfig || !owned || !originalRegistration) {
+        if (!options || !replyConfig || !owned || !sourceRef) {
           throw new Error("fixture requires the original accepted chat dispatch");
         }
         expect(ctx.BodyForAgent).toBe(message);
@@ -134,14 +148,14 @@ it.each([
           requestedSessionId: options.requestedSessionId,
           signal: options.abortSignal,
         });
-        expect(initialized.sessionId).toBe(finalSessionId);
+        expect(initialized.sessionId, "initialized session").toBe(finalSessionId);
         options.onSessionPrepared?.({
           sessionKey: initialized.sessionKey,
           sessionId: initialized.sessionId,
           storePath: initialized.storePath,
         });
-        expect(context.chatAbortControllers.get(runId)).toBe(originalRegistration);
-        expect(originalRegistration.sessionId).toBe(finalSessionId);
+        expect(rpcSourceTesting.get(runId)).toBe(sourceRef);
+        expect(getRpcSourceIdentity(sourceRef).sessionId).toBe(finalSessionId);
         await options.userTurnTranscriptRecorder?.persistApproved();
         return { text: "Continued in the compacted conversation." };
       });
@@ -154,6 +168,13 @@ it.each([
         });
       let releaseAuthorization: (() => void) | undefined;
       try {
+        if (scenario === "successive-compactions") {
+          // The queued compaction precedes this chat input in the same mailbox.
+          successorInput = reserveSessionControllerSource(sessionKey, {
+            target: captureSessionTarget({ storeScope: storePath, sessionKey, agentId }),
+            policy: { mode: "followup" },
+          });
+        }
         const params = { sessionKey, sessionId: initialSessionId, message, idempotencyKey: runId };
         const authorization = await resolveSessionMutationAuthorizationAsync({
           client,
@@ -184,8 +205,11 @@ it.each([
           observeChatDispatch.mock.calls.at(-1)?.[0],
           "chat.send did not start detached dispatch",
         );
-        originalRegistration = owned.admission.sessionBinding;
-        expect(originalRegistration.sessionId).toBe(initialSessionId);
+        sourceRef = owned.admission.sourceRef;
+        expect(getRpcSourceIdentity(sourceRef).sessionId).toBe(initialSessionId);
+        expect(owned.admission.expectedActiveReplyOperation).toBe(
+          scenario === "foreign-store" ? undefined : predecessor,
+        );
 
         await replaceSessionEntry(scope, { ...entry, sessionId: nextSessionId });
         if (scenario === "foreign-store") {
@@ -198,18 +222,20 @@ it.each([
           predecessor.abortForRestart();
         }
         if (scenario === "active-compaction") {
-          expect(replyRunRegistry.get(sessionKey)).toBe(predecessor);
+          expect(getSessionControllerOperation(sessionKey)).toBe(predecessor);
         } else {
           predecessor.complete();
           await predecessor.ownerSettlement;
-          expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+          expect(getSessionControllerOperation(sessionKey)).toBeUndefined();
         }
         if (scenario === "cancelled") {
           owned.admission.activeRunAbort.controller.abort();
         }
-        if (scenario === "successive-compactions") {
+        if (successorInput) {
+          successorClaim = await claimSessionControllerTask(successorInput, () => {}, "visible");
           const successorAdmission = await admitReplyTurn({
             ...scope,
+            mailboxClaim: successorClaim,
             sessionId: nextSessionId,
             expectedSessionId: nextSessionId,
             kind: "visible",
@@ -223,18 +249,21 @@ it.each([
         }
         releasePreparation.resolve();
         if (successor) {
-          // Gather retains this newer owner before its existing plugin-loading await.
           await capturedSuccessor.promise;
           await replaceSessionEntry(scope, { ...entry, sessionId: finalSessionId });
           successor.updateSessionId(finalSessionId);
           successor.complete();
           await successor.ownerSettlement;
-          expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+          if (successorClaim) {
+            releaseSessionControllerClaim(successorClaim);
+            await successorClaim.settlement.promise;
+          }
+          expect(getSessionControllerOperation(sessionKey)).toBeUndefined();
           releaseRuntimePlugins.resolve();
         }
-        // Admission release follows the chat owner's post-dispatch persistence and cleanup.
+        // Source cleanup follows post-dispatch persistence and the Gateway root's release.
         await owned.admission.gatewayWorkAdmission.released;
-        expect(context.chatAbortControllers.has(runId)).toBe(false);
+        expect(rpcSourceTesting.has(runId)).toBe(false);
 
         if (
           scenario === "compaction" ||
@@ -247,7 +276,7 @@ it.each([
             expect.anything(),
           );
           expect(resolver).toHaveBeenCalledOnce();
-          expect(originalRegistration.sessionId).toBe(finalSessionId);
+          expect(getRpcSourceIdentity(sourceRef).sessionId).toBe(finalSessionId);
           expect(context.dedupe.get(`chat:${runId}`)).toMatchObject({
             ok: true,
             payload: { runId, status: "ok" },
@@ -264,13 +293,19 @@ it.each([
           ).toHaveLength(1);
         } else {
           expect(resolver).not.toHaveBeenCalled();
-          expect(originalRegistration.sessionId).toBe(initialSessionId);
+          expect(getRpcSourceIdentity(sourceRef).sessionId).toBe(initialSessionId);
         }
       } finally {
         predecessor.complete();
         successor?.complete();
+        if (successorClaim) {
+          releaseSessionControllerClaim(successorClaim);
+        } else if (successorInput) {
+          retireSessionControllerInput(successorInput);
+        }
         releasePreparation.resolve();
         releaseRuntimePlugins.resolve();
+        await successorInput?.settlement.promise;
         if (owned) {
           await owned.admission.gatewayWorkAdmission.released;
         }

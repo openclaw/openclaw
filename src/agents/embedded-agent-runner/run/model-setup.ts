@@ -1,4 +1,3 @@
-import { getReplyOperationSessionReader } from "../../../auto-reply/reply/reply-run-registry.state.js";
 import { captureSessionEntryNativeMutationWitness } from "../../../config/sessions/session-entry-read-ordered.js";
 import {
   withSessionEntriesFromStoreInWorker,
@@ -10,6 +9,7 @@ import { readDatabasePathIdentitySync } from "../../../infra/sqlite-worker-ident
 import type { ProviderModelRouteSource } from "../../../plugin-sdk/provider-model-types.js";
 import { requireActivePluginRegistry } from "../../../plugins/runtime.js";
 import { resolveSessionPinnedHarnessId } from "../../../sessions/agent-harness-session-key.js";
+import { getReplyOperationSessionReader } from "../../../sessions/session-controller.session-reader.js";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import {
   prepareSessionRowPublicationScope,

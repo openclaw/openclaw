@@ -5,7 +5,7 @@ import OpenClawProtocol
 public enum OpenClawChatTransportEvent: Sendable {
     case health(ok: Bool)
     case tick
-    case chatMetadataChanged
+    case chatMetadataChanged(modelCatalogChanged: Bool = true, agentID: String? = nil)
     case modelSelectionChanged
     case sessionsChanged(OpenClawChatSessionsChangedEvent)
     case sessionObserver(SessionObserverDigest)
@@ -19,6 +19,20 @@ public enum OpenClawChatTransportEvent: Sendable {
     case routeChanged
     case reconnected
     case seqGap
+
+    public func refreshesModelCatalog(forAgentID agentID: String?) -> Bool {
+        switch self {
+        case let .chatMetadataChanged(modelCatalogChanged, changedAgentID):
+            guard modelCatalogChanged else { return false }
+            guard let changedAgentID = ChatPayloadDecoding.trimmedNonEmptyString(changedAgentID),
+                  let agentID = ChatPayloadDecoding.trimmedNonEmptyString(agentID) else { return true }
+            return changedAgentID.lowercased() == agentID.lowercased()
+        case .modelSelectionChanged:
+            return true
+        default:
+            return false
+        }
+    }
 }
 
 public struct OpenClawQuestionResolvedEvent: Codable, Sendable {

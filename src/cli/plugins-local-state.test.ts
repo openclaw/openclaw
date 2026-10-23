@@ -83,9 +83,13 @@ vi.mock("../plugins/official-external-plugin-catalog.js", async (importOriginal)
   loadConfiguredHostedOfficialExternalPluginCatalogEntries: (...args: unknown[]) =>
     boundary.catalog(...args),
 }));
-vi.mock("./hook-install-persistence.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./hook-install-persistence.js")>()),
-  persistHookPackInstall: (...args: unknown[]) => boundary.persistHook(...args),
+// mock-isolation: This suite owns admission; real hook compensation is covered by hooks/installs.test.ts.
+vi.mock("../hooks/install-record-transaction.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../hooks/install-record-transaction.js")>()),
+  stageHookInstall: async (...args: unknown[]) => {
+    boundary.persistHook(...args);
+    return { async commit() {}, async rollback() {} };
+  },
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);

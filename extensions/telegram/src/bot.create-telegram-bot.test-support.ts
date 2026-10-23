@@ -88,8 +88,6 @@ export async function queueChannelPostAlbum(
     mediaGroupId: string;
     firstMessageId: number;
     secondMessageId: number;
-    firstPhotoFileId?: string;
-    secondPhotoFileId?: string;
     secondGetFileResult?: Record<string, unknown>;
   },
 ) {
@@ -98,8 +96,7 @@ export async function queueChannelPostAlbum(
       handler(
         createChannelPostContext({
           messageId: index ? params.secondMessageId : params.firstMessageId,
-          photoFileId:
-            (index ? params.secondPhotoFileId : params.firstPhotoFileId) ?? `p${index + 1}`,
+          photoFileId: `p${index + 1}`,
           caption: index ? undefined : params.caption,
           getFileResult: index ? params.secondGetFileResult : undefined,
           date: 1736380800 + index,

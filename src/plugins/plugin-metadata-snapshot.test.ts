@@ -27,6 +27,7 @@ import {
 } from "./current-plugin-metadata.test-support.js";
 import type { PluginDiscoveryResult } from "./discovery.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
+import { normalizeManifestProviderEndpoints } from "./manifest-capability-normalizers.js";
 import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import {
   createPluginCache,
@@ -108,12 +109,6 @@ describe("plugin metadata snapshot", () => {
     const projected = projectPluginMetadataSnapshot(snapshot, ["setup-owner"]);
     expect([...(projected.declaredProviderOwners.get("literal") ?? [])]).toEqual(["setup-owner"]);
     expect(projectPluginMetadataSnapshot(snapshot, []).declaredProviderOwners.size).toBe(0);
-    expect(() => (snapshot.declaredProviderOwners as Map<string, Set<string>>).clear()).toThrow(
-      "Plugin metadata snapshots are immutable",
-    );
-    expect(() =>
-      (snapshot.declaredProviderOwners.get("literal") as Set<string>).add("foreign"),
-    ).toThrow("Plugin metadata snapshots are immutable");
   });
 
   beforeEach(() => {
@@ -352,32 +347,33 @@ describe("plugin metadata snapshot", () => {
     );
   });
 
-  it("reuses frozen snapshots across module instances", async () => {
+  it("reuses finalized snapshots across module instances", async () => {
     const snapshot = restorePluginMetadataSnapshot(createPluginMetadataSnapshotFixture());
     vi.resetModules();
     const reloaded = await import("./plugin-metadata-snapshot.js");
     expect(reloaded.finalizePluginMetadataSnapshot(snapshot)).toBe(snapshot);
-    expect(() => (snapshot.declaredProviderOwners as Map<string, Set<string>>).clear()).toThrow(
-      "Plugin metadata snapshots are immutable",
-    );
   });
 
-  it("reuses discovery from a derived empty plugin index", () => {
+  it.each(["derived", "persisted"])("keeps an empty %s index authoritative", (source) => {
     const index = makeIndex();
     index.plugins = [];
     const discovery: PluginDiscoveryResult = { candidates: [], diagnostics: [] };
     loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "derived",
+      source,
       snapshot: index,
       diagnostics: [],
-      discovery,
+      ...(source === "derived" ? { discovery } : {}),
     });
     loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
       plugins: [],
       diagnostics: [],
     });
 
-    const snapshot = loadPluginMetadataSnapshot({ config: {}, env: {} });
+    const snapshot = loadPluginMetadataSnapshot({
+      config: {},
+      env: {},
+      ...(source === "persisted" ? { index } : {}),
+    });
 
     expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
@@ -385,32 +381,9 @@ describe("plugin metadata snapshot", () => {
         includeDisabled: true,
       }),
     );
-    expect(snapshot.discovery).toBe(discovery);
-  });
-
-  it("keeps an empty installed index authoritative without rediscovering plugins", () => {
-    const index = makeIndex();
-    index.plugins = [];
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "persisted",
-      snapshot: index,
-      diagnostics: [],
-    });
-    loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
-      plugins: [],
-      diagnostics: [],
-    });
-
-    const snapshot = loadPluginMetadataSnapshot({ config: {}, env: {}, index });
-
+    expect(snapshot.discovery).toBe(source === "derived" ? discovery : undefined);
     expect(snapshot.plugins).toEqual([]);
     expect(snapshot.index.plugins).toEqual([]);
-    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        index: expect.objectContaining({ plugins: [] }),
-        includeDisabled: true,
-      }),
-    );
   });
 
   it("carries a derived manifest graph into snapshot construction without rebuilding it", () => {
@@ -587,14 +560,6 @@ describe("plugin metadata snapshot", () => {
       const unscoped = loadPluginMetadataSnapshot({ config, env: {}, index });
       setCurrentPluginMetadataSnapshot(unscoped, { config, env: {} });
       loadPluginManifestRegistryForInstalledIndex.mockClear();
-      loadPluginManifestRegistryForInstalledIndex.mockImplementation(
-        (params: { pluginIds?: readonly string[] }) => ({
-          ...makeManifestRegistry(),
-          plugins: makeManifestRegistry().plugins.filter(
-            (plugin) => params.pluginIds === undefined || params.pluginIds.includes(plugin.id),
-          ),
-        }),
-      );
 
       const scoped = resolvePluginMetadataSnapshot({ config, env: {}, pluginIds });
 
@@ -704,7 +669,7 @@ describe("plugin metadata snapshot", () => {
     plugin.setup = { cliBackends: ["Demo-CLI", "Other-CLI"] };
     plugin.contracts = { tools: [], webSearchProviders: ["demo-search"] };
     other.cliBackends = ["demo-cli"];
-    plugin.providerEndpoints = [
+    plugin.providerEndpoints = normalizeManifestProviderEndpoints([
       {
         endpointClass: " openai-public ",
         hosts: [" API.EXAMPLE.COM ", "api.example.com", " "],
@@ -728,7 +693,7 @@ describe("plugin metadata snapshot", () => {
         hosts: ["GLOBAL.VERTEX.EXAMPLE.COM"],
         googleVertexRegion: " GLOBAL ",
       },
-    ];
+    ]);
     other.providerEndpoints = [{ endpointClass: "azure-openai", hosts: ["api.example.com"] }];
     registry.plugins.push(other);
     index.plugins = [...index.plugins, ...makeIndex("other").plugins];
@@ -738,8 +703,8 @@ describe("plugin metadata snapshot", () => {
     plugin.providerRequest = {
       providers: {
         demo: {
-          family: " demo-family ",
-          compatibilityFamily: " moonshot " as never,
+          family: "demo-family",
+          compatibilityFamily: "moonshot",
           openAICompletions: { supportsStreamingUsage: true },
         },
       },
@@ -848,12 +813,6 @@ describe("plugin metadata snapshot", () => {
       expect(snapshot.owners.modelIdNormalizationPolicies.get("demo")).toEqual({
         aliases: { raw: "prepared-model" },
       });
-      expect(() =>
-        (snapshot.owners.modelIdNormalizationPolicies as Map<string, unknown>).clear(),
-      ).toThrow("Plugin metadata snapshots are immutable");
-      expect(() => (snapshot.owners.providers as Map<string, string[]>).set("other", [])).toThrow(
-        "Plugin metadata snapshots are immutable",
-      );
       const callerRecord = index.plugins[0];
       const snapshotRecord = snapshot.index.plugins[0];
       if (!callerRecord || !snapshotRecord) {

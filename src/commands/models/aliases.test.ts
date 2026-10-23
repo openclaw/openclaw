@@ -1,4 +1,5 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
 import type { OpenClawConfig, TransformConfigFileParams } from "../../config/config.js";
 import { stampConfigWriteMetadata } from "../../config/io.meta.js";
@@ -8,11 +9,13 @@ import {
   modelsAliasesListCommand,
   modelsAliasesRemoveCommand,
 } from "./aliases.js";
+import { modelsSetCommand } from "./set.js";
 
 const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
   replaceConfigFile: vi.fn(),
   loadModelsConfig: vi.fn(),
+  repairModelSelectionRuntimePlugins: vi.fn(),
 }));
 
 vi.mock("../../config/config.js", () => ({
@@ -42,6 +45,10 @@ vi.mock("./load-config.js", () => ({
 // Real provider activation is covered by model-selection.runtime.test.ts.
 vi.mock("./model-selection.runtime.js", () => ({
   withModelCommandProviderRuntime: (_params: unknown, run: () => unknown) => run(),
+}));
+vi.mock("../runtime-plugin-install.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime-plugin-install.js")>()),
+  repairModelSelectionRuntimePlugins: mocks.repairModelSelectionRuntimePlugins,
 }));
 
 function makeRuntime(): RuntimeEnv & { logs: string[] } {
@@ -90,7 +97,65 @@ beforeEach(() => {
   mocks.readConfigFileSnapshot.mockReset();
   mocks.replaceConfigFile.mockReset().mockResolvedValue(undefined);
   mocks.loadModelsConfig.mockReset();
+  mocks.repairModelSelectionRuntimePlugins.mockReset().mockResolvedValue([]);
 });
+afterEach(() => vi.unstubAllEnvs());
+
+it.each<{
+  label: string;
+  input: string;
+  primary: string;
+  source: Parameters<typeof modelConfig>[0];
+  resolved: Parameters<typeof modelConfig>[0];
+}>([
+  {
+    label: "runtime-only aliases",
+    input: "sonnet",
+    primary: "anthropic/claude-sonnet-4-6",
+    source: { "anthropic/claude-sonnet-4-6": {} },
+    resolved: { "anthropic/claude-sonnet-4-6": { alias: "sonnet" } },
+  },
+  {
+    label: "authored aliases ahead of runtime-only aliases",
+    input: "sonnet",
+    primary: "openai/gpt-5.5",
+    source: { "openai/gpt-5.5": { alias: "sonnet" } },
+    resolved: {
+      "openai/gpt-5.5": { alias: "sonnet" },
+      "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+    },
+  },
+  {
+    label: "manifest-owned provider aliases",
+    input: "z.ai/glm-4.7",
+    primary: "zai/glm-4.7",
+    source: {},
+    resolved: {},
+  },
+])(
+  "sets the default using $label and writes only source config",
+  async ({ input, primary, source, resolved }) => {
+    if (input === "z.ai/glm-4.7") {
+      vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.resolve("extensions"));
+    }
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      ...snapshot(modelConfig(source)),
+      runtimeConfig: modelConfig(resolved),
+      config: modelConfig(resolved),
+    });
+    await modelsSetCommand(input, runtime);
+    expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
+    expect(writtenConfig().agents?.defaults).toEqual({
+      model: { primary },
+      models: input === "z.ai/glm-4.7" ? { [primary]: {} } : source,
+    });
+    expect(mocks.repairModelSelectionRuntimePlugins).toHaveBeenCalledWith({
+      cfg: writtenConfig(),
+      model: primary,
+    });
+    expect(runtime.logs).toContain(`Default model: ${primary}`);
+  },
+);
 
 it.each([
   {
@@ -135,6 +200,22 @@ it("preserves safely named prototype aliases in deterministic JSON output", asyn
     zeta: "openai/gpt-5.6-sol",
   });
 });
+
+it.each([{}, { plain: true }])("keeps alias reports on one terminal line (%j)", async (opts) => {
+  const alias = "café\u001b[2J\nforged";
+  const target = "openai/model\u001b]0;hidden\u0007\tnext";
+  configureModels({ [target]: { alias } });
+  await modelsAliasesListCommand(opts, runtime);
+  expect(runtime.logs.join("\n")).toContain("café\\nforged");
+  expect(runtime.logs.join("\n")).toContain("openai/model\\tnext");
+  for (const control of ["\u001b", "\u0007", "\t"]) {
+    expect(runtime.logs.join("\n")).not.toContain(control);
+  }
+  runtime.logs.length = 0;
+  await modelsAliasesListCommand({ json: true }, runtime);
+  expect(JSON.parse(runtime.logs[0] ?? "").aliases).toEqual({ [alias]: target });
+});
+
 it("removes every case-colliding alias from an existing config", async () => {
   configureModels({
     "openai/gpt-5.4-mini": { alias: "Fast" },

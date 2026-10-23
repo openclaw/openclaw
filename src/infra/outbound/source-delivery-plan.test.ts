@@ -26,34 +26,34 @@ function messageToolPlan(target: SourceDeliveryPlan["target"]): SourceDeliveryPl
       force: true,
       requireExplicitTarget: false,
       requireExplicitTargetEvidence: false,
+      finalByDefault: true,
     },
     fallback: { directDelivery: true, skipWhenMessageToolSentToTarget: true },
   };
 }
 
-function isVerifiedSourceDeliveryTarget(
+function deliveryOutcome(
   target: NonNullable<
     Parameters<typeof resolveSourceDeliveryOutcome>[1]["messageToolSentTargets"]
   >[number],
   delivery: SourceDeliveryPlan["target"],
-): boolean {
-  const plan = messageToolPlan(delivery);
-  return resolveSourceDeliveryOutcome(plan, {
+) {
+  return resolveSourceDeliveryOutcome(messageToolPlan(delivery), {
     didSendViaMessageTool: true,
     messageToolSentTargets: [target],
-  }).verifiedMessageToolDelivery;
+  });
 }
 const slackDestination = { channel: "slack", to: "channel:C1" };
 const slackSend = { tool: "message", provider: "slack", to: "channel:C1" };
 
 describe("source delivery plan", () => {
   it("normalizes message-tool delivery outcomes against the planned source target", () => {
-    const contract = messageToolPlan({
+    const destination = {
       channel: "feishu",
       to: "oc_123",
       accountId: "bot-a",
       threadId: 456,
-    });
+    };
 
     const target = {
       tool: "message",
@@ -62,12 +62,7 @@ describe("source delivery plan", () => {
       to: "oc_123:topic:456",
       text: "done",
     };
-    expect(
-      resolveSourceDeliveryOutcome(contract, {
-        didSendViaMessageTool: true,
-        messageToolSentTargets: [{ ...target }],
-      }),
-    ).toEqual({
+    expect(deliveryOutcome(target, destination)).toEqual({
       satisfiesSourceDelivery: true,
       verifiedMessageToolDelivery: true,
       unverifiedMessageToolDelivery: false,
@@ -93,10 +88,12 @@ describe("source delivery plan", () => {
 
   it("matches source targets through the same provider normalization used by delivery", () => {
     expect(
-      isVerifiedSourceDeliveryTarget({ provider: "message", to: "channel:C1" }, slackDestination),
+      deliveryOutcome({ provider: "message", to: "channel:C1" }, slackDestination)
+        .verifiedMessageToolDelivery,
     ).toBe(true);
     expect(
-      isVerifiedSourceDeliveryTarget({ provider: "discord", to: "channel:C1" }, slackDestination),
+      deliveryOutcome({ provider: "discord", to: "channel:C1" }, slackDestination)
+        .verifiedMessageToolDelivery,
     ).toBe(false);
   });
 
@@ -107,24 +104,15 @@ describe("source delivery plan", () => {
   ] as const)(
     "uses %s metadata for prefixed target ids",
     (comparison, channel, targetTo, deliveryTo, expected) => {
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: channel,
-            source: "test",
-            plugin: {
-              ...createChannelTestPluginBase({ id: channel, label: channel }),
-              messaging: comparison ? { targetIdComparison: comparison } : {},
-            },
-          },
-        ]),
-      );
+      const plugin = {
+        ...createChannelTestPluginBase({ id: channel, label: channel }),
+        messaging: comparison ? { targetIdComparison: comparison } : {},
+      };
+      setActivePluginRegistry(createTestRegistry([{ pluginId: channel, source: "test", plugin }]));
 
       expect(
-        isVerifiedSourceDeliveryTarget(
-          { provider: channel, to: targetTo },
-          { channel, to: deliveryTo },
-        ),
+        deliveryOutcome({ provider: channel, to: targetTo }, { channel, to: deliveryTo })
+          .verifiedMessageToolDelivery,
       ).toBe(expected);
     },
   );
@@ -146,35 +134,19 @@ describe("source delivery plan", () => {
       { to: "-100:topic:462" },
       { to: "-100:topic:462", threadId: 111 },
     ],
+    ["missing observed recipient", { to: undefined }, { to: "123456" }],
+    [
+      "different account owners",
+      { to: "123456", accountId: "bot-a" },
+      { to: "123456", accountId: "bot-b" },
+    ],
   ] as const)("requires matching conversation and thread evidence: %s", (_name, sent, source) => {
-    const plan = messageToolPlan({ channel: "telegram", ...source });
-    const outcome = resolveSourceDeliveryOutcome(plan, {
-      didSendViaMessageTool: true,
-      messageToolSentTargets: [{ provider: "telegram", ...sent }],
-    });
-
-    expect(outcome).toMatchObject({
+    expect(
+      deliveryOutcome({ provider: "telegram", ...sent }, { channel: "telegram", ...source }),
+    ).toMatchObject({
       verifiedMessageToolDelivery: false,
       satisfiesSourceDelivery: false,
       unverifiedMessageToolDelivery: true,
     });
   });
-
-  it.each([
-    [
-      "missing observed recipient",
-      { provider: "telegram", to: undefined },
-      { channel: "telegram", to: "123456" },
-    ],
-    [
-      "different account owners",
-      { provider: "telegram", to: "123456", accountId: "bot-a" },
-      { channel: "telegram", to: "123456", accountId: "bot-b" },
-    ],
-  ] as const)(
-    "verifies source delivery through its public outcome: %s",
-    (_name, observed, destination) => {
-      expect(isVerifiedSourceDeliveryTarget(observed, destination)).toBe(false);
-    },
-  );
 });

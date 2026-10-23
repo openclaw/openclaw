@@ -1,5 +1,3 @@
-/** SQLite-backed Codex app-server thread bindings. */
-
 import {
   AgentHarnessSessionSupersededError,
   embeddedAgentLog,

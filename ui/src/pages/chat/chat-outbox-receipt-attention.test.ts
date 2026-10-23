@@ -1,13 +1,15 @@
 /* @vitest-environment jsdom */
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { createStoredChatOutboxReader } from "../../lib/chat/outbox-store-projection.ts";
-import { makeChatHost, requestCalls } from "./chat-host.test-support.ts";
+import {
+  createStoredChatOutboxReader,
+  listStoredChatOutboxes,
+} from "../../lib/chat/outbox-store-projection.ts";
+import { makeChatHost, requestCalls, expectRequestCounts } from "./chat-host.test-support.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { admitHostQueueItems, row } from "./chat-outbox-recovery.test-support.ts";
 import { updateQueuedMessage } from "./chat-queue.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
-import { listStoredChatOutboxes } from "./composer-persistence.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 
 useChatSendBrowserFixture();
@@ -46,6 +48,31 @@ function deliveredMessage(id: string, nativeId = "stored-" + id) {
 }
 
 describe("outbox receipt attention", () => {
+  it.each(["complete", "omitted"])(
+    "settles a background outbox from canonical history after a %s roster message body",
+    async (body) => {
+      const host = attentionHost(["delivered"], () => ({
+        sessionId,
+        sessionInfo: row(sessionKey, { sessionId, status: "done", hasActiveRun: false }),
+        messages: [deliveredMessage("delivered")],
+      }));
+      await resumeStoredChatOutboxes(host, {
+        type: "event",
+        event: "session.message",
+        payload: {
+          sessionKey,
+          agentId: "main",
+          messageId: "stored-delivered",
+          messageSeq: 2,
+          runId: "run-delivered",
+          ...(body === "complete" ? { message: deliveredMessage("delivered") } : {}),
+        },
+      });
+      expect(listStoredChatOutboxes(host)).toEqual([]);
+      expectRequestCounts(host.request, { "chat.history": 1, "chat.send": 0 });
+    },
+  );
+
   it.each(["receipt", "legacy"] as const)(
     "retires delivered attention behind an uncertain FIFO head using %s proof",
     async (proof) => {

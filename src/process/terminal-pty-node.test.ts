@@ -16,11 +16,33 @@ import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { killPidIfAlive } from "../test-utils/process-tree.js";
 import { spawnNodeTerminalPty } from "./terminal-pty-node.js";
 import type { TerminalPtyEvent } from "./terminal-pty-protocol.js";
-import type { TerminalPtyHandle } from "./terminal-pty.js";
+import type { TerminalPtyHandle, TerminalPtySpawnParams } from "./terminal-pty.js";
 
 const env = { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: os.tmpdir(), TERM: "dumb" };
 const handles: TerminalPtyHandle[] = [];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const defaults = { file: "/bin/sh", cwd: os.tmpdir(), env, cols: 80, rows: 24 };
+
+async function start(args: string[], params: Partial<TerminalPtySpawnParams> = {}) {
+  const handle = await spawnNodeTerminalPty({ ...defaults, args, ...params });
+  handles.push(handle);
+  return handle;
+}
+
+function observe(handle: TerminalPtyHandle, onData?: (output: string) => void) {
+  const state = { output: "", exited: false };
+  const done = createDeferredCore<{ exitCode: number; signal?: number }>();
+  handle.onExit((event) => {
+    state.exited = true;
+    done.resolve(event);
+  });
+  handle.onData((data) => {
+    expect(state.exited).toBe(false);
+    state.output += data;
+    onData?.(state.output);
+  });
+  return { state, done: done.promise };
+}
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -38,28 +60,24 @@ describe.runIf(process.platform !== "win32")("Node-owned terminal PTY", () => {
       const nativeAdmission = createDeferredCore();
       let launchGrants = 0;
       let allowed = true;
+      const assertAllowed = () => {
+        if (!allowed) {
+          throw new Error("PTY policy revoked");
+        }
+      };
       const starting = spawnNodeTerminalPty(
         {
-          file: "/bin/sh",
+          ...defaults,
           args: ["-c", "touch started; IFS= read -r input; printf 'completed\\n'"],
           cwd: directory,
-          env,
-          cols: 80,
-          rows: 24,
         },
-        () => {
-          if (!allowed) {
-            throw new Error("PTY policy revoked");
-          }
-        },
+        assertAllowed,
         (launch, settlement) => {
           launchGrants++;
           if (timing === "prepared") {
             allowed = false;
           }
-          if (!allowed) {
-            throw new Error("PTY policy revoked");
-          }
+          assertAllowed();
           if (!settlement) {
             throw new Error("PTY launch did not retain native admission");
           }
@@ -82,15 +100,10 @@ describe.runIf(process.platform !== "win32")("Node-owned terminal PTY", () => {
         expect(launchGrants).toBe(1);
         expect(isPidAlive(handle.pid)).toBe(true);
         allowed = false;
-        const done = createDeferredCore<{ exitCode: number; signal?: number }>();
-        let output = "";
-        handle.onData((data) => {
-          output += data;
-        });
-        handle.onExit((event) => done.resolve(event));
+        const { state, done } = observe(handle);
         handle.write("continue\r");
-        expect((await done.promise).exitCode).toBe(0);
-        expect(output).toContain("completed");
+        expect((await done).exitCode).toBe(0);
+        expect(state.output).toContain("completed");
         expect(fs.existsSync(marker)).toBe(true);
       }
     },
@@ -100,32 +113,20 @@ describe.runIf(process.platform !== "win32")("Node-owned terminal PTY", () => {
     const directory = tempDirs.make("openclaw-pty-node-shim-");
     fs.writeFileSync(path.join(directory, "node"), "#!/bin/sh\nexit 42\n", { mode: 0o755 });
     vi.stubEnv("PATH", `${directory}${path.delimiter}${process.env.PATH ?? ""}`);
-    const handle = await spawnNodeTerminalPty({
-      file: "/bin/sh",
-      args: [
-        "-c",
-        'stty -echo; printf "READY\\n"; IFS= read -r input; stty size; printf "%s\\n%s\\n" "$input" "$TERM"; exit 7',
-      ],
-      cwd: os.tmpdir(),
-      env,
-      cols: 80,
-      rows: 24,
-    });
-    handles.push(handle);
-    let output = "";
+    const handle = await start([
+      "-c",
+      'stty -echo; printf "READY\\n"; IFS= read -r input; stty size; printf "%s\\n%s\\n" "$input" "$TERM"; exit 7',
+    ]);
     let inputSent = false;
-    const done = createDeferredCore<{ exitCode: number; signal?: number }>();
-    handle.onExit((event) => done.resolve(event));
-    handle.onData((data) => {
-      output += data;
+    const { state, done } = observe(handle, (output) => {
       if (!inputSent && output.includes("READY\r\n")) {
         inputSent = true;
         handle.resize(101, 37);
         handle.write("hello 🦞\r");
       }
     });
-    expect(await done.promise).toEqual({ exitCode: 7, signal: 0 });
-    expect(output).toBe("READY\r\n37 101\r\nhello 🦞\r\nxterm-256color\r\n");
+    expect(await done).toEqual({ exitCode: 7, signal: 0 });
+    expect(state.output).toBe("READY\r\n37 101\r\nhello 🦞\r\nxterm-256color\r\n");
     expect(isPidAlive(handle.pid)).toBe(false);
   });
 
@@ -134,38 +135,17 @@ describe.runIf(process.platform !== "win32")("Node-owned terminal PTY", () => {
     const payload = "x".repeat(2 * 1024 * 1024);
     const file = path.join(directory, "output.txt");
     fs.writeFileSync(file, payload);
-    const handle = await spawnNodeTerminalPty({
-      file: "/bin/cat",
-      args: [file],
-      cwd: directory,
-      env,
-      cols: 80,
-      rows: 24,
-    });
-    handles.push(handle);
+    const handle = await start([file], { file: "/bin/cat", cwd: directory });
     handle.pause();
-    let output = "";
-    let exited = false;
-    const done = createDeferredCore();
-    handle.onData((data) => {
-      expect(exited).toBe(false);
-      output += data;
-    });
-    handle.onExit(() => {
-      exited = true;
-      done.resolve();
-    });
+    const { state, done } = observe(handle);
     await delay(50);
-    expect(output).toBe("");
-    expect(exited).toBe(false);
+    expect(state).toEqual({ output: "", exited: false });
     handle.resume();
-    await done.promise;
-    expect(output).toBe(payload);
+    await done;
+    expect(state.output).toBe(payload);
   });
 
-  it("reaps the PTY and its background process when the owning host disconnects", async ({
-    signal,
-  }) => {
+  it("reaps the PTY and background job on host disconnect", async ({ signal }) => {
     const worker = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.terminalPty);
     const node = resolveTestNodeExecPath();
     const child = spawn(node, resolveRuntimeWorkerArgv(worker, node), {
@@ -200,12 +180,9 @@ describe.runIf(process.platform !== "win32")("Node-owned terminal PTY", () => {
         child.send({
           type: "start",
           params: {
+            ...defaults,
             file: "/bin/bash",
             args: ["-c", 'set -m; sleep 300 & printf "BACKGROUND:%s\\n" "$!"; wait'],
-            cwd: os.tmpdir(),
-            env,
-            cols: 80,
-            rows: 24,
           },
         });
       } else if (message.type === "ready") {

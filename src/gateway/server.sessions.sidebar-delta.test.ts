@@ -1,7 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { expect, test, vi } from "vitest";
-import { SESSION_ROWS_DELTA_PREFIX } from "../../packages/gateway-protocol/src/session-row-fields.js";
 import { sidebarSessionListQuery } from "../../ui/src/components/session-data-events.js";
 import type { SessionRequestClient } from "../../ui/src/lib/sessions/session-capability.js";
 import { prepareSessionRefreshOptions } from "../../ui/src/lib/sessions/session-list-query.js";
@@ -30,12 +28,11 @@ import {
   connectReq,
   CONTROL_UI_CLIENT,
   installGatewayTestHooks,
-  onceMessage,
   openWs,
+  onceMessage,
   testState,
   withGatewayServer,
 } from "./server.auth.test-helpers.js";
-import * as presentation from "./session-row-presentation.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -50,13 +47,10 @@ test("sidebar wire caches retain deltas across real runtime publications", async
     },
   };
   testState.gatewayAuth = auth;
-  testState.gatewayControlUi = { allowedOrigins: [origin] };
+  const controlUi = { allowedOrigins: [origin] };
+  testState.gatewayControlUi = controlUi;
   await writeConfigFile({
-    gateway: {
-      auth,
-      trustedProxies: ["127.0.0.1"],
-      controlUi: { allowedOrigins: [origin] },
-    },
+    gateway: { auth, trustedProxies: ["127.0.0.1"], controlUi },
   });
   const viewer = ensureProfileForEmail("sidebar-reader@example.test");
   const peer = ensureProfileForEmail("sidebar-peer@example.test");
@@ -77,47 +71,16 @@ test("sidebar wire caches retain deltas across real runtime publications", async
     );
   }
   type Observation = {
-    event: string;
-    query: string;
-    baseSent: boolean;
-    baseFound: boolean;
     changedRows: number;
     outcome: "full" | "delta" | "unchanged";
-    bytes?: number;
   };
-  const observations: Observation[] = [];
+  let observation: Observation | undefined;
   const retirements: string[] = [];
   const stopDiagnostics = onTrustedInternalDiagnosticEvent((entry) => {
     if (entry.type === "sessions.list.baseline.retired") {
       retirements.push(entry.cause);
     }
   });
-  let event = "initial";
-  let query = "general";
-  const share = presentation.shareSidebarSessionRows;
-  const servedRows = new Map<string, Parameters<typeof share>[0]>();
-  const shareObserver = vi
-    .spyOn(presentation, "shareSidebarSessionRows")
-    .mockImplementation((rows, base, history) => {
-      const revision = base?.replace(SESSION_ROWS_DELTA_PREFIX, "");
-      const found = revision
-        ? [rows, ...(history ?? [])].find((candidate) => share(candidate).rowsRevision === revision)
-        : undefined;
-      const previous = revision ? servedRows.get(revision) : undefined;
-      const result = share(rows, base, history);
-      if (result.rowsRevision) {
-        servedRows.set(result.rowsRevision, rows);
-      }
-      observations.push({
-        event,
-        query,
-        baseSent: base !== undefined,
-        baseFound: found !== undefined,
-        changedRows: previous ? rows.filter((row) => !previous.includes(row)).length : rows.length,
-        outcome: result.rowsUnchanged ? "unchanged" : result.rowsDelta ? "delta" : "full",
-      });
-      return result;
-    });
   try {
     await withGatewayServer(async ({ port }) => {
       const socket = await openWs(port, {
@@ -139,106 +102,66 @@ test("sidebar wire caches retain deltas across real runtime publications", async
         const client: SessionRequestClient = {
           async request<T>(method: string, params?: unknown): Promise<T> {
             const id = randomUUID();
-            let bytes = 0;
-            const capture = (data: Parameters<typeof rawDataToString>[0]) => {
-              const text = rawDataToString(data);
-              const frame = JSON.parse(text) as { id?: string };
-              if (frame.id === id) {
-                bytes = Buffer.byteLength(text);
-              }
-            };
-            socket.on("message", capture);
-            try {
-              const response = onceMessage(
-                socket,
-                (frame) => frame.type === "res" && frame.id === id,
-              );
-              socket.send(JSON.stringify({ type: "req", id, method, params }));
-              const frame = await response;
-              expect(frame.ok, JSON.stringify(frame.error)).toBe(true);
-              if (method === "sessions.list") {
-                const observed = observations.at(-1)!;
-                observed.bytes = bytes;
-                observed.outcome = frame.payload?.rowsUnchanged
+            const response = onceMessage(
+              socket,
+              (frame) => frame.type === "res" && frame.id === id,
+            );
+            socket.send(JSON.stringify({ type: "req", id, method, params }));
+            const frame = await response;
+            expect(frame.ok, JSON.stringify(frame.error)).toBe(true);
+            if (method === "sessions.list") {
+              observation = {
+                changedRows: Array.isArray(frame.payload?.sessions)
+                  ? frame.payload.sessions.length
+                  : 0,
+                outcome: frame.payload?.rowsUnchanged
                   ? "unchanged"
                   : frame.payload?.rowsDelta
                     ? "delta"
-                    : "full";
-              }
-              // The real transport decodes JSON; each caller owns its result contract.
-              return frame.payload as T;
-            } finally {
-              socket.off("message", capture);
+                    : "full",
+              };
             }
+            return frame.payload as T;
           },
         };
         const snapshot = {
           client: null,
           phase: "connected" as const,
-          offlineStable: false,
           hello: null,
-          canvasPluginSurfaceUrl: null,
-          assistantAgentId: "main",
-          sessionKey: target.sessionKey,
-          lastError: null,
-          lastErrorCode: null,
           selfUser: { id: viewer.id },
         };
-        const queries = [false, true].map((involvingMe) => ({
-          name: involvingMe ? "involving" : "general",
-          params: buildSessionListParams(
-            prepareSessionRefreshOptions(
-              sidebarSessionListQuery(
-                {
-                  sidebarSessionOwnerFilter: () => ({ ownerId: "", involvingMe }),
-                  sidebarSessionStatusFilter: () => "active",
-                },
-                "main",
-              ),
-              snapshot,
-            ),
-          ),
-        }));
-        const read = async (label: string, expected: Observation["outcome"]) => {
-          event = label;
+        const queries = [false, true].map((involvingMe) => {
+          const options = sidebarSessionListQuery(
+            {
+              sidebarSessionOwnerFilter: () => ({ ownerId: "", involvingMe }),
+              sidebarSessionStatusFilter: () => "active",
+            },
+            "main",
+          );
+          return {
+            name: involvingMe ? "involving" : "general",
+            params: buildSessionListParams(prepareSessionRefreshOptions(options, snapshot)),
+          };
+        });
+        const read = async (
+          label: string,
+          expected: Observation["outcome"],
+          expectedRow?: object,
+        ) => {
           for (const entry of queries) {
-            query = entry.name;
             const result = await requestSessionListParams(client, entry.params, () => true);
             expect(result?.sessions).toHaveLength(entry.name === "general" ? 16 : 8);
-            if (label === "activity-and-usage") {
-              expect(
-                result?.sessions.find((row) => row.key === target.sessionKey)?.agentStatus?.note,
-              ).toBe("Reading the source");
-            } else if (label === "activity-expiry") {
-              expect(
-                result?.sessions.find((row) => row.key === target.sessionKey)?.agentStatus,
-              ).toBeUndefined();
-            } else if (label === "profile-presentation") {
-              expect(
-                result?.sessions.find((row) => row.key === target.sessionKey)?.createdActor?.label,
-              ).toBe("Updated sidebar reader");
-            }
             const row = result?.sessions.find((candidate) => candidate.key === target.sessionKey);
-            if (label.endsWith("run-start")) {
-              expect(row?.hasActiveRun).toBe(true);
-              expect(row?.status).toBe("running");
-            } else if (label.endsWith("run-end")) {
-              expect(row?.hasActiveRun).toBe(false);
-              expect(row?.status).toBe("done");
-            } else if (label === "label") {
-              expect(row?.label).toBe("Renamed sidebar");
+            if (expectedRow) {
+              expect(row).toMatchObject(expectedRow);
             }
-            expect.soft(observations.at(-1)?.outcome, `${label}/${query}`).toBe(expected);
-            if (expected === "delta") {
-              expect
-                .soft(observations.at(-1), `${label}/${query} base and row reuse`)
-                .toMatchObject({
-                  baseSent: true,
-                  baseFound: true,
-                  changedRows: 1,
-                });
+            if (label === "activity-expiry") {
+              expect(row?.agentStatus).toBeUndefined();
             }
-            console.log("SIDEBAR_DELTA_WIRE", JSON.stringify(observations.at(-1)));
+            expect.soft(observation, `${label}/${entry.name}`).toMatchObject({
+              outcome: expected,
+              ...(expected === "delta" ? { changedRows: 1 } : {}),
+            });
           }
         };
         await read("initial", "full");
@@ -247,13 +170,15 @@ test("sidebar wire caches retain deltas across real runtime publications", async
           key: target.sessionKey,
           label: "Renamed sidebar",
         });
-        await read("label", "delta");
+        await read("label", "delta", { label: "Renamed sidebar" });
         registerAgentRunContext(runIds[0]!, {
           ...target,
           sessionId: "sidebar-session-0",
           projectSessionActive: true,
         });
-        await read("keyed-run-start", "delta");
+        const running = { hasActiveRun: true, status: "running" };
+        const done = { hasActiveRun: false, status: "done" };
+        await read("keyed-run-start", "delta", running);
         emitAgentEvent({
           runId: runIds[0]!,
           ...target,
@@ -271,38 +196,40 @@ test("sidebar wire caches retain deltas across real runtime publications", async
           lastActivityAt: ++now,
           agentStatus: { note: "Reading the source", expiresAt: now + 60_000 },
         }));
-        await read("activity-and-usage", "delta");
+        await read("activity-and-usage", "delta", { agentStatus: { note: "Reading the source" } });
         now += 61_000;
         await read("activity-expiry", "delta");
         clearAgentRunContext(runIds[0]!);
         await patchSessionEntryCore(target, () => ({ status: "done" }));
-        await read("keyed-run-end", "delta");
+        await read("keyed-run-end", "delta", done);
         // Session-id-only runs are a real registry contract and publish broad runtime changes.
         registerAgentRunContext(runIds[1]!, {
           agentId: "main",
           sessionId: "sidebar-session-0",
           projectSessionActive: true,
         });
-        await read("session-id-run-start", "delta");
+        await read("session-id-run-start", "delta", running);
         clearAgentRunContext(runIds[1]!);
-        await read("session-id-run-end", "delta");
-        await client.request("session.members.add", {
-          sessionKey: target.sessionKey,
-          identityId: peer.id,
-        });
-        await read("member-added", "delta");
-        await client.request("session.members.remove", {
-          sessionKey: target.sessionKey,
-          identityId: peer.id,
-        });
-        await read("member-removed", "delta");
+        await read("session-id-run-end", "delta", done);
+        for (const [action, label] of [
+          ["add", "added"],
+          ["remove", "removed"],
+        ]) {
+          await client.request(`session.members.${action}`, {
+            sessionKey: target.sessionKey,
+            identityId: peer.id,
+          });
+          await read(`member-${label}`, "delta");
+        }
         await waitForDiagnosticEventsDrained();
         expect.soft(retirements).toEqual([]);
         await client.request("users.setDisplayName", {
           profileId: viewer.id,
           displayName: "Updated sidebar reader",
         });
-        await read("profile-presentation", "full");
+        await read("profile-presentation", "full", {
+          createdActor: { label: "Updated sidebar reader" },
+        });
         await waitForDiagnosticEventsDrained();
         expect.soft(retirements).toEqual(["identity"]);
         await read("profile-idle", "unchanged");
@@ -320,7 +247,6 @@ test("sidebar wire caches retain deltas across real runtime publications", async
     });
   } finally {
     stopDiagnostics();
-    shareObserver.mockRestore();
     clock.mockRestore();
   }
 });

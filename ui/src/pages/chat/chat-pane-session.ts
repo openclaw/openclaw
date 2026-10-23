@@ -11,6 +11,7 @@ import type {
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { collectUnreadHiddenRunRows } from "../../components/app-sidebar-session-parent.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { clampText } from "../../lib/format.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
@@ -52,6 +53,8 @@ import {
 import { scheduleControlUiAfterPaint } from "./performance.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 
+registerChatSessionEnglish();
+
 const NO_PULL_REQUESTS: ControlUiSessionPullRequest[] = [];
 
 export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
@@ -71,9 +74,6 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
   }
   protected get sessionPullRequestsBranch(): ControlUiSessionBranch | undefined {
     return this.readPullRequestSnapshot()?.branch;
-  }
-  protected get githubRepo() {
-    return sessionGitHubRepository(this.readPullRequestSnapshot());
   }
   protected get sessionPullRequestsStatus(): ControlUiSessionPullRequestSnapshot["status"] {
     return this.readPullRequestSnapshot()?.status ?? "ready";
@@ -197,7 +197,12 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     ) {
       this.repository.dismissedIds = dismissed;
     }
-    if (!result.rateLimited || result.pullRequests.length > 0 || repositoryChanged) {
+    if (
+      result.discardPrevious ||
+      !result.rateLimited ||
+      result.pullRequests.length > 0 ||
+      repositoryChanged
+    ) {
       const previousSummary = scope.context.sessions.pullRequestSummary(sessionKey);
       scope.context.sessions.setPullRequestSummary(
         sessionKey,
@@ -331,7 +336,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
 
   protected markSessionRead(row: GatewaySessionRow | undefined) {
     const state = this.state;
-    if (!state?.connected || !row || !isGatewayAvailable(this.context.gateway.snapshot)) {
+    if (!state || !row || !this.secondarySessionReadsReady()) {
       return;
     }
     const failureAt = row.endedAt ?? row.updatedAt ?? 0;
@@ -378,6 +383,8 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     guard: SessionUnreadPatchGuard,
     agentId: string | undefined,
   ) {
+    const state = this.state;
+    const sessionKey = state?.sessionKey;
     const settle = guard.settlePatch();
     void this.context.sessions
       .patch(
@@ -386,7 +393,17 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         { agentId, expectedMarkedUnreadAt: row.markedUnreadAt ?? null },
       )
       .then(
-        (result) => settle(result !== null),
+        (result) => {
+          if (
+            settle(result !== null) &&
+            result !== null &&
+            state &&
+            this.state === state &&
+            state.sessionKey === sessionKey
+          ) {
+            this.markSessionRead(selectedChatSessionRow(state));
+          }
+        },
         (error: unknown) => settle(false, error),
       );
   }

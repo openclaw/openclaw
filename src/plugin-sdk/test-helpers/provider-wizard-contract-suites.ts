@@ -1,22 +1,20 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { resolveProviderPluginChoice } from "../../plugins/provider-auth-choice.runtime.js";
-import {
-  resolveProviderModelPickerEntries,
-  setProviderWizardProvidersResolverForTest,
-} from "../../plugins/provider-wizard.js";
+import { resolveProviderModelPickerEntries } from "../../plugins/provider-wizard.js";
+import * as providerRuntime from "../../plugins/providers.runtime.js";
 import type { ProviderAuthMethod } from "../plugin-entry.js";
 import type { ProviderPlugin } from "../provider-model-shared.js";
 
-const resolvePluginProvidersMock = vi.fn();
-let restoreProviderResolver: (() => void) | undefined;
-
 function createAuthMethod(
-  params: Pick<ProviderAuthMethod, "id" | "label"> &
-    Partial<Pick<ProviderAuthMethod, "hint" | "wizard">>,
+  id: string,
+  label: string,
+  wizard?: ProviderAuthMethod["wizard"],
 ): ProviderAuthMethod {
   return {
-    ...params,
+    id,
+    label,
+    ...(wizard ? { wizard } : {}),
     kind: "api_key",
     run: async () => ({ profiles: [] }),
   };
@@ -27,29 +25,8 @@ const TEST_PROVIDERS: ProviderPlugin[] = [
     id: "alpha",
     label: "Alpha",
     auth: [
-      createAuthMethod({
-        id: "api-key",
-        label: "API key",
-        wizard: {
-          choiceLabel: "Alpha key",
-          choiceHint: "Use an API key",
-          groupId: "alpha",
-          groupLabel: "Alpha",
-          onboardingScopes: ["text-inference"],
-          modelTarget: "utility",
-        },
-      }),
-      createAuthMethod({
-        id: "oauth",
-        label: "OAuth",
-        wizard: {
-          choiceId: "alpha-oauth",
-          choiceLabel: "Alpha OAuth",
-          groupId: "alpha",
-          groupLabel: "Alpha",
-          groupHint: "Recommended",
-        },
-      }),
+      createAuthMethod("api-key", "API key", {}),
+      createAuthMethod("oauth", "OAuth", { choiceId: "alpha-oauth" }),
     ],
     wizard: {
       modelPicker: {
@@ -62,13 +39,9 @@ const TEST_PROVIDERS: ProviderPlugin[] = [
   {
     id: "beta",
     label: "Beta",
-    auth: [createAuthMethod({ id: "token", label: "Token" })],
+    auth: [createAuthMethod("token", "Token")],
     wizard: {
-      setup: {
-        choiceLabel: "Beta setup",
-        groupId: "beta",
-        groupLabel: "Beta",
-      },
+      setup: {},
       modelPicker: {
         label: "Beta custom",
       },
@@ -77,35 +50,15 @@ const TEST_PROVIDERS: ProviderPlugin[] = [
   {
     id: "gamma",
     label: "Gamma",
-    auth: [
-      createAuthMethod({ id: "default", label: "Default auth" }),
-      createAuthMethod({ id: "alt", label: "Alt auth" }),
-    ],
+    auth: [createAuthMethod("default", "Default auth"), createAuthMethod("alt", "Alt auth")],
     wizard: {
       setup: {
         methodId: "alt",
         choiceId: "gamma-alt",
-        choiceLabel: "Gamma alt",
-        groupId: "gamma",
-        groupLabel: "Gamma",
       },
     },
   },
 ];
-
-beforeEach(() => {
-  resolvePluginProvidersMock.mockReset();
-  resolvePluginProvidersMock.mockReturnValue(TEST_PROVIDERS);
-  restoreProviderResolver?.();
-  restoreProviderResolver = setProviderWizardProvidersResolverForTest((params) =>
-    resolvePluginProvidersMock(params),
-  );
-});
-
-afterEach(() => {
-  restoreProviderResolver?.();
-  restoreProviderResolver = undefined;
-});
 
 export function describeProviderWizardChoiceResolutionContract() {
   describe("provider wizard choice resolution contract", () => {
@@ -143,6 +96,9 @@ export function describeProviderWizardChoiceResolutionContract() {
 export function describeProviderWizardModelPickerContract() {
   describe("provider wizard model picker contract", () => {
     it("exposes every model-picker entry through the shared wizard layer", () => {
+      const resolver = vi.spyOn(providerRuntime, "resolvePluginProvidersCore");
+      resolver.mockReturnValue(TEST_PROVIDERS);
+      onTestFinished(() => resolver.mockRestore());
       const entries = resolveProviderModelPickerEntries({ config: {}, env: process.env });
 
       const values = entries.map((entry) => entry.value);

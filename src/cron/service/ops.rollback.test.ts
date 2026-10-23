@@ -33,13 +33,13 @@ describe("cron service ops persist rollback", () => {
     (await loadCronStore(storePath)).jobs.find((entry) => entry.id === id);
   const readJobs = async () => [state.store?.jobs ?? [], (await loadCronStore(storePath)).jobs];
   function notifications() {
-    const callbacks = [state.deps.enqueueSystemEvent, state.deps.requestHeartbeat].map((callback) =>
-      vi.mocked(callback),
-    );
-    callbacks.forEach((callback) => callback.mockClear());
-    const expectCalls = (count = 0) =>
-      callbacks.forEach((callback) => expect(callback).toHaveBeenCalledTimes(count));
-    return { callbacks, expectCalls };
+    const callback = vi.mocked(state.deps.enqueueSessionEvent!);
+    callback.mockClear();
+    const expectCalls = (count = 0) => {
+      expect(callback).toHaveBeenCalledTimes(count);
+      expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
+    };
+    return { callback, expectCalls };
   }
   async function malformedJob(name: string, agentId?: string) {
     const job = await createJob({ name, agentId, schedule: { kind: "cron", expr: "0 1 * * *" } });
@@ -159,12 +159,10 @@ describe("cron service ops persist rollback", () => {
 
   it("notifies about schedule auto-disable only after mutation persists", async () => {
     const malformed = await malformedJob("malformed sibling");
-    const { callbacks, expectCalls } = notifications();
+    const { callback, expectCalls } = notifications();
     const order: string[] = [];
-    callbacks.forEach((callback, index) => {
-      callback.mockImplementation(() => {
-        order.push(index === 0 ? "notify" : "heartbeat");
-      });
+    callback.mockImplementation(() => {
+      order.push("notify");
     });
     await withCronJobWriteFailure(() => expect(createJob()).rejects.toThrow("disk full"));
 
@@ -183,7 +181,7 @@ describe("cron service ops persist rollback", () => {
     await createJob();
 
     expect(state.store?.jobs.find((job) => job.id === malformed.id)?.enabled).toBe(false);
-    expect(order).toEqual(["persist", "notify", "heartbeat"]);
+    expect(order).toEqual(["persist", "notify"]);
   });
 
   it.each(["failed", "committed", "uncertain"] as const)(

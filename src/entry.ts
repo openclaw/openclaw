@@ -52,7 +52,7 @@ const ENTRY_WRAPPER_PAIRS = [
 
 async function writeCapturedCliArgumentError(message: string): Promise<void> {
   const { loadCliDotEnv } = await import("./cli/dotenv.js");
-  loadCliDotEnv({ quiet: true });
+  loadCliDotEnv();
   await configureGatewayStartupTraceConsoleFormatting(gatewayEntryStartupTrace);
   const { enableConsoleCapture } = await import("./logging.js");
   enableConsoleCapture();
@@ -71,14 +71,13 @@ async function prepareCliDiagnosticBlockWriter(): Promise<
 > {
   const loadWriter = async (): Promise<(message: string, error?: unknown) => void> => {
     const { loadCliDotEnv } = await import("./cli/dotenv.js");
-    loadCliDotEnv({ quiet: true });
+    loadCliDotEnv();
     await configureGatewayStartupTraceConsoleFormatting(gatewayEntryStartupTrace);
     const { formatConsoleDiagnosticBlock } = await import("./logging/json-console-line.js");
     return (message, error) => {
       const formatted = error === undefined ? message : format(message, error);
       process.stderr.write(
         formatConsoleDiagnosticBlock({
-          level: "error",
           message: formatted.endsWith("\n") ? formatted : `${formatted}\n`,
         }),
       );
@@ -152,7 +151,7 @@ async function runEntryMain(): Promise<void> {
     await import("./infra/runtime-guard.js");
   if (!(await isCurrentRuntimeSupported())) {
     const { loadCliDotEnv } = await import("./cli/dotenv.js");
-    loadCliDotEnv({ quiet: true });
+    loadCliDotEnv();
     await configureGatewayStartupTraceConsoleFormatting(gatewayEntryStartupTrace);
   }
   await assertSupportedRuntime(undefined, undefined, process.argv, false, inheritedRuntimeEnv);
@@ -209,7 +208,7 @@ async function runEntryMain(): Promise<void> {
       // The child environment was already snapshotted. Load dotenv only to format
       // the parent trace; command-specific dotenv ordering remains child-owned.
       const writeError = await prepareCliDiagnosticBlockWriter();
-      await runCliRespawnPlan(plan, undefined, writeError);
+      await runCliRespawnPlan(plan, writeError);
       // Parent must not continue running the CLI.
       return true;
     }

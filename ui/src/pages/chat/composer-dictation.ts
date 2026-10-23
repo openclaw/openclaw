@@ -3,7 +3,6 @@ import { t } from "../../i18n/index.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
 import { ComposerDictationSession, formatDictationError } from "./composer-dictation-session.ts";
-import { RealtimeTalkLevelSignal } from "./talk/level.ts";
 
 const HOLD_ARM_DELAY_MS = 150,
   HOLD_PROGRESS_MS = 350;
@@ -55,12 +54,14 @@ export function insertComposerDictation(
 
 // Gesture and session admission must remain synchronous across pointer and media callbacks.
 export class ComposerDictationOwner extends EventTarget {
-  readonly inputLevel = new RealtimeTalkLevelSignal();
   private readonly playback = new GatewaySpeechPlayback();
   private phase: DictationPhase = "idle";
   private pointerId: number | null = null;
   private pointerTarget: HTMLElement | null = null;
   private pointerBounds: DOMRect | null = null;
+  private pointerListeners: AbortController | null = null;
+  private suppressionListeners: AbortController | null = null;
+  private cancellationListeners: AbortController | null = null;
   private holdTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private session: ComposerDictationSession | null = null;
   private suppressedPointerId: number | null = null;
@@ -118,7 +119,11 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   update(options: ComposerDictationOwnerOptions): void {
-    if (this.options.draftKey !== options.draftKey) {
+    if (
+      this.options.client !== options.client ||
+      this.options.sessionKey !== options.sessionKey ||
+      this.options.draftKey !== options.draftKey
+    ) {
       this.cancel();
     }
     this.options = options;
@@ -150,7 +155,16 @@ export class ComposerDictationOwner extends EventTarget {
     this.pointerTarget = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
     this.pointerBounds = this.pointerTarget?.getBoundingClientRect() ?? null;
     this.pointerTarget?.setPointerCapture?.(event.pointerId);
-    this.pointerTarget?.addEventListener("lostpointercapture", this.handleDocumentPointerCancel);
+    this.pointerListeners = new AbortController();
+    const pointerOptions = { signal: this.pointerListeners.signal };
+    if (this.pointerTarget) {
+      listen(
+        this.pointerTarget,
+        "lostpointercapture",
+        this.handleDocumentPointerCancel,
+        pointerOptions,
+      );
+    }
     this.suppressedPointerId = event.pointerId;
     this.setPhase("pressing");
     // A normal click gets a quiet grace period. Only a sustained press enters
@@ -162,11 +176,14 @@ export class ComposerDictationOwner extends EventTarget {
       this.setPhase("holding");
       this.holdTimer = globalThis.setTimeout(() => void this.start(), HOLD_PROGRESS_MS);
     }, HOLD_ARM_DELAY_MS);
-    document.addEventListener("pointermove", this.handleDocumentPointerMove);
-    document.addEventListener("pointerup", this.handleDocumentPointerUp);
-    document.addEventListener("pointercancel", this.handleDocumentPointerCancel);
-    document.addEventListener("pointerup", this.handleSuppressedPointerRelease);
-    document.addEventListener("pointercancel", this.handleSuppressedPointerRelease);
+    listen(document, "pointermove", this.handleDocumentPointerMove, pointerOptions);
+    listen(document, "pointerup", this.handleDocumentPointerUp, pointerOptions);
+    listen(document, "pointercancel", this.handleDocumentPointerCancel, pointerOptions);
+    this.suppressionListeners?.abort();
+    this.suppressionListeners = new AbortController();
+    const suppressionOptions = { signal: this.suppressionListeners.signal };
+    listen(document, "pointerup", this.handleSuppressedPointerRelease, suppressionOptions);
+    listen(document, "pointercancel", this.handleSuppressedPointerRelease, suppressionOptions);
     return true;
   }
 
@@ -302,12 +319,10 @@ export class ComposerDictationOwner extends EventTarget {
             if (this.session === session) {
               void this.stop({ commit: true });
             } else if (this.pendingCommitSession === session) {
-              this.retirePendingCommit();
               this.dispatchEvent(new Event("change"));
             }
           }
         },
-        onLevel: (level) => this.inputLevel.set(level),
         onTranscriptChange: () => this.dispatchEvent(new Event("change")),
         onReady: () => {
           if (this.session === session && this.phase === "connecting") {
@@ -342,31 +357,22 @@ export class ComposerDictationOwner extends EventTarget {
     this.clearPointerGesture();
     const session = this.session;
     if (!session) {
-      this.reset();
+      this.setPhase("idle");
       return Promise.resolve(false);
     }
     this.setPhase("stopping");
-    const transcript = options.commit ? session.transcriptSnapshot() : "";
-    const committed = Boolean(options.commit && transcript && wasActive && !this.disposed);
     this.session = null;
-    this.reset();
+    this.setPhase("idle");
     if (!options.commit) {
       void session.cancel().catch(() => undefined);
       return Promise.resolve(false);
-    }
-    if (committed) {
-      this.playback.stop();
-      this.options.onCommit(transcript);
-      this.dispatchEvent(new Event("change"));
-      void session.finish().catch(() => undefined);
-      return Promise.resolve(true);
     }
     // The composer unlocks immediately, while this exact stopped session keeps
     // its final accumulator and voice claim until another voice action supersedes it.
     this.pendingCommitSession = session;
     this.syncCancellationListeners();
     return session
-      .finish(true)
+      .finish()
       .catch(() => "")
       .then((lateTranscript) => {
         const ownsPendingCommit = this.pendingCommitSession === session;
@@ -375,7 +381,14 @@ export class ComposerDictationOwner extends EventTarget {
           this.playback.stop();
           this.syncCancellationListeners();
         }
-        if (!ownsPendingCommit || !lateTranscript || !wasActive || this.disposed) {
+        if (
+          !ownsPendingCommit ||
+          !lateTranscript ||
+          !wasActive ||
+          this.disposed ||
+          !this.options.enabled ||
+          this.options.realtimeTalkActive
+        ) {
           return false;
         }
         this.options.onCommit(lateTranscript, true);
@@ -383,11 +396,6 @@ export class ComposerDictationOwner extends EventTarget {
         return true;
       })
       .catch(() => false);
-  }
-
-  private reset(): void {
-    this.inputLevel.set(0);
-    this.setPhase("idle");
   }
 
   private retirePendingCommit(): void {
@@ -403,11 +411,9 @@ export class ComposerDictationOwner extends EventTarget {
       globalThis.clearTimeout(this.holdTimer);
       this.holdTimer = null;
     }
+    this.pointerListeners?.abort();
+    this.pointerListeners = null;
     if (this.pointerId !== null) {
-      this.pointerTarget?.removeEventListener(
-        "lostpointercapture",
-        this.handleDocumentPointerCancel,
-      );
       try {
         this.pointerTarget?.releasePointerCapture?.(this.pointerId);
       } catch {
@@ -417,9 +423,6 @@ export class ComposerDictationOwner extends EventTarget {
     this.pointerId = null;
     this.pointerTarget = null;
     this.pointerBounds = null;
-    document.removeEventListener("pointermove", this.handleDocumentPointerMove);
-    document.removeEventListener("pointerup", this.handleDocumentPointerUp);
-    document.removeEventListener("pointercancel", this.handleDocumentPointerCancel);
   }
 
   private expireClickSuppression(): void {
@@ -434,8 +437,8 @@ export class ComposerDictationOwner extends EventTarget {
       globalThis.clearTimeout(this.suppressClickTimer);
       this.suppressClickTimer = null;
     }
-    document.removeEventListener("pointerup", this.handleSuppressedPointerRelease);
-    document.removeEventListener("pointercancel", this.handleSuppressedPointerRelease);
+    this.suppressionListeners?.abort();
+    this.suppressionListeners = null;
     this.suppressedPointerId = null;
   }
 
@@ -450,13 +453,17 @@ export class ComposerDictationOwner extends EventTarget {
 
   private syncCancellationListeners(): void {
     if (this.phase !== "idle" || this.pendingCommitSession) {
-      document.addEventListener("keydown", this.handleDocumentKeyDown);
-      document.addEventListener("visibilitychange", this.handleVisibilityChange);
-      window.addEventListener("blur", this.handleWindowBlur);
+      if (this.cancellationListeners) {
+        return;
+      }
+      this.cancellationListeners = new AbortController();
+      const options = { signal: this.cancellationListeners.signal };
+      listen(document, "keydown", this.handleDocumentKeyDown, options);
+      listen(document, "visibilitychange", this.handleVisibilityChange, options);
+      listen(window, "blur", this.handleWindowBlur, options);
     } else {
-      document.removeEventListener("keydown", this.handleDocumentKeyDown);
-      document.removeEventListener("visibilitychange", this.handleVisibilityChange);
-      window.removeEventListener("blur", this.handleWindowBlur);
+      this.cancellationListeners?.abort();
+      this.cancellationListeners = null;
     }
   }
 }

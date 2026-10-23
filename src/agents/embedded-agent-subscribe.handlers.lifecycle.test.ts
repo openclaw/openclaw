@@ -15,7 +15,8 @@ const BEFORE_AGENT_FINALIZE_EVENT = {
   stopHookActive: false,
 };
 
-vi.mock("../infra/agent-events.js", () => ({
+vi.mock(import("../infra/agent-events.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
   emitAgentEvent: emitAgentEventMock,
   getAgentEventLifecycleGeneration: () => "test-generation",
   isAgentEventLifecycleGenerationCurrent: (generation: string) => generation === "test-generation",
@@ -220,7 +221,6 @@ describe("embedded lifecycle", () => {
       name: "preserves token-limited message-tool-only delivery before runner finalization",
       stopReason: "length",
       state: { messageToolOnlySourceReplyDelivered: true },
-      params: { sourceReplyDeliveryMode: "message_tool_only" },
       expected: { livenessState: "working" },
     },
     {

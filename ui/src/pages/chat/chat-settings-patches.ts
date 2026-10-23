@@ -1,5 +1,5 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { registerListener } from "../../../../src/shared/listeners.js";
+import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import {
   resolveSessionKey,
   type SessionCapability,
@@ -38,23 +38,18 @@ function createChatPickerPatchReceipt(sessions: SessionCapability) {
   const scope = sessions.captureConnectionScope();
   const isCurrent = () => Boolean(scope && sessions.isConnectionScopeCurrent(scope));
   let confirmed: SessionPatchResult | null = null;
-  const listeners = new Set<() => void>();
+  const listeners = createChangeListeners({ snapshot: true });
   return {
     isCurrent,
     read: () => (isCurrent() ? confirmed : null),
-    subscribe(onConfirmed: () => void) {
-      return registerListener(listeners, onConfirmed);
-    },
+    subscribe: listeners.subscribe,
     confirm: (receipt: SessionPatchResult) => {
       if (!isCurrent()) {
         return;
       }
       confirmed = receipt;
       // Decoration can change subscriptions while this receipt is being published.
-      const currentListeners = [...listeners];
-      for (const listener of currentListeners) {
-        listener();
-      }
+      listeners.publish();
     },
   };
 }
@@ -155,7 +150,7 @@ export function patchChatSessionSettings(
       pendingBySession.delete(patchKey);
     }
   });
-  return operation;
+  return operation.then((result) => (result && "queued" in result ? null : result));
 }
 
 export function selectedGlobalScope(

@@ -55,6 +55,27 @@ describe("native SQLite schema snapshots and callbacks", () => {
     );
   });
 
+  it("observes a sibling commit while a new reader adopts retained schema facts", async () => {
+    const databaseAdmission = await import("./sqlite-database-admission.js");
+    const filename = path.join(tempDirs.make("sqlite-adoption-publication-"), "state.sqlite");
+    const writer = openDatabase(undefined, true, filename);
+    const readAdmission = databaseAdmission.getSqliteDatabaseAdmission;
+    const adoption = vi.spyOn(databaseAdmission, "getSqliteDatabaseAdmission");
+    adoption.mockImplementationOnce((database, key, options) => {
+      const captured = readAdmission(database, key, options);
+      // A worker can publish after the old catalog is read but before adoption returns.
+      writer.exec("CREATE TABLE newly_committed (value); INSERT INTO newly_committed VALUES (42)");
+      return captured;
+    });
+    try {
+      const reader = openDatabase("", true, filename);
+      expect(reader.prepare("SELECT value FROM newly_committed").all()).toEqual([{ value: 42 }]);
+      expect(tableExists(reader, "newly_committed")).toBe(true);
+    } finally {
+      adoption.mockRestore();
+    }
+  });
+
   it("publishes the next write after cold writer discovery throws", () => {
     const filename = path.join(tempDirs.make("sqlite-custody-recovery-"), "agent.sqlite");
     {
@@ -302,6 +323,8 @@ describe("native SQLite schema snapshots and callbacks", () => {
     const receipts = createSqliteDatabaseWriteReceipts({
       admission: () => sender.records.get(snapshot!.identity),
       pathAdmission: () => sender.records.get(snapshot!.identity),
+      retain: () => {},
+      release: () => {},
       writeListeners: new WeakMap(),
       readRevision: () => 0,
       writer: () => sender.records.get(snapshot!.identity),
@@ -362,7 +385,6 @@ describe("native SQLite schema snapshots and callbacks", () => {
       filename,
     );
     installSqliteTempTrackingSchema(database, {
-      kind: "transcript-index",
       statusTable: "local_status",
       pendingTable: "local_pending",
       pendingIndex: "local_pending_state",

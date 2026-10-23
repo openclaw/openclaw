@@ -31,6 +31,13 @@ registration/loading, not replicas of any private plugin implementation.
 `--latency-ms` sets the inbound message delay (default 35 ms). `--frame-gap-ms`
 sets the minimum separation between Gateway message deliveries (default 4 ms).
 Concurrent requests remain concurrent; replies share one serialized wire.
+`--sidebar-query-latency-ms ownerFirst=400` (also `involvingMe`, `ownerCounts`, and
+`children`) overrides method latency for that sidebar query shape. Use
+`--omit-hello-self-presence --method-latency-ms users.self=900` to exercise identity
+resolution after hello. `--sidebar-avatars` supplies synthetic avatar resources;
+`--sidebar-expanded` saves a Show more selection before replay. Warm-reload output
+includes per-frame sidebar row keys/order hashes, section headers, avatar sources,
+and retained cached row elements. These are DOM observations, not pixel paint times.
 `--sidebar-view` selects `sessions` (default, with Involving me selected) or `online`.
 Run both because current UI presents these inventories in separate sidebar views.
 Default reloads use one agent chip; explicit churn scenarios use the all-agent roster.
@@ -41,6 +48,21 @@ Online measurements.
 `--bundle-dir` serves an already built production bundle instead of rebuilding it;
 keep its build identity equal to the checkout head. This preserves a baseline
 bundle while production sources are edited.
+
+For a boot-weight comparison, use `--bundle-dir <base> --compare-bundle-dir <head>
+--runs 20 --untraced --cold-http-cache`. The runs alternate builds and restore
+each build's own warm state. Every run records `presentation.firstNonemptyTranscriptMs`
+and `presentation.firstEnabledComposerMs` from visible DOM observed on animation
+frames; these are readiness observations, not compositor paint timestamps.
+Keep profiling and the optional warm-reload probes out of this timing run.
+Console progress contains readiness and host load; full RPC and resource records
+are serialized to `summary.json` after all runs, outside the preview-server workload.
+
+`pnpm ui:check-performance --module-attribution --dist <build>` ranks the top
+30 emitted JavaScript modules in each route's preload graph. Add `--json` for all
+modules and mapping coverage. It gzips source-mapped generated ranges independently,
+so those scores identify expensive modules but are not additive transfer costs;
+the existing shipped gzip sidecars remain the route budget authority.
 
 Every reload replays the warm visit's persisted sidebar and trimmed v8 transcript
 (after unloading the app), local storage and session storage; the HTTP cache stays warm.
@@ -56,6 +78,15 @@ then collect separate traced runs for the storyboard and attribution.
 `--large-snapshot` expands the transcript to 1,100 synthetic messages (about 3 MB),
 including tool results and replay metadata. Combine it with `--warm-reload` to
 exercise a large live history with the current bounded IndexedDB restore. `snapshotSave` reports the persisted row count.
+`--transcript-messages 400` selects a specific positive message count instead.
+
+`--session-switch` clicks the first recent session after the other measured phases.
+It opens another 400-message transcript when paired with `--transcript-messages 400`,
+using the same synthetic history and native sidebar navigation. The phase ends once
+the target pane and inline preview are visible and pending wire work has been quiet
+for 750 ms. It records task/script/layout/style CPU and interval RPCs in `sessionSwitch`,
+plus a separate source-mapped `session-switch` profile with `--cpu-profile`.
+This measures a first switch to that session in the current document, not a warm return.
 
 The dashboard fixture includes reaction pickers, widget actions, context usage,
 and viewers. Use `--warm-reload` to measure its cached restore. Transaction labels
@@ -77,6 +108,10 @@ observed Solid owner calls and bounded lifecycle scheduling stacks per event lab
 snapshots of the affected rows, chat viewers, and streaming text; `run-N.live.png`
 shows the synthetic final state. Row attachment and viewport visibility distinguish
 an absent row from a rendered row below the fold.
+
+`live.milliseconds` records Chrome's task, scripting, layout, and style CPU deltas across the
+replay. For unprofiled comparisons, divide `ScriptDuration` by `sentEvents` to report scripting
+milliseconds per event; keep sampled CPU captures separate.
 
 For the Solid sidebar, `solidSidebar.lifecycle` separately counts owner
 `invalidate` calls and `prepareRender`/`commitRender` projection lifecycle
@@ -153,6 +188,39 @@ Mapped filesystem paths are repository-relative, independent of the build output
 Use the same fixture, phases, sampling and machine for both captures.
 Profiling inflates timing: use these tables to prove the hot path runs, then
 measure improvements in separate unprofiled, interleaved runs.
+
+For streaming comparisons, keep both production builds and run complete alternating
+cycles with `--bundle-dir <baseline> --compare-bundle-dir <candidate> --runs 20
+--streaming-reply --transcript-messages 400 --face chat --untraced`. The benchmark
+restores each build's warm state before each run. Streaming comparisons do not
+require the separate `--warm-reload` diagnostics or external probe scripts.
+
+Add `--streaming-allocations` to sample JavaScript allocations during the stream
+with CDP HeapProfiler at a 4 KiB interval, retaining samples collected by both
+major and minor GC. `streaming.allocations` reports estimated bytes and bytes per
+delivered delta; `run-N.streaming.heapprofile` retains the allocation call tree.
+The interval covers the whole renderer, including synthetic delivery and native
+composer input, and excludes reload and report serialization. These are sampled
+allocation estimates, not retained heap sizes or exact array counts. Collect
+timings in separate runs without allocation sampling.
+
+For concurrent paired comparisons, use separate processes and bundle directories
+with the same `--fixture-now-ms` and a future `--live-start-at-ms`, `--runs 1`, and
+distinct `--port` / `--sandbox-port` values. The start barrier supports either
+`--streaming-reply` or `--live-events` and fails if setup misses the requested time.
+
+Use `--streaming-burst-size 5` to enqueue five snapshots every 166.7 ms
+while retaining the average 30 deltas/s. The mock transport still applies
+`--frame-gap-ms`; set it to zero to remove intentional spacing, and inspect
+delivery timestamps before treating a group as one-frame delivery.
+Streaming reports count synchronous
+stream assignments, frame publications, pane render calls/time, forced rail
+observations, and row ResizeObserver deliveries. These are separate boundaries:
+publication is not a rendered commit, and pane render time excludes subsequent
+Solid and Markdown work. The source-mapped CPU profile covers that later work;
+the task/microtask and next-rAF timings do not measure presentation to the screen.
+After timing, each run also checks that the real transcript grew and remains
+within two pixels of its native scroll bottom, without manually requesting a render.
 
 ## Initial baseline
 

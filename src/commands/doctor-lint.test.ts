@@ -1,4 +1,3 @@
-// Doctor lint tests cover health-check registry integration and lint warning output.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
@@ -10,7 +9,9 @@ import { CORE_HEALTH_CHECKS } from "../flows/doctor-core-checks.js";
 import { clearHealthChecksForTest, registerHealthCheck } from "../flows/health-check-registry.js";
 import type { HealthCheckContext } from "../flows/health-checks.js";
 import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
+import * as diskSpace from "../infra/disk-space.js";
 import { resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
+import * as snapshotSource from "../infra/sqlite-snapshot-source.js";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "../plugins/installed-plugin-index-record-cache.js";
 import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
@@ -63,9 +64,7 @@ vi.mock("../infra/sqlite-snapshot-source.js", async (importOriginal) => {
 vi.mock("../infra/node-sqlite.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/node-sqlite.js")>();
   mocks.actualOpenNodeSqliteDatabase.mockImplementation(actual.openNodeSqliteDatabase);
-  mocks.openNodeSqliteDatabase.mockImplementation((...args: unknown[]) =>
-    mocks.actualOpenNodeSqliteDatabase(...args),
-  );
+  mocks.openNodeSqliteDatabase.mockImplementation(mocks.actualOpenNodeSqliteDatabase);
   return {
     ...actual,
     openNodeSqliteDatabase: mocks.openNodeSqliteDatabase,
@@ -78,8 +77,7 @@ vi.mock("../flows/doctor-health-contributions.js", async (importOriginal) => {
   );
   return {
     ...actual,
-    resolveDoctorContributionHealthChecks: (...args: unknown[]) =>
-      mocks.resolveDoctorContributionHealthChecks(...args),
+    resolveDoctorContributionHealthChecks: mocks.resolveDoctorContributionHealthChecks,
   };
 });
 vi.mock("../gateway/call.js", async (importOriginal) => {
@@ -126,9 +124,7 @@ async function seedSemanticState(config: OpenClawConfig, sourceConfig = config) 
     OPENCLAW_CONFIG_PATH: configPath,
     OPENCLAW_STATE_DIR: stateDir,
   });
-  mocks.readConfigFileSnapshot.mockImplementation((...args: unknown[]) =>
-    mocks.actualReadConfigFileSnapshot(...args),
-  );
+  mocks.readConfigFileSnapshot.mockImplementation(mocks.actualReadConfigFileSnapshot);
   return { stateDir, configPath, env, databasePath };
 }
 
@@ -145,19 +141,15 @@ describe("runDoctorLintCli", () => {
     mocks.readConfigFileSnapshot.mockReset();
     mocks.resolveDoctorContributionHealthChecks
       .mockReset()
-      .mockImplementation((...args: unknown[]) =>
-        mocks.actualResolveDoctorContributionHealthChecks(...args),
-      );
+      .mockImplementation(mocks.actualResolveDoctorContributionHealthChecks);
     mocks.buildGatewayProbeConnectionDetails.mockReset().mockResolvedValue({
       url: "ws://127.0.0.1:18789",
     });
     mocks.callGateway.mockReset().mockResolvedValue({ degradedSecretOwners: [] });
-    mocks.openNodeSqliteDatabase.mockImplementation((...args: unknown[]) =>
-      mocks.actualOpenNodeSqliteDatabase(...args),
-    );
+    mocks.openNodeSqliteDatabase.mockImplementation(mocks.actualOpenNodeSqliteDatabase);
     mocks.prepareSqliteReadOnlyLocationSync.mockReset();
-    mocks.prepareSqliteReadOnlyLocationSync.mockImplementation((...args: unknown[]) =>
-      mocks.actualPrepareSqliteReadOnlyLocationSync(...args),
+    mocks.prepareSqliteReadOnlyLocationSync.mockImplementation(
+      mocks.actualPrepareSqliteReadOnlyLocationSync,
     );
     clearHealthChecksForTest();
     stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
@@ -478,6 +470,7 @@ describe("runDoctorLintCli", () => {
       await closeOpenClawStateDatabaseByPathAsync(databasePath);
       clearLoadInstalledPluginIndexInstallRecordsCache();
       const before = snapshotDoctorLintSqliteFamily(databasePath);
+      const fork = vi.spyOn(snapshotSource, "forkSqlitePrivateSnapshot");
       mocks.openNodeSqliteDatabase.mockClear();
       const sourceOpenStacks: string[] = [];
       mocks.openNodeSqliteDatabase.mockImplementation((...args: unknown[]) => {
@@ -537,14 +530,42 @@ describe("runDoctorLintCli", () => {
             ]
           : [],
       );
-      expect(
-        mocks.prepareSqliteReadOnlyLocationSync.mock.calls.map(([pathname]) => pathname),
-      ).toEqual([databasePath]);
+      expect(mocks.prepareSqliteReadOnlyLocationSync).not.toHaveBeenCalled();
+      expect(fork).toHaveBeenCalledOnce();
+      expect(fork.mock.calls[0]?.[0]).not.toBe(databasePath);
       expect(sourceOpenStacks).toEqual([]);
       expect(snapshotDoctorLintSqliteFamily(databasePath)).toEqual(before);
       expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).toEqual(sourceConfig);
     },
   );
+
+  it.each([false, true])("checks the operator disk volume in mixed lint: %s", async (mixed) => {
+    const { stateDir, databasePath } = await seedSemanticState({
+      gateway: { mode: "local" },
+    });
+    const before = snapshotDoctorLintSqliteFamily(databasePath);
+    vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) => ({
+      targetPath,
+      checkedPath: targetPath,
+      availableBytes: targetPath === stateDir ? 50 * 1024 ** 2 : 10 * 1024 ** 3,
+      totalBytes: 20 * 1024 ** 3,
+    }));
+
+    const diskCheckId = "core/doctor/disk-space";
+    const exitCode = await runDoctorLintCli(runtime, {
+      json: true,
+      severityMin: "error",
+      onlyIds: mixed ? [diskCheckId, "memory-core/managed-local-embedding-setup"] : [diskCheckId],
+    });
+
+    expect(outputReport()).toMatchObject({
+      ok: false,
+      checksRun: mixed ? 2 : 1,
+      findings: [{ checkId: diskCheckId, severity: "error", path: stateDir }],
+    });
+    expect(exitCode).toBe(1);
+    expect(snapshotDoctorLintSqliteFamily(databasePath)).toEqual(before);
+  });
 
   it("fails closed when a semantic index needs plugin state that cannot be prepared", async () => {
     const config = {

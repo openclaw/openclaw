@@ -1,8 +1,12 @@
-import { onCleanup } from "solid-js";
+import { createEffect, createMemo, onCleanup } from "solid-js";
 import { listen } from "./listener.ts";
 
 /** A page-owned timer that pauses while hidden and catches up once on return. */
-export function useVisiblePoll(intervalMs: number, tick: () => void) {
+export function useVisiblePoll(
+  intervalMs: number,
+  tick: () => void,
+  options?: { enabled: () => boolean; immediate?: boolean },
+) {
   let timer: ReturnType<typeof globalThis.setInterval> | undefined;
   let stopVisibility: (() => void) | undefined;
 
@@ -46,5 +50,16 @@ export function useVisiblePoll(intervalMs: number, tick: () => void) {
     startTimer();
     return true;
   };
+  if (options) {
+    createEffect(createMemo(options.enabled), (enabled) => {
+      if (enabled) {
+        if (start() && options.immediate && document.visibilityState !== "hidden") {
+          tick();
+        }
+      } else {
+        stop();
+      }
+    });
+  }
   return { start, stop };
 }

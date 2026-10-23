@@ -301,7 +301,7 @@ export function loadPluginManifest(
       raw.modelIdNormalization,
       { ownedProviders: new Set(providers) },
     ),
-    providerEndpoints: modelProviderNormalizers.normalizeManifestProviderEndpoints(
+    providerEndpoints: capabilityNormalizers.normalizeManifestProviderEndpoints(
       raw.providerEndpoints,
     ),
     providerRequest: modelProviderNormalizers.normalizeManifestProviderRequest(
@@ -342,6 +342,7 @@ export function loadPluginManifest(
   const controlUiResult = loadPluginControlUiDeclaration({
     rootDir,
     controlUi: raw.controlUi,
+    channels,
     rejectHardlinks,
     rootRealPath,
   });

@@ -4,7 +4,7 @@ import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.
 import { assignSessionOwner } from "../../config/sessions/session-accessor.sqlite-owner.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { linkEmail, setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
@@ -198,7 +198,7 @@ describe("prepared session control target", () => {
     const { scope, entry } = seedTarget("assignee-self-archive");
     assign(scope, "human", callerId);
     const { authority } = issueAuthority(callerId);
-    const admission = await beginSessionWorkAdmission({
+    const admission = await beginSessionEffect({
       scope: resolveSessionStorePathCore(cfg.session?.store, { agentId: scope.agentId }),
       identities: [scope.sessionKey, entry.sessionId],
       assertAllowed: () => {},

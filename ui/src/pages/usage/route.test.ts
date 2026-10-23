@@ -10,10 +10,9 @@ import {
   stubGatewayStoreTestGlobals,
 } from "../../app/gateway-store.test-support.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
-import { page } from "./route.ts";
+import { page } from "./route.tsx";
 import type { UsageRouteData } from "./types.ts";
 
-const usageMethods = ["sessions.usage", "usage.status"];
 const totals = {
   ...createEmptyCostUsageTotals(),
   input: 100,
@@ -37,7 +36,7 @@ function createUsageRouter() {
   const store = createGatewayStoreTestStore();
   store.gateway.start();
   const request = vi.spyOn(store.gateway.snapshot.client!, "request").mockResolvedValue(payload);
-  store.current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
+  store.current().testOptions.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
   const selection = createAgentSelectionCapability(store.gateway, {
     state: { agentsList: null },
     subscribe: () => () => {},
@@ -93,16 +92,16 @@ describe("usage route", () => {
       if (change === "navigation") {
         await router.navigate("other", context);
       } else if (change === "disconnect" || change === "reconnect") {
-        current().opts.onClose?.({ code: 1012, reason: "restart", willRetry: true });
+        current().testOptions.onClose?.({ code: 1012, reason: "restart", willRetry: true });
         if (change === "reconnect") {
-          current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
+          current().testOptions.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
           expect(gateway.snapshot.client).toBe(admitted.client);
           expect(gateway.snapshot.hello).not.toBe(admitted.hello);
         }
       } else if (change === "client") {
         gateway.connect();
         current().request.mockResolvedValue(payload);
-        current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
+        current().testOptions.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
       } else if (change === "set") {
         selection.set("research");
       } else {
@@ -112,7 +111,7 @@ describe("usage route", () => {
       expect(usageCalls()).toEqual([]);
 
       if (gateway.snapshot.phase !== "connected") {
-        current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
+        current().testOptions.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
       }
       await router.revalidate(context, "usage");
       const active = router.getState().matches[0];
@@ -129,17 +128,17 @@ describe("usage route", () => {
   );
 
   it.each(["navigation", "preload"] as const)(
-    "preserves query and %s cancellation ownership for all aggregate requests",
+    "preserves query and %s cancellation ownership for the session usage request",
     async (kind) => {
       const { router, context, request, usageCalls } = createUsageRouter();
       const started = createDeferred();
       const response = createDeferred<typeof payload>();
       let requests = 0;
       request.mockImplementation(async (method) => {
-        if (!usageMethods.includes(method)) {
+        if (method !== "sessions.usage") {
           return {};
         }
-        if (++requests === 2) {
+        if (++requests === 1) {
           started.resolve();
         }
         return response.promise;
@@ -158,7 +157,8 @@ describe("usage route", () => {
       response.resolve(payload);
       await loading;
 
-      expect(calls.map(([method]) => method).toSorted()).toEqual(usageMethods.toSorted());
+      // Provider plans load on the page, never in the route loader.
+      expect(calls.map(([method]) => method)).toEqual(["sessions.usage"]);
       for (const call of calls) {
         expect(call[2]?.signal).toBe(match.abortController.signal);
         expect(call[2]?.signal?.aborted).toBe(kind === "navigation");
@@ -190,29 +190,22 @@ describe("usage route", () => {
         mode: "specific",
         timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         includeContextWeight: false,
+        sort: "cost",
+        sortDirection: "desc",
       });
     },
   );
 
-  it.each([
-    ["usage.status", "gateway transport unavailable", null],
-    ["sessions.usage", "OPENAI_API_KEY=sk-1234567890abcdef", "OPENAI_API_KEY=sk-123...cdef"],
-  ] as const)("reports %s failure without exposing secrets", async (method, message, error) => {
+  it("reports a session usage failure without exposing secrets", async () => {
     const { router, context, request } = createUsageRouter();
-    request.mockImplementation(async (requested) => {
-      if (requested === method) {
-        throw new Error(message);
+    request.mockImplementation(async (method) => {
+      if (method === "sessions.usage") {
+        throw new Error("OPENAI_API_KEY=sk-1234567890abcdef");
       }
-      return requested === "sessions.usage" ? payload : {};
+      return {};
     });
     await router.navigate("usage", context);
     const result = router.getState().matches[0]?.data;
-    expect(result?.error).toBe(error);
-    if (method === "usage.status") {
-      expect(result?.providerUsage).toEqual({
-        state: "settled",
-        result: { ok: false, error: { kind: "request-failed" } },
-      });
-    }
+    expect(result?.error).toBe("OPENAI_API_KEY=sk-123...cdef");
   });
 });

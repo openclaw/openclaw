@@ -382,6 +382,8 @@ Snapshots from supported older schema versions can be verified and restored with
 
 Verification validates a private content-pinned copy so pathname races cannot swap the bytes SQLite inspects. By default, that temporary copy is created beside the snapshot repository and removed before the command returns. The staging root and its ancestor chain must prevent other users from replacing it. POSIX roots must be current-user-owned and not group/world writable; sticky ancestors such as `/tmp` are accepted for user-owned children. macOS ACL grants that expose or make staging replaceable are rejected. Windows roots and ancestors must be owned by the current user or a trusted OS principal, with ACLs that deny untrusted staging access. For a read-only mount or network share, pass `--scratch <existing-private-directory>` on storage with equivalent encryption and destination controls.
 
+When the Windows filesystem helper verifies that an ancestor is a local volume root, DELETE-self alone does not make that ancestor replaceable. Child deletion, ownership and DACL changes, unknown rights, and private repository access are still checked. Helpers that cannot verify volume-root identity retain the stricter refusal; drive-letter or path spelling alone never grants this exception. Network shares remain unsupported as private staging roots.
+
 Snapshot creation applies the same owner, ACL, ancestor, and path-identity checks to the repository before staging or publishing database bytes. Newly created directory edges and final publication metadata are synchronized through the shared `fs-safe` durability boundary before success is reported on supported filesystems.
 
 Restore repeats verification and writes only to a fresh target. It refuses an existing target, `-wal`, `-shm`, or `-journal` sidecar and never performs an in-place replacement of a live OpenClaw database. The target parent has the same path-security requirements as verification scratch. Activating a restored database remains an explicit offline operator step.
@@ -668,7 +670,8 @@ openclaw backup record --status failed --target host-restic --error "Backup dest
 ```
 
 `--status ok|failed` and `--target <label>` are required. `--bytes <n>` optionally
-records a nonnegative integer byte count; `--error <text>` records a diagnostic.
+records a nonnegative decimal integer byte count (not radix or exponent notation);
+`--error <text>` records a diagnostic.
 `--json` emits a machine-readable result. The command adds a `kind: "external"`
 outcome using the same best-effort recording semantics as built-in backups. It
 does not run or verify the external backup. Use a stable target label and run
@@ -692,11 +695,17 @@ whether it is outside the state directory, inside a workspace, or nested under
 an otherwise regenerable managed state root. `--no-include-workspace` omits
 ordinary workspace sources, not configured agent directories.
 
+State-only archives also omit registered managed chat worktrees, including
+pending or recovering allocations and live worktrees under a previous
+`worktreeRoot`. Only recorded checkout paths are excluded; neighboring files and
+paths from removed registrations remain eligible. Config, credentials, and
+agent databases nested inside an excluded checkout remain included.
+
 `--only-config` skips state, agent, credentials-directory, workspace, and
 plugin-resource discovery and archives only the active config file path.
 
 OpenClaw first plans resources from configuration. It captures the root SQLite
-database online, then derives and freezes registered-agent ownership from that
+database online, then derives registered-agent ownership from that
 private snapshot for database discovery and archive traversal. Paths are resolved before comparison: config, credentials, workspaces, and agents
 already covered by another included root are not duplicated as top-level
 sources. A custom agent root becomes a distinct `agent` asset only when no
@@ -842,8 +851,9 @@ scratch even when it is old. Cleanup failures preserve the published archive
 and appear as warnings with the scratch path in both text and JSON output.
 The owned prefix also lets cleanup coordinate with a new creator before its
 token exists, without mistaking that allocation for legacy scratch.
-If cleanup wins before the creator claims its directory, creation retries with
-a fresh directory. A changed directory identity is still rejected.
+If temporary-directory allocation or lifetime admission fails, creation reports
+the underlying error; rerun the backup command. A changed directory identity is
+still rejected.
 Scratch observed by the scan that disappears before cleanup is recorded as
 already reclaimed, without a warning or a claim that this pass removed it.
 
@@ -858,6 +868,8 @@ processes before manually removing their reported scratch directories.
 Published archives and package rollback backups are outside this cleanup.
 Retired scratch is renamed to `openclaw-backup-retired-*` before deletion so a
 later pass can finish partial cleanup even after the lifetime token is gone.
+On Windows, the retirement destination is left absent until a guarded
+no-clobber move, so cleanup does not try to replace an existing directory.
 
 ## Related
 

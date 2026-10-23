@@ -51,6 +51,8 @@ type VisibleMessagePositions = {
 
 type ResetMessageWindow = {
   boundarySeq: number;
+  boundaryType: "reset" | "compaction";
+  firstKeptActivePosition?: number;
   contextPrefixEventCount: number;
   keptMessagePositions: number[];
   contextPrefixSizeBytes: number;
@@ -331,6 +333,7 @@ function findLatestResetMessageWindow(
     return null;
   }
   const boundary = readBoundaryWindowFacts(projection, latestBoundary, scope);
+  let firstKeptActivePosition: number | undefined;
   const keptMessagePositions: number[] = [];
   const includesBoundary = latestBoundary.event_type === "compaction";
   let contextPrefixEventCount = includesBoundary ? 1 : 0;
@@ -363,6 +366,7 @@ function findLatestResetMessageWindow(
     }
     const firstKept = unindexedFirstKept ?? indexedFirstKept;
     if (firstKept && firstKept.active_position < latestBoundary.active_position) {
+      firstKeptActivePosition = firstKept.active_position;
       const candidateRows = iterateSqliteQuerySync(
         projection.database.db,
         db
@@ -374,12 +378,15 @@ function findLatestResetMessageWindow(
           )
           .select([
             "active.message_position",
-            /* kysely-allow-raw: preserve JS-readable overdepth rows for existing tool-pairing validation. */
-            sql<string>`CASE WHEN ${jsonValid(projection.database.db, transcriptEventNavigationSql(projection.database.db, "event"))}
-              THEN ${transcriptEventModelNavigationSql(projection.database.db, "event")}
-              ELSE ${transcriptEventNavigationSql(projection.database.db, "event")} END`.as(
-              "event_json",
-            ),
+            // Compaction keeps the entire tail and needs no tool-pairing metadata.
+            (includesBoundary
+              ? transcriptEventResetNavigationSql(projection.database.db, "event")
+              : // Preserve JS-readable overdepth rows for reset tool-pairing validation.
+                /* kysely-allow-raw: guarded model-navigation projection. */
+                sql<string>`CASE WHEN ${jsonValid(projection.database.db, transcriptEventNavigationSql(projection.database.db, "event"))}
+                  THEN ${transcriptEventModelNavigationSql(projection.database.db, "event")}
+                  ELSE ${transcriptEventNavigationSql(projection.database.db, "event")} END`
+            ).as("event_json"),
             /* kysely-allow-raw: raw-byte accounting stays independent of the transient projection. */
             sql<number>`${transcriptEventReadBytesSql("event")} + 1`.as("serialized_bytes"),
           ])
@@ -427,6 +434,8 @@ function findLatestResetMessageWindow(
   }
   return {
     boundarySeq: latestBoundary.seq,
+    boundaryType: includesBoundary ? "compaction" : "reset",
+    firstKeptActivePosition,
     contextPrefixEventCount,
     keptMessagePositions,
     contextPrefixSizeBytes,
@@ -666,7 +675,7 @@ export function readVisibleTranscriptStats(
         .onRef("event.seq", "=", "active.event_seq"),
     )
     .select((eb) => [
-      eb.fn.count<number>("active.event_seq").as("event_count"),
+      eb.fn.countAll<number>().as("event_count"),
       /* kysely-allow-raw: JSONL size includes one terminating newline per event. */
       sql<number>`CAST(COALESCE(SUM(${transcriptEventReadBytesSql("event")} ), 0)
         + COUNT(*) AS BIGINT)`.as("size_bytes"),

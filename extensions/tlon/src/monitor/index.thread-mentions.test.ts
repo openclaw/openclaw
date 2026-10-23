@@ -1,60 +1,52 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { describe, expect, it, vi } from "vitest";
-import { useTlonMonitorFixture } from "./monitor.test-harness.js";
+import { messageEssay, useTlonMonitorFixture } from "./monitor.test-harness.js";
 
 const {
-  monitorTlonProvider,
+  configureTlon,
+  withMonitor,
+  startMonitor,
+  getSubscription,
   authenticateMock,
   sseClientMock,
   ingressMock,
   inboundRuntimeMock,
   settingsManagerMock,
-  realUrbitFixture,
 } = useTlonMonitorFixture();
 
 describe("monitorTlonProvider bot-owned thread mention policy", () => {
   it.each([
-    { name: "another ship's root", policy: false, rootAuthor: "~bus", admitted: false },
-    { name: "unavailable root", policy: false, lookupFails: true, admitted: false },
+    {
+      name: "memo and raw reply id take precedence over a simultaneous post essay",
+      parallelPost: true,
+      rawReplyId: " reply-stable ",
+      admitted: true,
+    },
+    { name: "another ship's root", rootAuthor: "~bus" },
+    { name: "unavailable root", lookupFails: true },
     {
       name: "legacy settings access rule preserves strict file mention policy",
-      policy: false,
       channelPolicy: true,
       settingsRule: { mode: "open" },
-      rootAuthor: "~zod",
       participate: true,
-      admitted: false,
     },
     {
       name: "settings access rule does not inherit the file open mode",
-      policy: false,
       channelPolicy: false,
       settingsRule: { allowedShips: [] },
-      rootAuthor: "~zod",
-      admitted: false,
     },
     {
       name: "sender authorization revoked during root lookup",
-      policy: false,
-      rootAuthor: "~zod",
       revokeDuringLookup: true,
-      admitted: false,
     },
     {
       name: "bot thread exemption revoked during ingress despite a mention in history",
-      policy: false,
-      rootAuthor: "~zod",
       pauseAt: "ingress",
       latePolicy: true,
       historyMention: true,
-      admitted: false,
     },
     {
       name: "raw explicit mention admitted after a strict ingress update",
-      policy: false,
-      rootAuthor: "~zod",
       pauseAt: "ingress",
       latePolicy: true,
       mentioned: true,
@@ -62,19 +54,14 @@ describe("monitorTlonProvider bot-owned thread mention policy", () => {
     },
     {
       name: "sender removed from the allowlist during ingress",
-      policy: false,
-      rootAuthor: "~zod",
       restricted: true,
       allowedShips: ["~nec"],
       pauseAt: "ingress",
       latePolicy: false,
       lateAllowedShips: [],
-      admitted: false,
     },
     {
       name: "sender remains allowlisted after an ingress policy update",
-      policy: false,
-      rootAuthor: "~zod",
       pauseAt: "ingress",
       latePolicy: false,
       lateAllowedShips: ["~nec"],
@@ -82,8 +69,6 @@ describe("monitorTlonProvider bot-owned thread mention policy", () => {
     },
     {
       name: "owner remains admitted after an ingress allowlist removal",
-      policy: false,
-      rootAuthor: "~zod",
       ownerShip: "~nec",
       pauseAt: "ingress",
       latePolicy: false,
@@ -92,70 +77,52 @@ describe("monitorTlonProvider bot-owned thread mention policy", () => {
     },
     {
       name: "omitted thread policy becomes strict during ingress after participation",
-      rootAuthor: "~zod",
+      policy: undefined,
       participate: true,
       pauseAt: "ingress",
       latePolicy: true,
-      admitted: false,
     },
     {
       name: "empty-history response suppressed after exemption revocation",
-      policy: false,
-      rootAuthor: "~zod",
       pauseAt: "summary",
       latePolicy: true,
       summary: true,
-      admitted: false,
       directReply: false,
     },
     {
       name: "empty-history response admitted while exemption remains",
-      policy: false,
-      rootAuthor: "~zod",
       pauseAt: "summary",
       latePolicy: false,
       summary: true,
-      admitted: false,
       directReply: true,
     },
     {
       name: "invalid parent identifier",
-      policy: false,
-      rootAuthor: "~zod",
       parentId: "../../settings",
-      admitted: false,
     },
-  ])("applies ownership and authorization for $name", async (row) => {
+  ])("applies ownership and authorization for $name", async (scenario) => {
+    const row = { policy: false, rootAuthor: "~zod", admitted: false, ...scenario };
     vi.useFakeTimers();
-    const controller = new AbortController();
-    const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() } satisfies RuntimeEnv;
     const channelNest = "chat/~host/general";
     const parentId = row.parentId ?? "1234";
     const botShip = "~zod";
     const rootPath = `/channels/v4/${channelNest}/posts/post/id/1.234.json`;
     const paused = createDeferred<void>();
     const resume = createDeferred<void>();
-    realUrbitFixture.config = {
-      channels: {
-        tlon: {
-          code: "code",
-          ship: "~zod",
-          url: realUrbitFixture.url,
-          ownerShip: row.ownerShip,
-          groupChannels: [channelNest],
-          requireMentionInBotThreads: row.policy,
-          authorization: {
-            channelRules: {
-              [channelNest]: {
-                mode: row.restricted ? "restricted" : "open",
-                allowedShips: row.allowedShips,
-                requireMentionInBotThreads: row.channelPolicy,
-              },
-            },
+    configureTlon({
+      ownerShip: row.ownerShip,
+      groupChannels: [channelNest],
+      requireMentionInBotThreads: row.policy,
+      authorization: {
+        channelRules: {
+          [channelNest]: {
+            mode: row.restricted ? "restricted" : "open",
+            allowedShips: row.allowedShips,
+            requireMentionInBotThreads: row.channelPolicy,
           },
         },
       },
-    };
+    });
     authenticateMock.mockResolvedValueOnce("urbauth-test");
     settingsManagerMock.load.mockResolvedValueOnce(
       row.settingsRule ? { channelRules: { [channelNest]: row.settingsRule } } : {},
@@ -185,15 +152,18 @@ describe("monitorTlonProvider bot-owned thread mention policy", () => {
     });
 
     const replyEvent = (text: string) => {
-      const memo = { author: "~nec", content: [{ inline: [text] }], sent: 1_700_000_000_000 };
+      const memo = messageEssay("~nec", text);
       return {
         nest: channelNest,
         response: {
           post: {
             id: parentId,
             "r-post": {
+              ...(row.parallelPost
+                ? { set: { essay: messageEssay("~bus", "parent essay"), seal: { parent: "9999" } } }
+                : {}),
               reply: {
-                id: "5678",
+                id: row.rawReplyId ?? "5678",
                 "r-reply": { set: { memo, seal: { "parent-id": parentId } } },
               },
             },
@@ -201,20 +171,10 @@ describe("monitorTlonProvider bot-owned thread mention policy", () => {
         },
       };
     };
-    const monitor = monitorTlonProvider({
-      scheduler: createTestPluginServiceScheduler(),
-      abortSignal: controller.signal,
-      runtime,
-      accountId: "default",
-    });
+    const { runtime, stop } = startMonitor({ accountId: "default" });
     try {
       await vi.advanceTimersByTimeAsync(0);
-      const subscription = sseClientMock.subscribe.mock.calls
-        .map(([value]) => value)
-        .find((value) => value.app === "channels");
-      if (!subscription) {
-        throw new Error("expected channel subscription");
-      }
+      const subscription = getSubscription("channels");
       if (row.participate) {
         await subscription.event(replyEvent(`${botShip} hello`));
         const delivery = inboundRuntimeMock.dispatch.mock.calls[0]?.[0].delivery;
@@ -257,6 +217,11 @@ describe("monitorTlonProvider bot-owned thread mention policy", () => {
       await handling;
 
       expect(inboundRuntimeMock.dispatch).toHaveBeenCalledTimes(row.admitted ? 1 : 0);
+      if (row.rawReplyId) {
+        expect(inboundRuntimeMock.buildContext).toHaveBeenCalledWith(
+          expect.objectContaining({ messageId: row.rawReplyId }),
+        );
+      }
       if (row.summary) {
         const replies = sseClientMock.poke.mock.calls.filter(
           ([value]) => value.mark === "channel-action-1",
@@ -275,8 +240,7 @@ describe("monitorTlonProvider bot-owned thread mention policy", () => {
       expect(rootLookups).toEqual(shouldReadRoot ? [[rootPath]] : []);
       expect(runtime.error).not.toHaveBeenCalled();
     } finally {
-      controller.abort();
-      await monitor;
+      await stop();
       sseClientMock.scry.mockReset().mockResolvedValue({});
     }
   });
@@ -289,132 +253,94 @@ it("fetches and prepends citations only after DM and channel sender admission", 
     { block: { cite: { chan: { nest, where: "/msg/~bus/12345" } } } },
     { inline: ["~zod inspect this citation"] },
   ];
-  realUrbitFixture.config = {
-    channels: {
-      tlon: {
-        code: "code",
-        ship: "~zod",
-        url: realUrbitFixture.url,
-        dmAllowlist: ["~bus"],
-        defaultAuthorizedShips: ["~bus"],
-        groupChannels: [nest],
-      },
-    },
-  };
+  configureTlon({
+    dmAllowlist: ["~bus"],
+    defaultAuthorizedShips: ["~bus"],
+    groupChannels: [nest],
+  });
   authenticateMock.mockResolvedValueOnce("urbauth-~zod=proof");
   settingsManagerMock.load.mockResolvedValueOnce({});
   ingressMock.receive.mockResolvedValue({ kind: "ignored" });
-  const started = Promise.withResolvers<void>();
-  ingressMock.start.mockImplementationOnce(() => started.resolve());
-  const controller = new AbortController();
-  const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() } satisfies RuntimeEnv;
-  const monitor = monitorTlonProvider({
-    scheduler: createTestPluginServiceScheduler(),
-    abortSignal: controller.signal,
-    runtime,
-  });
-  try {
-    await Promise.race([started.promise, monitor]);
-    for (const source of ["chat", "channels"]) {
-      const subscription = sseClientMock.subscribe.mock.calls
-        .map(([value]) => value)
-        .find((value) => value.app === source);
-      expect(subscription).toBeDefined();
-      for (const sender of ["~nec", "~bus"]) {
-        sseClientMock.scry.mockReset().mockResolvedValue({
-          essay: { content: [{ inline: ["CITED-CONTENT"] }] },
-        });
-        inboundRuntimeMock.buildContext.mockClear();
-        inboundRuntimeMock.dispatch.mockClear();
-        const essay = { author: sender, content, sent: 1_700_000_000_000 };
-        const id = `${source}-${sender}`;
-        await subscription!.event(
-          source === "chat"
-            ? { whom: sender, id, response: { add: { essay } } }
-            : { nest, response: { post: { id, "r-post": { set: { essay } } } } },
-        );
-        if (sender === "~nec") {
-          expect(sseClientMock.scry).not.toHaveBeenCalled();
-          expect(inboundRuntimeMock.dispatch).not.toHaveBeenCalled();
-        } else {
-          expect(sseClientMock.scry).toHaveBeenCalledExactlyOnceWith(
-            `/channels/v4/${nest}/posts/post/12345.json`,
+  await withMonitor(
+    async (runtime) => {
+      for (const source of ["chat", "channels"]) {
+        const subscription = getSubscription(source);
+        for (const sender of ["~nec", "~bus"]) {
+          sseClientMock.scry.mockReset().mockResolvedValue({
+            essay: { content: [{ inline: ["CITED-CONTENT"] }] },
+          });
+          inboundRuntimeMock.buildContext.mockClear();
+          inboundRuntimeMock.dispatch.mockClear();
+          const essay = messageEssay(sender, content);
+          const id = `${source}-${sender}`;
+          await subscription.event(
+            source === "chat"
+              ? { whom: sender, id, response: { add: { essay } } }
+              : { nest, response: { post: { id, "r-post": { set: { essay } } } } },
           );
-          expect(inboundRuntimeMock.buildContext.mock.calls[0]?.[0].message.rawBody).toBe(
-            `> ~bus wrote: CITED-CONTENT\n\n> [quoted: ~bus in ${nest}]\n\n~zod inspect this citation`,
-          );
-          expect(inboundRuntimeMock.dispatch).toHaveBeenCalledOnce();
+          if (sender === "~nec") {
+            expect(sseClientMock.scry).not.toHaveBeenCalled();
+            expect(inboundRuntimeMock.dispatch).not.toHaveBeenCalled();
+          } else {
+            expect(sseClientMock.scry).toHaveBeenCalledExactlyOnceWith(
+              `/channels/v4/${nest}/posts/post/12345.json`,
+            );
+            expect(inboundRuntimeMock.buildContext.mock.calls[0]?.[0].message.rawBody).toBe(
+              `> ~bus wrote: CITED-CONTENT\n\n> [quoted: ~bus in ${nest}]\n\n~zod inspect this citation`,
+            );
+            expect(inboundRuntimeMock.dispatch).toHaveBeenCalledOnce();
+          }
         }
       }
-    }
-    expect(runtime.error).not.toHaveBeenCalled();
-  } finally {
-    controller.abort();
-    await monitor;
-  }
+      expect(runtime.error).not.toHaveBeenCalled();
+    },
+    { waitForStart: true },
+  );
 });
 
 it("retires terminal group invites without forgetting unrelated foreigns deltas", async () => {
   vi.useFakeTimers();
-  realUrbitFixture.config = {
-    channels: {
-      tlon: {
-        code: "code",
-        ship: "~zod",
-        url: realUrbitFixture.url,
-        autoAcceptGroupInvites: true,
-        groupInviteAllowlist: ["~bus"],
-      },
-    },
-  };
+  configureTlon({
+    autoAcceptGroupInvites: true,
+    groupInviteAllowlist: ["~bus"],
+  });
   authenticateMock.mockResolvedValueOnce("urbauth-~zod=proof");
   settingsManagerMock.load.mockResolvedValueOnce({});
-  const started = Promise.withResolvers<void>();
-  ingressMock.start.mockImplementationOnce(() => started.resolve());
-  const controller = new AbortController();
-  const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() } satisfies RuntimeEnv;
-  const monitor = monitorTlonProvider({
-    scheduler: createTestPluginServiceScheduler(),
-    abortSignal: controller.signal,
-    runtime,
-  });
-  try {
-    await Promise.race([started.promise, monitor]);
-    const subscription = sseClientMock.subscribe.mock.calls
-      .map(([value]) => value)
-      .find((value) => value.app === "groups" && value.path === "/v1/foreigns");
-    expect(subscription).toBeDefined();
-    sseClientMock.poke.mockClear();
-    const active = { invites: [{ valid: true, from: "~bus" }] };
-    const unrelated = { "~bus/unrelated": active };
-    await subscription!.event(unrelated);
-    const expectedJoins = ["~bus/unrelated"];
-    for (const [state, terminal] of [
-      ["revoked", { invites: [{ valid: false, from: "~bus" }] }],
-      ["removed", { invites: [] }],
-      ["done", { ...active, progress: "done" }],
-    ] as const) {
-      const groupFlag = `~bus/${state}`;
-      const invite = { [groupFlag]: active };
-      await subscription!.event(invite);
-      expectedJoins.push(groupFlag);
-      await subscription!.event(unrelated);
-      await subscription!.event(invite);
-      await subscription!.event({ [groupFlag]: terminal });
-      await subscription!.event(unrelated);
-      await subscription!.event(invite);
-      expectedJoins.push(groupFlag);
-      expect(sseClientMock.poke.mock.calls.map(([call]) => call.json.flag)).toEqual(expectedJoins);
-    }
-    await subscription!.event({ "~nec/blocked": { invites: [{ valid: true, from: "~nec" }] } });
-    expect(sseClientMock.poke.mock.calls).toEqual(
-      expectedJoins.map((flag) => [
-        { app: "groups", mark: "group-join", json: { flag, "join-all": true } },
-      ]),
-    );
-    expect(runtime.error).not.toHaveBeenCalled();
-  } finally {
-    controller.abort();
-    await monitor;
-  }
+  await withMonitor(
+    async (runtime) => {
+      const subscription = getSubscription("groups", "/v1/foreigns");
+      sseClientMock.poke.mockClear();
+      const active = { invites: [{ valid: true, from: "~bus" }] };
+      const unrelated = { "~bus/unrelated": active };
+      await subscription.event(unrelated);
+      const expectedJoins = ["~bus/unrelated"];
+      for (const [state, terminal] of [
+        ["revoked", { invites: [{ valid: false, from: "~bus" }] }],
+        ["removed", { invites: [] }],
+        ["done", { ...active, progress: "done" }],
+      ] as const) {
+        const groupFlag = `~bus/${state}`;
+        const invite = { [groupFlag]: active };
+        await subscription.event(invite);
+        expectedJoins.push(groupFlag);
+        await subscription.event(unrelated);
+        await subscription.event(invite);
+        await subscription.event({ [groupFlag]: terminal });
+        await subscription.event(unrelated);
+        await subscription.event(invite);
+        expectedJoins.push(groupFlag);
+        expect(sseClientMock.poke.mock.calls.map(([call]) => call.json.flag)).toEqual(
+          expectedJoins,
+        );
+      }
+      await subscription.event({ "~nec/blocked": { invites: [{ valid: true, from: "~nec" }] } });
+      expect(sseClientMock.poke.mock.calls).toEqual(
+        expectedJoins.map((flag) => [
+          { app: "groups", mark: "group-join", json: { flag, "join-all": true } },
+        ]),
+      );
+      expect(runtime.error).not.toHaveBeenCalled();
+    },
+    { waitForStart: true },
+  );
 });

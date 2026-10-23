@@ -19,7 +19,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { withSqliteDatabaseAdmissionExchange } from "../../infra/sqlite-database-admission.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import {
   bindSqliteDatabaseAdmissionUpstream,
   exchangeSqliteDatabaseAdmissions,
@@ -213,7 +213,7 @@ export async function materializeTranscriptArchiveInWorker(
   try {
     const opened = withFreshOpenClawAgentDatabaseReadOnly(
       (database) =>
-        runSqliteDeferredTransactionSync(
+        runSqliteReadSnapshotSync(
           database.db,
           () => {
             assertSource();
@@ -447,9 +447,13 @@ if (isRecord(workerData) && workerData.type === "sqlite-transcript-archive-v2") 
             } satisfies SqliteCanonicalValidationTaskMessage,
             [],
           );
-          await runReclamationWorkerPort(task.port, task.databaseOptions, taskSequence);
+          const cleanup = await runReclamationWorkerPort(
+            task.port,
+            task.databaseOptions,
+            taskSequence,
+          );
           channel.consumeInput();
-          return { status: "closed" };
+          return { status: "closed", cleanup };
         } catch (error) {
           return {
             status: "failed",

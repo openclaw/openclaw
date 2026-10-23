@@ -151,20 +151,44 @@ function projectSessionTranscriptCorpusEntries(
   const includeContentRevision = options.includeContentRevision !== false;
   const activeEntriesBySessionId = new Map<string, SessionTranscriptCorpusEntry>();
   const entryOwnersBySessionId = new Map<string, string>();
+  const instanceScope = {
+    agentId: normalizedAgentId,
+    env,
+    hydrateSkillPromptRefs: false,
+    projection: "list",
+    readConsistency: "latest",
+    storePath: databasePath,
+  } satisfies Parameters<typeof listSessionTranscriptInstances>[0];
   const retainedInstances = options.includeRetainedSqlite
-    ? listSessionTranscriptInstances(
-        {
-          agentId: normalizedAgentId,
-          env,
-          hydrateSkillPromptRefs: false,
-          projection: "list",
-          readConsistency: "latest",
-          storePath: databasePath,
-        },
-        {},
-        continuation,
-      )
+    ? listSessionTranscriptInstances(instanceScope, {}, continuation)
     : [];
+  const retainedInstanceIds = new Set(retainedInstances.map((instance) => instance.sessionId));
+  const activeSessionIdsToRead = [
+    ...new Set(
+      sessionEntries.flatMap(({ entry }) => {
+        const sessionId = entry.sessionId?.trim();
+        return sessionId && !retainedInstanceIds.has(sessionId) ? [sessionId] : [];
+      }),
+    ),
+  ];
+  const ownershipInstances = [
+    ...retainedInstances,
+    ...(activeSessionIdsToRead.length > 0
+      ? listSessionTranscriptInstances(
+          instanceScope,
+          { includeAllWindows: true, sessionIds: activeSessionIdsToRead },
+          continuation,
+        )
+      : []),
+  ];
+  // Current metadata can lose a captured owner, but cannot establish ownership of
+  // transcript bytes that predate provenance capture. Use each window's recorded facts.
+  const pluginOwnersBySessionId = new Map<string, string>();
+  for (const instance of ownershipInstances) {
+    if (instance.provenanceKnown && instance.entry.pluginOwnerId) {
+      pluginOwnersBySessionId.set(instance.sessionId, instance.entry.pluginOwnerId);
+    }
+  }
   const archivedIdentitiesByName = new Map(
     listSessionTranscriptArchivesReadOnly({
       agentId: normalizedAgentId,
@@ -187,6 +211,7 @@ function projectSessionTranscriptCorpusEntries(
   ): SessionTranscriptCorpusEntry => {
     const classification = classifySessionEntry(sessionKey, entry, cronGeneratedSessionKeys);
     const transcriptKey = artifactKind === "active-session" ? sessionKey.trim() : sessionKey;
+    const pluginOwnerId = pluginOwnersBySessionId.get(sessionId);
     const contentRevision = includeContentRevision
       ? sqliteContentRevision({
           agentId,
@@ -207,6 +232,7 @@ function projectSessionTranscriptCorpusEntries(
       storePath,
       ...(updatedAtMs !== undefined ? { updatedAtMs } : {}),
       ...(transcriptKey ? { sessionKey: transcriptKey } : {}),
+      ...(pluginOwnerId ? { pluginOwnerId } : {}),
       ...(classification.generatedByDreamingNarrative
         ? { generatedByDreamingNarrative: true }
         : {}),

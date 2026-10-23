@@ -1,5 +1,6 @@
 import {
   type AdmittedRunContext,
+  type AdmittedRunOperatorAuthority,
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
   resolveAdmittedRunActiveAssertion,
@@ -30,11 +31,13 @@ import {
   captureCronJobStandingGrantAuthority,
 } from "./active-jobs.js";
 import type { CronCompletionDeliveryFence } from "./delivery-attempt-fence.js";
+import type { MintedScheduledExecution } from "./scheduled-occurrence.js";
 import type { CronExecutionIdentityAdmission } from "./service/state.js";
 
 /** Owns one cron tool admission and its private message grant through settlement. */
 export function prepareCronRunAdmission(params: {
   admissionSource?: AdmittedRunContext["admissionSource"];
+  assertSourceCurrent?: () => void;
   cfg: OpenClawConfig;
   agentId: string;
   runId: string;
@@ -46,10 +49,18 @@ export function prepareCronRunAdmission(params: {
   toolsAllow?: string[];
   scheduledToolPolicy?: ScheduledToolPolicyContext;
   executionIdentity?: CronExecutionIdentityAdmission;
-  ingressBoundary?: "cron.isolated-agent" | "cron.script";
+  ingressBoundary?: "cron.isolated-agent" | "cron.session-agent" | "cron.script";
+  onAdmitted?: (context: AdmittedRunContext) => void;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   resolveGatewayContext?: GatewayContextResolver;
+  /** Minted from the run's admitted occurrence; bound to the admitted run and released with it. */
+  scheduledExecution: MintedScheduledExecution;
 }) {
   const { runId, scheduledToolPolicy } = params;
+  if (!params.scheduledExecution) {
+    // Every scheduled run belongs to exactly one occurrence admitted by `admitScheduledOccurrence`.
+    throw new Error("a scheduled run requires its admitted occurrence");
+  }
   const operationalRunInstance = createOperationalRunInstanceRef(runId);
   const resolveGatewayContext =
     params.resolveGatewayContext ?? getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
@@ -63,6 +74,8 @@ export function prepareCronRunAdmission(params: {
   const basePreparedRunAdmission = prepareAgentRunAdmission({
     operationalRunInstance,
     admissionSource: params.admissionSource,
+    assertSourceCurrent: params.assertSourceCurrent,
+    operatorAuthority: params.operatorAuthority,
     cfg: params.cfg,
     facts: {
       runId,
@@ -77,6 +90,8 @@ export function prepareCronRunAdmission(params: {
     onAdmitted: (admitted) => {
       bindGatewayContextResolver(admitted, resolveGatewayContext);
       assertAdmitted = resolveAdmittedRunActiveAssertion(admitted);
+      params.onAdmitted?.(admitted);
+      params.scheduledExecution.bind(() => readAdmittedSource()());
     },
   });
   const preparedRunAdmission = params.executionIdentity?.onPostAdmission
@@ -94,6 +109,7 @@ export function prepareCronRunAdmission(params: {
     : undefined;
   const deliveryAttemptFence = params.deliveryAttemptFence;
   if (scheduledMessageAuthority && !deliveryAttemptFence) {
+    params.scheduledExecution.release();
     preparedRunAdmission.close();
     throw new Error("scheduled message authority requires its occurrence delivery fence");
   }
@@ -134,6 +150,7 @@ export function prepareCronRunAdmission(params: {
       })
     : undefined;
   const close = () => {
+    params.scheduledExecution.release();
     revokeMessageActionTurnCapability(messageActionTurnCapability);
     preparedRunAdmission.close();
   };
@@ -144,6 +161,8 @@ export function prepareCronRunAdmission(params: {
       operationalRunInstance,
     }),
     messageActionTurnCapability,
+    /** The minted execution context once the run is admitted. */
+    readScheduledExecution: () => params.scheduledExecution.current(),
     close,
     finish: async () => {
       await drainAgentRunTerminalWrites(preparedRunAdmission.operationalRunInstance).finally(close);

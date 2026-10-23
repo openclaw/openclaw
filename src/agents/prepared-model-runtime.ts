@@ -1,6 +1,7 @@
 /** Lifecycle-owned auth/model discovery snapshots for agent runs. */
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { enqueueKeyedTask } from "../plugin-sdk/keyed-async-queue.js";
 import { getPreparedSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
@@ -15,7 +16,7 @@ import {
 import { acquirePreparedModelRuntimeLeaseFromOwners } from "./prepared-model-runtime-lease.js";
 import {
   configuredOwnersAreRequestVisible,
-  registerPreparedRuntimeAuthMaterializationPublisher,
+  bindPreparedRuntimeAuthMaterializationPublisher,
 } from "./prepared-model-runtime-materializations.js";
 import * as configuredRefresh from "./prepared-model-runtime.configured-refresh.js";
 import {
@@ -192,12 +193,7 @@ async function closeModelRuntime(error: Error): Promise<void> {
   closingOwners.forEach(releasePreparedPluginPublication);
   releaseProcessLifetime?.();
   releaseProcessLifetime = undefined;
-  const failures = results.flatMap((result) =>
-    result.status === "rejected" ? [result.reason] : [],
-  );
-  if (failures.length) {
-    throw new AggregateError(failures, "Prepared model work failed to close");
-  }
+  throwSettledAggregate(results, "Prepared model work failed to close");
 }
 
 /** Retire deleted-agent publications before closing readers that their builds can reopen. */
@@ -329,39 +325,27 @@ async function activateStandalonePreparedModelRuntimeNow(
     "catalogMode" | "force" | "providerDiscoveryTimeoutMs"
   >,
 ): Promise<PreparedModelRuntimeSnapshot | undefined> {
-  for (;;) {
-    assertLifetime();
-    const overlapsConfiguredOwner = [...owners.values()].some(
-      (owner) =>
-        owner.provenance === "configured" &&
-        owner.input.agentDir === input.agentDir &&
-        (input.agentId === undefined || owner.input.agentId === input.agentId) &&
-        (input.workspaceDir === undefined || owner.input.workspaceDir === input.workspaceDir),
-    );
-    if (gatewayLifecycleActive && (!input.readOnly || overlapsConfiguredOwner)) {
-      // Gateway startup/reload owns configured identities. Isolated read-only drafts may publish
-      // separately, but stale drafts must never replace an overlapping configured generation.
-      return undefined;
-    }
-    try {
-      return await publishPreparedModelRuntimeSnapshot(
-        {
-          ...input,
-          preserveWorkspaceDirOnRefresh: input.workspaceDir !== undefined,
-        },
-        { ...options, provenance: "standalone" },
-      );
-    } catch (error) {
-      if (!(error instanceof PreparedModelRuntimePublicationSupersededError)) {
-        throw error;
-      }
-      const replacement = pendingModelRuntimeReplacement;
-      if (replacement) {
-        assertPreparedModelRuntimeAdmissionCanWait();
-        await replacement.promise;
-      }
-    }
+  assertLifetime();
+  const overlapsConfiguredOwner = [...owners.values()].some(
+    (owner) =>
+      owner.provenance === "configured" &&
+      owner.input.agentDir === input.agentDir &&
+      (input.agentId === undefined || owner.input.agentId === input.agentId) &&
+      (input.workspaceDir === undefined || owner.input.workspaceDir === input.workspaceDir),
+  );
+  if (gatewayLifecycleActive && (!input.readOnly || overlapsConfiguredOwner)) {
+    // Gateway startup/reload owns configured identities. Isolated read-only drafts may publish
+    // separately, but stale drafts must never replace an overlapping configured generation.
+    return undefined;
   }
+  // A crossing reload fails this standalone request; the next request selects its new owner.
+  return await publishPreparedModelRuntimeSnapshot(
+    {
+      ...input,
+      preserveWorkspaceDirOnRefresh: input.workspaceDir !== undefined,
+    },
+    { ...options, provenance: "standalone" },
+  );
 }
 
 const preparedModelRuntimeLeaseContext = {
@@ -748,7 +732,7 @@ function invalidateForAuthMutation(event: PreparedModelRuntimeAuthMutation): voi
 }
 
 registerRuntimeAuthProfileStoreMutationListener(invalidateForAuthMutation);
-registerPreparedRuntimeAuthMaterializationPublisher(owners, notifyPreparedModelRuntimePublication);
+bindPreparedRuntimeAuthMaterializationPublisher(owners, notifyPreparedModelRuntimePublication);
 
 async function resetPreparedModelRuntimeSnapshotsForTest(): Promise<void> {
   await closePreparedModelRuntimeSnapshots();

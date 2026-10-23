@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For, Match, Show, Switch, createEffect, createMemo, untrack } from "solid-js";
+import { For, Match, Show, Switch, createMemo, createSignal } from "solid-js";
 import type {
   SessionParticipant,
   SessionParticipantIdentity,
@@ -8,8 +8,9 @@ import {
   SESSION_ICON_GLYPH_IDS,
   SESSION_ICON_SVG_DATA_URL_PREFIX,
 } from "../../../../packages/gateway-protocol/src/session-agent-status.js";
+import { registerChatToolLabelsEnglish } from "../../i18n/locales/en-chat-tool-labels.ts";
 import { resolveToolDisplayIcon } from "../../lib/chat/tool-display-icon.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import type { SessionCreatedActor, SessionOwnerOption } from "../../lib/session-owner.ts";
 import {
   summarizeSidebarSessionAttention,
@@ -28,9 +29,11 @@ import {
 import type { resolveSidebarSessionSubtitle } from "../session-row-subtitle.ts";
 import { createSessionRunVisibility as sessionRunVisibility } from "../session-run-visibility-controller.ts";
 import { ChannelAvatar } from "./channel-avatar.tsx";
+import "../tooltip.ts";
 import { Icon } from "./icon.tsx";
 import { SessionOwnerAvatar, SessionOwnerChip } from "./session-owner-chip.tsx";
-import "../tooltip.ts";
+
+registerEnglishCatalog(registerChatToolLabelsEnglish);
 
 type SessionRunVisibility = typeof sessionRunVisibility;
 export { sessionRunVisibility };
@@ -42,7 +45,13 @@ function SessionAttentionIcon(props: { attention: SidebarSessionAttention }) {
   const icon = () => sessionAttentionIconName(props.attention);
   return (
     <Show when={props.attention.kind !== "none"}>
-      <openclaw-tooltip prop:content={parts().preview ? "" : parts().status} open-on-click>
+      {/* Sidebar rows sit against the app rail; open inline to the right so the
+          tooltip never clamps over the rail or the row's own title. */}
+      <openclaw-tooltip
+        prop:content={parts().preview ? "" : parts().status}
+        prop:placement="right"
+        open-on-click
+      >
         <span
           class={[
             "sidebar-session-attention__icon",
@@ -108,13 +117,23 @@ export function SessionGlyph(props: SessionGlyphOptions) {
       ]}
     >
       <span class="session-glyph__content">{props.content}</span>
-      <Show when={props.running}>
-        <SessionGlyphRun
-          pair={props.ring === "pair"}
-          queued={props.queued}
-          label={label()}
-          runVisibility={props.runVisibility}
-        />
+      <Show when={props.running && (props.runVisibility ?? true)} keyed>
+        {(createVisibility) =>
+          renderSessionGlyphRun(
+            {
+              get pair() {
+                return props.ring === "pair";
+              },
+              get queued() {
+                return props.queued;
+              },
+              get label() {
+                return label();
+              },
+            },
+            typeof createVisibility === "function" ? createVisibility : undefined,
+          )
+        }
       </Show>
       {props.badge}
     </span>
@@ -128,32 +147,25 @@ export function SessionGlyph(props: SessionGlyphOptions) {
   );
 }
 
-function SessionGlyphRun(props: {
-  pair: boolean;
-  queued?: boolean;
-  label: string;
-  runVisibility?: SessionRunVisibility;
-}) {
-  const observe = untrack(() => props.runVisibility?.());
-  let indicator: Element | undefined;
-  // Class bindings can clear the offscreen class; refresh native visibility after that commit.
-  createEffect(
-    () => [props.queued, props.pair],
-    () => {
-      if (indicator) {
-        observe?.(indicator);
-      }
-    },
-  );
+function renderSessionGlyphRun(
+  props: { pair: boolean; queued?: boolean; label: string },
+  createVisibility: SessionRunVisibility | undefined,
+) {
+  const [offscreen, setOffscreen] = createSignal(false);
+  const observe = createVisibility?.(setOffscreen);
   return (
     <Show
       when={props.pair}
       fallback={
         <span
-          ref={(element) => {
-            indicator = element;
-          }}
-          class={["session-glyph__ring", { "session-glyph__ring--queued": props.queued }]}
+          ref={(element) => observe?.(element)}
+          class={[
+            "session-glyph__ring",
+            {
+              "session-glyph__ring--queued": props.queued,
+              "session-run-indicator--offscreen": offscreen(),
+            },
+          ]}
           role="img"
           aria-label={props.label}
         />
@@ -167,10 +179,8 @@ function SessionGlyphRun(props: {
       >
         <path class="session-glyph__trace-track" d={PAIR_TRACE_PATH} />
         <path
-          ref={(element) => {
-            indicator = element;
-          }}
-          class="session-glyph__trace-run"
+          ref={(element) => observe?.(element)}
+          class={["session-glyph__trace-run", { "session-run-indicator--offscreen": offscreen() }]}
           d={PAIR_TRACE_PATH}
           pathLength="100"
         />
@@ -574,21 +584,8 @@ export function renderSessionLeadingState(props: SessionLeadingStateProps) {
     </Show>
   );
   return {
-    get running() {
-      return running();
-    },
+    running,
     leadingIndicator,
-    get visible() {
-      return (
-        showGlyph() ||
-        (!props.trailingState &&
-          (session().isChild
-            ? Boolean(resolveSessionIdleBadge(session().status, t))
-            : session().unread))
-      );
-    },
-    get renderedIdentities() {
-      return renderedIdentities();
-    },
+    renderedIdentities,
   };
 }

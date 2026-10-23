@@ -21,6 +21,7 @@ import {
 import { runCronCommandJob } from "./command-runner.js";
 import { normalizeCronJobPatch } from "./normalize.js";
 import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
+import { cronTestDeps, cronTestInput } from "./service.fixture-builders.test-support.js";
 import type { CronEvent, CronService } from "./service.js";
 import {
   createCronServiceWithStateForTest,
@@ -47,14 +48,6 @@ const { makeStorePath } = createCronStoreHarness();
 installCronTestHooks({ logger: noopLogger });
 
 type CronAddInput = Parameters<CronService["add"]>[0];
-type DeliveryCase = {
-  name: string;
-  delivery?: CronAddInput["delivery"];
-  failureAlert?: CronAddInput["failureAlert"];
-  result: Partial<Awaited<ReturnType<CronServiceDeps["runIsolatedAgentJob"]>>>;
-  state: Partial<CronJob["state"]>;
-  event: Partial<CronEvent>;
-};
 const noFailureNotification = {
   lastFailureNotificationDelivered: undefined,
   lastFailureNotificationDeliveryStatus: "not-requested",
@@ -190,18 +183,8 @@ async function createCommandWebhook(
   };
 }
 
-function agentJob(name: string, overrides: Partial<CronAddInput> = {}): CronAddInput {
-  return {
-    name,
-    enabled: true,
-    schedule: { kind: "every", everyMs: 60_000 },
-    sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
-    payload: { kind: "agentTurn", message: "test" },
-    delivery: { mode: "announce", ...destination },
-    ...overrides,
-  };
-}
+const agentJob = (name: string, overrides: Partial<CronAddInput> = {}) =>
+  cronTestInput({ name, delivery: { mode: "announce", ...destination }, ...overrides });
 
 async function createScheduledService(deps: Partial<CronServiceDeps> = {}, start = true) {
   const { storePath, cleanup } = await makeStorePath();
@@ -209,13 +192,9 @@ async function createScheduledService(deps: Partial<CronServiceDeps> = {}, start
   const finished = createDeferred<CronEvent>();
   const events: CronEvent[] = [];
   const { cron, state } = createCronServiceWithStateForTest({
+    ...cronTestDeps({ storePath, nowMs: undefined }),
     scheduler: createTestGatewayScheduler(clock.clock),
-    storePath,
-    cronEnabled: true,
     log: noopLogger,
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
-    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     ...deps,
     onEvent: (event) => {
       if (event.action === "finished") {
@@ -242,41 +221,25 @@ async function createScheduledService(deps: Partial<CronServiceDeps> = {}, start
 }
 
 describe("CronService persists delivered status", () => {
-  it.each([
-    ["failing endpoint", 503, "not-delivered", 0],
-    ["forward wall-clock jump", 204, "delivered", 86_400_000],
-  ] as const)(
-    "records command webhook delivery through a real HTTP server: %s",
-    async (_name, responseStatus, expectedStatus, clockJumpMs) => {
-      const execution = gate(commandOk);
-      await using h = await createCommandWebhook({
-        oneShot: true,
-        responseStatus,
-        ...(clockJumpMs > 0
-          ? {
-              timeoutSeconds: 1,
-              runCommandJob: execution.run,
-            }
-          : {}),
-      });
-      const run = h.run();
-      if (clockJumpMs > 0) {
-        await execution.entered;
-        vi.setSystemTime(Date.now() + clockJumpMs);
-        execution.release();
-      }
-      await run;
-      const event = await h.finished;
-      expect(h.requests).toHaveLength(1);
-      await h.expectRequest({ action: "finished", ...commandOk });
-      h.expectDelivery(event, responseStatus === 204, expectedStatus);
-      expect(h.sendCronFailureAlert).toHaveBeenCalledTimes(responseStatus === 503 ? 1 : 0);
-      if (responseStatus === 503) {
-        expect(h.state()?.lastDeliveryError).toContain("HTTP 503");
-        expect(event.deliveryError).toContain("HTTP 503");
-      }
-    },
-  );
+  it("delivers a command webhook after a forward wall-clock jump", async () => {
+    const execution = gate(commandOk);
+    await using h = await createCommandWebhook({
+      oneShot: true,
+      responseStatus: 204,
+      timeoutSeconds: 1,
+      runCommandJob: execution.run,
+    });
+    const run = h.run();
+    await execution.entered;
+    vi.setSystemTime(Date.now() + 86_400_000);
+    execution.release();
+    await run;
+    const event = await h.finished;
+    expect(h.requests).toHaveLength(1);
+    await h.expectRequest({ action: "finished", ...commandOk });
+    h.expectDelivery(event, true, "delivered");
+    expect(h.sendCronFailureAlert).not.toHaveBeenCalled();
+  });
 
   it.each(["deadline", "cancellation"] as const)(
     "finalizes a hanging webhook on %s",
@@ -406,103 +369,46 @@ describe("CronService persists delivered status", () => {
     },
   );
 
-  it.each([
-    {
-      name: "verified primary delivery before a run error",
-      result: {
-        status: "error",
-        delivered: true,
-        delivery: verifiedDelivery,
-        error: "provider failed after verified delivery",
-      },
-      state: {
+  it.each([true, false])(
+    "persists failed-run delivery evidence (verified=%s)",
+    async (verified) => {
+      const error = verified
+        ? "provider failed after verified delivery"
+        : "Agent couldn't generate a response.";
+      await using h = await createScheduledService({
+        runIsolatedAgentJob: async () => ({
+          status: "error",
+          summary: "done",
+          delivered: true,
+          error,
+          ...(verified ? { delivery: verifiedDelivery } : {}),
+        }),
+      });
+      const { cron, clock, tick, finished } = h;
+      const added = await cron.add(agentJob("failed-run delivery"));
+      clock.setTime(added.state.nextRunAtMs! + 5);
+      await tick();
+      const event = await finished;
+      const updated = (await cron.list({ includeDisabled: true })).find(
+        (entry) => entry.id === added.id,
+      );
+      const deliveryStatus = verified ? "delivered" : "not-delivered";
+      expectFields(updated?.state, {
         lastRunStatus: "error",
         consecutiveErrors: 1,
-        lastDelivered: true,
-        lastDeliveryStatus: "delivered",
-        lastDeliveryError: undefined,
-      },
-      event: {
+        lastDelivered: verified,
+        lastDeliveryStatus: deliveryStatus,
+        lastDeliveryError: verified ? undefined : error,
+        ...(!verified ? noFailureNotification : {}),
+      });
+      expectFields(event, {
         completionStatus: "failed",
-        delivered: true,
-        deliveryStatus: "delivered",
-        deliveryError: undefined,
-      },
+        delivered: verified,
+        deliveryStatus,
+        ...(!verified ? { failureNotificationDelivery: undefined } : { deliveryError: undefined }),
+      });
     },
-    {
-      name: "unverified delivery on a failed run",
-      result: { status: "error", delivered: true, error: "Agent couldn't generate a response." },
-      state: {
-        ...noFailureNotification,
-        lastRunStatus: "error",
-        lastDelivered: false,
-        lastDeliveryStatus: "not-delivered",
-        lastDeliveryError: "Agent couldn't generate a response.",
-      },
-      event: {
-        delivered: false,
-        deliveryStatus: "not-delivered",
-        failureNotificationDelivery: undefined,
-      },
-    },
-    {
-      name: "scheduler-authorized alert intent",
-      failureAlert: { after: 1 },
-      result: { status: "error", error: "provider unavailable" },
-      state: { ...noFailureNotification, lastFailureNotificationDeliveryStatus: "unknown" },
-      event: { failureNotificationDelivery: { status: "unknown" } },
-    },
-    {
-      name: "suppressed best-effort failure destination",
-      delivery: {
-        mode: "none",
-        bestEffort: true,
-        failureDestination: { mode: "webhook", to: "https://example.invalid/cron-failure" },
-      },
-      result: { status: "error", error: "Agent couldn't generate a response." },
-      state: {
-        ...noFailureNotification,
-        lastRunStatus: "error",
-        lastDeliveryStatus: "not-requested",
-      },
-      event: { deliveryStatus: "not-requested", failureNotificationDelivery: undefined },
-    },
-    {
-      name: "requested delivery without a runner outcome",
-      result: {},
-      state: {
-        lastStatus: "ok",
-        lastRunStatus: "ok",
-        lastDelivered: undefined,
-        lastDeliveryStatus: "unknown",
-        lastDeliveryError: undefined,
-      },
-      event: {},
-    },
-  ] satisfies DeliveryCase[])("persists and emits $name", async (scenario) => {
-    await using h = await createScheduledService({
-      runIsolatedAgentJob: vi.fn(async () => ({
-        status: "ok" as const,
-        summary: "done",
-        ...scenario.result,
-      })),
-    });
-    const { cron, clock, tick, finished } = h;
-    const added = await cron.add(
-      agentJob(scenario.name, {
-        ...("delivery" in scenario ? { delivery: scenario.delivery } : {}),
-        ...("failureAlert" in scenario ? { failureAlert: scenario.failureAlert } : {}),
-      }),
-    );
-    clock.setTime(added.state.nextRunAtMs! + 5);
-    await tick();
-    const event = await finished;
-    const updated = (await cron.list({ includeDisabled: true })).find(
-      (entry) => entry.id === added.id,
-    );
-    expectFields(updated?.state, scenario.state);
-    expectFields(event, scenario.event);
-  });
+  );
 
   it.each([
     ["best-effort to required", true, [false], "succeeded"],

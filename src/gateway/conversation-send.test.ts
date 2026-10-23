@@ -1,5 +1,5 @@
 import { setImmediate } from "node:timers/promises";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import {
@@ -170,10 +170,14 @@ describe("conversation send through an accepted channel response", () => {
 });
 
 describe("runGatewayConversationSend", () => {
+  let deps: Awaited<ReturnType<typeof createDeps>>;
+  beforeEach(async () => {
+    deps = await createDeps();
+  });
+
   it.each([false, true])(
     "admits the initial writable lookup before sending (aborted=%s)",
     async (aborted) => {
-      const deps = await createDeps();
       const scope = await prepareConversationRegistryScope({
         agentId: "main",
         config: deps.config,
@@ -208,7 +212,6 @@ describe("runGatewayConversationSend", () => {
   );
 
   it("joins accepted send reconciliation on its original store after cancellation and config rotation", async () => {
-    const deps = await createDeps();
     const replacement = await createConversationDeliveryTestStore();
     const scope = await prepareConversationRegistryScope({ agentId: "main", config: deps.config });
     const blocked = createDeferred<ReturnType<typeof holdConversationWriterForTest>>();
@@ -269,7 +272,6 @@ describe("runGatewayConversationSend", () => {
   ] as const)(
     "replays $status with persisted metadata and no current store access",
     async ({ status, preparedMessageId }) => {
-      const deps = await createDeps();
       const operationId = "send-completed";
       await deps.begin(operationId, { preparedMessageId });
       await markConversationDeliveryQueued(deps.scope, operationId, "queue-existing");
@@ -308,7 +310,6 @@ describe("runGatewayConversationSend", () => {
   );
 
   it("projects current conversation metadata for an unfinished send", async () => {
-    const deps = await createDeps();
     await deps.begin("send-unfinished");
     await registerConversationAddresses(deps.scope, [
       { ...currentConversation, deliveryTarget: currentConversation.target },
@@ -323,7 +324,6 @@ describe("runGatewayConversationSend", () => {
   });
 
   it("owns durable delivery in the Gateway and binds the source session", async () => {
-    const deps = await createDeps();
     const result = await deps.send("send-1", {
       sourceSessionKey: "agent:main:telegram:direct:operator",
       message: "hello molty",
@@ -355,7 +355,6 @@ describe("runGatewayConversationSend", () => {
   });
 
   it("does not reveal completed send state after the route owner changes", async () => {
-    const deps = await createDeps();
     await deps.begin("send-reassigned");
     await markConversationDeliverySent(deps.scope, "send-reassigned", "reef-private-message");
 
@@ -367,7 +366,6 @@ describe("runGatewayConversationSend", () => {
   });
 
   it("revalidates a route-owner change at the durable delivery attempt", async () => {
-    const deps = await createDeps();
     deps.runMessageAction.mockImplementation(async (input) => {
       await queueConversationDeliveryForTest(input, "queue-revoked-route");
       readCurrentConfig.mockReturnValue(reassignedConfig(deps.config));
@@ -389,7 +387,6 @@ describe("runGatewayConversationSend", () => {
   });
 
   it("maps unknown conversations to terminal input errors", async () => {
-    const deps = await createDeps();
     deps.resolveConversation.mockResolvedValueOnce(undefined);
 
     await expect(deps.send("send-missing")).rejects.toBeInstanceOf(ConversationInputError);
@@ -398,7 +395,6 @@ describe("runGatewayConversationSend", () => {
   });
 
   it("preserves durable operation conflicts for Gateway identity recovery", async () => {
-    const deps = await createDeps();
     await deps.begin("send-reused", { message: "original" });
     await markConversationDeliverySent(deps.scope, "send-reused");
     deps.resolveConversation.mockResolvedValue(undefined);

@@ -37,6 +37,8 @@ afterEach(async () => {
 
 it("keeps an empty legacy state dir separate when the canonical root exists", async () => {
   const instance = await createInstance("doctor-empty-legacy-state-dir", {
+    // This case owns state-root selection; the next case covers the plugin index.
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
     OPENCLAW_CONFIG_PATH: undefined,
     OPENCLAW_HOME: undefined,
     OPENCLAW_STATE_DIR: undefined,
