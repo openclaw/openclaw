@@ -16,7 +16,10 @@ import path from "node:path";
 import { finished } from "node:stream/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
+import { McpServer } from "@modelcontextprotocol/server";
 import { Value } from "typebox/value";
+import { z } from "zod";
 import { rawDataToString } from "../../packages/gateway-client/src/websocket-data.ts";
 import { HelloOkSchema } from "../../packages/gateway-protocol/src/schema/frames.ts";
 import type { SessionsPatchParams } from "../../packages/gateway-protocol/src/schema/sessions-patch.ts";
@@ -27,7 +30,6 @@ import { prepareSessionEventMetrics } from "../../src/gateway/session-event-metr
 import { encodePngRgba } from "../../src/media/png-encode.js";
 import { GatewaySessionRowEvents } from "../../ui/src/api/gateway-session-row-events.ts";
 import { applyMockOpenAiModelConfig } from "../e2e/lib/fixtures/mock-openai-config.mjs";
-import { writeProbeMcpServer } from "../e2e/lib/mcp-code-mode-probe-server.js";
 import {
   readMockUserText,
   summarizeMockInferenceRequest,
@@ -623,8 +625,10 @@ const coldBaseRefs =
   isRecord(project) && Array.isArray(project.coldBaseRefs)
     ? project.coldBaseRefs.filter((ref: unknown): ref is string => typeof ref === "string")
     : [];
-if (values["attempt-setup-image"] && coldBaseRefs.length < coldSessionRounds) {
-  throw new Error("Regenerate the fixture with --worktree-cold-commits >= --cold-session-rounds");
+if (values["attempt-setup-image"] && coldBaseRefs.length < coldSessionRounds * runCount) {
+  throw new Error(
+    "Regenerate the fixture with --worktree-cold-commits >= cold-session-rounds * runs",
+  );
 }
 const fixtureSessionCount = typeof fixture.sessionCount === "number" ? fixture.sessionCount : 0;
 const patchKeys =
@@ -922,14 +926,15 @@ if (values["attempt-setup-image"]) {
     allow: [...new Set([...(cfg.plugins?.allow ?? []), ...plugin.pluginIds])],
     load: { paths: [plugin.pluginsDir] },
   };
-  const serverPath = path.join(output, "attempt-setup-mcp.mjs");
-  await writeProbeMcpServer(serverPath);
+  const manifestPath = path.join(plugin.pluginsDir, plugin.pluginIds[0]!, "openclaw.plugin.json");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  manifest.contracts = { tools: ["benchmark_probe"] };
+  writeFileSync(manifestPath, JSON.stringify(manifest));
   cfg.mcp = {
     servers: {
       benchmark: {
-        transport: "stdio",
-        command: process.execPath,
-        args: [serverPath],
+        transport: "streamable-http",
+        url: `http://127.0.0.1:${mockPort}/mcp`,
         enabled: true,
       },
     },
@@ -1482,6 +1487,28 @@ const mock = createServer((req, res) => {
     return;
   }
   void (async () => {
+    if (values["attempt-setup-image"] && req.url === "/mcp") {
+      const server = new McpServer({ name: "attempt-setup-fixture", version: "1.0.0" });
+      server.registerTool(
+        "lookup_note",
+        {
+          description: "Read a synthetic fixture note.",
+          inputSchema: z.object({ id: z.string() }),
+        },
+        async () => ({ content: [{ type: "text", text: "synthetic-mcp-ready" }] }),
+      );
+      const transport = new NodeStreamableHTTPServerTransport({
+        sessionIdGenerator: undefined,
+        enableJsonResponse: true,
+      });
+      await server.connect(transport);
+      try {
+        await transport.handleRequest(req, res);
+      } finally {
+        await server.close();
+      }
+      return;
+    }
     const body: unknown = JSON.parse(
       await readBody(
         req,
@@ -1971,6 +1998,9 @@ const env = {
     : {}),
   ...(values["attempt-setup-image"] && process.env.CONTAINERS_CONF
     ? { CONTAINERS_CONF: process.env.CONTAINERS_CONF }
+    : {}),
+  ...(values["attempt-setup-image"] && process.env.OPENCLAW_PATH_BOOTSTRAPPED === "1"
+    ? { OPENCLAW_PATH_BOOTSTRAPPED: "1" }
     : {}),
   TMPDIR: path.join(root, "tmp"),
   OPENAI_API_KEY: "synthetic-fixture",
@@ -4485,7 +4515,7 @@ try {
           key,
           ...(stressWorktree ? { cwd: stressWorktree } : {}),
           ...(values["attempt-setup-image"]
-            ? { worktree: true, worktreeBaseRef: coldBaseRefs[round] }
+            ? { worktree: true, worktreeBaseRef: coldBaseRefs[round * runCount + index] }
             : {}),
           parentSessionKey: parentKey,
           spawnDepth: 1,

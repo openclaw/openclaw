@@ -31,6 +31,8 @@ type PreparationPhase =
   | "snapshot"
   | "synchronizeCanonical"
   | "synchronizeProjection"
+  | "runtimeQuiesce"
+  | "runtimeResume"
   | "containerStart"
   | "workspaceLayout";
 type TemplateState = "warm" | "cold" | "unavailable" | "reused";

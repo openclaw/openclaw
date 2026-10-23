@@ -497,7 +497,9 @@ validation, and occur outside attempt setup.
 
 `detail.worktree.managed.*` and `detail.worktree.sandbox.*` carry the worktree
 owner's recorded phase durations, including `templatePrepare`, `templateApply`,
-`checkout`, and `unattributed`. The top-level `worktree` interval can describe an
+`checkout`, `runtimeQuiesce`, `runtimeResume`, and `unattributed`. Runtime quiescence
+and resume include pausing and unpausing sandbox writers around synchronization.
+The top-level `worktree` interval can describe an
 earlier managed checkout; it is not the sandbox work inside `attempt.setup`.
 Use the matching `detail.worktree.sandbox` total when comparing setup with its
 nested worktree preparation. Recorded worktree summaries appear when their owner

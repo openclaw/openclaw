@@ -3143,22 +3143,30 @@ node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
 ```
 
 For workspace/sandbox setup attribution, add `--attempt-setup-image <local-image-id>`
-and generate the fixture with at least one project, `--worktree-files 5000`, and
-`--worktree-install-failure --worktree-cold-commits 30`. The install-failure option commits a minimal pnpm package with a
+and generate the fixture with at least one project, `--worktree-files 5000 --worktree-file-bytes 4096`, and
+`--worktree-install-failure --worktree-cold-commits 32`. The install-failure option commits a minimal pnpm package with a
 failing preinstall script, exercising source-only template recovery after an
 installer failure (the Python probe image fails earlier because pnpm is absent).
+The 5,000 distinct deterministic 4 KiB files add about 20 MiB of tracked source
+content; this exercises object copying beyond an empty-file index inventory.
 This uses the real Podman backend with a network-disabled session container,
 creates managed session worktrees, and prepares one synthetic plugin tool plus
-the existing stdio MCP probe server. Every first provider request must contain
+a synthetic Streamable HTTP MCP server on the loopback model-fixture listener. Every first provider request must contain
 both tool definitions; the completed turn must read the committed project README
 through the sandbox. The image must already be available in an isolated Podman
 store selected by `CONTAINERS_STORAGE_CONF`; prepare it outside measurement.
 The image needs the normal sandbox shell, core utilities, and Python filesystem
 bridge dependencies. Keep the store, HOME, temporary files, and fixture under the
-approved sandbox directory.
+approved sandbox directory. For a task-owned Podman wrapper that supplies the
+side scope as `--cgroup-parent`, set `OPENCLAW_PATH_BOOTSTRAPPED=1` with a curated
+PATH; this fixture forwards it so CLI path bootstrapping does not select the
+system Podman ahead of the wrapper. Verify the real container and Gateway
+cgroup effective CPUs before accepting a pair.
 
-`--cold-session-rounds 30 --rounds 230 --runs 1` measures 30 new sessions,
-worktrees, and containers, followed by 200 turns on the final session. Each cold
+`--cold-session-rounds 8 --rounds 58 --runs 4` measures 32 new sessions,
+worktrees, and containers, followed by 200 turns on the final four sessions.
+Both sides use cohorts of four concurrent turns; cold cohorts contend for the
+same dependency-template owner with four distinct content revisions. Each cold
 session selects a distinct pre-generated commit with identical tree contents;
 this invalidates the dependency template even after Gateway warmup. Confirm the
 managed-worktree log reports cold fallback for these turns before claiming a
@@ -3170,7 +3178,7 @@ to first model HTTP request samples by `cold-session` and `warm-session`, includ
 counts, raw samples, p50/p95/p99, and max; no provider response delay is included.
 Per-round `streamStart.providerRequestMs` retains the same underlying samples.
 Use separate matching fixtures, concurrent guarded pairs, and swapped interleaved
-CPU sets. p99 with 30 or 200 observations is context under the campaign's
+CPU sets. p99 with 32 or 200 observations is context under the campaign's
 1,000-sample rule; it cannot gate. Remove only the task-owned containers and store
 after inspecting the results. This workload raises the provider-arrival deadline
 to 170 seconds so a slow setup is measured rather than rejected at 45 seconds.
