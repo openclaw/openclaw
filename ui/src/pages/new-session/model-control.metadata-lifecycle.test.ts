@@ -10,6 +10,7 @@ import {
 import { invalidateModelCatalogCache } from "../../lib/model-catalog-cache.ts";
 import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { resetWorktreeMocks } from "./draft-worktree-checks.test-support.ts";
 import { identityPreferences } from "./draft-worktree-preferences.test-support.ts";
 import { disposeWorktreeDraft } from "./draft-worktree-submission.test-support.ts";

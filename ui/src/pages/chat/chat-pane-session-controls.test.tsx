@@ -323,6 +323,10 @@ describe("chat pane composer controls", () => {
       const state = makeChatHost({
         connected,
         requestHandlers: {},
+        sessionsResult: createSessionsListResult({
+          model: "cached-model",
+          modelProvider: "openai",
+        }),
         chatModelCatalog: cached
           ? [{ id: "cached-model", name: "Cached Model", provider: "openai", available: false }]
           : [],

@@ -576,8 +576,10 @@ suite.define(() => {
           key: sessionKey,
           model: `openai/gpt-5.5@${work.authProfileId}`,
         });
-        await search.clear();
-        await expect.poll(() => trigger.textContent()).toContain(personal.label);
+        // A pending write must not promote this candidate to the current account.
+        await expect.poll(() => workOption.isVisible()).toBe(true);
+        expect(await workOption.getAttribute("aria-selected")).toBe("false");
+        expect(await search.isDisabled()).toBe(true);
         await gateway.resolveDeferred("sessions.patch", { ok: true });
         await gateway.setMethodResponse("sessions.list", sessionList);
         await gateway.setMethodResponse("models.list", {
@@ -596,6 +598,7 @@ suite.define(() => {
           agentId: "main",
           reason: "patch",
         });
+        await search.clear();
         await expect.poll(() => trigger.textContent()).toContain(work.label);
         await expect.poll(() => heading.textContent()).toContain("Subscription · work@example.com");
         expect(await gateway.getRequests("users.selectModelAccount")).toHaveLength(0);
