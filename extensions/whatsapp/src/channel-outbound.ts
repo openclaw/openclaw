@@ -15,17 +15,17 @@ const loadWhatsAppApprovalReactionsModule = createLazyRuntimeModule(
 export const whatsappChannelOutbound = {
   ...whatsappOutboundBase,
   sendTextOnlyErrorPayloads: true,
-  async renderPresentation(
+  renderPresentation: async (
     params: Parameters<NonNullable<ChannelOutboundAdapter["renderPresentation"]>>[0],
-  ) {
+  ) => {
     return (await loadWhatsAppApprovalReactionsModule()).prepareWhatsAppApprovalPayloadForDelivery({
       payload: params.payload,
       presentation: params.presentation,
     });
   },
-  async afterDeliverPayload(
+  afterDeliverPayload: async (
     params: Parameters<NonNullable<ChannelOutboundAdapter["afterDeliverPayload"]>>[0],
-  ): Promise<void> {
+  ): Promise<void> => {
     await (
       await loadWhatsAppApprovalReactionsModule()
     ).registerWhatsAppApprovalReactionTargetForDeliveredPayload(params);
