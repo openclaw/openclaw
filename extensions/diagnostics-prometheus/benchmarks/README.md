@@ -23,6 +23,10 @@ It is an owner workload, not a traffic replay or a claim about actual scrape byt
 lengths. Omitting `--shape` instead fills the current 16,384-entry exporter budget
 with the existing mixed scalar/histogram saturation fixture.
 
+`render-shape-2026-10-23.json` is a second observed shape with 1,462 histogram
+and 1,520 scalar label sets, producing 38,779 rows across 112 families. As with
+the original shape, all label values and metric values are synthetic.
+
 The first phase measures 200 warm renders without allocation sampling. It reports
 CPU per scrape, wall time, and scrape latency samples, median, p95, p99, and max.
 The second phase measures 100 renders with V8 heap allocation sampling at a 4 KiB
@@ -75,6 +79,26 @@ and profiler startup/teardown are outside these markers. Keep unprofiled and
 profiled promotion separate. The synchronous owner phases omit HTTP transport
 copying; use the HTTP phases to include it. Neither mode measures Gateway
 event-loop delay.
+
+Chunked store output is sent with its exact aggregate `Content-Length`, using
+one corked response and the immutable per-series buffers. It does not allocate
+a joined response buffer. `scrape.chunks` counts the returned fragments;
+`bufferByteLength` remains zero when no joined backing buffer is allocated.
+The retained external-memory measurement includes cached series buffers.
+Account for this storage separately from sampled heap allocation and response
+bytes. The 1 ms event-loop monitor reports sample counts and tails for each
+phase; synchronous owner loops normally have no samples, while HTTP phases
+can provide transport-level event-loop evidence.
+
+Use `--updates-per-render <count>` with `--shape` to rotate through that many
+existing series before each measured render and each HTTP request. Histogram
+observations increment count/sum/buckets; counters increase and gauges change.
+The synthetic event inputs are prepared before the store-retention baseline.
+CPU and allocation include updates; the owner render-latency timer excludes
+them. Both sides must use the same count. Updated HTTP bodies have variable
+lengths, so compare aggregate received bytes and the final `.final.prom` files
+between sides, as well as initial and escaped fixtures. This workload measures
+invalidation cost; it does not claim to replay a production event distribution.
 
 The JSON includes full scrape and small escaped/Unicode fixture digests.
 `<output>.prom` holds the full fixture and `<output>.fixed.prom` holds the small

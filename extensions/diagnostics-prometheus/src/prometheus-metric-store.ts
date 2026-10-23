@@ -7,6 +7,7 @@ import {
 } from "./prometheus-family-budget.js";
 import {
   escapeHelp,
+  formatHistogramLabels,
   formatLabels,
   formatPrometheusNumber,
   metricKey,
@@ -19,11 +20,13 @@ type ScalarSample = {
   name: string;
   prefix: string;
   value: number;
+  rendered?: Buffer;
 };
 
 type HistogramSample = {
   buckets: number[];
-  bucketPrefixes: string[];
+  bucketPrefix: string;
+  bucketSuffix: string;
   counts: number[];
   count: number;
   help: string;
@@ -32,6 +35,7 @@ type HistogramSample = {
   sumPrefix: string;
   countPrefix: string;
   sum: number;
+  rendered?: Buffer;
 };
 
 type LabelNode<T> = {
@@ -69,8 +73,6 @@ export function createPrometheusMetricStore(
   let sharedSeries = 0;
   const familyCounts = new Map<PrometheusMetricName, number>();
   const familyDrops = new Map<PrometheusMetricName, number>();
-  // Reuse the scrape workspace; render overwrites it, and reset releases it.
-  const parts: string[] = [];
 
   const series = <T>(map: MetricSeries<T>, name: PrometheusMetricName, labels: LabelSet) => {
     let labelCount = 0;
@@ -164,12 +166,16 @@ export function createPrometheusMetricStore(
       return;
     }
     if (node.sample) {
-      node.sample.value =
+      const next =
         mode === "add"
           ? node.sample.value + value
           : mode === "max"
             ? Math.max(node.sample.value, value)
             : value;
+      if (next !== node.sample.value) {
+        node.sample.value = next;
+        node.sample.rendered = undefined;
+      }
     } else {
       node.sample = {
         help,
@@ -220,12 +226,12 @@ export function createPrometheusMetricStore(
     }
     let sample = node.sample;
     if (!sample) {
+      const [beforeBound, afterBound] = formatHistogramLabels(labels);
       sample = {
         buckets,
-        // Labels and bounds are fixed for this series; reset releases the prepared text.
-        bucketPrefixes: [...buckets, "+Inf"].map(
-          (le) => `${name}_bucket${formatLabels({ ...labels, le: String(le) })} `,
-        ),
+        // Retain compact labels, not a second expanded copy of every rendered bucket.
+        bucketPrefix: `${name}_bucket${beforeBound}`,
+        bucketSuffix: `${afterBound} `,
         counts: buckets.map(() => 0),
         count: 0,
         help,
@@ -261,6 +267,7 @@ export function createPrometheusMetricStore(
     }
     sample.count += 1;
     sample.sum += value;
+    sample.rendered = undefined;
     for (let index = 0; index < sample.buckets.length; index += 1) {
       const bucket = sample.buckets[index];
       if (bucket !== undefined && value <= bucket) {
@@ -270,17 +277,18 @@ export function createPrometheusMetricStore(
   };
 
   const render = () => {
+    const parts: Buffer[] = [];
     let index = 0;
     const write = (prefix: string, value: number) => {
-      parts[index++] = prefix;
-      parts[index++] = formatPrometheusNumber(value);
-      parts[index++] = "\n";
+      parts[index++] = Buffer.from(`${prefix}${formatPrometheusNumber(value)}\n`);
     };
     const emitted = new Set<string>();
     const header = (name: string, type: string, help: string) => {
       if (!emitted.has(name)) {
         emitted.add(name);
-        parts[index++] = `# HELP ${name} ${escapeHelp(help)}\n# TYPE ${name} ${type}\n`;
+        parts[index++] = Buffer.from(
+          `# HELP ${name} ${escapeHelp(help)}\n# TYPE ${name} ${type}\n`,
+        );
       }
     };
     for (const [type, samples] of [
@@ -289,7 +297,9 @@ export function createPrometheusMetricStore(
     ] as const) {
       for (const sample of samples.toSorted((left, right) => left.key.localeCompare(right.key))) {
         header(sample.name, type, sample.help);
-        write(sample.prefix, sample.value);
+        parts[index++] = sample.rendered ??= Buffer.from(
+          `${sample.prefix}${formatPrometheusNumber(sample.value)}\n`,
+        );
       }
       if (type === "counter" && droppedSeries > 0) {
         header(
@@ -315,14 +325,22 @@ export function createPrometheusMetricStore(
         continue;
       }
       header(sample.name, "histogram", sample.help);
-      sample.bucketPrefixes.forEach((prefix, bucketIndex) => {
-        write(prefix, sample.counts[bucketIndex] ?? sample.count);
-      });
-      write(sample.sumPrefix, sample.sum);
-      write(sample.countPrefix, sample.count);
+      if (!sample.rendered) {
+        const rows = sample.buckets.map(
+          (bound, bucketIndex) =>
+            `${sample.bucketPrefix}${bound}${sample.bucketSuffix}${formatPrometheusNumber(sample.counts[bucketIndex] ?? sample.count)}\n`,
+        );
+        rows.push(
+          `${sample.bucketPrefix}+Inf${sample.bucketSuffix}${formatPrometheusNumber(sample.count)}\n`,
+          `${sample.sumPrefix}${formatPrometheusNumber(sample.sum)}\n`,
+          `${sample.countPrefix}${formatPrometheusNumber(sample.count)}\n`,
+        );
+        sample.rendered = Buffer.from(rows.join(""));
+      }
+      parts[index++] = sample.rendered;
     }
-    parts.length = index;
-    return parts.join("");
+    // Replacing a changed series never mutates bytes held by an outstanding scrape.
+    return parts;
   };
 
   const reset = () => {
@@ -334,7 +352,6 @@ export function createPrometheusMetricStore(
     sharedSeries = 0;
     familyCounts.clear();
     familyDrops.clear();
-    parts.length = 0;
   };
 
   return { counter, counterValue, gauge, clearGauges, histogram, reserveHistogram, reset, render };

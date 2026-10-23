@@ -28,6 +28,23 @@ export function formatLabels(labels: LabelSet): string {
   return `{${entries.map(formatLabelEntry).join(",")}}`;
 }
 
+export function formatHistogramLabels(labels: LabelSet): [string, string] {
+  const before: string[] = [];
+  const after: string[] = [];
+  let target = before;
+  for (const entry of sortedLabels({ ...labels, le: "" })) {
+    if (entry[0] === "le") {
+      target = after;
+    } else {
+      target.push(formatLabelEntry(entry));
+    }
+  }
+  return [
+    `{${before.length ? `${before.join(",")},` : ""}le="`,
+    `"${after.length ? `,${after.join(",")}` : ""}}`,
+  ];
+}
+
 export function formatPrometheusNumber(value: number): string {
   if (!Number.isFinite(value)) {
     return "0";
