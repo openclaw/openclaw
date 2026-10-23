@@ -433,7 +433,6 @@ src/auto-reply/group-activation.ts
 src/auto-reply/heartbeat-filter.ts
 src/auto-reply/heartbeat.ts
 src/auto-reply/reply/commands-slash-parse.ts
-src/auto-reply/reply/delivery-hints.ts
 src/auto-reply/reply/display-text-sanitize.ts
 src/auto-reply/reply/history-limit.ts
 src/auto-reply/reply/inbound-context-marker.ts
@@ -1431,7 +1430,6 @@ src/plugins/compat/workspace-mutation-guard.ts
 src/plugins/config-activation-shared.ts
 src/plugins/config-contract-matches.ts
 src/plugins/config-normalization-shared.ts
-src/plugins/config-policy.ts
 src/plugins/config-state.ts
 src/plugins/control-plane-workspace.ts
 src/plugins/control-ui-assets.ts
@@ -1493,7 +1491,6 @@ src/plugins/managed-npm-retention.ts
 src/plugins/management-lifecycle-error.ts
 src/plugins/manifest-capability-normalizers.ts
 src/plugins/manifest-command-aliases.ts
-src/plugins/manifest-config-groups.ts
 src/plugins/manifest-contract-eligibility.ts
 src/plugins/manifest-contract-keys.ts
 src/plugins/manifest-control-ui.ts
@@ -1501,7 +1498,6 @@ src/plugins/manifest-decision-catalog.ts
 src/plugins/manifest-install-owner.ts
 src/plugins/manifest-metadata-scan.ts
 src/plugins/manifest-model-id-normalization.ts
-src/plugins/manifest-model-provider-normalizers.ts
 src/plugins/manifest-owner-policy.ts
 src/plugins/manifest-platforms.ts
 src/plugins/manifest-record.ts
@@ -1509,7 +1505,6 @@ src/plugins/manifest-registry-build.ts
 src/plugins/manifest-registry-installed.ts
 src/plugins/manifest-registry.ts
 src/plugins/manifest-setup-normalizers.ts
-src/plugins/manifest-theme-definitions.ts
 src/plugins/manifest-themes.ts
 src/plugins/manifest.ts
 src/plugins/min-host-version.ts
@@ -1620,7 +1615,6 @@ src/plugins/plugin-source-references.ts
 src/plugins/plugin-source-verification.ts
 src/plugins/portable-icon-paths.ts
 src/plugins/prepared-message-tool-catalog.ts
-src/plugins/provider-availability-policy.ts
 src/plugins/provider-config-owner.ts
 src/plugins/provider-model-routes.ts
 src/plugins/provider-owner-index.ts

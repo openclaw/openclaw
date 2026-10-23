@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { isAuthCooldownBypassedForProvider as managesAvailability } from "../agents/auth-profiles/usage-state.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -17,7 +18,6 @@ import {
   rebasePluginMetadataSnapshotManifestRegistry as rebaseRegistry,
 } from "./plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
-import { resolveProviderManagesOwnAvailability as managesAvailability } from "./provider-availability-policy.js";
 
 const tempDirs = createTempDirTracker();
 
@@ -90,12 +90,12 @@ it("uses cold third-party metadata and the same pinned runtime generation withou
     },
   };
   setRuntimeConfigSnapshot(config, config);
-  expect(managesAvailability("LOCAL")).toBe(true);
-  expect(managesAvailability("unrelated")).toBe(false);
+  expect(managesAvailability("LOCAL", "rate_limit")).toBe(true);
+  expect(managesAvailability("unrelated", "rate_limit")).toBe(false);
   const snapshot = loadPluginMetadataSnapshot({ config, env: process.env });
-  expect(within(snapshot, () => managesAvailability("local"))).toBe(true);
+  expect(within(snapshot, () => managesAvailability("local", "rate_limit"))).toBe(true);
   const empty = projectPluginMetadataSnapshot(snapshot, []);
-  expect(within(empty, () => managesAvailability("local"))).toBe(false);
+  expect(within(empty, () => managesAvailability("local", "rate_limit"))).toBe(false);
 });
 
 it("preserves literal owner precedence and excludes disabled declarations", () => {
@@ -111,8 +111,8 @@ it("preserves literal owner precedence and excludes disabled declarations", () =
   }
   const prepared = rebaseRegistry(snapshot, snapshot.manifestRegistry);
   within(prepared, () => {
-    expect(managesAvailability("shared")).toBe(false);
-    expect(managesAvailability("local")).toBe(true);
-    expect(managesAvailability("disabled-local")).toBe(false);
+    expect(managesAvailability("shared", "rate_limit")).toBe(false);
+    expect(managesAvailability("local", "rate_limit")).toBe(true);
+    expect(managesAvailability("disabled-local", "rate_limit")).toBe(false);
   });
 });

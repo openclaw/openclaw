@@ -1,10 +1,19 @@
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
 } from "../../../packages/gateway-protocol/src/schema/error-codes.js";
 import type { RespondFn } from "./types.js";
-export { parseGatewayPayload } from "../server-json.js";
+
+export function parseGatewayPayload(value: string | null | undefined): unknown {
+  const trimmed = normalizeOptionalString(value);
+  if (!trimmed) {
+    return undefined;
+  }
+  const parsed = safeParseJson(trimmed);
+  return parsed === undefined ? { payloadJSON: value } : parsed;
+}
 
 export const respondUnavailableOnNodeInvokeError: <T extends { ok: boolean; error?: unknown }>(
   respond: RespondFn,

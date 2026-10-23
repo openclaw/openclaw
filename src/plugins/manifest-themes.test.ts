@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createThemeDefinitionFixture } from "../../test/helpers/theme-fixture.js";
-import { loadManifestThemeDefinitions } from "./manifest-theme-definitions.js";
+import { buildPluginManifestRecord } from "./manifest-record.js";
 import { normalizeManifestThemes } from "./manifest-themes.js";
 import type { PluginDiagnostic, PluginManifestTheme } from "./manifest-types.js";
 import { loadPluginManifest } from "./manifest.js";
@@ -41,14 +41,22 @@ function fixture(theme = declaration, palette = definition) {
   }
   const capture = (rejectHardlinks = true) => {
     const diagnostics: PluginDiagnostic[] = [];
-    const themes = withPluginCache(createPluginCache(), () =>
-      loadManifestThemeDefinitions({
-        pluginId: "theme-pack",
-        rootDir,
-        themes: [theme],
-        rejectHardlinks,
-        diagnostics,
-      }),
+    const themes = withPluginCache(
+      createPluginCache(),
+      () =>
+        buildPluginManifestRecord({
+          manifest: { id: "theme-pack", configSchema: {}, themes: [theme] },
+          candidate: {
+            idHint: "theme-pack",
+            rootDir,
+            source: path.join(rootDir, "index.ts"),
+            origin: "bundled",
+          },
+          manifestPath: path.join(rootDir, "openclaw.plugin.json"),
+          rejectHardlinks,
+          diagnostics,
+          trust: { reason: "bundled", registryPath: null, origin: "bundled" },
+        }).themeDefinitions,
     );
     return { themes, diagnostics };
   };

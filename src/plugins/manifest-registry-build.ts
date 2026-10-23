@@ -12,7 +12,7 @@ import {
   isPluginCandidateInstallOwnerAmbiguous,
   resolvePluginCandidateInstallOwner,
 } from "./candidate-install-owner.js";
-import { normalizePluginsConfigWithResolver } from "./config-policy.js";
+import { normalizePluginsConfigWithResolverCore } from "./config-normalization-shared.js";
 import { isBundledPluginInsideDevSourceRoot } from "./dev-source-root.js";
 import {
   discoverOpenClawPlugins,
@@ -84,7 +84,7 @@ function rejectCaseFoldedIdCollisions(
 function pushNonBundledChannelConfigDescriptorDiagnostic(params: {
   record: PluginManifestRecord;
   diagnostics: PluginDiagnostic[];
-  normalized?: ReturnType<typeof normalizePluginsConfigWithResolver>;
+  normalized?: ReturnType<typeof normalizePluginsConfigWithResolverCore>;
 }): void {
   if (params.record.origin === "bundled" || params.record.format === "bundle") {
     return;
@@ -238,7 +238,7 @@ export function buildPluginManifestRegistry(
   params: PluginManifestRegistryBuildParams,
 ): PluginManifestRegistry {
   const config = params.config ?? {};
-  const normalized = normalizePluginsConfigWithResolver(config.plugins);
+  const normalized = normalizePluginsConfigWithResolverCore(config.plugins);
   const env = params.env ?? process.env;
   const registryPath = params.registryPath ?? resolveInstalledPluginIndexStorePath({ env });
   const { getInstallRecords } = params;

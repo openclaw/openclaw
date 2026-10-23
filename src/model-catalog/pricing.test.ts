@@ -18,7 +18,7 @@ import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveInstalledPluginIndexStorePath } from "../plugins/installed-plugin-index-store-path.js";
 import * as manifestNormalization from "../plugins/manifest-model-id-normalization.js";
-import { normalizeManifestModelPricing } from "../plugins/manifest-model-provider-normalizers.js";
+import { loadPluginManifest } from "../plugins/manifest.js";
 import type { PersistedInstalledPluginIndexCacheEntry } from "../plugins/plugin-cache-management.js";
 import {
   createPluginCache,
@@ -250,12 +250,23 @@ describe("hosted model pricing", () => {
     const snapshot = pluginMetadata.resolvePluginMetadataSnapshot({ config, env: process.env });
     const plugins = [...snapshot.manifestRegistry.plugins];
     const ownerIndex = plugins.findIndex((plugin) => plugin.id === "venice");
+    const manifestRoot = tempDirs.make("openclaw-native-zero-manifest-");
+    await fs.writeFile(
+      path.join(manifestRoot, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "venice",
+        configSchema: {},
+        providers: ["venice"],
+        modelPricing: { providers: { venice: { openCode: { provider: "upstream" } } } },
+      }),
+    );
+    const manifest = withPluginCache(createPluginCache(), () => loadPluginManifest(manifestRoot));
+    if (!manifest.ok) {
+      throw new Error(manifest.error);
+    }
     plugins[ownerIndex] = {
       ...expectDefined(plugins[ownerIndex], "Venice manifest owner"),
-      modelPricing: normalizeManifestModelPricing(
-        { providers: { venice: { openCode: { provider: "upstream" } } } },
-        { ownedProviders: new Set(["venice"]) },
-      ),
+      modelPricing: manifest.manifest.modelPricing,
     };
     vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshot").mockReturnValue({
       ...snapshot,

@@ -1,8 +1,8 @@
 // Generated inbound context is current-turn model input, never historical display text.
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { MESSAGE_TOOL_DELIVERY_HINTS } from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { escapeRegExp } from "../../shared/regexp.js";
-import { MESSAGE_TOOL_DELIVERY_HINTS } from "./delivery-hints.js";
 import { INBOUND_CONTEXT_MARKER } from "./inbound-context-marker.js";
 
 const LEADING_TIMESTAMP_PREFIX_RE = /^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*\] */;

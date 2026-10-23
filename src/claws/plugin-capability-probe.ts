@@ -25,8 +25,8 @@ import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plu
 import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { preflightPluginInstall } from "../plugins/plugin-install-preflight.js";
+import { resolveLocalProviderAuthEvidence } from "../secrets/provider-auth-evidence.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveClawPluginSetupRequirements } from "./package-setup-requirements.js";
 import type { ClawPackage, ClawPackagePreflightResult } from "./types.js";
 
 export function inspectClawPluginCapabilities(
@@ -231,11 +231,33 @@ export async function preflightClawPluginPackage(
       message: `Plugin ${pkg.ref}@${pkg.version} did not resolve an artifact integrity.`,
     };
   }
-  const requirements = resolveClawPluginSetupRequirements({
-    pluginId: probe.pluginId,
-    setup: probe.setup,
-    env: options.env ?? process.env,
-  });
+  const setupPluginId = probe.pluginId;
+  const setup = probe.setup;
+  const setupEnv = options.env ?? process.env;
+  const providers = setup?.providers ?? [];
+  const hasConfiguredProvider = providers.some(
+    (provider) =>
+      (provider.envVars ?? []).some((name) => Boolean(setupEnv[name]?.trim())) ||
+      resolveLocalProviderAuthEvidence(provider.authEvidence, setupEnv),
+  );
+  const requirements = hasConfiguredProvider
+    ? []
+    : providers.flatMap((provider) => {
+        const envVars = provider.envVars ?? [];
+        const authEvidence = provider.authEvidence ?? [];
+        if (envVars.length === 0 && authEvidence.length === 0) {
+          return [];
+        }
+        return [
+          {
+            kind: "plugin-setup" as const,
+            plugin: setupPluginId,
+            provider: provider.id,
+            envVars,
+            authMethods: provider.authMethods ?? [],
+          },
+        ];
+      });
   const artifact = {
     integrity,
     installId: probe.pluginId,

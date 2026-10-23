@@ -1,10 +1,17 @@
 // Constructs manifest records without loading plugin runtime modules.
 import path from "node:path";
+import { sniffInlineImageMime } from "@openclaw/media-core/inline-image-data-url";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizeOptionalTrimmedStringList,
   normalizeUniqueTrimmedStringList,
 } from "@openclaw/normalization-core/string-normalization";
+import { isSelfContainedSvg } from "../../packages/gateway-protocol/src/svg-image.js";
+import {
+  MAX_THEME_DEFINITION_BYTES,
+  isThemeId,
+  normalizeThemeDefinition,
+} from "../../packages/gateway-protocol/src/theme.js";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type { PluginCandidate } from "./discovery.js";
@@ -13,8 +20,8 @@ import { PLUGIN_MANIFEST_CONTRACT_KEYS } from "./manifest-contract-keys.js";
 import type {
   BundledChannelConfigCollector,
   PluginManifestRecord,
+  PluginThemeArtwork,
 } from "./manifest-registry.types.js";
-import { loadManifestThemeDefinitions } from "./manifest-theme-definitions.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import {
   type OpenClawPackageManifest,
@@ -34,15 +41,20 @@ import {
   pluginCacheRealpathSync,
   pluginCacheStatSync,
   readPluginCacheDirectory,
+  readPluginCacheFile,
 } from "./plugin-cache-files.js";
 import type { PluginTrust } from "./plugin-trust.js";
 import {
   isPluginActivityToolName,
   MAX_PLUGIN_ACTIVITY_TOOL_ICONS,
   PLUGIN_ACTIVITY_ICON_PATH,
+  PLUGIN_ACTIVITY_ICON_MAX_BYTES,
+  PLUGIN_THEME_BACKGROUND_MAX_BYTES,
   PLUGIN_TOOL_ACTIVITY_ICON_DIR,
   PORTABLE_PLUGIN_ICON_PATH,
 } from "./portable-icon-paths.js";
+
+const BACKGROUND_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 
 function resolvePluginSourcePath(sourcePath: string): string {
   if (pluginCacheExistsSync(sourcePath)) {
@@ -347,6 +359,131 @@ export function buildPluginManifestRecord(params: {
   const packageChannelCommands = normalizeManifestChannelCommandDefaults(
     params.candidate.packageManifest?.channel?.commands,
   );
+  /** Capture palettes and artwork so a published generation never reads changed files. */
+  function loadManifestThemeDefinitions(): PluginManifestRecord["themeDefinitions"] {
+    const rootDir = params.candidate.rootDir;
+    const themes = params.manifest.themes;
+    const rejectHardlinks = params.rejectHardlinks;
+    const diagnostics = params.diagnostics;
+    if (!themes?.length) {
+      return undefined;
+    }
+    return themes.flatMap((theme) => {
+      try {
+        if (pluginId === "user" || !isThemeId(`${pluginId}/${theme.id}`)) {
+          throw new Error(
+            "qualified theme ID must be portable, outside user/, and at most 256 characters",
+          );
+        }
+        const file = readPluginCacheFile({
+          rootDir,
+          relativePath: theme.source,
+          rejectHardlinks,
+          // Formatting whitespace is allowed; normalized portable definitions remain <=4 KiB.
+          maxBytes: MAX_THEME_DEFINITION_BYTES * 4,
+        });
+        if (!file.ok) {
+          throw new Error("source must be a readable JSON file inside the plugin root");
+        }
+        const definition = normalizeThemeDefinition(JSON.parse(file.contents.toString("utf8")), {
+          iconIds: Object.keys(theme.icons ?? {}),
+          hatIds: Object.keys(theme.hats ?? {}),
+          critterIds: Object.keys(theme.critters ?? {}),
+        });
+        if (definition.name !== theme.name || definition.description !== theme.description) {
+          throw new Error("name and description must match the manifest declaration");
+        }
+        const readSvg = (source: string): string => {
+          const svgFile = readPluginCacheFile({
+            rootDir,
+            relativePath: source,
+            rejectHardlinks,
+            maxBytes: PLUGIN_ACTIVITY_ICON_MAX_BYTES,
+          });
+          if (!svgFile.ok) {
+            throw new Error(
+              `artwork ${source} must be a readable SVG inside the plugin root, at most ${PLUGIN_ACTIVITY_ICON_MAX_BYTES} bytes`,
+            );
+          }
+          const svg = svgFile.contents.toString("utf8");
+          if (!isSelfContainedSvg(svg)) {
+            throw new Error(`artwork ${source} must be a self-contained SVG`);
+          }
+          return svg;
+        };
+        const readBackground = (source: string): string => {
+          const imageFile = readPluginCacheFile({
+            rootDir,
+            relativePath: source,
+            rejectHardlinks,
+            maxBytes: PLUGIN_THEME_BACKGROUND_MAX_BYTES,
+          });
+          if (
+            !imageFile.ok ||
+            !BACKGROUND_MIME_TYPES.has(sniffInlineImageMime(imageFile.contents) ?? "")
+          ) {
+            throw new Error(
+              `background ${source} must be a readable PNG, JPEG, or WebP inside the plugin root, at most ${PLUGIN_THEME_BACKGROUND_MAX_BYTES} bytes`,
+            );
+          }
+          return imageFile.contents.toString("base64");
+        };
+        const artwork: PluginThemeArtwork = {
+          ...(theme.icons
+            ? {
+                icons: Object.fromEntries(
+                  Object.entries(theme.icons).map(([id, source]) => [id, { svg: readSvg(source) }]),
+                ),
+              }
+            : {}),
+          ...(theme.hats
+            ? {
+                hats: Object.fromEntries(
+                  Object.entries(theme.hats).map(([id, source]) => [id, { svg: readSvg(source) }]),
+                ),
+              }
+            : {}),
+          ...(theme.critters
+            ? {
+                critters: Object.fromEntries(
+                  Object.entries(theme.critters).map(([id, { source, ...metadata }]) => [
+                    id,
+                    { svg: readSvg(source), ...metadata },
+                  ]),
+                ),
+              }
+            : {}),
+          ...(theme.backgrounds
+            ? {
+                backgrounds: Object.fromEntries(
+                  Object.entries(theme.backgrounds).map(([mode, source]) => [
+                    mode,
+                    { base64: readBackground(source) },
+                  ]),
+                ),
+              }
+            : {}),
+        };
+        return [
+          {
+            id: theme.id,
+            definition,
+            ...(theme.icons || theme.hats || theme.critters || theme.backgrounds
+              ? { artwork }
+              : {}),
+          },
+        ];
+      } catch (error) {
+        diagnostics.push({
+          level: "warn",
+          pluginId,
+          message: `theme ${theme.id} is unavailable: ${error instanceof Error ? error.message : "invalid definition"}`,
+        });
+        return [];
+      }
+    });
+  }
+
   return {
     id: pluginId,
     categories: params.manifest.categories,
@@ -414,13 +551,7 @@ export function buildPluginManifestRecord(params: {
     controlUi: params.manifest.controlUi,
     uiCapabilities: params.manifest.uiCapabilities,
     themes: params.manifest.themes,
-    themeDefinitions: loadManifestThemeDefinitions({
-      pluginId,
-      rootDir: params.candidate.rootDir,
-      themes: params.manifest.themes,
-      rejectHardlinks: params.rejectHardlinks,
-      diagnostics: params.diagnostics,
-    }),
+    themeDefinitions: loadManifestThemeDefinitions(),
     mcpServers: params.manifest.mcpServers,
     skills: params.manifest.skills ?? [],
     settingsFiles: [],

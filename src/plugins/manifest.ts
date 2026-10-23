@@ -1,22 +1,36 @@
 /** Loads and normalizes OpenClaw plugin manifests, including contracts and config schemas. */
 import path from "node:path";
+import { normalizeModelPricingProvider } from "@openclaw/model-catalog-core/model-catalog-pricing";
+import { normalizeModelCatalogProviderId } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { validatePluginUiCapabilities } from "../../packages/gateway-protocol/src/plugin-ui-capabilities.js";
+import { asSafeIntegerInRange } from "../../packages/normalization-core/src/number-coercion.js";
+import { omitUndefinedFields } from "../../packages/normalization-core/src/record-coerce.js";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
-import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
+import {
+  normalizeOptionalTrimmedStringList,
+  normalizeTrimmedStringList,
+} from "../../packages/normalization-core/src/string-normalization.js";
 import { validatePluginCategories } from "../../packages/plugin-package-contract/src/index.js";
+import { ENV_SECRET_REF_ID_RE } from "../config/types.secrets.js";
 import { matchRootFileOpenFailure } from "../infra/boundary-file-read.js";
+import type { ConfigUiGroup } from "../shared/config-ui-hints-types.js";
 import { isRecord } from "../utils.js";
 import { loadPluginControlUiDeclaration } from "./control-ui-build-manifest.js";
 import { coerceDoctorSessionRouteStateOwners } from "./doctor-session-route-state-owner-types.js";
 import * as capabilityNormalizers from "./manifest-capability-normalizers.js";
 import { normalizeManifestCommandAliases } from "./manifest-command-aliases.js";
-import { normalizeConfigGroups } from "./manifest-config-groups.js";
 import { normalizeManifestModelCatalog } from "./manifest-decision-catalog.js";
-import * as modelProviderNormalizers from "./manifest-model-provider-normalizers.js";
 import { normalizeManifestPlatforms } from "./manifest-platforms.js";
 import * as setupNormalizers from "./manifest-setup-normalizers.js";
 import { normalizeManifestThemes } from "./manifest-themes.js";
 import type {
+  PluginManifestModelIdNormalization,
+  PluginManifestModelIdNormalizationProvider,
+  PluginManifestModelIdPrefixRule,
+  PluginManifestModelPricing,
+  PluginManifestModelSupport,
+  PluginManifestProviderRequest,
+  PluginManifestSecretProviderIntegration,
   PluginManifestBackupResource,
   PluginManifestDoctorContract,
 } from "./manifest-types.js";
@@ -24,6 +38,7 @@ import { parsePluginCacheJson, readPluginCacheFile } from "./plugin-cache-files.
 import type { CachedPluginManifestResult as PluginManifestLoadResult } from "./plugin-cache-files.types.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
+import { normalizeManifestProviderRequestProvider } from "./plugin-provider-request-policy.js";
 
 export type * from "./manifest-types.js";
 export * from "./package-manifest.js";
@@ -155,6 +170,225 @@ function parseManifestBackupResources(
       .toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
       .map(([, resource]) => resource),
   };
+}
+
+const MAX_SECRET_PROVIDER_EXEC_ARGS = 128;
+const MAX_SECRET_PROVIDER_EXEC_ARG_BYTES = 1024;
+const MAX_SECRET_PROVIDER_EXEC_TIMEOUT_MS = 120_000;
+const MAX_SECRET_PROVIDER_EXEC_OUTPUT_BYTES = 20 * 1024 * 1024;
+const MAX_SECRET_PROVIDER_EXEC_PASS_ENV = 128;
+const SECRET_PROVIDER_NODE_COMMAND_PLACEHOLDER = "${node}";
+
+function normalizeManifestModelSupport(value: unknown): PluginManifestModelSupport | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  return capabilityNormalizers.optionalManifestFields({
+    modelPrefixes: normalizeOptionalTrimmedStringList(value.modelPrefixes),
+    modelPatterns: normalizeOptionalTrimmedStringList(value.modelPatterns),
+  });
+}
+
+function normalizeOwnedProviderMap<T>(
+  value: unknown,
+  ownedProvidersRaw: ReadonlySet<string>,
+  normalizePolicy: (value: unknown) => T | undefined,
+): Record<string, T> | undefined {
+  if (!isRecord(value) || !isRecord(value.providers)) {
+    return undefined;
+  }
+  const ownedProviders = new Set(
+    [...ownedProvidersRaw]
+      .map((provider) => normalizeModelCatalogProviderId(provider))
+      .filter(Boolean),
+  );
+  const providers: Record<string, T> = {};
+  for (const [rawProviderId, rawPolicy] of Object.entries(value.providers)) {
+    const providerId = normalizeModelCatalogProviderId(rawProviderId);
+    const policy = providerId && ownedProviders.has(providerId) ? normalizePolicy(rawPolicy) : null;
+    if (providerId && policy) {
+      providers[providerId] = policy;
+    }
+  }
+  return Object.keys(providers).length > 0 ? providers : undefined;
+}
+
+function normalizeManifestModelPricing(
+  value: unknown,
+  params: { ownedProviders: ReadonlySet<string> },
+): PluginManifestModelPricing | undefined {
+  const providers = normalizeOwnedProviderMap(
+    value,
+    params.ownedProviders,
+    normalizeModelPricingProvider,
+  );
+  return providers ? { providers } : undefined;
+}
+
+function normalizeManifestModelIdPrefixRules(
+  value: unknown,
+): PluginManifestModelIdPrefixRule[] | undefined {
+  return capabilityNormalizers.normalizeManifestObjectList(value, (rawRule) => {
+    const modelPrefix = normalizeOptionalString(rawRule.modelPrefix);
+    const prefix = normalizeOptionalString(rawRule.prefix);
+    return modelPrefix && prefix ? { modelPrefix, prefix } : undefined;
+  });
+}
+
+function normalizeManifestModelIdNormalizationProvider(
+  value: unknown,
+): PluginManifestModelIdNormalizationProvider | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const aliases: Record<string, string> = {};
+  if (isRecord(value.aliases)) {
+    for (const [rawAlias, rawCanonical] of Object.entries(value.aliases)) {
+      const alias = normalizeModelCatalogProviderId(rawAlias);
+      const canonical = normalizeOptionalString(rawCanonical);
+      if (alias && canonical) {
+        aliases[alias] = canonical;
+      }
+    }
+  }
+  return capabilityNormalizers.optionalManifestFields({
+    aliases: Object.keys(aliases).length > 0 ? aliases : undefined,
+    stripPrefixes: normalizeOptionalTrimmedStringList(value.stripPrefixes),
+    prefixWhenBare: normalizeOptionalString(value.prefixWhenBare),
+    prefixWhenBareAfterAliasStartsWith: normalizeManifestModelIdPrefixRules(
+      value.prefixWhenBareAfterAliasStartsWith,
+    ),
+  });
+}
+
+function normalizeManifestModelIdNormalization(
+  value: unknown,
+  params: { ownedProviders: ReadonlySet<string> },
+): PluginManifestModelIdNormalization | undefined {
+  const providers = normalizeOwnedProviderMap(
+    value,
+    params.ownedProviders,
+    normalizeManifestModelIdNormalizationProvider,
+  );
+  return providers ? { providers } : undefined;
+}
+
+function normalizeManifestProviderRequest(
+  value: unknown,
+  params: { ownedProviders: ReadonlySet<string> },
+): PluginManifestProviderRequest | undefined {
+  const providers = normalizeOwnedProviderMap(
+    value,
+    params.ownedProviders,
+    normalizeManifestProviderRequestProvider,
+  );
+  return providers ? { providers } : undefined;
+}
+
+function normalizeManifestPositiveInteger(value: unknown, max: number): number | undefined {
+  return asSafeIntegerInRange(value, { min: 1, max });
+}
+
+function normalizeManifestSecretProviderIntegrations(
+  value: unknown,
+): Record<string, PluginManifestSecretProviderIntegration> | undefined {
+  return capabilityNormalizers.normalizeNamedMetadataRecord(value, (rawIntegration) => {
+    const command = normalizeOptionalString(rawIntegration.command);
+    if (rawIntegration.source !== "exec" || command !== SECRET_PROVIDER_NODE_COMMAND_PLACEHOLDER) {
+      return undefined;
+    }
+    const args: string[] = [];
+    if (Array.isArray(rawIntegration.args)) {
+      for (const entry of rawIntegration.args) {
+        if (typeof entry !== "string" || entry.length > MAX_SECRET_PROVIDER_EXEC_ARG_BYTES) {
+          continue;
+        }
+        args.push(entry);
+        if (args.length >= MAX_SECRET_PROVIDER_EXEC_ARGS) {
+          break;
+        }
+      }
+    }
+    const passEnv = normalizeTrimmedStringList(rawIntegration.passEnv)
+      .filter((entry) => ENV_SECRET_REF_ID_RE.test(entry))
+      .slice(0, MAX_SECRET_PROVIDER_EXEC_PASS_ENV);
+    return omitUndefinedFields<PluginManifestSecretProviderIntegration>({
+      providerAlias: normalizeOptionalString(rawIntegration.providerAlias),
+      displayName: normalizeOptionalString(rawIntegration.displayName),
+      description: normalizeOptionalString(rawIntegration.description),
+      source: "exec",
+      command,
+      args: args.length > 0 ? args : undefined,
+      timeoutMs: normalizeManifestPositiveInteger(
+        rawIntegration.timeoutMs,
+        MAX_SECRET_PROVIDER_EXEC_TIMEOUT_MS,
+      ),
+      noOutputTimeoutMs: normalizeManifestPositiveInteger(
+        rawIntegration.noOutputTimeoutMs,
+        MAX_SECRET_PROVIDER_EXEC_TIMEOUT_MS,
+      ),
+      maxOutputBytes: normalizeManifestPositiveInteger(
+        rawIntegration.maxOutputBytes,
+        MAX_SECRET_PROVIDER_EXEC_OUTPUT_BYTES,
+      ),
+      jsonOnly: typeof rawIntegration.jsonOnly === "boolean" ? rawIntegration.jsonOnly : undefined,
+      env: capabilityNormalizers.normalizeManifestStringRecord(rawIntegration.env),
+      passEnv: passEnv.length > 0 ? passEnv : undefined,
+    });
+  });
+}
+
+/** Invalid presentation metadata leaves the plugin's complete flat settings form available. */
+function normalizeConfigGroups(
+  raw: unknown,
+  schema: Record<string, unknown>,
+): ConfigUiGroup[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0 || !isRecord(schema.properties)) {
+    return undefined;
+  }
+  const ids = new Set<string>();
+  const assigned = new Set<string>();
+  const groups: ConfigUiGroup[] = [];
+  for (const entry of raw) {
+    if (!isRecord(entry)) {
+      return undefined;
+    }
+    const id = typeof entry.id === "string" ? entry.id.trim() : "";
+    const title = typeof entry.title === "string" ? entry.title.trim() : "";
+    if (
+      !id ||
+      !title ||
+      ids.has(id) ||
+      (entry.order !== undefined && !Number.isInteger(entry.order)) ||
+      !Array.isArray(entry.properties) ||
+      entry.properties.length === 0
+    ) {
+      return undefined;
+    }
+    const properties: string[] = [];
+    for (const property of entry.properties) {
+      if (
+        typeof property !== "string" ||
+        !property ||
+        !Object.hasOwn(schema.properties, property) ||
+        assigned.has(property)
+      ) {
+        return undefined;
+      }
+      assigned.add(property);
+      properties.push(property);
+    }
+    ids.add(id);
+    groups.push({
+      id,
+      title,
+      ...(typeof entry.order === "number" ? { order: entry.order } : {}),
+      properties,
+    });
+  }
+  return groups;
 }
 
 export function loadPluginManifest(
@@ -291,27 +525,24 @@ export function loadPluginManifest(
       raw.capabilityCatalogEntry === undefined
         ? undefined
         : (normalizeOptionalString(raw.capabilityCatalogEntry) ?? ""),
-    modelSupport: modelProviderNormalizers.normalizeManifestModelSupport(raw.modelSupport),
+    modelSupport: normalizeManifestModelSupport(raw.modelSupport),
     modelCatalog,
     // CLI backends own pricing policies as they own catalog rows: their usage needs an estimate too.
-    modelPricing: modelProviderNormalizers.normalizeManifestModelPricing(raw.modelPricing, {
+    modelPricing: normalizeManifestModelPricing(raw.modelPricing, {
       ownedProviders: new Set([...providers, ...cliBackends]),
     }),
-    modelIdNormalization: modelProviderNormalizers.normalizeManifestModelIdNormalization(
-      raw.modelIdNormalization,
-      { ownedProviders: new Set(providers) },
-    ),
+    modelIdNormalization: normalizeManifestModelIdNormalization(raw.modelIdNormalization, {
+      ownedProviders: new Set(providers),
+    }),
     providerEndpoints: capabilityNormalizers.normalizeManifestProviderEndpoints(
       raw.providerEndpoints,
     ),
-    providerRequest: modelProviderNormalizers.normalizeManifestProviderRequest(
-      raw.providerRequest,
-      { ownedProviders: new Set(providers) },
+    providerRequest: normalizeManifestProviderRequest(raw.providerRequest, {
+      ownedProviders: new Set(providers),
+    }),
+    secretProviderIntegrations: normalizeManifestSecretProviderIntegrations(
+      raw.secretProviderIntegrations,
     ),
-    secretProviderIntegrations:
-      modelProviderNormalizers.normalizeManifestSecretProviderIntegrations(
-        raw.secretProviderIntegrations,
-      ),
     cliBackends,
     syntheticAuthRefs: normalizeTrimmedStringList(raw.syntheticAuthRefs),
     nonSecretAuthMarkers: normalizeTrimmedStringList(raw.nonSecretAuthMarkers),

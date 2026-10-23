@@ -1,6 +1,7 @@
 import { coerceErrorMessage, stableStringify } from "@openclaw/normalization-core";
 import { createPluginInstallLogger } from "../cli/plugins-command-helpers.js";
 import { readConfigFileSnapshotForWrite } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub-integrity.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.js";
 import { computeDeclaredSurfaceHash } from "../plugins/capability-summary.js";
@@ -23,18 +24,47 @@ import { matchesPlannedPluginProbe } from "./package-plugin-probe-match.js";
 import { createStatelessClawPackageReceipt } from "./package-stateless-receipt.js";
 import {
   inspectClawPluginCapabilities,
+  preflightClawPluginPackage,
   probeClawPluginArtifact,
   sourceHostPluginConflict,
+  type ClawPluginProbeDeps,
 } from "./plugin-capability-probe.js";
 import { runClawPluginBatch } from "./plugin-runtime.js";
 import type { PersistedClawPackageRef } from "./provenance.js";
-import type { ClawAddPlan } from "./types.js";
+import type { ClawAddPlan, ClawPackage, ClawPackagePreflightResult } from "./types.js";
 
-export { preflightClawPackage } from "./package-preflight.js";
 export type {
   ClawPluginInstallConsent,
   ClawSkillInstallConsent,
 } from "./package-install-options.js";
+
+export async function preflightClawPackage(
+  pkg: ClawPackage,
+  workspaceDir: string,
+  options: {
+    env?: NodeJS.ProcessEnv;
+    config?: OpenClawConfig;
+    deps?: { preflightPlugin?: typeof preflightPluginInstall } & ClawPluginProbeDeps;
+  } = {},
+): Promise<ClawPackagePreflightResult> {
+  if (pkg.kind === "skill") {
+    const result = await preflightSkillFromClawHub({
+      workspaceDir,
+      slug: pkg.ref,
+      version: pkg.version,
+    });
+    return result.ok
+      ? result
+      : {
+          ok: false,
+          code: result.code,
+          message: result.error,
+          ...(result.integrity ? { integrity: result.integrity } : {}),
+          ...(result.warning ? { warning: result.warning } : {}),
+        };
+  }
+  return await preflightClawPluginPackage(pkg, options);
+}
 
 export class ClawPackageInstallError extends Error {
   constructor(

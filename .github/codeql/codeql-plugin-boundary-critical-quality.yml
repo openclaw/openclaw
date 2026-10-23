@@ -24,7 +24,6 @@ paths:
   - src/plugins/config-activation-shared.ts
   - src/plugins/config-contracts.ts
   - src/plugins/config-normalization-shared.ts
-  - src/plugins/config-policy.ts
   - src/plugins/config-schema.ts
   - src/plugins/config-state.ts
   - src/plugins/discovery.ts

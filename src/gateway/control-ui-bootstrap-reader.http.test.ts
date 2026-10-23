@@ -69,8 +69,14 @@ it("serves configured viewer policy without granting plugin or config access", (
                 "x-openclaw-scopes": scopes,
               },
       });
-    for (const embedSandbox of ["scripts", "strict", "trusted"] as const) {
+    for (const [embedSandbox, newSessionModelDefaults, enabled] of [
+      ["scripts", undefined, undefined],
+      ["strict", "configured", false],
+      ["trusted", "configured", true],
+    ] as const) {
       controlUi.embedSandbox = embedSandbox;
+      controlUi.newSessionModelDefaults = newSessionModelDefaults;
+      controlUi.experimental = { chatBubbles: enabled, composerPredictions: { enabled } };
       setRuntimeConfigSnapshot(config);
       const response = await read("/control-ui-config.json", "operator.sessions.read");
       expect(response.status, `${embedSandbox}: ${await response.clone().text()}`).toBe(200);
@@ -81,7 +87,11 @@ it("serves configured viewer policy without granting plugin or config access", (
         pluginAssetsRequireAuth: true,
         pluginControlUiModules: [],
         pluginFrameGrants: [],
+        newSessionModelDefaults: newSessionModelDefaults ?? "last-used",
+        composerPredictionsEnabled: enabled === true,
+        chatBubblesEnabled: enabled === true,
       });
+      expect(bootstrap).not.toHaveProperty("modelSelectionPolicy");
       expect(bootstrap.preferences.config).toBeUndefined();
       expect(JSON.stringify(bootstrap)).not.toContain("private-command");
       expect(response.headers.get("set-cookie")).toBeNull();

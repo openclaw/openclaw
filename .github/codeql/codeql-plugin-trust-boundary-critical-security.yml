@@ -29,7 +29,6 @@ paths:
   - src/plugins/cli-registry-loader.ts
   - src/plugins/config-activation-shared.ts
   - src/plugins/config-contracts.ts
-  - src/plugins/config-policy.ts
   - src/plugins/config-schema.ts
   - src/plugins/dependency-denylist.ts
   - src/plugins/discovery.ts
