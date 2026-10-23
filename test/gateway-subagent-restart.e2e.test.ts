@@ -1,6 +1,6 @@
 // Managed process replacement proves recovery of a child whose requester already finished.
 import { once } from "node:events";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -216,6 +216,8 @@ it.skipIf(process.platform === "win32").for([
   async ({ outcome, replaceChild }, { signal }) => {
     const provider = await startProvider(signal);
     const model = buildMockOpenAiResponsesProvider(provider.baseUrl, "gpt-5.4");
+    const { buildId } = asRecord(JSON.parse(await readFile("dist/build-info.json", "utf8")));
+    expect(typeof buildId).toBe("string");
     const instance = await createOpenClawTestInstance({
       name: "gateway-quiet-subagent-restart",
       port: provider.gatewayPort,
@@ -287,8 +289,10 @@ it.skipIf(process.platform === "win32").for([
         {
           url: instance.url,
           token: instance.gatewayToken,
-          clientName: "gateway-client",
-          mode: "backend",
+          clientName: "openclaw-control-ui",
+          clientBuildId: typeof buildId === "string" ? buildId : undefined,
+          mode: "webchat",
+          origin: `http://127.0.0.1:${instance.port}`,
           scopes: ["operator.admin", "operator.read", "operator.write"],
           deviceIdentity: loadOrCreateDeviceIdentity({
             path: instance.state.path("proof-device.sqlite"),
@@ -446,7 +450,10 @@ it.skipIf(process.platform === "win32").for([
             },
             gateway: {
               mode: "local",
-              controlUi: { enabled: false },
+              controlUi: {
+                enabled: false,
+                allowedOrigins: [`http://127.0.0.1:${instance.port}`],
+              },
               bind: "loopback",
               port: instance.port,
               auth: { mode: "token", token: instance.gatewayToken },
