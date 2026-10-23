@@ -60,6 +60,7 @@ import {
   type DiagnosticTraceContext,
 } from "./diagnostic-trace-context.js";
 import {
+  hasActiveDiagnosticTracePropagation,
   hasDiagnosticTracePropagationConsumer,
   prepareDiagnosticTracePropagation,
   resetDiagnosticTracePropagationForTest,
@@ -556,6 +557,13 @@ export type DiagnosticSkillUsedEvent = DiagnosticSessionEvent & {
   skillName: string;
   skillSource: DiagnosticSkillTelemetrySource;
   activation: DiagnosticSkillActivation;
+  /**
+   * Retained content fingerprint of the loaded skill bundle associated with
+   * this invocation's qualifying delivery — the bundle digest stamped on the
+   * delivered entry, resolved by lookup at emission; omitted when no
+   * qualifying delivery association is established.
+   */
+  skillFingerprint?: string;
   toolName?: string;
   toolCallId?: string;
 };
@@ -1010,6 +1018,20 @@ export function areDiagnosticsEnabledForProcess(): boolean {
   return diagnosticEventsState.enabled;
 }
 
+/**
+ * Re-applies the tracing gate to a queued `skill.used` payload: the async
+ * queue can outlive the exporter-owned tracing consumer that admitted the
+ * fingerprint, so every boundary that forms a listener- or inspector-facing
+ * payload — dispatch and pending-queue inspection — drops the private field
+ * while tracing is inactive. Skill accounting is never gated: the event and
+ * its skill identity stay intact.
+ */
+function dropInactiveTracingSkillFingerprint(event: DiagnosticEventPayload): void {
+  if (event.type === "skill.used" && !hasActiveDiagnosticTracePropagation()) {
+    delete event.skillFingerprint;
+  }
+}
+
 function dispatchDiagnosticEvent(
   state: DiagnosticEventsGlobalState,
   enriched: DiagnosticEventPayload,
@@ -1026,6 +1048,7 @@ function dispatchDiagnosticEvent(
 
   state.dispatchDepth += 1;
   try {
+    dropInactiveTracingSkillFingerprint(enriched);
     const eventForListener = createDiagnosticValueForListeners(enriched);
     let metadataForListener: DiagnosticEventMetadata | undefined;
     if (!options.trustedListenersOnly) {
@@ -1575,7 +1598,14 @@ export function hasPendingInternalDiagnosticEvent(
   for (const entry of state.asyncQueue) {
     let event: DiagnosticEventPayload;
     try {
-      event = cloneDiagnosticValueForListener(entry.event);
+      // Strip before the inspector copy freezes: a queued skill.used payload
+      // drops its fingerprint from this copy while tracing is inactive, so an
+      // in-process inspector — including the Plugin SDK surface — never
+      // observes a retained stamp the dispatch gate would strip. Skill
+      // accounting stays intact: the event and its skill identity remain.
+      const cloned = structuredClone(entry.event);
+      dropInactiveTracingSkillFingerprint(cloned);
+      event = deepFreezeDiagnosticValue(cloned);
     } catch {
       continue;
     }

@@ -8,7 +8,10 @@ import type { SkillSnapshot, SkillUsagePath } from "../skills/types.js";
 import type { OperationalRunInstanceRef } from "./admitted-run-context.js";
 import type { ToolOutcomeObserver } from "./agent-tools.before-tool-call.js";
 import type { MemoryFlushToolRunContext } from "./agent-tools.memory-flush.types.js";
-import type { SkillInstructionDeliveryCache } from "./agent-tools.read.js";
+import type {
+  SkillInstructionDeliveryCache,
+  SkillInstructionDeliveryMarkers,
+} from "./agent-tools.read.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import type { ProcessToolDefaults } from "./bash-tools.process.js";
 import type {
@@ -102,6 +105,8 @@ export type OpenClawCodingToolsOptions = {
   cronCreatorToolAllowlistCaptureRef?: CronToolsAllowCaptureRef;
   /** Attempt-local full skill reads that remain visible in the model context. */
   skillInstructionDeliveryCache?: SkillInstructionDeliveryCache;
+  /** Attempt-local delivery fingerprints and per-invocation emission markers. */
+  skillInstructionDeliveryMarkers?: SkillInstructionDeliveryMarkers;
   /** Keep the message tool available even when the selected profile omits it. */
   forceMessageTool?: boolean;
   /** If false, build plugin tools only while preserving the shared policy pipeline. */

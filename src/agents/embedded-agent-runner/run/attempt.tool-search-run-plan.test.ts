@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
+import { createSkillInstructionDeliveryMarkers } from "../../agent-tools.read.js";
 import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../../harness/tool-surface-bridge.js";
 import { createSandboxTestContext } from "../../sandbox/test-fixtures.js";
@@ -118,6 +119,7 @@ async function plan(
       codeModeSkills: [],
       computerContextEpoch: { value: 0 },
       skillInstructionDeliveryCache: new Map<string, Promise<boolean>>(),
+      skillInstructionDeliveryMarkers: createSkillInstructionDeliveryMarkers(),
       cronCreatorToolAllowlist: [],
       cronCreatorToolAllowlistCaptureRef: {},
       effectiveToolsAllow: options.effectiveToolsAllow,

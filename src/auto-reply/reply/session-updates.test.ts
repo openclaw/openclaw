@@ -60,9 +60,11 @@ vi.mock("../../skills/runtime/refresh.js", () => ({
   ensureSkillsWatcher: ensureSkillsWatcherMock,
 }));
 
+// mock-isolation: Skill snapshot publication must not depend on shared refresh-state version clocks or remote watcher state.
 vi.mock("../../skills/runtime/refresh-state.js", () => ({
   getSkillsSnapshotVersion: getSkillsSnapshotVersionMock,
   getSkillsSourceVersion: getSkillsSnapshotVersionMock,
+  getSkillsResourceVersion: getSkillsSnapshotVersionMock,
   shouldRefreshSnapshotForVersion: shouldRefreshSnapshotForVersionMock,
 }));
 

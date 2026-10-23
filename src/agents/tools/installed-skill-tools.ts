@@ -4,6 +4,7 @@ import {
   getAgentToolAvailabilityBinding,
   type AgentToolAvailabilityBinding,
 } from "../agent-tool-availability.js";
+import type { SkillInstructionDeliveryMarkers } from "../agent-tools.read.js";
 import {
   readInstalledSkill,
   searchInstalledSkills,
@@ -24,7 +25,13 @@ const SkillsSearchSchema = Type.Object({
 });
 const SkillsReadSchema = Type.Object({ name: Type.String({ minLength: 1 }) });
 
-export function createInstalledSkillTools(skills: readonly InstalledSkill[]): AnyAgentTool[] {
+export function createInstalledSkillTools(
+  skills: readonly InstalledSkill[],
+  delivery?: {
+    /** Attempt-local per-invocation skill.used emission markers. */
+    skillInstructionDeliveryMarkers?: SkillInstructionDeliveryMarkers;
+  },
+): AnyAgentTool[] {
   if (skills.length === 0) {
     return [];
   }
@@ -72,10 +79,32 @@ export function createInstalledSkillTools(skills: readonly InstalledSkill[]): An
         description:
           "Load complete SKILL.md instructions for an exact installed skill name. Use a known name directly; search is not required first. Does not execute the skill or grant additional tool permissions.",
         parameters: SkillsReadSchema,
-        execute: async (_id, args, signal) => {
+        execute: async (toolCallId, args, signal) => {
           const params = asToolParamsRecord(args);
           const name = readToolStringParam(params, "name", { required: true });
+          const markers = delivery?.skillInstructionDeliveryMarkers;
+          // The receipt cohort is the epoch this invocation's serving read
+          // started in: a clear during that read treats the settlement as
+          // cleared, so this invocation never captures a receipt a fresh
+          // generation could consume.
+          const invocationCohort = markers?.generation();
           const instructions = await readInstalledSkill(skills, name, signal);
+          signal?.throwIfAborted();
+          const skill = skills.find((entry) => entry.name === name);
+          skill?.assertCurrent?.();
+          // The receipt rides the invocation, resolved by lookup at the serving
+          // boundary: the entry's retained loaded-bundle identity, never a
+          // delivery-time tree read. An epoch clear that landed during the
+          // serving read owns the markers now, so a cleared invocation
+          // captures nothing — the matcher omits until a fresh delivery
+          // re-establishes one.
+          const fingerprint =
+            invocationCohort === undefined || markers?.generation() === invocationCohort
+              ? skill?.bundleFingerprint
+              : undefined;
+          if (markers && fingerprint && typeof toolCallId === "string") {
+            markers.captureInvocationFingerprint(toolCallId, fingerprint);
+          }
           return {
             content: [{ type: "text", text: formatSkillInstructions(instructions) }],
             details: instructions,
