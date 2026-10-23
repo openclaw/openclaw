@@ -55,6 +55,8 @@ How forum topics map to sessions, agents, and ACP bindings.
     Template context exposes `MessageThreadId` and `IsForum`. DM chats with `message_thread_id` keep reply metadata but only use thread-aware session keys when Telegram `getMe` reports `has_topics_enabled: true`.
     The retired `dm.threadReplies` and `direct.*.threadReplies` overrides are gone; BotFather threaded mode is the single source of truth. Run `openclaw doctor --fix` to remove stale config keys.
 
+    Some Telegram clients create a DM topic in threaded mode but deliver the user's first message to the root chat: the bot sees a `forum_topic_created` service message with the new `message_thread_id`, then the message itself without one. When the same user's root message arrives within 3 seconds of a topic they created, OpenClaw treats it as the first message of that topic, so the session and the reply land in the topic instead of leaving it empty. Topics created by the bot and group chats are not affected.
+
   </Accordion>
 </AccordionGroup>
 

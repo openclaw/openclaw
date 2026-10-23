@@ -27,6 +27,12 @@ import {
   resolveTelegramMessageThreadSpec,
 } from "./bot/helpers.js";
 import {
+  adoptTelegramDmTopicUpdate,
+  createTelegramDmTopicAdoptState,
+  readTelegramAdoptedDmThreadId,
+  restoreTelegramAdoptedDmThreadId,
+} from "./dm-topic-adopt.js";
+import {
   getPreparedTelegramPollAnswer,
   isEligibleTelegramPollAnswerUpdate,
   prepareTelegramPollAnswerContextAsync,
@@ -316,12 +322,19 @@ type CreateTelegramIngressMonitorParams = {
  * committed spool append into the shared pump.
  */
 export function createTelegramIngressMonitor(params: CreateTelegramIngressMonitorParams) {
+  // Client-created DM topic adoption belongs to this account's ingress owner.
+  const dmTopicAdoptState = createTelegramDmTopicAdoptState();
   const inspect: Parameters<typeof createChannelIngressMonitor>[0]["inspect"] = (update, context) =>
     inspectTelegramSpooledUpdate(
       update,
       params.botInfo,
       context.phase === "claim" ? context.claimedLaneKey : undefined,
     );
+  const restoreSpooledUpdate = (payload: TelegramSpooledUpdatePayload): unknown => {
+    const update = payload.update;
+    restoreTelegramAdoptedDmThreadId(update, payload.adoptedDmThreadId);
+    return update;
+  };
   return createChannelIngressMonitor<
     unknown,
     TelegramSpooledUpdatePayload,
@@ -330,8 +343,12 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
     queue: params.queue,
     inspect,
     inspectAsync: async (update, context) => {
-      if (context.phase === "admission" && isEligibleTelegramPollAnswerUpdate(update)) {
-        await prepareTelegramPollAnswerContextAsync({ update, accountId: params.accountId });
+      if (context.phase === "admission") {
+        // Decide before lane derivation so the adopted topic owns the lane.
+        adoptTelegramDmTopicUpdate(update, dmTopicAdoptState);
+        if (isEligibleTelegramPollAnswerUpdate(update)) {
+          await prepareTelegramPollAnswerContextAsync({ update, accountId: params.accountId });
+        }
       }
       return inspect(update, context);
     },
@@ -344,16 +361,18 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
           typeof update === "object" && update !== null
             ? getPreparedTelegramPollAnswer(update)
             : undefined;
+        const adoptedDmThreadId = readTelegramAdoptedDmThreadId(update);
         return {
           version: TELEGRAM_SPOOLED_UPDATE_PAYLOAD_VERSION,
           updateId,
           receivedAt,
           update,
           ...(preparedPollAnswer ? { preparedPollAnswer } : {}),
+          ...(adoptedDmThreadId === undefined ? {} : { adoptedDmThreadId }),
         };
       },
       deserialize: (payload) => {
-        const update = payload.update;
+        const update = restoreSpooledUpdate(payload);
         if (typeof update === "object" && update !== null) {
           recordTelegramUpdateReceivedAt(update, payload.receivedAt);
           if (payload.preparedPollAnswer) {
@@ -486,7 +505,8 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
         accountId: params.accountId,
         ...(params.botInfo?.username ? { botUsername: params.botInfo.username } : {}),
       }),
-      deriveLaneKey: (record) => telegramSpooledLaneKey(record.payload.update, params.botInfo),
+      deriveLaneKey: (record) =>
+        telegramSpooledLaneKey(restoreSpooledUpdate(record.payload), params.botInfo),
       reconcileStoredLaneKey: (record, storedLaneKey, derivedLaneKey) =>
         canReconcileTelegramLegacyLane({
           record,
