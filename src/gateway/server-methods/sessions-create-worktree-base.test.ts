@@ -317,6 +317,12 @@ test("sessions.create recovers a failed worktree in the same session with an exp
     expect(failed).toEqual({
       ...beforeTitle,
       displayName: expect.stringMatching(/^[a-z]+-[a-z]+$/),
+      titleRefinement: {
+        generatedName: failed.displayName,
+        refinementDone: false,
+        sessionId: failed.sessionId,
+        taskMessagesSinceTitle: 0,
+      },
       updatedAt: expect.any(Number),
     });
     expect(failed.updatedAt).toBeGreaterThanOrEqual(beforeTitle.updatedAt);

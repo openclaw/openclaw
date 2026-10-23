@@ -16,12 +16,21 @@ export const sessionTitleRequests = {
   get(target: SessionTitleTarget) {
     return pending.get(requestKey(target));
   },
-  run(target: SessionTitleTarget, create: () => Promise<boolean>, onStateChanged?: () => void) {
+  run(
+    target: SessionTitleTarget,
+    create: () => Promise<boolean>,
+    onStateChanged?: () => void,
+    onJoined?: (joined: boolean) => void,
+  ) {
     const key = requestKey(target);
     const existing = pending.get(key);
     if (existing) {
+      // Joiners did not persist the title; callers need that distinction to
+      // count their own turn toward refinement (Codex 4303083912).
+      onJoined?.(true);
       return existing;
     }
+    onJoined?.(false);
     const request = getOrCreatePromise(pending, key, create, { evictOnSettled: true });
     // Register after the cache eviction handlers so either outcome publishes the
     // settled state, not the just-completed request still present in the registry.

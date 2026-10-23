@@ -1,5 +1,9 @@
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
-import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  formatMediaPlaceholderText,
+  isChannelPartialDeliveryError,
+} from "openclaw/plugin-sdk/channel-inbound";
+import { captureAsyncWorkTracker } from "openclaw/plugin-sdk/concurrency-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import {
@@ -7,8 +11,13 @@ import {
   resolveChunkMode,
 } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { createSubsystemLogger, danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { resolveAutoTopicLabelConfig } from "./auto-topic-label-config.js";
+import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
+import {
+  resolveAutoTopicLabelConfig,
+  resolveAutoTopicLabelRefineConfig,
+} from "./auto-topic-label-config.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import { resolveDispatchTelegramContext } from "./bot-message-dispatch-context.js";
 import {
@@ -38,6 +47,12 @@ import {
 import { resolveTelegramRichMessages, resolveTelegramTableMode } from "./rich-messages-config.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 import { resolveStickerVisionSupport } from "./sticker-vision.js";
+import {
+  armTopicLabelRefinement,
+  finishInitialTopicLabel,
+  maybeRefineTopicLabel,
+} from "./topic-label-refinement.js";
+import { appendTopicNameCacheAccountScope, updateTopicName } from "./topic-name-cache.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-dispatch");
@@ -116,9 +131,154 @@ async function prepareTelegramSticker(params: {
   logVerbose(`telegram: cached sticker description for ${sticker.fileUniqueId}`);
 }
 
+async function scheduleDmTopicLabel(params: {
+  bot: DispatchTelegramMessageParams["bot"];
+  cfg: DispatchTelegramMessageParams["cfg"];
+  context: TelegramMessageContext;
+  isFirstTurnInSession: boolean;
+  telegramCfg: DispatchTelegramMessageParams["telegramCfg"];
+  userMessage: string;
+  accountAbortSignal?: AbortSignal;
+}) {
+  const { context } = params;
+  const isDmTopic =
+    !context.isGroup && context.threadSpec.scope === "dm" && context.threadSpec.id != null;
+  if (!isDmTopic) {
+    return;
+  }
+  const directAutoTopicLabel =
+    context.groupConfig && "autoTopicLabel" in context.groupConfig
+      ? context.groupConfig.autoTopicLabel
+      : undefined;
+  const topicThreadId = context.threadSpec.id!;
+  const assertAccountCurrent = () => {
+    if (params.accountAbortSignal?.aborted) {
+      throw new Error("telegram account stopped; refinement cancelled");
+    }
+  };
+  if (!params.isFirstTurnInSession) {
+    // Later turns: opt-in one-time bounded refinement of the auto label.
+    // This must run before any first-turn-only early return so that later
+    // turns can actually reach the refinement state machine.
+    const refineCfg = resolveAutoTopicLabelRefineConfig({
+      directConfig: directAutoTopicLabel,
+      accountConfig: params.telegramCfg.autoTopicLabel,
+    });
+    if (!refineCfg.enabled || !params.userMessage.trim()) {
+      return;
+    }
+    await maybeRefineTopicLabel({
+      botId: params.bot.botInfo?.id,
+      accountId: context.route.accountId,
+      bot: params.bot,
+      assertServiceCurrent: assertAccountCurrent,
+      cfg: params.cfg,
+      agentId: context.route.agentId,
+      chatId: context.chatId,
+      threadId: topicThreadId,
+      userMessage: params.userMessage,
+      afterMessages: refineCfg.afterMessages,
+      logVerbose,
+    });
+    return;
+  }
+  const userMessage = params.userMessage;
+  if (!userMessage.trim()) {
+    return;
+  }
+  const autoTopicConfig = resolveAutoTopicLabelConfig(
+    directAutoTopicLabel,
+    params.telegramCfg.autoTopicLabel,
+  );
+  if (!autoTopicConfig) {
+    return;
+  }
+  const refineCfg = resolveAutoTopicLabelRefineConfig({
+    directConfig: directAutoTopicLabel,
+    accountConfig: params.telegramCfg.autoTopicLabel,
+  });
+  // Arm the refinement counter BEFORE the async first-turn label so a fast
+  // follow-up that lands while the label is still generating is counted on
+  // this turn's entry once it appears, instead of racing past the arming
+  // window (Codex 4300868452). Completed attempts and interrupted label
+  // attachment survive re-arming; new session context otherwise starts fresh.
+  if (refineCfg.enabled) {
+    await armTopicLabelRefinement({
+      botId: params.bot.botInfo?.id,
+      accountId: context.route.accountId,
+      chatId: context.chatId,
+      threadId: topicThreadId,
+      label: "",
+    });
+  }
+  await (async () => {
+    try {
+      assertAccountCurrent();
+      const label = await generateTopicLabel({
+        userMessage,
+        prompt: autoTopicConfig.prompt,
+        maxLength: 128,
+        cfg: params.cfg,
+        agentId: context.route.agentId,
+        agentDir: resolveAgentDir(params.cfg, context.route.agentId),
+        assertCurrent: assertAccountCurrent,
+      });
+      if (!label) {
+        logVerbose("auto-topic-label: LLM returned empty label");
+        return;
+      }
+      logVerbose(`auto-topic-label: generated label (len=${label.length})`);
+      const applyInitialLabel = async () => {
+        assertAccountCurrent();
+        await params.bot.api.editForumTopic(context.chatId, topicThreadId, { name: label });
+        // Cache the automatic label so the refinement's manual-rename guard can
+        // observe later human renames of DM topics (Codex 4302875124).
+        await updateTopicName(
+          context.chatId,
+          topicThreadId,
+          { name: label },
+          appendTopicNameCacheAccountScope(
+            resolveStorePath(params.cfg.session?.store, {
+              agentId: resolveTelegramAccountOwnerAgentId({
+                cfg: params.cfg,
+                accountId: context.route.accountId,
+              }),
+            }),
+            context.route.accountId,
+          ),
+        ).catch(() => {});
+        logVerbose(`auto-topic-label: renamed topic ${context.chatId}/${topicThreadId}`);
+      };
+      if (refineCfg.enabled) {
+        await finishInitialTopicLabel({
+          botId: params.bot.botInfo?.id,
+          accountId: context.route.accountId,
+          bot: params.bot,
+          assertServiceCurrent: assertAccountCurrent,
+          cfg: params.cfg,
+          agentId: context.route.agentId,
+          chatId: context.chatId,
+          threadId: topicThreadId,
+          afterMessages: refineCfg.afterMessages,
+          logVerbose,
+          label,
+          applyInitialLabel,
+        });
+      } else {
+        await applyInitialLabel();
+      }
+    } catch (err) {
+      logVerbose(`auto-topic-label: failed: ${String(err)}`);
+    }
+  })();
+}
+
 export const dispatchTelegramMessage = async (
   dispatchParams: DispatchTelegramMessageParams,
 ): Promise<TelegramDispatchResult> => {
+  // Retain naming under the existing ingress owner, before the foreground turn
+  // enters nested scopes. This captures work ownership, never authorization.
+  const trackTopicLabelWork = captureAsyncWorkTracker();
   const {
     context,
     bot,
@@ -129,6 +289,7 @@ export const dispatchTelegramMessage = async (
     retryDispatchErrors = false,
     suppressFailureFallback = false,
     turnAdoptionLifecycle,
+    opts,
   } = dispatchParams;
   const dispatchStartedAt = Date.now();
   const dispatchContext = await resolveDispatchTelegramContext({ context });
@@ -424,52 +585,21 @@ export const dispatchTelegramMessage = async (
     return { kind: "completed" };
   }
 
-  const scheduleDmTopicLabel = () => {
-    if (!isDmTopic || !isFirstTurnInSession) {
-      return;
-    }
-    const userMessage = truncateUtf16Safe(
-      dispatchContext.ctxPayload.RawBody ?? dispatchContext.ctxPayload.Body ?? "",
-      500,
-    );
-    if (!userMessage.trim()) {
-      return;
-    }
-    const directAutoTopicLabel =
-      dispatchContext.groupConfig && "autoTopicLabel" in dispatchContext.groupConfig
-        ? dispatchContext.groupConfig.autoTopicLabel
-        : undefined;
-    const autoTopicConfig = resolveAutoTopicLabelConfig(
-      directAutoTopicLabel,
-      telegramCfg.autoTopicLabel,
-    );
-    if (!autoTopicConfig) {
-      return;
-    }
-    const topicThreadId = dispatchContext.threadSpec.id!;
-    void (async () => {
-      try {
-        const label = await generateTopicLabel({
-          userMessage,
-          prompt: autoTopicConfig.prompt,
-          maxLength: 128,
-          cfg,
-          agentId: dispatchContext.route.agentId,
-          agentDir: resolveAgentDir(cfg, dispatchContext.route.agentId),
-        });
-        if (!label) {
-          logVerbose("auto-topic-label: LLM returned empty label");
-          return;
-        }
-        logVerbose(`auto-topic-label: generated label (len=${label.length})`);
-        await bot.api.editForumTopic(dispatchContext.chatId, topicThreadId, { name: label });
-        logVerbose(`auto-topic-label: renamed topic ${dispatchContext.chatId}/${topicThreadId}`);
-      } catch (err) {
-        logVerbose(`auto-topic-label: failed: ${String(err)}`);
-      }
-    })();
-  };
-  scheduleDmTopicLabel();
+  void trackTopicLabelWork(() =>
+    scheduleDmTopicLabel({
+      bot,
+      cfg,
+      context: dispatchContext,
+      isFirstTurnInSession,
+      telegramCfg,
+      userMessage: truncateUtf16Safe(
+        (dispatchContext.ctxPayload.RawBody ?? dispatchContext.ctxPayload.Body ?? "").trim() ||
+          formatMediaPlaceholderText(dispatchContext.ctxPayload.media ?? []),
+        500,
+      ),
+      ...(opts.accountAbortSignal ? { accountAbortSignal: opts.accountAbortSignal } : {}),
+    }),
+  ).catch((error: unknown) => logVerbose(`auto-topic-label: failed: ${String(error)}`));
   if (statusReactionController) {
     finalizeStatusInBackground(
       turn.agentRunFailed ||

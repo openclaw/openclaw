@@ -35,7 +35,7 @@ import {
   resolveTelegramTestUpload,
   useTelegramHttpFixture,
 } from "./send.telegram-http.test-support.js";
-import { getTopicName } from "./topic-name-cache.js";
+import { appendTopicNameCacheAccountScope, getTopicName } from "./topic-name-cache.js";
 
 const buttonPresentation = (...buttons: MessagePresentationButton[]) => ({
   blocks: [{ type: "buttons" as const, buttons }],
@@ -773,10 +773,24 @@ describe("Telegram registered adapter conformance over HTTP", () => {
       expectFields({ message_thread_id: 99, icon_custom_emoji_id: "5231419410191111111" }, 2);
       resetTelegramTopicNameCacheForTest();
       await expect(
-        getTopicName("-1001", 99, resolveStorePath(actionCfg.session?.store, { agentId: "ops" })),
+        getTopicName(
+          "-1001",
+          99,
+          appendTopicNameCacheAccountScope(
+            resolveStorePath(actionCfg.session?.store, { agentId: "ops" }),
+            "work",
+          ),
+        ),
       ).resolves.toBe("Renamed");
       await expect(
-        getTopicName("-1001", 99, resolveStorePath(actionCfg.session?.store, { agentId: "main" })),
+        getTopicName(
+          "-1001",
+          99,
+          appendTopicNameCacheAccountScope(
+            resolveStorePath(actionCfg.session?.store, { agentId: "main" }),
+            "work",
+          ),
+        ),
       ).resolves.toBeUndefined();
     });
   });

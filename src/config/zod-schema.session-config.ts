@@ -6,6 +6,13 @@ import { parseDurationMs } from "../cli/parse-duration.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
 import { ChannelThreadBindingsSchema } from "./zod-schema.channel-messaging-common.js";
 
+const SessionAutoTitleConfigSchema = z.strictObject({
+  /** Opt-in one-time refinement of an already generated title after later messages. */
+  refine: z.boolean().optional(),
+  /** User task messages after the first title before the single refinement runs. */
+  refineAfterMessages: z.number().int().min(1).max(100).optional(),
+});
+
 const SessionResetConfigSchema = z.strictObject({
   mode: z.union([z.literal("none"), z.literal("daily"), z.literal("idle")]).optional(),
   atHour: z.number().int().min(0).max(23).optional(),
@@ -62,6 +69,7 @@ export const SessionSchema = z
       })
       .optional(),
     threadBindings: ChannelThreadBindingsSchema.optional(),
+    autoTitle: SessionAutoTitleConfigSchema.optional(),
     sharing: z
       .strictObject({
         readOnly: z.boolean().optional(),

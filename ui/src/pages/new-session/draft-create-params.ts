@@ -9,8 +9,12 @@ export function buildSelectedSessionCreateParams(
   place: DraftPlaceState,
   params: DraftSessionCreateSelection,
 ): SessionCreateParams {
+  const { preparedTitle, ...selection } = params;
   const draft = {
-    ...params,
+    ...selection,
+    ...(preparedTitle
+      ? { displayName: preparedTitle, displayNameSource: "generated" as const }
+      : {}),
     deferInitialTurn: place.remotePlacement,
     agentId: place.agentId,
     model: place.modelControl.modelForSubmission(),
@@ -79,6 +83,9 @@ export function buildSelectedSessionCreateParams(
       ? { mentions: draft.mentions.map((mention) => ({ ...mention })) }
       : {}),
     ...(displayName ? { displayName } : {}),
+    ...(displayName && draft.displayNameSource
+      ? { displayNameSource: draft.displayNameSource }
+      : {}),
     ...(titleSource ? { titleSource } : {}),
     ...(draft.visibility === "incognito" ? { incognito: true } : {}),
     ...(draft.visibility === "draft" ? { visibility: "draft" } : {}),

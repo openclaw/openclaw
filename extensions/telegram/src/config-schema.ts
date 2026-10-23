@@ -113,6 +113,10 @@ const AutoTopicLabelSchema = z
       .object({
         enabled: z.boolean().optional(),
         prompt: z.string().optional(),
+        /** Opt-in one-time refinement of the auto label after later messages. */
+        refine: z.boolean().optional(),
+        /** Task messages after the first turn before the one-time refinement runs (1-100). */
+        refineAfterMessages: z.number().int().min(1).max(100).optional(),
       })
       .strict(),
   ])

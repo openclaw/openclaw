@@ -77,7 +77,7 @@ import { TELEGRAM_SUPPORTED_REACTION_EMOJI_LIST } from "./status-reaction-varian
 import { getCacheStats, searchStickers } from "./sticker-cache.js";
 import { normalizeTelegramOutboundTarget, parseTelegramTarget } from "./targets.js";
 import { resolveTelegramToken } from "./token.js";
-import { updateTopicName } from "./topic-name-cache.js";
+import { appendTopicNameCacheAccountScope, updateTopicName } from "./topic-name-cache.js";
 
 const TELEGRAM_EMOJI_LIST_LIMIT = 100;
 const TELEGRAM_REACTION_HINT_LIMIT = 20;
@@ -111,9 +111,12 @@ function normalizeTelegramActionName(action: string): TelegramActionName {
 
 function resolveActionTopicNameCacheScope(cfg: OpenClawConfig, accountId?: string | null): string {
   const resolvedAccountId = accountId ?? resolveDefaultTelegramAccountId(cfg);
-  return resolveStorePath(cfg.session?.store, {
-    agentId: resolveTelegramAccountOwnerAgentId({ cfg, accountId: resolvedAccountId }),
-  });
+  return appendTopicNameCacheAccountScope(
+    resolveStorePath(cfg.session?.store, {
+      agentId: resolveTelegramAccountOwnerAgentId({ cfg, accountId: resolvedAccountId }),
+    }),
+    resolvedAccountId,
+  );
 }
 
 function formatTelegramDeliveryTarget(to: string, messageThreadId?: number | null): string {

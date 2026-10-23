@@ -61,6 +61,12 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Matches the raw, unnormalized session-key prefix for exact full-key policy targeting. Use this when normalized keyPrefix is too broad and you need agent-prefixed or transport-specific precision.",
   "session.threadBindings":
     "Shared defaults for thread-bound session spawning and routing across supported channels. Configure global defaults here and override per channel only when behavior differs.",
+  "session.autoTitle":
+    "Automatic session title controls. The initial title after the first task message is always automatic; the optional refinement is opt-in.",
+  "session.autoTitle.refine":
+    "Opt-in one-time refinement of the generated session title after several later task messages. Never renames a manually set label and never rewrites an explicit GUI name. Default: false.",
+  "session.autoTitle.refineAfterMessages":
+    "User task messages after the first titled message before the single optional refinement runs. Default: 6. Range: 1-100.",
   "session.threadBindings.enabled":
     "Global master switch for thread-bound session spawning, routing, and delivery. Disable to turn off thread binding globally.",
   "session.threadBindings.idleHours":
