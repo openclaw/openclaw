@@ -15,6 +15,10 @@ resume them. Recovery is always on. Exhausted infrastructure retries, or a
 missing durable message-action authority claim, may tombstone one session
 until you inspect or replace it.
 
+Before accepting another message, the Gateway retires leftover recovery records
+whose runs are all recorded terminal and have no remaining execution or delivery
+owner. This lets a stopped conversation continue without resetting its history.
+
 Inter-session steering updates remain context for the executing turn. When that
 turn retains a Control UI, channel, or authenticated operator source claim,
 recovery uses the claim rather than treating the latest steering message as a new
