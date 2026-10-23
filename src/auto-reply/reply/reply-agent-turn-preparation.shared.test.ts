@@ -19,7 +19,6 @@ vi.mock("../../sessions/session-controller.mailbox.js", async (importOriginal) =
 vi.mock("./agent-runner-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./agent-runner-utils.js")>()),
   resolveQueuedReplyExecutionConfig: (config: unknown) => state.resolveConfig(config),
-  resolveQueuedReplyRuntimeConfig: (config: unknown) => config,
 }));
 vi.mock("./reply-turn-admission.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./reply-turn-admission.js")>()),

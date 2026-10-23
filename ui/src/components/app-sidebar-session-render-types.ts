@@ -81,6 +81,8 @@ export interface SessionListHost {
     | "handleSessionListDragLeave"
     | "handleSessionListDragOver"
     | "handleSessionListDrop"
+    | "handleSidebarZoneDragLeave"
+    | "sidebarZoneDropTarget"
     | "sectionDragLeave"
     | "sectionDragOver"
     | "sectionDrop"

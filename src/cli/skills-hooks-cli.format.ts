@@ -1,3 +1,5 @@
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   getTerminalTableWidth,
   renderTable,
@@ -5,6 +7,22 @@ import {
 } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { RequirementConfigCheck, Requirements } from "../shared/requirements.js";
+
+const REMAINING_ESC_SEQUENCE_REGEX = new RegExp(
+  String.raw`\u001b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])`,
+  "g",
+);
+const UNSAFE_CONTROL_CHAR_REGEX = new RegExp(
+  String.raw`[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]`,
+  "g",
+);
+
+/** Keep description whitespace while removing terminal controls, including stray escapes. */
+export function sanitizeCliDescriptorText(value: string): string {
+  return stripAnsi(value)
+    .replace(REMAINING_ESC_SEQUENCE_REGEX, "")
+    .replace(UNSAFE_CONTROL_CHAR_REGEX, "");
+}
 
 export function formatCliStatusTable(params: {
   title: string;
@@ -39,7 +57,9 @@ export function formatCliRequirements(
     return [];
   }
   const formatStatus = (value: string, satisfied: boolean) =>
-    satisfied ? theme.success(`✓ ${value}`) : theme.error(`✗ ${value}`);
+    satisfied
+      ? theme.success(`✓ ${sanitizeTerminalText(value)}`)
+      : theme.error(`✗ ${sanitizeTerminalText(value)}`);
   return [
     "",
     theme.heading("Requirements:"),
