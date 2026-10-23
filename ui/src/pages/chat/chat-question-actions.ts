@@ -40,6 +40,11 @@ export function createChatQuestionActions({
           if (itemId && state.chatQueue.some((item) => item.asyncQuestionItemId === itemId)) {
             return true;
           }
+          // Stream-only questions cannot claim a shared answer until their
+          // canonical source exists. A failed attempt must not create an outbox claim.
+          if (!itemId || !sourceMessageId) {
+            return false;
+          }
           let outboxAdmitted = false;
           let accepted: boolean | void = undefined;
           try {

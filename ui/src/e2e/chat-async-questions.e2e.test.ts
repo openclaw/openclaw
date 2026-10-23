@@ -7,7 +7,11 @@ import {
   reconnectMockGateway,
   defaultControlUiFeatureMethods,
 } from "../test-helpers/control-ui-e2e.ts";
-import { readStoredQuestionDrafts } from "./chat-async-questions.test-support.ts";
+import {
+  asyncQuestionTitle as title,
+  sharedQuestion as questionMessage,
+  readStoredQuestionDrafts,
+} from "./chat-async-questions.test-support.ts";
 import {
   captureUiProof,
   captureUiProofEnabled,
@@ -21,17 +25,6 @@ import { readOutboxQueue } from "./chat-outbox-payloads.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
-const title = "Which audience should the summary address?";
-const questionMessage = {
-  role: "assistant",
-  content: `${title}\n\n1. Engineers\n2. Everyone`,
-  timestamp: 1_789_000_000_000,
-  openclawAsyncDelivery: {
-    itemId: "audience-question",
-    questions: [{ title, options: ["Engineers", "Everyone"] }],
-  },
-};
-
 function createQuestionCapture(scope: string) {
   const artifactDir = captureUiProofEnabled ? createControlUiE2eArtifactDir(scope) : undefined;
   return async (page: Page, fileName: string) => {

@@ -298,6 +298,17 @@ export function useBrowserFollowupFixture() {
       activeRun,
       activeTranscript,
       readTranscript,
+      withStorage: <T>(run: () => T) =>
+        memoryIncognito
+          ? withSessionActorStorage(
+              scope,
+              {
+                lifetime: { assertCurrent() {}, assertReadable() {} },
+                authority,
+              },
+              run,
+            )
+          : run(),
       send,
       dispatchedRecorder: dispatchedRecorder.promise,
       releaseDispatch: () => dispatchRelease.resolve(),

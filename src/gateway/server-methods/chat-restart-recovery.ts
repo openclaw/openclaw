@@ -101,6 +101,7 @@ function hasRestartUnsafeMessageSemantics(rawMessage: string, cfg: OpenClawConfi
 
 async function fingerprintRestartSafeChatRequest(params: {
   message: string;
+  asyncQuestion?: { replyToId: string; itemId: string };
   mentions?: readonly HumanMention[];
   senderIsOwner: boolean;
 }): Promise<string> {
@@ -110,6 +111,7 @@ async function fingerprintRestartSafeChatRequest(params: {
       JSON.stringify([
         RESTART_SAFE_CHAT_REQUEST_VERIFIER_DOMAIN,
         params.message,
+        ...(params.asyncQuestion ? [params.asyncQuestion] : []),
         params.senderIsOwner,
         ...(params.mentions?.length
           ? [params.mentions.map(({ profileId, start, end }) => [profileId, start, end])]
@@ -126,6 +128,7 @@ export async function createRestartSafeChatRequest(params: {
   goalRequestFingerprint?: string;
   eligible: boolean;
   message: string;
+  asyncQuestion?: { replyToId: string; itemId: string };
   mentions?: readonly HumanMention[];
   senderIsOwner: boolean;
   cfg: OpenClawConfig;

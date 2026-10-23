@@ -75,6 +75,8 @@ export type UserTurnInput = Pick<PersistedUserTurnMessage, "display" | "excludeF
   idempotencyKey?: string;
   /** Durable transcript message reference used to render and hydrate replies. */
   replyToId?: string;
+  /** Explicit optional-question answer; replyToId identifies its canonical source. */
+  asyncQuestionItemId?: string;
   /** Bounded display fallback for replies whose target is outside loaded history. */
   replyToPreview?: { text: string; senderLabel?: string | null } | null;
   senderIsOwner?: boolean;

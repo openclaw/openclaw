@@ -402,6 +402,7 @@ export async function prepareChatSendSession(params: {
       request.systemProvenanceReceipt === undefined &&
       !request.suppressCommandInterpretation,
     message: rawMessage,
+    asyncQuestion: request.asyncQuestion,
     mentions: p.mentions,
     senderIsOwner: hasGatewayAdminScope(client),
   });

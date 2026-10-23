@@ -83,6 +83,7 @@ export function buildPersistedUserTurnMetadata(
       ? { humanMentions: input.mentions.map((mention) => ({ ...mention })) }
       : {}),
     ...(replyToId ? { replyToId } : {}),
+    ...(input.asyncQuestionItemId ? { asyncQuestionItemId: input.asyncQuestionItemId } : {}),
     ...(replyPreviewText
       ? {
           replyToPreview: {
@@ -253,6 +254,7 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   const humanMentions = structuredClone(originalMeta?.humanMentions);
   const display = message.display;
   const intent = structuredClone(originalMeta?.intent);
+  const asyncQuestionItemId = originalMeta?.asyncQuestionItemId;
   const senderIsOwner = originalMeta?.senderIsOwner;
   const replyToId = normalizeOptionalString(originalMeta?.replyToId);
   const originalReplyPreview = asOptionalRecord(originalMeta?.replyToPreview);
@@ -299,6 +301,7 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
     ...(media === undefined ? {} : { media }),
     ...(mediaImageLayout === undefined ? {} : { mediaImageLayout }),
     ...(intent === undefined ? {} : { intent }),
+    ...(asyncQuestionItemId === undefined ? {} : { asyncQuestionItemId }),
   };
   if (intent === undefined) {
     delete protectedMeta.intent;

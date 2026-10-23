@@ -1,4 +1,5 @@
 import { isNonTerminalAgentRunStatus } from "../../../../src/shared/agent-run-status.js";
+import { ASYNC_QUESTION_ANSWERED } from "../../../../src/shared/async-question-answer.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
@@ -325,6 +326,9 @@ async function sendQueuedChatMessage(
             ? { expectedLeafEntryId: deliveryLeafEntryId }
             : {}),
           ...(prepared.replyToId ? { replyToId: prepared.replyToId } : {}),
+          ...(prepared.asyncQuestionItemId
+            ? { asyncQuestionItemId: prepared.asyncQuestionItemId }
+            : {}),
         });
         if (!requestConnectionIsCurrent()) {
           return "pending";
@@ -484,6 +488,31 @@ async function sendQueuedChatMessage(
               }),
             },
           );
+        }
+        if (
+          prepared.asyncQuestionItemId &&
+          err instanceof GatewayRequestError &&
+          err.details &&
+          typeof err.details === "object" &&
+          Reflect.get(err.details, "reason") === ASYNC_QUESTION_ANSWERED
+        ) {
+          // The rejected bytes never became input. Reconcile the winner, not an
+          // optimistic copy of this stale answer, and leave ordinary sends alone.
+          chatOutboxOwner(host).remove(host, id);
+          if (isVisible()) {
+            await loadChatHistory(host, { deferBranches: true });
+          }
+          if (readQueuedMessageById(host, id)) {
+            setState("failed", OFFLINE_QUEUE_STORAGE_ERROR);
+            surfaceChatDeliveryFailure(
+              host,
+              sessionKey,
+              prepared.agentId,
+              OFFLINE_QUEUE_STORAGE_ERROR,
+            );
+            return "pending";
+          }
+          return "sent";
         }
         const restriction =
           err instanceof GatewayRequestError && isAgentRuntimeRestrictionErrorDetails(err.details)

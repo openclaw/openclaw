@@ -1,5 +1,6 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { ChatPendingInputsPage } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { resolveAssistantMessagePhase } from "../../../../../src/shared/chat-message-content.js";
 import { t } from "../../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
@@ -128,10 +129,12 @@ function readQuestionHistory(messages: readonly unknown[]) {
         // headings prevent splitting its answers. Unlinked duplicate titles stay ambiguous.
         const rawReplyToId = asNullableRecord(record?.["__openclaw"])?.replyToId;
         const replyToId = typeof rawReplyToId === "string" ? rawReplyToId.trim() : "";
+        const answerItemId = asNullableRecord(record?.["__openclaw"])?.asyncQuestionItemId;
         const matches = [...questions.values()]
           .filter(
             ({ question: candidate }) =>
               !resolved.has(candidate.itemId) &&
+              (typeof answerItemId !== "string" || candidate.itemId === answerItemId) &&
               (!replyToId || candidate.sourceMessageId === replyToId),
           )
           .map(({ question: candidate }) => ({
@@ -260,6 +263,7 @@ export function createAsyncQuestionPresentation(
   props: {
     messages?: readonly unknown[];
     queue?: readonly ChatQueueItem[];
+    pendingInputs?: ChatPendingInputsPage["items"];
     onQueueRetry?: (id: string) => void;
     sessionKey: string;
     currentAgentId?: string;
@@ -330,7 +334,61 @@ export function createAsyncQuestionPresentation(
     state.asyncQuestionScope === scope &&
     state.asyncQuestionGeneration === generation &&
     state.asyncQuestionDrafts === drafts;
-  const { history: questions, resolved } = questionHistory(props.messages ?? []);
+  const history = questionHistory(props.messages ?? []);
+  const questions = history.history;
+  const resolved = new Map(history.resolved);
+  const releaseAdmission = (itemId: string) => {
+    const draft = drafts.get(itemId);
+    if (!draft || history.resolved.has(itemId)) {
+      return;
+    }
+    // Replace the hint so a late local submit completion cannot restore it.
+    drafts.set(itemId, {
+      ...draft,
+      status: undefined,
+      admittedQueueId: undefined,
+      acceptedInputId: undefined,
+      error: undefined,
+      reopenedAfterBoundary: questions.find(({ question }) => question.itemId === itemId)?.boundary,
+    });
+  };
+  for (const input of (props.pendingInputs ?? []).toSorted(
+    (left, right) => left.acceptedAt - right.acceptedAt,
+  )) {
+    if (input.state === "cancelled") {
+      // Explicit withdrawal redacts message metadata. Its stable input ID still
+      // invalidates the matching local hint; an absent page is never cancellation.
+      for (const [itemId, draft] of drafts) {
+        if (draft.acceptedInputId === input.id) {
+          releaseAdmission(itemId);
+        }
+      }
+      continue;
+    }
+    const metadata = asNullableRecord(asNullableRecord(input.message)?.["__openclaw"]);
+    const question = questions.find(
+      ({ question: candidate }) =>
+        candidate.sourceMessageId &&
+        candidate.sourceMessageId === metadata?.replyToId &&
+        (metadata?.asyncQuestionItemId === undefined ||
+          metadata.asyncQuestionItemId === candidate.itemId),
+    )?.question;
+    if (!question || resolved.has(question.itemId)) {
+      continue;
+    }
+    const local = drafts.get(question.itemId);
+    if (local?.status === "submitted") {
+      local.acceptedInputId = input.id;
+    }
+    const text = extractTextCached(input.message) ?? "";
+    const answers = parseGeneratedAsyncAnswer(question, text);
+    resolved.set(question.itemId, {
+      status: "submitted",
+      answers: answers ?? new Map(),
+      ...(answers ? {} : { unparsedText: text }),
+      pendingInputState: input.state === "queued" ? "queued" : "interrupted",
+    });
+  }
   // This is a projection, never another sender: a recovered outbox row retains
   // the question association and is the only owner of retry and delivery state.
   const delivery = new Map(
@@ -455,6 +513,7 @@ export function createAsyncQuestionPresentation(
       [...archived],
       [...resolved].map(([itemId, draft]) => [
         itemId,
+        draft.pendingInputState,
         draft.unparsedText,
         [...draft.answers].map(([questionId, answer]) => [
           questionId,
@@ -481,19 +540,11 @@ export function createAsyncQuestionPresentation(
       }
       const itemId = item.asyncQuestionItemId;
       const draft = itemId ? drafts.get(itemId) : undefined;
-      if (!itemId || draft?.admittedQueueId !== item.id || resolved.has(itemId)) {
+      if (!itemId || draft?.admittedQueueId !== item.id || history.resolved.has(itemId)) {
         return;
       }
-      // Only the outbox owner's successful explicit removal retires admission.
-      // Replace the draft so a late completion cannot mark it submitted again.
-      drafts.set(itemId, {
-        ...draft,
-        status: undefined,
-        admittedQueueId: undefined,
-        error: undefined,
-        reopenedAfterBoundary: questions.find(({ question }) => question.itemId === itemId)
-          ?.boundary,
-      });
+      // Shared custody continues to suppress the form until cancellation commits.
+      releaseAdmission(itemId);
       onChange();
     },
     retry:

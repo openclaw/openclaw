@@ -58,6 +58,7 @@ export type SessionActorPhaseBackend = {
   validateSources(sources: SessionSourcePredicate[] | undefined): SessionSourceValidation;
   validateRecoveryInput(claim: HarnessCompletionRecovery): boolean;
   mutatePendingInput(input: PendingInputMutation): PendingInputMutationReceipt;
+  assertAsyncQuestionAdmission(message: unknown): void;
   admit(stage: "transaction" | "commit", publication?: unknown): void;
 };
 
@@ -141,6 +142,13 @@ export function applySessionActorPhaseWithBackend(
   switch (command.type) {
     case "session.actor.acceptInput": {
       const { pending, expectedState, lifecycle: patch } = command.input;
+      // The same owner admits staged inputs and idle inputs committed directly.
+      if (pending) {
+        backend.assertAsyncQuestionAdmission(JSON.parse(pending.messageJson));
+      }
+      for (const append of command.input.turn?.options.messages ?? []) {
+        backend.assertAsyncQuestionAdmission(append.message);
+      }
       if (
         pending &&
         (pending.sessionKey !== sessionKey || pending.sessionId !== requireEntry().sessionId)

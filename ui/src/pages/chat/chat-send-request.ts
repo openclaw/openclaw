@@ -36,6 +36,7 @@ export async function requestChatSend(
     intent?: ChatSendIntent;
     sessionId?: string;
     replyToId?: string;
+    asyncQuestionItemId?: string;
     expectedLeafEntryId?: string | null;
   },
 ): Promise<ChatSendAck> {
@@ -92,6 +93,7 @@ export async function requestChatSend(
         ...(params.intent ? { intent: params.intent } : {}),
         deliver: false,
         ...(params.replyToId ? { replyToId: params.replyToId } : {}),
+        ...(params.asyncQuestionItemId ? { asyncQuestionItemId: params.asyncQuestionItemId } : {}),
         ...(params.queueMode ? { queueMode: params.queueMode } : {}),
         ...(params.expectedLeafEntryId !== undefined
           ? { expectedLeafEntryId: params.expectedLeafEntryId }

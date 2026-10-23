@@ -36,3 +36,48 @@ export async function readStoredQuestionDrafts(page: Page): Promise<DurableQuest
     }
   });
 }
+
+export const asyncQuestionTitle = "Which audience should the summary address?";
+export const sharedQuestion = {
+  role: "assistant",
+  __openclaw: { id: "audience-prompt", seq: 1 },
+  content: asyncQuestionTitle + "\n\n1. Engineers\n2. Everyone",
+  timestamp: 1_789_000_000_000,
+  openclawAsyncDelivery: {
+    itemId: "audience-question",
+    questions: [{ title: asyncQuestionTitle, options: ["Engineers", "Everyone"] }],
+  },
+};
+
+export function acceptedQuestionInput(runId: string, answer = "Engineers", legacy = false) {
+  return {
+    id: "shared-answer",
+    runId,
+    state: "queued",
+    queued: true,
+    acceptedAt: Date.now(),
+    message: {
+      role: "user",
+      content: "> " + asyncQuestionTitle + "\n\n" + answer,
+      __openclaw: {
+        replyToId: "audience-prompt",
+        ...(!legacy && { asyncQuestionItemId: "audience-question" }),
+      },
+    },
+  };
+}
+
+export function sharedQuestionHistory(input: ReturnType<typeof acceptedQuestionInput>) {
+  return {
+    sessionId: "session:agent:main:main",
+    messages: [sharedQuestion],
+    sessionInfo: {
+      key: "agent:main:main",
+      sessionId: "session:agent:main:main",
+      status: "done",
+      hasActiveRun: false,
+    },
+    pendingInputs: { items: [input], total: 1, queuedCount: 1 },
+    inputReceipts: [{ runId: input.runId, state: "pending", queued: true }],
+  };
+}

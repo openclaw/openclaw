@@ -2,6 +2,7 @@ import { createMemo, createStore, merge } from "solid-js";
 import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
 import { projectPresentation } from "../../../lib/reactive/presentation.ts";
 import { projectSource } from "../../../lib/reactive/projection.ts";
+import { getChatPendingInputs } from "../chat-pending-inputs.ts";
 import type { ChatProps } from "../chat-view-frame.ts";
 import {
   createAsyncQuestionPanelProps,
@@ -25,6 +26,7 @@ type QuestionInput = ChatComposerProps &
       | "getQueue"
       | "transcriptVisible"
       | "connectionEpoch"
+      | "historyState"
     >
   >;
 
@@ -55,10 +57,14 @@ export function createComposerQuestions(paneId: string, readProps: () => Questio
     if (!props) {
       return null;
     }
+    const inputs = props.historyState ? getChatPendingInputs(props.historyState) : undefined;
     const asyncQuestions = createAsyncQuestionPresentation(
       transcript,
       merge(props, {
         queue: props.getQueue?.() ?? props.queue,
+        pendingInputs: inputs
+          ? [...inputs.page.items.filter((input) => !input.queued), ...inputs.queuedInputs]
+          : undefined,
         onReopen: (itemId, scope) => {
           state.restoreComposerFocus ||= state.questionTakeoverActive;
           state.questionTakeoverActive = false;

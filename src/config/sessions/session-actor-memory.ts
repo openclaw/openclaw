@@ -41,6 +41,7 @@ import {
 } from "./session-actor-phase.js";
 import { createSessionActorCommittedOutcome } from "./session-actor-receipt.js";
 import type { SessionActorStorageReads } from "./session-actor-storage-contract.js";
+import { assertMemoryAsyncQuestionAdmission } from "./session-async-question-admission.memory.js";
 import {
   attachSessionEntrySnapshots,
   type SessionEntryProjection,
@@ -230,6 +231,8 @@ export function createMemorySessionActorOwner(options: { agentId: string; path: 
                     validateRecoveryInput: (claim) =>
                       validateSessionActorMemoryRecoveryInput(working, claim),
                     mutatePendingInput: (value) => pending.mutate(value),
+                    assertAsyncQuestionAdmission: (message) =>
+                      assertMemoryAsyncQuestionAdmission(working, message),
                     admit,
                   });
                   let changedConversations = conversations;

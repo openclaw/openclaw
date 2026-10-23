@@ -372,6 +372,7 @@ export const ChatSendParamsSchema = closedObject({
   // Transcript id of the message this send replies to; the Gateway hydrates
   // channel-agnostic reply context metadata from session history.
   replyToId: Type.Optional(NonEmptyString),
+  asyncQuestionItemId: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
   attachments: Type.Optional(ChatAttachmentsSchema),
   toolBindings: Type.Optional(RunToolBindingsSchema),
   timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),

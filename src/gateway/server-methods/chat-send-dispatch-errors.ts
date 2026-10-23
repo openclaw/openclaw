@@ -18,6 +18,7 @@ import {
 } from "../../sessions/session-controller.rpc-sources.js";
 import { resolveStateContentionPresentation } from "../../sessions/session-run-error-presentation.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { ASYNC_QUESTION_ANSWERED } from "../../shared/async-question-answer.js";
 import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { waitForChatAbortTerminalPersistence } from "../chat-abort-lifecycle-internal.js";
 import { errorShapeFromError } from "../error-shape.js";
@@ -164,6 +165,8 @@ export async function handleChatSendSetupError(params: {
   const { cleanupAdmittedRun, lifecycleGeneration, restartSafeAdmission } = params.admission;
   const { agentId, clientRunId, sessionKey } = params.session;
   const hidden = getAgentRunContext(clientRunId)?.projectSessionMessages === false;
+  const questionAnswered =
+    params.error instanceof Error && params.error.message === ASYNC_QUESTION_ANSWERED;
   if (params.error instanceof ExpectedProfileMismatchError) {
     // Selection failure belongs to this request, not the run's recorded outcome.
     // Release only this admission; never poison a receipt or replay cache.
@@ -212,8 +215,11 @@ export async function handleChatSendSetupError(params: {
   cleanupAdmittedRun();
   clearAgentRunContext(clientRunId, lifecycleGeneration);
   params.context.removeChatRun(clientRunId, clientRunId, sessionKey);
-  const error =
-    params.error instanceof SessionMutationAuthorizationChangedError
+  const error = questionAnswered
+    ? errorShape(ErrorCodes.INVALID_REQUEST, "This question already has an accepted answer.", {
+        details: { reason: ASYNC_QUESTION_ANSWERED },
+      })
+    : params.error instanceof SessionMutationAuthorizationChangedError
       ? params.error.error
       : params.error instanceof SessionGoalOperationError
         ? errorShape(ErrorCodes.INVALID_REQUEST, params.error.message, {
@@ -238,7 +244,7 @@ export async function handleChatSendSetupError(params: {
     });
   }
   params.respond(false, payload, error, { runId: clientRunId, error: formatForLog(params.error) });
-  if (!hidden && failureDisposition !== "client-retry") {
+  if (!hidden && !questionAnswered && failureDisposition !== "client-retry") {
     broadcastChatError({
       terminalEntry: params.admission.activeRunAbort.entry,
       context: params.context,

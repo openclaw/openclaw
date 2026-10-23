@@ -87,7 +87,13 @@ export function AsyncQuestionSummary(props: {
       archived: presentation.archived.has(questions.itemId),
       dismissed: draft?.status === "skipped" || reopening,
       deliveryLabel: confirmed
-        ? t("chat.asyncQuestions.sent")
+        ? t(
+            confirmed.pendingInputState
+              ? confirmed.pendingInputState === "queued"
+                ? "chat.asyncQuestions.queued"
+                : "chat.queue.deliveryUnconfirmed"
+              : "chat.asyncQuestions.sent",
+          )
         : queued
           ? t(
               queued.sendState === "failed"

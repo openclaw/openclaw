@@ -8,6 +8,24 @@ import {
   subscribeAsyncQuestionState,
 } from "./components/chat-async-question.ts";
 
+it("does not admit an answer before its canonical question source exists", async () => {
+  const send = vi.fn(async () => true);
+  const actions = createChatQuestionActions({
+    state: {
+      sessionKey: "agent:main:main",
+      connectionEpoch: 1,
+      handleSendChat: send,
+      lastError: null,
+      chatQueue: [],
+    },
+    questionState: createQuestionPromptState(() => {}),
+    canSend: true,
+    isCurrent: () => true,
+  });
+  expect(await actions.onAsyncQuestionSubmit?.("Engineers", "audience")).toBe(false);
+  expect(send).not.toHaveBeenCalled();
+});
+
 it.each(["session", "connection", "pane", "outbox"] as const)(
   "does not resubmit a question after %s changes",
   async (changed) => {

@@ -14,6 +14,10 @@ export type AsyncQuestionDraft = {
   signature?: string;
   status?: "submitting" | "submitted" | "skipped" | "reopening";
   admittedQueueId?: string;
+  /** Shared custody observed for this local admission; only its cancellation releases the hint. */
+  acceptedInputId?: string;
+  /** Server-accepted custody is shared, not canonical transcript confirmation. */
+  pendingInputState?: "queued" | "interrupted";
   error?: string;
   reopenedAfterBoundary?: string;
 };

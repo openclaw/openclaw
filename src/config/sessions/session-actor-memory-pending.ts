@@ -3,6 +3,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { MAX_PAYLOAD_BYTES } from "../../gateway/payload-limits.js";
 import { toAgentStoreSessionKey } from "../../routing/session-key.js";
 import type { SessionActorMemoryWindow } from "./session-actor-memory-state.js";
+import { assertMemoryAsyncQuestionAdmission } from "./session-async-question-admission.memory.js";
 import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js";
 import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
@@ -296,6 +297,8 @@ export function createSessionActorMemoryPending(
       };
       options.admit("transaction", grant);
       if (input.kind === "stage") {
+        // Incognito public staging enters this storage command without an acceptInput phase.
+        assertMemoryAsyncQuestionAdmission(state, JSON.parse(input.messageJson));
         const staged: SessionPendingInputRow = row
           ? { ...row, state: "queued", lifecycle_generation: input.lifecycleGeneration }
           : {

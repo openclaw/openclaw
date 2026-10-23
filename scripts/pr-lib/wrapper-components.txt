@@ -1769,6 +1769,7 @@ src/sessions/user-turn-transcript-admission.ts
 src/secrets/store/secret-store-validation-error.ts
 src/shared/assistant-error-format.ts
 src/shared/async-store.ts
+src/shared/async-question-answer.ts
 src/shared/async-work-scope.ts
 src/shared/avatar-limits.ts
 src/shared/avatar-policy.ts
@@ -2451,6 +2452,7 @@ src/config/sessions/session-actor-memory-metadata.ts
 src/config/sessions/session-actor-memory-outbox.ts
 src/config/sessions/session-actor-memory-owner.ts
 src/config/sessions/session-actor-memory-pending.ts
+src/config/sessions/session-async-question-admission.memory.ts
 src/config/sessions/session-actor-memory-publication.ts
 src/config/sessions/session-actor-memory-reactions.ts
 src/config/sessions/session-actor-memory-recovery.ts

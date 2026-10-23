@@ -98,6 +98,77 @@ function present(
   });
 }
 
+it("projects shared queued and interrupted answers without claiming transcript confirmation", () => {
+  const source = { ...question(), __openclaw: { id: "canonical-question", seq: 1 } };
+  const pending = {
+    id: "accepted",
+    runId: "answer",
+    state: "queued" as const,
+    queued: true as const,
+    acceptedAt: 2,
+    message: {
+      role: "user",
+      content: "> Which audience?\n\nEngineers",
+      __openclaw: { replyToId: "canonical-question" },
+    },
+  };
+  for (const state of ["queued", "interrupted"] as const) {
+    const presentation = present([source], presentationState(), {
+      pendingInputs: [{ ...pending, state }],
+    });
+    expect(presentation.pending).toHaveLength(0);
+    expect(presentation.resolved.get("question-1")?.pendingInputState).toBe(state);
+    drawSummary(presentation.pending[0] ?? readAsyncQuestions(source)!, presentation);
+    expect(container.textContent).toContain("Engineers");
+    expect(container.textContent).not.toContain("Sent");
+  }
+  expect(
+    present([source], presentationState(), { pendingInputs: [{ ...pending, state: "cancelled" }] })
+      .pending,
+  ).toHaveLength(1);
+  const next = {
+    ...source,
+    openclawAsyncDelivery: { ...source.openclawAsyncDelivery, itemId: "next" },
+    __openclaw: { id: "another-question", seq: 3 },
+  };
+  expect(
+    present([source, next], presentationState(), { pendingInputs: [pending] }).pending.map(
+      (entry) => entry.itemId,
+    ),
+  ).toEqual(["next"]);
+});
+
+it("releases a retained local hint only on its observed custody's explicit cancellation", () => {
+  const source = { ...question(), __openclaw: { id: "canonical-question", seq: 1 } };
+  const state = presentationState();
+  const text = "> Which audience?\n\nEngineers";
+  present([source], state, {
+    queue: [{ id: "local-answer", asyncQuestionItemId: "question-1", text, createdAt: 1 }],
+  });
+  const pending = {
+    id: "accepted-input",
+    runId: "answer",
+    state: "queued" as const,
+    acceptedAt: 2,
+    message: { role: "user", content: text, __openclaw: { replyToId: "canonical-question" } },
+  };
+  expect(present([source], state, { pendingInputs: [pending] }).pending).toHaveLength(0);
+  expect(present([source], state, { pendingInputs: [] }).pending).toHaveLength(0);
+  expect(
+    present([source], state, { pendingInputs: [{ ...pending, state: "interrupted" }] }).pending,
+  ).toHaveLength(0);
+  const cancelled = {
+    ...pending,
+    state: "cancelled" as const,
+    message: { role: "user", content: [], display: false },
+  };
+  expect(
+    present([source], state, { pendingInputs: [{ ...cancelled, id: "unrelated-cancelled-input" }] })
+      .pending,
+  ).toHaveLength(0);
+  expect(present([source], state, { pendingInputs: [cancelled] }).pending).toHaveLength(1);
+});
+
 it("retires old reminders after a later run completes and reconstructs that outcome after reload", () => {
   const old = question("old", "run-1");
   const latest = question("latest", "run-2");

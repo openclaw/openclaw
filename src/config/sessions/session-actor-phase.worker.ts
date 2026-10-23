@@ -6,6 +6,7 @@ import {
   applySessionActorPhaseWithBackend,
   type SessionActorMutation,
 } from "./session-actor-phase.js";
+import { assertSessionAsyncQuestionAdmission } from "./session-async-question-admission.kernel.js";
 import { readHarnessCompletionSourceInDatabase } from "./session-harness-completion-source.kernel.js";
 import { applySessionTranscriptEvent } from "./session-message-rewrite.worker.js";
 import { mutatePendingInput } from "./session-pending-input-operations.kernel.js";
@@ -73,6 +74,15 @@ export function applySessionActorPhase(
     validateRecoveryInput: (claim) =>
       readHarnessCompletionSourceInDatabase(database, claim).validInput,
     mutatePendingInput: (input) => mutatePendingInput(input, context, () => {}),
+    assertAsyncQuestionAdmission: (message) =>
+      assertSessionAsyncQuestionAdmission(
+        database,
+        {
+          sessionKey,
+          sessionId: hot.entry?.sessionId ?? "",
+        },
+        message,
+      ),
     admit: (stage, publication) => context.admit(stage, publication),
   });
 }

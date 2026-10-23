@@ -139,6 +139,9 @@ export function createGatewayChatUserTurnController(params: {
     timestamp: session.now,
     idempotencyKey: sourceId,
     ...(request.p.replyToId ? { replyToId: request.p.replyToId } : {}),
+    ...(request.p.asyncQuestionItemId
+      ? { asyncQuestionItemId: request.p.asyncQuestionItemId }
+      : {}),
     ...(sender ? { sender } : {}),
     ...(sourceClients.length ? { transport: { clients: sourceClients } } : {}),
     ...(hasGatewayAdminScope(params.client) ? { senderIsOwner: true } : {}),

@@ -66,6 +66,7 @@ type ChatSendRequestParams = Omit<
 };
 
 export type NormalizedChatSendRequest = {
+  asyncQuestion?: { replyToId: string; itemId: string };
   restartResume?: SessionRestartResume;
   providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
   goalOperation?: SessionGoalOperation & { action: "start" | "resume" };
@@ -123,6 +124,9 @@ export function normalizeChatSendRequest(params: {
   }
 
   const p = controlUiReconnectResume.params as ChatSendRequestParams;
+  if (p.asyncQuestionItemId && (!p.replyToId || p.intent || p.attachments?.length)) {
+    return reject("An async question answer requires its canonical reply target and text input.");
+  }
   const providerReview = params.providerReviewAcknowledgment
     ? readProviderReviewAcknowledgment(params.providerReviewAcknowledgment)
     : undefined;
@@ -298,12 +302,16 @@ export function normalizeChatSendRequest(params: {
     : rawMessage;
   const requestInput = JSON.stringify([
     p.message,
+    ...(p.asyncQuestionItemId ? [[p.replyToId, p.asyncQuestionItemId]] : []),
     p.mentions?.map(({ profileId, start, end }) => [profileId, start, end]) ?? [],
     ...(workContext ? [workContext.snapshot] : []),
     ...(providerReview ? [providerReview.review.id, providerReview.target.sessionId] : []),
   ]);
 
   const value: NormalizedChatSendRequest = {
+    ...(p.asyncQuestionItemId && p.replyToId
+      ? { asyncQuestion: { replyToId: p.replyToId, itemId: p.asyncQuestionItemId } }
+      : {}),
     chatSendReceivedAtMs,
     clientInfo,
     supportsTaskSuggestions,
@@ -394,6 +402,7 @@ export function createChatInputRecovery(params: {
       deliver: p.deliver,
       queueMode: p.queueMode,
       replyToId: p.replyToId,
+      asyncQuestionItemId: p.asyncQuestionItemId,
       originatingChannel: p.originatingChannel,
       originatingTo: p.originatingTo,
       originatingAccountId: p.originatingAccountId,
