@@ -317,6 +317,7 @@ export async function observeOriginalManagedServiceRuntime(
       opts: params.opts,
       timeoutMs: params.updateStepTimeoutMs,
       assertCurrent,
+      gatewayPort: before.servicePort,
       serviceCommand: original.definition.command,
     });
     assertCurrent();
