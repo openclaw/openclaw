@@ -387,8 +387,9 @@ export function createDoctorPluginMigrationPreparation(params: {
           deferredPluginMigrations: expectedPending,
           shellEnvFallback: "defer",
         }).readConfigFileSnapshotForWrite();
+        // Legacy keys can remain invalid until the following Doctor config repair.
         if (
-          !snapshot.valid ||
+          snapshot.readError ||
           describeConfigSnapshotInputChange(sourceSnapshot, snapshot, {
             compareResolvedConfig: false,
           })

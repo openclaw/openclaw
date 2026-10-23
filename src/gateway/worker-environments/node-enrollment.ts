@@ -53,7 +53,6 @@ type WorkerNodeEnrollmentManagerOptions = {
     signal?: AbortSignal,
   ) => Promise<NodeBootstrapArtifact>;
   transfer: WorkerBootstrapArtifactTransferService;
-  now?: () => number;
 };
 
 function isProvisioningOwner(
@@ -69,7 +68,6 @@ function isProvisioningOwner(
 }
 
 export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentManagerOptions) {
-  const now = options.now ?? Date.now;
   const controller = new AbortController();
   const { signal } = controller;
   const active = new Map<string, NodeEnrollmentBinding>();
@@ -328,8 +326,8 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
         displayName: truncateUtf16Safe(`Cloud worker ${owner.profileId}`, 64),
         signal: enrollmentSignal,
         waitForDeviceId: async () => {
-          const deadline = now() + NODE_ENROLLMENT_TIMEOUT_MS;
-          while (now() < deadline) {
+          const deadline = Date.now() + NODE_ENROLLMENT_TIMEOUT_MS;
+          while (Date.now() < deadline) {
             enrollmentSignal.throwIfAborted();
             const live = options.store.get(owner.environmentId);
             if (

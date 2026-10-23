@@ -1,7 +1,6 @@
 // Provider auth runtime helpers implement OAuth loopback, token exchange, and auth persistence.
 import crypto from "node:crypto";
 import fs from "node:fs";
-import { createServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
@@ -54,7 +53,7 @@ export type OAuthCallbackResult = {
  * only after the callback route is ready. Invalid request candidates remain nonterminal.
  */
 export async function startProviderOAuthLoopbackCallbackServer(
-  params: Omit<Parameters<typeof startOAuthLoopbackCallbackServer>[0], "lookup" | "createServer">,
+  params: Parameters<typeof startOAuthLoopbackCallbackServer>[0],
 ): Promise<OAuthLoopbackCallbackServer> {
   return await startOAuthLoopbackCallbackServer(params);
 }
@@ -230,7 +229,6 @@ export async function waitForLocalOAuthCallback(params: {
     expectedState: params.expectedState,
     timeoutMs,
     ...(params.hostname ? { bindHostname: params.hostname } : {}),
-    createServer,
     ...(params.signal ? { signal: params.signal } : {}),
     resolveCorsOrigin: hasCorsOriginAllowlist
       ? resolveOAuthCallbackOrigin

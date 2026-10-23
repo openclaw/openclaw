@@ -31,91 +31,6 @@ import {
 import type { AgentLocalStatus } from "./status.agent-local.js";
 import type { MemoryStatusSnapshot } from "./status.scan.shared.js";
 
-function buildStatusLastHeartbeatValue(params: {
-  deep?: boolean;
-  gatewayReachable: boolean;
-  gatewayStartupPhase?: string;
-  lastHeartbeat: HeartbeatEventPayload | null;
-}) {
-  if (!params.deep) {
-    // Fast status omits the row entirely instead of implying heartbeat is missing.
-    return null;
-  }
-  if (params.gatewayStartupPhase) {
-    return theme.muted(`not checked (gateway still starting; phase ${params.gatewayStartupPhase})`);
-  }
-  if (!params.gatewayReachable) {
-    return theme.warn("unavailable");
-  }
-  if (!params.lastHeartbeat) {
-    return theme.muted("none");
-  }
-  const age = formatTimeAgo(Date.now() - params.lastHeartbeat.ts);
-  const accountLabel = params.lastHeartbeat.accountId
-    ? `account ${params.lastHeartbeat.accountId}`
-    : null;
-  return [params.lastHeartbeat.status, age, params.lastHeartbeat.channel, accountLabel]
-    .filter(Boolean)
-    .join(" · ");
-}
-
-function buildStatusMemoryValue(params: {
-  memory: MemoryStatusSnapshot | null;
-  memoryPlugin: MemoryPluginStatus;
-  memoryUnavailableLabel?: string;
-}) {
-  if (!params.memoryPlugin.enabled) {
-    const suffix = params.memoryPlugin.reason ? ` (${params.memoryPlugin.reason})` : "";
-    return theme.muted(`disabled${suffix}`);
-  }
-  if (!params.memory) {
-    const slot = params.memoryPlugin.slot ? `plugin ${params.memoryPlugin.slot}` : "plugin";
-    return theme.muted(`enabled (${slot}) · ${params.memoryUnavailableLabel ?? "unavailable"}`);
-  }
-  if ("health" in params.memory) {
-    const detail = params.memory.health.message ? ` · ${params.memory.health.message}` : "";
-    const status =
-      params.memory.health.status === "ready"
-        ? theme.success("ready")
-        : params.memory.health.status === "degraded"
-          ? theme.warn("degraded")
-          : theme.warn("unavailable");
-    return `plugin ${params.memory.provider} · ${status}${detail}`;
-  }
-  const parts: string[] = [];
-  const dirtySuffix = params.memory.dirty ? ` · ${theme.warn("dirty")}` : "";
-  parts.push(`${params.memory.files} files · ${params.memory.chunks} chunks${dirtySuffix}`);
-  if (params.memory.sources?.length) {
-    parts.push(`sources ${params.memory.sources.join(", ")}`);
-  }
-  if (params.memoryPlugin.slot) {
-    parts.push(`plugin ${params.memoryPlugin.slot}`);
-  }
-  const colorByTone = (tone: Tone, text: string) =>
-    tone === "ok" ? theme.success(text) : tone === "warn" ? theme.warn(text) : theme.muted(text);
-  if (params.memory.vector) {
-    const vector =
-      params.memory.backend === "builtin" && params.memory.vector.storeAvailable !== undefined
-        ? // Built-in memory reports store availability under a backend-specific field.
-          { ...params.memory.vector, available: params.memory.vector.storeAvailable }
-        : params.memory.vector;
-    const state = resolveMemoryVectorState(vector);
-    const prefix = params.memory.backend === "builtin" ? "vector store" : "vector";
-    const label = state.state === "disabled" ? `${prefix} off` : `${prefix} ${state.state}`;
-    parts.push(colorByTone(state.tone, label));
-  }
-  if (params.memory.fts) {
-    const state = resolveMemoryFtsState(params.memory.fts);
-    const label = state.state === "disabled" ? "fts off" : `fts ${state.state}`;
-    parts.push(colorByTone(state.tone, label));
-  }
-  if (params.memory.cache) {
-    const summary = resolveMemoryCacheSummary(params.memory.cache);
-    parts.push(colorByTone(summary.tone, summary.text));
-  }
-  return parts.join(" · ");
-}
-
 type StatusDegradationSummary = Pick<
   StatusSummary,
   | "degradedSecretOwners"
@@ -233,17 +148,82 @@ export function buildStatusCommandOverviewRows(params: {
     return `${agent.every} (${agent.agentId})`;
   });
   const heartbeatValue = heartbeatParts.length > 0 ? heartbeatParts.join(", ") : "disabled";
-  const lastHeartbeatValue = buildStatusLastHeartbeatValue({
-    deep: params.opts.deep,
-    gatewayReachable: params.surface.gatewayReachable,
-    gatewayStartupPhase: params.surface.gatewayProbe?.startupPhase,
-    lastHeartbeat: params.lastHeartbeat,
-  });
-  const memoryValue = buildStatusMemoryValue({
-    memory: params.memory,
-    memoryPlugin: params.memoryPlugin,
-    memoryUnavailableLabel: "not checked",
-  });
+  let lastHeartbeatValue: string | null;
+  if (!params.opts.deep) {
+    // Fast status omits the row entirely instead of implying heartbeat is missing.
+    lastHeartbeatValue = null;
+  } else if (params.surface.gatewayProbe?.startupPhase) {
+    lastHeartbeatValue = theme.muted(
+      `not checked (gateway still starting; phase ${params.surface.gatewayProbe.startupPhase})`,
+    );
+  } else if (!params.surface.gatewayReachable) {
+    lastHeartbeatValue = theme.warn("unavailable");
+  } else if (!params.lastHeartbeat) {
+    lastHeartbeatValue = theme.muted("none");
+  } else {
+    const age = formatTimeAgo(Date.now() - params.lastHeartbeat.ts);
+    const accountLabel = params.lastHeartbeat.accountId
+      ? `account ${params.lastHeartbeat.accountId}`
+      : null;
+    lastHeartbeatValue = [
+      params.lastHeartbeat.status,
+      age,
+      params.lastHeartbeat.channel,
+      accountLabel,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+  }
+  let memoryValue: string;
+  if (!params.memoryPlugin.enabled) {
+    const suffix = params.memoryPlugin.reason ? ` (${params.memoryPlugin.reason})` : "";
+    memoryValue = theme.muted(`disabled${suffix}`);
+  } else if (!params.memory) {
+    const slot = params.memoryPlugin.slot ? `plugin ${params.memoryPlugin.slot}` : "plugin";
+    memoryValue = theme.muted(`enabled (${slot}) · not checked`);
+  } else if ("health" in params.memory) {
+    const detail = params.memory.health.message ? ` · ${params.memory.health.message}` : "";
+    const status =
+      params.memory.health.status === "ready"
+        ? theme.success("ready")
+        : params.memory.health.status === "degraded"
+          ? theme.warn("degraded")
+          : theme.warn("unavailable");
+    memoryValue = `plugin ${params.memory.provider} · ${status}${detail}`;
+  } else {
+    const parts: string[] = [];
+    const dirtySuffix = params.memory.dirty ? ` · ${theme.warn("dirty")}` : "";
+    parts.push(`${params.memory.files} files · ${params.memory.chunks} chunks${dirtySuffix}`);
+    if (params.memory.sources?.length) {
+      parts.push(`sources ${params.memory.sources.join(", ")}`);
+    }
+    if (params.memoryPlugin.slot) {
+      parts.push(`plugin ${params.memoryPlugin.slot}`);
+    }
+    const colorByTone = (tone: Tone, text: string) =>
+      tone === "ok" ? theme.success(text) : tone === "warn" ? theme.warn(text) : theme.muted(text);
+    if (params.memory.vector) {
+      const vector =
+        params.memory.backend === "builtin" && params.memory.vector.storeAvailable !== undefined
+          ? // Built-in memory reports store availability under a backend-specific field.
+            { ...params.memory.vector, available: params.memory.vector.storeAvailable }
+          : params.memory.vector;
+      const state = resolveMemoryVectorState(vector);
+      const prefix = params.memory.backend === "builtin" ? "vector store" : "vector";
+      const label = state.state === "disabled" ? `${prefix} off` : `${prefix} ${state.state}`;
+      parts.push(colorByTone(state.tone, label));
+    }
+    if (params.memory.fts) {
+      const state = resolveMemoryFtsState(params.memory.fts);
+      const label = state.state === "disabled" ? "fts off" : `fts ${state.state}`;
+      parts.push(colorByTone(state.tone, label));
+    }
+    if (params.memory.cache) {
+      const summary = resolveMemoryCacheSummary(params.memory.cache);
+      parts.push(colorByTone(summary.tone, summary.text));
+    }
+    memoryValue = parts.join(" · ");
+  }
   let pluginCompatibilityValue: string;
   if (params.pluginCompatibility.length === 0) {
     pluginCompatibilityValue = theme.success("none");

@@ -24,7 +24,7 @@ import {
 } from "./update-command-post-update.test-support.js";
 import { resolveMutableUpdateFailure } from "./update-command-result.js";
 import * as service from "./update-command-service.js";
-import { createPostUpdateFailureResult } from "./update-command-terminal-publication.js";
+import { createPostUpdateExceptionResult } from "./update-command-terminal-publication.js";
 import { resolveSettledUpdateCommandResult } from "./update-command-terminal.js";
 
 const healthyRecovery = { serviceRestartSafe: true as const, version: "2026.10.3" };
@@ -194,7 +194,7 @@ export function registerMaintenanceContentionTests(
           ])
         : new Error("settlement failed", { cause: contention });
       const original = packageResult();
-      const postUpdate = createPostUpdateFailureResult(
+      const postUpdate = createPostUpdateExceptionResult(
         { result: original, root: "/synthetic", startedAt: Date.now() },
         error,
       ).result;
