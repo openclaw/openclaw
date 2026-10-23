@@ -16,12 +16,9 @@ import {
   getChatAttachmentDataUrl,
   releaseChatAttachmentPayloads,
 } from "../chat/attachment-payload-store.ts";
+import { retainCreatedComposer, takeCreatedComposer } from "./creation-composer-registry.ts";
 import { CreationComposer as CreationComposerView } from "./creation-composer-render.tsx";
-import {
-  CreationComposer,
-  retainCreatedComposer,
-  takeCreatedComposer,
-} from "./creation-composer.ts";
+import { CreationComposer } from "./creation-composer.ts";
 import { createDraftFixture, registerTextPayload } from "./draft-submission-flow.test-support.ts";
 import { StartedSessionNavigation } from "./started-session-navigation.ts";
 

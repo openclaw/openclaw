@@ -68,7 +68,11 @@ describe("retireStandaloneGitWrapper", () => {
             return contents;
           });
     try {
-      const result = await withMockedPlatform(platform, () => retire([base], assertCurrent));
+      const retiring = withMockedPlatform(platform, () => retire([base], assertCurrent));
+      const result =
+        change === "revoked finalizer"
+          ? await expect(retiring).rejects.toThrow("finalizer revoked")
+          : await retiring;
       if (change === "directory") {
         expect((await fs.lstat(wrapper)).isDirectory()).toBe(true);
       } else {
@@ -80,7 +84,9 @@ describe("retireStandaloneGitWrapper", () => {
               : original,
         );
       }
-      expect(result).toMatchObject({ error: expect.stringContaining("Could not retire") });
+      if (change !== "revoked finalizer") {
+        expect(result).toMatchObject({ error: expect.stringContaining("Could not retire") });
+      }
       expect(assertCurrent).toHaveBeenCalledTimes(change === "revoked finalizer" ? 1 : 0);
     } finally {
       observation.mockRestore();
@@ -94,9 +100,7 @@ describe("retireStandaloneGitWrapper", () => {
       .mockResolvedValue(pkgQueryResult(`${wrapper}\n`));
     try {
       await withMockedPlatform("freebsd", () =>
-        expect(retire()).resolves.toMatchObject({
-          error: expect.stringContaining("installed by FreeBSD pkg"),
-        }),
+        expect(retire()).rejects.toThrow("installed by FreeBSD pkg"),
       );
       await expect(fs.readFile(wrapper, "utf8")).resolves.toBe(original);
     } finally {

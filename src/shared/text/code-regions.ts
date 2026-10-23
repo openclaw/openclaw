@@ -80,6 +80,7 @@ export function findCodeOwnership(
     completedParagraphs,
     paragraphs,
     definitions,
+    textSpans,
     unsettledDefinitionStarts,
     unresolvedImageCodeStart,
   } = parseMarkdownOwnership(text, options);
@@ -89,6 +90,7 @@ export function findCodeOwnership(
     ...(unresolvedImageCodeStart === undefined ? {} : { unresolvedImageCodeStart }),
     completedParagraphs,
     definitions,
+    textSpans,
     unsettledDefinitionStarts,
     ...(paragraphs ? { paragraphs } : {}),
   };

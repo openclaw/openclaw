@@ -671,7 +671,9 @@
   position: relative;
 }
 
-.agent-chat__input-btn--attach > .oc-menu-item__label {
+/* Icon-only triggers center the glyph, not the generic flex-growing text label. */
+.agent-chat__input-btn--attach > .oc-menu-item__label,
+.chat-talk-input-picker__trigger > .oc-menu-item__label {
   display: contents;
 }
 

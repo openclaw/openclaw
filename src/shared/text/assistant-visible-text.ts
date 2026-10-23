@@ -14,7 +14,7 @@ import {
   stripLinesOutsideCode,
 } from "./code-regions.js";
 import { downgradedToolCallTextFilter } from "./downgraded-tool-call-text.js";
-import { stripModelSpecialTokens } from "./model-special-tokens.js";
+import { modelSpecialTokensTextFilter } from "./model-special-tokens.js";
 import { createReasoningTagProbe, stripReasoningTagsFromText } from "./reasoning-tags.js";
 import {
   applyTextFilters,
@@ -259,7 +259,7 @@ export function assistantVisibleTextFilters(
   };
   const filters: TextFilter[] = [
     ...(!preserve ? [minimaxToolCallTextFilter] : []),
-    { transform: stripModelSpecialTokens, activationTokens: ["<|", "<｜"] },
+    modelSpecialTokensTextFilter,
     {
       transform: stripRelevantMemoriesTags,
       activationTokens: ["relevant-memories", "relevant_memories"],
