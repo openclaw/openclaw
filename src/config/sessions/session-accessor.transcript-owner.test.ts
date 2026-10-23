@@ -147,7 +147,7 @@ it("completes committed custody before a queued cancellation can interrupt the r
       },
       updateMode: "none",
     });
-    await expect(turn).resolves.toMatchObject({ appendedCount: 1 });
+    await expect(turn).resolves.toMatchObject({ messages: [{ appended: true }] });
     expect(controller.signal.aborted).toBe(true);
     expect(completed).toEqual(["committed"]);
     expect(await loadEvents(scope)).toContainEqual(expect.objectContaining({ id: "committed" }));
@@ -209,7 +209,7 @@ it.each(["recorded default", "explicit per-agent store"] as const)(
           ...turnOptions(cfg, kind),
           ...(explicit ? { expectedSessionId: scope.sessionId } : {}),
         }),
-      ).resolves.toMatchObject({ appendedCount: 1 });
+      ).resolves.toMatchObject({ messages: [{ appended: true }] });
       await expect(loadEvents({ ...scope, agentId })).resolves.toContainEqual(
         expect.objectContaining({
           message: expect.objectContaining({ content: kind, role: "user" }),
@@ -233,7 +233,7 @@ it("rejects a conflicting scope agent for a persisted fixed-store owner", async 
     await seed({ ...scope, agentId: "ops" });
     await expect(
       persistTurn({ ...scope, agentId: "ops" }, turnOptions(cfg, "right owner")),
-    ).resolves.toMatchObject({ appendedCount: 1 });
+    ).resolves.toMatchObject({ messages: [{ appended: true }] });
   });
 });
 
@@ -434,7 +434,7 @@ it.each(["authority", "idempotency"] as const)(
           },
         ],
       });
-      expect(committed.appendedCount).toBe(1);
+      expect(committed.messages.filter((m) => m.appended)).toHaveLength(1);
       expect(guard).toHaveBeenCalledTimes(guardKind === "authority" ? 1 : 0);
       expect(decode).not.toHaveBeenCalled();
     });

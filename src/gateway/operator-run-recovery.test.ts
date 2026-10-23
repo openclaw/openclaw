@@ -799,7 +799,7 @@ describe("restart recovery authenticated operator source", () => {
         ],
         updateMode: "none",
       });
-      expect(admitted.appendedCount).toBe(1);
+      expect(admitted.messages.filter((m) => m.appended)).toHaveLength(1);
       expect(admitted.rejectedReason).toBeUndefined();
       const restored = expectDefined(await fixture.restore(), "restored operator source");
       using _ = { [Symbol.dispose]: restored.release };
