@@ -40,7 +40,11 @@ Object.assign(process.env, {
   OPENCLAW_BUNDLED_SKILLS_DIR: path.join(state, "absent"),
 });
 installBaselineHook(values["baseline-dir"]);
-const { runGitBytes, runGitBuffered } = await import("../../src/agents/worktrees/git.ts");
+// Unrelated workers must not inherit different host graphs from the Git comparison.
+const { runGitBytes, runGitBuffered } =
+  !values.worker || values.worker === "git-operation"
+    ? await import("../../src/agents/worktrees/git.ts")
+    : {};
 const repository = path.join(state, "repository");
 const git = (...args) => execFileSync("git", ["-C", repository, ...args], { stdio: "pipe" });
 git("init", "-q", "-b", "main");
