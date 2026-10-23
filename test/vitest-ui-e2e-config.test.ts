@@ -32,24 +32,26 @@ const qaLabFiles = [
   "extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts",
   "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
 ] as const;
-const serialGatewayFiles = `background-work chat-collaborator-scroll chat-managed-media-order
-  chat-html-publication
-  chat-session-diff-folding chat-steer-deferred-custody chat-stop-owned-exec chat-tts-supplement
-  chat-wait-clock command-palette-search deepseek-search desktop-resize device-platform-family
-  peer-followup-restart provider-browser-login session-pr-reader-lifetime session-roster-request-rate
+const serialGatewayFiles = `chat-managed-media-order
+  chat-session-diff-folding chat-steer-deferred-custody chat-tts-supplement
+  command-palette-search deepseek-search desktop-resize device-platform-family
+  peer-followup-restart session-pr-reader-lifetime
   sidebar-running-counts task-pull-requests`
   .split(/\s+/u)
   .map((name) => `ui/src/e2e/${name}.real-gateway.e2e.test.ts`)
   .concat("ui/src/e2e/mcp-app-conformance.e2e.test.ts", workboardFile);
 const realGatewayFiles = `activity-run-inspector.real-gateway agent-file-lifecycle.real-gateway
+  background-work.real-gateway chat-collaborator-scroll.real-gateway chat-html-publication.real-gateway
   chat-agent-avatar.real-gateway chat-composer-websearch-kill-switch.real-gateway
   chat-flow.catalog-bootstrap chat-loading-performance.real-gateway chat-project-media.real-gateway
   chat-reconnect-continuity.real-gateway chat-stop-finished-run.real-gateway
   chat-thinking-metadata.real-gateway chat-widget-sandbox.real-gateway
+  chat-stop-owned-exec.real-gateway chat-wait-clock.real-gateway
   command-palette-catalog.real-gateway control-ui-auth-transports cron-duration-save.real-gateway
   device-alias-rename.real-gateway logs-lifecycle model-api-keys.real-gateway
   model-catalog-partial-refresh.real-gateway model-picker-search.real-gateway profile-page.real-gateway
-  quota-reset-status.real-gateway session-progress-hovercard.real-gateway
+  provider-browser-login.real-gateway quota-reset-status.real-gateway
+  session-progress-hovercard.real-gateway session-roster-request-rate.real-gateway
   usage-sessions-owner-attribution worker-initial-setup.real-gateway`
   .split(/\s+/u)
   .map((name) => `ui/src/e2e/${name}.e2e.test.ts`)
@@ -401,7 +403,7 @@ describe("Control UI E2E resource ownership", () => {
         })),
       );
       const parallel = result.files.filter((entry) => entry.phase === 2);
-      expect(parallel).toHaveLength(28);
+      expect(parallel).toHaveLength(35);
       expect(parallel.every((entry) => entry.fileParallelism)).toBe(true);
       expect(parallel.every((entry) => entry.workers === result.rootWorkers)).toBe(true);
       for (const entry of parallel) {

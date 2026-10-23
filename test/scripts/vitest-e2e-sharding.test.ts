@@ -11,7 +11,8 @@ import { UiE2eSequencer } from "../vitest/vitest.ui-e2e.sequencer.ts";
 import { selectWeightedShard } from "../vitest/vitest.weighted-sharding.ts";
 
 const { timings } = vi.hoisted(() => ({ timings: {} as Record<string, number> }));
-vi.mock("../../scripts/lib/ci-test-timings.mts", () => ({
+vi.mock("../../scripts/lib/ci-test-timings.mts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../scripts/lib/ci-test-timings.mts")>()),
   readRepoE2eFileTimings: () => timings,
   readUiE2eFileTimings: () => ({ fileSeconds: timings, perFileOverheadSeconds: 0 }),
 }));
