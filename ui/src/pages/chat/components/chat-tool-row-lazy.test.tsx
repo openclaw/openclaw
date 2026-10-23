@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-import { createSignal } from "solid-js";
+import { For, createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
@@ -49,12 +49,43 @@ it("keeps card chrome through import recovery and retains the current resolved r
     args: { id: "exec", args: { command: "echo before" } },
   };
   const [card, setCard] = createSignal(initialCard);
+  const [mutations, setMutations] = createSignal<ToolCard[]>([
+    {
+      id: "edit",
+      name: "edit",
+      args: { path: "/repo/src/edit.ts", oldText: "before", newText: "after" },
+      live: true,
+      liveDiffStat: { added: 1, removed: 1 },
+    },
+    {
+      id: "write",
+      name: "write",
+      args: { path: "/repo/src/write.ts", content: "new file\n" },
+      live: true,
+      liveDiffStat: { added: 1, removed: 0 },
+    },
+  ]);
   const root = mountSolid(() => (
     <>
       <ChatToolCard
         card={card()}
         options={{ messageKey: "lazy-row", expanded: false, onToggleExpanded: toggle }}
       />
+      <For each={mutations()} keyed={(item) => item.id}>
+        {(item) => (
+          <section data-tool-case={item().name}>
+            <ChatToolCard
+              card={item()}
+              options={{
+                messageKey: item().id,
+                expanded: false,
+                onToggleExpanded: toggle,
+                runActive: true,
+              }}
+            />
+          </section>
+        )}
+      </For>
       <GroupedMessage
         preparation={prepareChatMessageRender({ role: "toolResult", content: "Example output" })}
         messageKey="tool-message"
@@ -97,6 +128,36 @@ it("keeps card chrome through import recovery and retains the current resolved r
   expect(placeholder.querySelector(".chat-tool-row__chevron")).not.toBeNull();
   expect(root.container.querySelector(".chat-permission-card")).not.toBeNull();
   expect(root.container.querySelector(".chat-progress-card-receipt")).not.toBeNull();
+  for (const [name, verb, removed] of [
+    ["edit", "Editing", "-1"],
+    ["write", "Writing", "-0"],
+  ]) {
+    const mutation = root.container.querySelector(`[data-tool-case="${name}"]`)!;
+    expect(mutation.querySelector(".chat-tool-row[aria-busy]")).not.toBeNull();
+    expect(mutation.querySelector(".chat-tool-row__verb")?.textContent).toBe(verb);
+    expect(mutation.querySelector(".chat-tool-row__target")?.textContent).toBe(`${name}.ts`);
+    expect(mutation.querySelector(".chat-diffstat__add")?.textContent).toBe("+1");
+    expect(mutation.querySelector(".chat-diffstat__del")?.textContent).toBe(removed);
+  }
+  setMutations((items) =>
+    items.map((item) => ({ ...item, liveDiffStat: { added: 4, removed: 2 } })),
+  );
+  flush();
+  for (const mutation of root.container.querySelectorAll("[data-tool-case]")) {
+    expect(mutation.querySelector(".chat-diffstat__add")?.textContent).toBe("+4");
+    expect(mutation.querySelector(".chat-diffstat__del")?.textContent).toBe("-2");
+  }
+  setMutations((items) => items.map((item) => ({ ...item, live: false, completed: true })));
+  flush();
+  for (const [name, verb] of [
+    ["edit", "Edited"],
+    ["write", "Wrote"],
+  ]) {
+    const mutation = root.container.querySelector(`[data-tool-case="${name}"]`)!;
+    expect(mutation.querySelector(".chat-tool-row__verb")?.textContent).toBe(verb);
+  }
+  setMutations([]);
+  flush();
   initialLoad.reject(new Error("Synthetic row import failure"));
   await waitForSolid(() =>
     expect(root.container.querySelectorAll('[role="alert"]')).toHaveLength(2),
