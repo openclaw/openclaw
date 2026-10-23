@@ -9,6 +9,7 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import { emitCoreSemanticRunProgressDiagnosticEvent } from "../infra/diagnostic-semantic-run-progress.js";
+import { createReplyOperation } from "../sessions/session-controller.operation.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withDiagnosticPhase } from "./diagnostic-phase.js";
@@ -46,6 +47,7 @@ import {
   startDiagnosticHeartbeatForTest as startDiagnosticHeartbeat,
   startEnabledDiagnosticHeartbeatForTest as startEnabledDiagnosticHeartbeat,
 } from "./diagnostic.test-support.js";
+import { createDiagnosticMessageLifecycle } from "./message-lifecycle.js";
 
 function createEmitMemorySampleMock() {
   return vi.fn(() => ({
@@ -286,7 +288,9 @@ describe("stuck session diagnostics threshold", () => {
       reason: "stale_session_state",
       queueDepth: 0,
     });
-    expect(recoverStuckSession).not.toHaveBeenCalled();
+    expect(recoverStuckSession).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ operation: undefined, allowActiveAbort: false, queueDepth: 0 }),
+    );
   });
 
   it.each([
@@ -331,17 +335,20 @@ describe("stuck session diagnostics threshold", () => {
     logSessionStateChange({ ...session, state: "processing" });
     vi.advanceTimersByTime(91_000);
     expect(stuckEvents()).toHaveLength(1);
-    expect(recoverStuckSession).not.toHaveBeenCalled();
+    expect(recoverStuckSession).toHaveBeenCalledTimes(2);
 
     vi.advanceTimersByTime(31_000);
 
     expect(stuckEvents().map((event) => event.ageMs)).toEqual([60_000, 120_000]);
-    expect(recoverStuckSession).not.toHaveBeenCalled();
+    expect(recoverStuckSession).toHaveBeenCalledTimes(3);
+    expect(recoverStuckSession.mock.calls.every(([request]) => !request.allowActiveAbort)).toBe(
+      true,
+    );
     expect(
       events
         .filter((event) => event.type === "session.recovery.requested")
         .map((event) => event.ageMs),
-    ).toEqual([]);
+    ).toEqual([60_000, 90_000, 120_000]);
   });
 
   it("reports the default no-progress stall without granting ownerless stop authority", () => {
@@ -648,14 +655,8 @@ describe("stuck session diagnostics threshold", () => {
     expect(getDiagnosticSessionState(session).queueDepth).toBe(1);
   });
 
-  it("reports stale model activity without adopting idle queued work", async () => {
-    const recoverStuckSession = vi.fn().mockResolvedValue({
-      status: "released",
-      action: "release_lane",
-      reason: "no_active_work",
-      ...session,
-      released: 0,
-    });
+  it("reconciles stale model activity while retaining idle queued work", async () => {
+    const recoverStuckSession = vi.fn(recoverStuckDiagnosticSession);
     startEnabledDiagnosticHeartbeat({ recoverStuckSession });
     logSessionStateChange({ ...session, state: "processing" });
     markDiagnosticModelStartedForTest({
@@ -679,8 +680,10 @@ describe("stuck session diagnostics threshold", () => {
       queueDepth: 1,
       lastProgressReason: "model_call:started",
     });
-    expect(recoverStuckSession).not.toHaveBeenCalled();
-    expect(getDiagnosticSessionState(session)).toMatchObject({ state: "idle", queueDepth: 1 });
+    expect(recoverStuckSession).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ operation: undefined, allowActiveAbort: false }),
+    );
+    expect(getDiagnosticSessionState(session)).toMatchObject({ state: "waiting", queueDepth: 1 });
   });
 
   it("throttles repeated long-running active-work warnings", async () => {
@@ -948,53 +951,72 @@ describe("stuck session diagnostics threshold", () => {
     ).toBe(true);
   });
 
-  it("counts only messages waiting behind the active processing turn as liveness backlog", () => {
-    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+  it.each(["before", "after"])(
+    "counts only waiting messages when admission happens %s enqueue",
+    (admission) => {
+      const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
 
-    startEnabledDiagnosticHeartbeat({
-      emitMemorySample: createEmitMemorySampleMock(),
-      sampleLiveness: () => ({
-        reasons: ["event_loop_delay"],
-        intervalMs: 30_000,
-        eventLoopDelayP99Ms: 53.6,
-        eventLoopDelayMaxMs: 2_761.9,
-        eventLoopUtilization: 0.785,
-        cpuCoreRatio: 0.378,
-      }),
-    });
+      startEnabledDiagnosticHeartbeat({
+        emitMemorySample: createEmitMemorySampleMock(),
+        sampleLiveness: () => ({
+          reasons: ["event_loop_delay"],
+          intervalMs: 30_000,
+          eventLoopDelayP99Ms: 53.6,
+          eventLoopDelayMaxMs: 2_761.9,
+          eventLoopUtilization: 0.785,
+          cpuCoreRatio: 0.378,
+        }),
+      });
 
-    logMessageQueued({ ...session, source: "discord" });
-    logSessionStateChange({ ...session, state: "processing" });
-    vi.advanceTimersByTime(30_000);
+      const message = createDiagnosticMessageLifecycle({
+        ...session,
+        enabled: true,
+        channel: "cron",
+        source: "cron-isolated",
+        trackSessionState: true,
+      });
+      const operation =
+        admission === "before"
+          ? createReplyOperation({ ...session, resetTriggered: false })
+          : undefined;
+      message.markProcessing();
+      const admittedOperation =
+        operation ?? createReplyOperation({ ...session, resetTriggered: false });
+      try {
+        vi.advanceTimersByTime(30_000);
 
-    expectNoLoggerMessageContaining(warnSpy, "liveness warning:");
-    requireMatchingRecord(
-      getDiagnosticStabilitySnapshot({ limit: 10 }).events,
-      {
-        type: "diagnostic.liveness.warning",
-        level: "info",
-        active: 1,
-        waiting: 0,
-        queued: 0,
-      },
-      "active processing liveness stability event",
-    );
+        expectNoLoggerMessageContaining(warnSpy, "liveness warning:");
+        requireMatchingRecord(
+          getDiagnosticStabilitySnapshot({ limit: 10 }).events,
+          {
+            type: "diagnostic.liveness.warning",
+            level: "info",
+            active: 1,
+            waiting: 0,
+            queued: 0,
+          },
+          "active processing liveness stability event",
+        );
 
-    logMessageQueued({ ...session, source: "discord" });
-    vi.advanceTimersByTime(120_000);
-    expectLoggerMessageContaining(warnSpy, "liveness warning:");
-    requireMatchingRecord(
-      getDiagnosticStabilitySnapshot({ limit: 20 }).events,
-      {
-        type: "diagnostic.liveness.warning",
-        level: "warning",
-        active: 1,
-        waiting: 0,
-        queued: 1,
-      },
-      "queued backlog liveness stability event",
-    );
-  });
+        message.markProcessing();
+        vi.advanceTimersByTime(120_000);
+        expectLoggerMessageContaining(warnSpy, "liveness warning:");
+        requireMatchingRecord(
+          getDiagnosticStabilitySnapshot({ limit: 20 }).events,
+          {
+            type: "diagnostic.liveness.warning",
+            level: "warning",
+            active: 1,
+            waiting: 0,
+            queued: 1,
+          },
+          "queued backlog liveness stability event",
+        );
+      } finally {
+        admittedOperation.complete();
+      }
+    },
+  );
 
   it("does not start the heartbeat when diagnostics are disabled by config", () => {
     const emitMemorySample = createEmitMemorySampleMock();

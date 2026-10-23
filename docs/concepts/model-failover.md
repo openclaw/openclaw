@@ -417,6 +417,10 @@ State is stored in the per-agent SQLite auth state:
 
 Overloaded and rate-limit errors allow one same-provider auth-profile rotation by default before advancing to the next configured model fallback. The active runtime first uses its eligible same-model recovery budget. Auth-profile rotation and model fallback still require evidence that replaying the original attempt is safe.
 
+Confirmed pre-execution tool rejections do not by themselves make an attempt
+replay-unsafe. Non-replay-safe operations that started, or may have started,
+still block replay.
+
 ## Model fallback
 
 If all profiles for a provider fail, OpenClaw moves to the next model in `agents.defaults.model.fallbacks` when the failure matches one of the failover reasons listed below. This includes `model_not_found` for HTTP 404 responses. It does not include a 404 whose response body identifies a more specific condition, such as context overflow, session expiry, billing, authentication, or request format. Provider errors that do not expose enough detail are still labeled precisely in fallback state. `empty_response` means the provider returned no usable message or status. `no_error_details` means the provider explicitly returned `Unknown error (no error details in response)`. `unclassified` means OpenClaw preserved the raw preview but no classifier matched it yet.

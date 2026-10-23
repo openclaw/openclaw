@@ -5,7 +5,6 @@ import { afterAll, beforeAll, expect, it } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../../packages/ai/src/host.js";
 import { makeProviderModel } from "../../packages/ai/src/providers/provider-model.test-support.js";
 import { createOpenAICompletionsTransportStreamFn } from "../../packages/ai/src/transports/openai-completions-transport.js";
-import { resolveOpenAIStrictToolSetting } from "../../src/agents/openai-strict-tool-setting.js";
 import { resolveProviderRequestCapabilities } from "../../src/agents/provider-attribution.js";
 import { normalizeModelCompat } from "../../src/plugins/provider-model-compat.js";
 import { registerSingleProviderPlugin } from "../../src/test-utils/plugin-registration.js";
@@ -54,12 +53,12 @@ let captured: { url: string; body: CapturedRequest };
 
 beforeAll(async () => {
   provider = await registerSingleProviderPlugin(await loadBundledProviderPlugin("openrouter"));
+  await import("../../src/llm/ai-transport-host.js");
   // Plugin loading can install the runtime host; preserve that initialization on cleanup.
   originalHost = getAiTransportHost();
   configureAiTransportHost({
     ...originalHost,
     resolveProviderRequestCapabilities,
-    resolveOpenAIStrictToolSetting,
     requiresManagedTransport: () => true,
     // Replace only external I/O, after the real SDK has serialized the request.
     buildModelFetch: () => async (input, init) => {

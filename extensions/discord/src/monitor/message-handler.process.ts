@@ -17,14 +17,18 @@ import {
   isReplyPayloadNonTerminalToolErrorWarning,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
-import type { ReplyDispatchRuntimeInfo, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import type {
+  GetReplyOptions,
+  ReplyDispatchRuntimeInfo,
+  ReplyPayload,
+} from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
+import { getSessionEntryAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { beginDiscordActiveTurnThreadRoute } from "../active-turn-thread-route.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import { discordTextHasBroadcastMention } from "../mentions.js";
 import { buildDiscordMessageProcessContext } from "./message-handler.context.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
-import { createDiscordMessageProgressRuntime } from "./message-handler.process-progress.js";
 import { createDiscordMessageReactionRuntime } from "./message-handler.process-reactions.js";
 import {
   createDiscordBeforePayloadDelivery,
@@ -220,16 +224,155 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         deliverySession: ReturnType<typeof getGroupThreadDeliverySession>;
       }
     | undefined;
-  const progress = await createDiscordMessageProgressRuntime({
-    ctx,
-    sessionKey: ctxPayload.SessionKey,
-    sourceRepliesAreToolOnly,
-    draftPreview,
-    reactions,
-    onTurnReset: () => {
-      pendingToolWarningFinal = undefined;
+  const progressSessionKey = ctxPayload.SessionKey;
+  // Reasoning delivery follows the session /reasoning level, not streaming config.
+  const reasoningLevel = await (async (): Promise<"on" | "stream" | "off"> => {
+    const agentEntryDefault = resolveAgentConfig(cfg, route.agentId ?? "main")?.reasoningDefault;
+    const cfgDefault = agentEntryDefault ?? cfg.agents?.defaults?.reasoningDefault;
+    const configDefault: "on" | "stream" | "off" =
+      cfgDefault === "on" || cfgDefault === "stream" ? cfgDefault : "off";
+    if (!progressSessionKey) {
+      return configDefault;
+    }
+    try {
+      const storePath = resolveStorePath(cfg.session?.store, { agentId: route.agentId });
+      const level = (
+        await getSessionEntryAsync({
+          agentId: route.agentId,
+          sessionKey: progressSessionKey,
+          storePath,
+        })
+      )?.reasoningLevel;
+      if (level === "on" || level === "stream" || level === "off") {
+        return level;
+      }
+    } catch {
+      return "off";
+    }
+    return configDefault;
+  })();
+  const reasoningDurableEnabled = reasoningLevel === "on";
+  const reasoningWindowEnabled = reasoningLevel === "stream";
+  // The durable verbose lane mirrors commentary, not tool lifecycle rows.
+  // Yield only the draft content that has a durable counterpart.
+  let shouldYieldDraftCommentary = async () => false;
+  let turnCommentaryVisible = false;
+  const progressReplyOptions: Partial<Omit<GetReplyOptions, "onBlockReply">> = {
+    progressRequiresReply: draftPreview.isProgressMode ? true : undefined,
+    onAssistantMessageStart: draftPreview.draftStream
+      ? () => {
+          if (draftPreview.handleAssistantMessageBoundary()) {
+            pendingToolWarningFinal = undefined;
+          }
+          return false;
+        }
+      : undefined,
+    onReasoningEnd: draftPreview.draftStream
+      ? () => {
+          draftPreview.resetReasoningProgress();
+          return false;
+        }
+      : undefined,
+    onQueuedFollowupAdmitted: draftPreview.draftStream
+      ? () => {
+          if (draftPreview.handleQueuedFollowupAdmitted()) {
+            pendingToolWarningFinal = undefined;
+          }
+        }
+      : undefined,
+    // Queued turns can finish after dispatch closeout has already cleaned up.
+    onQueuedFollowupSettled: draftPreview.draftStream ? () => draftPreview.cleanup() : undefined,
+    suppressDefaultToolProgressMessages:
+      (sourceRepliesAreToolOnly && reactions.statusReactionsExplicitlyEnabled) ||
+      draftPreview.suppressDefaultToolProgressMessages
+        ? true
+        : undefined,
+    allowToolLifecycleWhenProgressHidden: reactions.statusReactionsEnabled ? true : undefined,
+    commentaryProgressEnabled: draftPreview.isProgressMode
+      ? draftPreview.commentaryProgressEnabled
+      : undefined,
+    progressPreambleEnabled:
+      draftPreview.draftStream && draftPreview.isProgressMode ? true : undefined,
+    commentaryPayloadsEnabled: draftPreview.isProgressMode
+      ? draftPreview.commentaryProgressEnabled
+      : undefined,
+    shouldDeliverCommentaryPayloads:
+      draftPreview.isProgressMode && draftPreview.commentaryProgressEnabled
+        ? () => turnCommentaryVisible
+        : undefined,
+    reasoningPayloadsEnabled: reasoningDurableEnabled,
+    onVerboseProgressVisibilityAsync: async (isActive) => {
+      shouldYieldDraftCommentary = isActive;
+      turnCommentaryVisible = await isActive();
     },
-  });
+    onNarrationUpdate: draftPreview.narrationProgressEnabled
+      ? async (payload) => {
+          if ((await shouldYieldDraftCommentary()) || abortSignal?.aborted) {
+            return;
+          }
+          await draftPreview.pushNarrationProgress(payload.text);
+        }
+      : undefined,
+    onProgressNarratorLifecycle: draftPreview.narrationProgressEnabled
+      ? (progressLifecycle) => draftPreview.setProgressNarratorLifecycle(progressLifecycle)
+      : undefined,
+    isProgressDraftVisible: draftPreview.narrationProgressEnabled
+      ? () => draftPreview.isProgressDraftVisible
+      : undefined,
+    narrationHideCommandText: draftPreview.narrationHideCommandText ? true : undefined,
+    onReasoningStream: async (payload) => {
+      if (payload?.requiresReasoningProgressOptIn === true && !reasoningWindowEnabled) {
+        return false;
+      }
+      await reactions.controller.setThinking();
+      return await draftPreview.pushReasoningProgress(payload?.text, {
+        snapshot: payload?.isReasoningSnapshot === true,
+      });
+    },
+    streamReasoningInNonStreamModes: reasoningWindowEnabled,
+    onToolStart: async (payload) => {
+      if (abortSignal?.aborted) {
+        return false;
+      }
+      await reactions.maybeBindToToolReaction(payload);
+      await reactions.controller.setTool(payload.name);
+      return await draftPreview.pushToolEvent(payload);
+    },
+    onItemEvent: async (payload) => {
+      if (
+        abortSignal?.aborted ||
+        (payload.kind === "preamble" && (await shouldYieldDraftCommentary()))
+      ) {
+        return undefined;
+      }
+      return await draftPreview.pushItemEvent(payload);
+    },
+    onPlanUpdate: async (payload) => {
+      if (payload.phase === "update") {
+        return await draftPreview.pushPlanProgress(payload.steps, {
+          explanation: payload.explanation,
+          explanationFormat: payload.explanationFormat,
+        });
+      }
+      return false;
+    },
+    onApprovalEvent: async (payload) => {
+      return await draftPreview.pushApprovalEvent(payload);
+    },
+    onCompactionStart: async () => {
+      if (!abortSignal?.aborted) {
+        await reactions.controller.setCompacting();
+      }
+      return false;
+    },
+    onCompactionEnd: async () => {
+      if (!abortSignal?.aborted) {
+        reactions.controller.cancelPending();
+        await reactions.controller.setThinking();
+      }
+      return false;
+    },
+  };
   let replyLifecycleStarted = false;
   const onDiscordReplyStart = async () => {
     if (abortSignal?.aborted) {
@@ -525,7 +668,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
           draftPreview.draftStream && !draftPreview.isProgressMode
             ? (payload) => draftPreview.updateFromPartial(payload.text)
             : undefined,
-        ...progress.replyOptions,
+        ...progressReplyOptions,
         onObservedReplyDelivery: observeFinalDelivery,
         onModelSelected,
       },

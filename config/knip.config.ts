@@ -72,6 +72,10 @@ const repositoryScriptEntries = [
   // setup-pnpm-store-cache invokes this helper from composite-action YAML.
   ".github/actions/setup-pnpm-store-cache/seed-pnpm-from-image.mjs!",
   "apps/android/scripts/build-release-artifacts.ts!",
+  // scripts/README.md invokes this warm-interaction benchmark CLI by path.
+  "scripts/bench-control-ui-interactions.ts!",
+  // #180983 invokes this isolated plugin-registration benchmark CLI by path.
+  "scripts/bench-plugin-registration.mts!",
   // The cold-load benchmark guide invokes this opt-in CLI by path.
   "scripts/bench-control-ui-cold-load.ts!",
   // #179175 invokes this development-loop benchmark CLI by path.
