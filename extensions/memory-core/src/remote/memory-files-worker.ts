@@ -10,8 +10,10 @@ import {
   buildMultimodalChunkForIndexing,
   listMemoryFiles,
   readMemoryFile,
-  type MemoryWorkspaceFiles,
-  type MemoryWorkspaceWatchRequest,
+} from "openclaw/plugin-sdk/memory-core-host-engine-fs";
+import type {
+  MemoryWorkspaceFiles,
+  MemoryWorkspaceWatchRequest,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
 export async function serveLocalMemoryWatches(port: MessagePort): Promise<void> {
