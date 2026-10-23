@@ -1,6 +1,7 @@
 import type { ApplicationConfigCapability } from "../../../app/config.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import { showToast } from "../../../lib/toast.ts";
 import { uploadsEnabled, uploadsDisabledMessage } from "../../../lib/uploads.ts";
 import {
@@ -265,7 +266,6 @@ export function readChatAttachmentFile(
     preparation.abort();
     clearTimeout(timer);
     timer = undefined;
-    signal.removeEventListener("abort", abort);
     entry.cancel = undefined;
     entry.compress = undefined;
     if (outcome === "ready" && !uploadsEnabled(props.uploadConfig)) {
@@ -310,12 +310,13 @@ export function readChatAttachmentFile(
   };
   // This read owns the FileReader and abort subscription through settlement, independent of rendering.
   entry.cancel = abort;
-  signal.addEventListener("abort", abort, { once: true });
   const listenerOptions = { signal: preparation.signal };
-  reader.addEventListener("error", () => finish("error"), listenerOptions);
-  reader.addEventListener("abort", () => finish("aborted"), listenerOptions);
-  reader.addEventListener("load", () => finish("ready"), listenerOptions);
-  reader.addEventListener(
+  listen(signal, "abort", abort, { ...listenerOptions, once: true });
+  listen(reader, "error", () => finish("error"), listenerOptions);
+  listen(reader, "abort", () => finish("aborted"), listenerOptions);
+  listen(reader, "load", () => finish("ready"), listenerOptions);
+  listen(
+    reader,
     "progress",
     (event) => {
       if (!settled && event.lengthComputable && event.total > 0) {
