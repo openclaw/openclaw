@@ -65,6 +65,10 @@ minimumReleaseAgeExclude:
   - "@tsrs/linux-arm64-musl@0.16.0-ts7.1.0-dev.20260929"
   - "@tsrs/linux-x64-gnu@0.16.0-ts7.1.0-dev.20260929"
   - "@tsrs/linux-x64-musl@0.16.0-ts7.1.0-dev.20260929"
+  # Reviewed markdown-it 15.0.3 unclosed link-reference fix; remove after 2026-10-23T01:25:15.267Z.
+  - "markdown-it@15.0.3"
+  # argparse 3.0.3 is required by markdown-it 15.0.3; remove after 2026-10-22T21:58:50.520Z.
+  - "argparse@3.0.3"
 
 # Isolated installs let pnpm reuse whole-package APFS clones instead of relinking every file.
 nodeLinker: isolated
