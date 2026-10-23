@@ -167,38 +167,6 @@ function schemaLooksObject(schema: JsonSchemaRecord): boolean {
   );
 }
 
-function propertySchema(schema: JsonSchemaRecord, segment: PathSegment): JsonSchemaRecord[] {
-  const schemas: JsonSchemaRecord[] = [];
-  for (const alternative of schemaAlternatives(schema)) {
-    if (Object.keys(alternative).length === 0) {
-      schemas.push(alternative);
-      continue;
-    }
-    if (schemaLooksArray(alternative)) {
-      const index = parseConfigPathArrayIndex(segment);
-      if (index !== undefined) {
-        const indexedItem = Array.isArray(alternative.items)
-          ? alternative.items[index]
-          : alternative.items;
-        if (isPlainRecord(indexedItem)) {
-          schemas.push(indexedItem);
-        }
-      }
-      continue;
-    }
-    const properties = isPlainRecord(alternative.properties) ? alternative.properties : undefined;
-    const explicit = properties?.[segment];
-    if (isPlainRecord(explicit)) {
-      schemas.push(explicit);
-    } else if (alternative.additionalProperties === true) {
-      schemas.push({});
-    } else if (isPlainRecord(alternative.additionalProperties)) {
-      schemas.push(alternative.additionalProperties);
-    }
-  }
-  return schemas;
-}
-
 function schemasAtPath(
   schema: JsonSchemaRecord | undefined,
   path: readonly PathSegment[],
@@ -208,7 +176,39 @@ function schemasAtPath(
   }
   let schemas = [schema];
   for (const segment of path) {
-    schemas = schemas.flatMap((candidate) => propertySchema(candidate, segment));
+    schemas = schemas.flatMap((candidate) => {
+      const propertySchemas: JsonSchemaRecord[] = [];
+      for (const alternative of schemaAlternatives(candidate)) {
+        if (Object.keys(alternative).length === 0) {
+          propertySchemas.push(alternative);
+          continue;
+        }
+        if (schemaLooksArray(alternative)) {
+          const index = parseConfigPathArrayIndex(segment);
+          if (index !== undefined) {
+            const indexedItem = Array.isArray(alternative.items)
+              ? alternative.items[index]
+              : alternative.items;
+            if (isPlainRecord(indexedItem)) {
+              propertySchemas.push(indexedItem);
+            }
+          }
+          continue;
+        }
+        const properties = isPlainRecord(alternative.properties)
+          ? alternative.properties
+          : undefined;
+        const explicit = properties?.[segment];
+        if (isPlainRecord(explicit)) {
+          propertySchemas.push(explicit);
+        } else if (alternative.additionalProperties === true) {
+          propertySchemas.push({});
+        } else if (isPlainRecord(alternative.additionalProperties)) {
+          propertySchemas.push(alternative.additionalProperties);
+        }
+      }
+      return propertySchemas;
+    });
     if (schemas.length === 0) {
       return [];
     }
@@ -227,45 +227,6 @@ export function isConfigSchemaPath(
   return schemasAtPath(schema, path).length > 0;
 }
 
-function schemaPrefersArrayAtPath(
-  schema: JsonSchemaRecord | undefined,
-  path: readonly PathSegment[],
-): boolean | undefined {
-  const candidates = schemasAtPath(schema, path).flatMap((candidate) =>
-    schemaAlternatives(candidate),
-  );
-  if (candidates.length === 0) {
-    return undefined;
-  }
-  const hasArray = candidates.some((candidate) => schemaLooksArray(candidate));
-  const hasObject = candidates.some((candidate) => schemaLooksObject(candidate));
-  return hasArray === hasObject ? undefined : hasArray;
-}
-
-function shouldCreateArrayForMissingPathSegment(params: {
-  path: readonly PathSegment[];
-  segmentIndex: number;
-  next?: PathSegment;
-  options?: SetAtPathOptions;
-}): boolean {
-  if (
-    !params.next ||
-    params.options?.numericObjectKeys ||
-    parseConfigPathArrayIndex(params.next) === undefined
-  ) {
-    return false;
-  }
-  const nextToken = params.options?.pathTokens?.[params.segmentIndex + 1];
-  if (typeof nextToken === "number") {
-    return true;
-  }
-  if (params.options?.quotedNumericSegments?.has(params.segmentIndex + 1)) {
-    return false;
-  }
-  const parentPath = params.path.slice(0, params.segmentIndex + 1);
-  return schemaPrefersArrayAtPath(params.options?.schema, parentPath) ?? true;
-}
-
 export function setAtPath(
   root: Record<string, unknown>,
   path: PathSegment[],
@@ -278,12 +239,25 @@ export function setAtPath(
   }
   let current: unknown = root;
   for (const [i, segment] of path.slice(0, -1).entries()) {
-    const nextIsIndex = shouldCreateArrayForMissingPathSegment({
-      path,
-      segmentIndex: i,
-      next: path[i + 1],
-      options,
-    });
+    const next = path[i + 1];
+    let nextIsIndex = false;
+    if (next && !options?.numericObjectKeys && parseConfigPathArrayIndex(next) !== undefined) {
+      const nextToken = options?.pathTokens?.[i + 1];
+      if (typeof nextToken === "number") {
+        nextIsIndex = true;
+      } else if (!options?.quotedNumericSegments?.has(i + 1)) {
+        const parentPath = path.slice(0, i + 1);
+        const candidates = schemasAtPath(options?.schema, parentPath).flatMap((candidate) =>
+          schemaAlternatives(candidate),
+        );
+        nextIsIndex = true;
+        if (candidates.length > 0) {
+          const hasArray = candidates.some((candidate) => schemaLooksArray(candidate));
+          const hasObject = candidates.some((candidate) => schemaLooksObject(candidate));
+          nextIsIndex = hasArray === hasObject || hasArray;
+        }
+      }
+    }
     if (Array.isArray(current)) {
       const index = parseConfigPathArrayIndex(segment);
       if (index === undefined) {
@@ -384,14 +358,6 @@ type MergePath = {
   segment: PathSegment;
 };
 
-function toMergePath(path: PathSegment[]): MergePath | undefined {
-  let current: MergePath | undefined;
-  for (const segment of path) {
-    current = { parent: current, segment };
-  }
-  return current;
-}
-
 function mergePathSegments(path: MergePath): PathSegment[] {
   const segments: PathSegment[] = [];
   for (let current: MergePath | undefined = path; current; current = current.parent) {
@@ -425,7 +391,11 @@ function mergeConfigValue(
     const next: Record<string, unknown> = { ...existing };
     const suppliedPaths: PathSegment[][] = [];
     // Linked paths keep deep merges linear while preserving descendant-specific merge policy.
-    const pending = [{ target: next, patch, path: toMergePath(path) }];
+    let mergePath: MergePath | undefined;
+    for (const segment of path) {
+      mergePath = { parent: mergePath, segment };
+    }
+    const pending = [{ target: next, patch, path: mergePath }];
     while (pending.length > 0) {
       const frame = pending.pop()!;
       for (const [key, value] of Object.entries(frame.patch)) {
@@ -490,25 +460,6 @@ function isProtectedMapReplacementPath(path: PathSegment[]): boolean {
   );
 }
 
-function formatRemovedEntries(entries: string[]): string {
-  const visible = entries.slice(0, 6);
-  const suffix =
-    entries.length > visible.length ? `, ... ${entries.length - visible.length} more` : "";
-  return `${visible.join(", ")}${suffix}`;
-}
-
-function replacementAdvice(
-  command: ConfigMutationCommand,
-  pathLabel: string,
-  mergeSubject: string,
-): string {
-  // `config patch` has no --merge/--replace; --replace-path is its way out of the guard.
-  if (command === "patch") {
-    return `Use ${replacePathArgument(pathLabel)} to replace intentionally.`;
-  }
-  return `Use --merge to merge ${mergeSubject} or --replace to replace intentionally.`;
-}
-
 export function assertNonDestructiveReplacement(params: {
   root: Record<string, unknown>;
   path: PathSegment[];
@@ -545,8 +496,17 @@ export function assertNonDestructiveReplacement(params: {
     return;
   }
   if (removed.length > 0) {
+    const visible = removed.slice(0, 6);
+    const suffix =
+      removed.length > visible.length ? `, ... ${removed.length - visible.length} more` : "";
+    const removedEntries = `${visible.join(", ")}${suffix}`;
+    // `config patch` has no --merge/--replace; --replace-path is its way out of the guard.
+    const advice =
+      params.command === "patch"
+        ? `Use ${replacePathArgument(pathLabel)} to replace intentionally.`
+        : `Use --merge to merge ${mergeHint} or --replace to replace intentionally.`;
     throw new Error(
-      `Refusing to replace ${pathLabel}; it would remove existing entries: ${formatRemovedEntries(removed)}. ${replacementAdvice(params.command, pathLabel, mergeHint)}`,
+      `Refusing to replace ${pathLabel}; it would remove existing entries: ${removedEntries}. ${advice}`,
     );
   }
 }

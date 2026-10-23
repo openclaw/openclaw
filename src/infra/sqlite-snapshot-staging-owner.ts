@@ -114,7 +114,6 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
       onFailure(error) {
         unavailable ??= { error };
       },
-      onDispose() {},
     });
   }
 
@@ -265,7 +264,7 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
       if (pendingClose?.read().status === "pending") {
         return pendingClose;
       }
-      let removals: Array<[string, RetainedOperation<boolean>]> | undefined;
+      let removals: Array<[string, RetainedOperation<boolean>, ErrorOptions]> | undefined;
       let servicing = false;
       const closing = createRetainedOperation<void>(() => {
         if (servicing || closing.operation.read().status !== "pending") {
@@ -279,16 +278,19 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
             return;
           }
           removals ??= [...preparation.directories].map(
-            (directory): [string, RetainedOperation<boolean>] => {
-              const removal = startRemoveTempDirectory(directory);
+            (directory): [string, RetainedOperation<boolean>, ErrorOptions] => {
+              const failure: ErrorOptions = {};
+              const removal = startRemoveTempDirectory(directory, (cause) => {
+                failure.cause = cause;
+              });
               void removal.result.then(
                 () => closing.operation.service(),
                 () => closing.operation.service(),
               );
-              return [directory, removal];
+              return [directory, removal, failure];
             },
           );
-          for (const [directory, removal] of removals) {
+          for (const [directory, removal, failure] of removals) {
             removal.service();
             const outcome = removal.read();
             if (outcome.status === "pending") {
@@ -300,6 +302,7 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
             if (!outcome.value) {
               throw new SqliteSnapshotCleanupError(
                 `SQLite staging preparation cleanup failed: ${directory}`,
+                failure,
               );
             }
           }

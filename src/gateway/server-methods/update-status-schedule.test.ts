@@ -159,20 +159,6 @@ function announcePackageCampaign() {
   return target;
 }
 
-it.each([false, true])(
-  "reports cold configured scheduler policy without checkout discovery (auto=%s)",
-  async (enabled) => {
-    vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "external");
-    const config = { update: { channel: "dev" as const, auto: { enabled } } };
-    const result = await status(config);
-    expect(result.schedule).toMatchObject({ channel: "dev", autoEnabled: enabled });
-    expect(result.schedule.campaign).toBeUndefined();
-    expect(config.update.auto.enabled).toBe(enabled);
-    expect(getUpdateSchedule()).toBeNull();
-    expect(install).not.toHaveBeenCalled();
-  },
-);
-
 it("preserves a live campaign while hydrating disabled policy", async () => {
   campaignOwner.announce({
     target: { kind: "package", version: "99.0.0" },

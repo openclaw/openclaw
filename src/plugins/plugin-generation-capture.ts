@@ -3,10 +3,17 @@ import { isBuiltin } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isPathInside } from "../infra/path-guards.js";
+import {
+  resolveBundledSharedModule,
+  type BundledPluginReloadSource,
+} from "./plugin-bundled-reload.js";
 import { createPluginCaptureResolver } from "./plugin-capture-resolution.js";
+import type { PluginGenerationArtifact } from "./plugin-generation-artifact.types.js";
 import {
   createPluginGenerationFileCapture,
   createPluginSourceLinkCapture,
+  linkPluginGenerationDependency,
+  linkPluginGenerationHostModule,
 } from "./plugin-generation-file-capture.js";
 import { createPluginGenerationReceipt } from "./plugin-generation-receipt.js";
 import {
@@ -17,6 +24,7 @@ import {
   type PluginSourceCustodyFork,
   createPluginGenerationModuleLookup,
 } from "./plugin-generation-source-lookup.js";
+import { PluginDependencyLinkError } from "./plugin-instance-error.js";
 import {
   createPluginNativeAdmission,
   type PluginNativeRecovery,
@@ -47,34 +55,7 @@ import {
   visitPluginSourceReferences,
 } from "./plugin-source-references.js";
 
-export type PluginGenerationArtifact = {
-  sourceRoot: string;
-  rootDir: string;
-  boundaryRoot: string;
-  sourceAliases: Record<string, string>;
-  sourceDigest: string;
-  linkHost: (hostRoot: string) => void;
-  hasSource: (source: string) => boolean;
-  resolve: (source: string, rejectHardlinks?: boolean) => string;
-  captureRecoverySource: () => PluginSourceCustodyFork["source"];
-  retainSourceCustody: () => PluginSourceCustodyFork;
-  sourceForCaptured: (file: string) => string | undefined;
-  moduleFacts: (importer: string) => Readonly<PluginModuleCapture> | undefined;
-  moduleRoot: (filename: string) => string | undefined;
-  assertModuleAvailable: (filename: string) => void;
-  prepareModule: (filename: string) => string[];
-  prepareDependency: (importer: string, specifier: string) => string[];
-  prepareNativeScopes: (importer?: string) => { value: void; additions: string[] } | undefined;
-  prepareNativeModule: (importer: string, specifier: string) => boolean;
-  captureModule: (
-    importer: string,
-    specifier: string,
-    conditions: readonly string[],
-  ) => (({ target: URL } | { retryNative: true }) & { additions: string[] }) | undefined;
-  captureResolvedModule: (filename: string) => string | undefined;
-  dispose: () => void;
-  disposeAsync: () => Promise<void>;
-};
+export type { PluginGenerationArtifact } from "./plugin-generation-artifact.types.js";
 
 /** Capture selective entries and whole dependencies without replacing earlier file bytes. */
 export const capturePluginGenerationArtifactInScope = createPluginGenerationCapture(
@@ -88,6 +69,7 @@ function createPluginGenerationArtifact(
   moduleSource?: (filename: string) => string,
   nativeRecovery?: PluginNativeRecovery,
   dependencyLookupBoundary?: Parameters<typeof createPluginDependencyResolver>[0],
+  bundledReloadSource?: BundledPluginReloadSource,
   retained?: PluginSourceCustodyFork,
   captureForCustody = false,
 ): PluginGenerationArtifact {
@@ -247,11 +229,20 @@ function createPluginGenerationArtifact(
           ? path.dirname(moduleRoot)
           : destination;
       const link = path.join(lookupDirectory, "node_modules", name);
-      packages.get(dependency.root)!.links.add(link);
-      if (!fs.existsSync(link)) {
-        fs.mkdirSync(path.dirname(link), { recursive: true, mode: 0o700 });
-        fs.symlinkSync(path.relative(path.dirname(link), captured), link, "junction");
+      const dependencyPackage = packages.get(dependency.root)!;
+      dependencyPackage.links.add(link);
+      try {
+        if (linkPluginGenerationDependency(link, captured)) {
+          additions.add(link);
+        }
+      } catch (cause) {
+        const error = new PluginDependencyLinkError(
+          `Cannot prepare dependency ${name} for plugin ${rootDir}; check filesystem permissions and retry.`,
+          { cause },
+        );
+        dependencyPackage.state = { error };
         additions.add(link);
+        throw error;
       }
     };
     const scopes = metadataCapture.createScope({
@@ -427,6 +418,19 @@ function createPluginGenerationArtifact(
           module && path.isAbsolute(value) && isPathInside(lexicalBoundary, requested)
             ? path.join(boundary, path.relative(lexicalBoundary, requested))
             : requested;
+        const shared =
+          module && resolveBundledSharedModule(bundledReloadSource, rootDir, source, local);
+        if (shared) {
+          // Native Workers do not inherit the parent resolver. Their relative imports
+          // must reach the same host modules without capturing another SDK identity.
+          if (value.startsWith(".") && isPathInside(boundary, local)) {
+            const sharedLink = path.join(destination, path.relative(boundary, local));
+            if (linkPluginGenerationHostModule(sharedLink, shared)) {
+              additions.add(sharedLink);
+            }
+          }
+          return undefined;
+        }
         if (module && !isPathInside(boundary, local)) {
           if (!conditions || !execute) {
             return null;
@@ -645,7 +649,11 @@ function createPluginGenerationArtifact(
         sourceRoot,
         path.relative(path.resolve(rootDir), path.resolve(entryFiles![index]!)),
       );
-      capturedPaths.set(alias, capturedPaths.get(entry)!);
+      // Directory selections capture their files, not a module at the directory path.
+      const captured = capturedPaths.get(entry);
+      if (captured) {
+        capturedPaths.set(alias, captured);
+      }
     }
     const initialReceipt = receipt.finish();
     nativeAdmission.finish(initialReceipt);
@@ -664,6 +672,10 @@ function createPluginGenerationArtifact(
     });
     return {
       sourceRoot,
+      sharedModule: bundledReloadSource
+        ? (importer, specifier) =>
+            resolveBundledSharedModule(bundledReloadSource, root, importer, specifier)
+        : undefined,
       rootDir: root,
       sourceAliases,
       linkHost: (hostRoot: string) => {

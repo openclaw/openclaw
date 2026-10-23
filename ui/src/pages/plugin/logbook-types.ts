@@ -48,14 +48,9 @@ export type LogbookTimelinePayload = {
   stats: LogbookDayStatsPayload;
 };
 
-export type LogbookDaysPayload = {
-  days: Array<{ day: string; cards: number; firstMs: number; lastMs: number }>;
-};
-
 export type LogbookUiState = {
   day: string;
   status: LogbookStatusPayload | null;
-  days: LogbookDaysPayload["days"];
   timeline: LogbookTimelinePayload | null;
   loading: boolean;
   error: string | null;

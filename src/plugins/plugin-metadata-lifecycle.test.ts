@@ -78,7 +78,7 @@ it("retains running metadata readers through Gateway close after package replace
   try {
     owner.publish(snapshot);
     setGatewayPluginMetadataSnapshot(snapshot);
-    setSnapshot(snapshot, "boot", undefined, undefined, undefined, "gateway");
+    setSnapshot(snapshot, "boot", undefined, undefined, "gateway");
     clearMemo.mockClear();
     clearPluginMetadataLifecycleCaches();
     // Released modules register by assigning the shared slot directly.

@@ -45,6 +45,15 @@ afterEach(() => {
 
 const itUnix = it.runIf(process.platform !== "win32");
 
+async function writePostgresAnchor(pathname: string) {
+  await fs.mkdir(path.dirname(pathname), { recursive: true });
+  using db = new DatabaseSync(pathname);
+  db.exec("CREATE TABLE openclaw_engine_anchor (store_id TEXT, engine TEXT, schema TEXT)");
+  db.exec(
+    "INSERT INTO openclaw_engine_anchor VALUES ('handoff-fixture', 'postgres', 'handoff_fixture')",
+  );
+}
+
 it.each(["sqlite", "postgres"] as const)(
   "uses the admitted %s selection without inspecting the state file",
   async (engine) => {
@@ -64,15 +73,7 @@ it("recognizes an offline PostgreSQL anchor through its inspection worker", asyn
   const root = tempDirs.make("handoff-engine-anchor-");
   const env = { ...process.env, OPENCLAW_STATE_DIR: root };
   const pathname = resolveOpenClawStateSqlitePath(env);
-  await fs.mkdir(path.dirname(pathname), { recursive: true });
-  const db = new DatabaseSync(pathname);
-  db.exec("CREATE TABLE openclaw_engine_anchor (store_id TEXT, engine TEXT, schema TEXT)");
-  db.prepare("INSERT INTO openclaw_engine_anchor VALUES (?, ?, ?)").run(
-    "handoff-fixture",
-    "postgres",
-    "handoff_fixture",
-  );
-  db.close();
+  await writePostgresAnchor(pathname);
   await expect(resolveManagedHandoffStateEngine(env)).resolves.toBe("postgres");
 });
 
@@ -91,15 +92,7 @@ itUnix.for(["transfer", "cancel"] as const)(
     process.stdout.write(JSON.stringify({ status: "skipped", mode: "npm", reason: "already-current" }));
   `,
     );
-    await fs.mkdir(path.join(root, "state"));
-    const db = new DatabaseSync(path.join(root, "state", "openclaw.sqlite"));
-    db.exec("CREATE TABLE openclaw_engine_anchor (store_id TEXT, engine TEXT, schema TEXT)");
-    db.prepare("INSERT INTO openclaw_engine_anchor VALUES (?, ?, ?)").run(
-      "exit-fixture",
-      "postgres",
-      "exit_fixture",
-    );
-    db.close();
+    await writePostgresAnchor(path.join(root, "state", "openclaw.sqlite"));
     const parentScript = path.join(root, "parent.mjs");
     await fs.writeFile(
       parentScript,
@@ -168,6 +161,7 @@ itUnix.for(["transfer", "cancel"] as const)(
 itUnix("restores a SQLite runtime that has no engine-aware sentinel method", async () => {
   // The installed recovery fixture intentionally has no new operation export.
   const result = await runManagedServiceManagerBoundary("systemd", {
+    ledger: true,
     controlDisconnect: "transferred",
     helperExitCode: 7,
     updaterNotification: "published",
@@ -177,7 +171,21 @@ itUnix("restores a SQLite runtime that has no engine-aware sentinel method", asy
       reason: "candidate-failed",
       recovery: { serviceRestartSafe: true, version: "1.0.0" },
     },
+    async prepareState({ env, recoveryModulePath, sourceRuntimeImport }) {
+      env.OPENCLAW_LOG_LEVEL = "debug";
+      env.OPENCLAW_TEST_CONSOLE = "1";
+      await fs.appendFile(
+        recoveryModulePath,
+        `
+        ${sourceRuntimeImport}
+        const { resolveSqliteInspectionBudget } = await import(${JSON.stringify(new URL("./sqlite-readonly-worker.ts", import.meta.url).href)});
+        resolveSqliteInspectionBudget("handoff fixture", "synthetic.sqlite", 1024);
+        `,
+      );
+    },
   });
+  expect(result.stdout.split("\n")[0]).toBe("OPENCLAW_UPDATE_HANDOFF_READY");
+  expect(result.stderr).toContain("SQLite handoff fixture for synthetic.sqlite");
   expect(result.state).toMatchObject({ restored: true });
   expect(result.sentinel).toMatchObject({ payload: { status: "error" } });
   expect(result.log).not.toContain("could not be recorded");

@@ -89,17 +89,12 @@ export type CliOutput = {
   yieldAcknowledgment?: string;
 };
 
-export type CliStreamingDelta = {
-  text: string;
+export type CliStreamingDelta = Pick<CliOutput, "text" | "sessionId" | "usage"> & {
   delta: string;
-  sessionId?: string;
-  usage?: CliUsage;
 };
 
 /** Incremental thinking text emitted while parsing a streaming CLI response. */
-export type CliThinkingDelta = {
-  text: string;
-  delta: string;
+export type CliThinkingDelta = Pick<CliStreamingDelta, "text" | "delta"> & {
   isReasoningSnapshot?: boolean;
 };
 
@@ -122,9 +117,7 @@ export type CliToolUseStartDelta = {
 export type CliToolInputDelta = LiveEditDiffProgress;
 
 /** Tool-call result event reconstructed from CLI stream output. */
-export type CliToolResultDelta = {
-  toolCallId: string;
-  name: string;
+export type CliToolResultDelta = Pick<CliToolUseStartDelta, "toolCallId" | "name"> & {
   isError: boolean;
   result?: unknown;
 };

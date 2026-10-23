@@ -14,7 +14,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { chatSessionListResponse } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { expectText, expectCount } from "./sidebar-assertions.test-support.ts";
+import { expectText, expectCount, seedStorage } from "./sidebar-assertions.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI session progress dashboard widget",
@@ -36,19 +36,27 @@ const englishDesktopPageOptions = {
 const widgetKinds = [{ pluginId: "session", kind: "session:progress", label: "Session progress" }];
 
 async function openDashboard(page: Page, dashboardKey: string) {
-  await page.addInitScript(
-    ({ key, storage }) => {
-      localStorage.setItem(
-        storage,
-        JSON.stringify({ boardSessionViews: { [key]: { activeTabId: "main" } } }),
-      );
-    },
-    { key: dashboardKey, storage: controlUiBundledSettingsStorageKey(suite.server.baseUrl) },
-  );
+  await seedDashboard(page, dashboardKey);
   await page.goto(controlUiSessionUrl(suite.server.baseUrl, dashboardKey, "dashboard"));
   const card = page.locator('[data-progress-card-placement="board"]');
   await card.waitFor();
   return card;
+}
+
+function seedDashboard(page: Page, key: string, extra: Record<string, unknown> = {}) {
+  return seedStorage(page, {
+    [controlUiBundledSettingsStorageKey(suite.server.baseUrl)]: JSON.stringify({
+      boardSessionViews: { [key]: { activeTabId: "main" } },
+      ...extra,
+    }),
+  });
+}
+
+function progressResponse(key: string, updatedAt: number, markdown: string, step: string) {
+  const steps = [{ step, status: "in_progress" }];
+  return {
+    card: { sessionKey: key, revision: 1, updatedAt, markdown, steps },
+  };
 }
 
 function boardResponse(key: string, widgetOverrides?: Record<string, unknown>) {
@@ -129,43 +137,32 @@ suite.define(() => {
           ]),
         },
       });
-      const storageKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
-      await page.addInitScript(
-        ({ key, rawKey, storage, dashboardLayout, expandedSide }) => {
-          localStorage.setItem(
-            storage,
-            JSON.stringify({
-              boardSessionViews: { [key]: { activeTabId: "main" } },
-              ...(rawKey === key && !expandedSide
-                ? {}
-                : {
-                    // Each split pane owns its presentation independently of the current route.
-                    sidebarSessionLayouts: { [rawKey]: dashboardLayout },
-                    chatSplitLayout: {
-                      activePaneId: "p1",
-                      columns: [
-                        { id: "c1", panes: [{ id: "p1", sessionKey: key }], paneWeights: [1] },
-                        { id: "c2", panes: [{ id: "p2", sessionKey: rawKey }], paneWeights: [1] },
-                      ],
-                      columnWeights: [0.5, 0.5],
-                    },
-                  }),
-            }),
-          );
-        },
-        {
-          key: sessionKey,
-          rawKey: viewport.routeKey,
-          storage: storageKey,
-          expandedSide: viewport.name === "expanded-side",
-          dashboardLayout:
-            viewport.name === "expanded-side"
-              ? toggleSidebarPanelExpanded(
-                  openSlot(ensureSidebarConversation({ columns: [] }), "dashboard"),
-                  "dashboard",
-                )
-              : openSlot({ columns: [] }, "dashboard"),
-        },
+      const expanded = viewport.name === "expanded-side";
+      const dashboardLayout = expanded
+        ? toggleSidebarPanelExpanded(
+            openSlot(ensureSidebarConversation({ columns: [] }), "dashboard"),
+            "dashboard",
+          )
+        : openSlot({ columns: [] }, "dashboard");
+      const split = viewport.routeKey !== sessionKey || expanded;
+      // Each split pane owns its presentation independently of the current route.
+      await seedDashboard(
+        page,
+        sessionKey,
+        split
+          ? {
+              sidebarSessionLayouts: { [viewport.routeKey]: dashboardLayout },
+              chatSplitLayout: {
+                activePaneId: "p1",
+                columns: [sessionKey, viewport.routeKey].map((key, index) => ({
+                  id: `c${index + 1}`,
+                  panes: [{ id: `p${index + 1}`, sessionKey: key }],
+                  paneWeights: [1],
+                })),
+                columnWeights: [0.5, 0.5],
+              },
+            }
+          : {},
       );
 
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
@@ -289,15 +286,12 @@ suite.define(() => {
         featureMethods: dashboardFeatureMethods,
         methodResponses: {
           "board.get": boardResponse(sessionKey),
-          "progressCard.get": {
-            card: {
-              sessionKey,
-              revision: 1,
-              updatedAt: now - 10_000,
-              markdown: "**Scope-transition dashboard tile** follows the dashboard roster.",
-              steps: [{ step: "Show the selected scope", status: "in_progress" }],
-            },
-          },
+          "progressCard.get": progressResponse(
+            sessionKey,
+            now - 10_000,
+            "**Scope-transition dashboard tile** follows the dashboard roster.",
+            "Show the selected scope",
+          ),
           "sessions.list": {
             cases: [
               {
@@ -378,15 +372,12 @@ suite.define(() => {
             ownerKey,
             boardless ? { props: { sessionKey: targetKey } } : {},
           ),
-          "progressCard.get": {
-            card: {
-              sessionKey: targetKey,
-              revision: 1,
-              updatedAt: boardless ? now : 3,
-              markdown: `**${title}**`,
-              steps: [{ step, status: "in_progress" }],
-            },
-          },
+          "progressCard.get": progressResponse(
+            targetKey,
+            boardless ? now : 3,
+            `**${title}**`,
+            step,
+          ),
           // A board-filtered roster omits the board-less target; its own roster must keep it live.
           "sessions.list": boardless
             ? {

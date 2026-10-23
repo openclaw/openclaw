@@ -1,8 +1,16 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as gatewayWork from "../process/gateway-work-admission.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import {
+  assertAgentDatabaseAdmitted,
+  createAgentDatabaseInspectionRefusal,
+  preparePendingAgentDatabase,
+  readAgentDatabaseAdmissionRefusal,
+  recordAgentDatabaseAdmissions,
+} from "../state/agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import {
   createGatewaySchedulerClock,
@@ -13,9 +21,14 @@ import { startCronMaintenance, stopCronMaintenance } from "./maintenance.js";
 const mocks = vi.hoisted(() => ({
   history: vi.fn(async (): Promise<{ nextSweepAtMs: number | null }> => ({ nextSweepAtMs: null })),
   historyChanged: undefined as ((databasePath: string) => void) | undefined,
-  registry: vi.fn(async (): Promise<{ nextSweepAtMs: number | null }> => ({
-    nextSweepAtMs: null,
-  })),
+  registry: vi.fn(
+    async (): Promise<{
+      nextSweepAtMs: number | null;
+      pruned?: number;
+      skippedStores?: number;
+      skippedReason?: string;
+    }> => ({ nextSweepAtMs: null, pruned: 0, skippedStores: 0 }),
+  ),
   info: vi.fn(),
   warn: vi.fn(),
   error: vi.fn(),
@@ -54,9 +67,12 @@ let scheduler: ReturnType<typeof createTestGatewayScheduler>;
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.history.mockReset().mockResolvedValue({ nextSweepAtMs: null });
-  mocks.registry.mockReset().mockResolvedValue({ nextSweepAtMs: null });
+  mocks.registry
+    .mockReset()
+    .mockResolvedValue({ nextSweepAtMs: null, pruned: 0, skippedStores: 0 });
   clock = createGatewaySchedulerClock();
   gatewayWork.resetGatewayWorkAdmission();
+  recordAgentDatabaseAdmissions([]);
   scheduler = createTestGatewayScheduler(clock.clock);
 });
 afterEach(async () => {
@@ -64,6 +80,85 @@ afterEach(async () => {
   await scheduler.stop();
   vi.restoreAllMocks();
   gatewayWork.resetGatewayWorkAdmission();
+  recordAgentDatabaseAdmissions([]);
+});
+
+it("keeps pending database admission private when its publisher wakes retention", async () => {
+  const ownerContext = new AsyncLocalStorage<string>();
+  ownerContext.run("gateway", () =>
+    startCronMaintenance(scheduler, () => "/synthetic/cron/jobs.json"),
+  );
+  const pending = createAgentDatabaseInspectionRefusal({
+    agentId: "main",
+    paths: [],
+    reason: "Startup preparation is pending",
+    pending: true,
+  });
+  recordAgentDatabaseAdmissions([pending]);
+  mocks.registry.mockImplementation(async () => {
+    expect(ownerContext.getStore()).toBe("gateway");
+    assertAgentDatabaseAdmitted("healthy");
+    return {
+      nextSweepAtMs: null,
+      skippedStores: readAgentDatabaseAdmissionRefusal("main") ? 1 : 0,
+    };
+  });
+  await preparePendingAgentDatabase(pending, { assertCurrent() {} }, async () => {
+    sessionChanges.emit({ all: true, scope: { agentId: "main", topology: true } });
+    await clock.advanceBy(0);
+    expect(mocks.info).toHaveBeenLastCalledWith(
+      "Session registry maintenance completed",
+      expect.objectContaining({ skippedStores: 1 }),
+    );
+  });
+  await clock.advanceBy(0);
+  expect(mocks.info).toHaveBeenLastCalledWith(
+    "Session registry maintenance completed",
+    expect.objectContaining({ skippedStores: 0 }),
+  );
+  expect(mocks.warn).not.toHaveBeenCalled();
+});
+
+it("finishes retention and rearms after a notifying preparation ends during a read", async () => {
+  const readEntered = createDeferredCore();
+  const readReply = createDeferredCore();
+  const pending = createAgentDatabaseInspectionRefusal({
+    agentId: "main",
+    paths: [],
+    reason: "Startup preparation is pending",
+    pending: true,
+  });
+  startCronMaintenance(scheduler, () => "/synthetic/cron/jobs.json");
+  recordAgentDatabaseAdmissions([pending]);
+  mocks.registry
+    .mockImplementation(async () => {
+      assertAgentDatabaseAdmitted("main");
+      return { nextSweepAtMs: null };
+    })
+    .mockImplementationOnce(async () => {
+      readEntered.resolve();
+      await readReply.promise;
+      assertAgentDatabaseAdmitted("main");
+      return { nextSweepAtMs: 60_000 };
+    });
+  let tick = Promise.resolve();
+  try {
+    await preparePendingAgentDatabase(pending, { assertCurrent() {} }, async () => {
+      sessionChanges.emit({ all: true, scope: { agentId: "main", topology: true } });
+      tick = Promise.resolve(clock.advanceBy(0));
+      await readEntered.promise;
+    });
+    readReply.resolve();
+    await tick;
+    await clock.advanceTo(60_000);
+    expect(mocks.registry).toHaveBeenCalledTimes(2);
+    expect(mocks.warn).not.toHaveBeenCalled();
+    expect(mocks.info).toHaveBeenCalledTimes(2);
+    expect(scheduler.nextWakeAtMs).toBeNull();
+  } finally {
+    readReply.resolve();
+    await tick;
+  }
 });
 
 it.each([
@@ -100,7 +195,15 @@ it.each([
         await clock.advanceBy(60_000);
         expect(mocks.history).toHaveBeenCalledOnce();
         expect(mocks.registry).toHaveBeenCalledOnce();
-        expect(mocks.info).not.toHaveBeenCalled();
+        expect(mocks.info).toHaveBeenCalledExactlyOnceWith(
+          "Session registry maintenance completed",
+          {
+            lastSuccessAtMs: 5_000,
+            nextSweepAtMs: null,
+            pruned: 0,
+            skippedStores: 0,
+          },
+        );
       } finally {
         preparation.resolve();
         await tick;
@@ -166,6 +269,43 @@ it("retains a committed cron wake received while the previous registry read is i
   await sweep;
   await clock.advanceTo(65_000);
   expect(mocks.registry).toHaveBeenCalledTimes(2);
+});
+
+it("keeps the last completed sweep visible when missing cron facts defer the next pass", async () => {
+  startCronMaintenance(scheduler, () => "/synthetic/cron/jobs.json");
+  await clock.advanceBy(5_000);
+  mocks.registry.mockResolvedValueOnce({
+    nextSweepAtMs: 125_000,
+    skippedReason: "synthetic unreadable cron store",
+  });
+  sessionChanges.emit({ sessionKey: "agent:main:cron:job:run:new", scope: "session-entry" });
+  await clock.advanceTo(65_000);
+  expect(mocks.warn).toHaveBeenCalledExactlyOnceWith("Session registry maintenance skipped", {
+    reason: "synthetic unreadable cron store",
+    retryAtMs: 125_000,
+    lastSuccessAtMs: 5_000,
+  });
+  expect(mocks.info).toHaveBeenCalledOnce();
+  await clock.advanceTo(125_000);
+  expect(mocks.info).toHaveBeenLastCalledWith("Session registry maintenance completed", {
+    lastSuccessAtMs: 125_000,
+    nextSweepAtMs: null,
+    pruned: 0,
+    skippedStores: 0,
+  });
+});
+
+it("does not mistake an unknown failure with the snapshot error text for an expected deferral", async () => {
+  const failure = new Error("Agent database deletion snapshot changed during consumption.");
+  mocks.registry.mockRejectedValueOnce(failure);
+  startCronMaintenance(scheduler, () => "/synthetic/cron/jobs.json");
+  await clock.advanceBy(5_000);
+  expect(mocks.warn).toHaveBeenCalledExactlyOnceWith("Cron maintenance failed", { error: failure });
+  expect(mocks.info).not.toHaveBeenCalled();
+  expect(scheduler.nextWakeAtMs).toBe(65_000);
+  await clock.advanceTo(65_000);
+  expect(mocks.registry).toHaveBeenCalledTimes(2);
+  expect(mocks.info).toHaveBeenCalledOnce();
 });
 
 describe("Cron maintenance admission diagnostics", () => {

@@ -30,9 +30,8 @@ const gatewayRuntime = createRecoveryRuntimeFixture({
 const { makeSessionsDir, writeStore, writeTranscript } = createRestartRecoveryStoreFixture(
   () => state.root,
 );
-const scheduleRestartAbortedMainSessionRecovery = (params: { delayMs: number }) =>
+const scheduleRestartAbortedMainSessionRecovery = () =>
   scheduleRecovery({
-    ...params,
     stateDir: state.root,
     getConfig: () => ({}),
     gatewayRuntime,
@@ -97,7 +96,7 @@ it.for(["abandoned", "completed", "replaced", "stopped"] as const)(
       dispatched.resolve();
       return { runId: "run-resumed" };
     });
-    const recovery = scheduleRestartAbortedMainSessionRecovery({ delayMs: 0 });
+    const recovery = scheduleRestartAbortedMainSessionRecovery();
     try {
       await withinTest(firstPass.completed, signal);
       expect(callGateway).not.toHaveBeenCalled();

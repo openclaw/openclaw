@@ -1,13 +1,11 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
-import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 import { resolveModelCatalogState } from "../../lib/model-catalog-store.ts";
 import {
   readSessionMethodAccess,
-  readSessionMethodScopeAccess,
   type SessionMethodAccess,
 } from "../../lib/session-method-access.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
@@ -71,24 +69,6 @@ export function createChatPaneQueuedEditProps(
   };
 }
 
-export function readChatPaneComposerAccess(
-  snapshot: Pick<ApplicationGatewaySnapshot, "hello">,
-  session: GatewaySessionRow | undefined,
-  catalog: boolean,
-): boolean {
-  const auth = snapshot.hello?.auth ?? null;
-  return (
-    hasOperatorWriteAccess(auth) ||
-    (!catalog &&
-      readSessionMethodScopeAccess(auth, {
-        method: "chat.send",
-        requiredScope: "operator.write",
-        sessionScope: true,
-        session,
-      }).allowed)
-  );
-}
-
 export function readChatPaneMutationAccess(
   snapshot: ApplicationGatewaySnapshot,
   sessionKey: string,
@@ -110,24 +90,6 @@ export function readChatPaneMutationAccess(
     }),
     permission: scopedPatchAccess({ permissionMode: "guarded" }),
     unarchive: scopedPatchAccess({ archived: false }),
-  };
-}
-
-export function readChatPublicationAccess(
-  snapshot: ApplicationGatewaySnapshot,
-  session: GatewaySessionRow,
-  participationBlocked: boolean,
-) {
-  const canMutate = !session.archived && !participationBlocked;
-  return {
-    canPublishShared:
-      canMutate &&
-      readSessionMethodAccess(snapshot, {
-        method: "sessions.github.publish",
-        requiredScope: "operator.sessions.write",
-        session,
-      }).allowed,
-    canPublishPersonal: canMutate && hasOperatorWriteAccess(snapshot.hello?.auth ?? null),
   };
 }
 
@@ -303,7 +265,9 @@ export function renderChatPaneComposerControls(params: {
         sessionKey: state.sessionKey,
         selectedSession,
         sessionsResult: state.sessionsResult,
-        stream: state.chatStream,
+        get stream() {
+          return state.chatStream;
+        },
         onModelSetup,
         onProviderSettings,
         onFastModeSelect: (next, targetSessionKey) =>

@@ -172,6 +172,25 @@ describe("update.run handoff refusal diagnostics", () => {
     );
   });
 
+  it("preserves the Node engine refusal and serving observation for update.run", async () => {
+    const message =
+      "Node 26.10.0 at /fixture/node requires >=24.22.1 <25 || >=26.12.1. Install Node 24.22.1 and update the service definition selecting /fixture/node.";
+    startHandoff.mockRejectedValueOnce(
+      new UpdatePreMutationError("preflight-node-runtime-incompatible", message),
+    );
+
+    const payload = expectDefined(await captureUpdateRunPayload(), "update response");
+    const run = readRun(payload);
+    expect(payload).toMatchObject({
+      ok: false,
+      result: { status: "error", reason: "preflight-node-runtime-incompatible" },
+    });
+    expect(run.origin.nextAction).toBe(message);
+    expect(run.verification.serviceRunning).toBe(true);
+    expect(renderUpdateRunReport(run).lines.join("\n")).toContain(message);
+    expectServing();
+  });
+
   it.each(["helper-start", "sentinel-write"] as const)(
     "cancels its exact helper when admission ends during %s",
     async (boundary) => {
@@ -280,7 +299,8 @@ describe("update.run handoff refusal diagnostics", () => {
         expect(report.body).toContain("Recovery outcome: Gateway kept serving");
         expect(report.body).toContain("handoff-payload-failed");
         expect.soft(report.body).toContain("Failing check managed-service (Error)");
-        expect.soft(report.body).toContain(message);
+        expect.soft(report.body).not.toContain(message);
+        expect.soft(report.body).toContain("[redacted-diagnostic]");
       } else {
         expect(report.body).not.toContain("Recovery outcome: Gateway kept serving");
         expect.soft(report.body).toContain(`Failed phase requested: ${message}`);

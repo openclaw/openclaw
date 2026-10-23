@@ -4,7 +4,7 @@ import {
   deferCommandInteractionIfNeeded,
   resolveFocusedCommandOptionAutocompleteHandler,
 } from "./commands.js";
-import type { BaseMessageInteractiveComponent } from "./components.base.js";
+import { parseCustomId, type BaseMessageInteractiveComponent } from "./components.base.js";
 import type { Modal } from "./components.modal.js";
 import {
   AutocompleteInteraction,
@@ -84,7 +84,10 @@ async function dispatchAcknowledgeableInteraction(
     });
     if (component) {
       await deferComponentInteractionIfNeeded(component, componentInteraction);
-      await component.run(componentInteraction, component.customIdParser(customId).data);
+      await component.run(
+        componentInteraction,
+        (component.customIdParser ?? parseCustomId)(customId).data,
+      );
     }
     return;
   }
@@ -125,10 +128,10 @@ async function reportInteractionFailure(
 }
 
 function resolveConditionalComponentOption(
-  value: boolean | ((interaction: BaseComponentInteraction) => boolean),
+  value: boolean | ((interaction: BaseComponentInteraction) => boolean) | undefined,
   interaction: BaseComponentInteraction,
 ): boolean {
-  return typeof value === "function" ? value(interaction) : value;
+  return typeof value === "function" ? value(interaction) : (value ?? false);
 }
 
 async function deferComponentInteractionIfNeeded(

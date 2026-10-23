@@ -55,6 +55,7 @@ it.each(["recovered", "preparation-failure", "later-failure"] as const)(
     };
     const createCallbacks = attemptCallbacks.createAgentAttemptLifecycleCallbacks;
     let observedState: attemptCallbacks.AgentAttemptLifecycleState | undefined;
+    let observedRecorder: RunEmbeddedAgentInternalParams["userTurnTranscriptRecorder"];
     const observeState = vi
       .spyOn(attemptCallbacks, "createAgentAttemptLifecycleCallbacks")
       .mockImplementation((lifecycleState, onRuntimeTurnStarted) => {
@@ -62,7 +63,9 @@ it.each(["recovered", "preparation-failure", "later-failure"] as const)(
         return createCallbacks(lifecycleState, onRuntimeTurnStarted);
       });
     runEmbeddedAgent.mockImplementationOnce(async (params: RunEmbeddedAgentInternalParams) => {
-      params.onUserMessagePersisted?.({ role: "user", content: "Write once.", timestamp: 1 });
+      observedRecorder = params.userTurnTranscriptRecorder;
+      assert.isDefined(observedRecorder);
+      observedRecorder.markRuntimePersisted({ role: "user", content: "Write once.", timestamp: 1 });
       await params.onAgentEvent?.({
         stream: "lifecycle",
         data: {
@@ -123,7 +126,7 @@ it.each(["recovered", "preparation-failure", "later-failure"] as const)(
         );
       }
       expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-      expect(observedState?.currentTurnUserMessagePersisted).toBe(true);
+      expect(observedRecorder?.hasPersisted()).toBe(true);
       expect(observedState?.lifecycleEnded).toBe(true);
       const terminals = state.emitAgentEventMock.mock.calls
         .map(([event]) => event)

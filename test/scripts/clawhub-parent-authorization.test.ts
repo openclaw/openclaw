@@ -1,8 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
   clawHubIdentityFromEnvironment,
@@ -14,7 +13,9 @@ import {
   validateClawHubTransactions,
   validateClawHubWorkflowRun,
 } from "../../scripts/clawhub-parent-authorization.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const sha = "a".repeat(40);
 const ref = `release-publish/${sha.slice(0, 12)}-1`;
 const recoveryEnv = {
@@ -107,16 +108,6 @@ function authorization(route = "automated-awaited", count = 1) {
     validateClawHubParentAuthorization({ ...receipt, ...patch }, sealed);
   return { sealed, receipt, validate };
 }
-function packedFixture() {
-  const directory = mkdtempSync(join(tmpdir(), "clawhub-packed-"));
-  const artifactName = "clawhub-package-openclaw-arcee-provider-2026.9.1";
-  return {
-    directory,
-    nested: join(directory, artifactName),
-    resolve: (matrixSize: number) =>
-      resolvePackedClawHubArtifactDir({ directory, artifactName, matrixSize }),
-  };
-}
 
 it("rejects alpha package transactions before granting parent authority", () => {
   const value = transactions();
@@ -128,6 +119,12 @@ it("rejects alpha package transactions before granting parent authority", () => 
 });
 
 describe("ClawHub parent publication authorization", () => {
+  it("does not fall back to the flat directory when a matrix artifact is missing", () => {
+    const directory = tempDirs.make("clawhub-packed-");
+    expect(
+      resolvePackedClawHubArtifactDir({ directory, artifactName: "missing", matrixSize: 2 }),
+    ).toBe(join(directory, "missing"));
+  });
   it("writes an exact human recovery receipt once for the child and parent attempts", () => {
     const receipt = createClawHubRecoveryApproval(recoveryEnv, noGh);
     expect(receipt).toStrictEqual({
@@ -169,27 +166,23 @@ describe("ClawHub parent publication authorization", () => {
     rejectRecovery({ GITHUB_REPOSITORY: "other/repository" }, /repository/u);
     rejectRecovery({ GITHUB_RUN_ID: "1".repeat(8 * 1024) }, /8 KiB/u);
 
-    const directory = mkdtempSync(join(tmpdir(), "clawhub-recovery-approval-"));
-    try {
-      const output = join(directory, "approval.json");
-      const args = [
-        "scripts/clawhub-parent-authorization.mjs",
-        "recovery-approval",
-        "--output",
-        output,
-      ];
-      const options = { env: { ...process.env, ...recoveryEnv }, encoding: "utf8" } as const;
-      const first = spawnSync(process.execPath, args, options);
-      expect(first.status, first.stderr).toBe(0);
-      const contents = readFileSync(output, "utf8");
-      expect(JSON.parse(contents)).toEqual(receipt);
-      expect(contents).toBe(`${JSON.stringify(receipt)}\n`);
-      const second = spawnSync(process.execPath, args, options);
-      expect(second.status).toBe(1);
-      expect(second.stderr).toContain("EEXIST");
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
-    }
+    const directory = tempDirs.make("clawhub-recovery-approval-");
+    const output = join(directory, "approval.json");
+    const args = [
+      "scripts/clawhub-parent-authorization.mjs",
+      "recovery-approval",
+      "--output",
+      output,
+    ];
+    const options = { env: { ...process.env, ...recoveryEnv }, encoding: "utf8" } as const;
+    const first = spawnSync(process.execPath, args, options);
+    expect(first.status, first.stderr).toBe(0);
+    const contents = readFileSync(output, "utf8");
+    expect(JSON.parse(contents)).toEqual(receipt);
+    expect(contents).toBe(`${JSON.stringify(receipt)}\n`);
+    const second = spawnSync(process.execPath, args, options);
+    expect(second.status).toBe(1);
+    expect(second.stderr).toContain("EEXIST");
   });
 
   it("discovers the authorized child from the parent attempt's single v2 receipt", () => {
@@ -238,11 +231,12 @@ describe("ClawHub parent publication authorization", () => {
   it("uploads recovery approval only for direct human dispatches from trusted tooling", () => {
     const config = workflow();
     const approval = config.jobs.approve_plugins_clawhub_release;
-    expect(approval.environment).toBe(
-      "${{ needs.validate_release_publish_approval.outputs.parent_approval != 'receipt' && 'clawhub-plugin-release' || '' }}",
-    );
-    expect(approval.needs).toContain("validate_release_publish_approval");
-    expect(approval.if).toContain("needs.validate_release_publish_approval.result == 'success'");
+    expect(approval).toMatchObject({
+      environment:
+        "${{ needs.validate_release_publish_approval.outputs.parent_approval != 'receipt' && 'clawhub-plugin-release' || '' }}",
+      needs: expect.arrayContaining(["validate_release_publish_approval"]),
+      if: expect.stringContaining("needs.validate_release_publish_approval.result == 'success'"),
+    });
     const validation = config.jobs.validate_release_publish_approval;
     expect(validation.outputs?.direct_recovery).toBe(
       "${{ steps.approval.outputs.direct_recovery }}",
@@ -334,21 +328,11 @@ describe("ClawHub parent publication authorization", () => {
     expect(validate()).toEqual(receipt);
   });
 
-  it("seals detached publication at the immutable release milestone", () => {
-    const sealed = transactions();
-    const receipt = createClawHubParentAuthorization(sealed, "automated-sealed");
-    expect(receipt.authorizationRoute).toBe("automated-sealed");
-    expect(validateClawHubParentAuthorization(receipt, sealed)).toEqual(receipt);
-  });
-
   it.each(["childRunId", "childRunAttempt", "candidateSha", "toolingSha", "childFullRef"])(
     "rejects receipt substitution of %s",
     (key) => {
-      const sealed = transactions();
-      const receipt = createClawHubParentAuthorization(sealed, "automated-detached");
-      expect(() =>
-        validateClawHubParentAuthorization({ ...receipt, [key]: "changed" }, sealed),
-      ).toThrow(/mismatch/u);
+      const { validate } = authorization("automated-detached");
+      expect(() => validate({ [key]: "changed" })).toThrow(/mismatch/u);
     },
   );
 
@@ -436,19 +420,5 @@ describe("ClawHub parent publication authorization", () => {
         terminal: true,
       }),
     ).toThrow(/state/u);
-  });
-});
-
-describe("packed ClawHub artifact directories", () => {
-  it("reads a lone pattern match from the flat download path", () => {
-    const { directory, resolve } = packedFixture();
-    expect(resolve(1)).toBe(directory);
-  });
-
-  it("keeps per-artifact directories for multi-package matrices and nested singles", () => {
-    const { nested, resolve } = packedFixture();
-    expect(resolve(2)).toBe(nested);
-    mkdirSync(nested);
-    expect(resolve(1)).toBe(nested);
   });
 });

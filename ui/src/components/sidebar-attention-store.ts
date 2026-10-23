@@ -113,6 +113,7 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
       connectionBootstrap: sources.connectionBootstrap,
     });
     this.loadedClient = null;
+    // Reconcile owner scope and publish aggregate attention synchronously for downstream consumers.
     this.stopSubscriptions = [
       sources.gateway.subscribe(() => this.synchronizeGateway()),
       sources.gateway.subscribeEvents((event) => {

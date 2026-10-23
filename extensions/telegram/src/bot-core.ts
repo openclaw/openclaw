@@ -131,7 +131,6 @@ export async function createTelegramBotCore(
       typeof opts.updateOffset?.persistenceFloorUpdateId === "number"
         ? opts.updateOffset.persistenceFloorUpdateId
         : initialUpdateId,
-    ackPolicy: "after_agent_dispatch",
     ...(typeof opts.updateOffset?.onUpdateId === "function"
       ? { onAcceptedUpdateId: opts.updateOffset.onUpdateId }
       : {}),

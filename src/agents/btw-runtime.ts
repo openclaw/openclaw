@@ -2,8 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
-import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
-import type { ChatType } from "../channels/chat-type.js";
+import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { SessionEntry as StoredSessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ImageContent, Message, Model, TextContent } from "../llm/types.js";
@@ -23,14 +22,17 @@ import { normalizeBtwContentBlocks } from "./btw-transcript.js";
 import { executePreparedCliRun } from "./cli-runner/execute.runtime.js";
 import { prepareCliRunContext } from "./cli-runner/prepare.runtime.js";
 import { createNativeModelOwnedRuntimeModel } from "./defaults.js";
-import type { BlockReplyChunking } from "./embedded-agent-block-chunker.js";
 import { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import {
   preparePluginHarnessToolPolicies,
   resolvePluginHarnessPolicyToolsAllow,
 } from "./harness/execution-environment.js";
 import { readSessionRuntimeOwnershipAsync } from "./harness/session-runtime-ownership.js";
-import type { AgentHarness, AgentHarnessSessionRuntimeOwnership } from "./harness/types.js";
+import type {
+  AgentHarness,
+  AgentHarnessSessionRuntimeOwnership,
+  AgentHarnessSideQuestionParamsV2,
+} from "./harness/types.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import {
   ensureAuthProfileStoreAsync,
@@ -425,55 +427,34 @@ export async function resolveRuntimeModel(params: {
   };
 }
 
-export type RunBtwSideQuestionParams = {
-  cfg: OpenClawConfig;
+export type RunBtwSideQuestionParams = Omit<
+  AgentHarnessSideQuestionParamsV2,
+  | "hostCapabilities"
+  | "sandbox"
+  | "preparedModelRuntime"
+  | "runtimeModel"
+  | "preparedRuntimeAuth"
+  | "expectedSessionRuntimeOwnership"
+  | "preparedWebSearchPolicy"
+  | "sessionId"
+  | "sessionFile"
+  | "agentId"
+  | "workspaceDir"
+  | "toolsAllow"
+  | "authProfileId"
+  | "authProfileIdSource"
+> & {
   agentId: string;
-  agentDir: string;
-  provider: string;
-  model: string;
-  question: string;
-  toolCalls?: "deny";
   assertCurrent?: () => void;
   operatorAuthority?: AdmittedRunOperatorAuthority;
   /** Background consumers collect usage without recording a user-facing reply. */
   onUsage?: (usage: NormalizedUsage | undefined) => void;
-  images?: ImageContent[];
-  sessionEntry: StoredSessionEntry;
-  sessionStore?: Record<string, StoredSessionEntry>;
-  sessionKey?: string;
-  sandboxSessionKey?: string;
   /**
    * Set by gateway-hosted callers so the prepared runtime resolves the owner the
    * gateway published. Left unset by local callers such as the embedded TUI,
    * which must not borrow the active registry's subagent and node capabilities.
    */
   allowGatewaySubagentBinding?: boolean;
-  storePath?: string;
-  resolvedThinkLevel?: ThinkLevel;
-  resolvedReasoningLevel: ReasoningLevel;
-  blockReplyChunking?: BlockReplyChunking;
-  resolvedBlockStreamingBreak?: "text_end" | "message_end";
-  opts?: GetReplyOptions;
-  isNewSession: boolean;
-  messageChannel?: string;
-  messageProvider?: string;
-  chatType?: ChatType;
-  agentAccountId?: string;
-  messageTo?: string;
-  messageThreadId?: string | number;
-  chatId?: string;
-  messageActionTurnCapability?: string;
-  groupId?: string | null;
-  groupChannel?: string | null;
-  groupSpace?: string | null;
-  memberRoleIds?: string[];
-  spawnedBy?: string | null;
-  senderId?: string | null;
-  senderName?: string | null;
-  senderUsername?: string | null;
-  senderE164?: string | null;
-  senderIsOwner?: boolean;
-  currentChannelId?: string;
   /** Internal execution identity; never reuse a parent/correlation run id. */
   authorityRunId?: string;
 };

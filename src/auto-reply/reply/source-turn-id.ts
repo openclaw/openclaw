@@ -115,3 +115,9 @@ export function setChannelSourceTurnSameThreadRequired(
 export function readChannelSourceTurnSameThreadRequired(context: object): boolean {
   return (context as ChannelSourceTurnContext)[CHANNEL_SOURCE_TURN_SAME_THREAD_REQUIRED] === true;
 }
+
+/** Keep input identity and its narrowed channel scope together across execution handoffs. */
+export function copyChannelSourceTurnContext(target: object, source: object): void {
+  setChannelSourceTurnId(target, readChannelSourceTurnId(source));
+  setChannelSourceTurnSameThreadRequired(target, readChannelSourceTurnSameThreadRequired(source));
+}

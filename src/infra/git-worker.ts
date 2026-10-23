@@ -14,6 +14,7 @@ import { runGitBytes, runGitBuffered } from "../agents/worktrees/git.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withGitProcessOperation, type GitProcessOperation } from "../process/spawn-diagnostics.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import type { DiffReadTiming } from "./diff-read-timing.js";
 import { withContentGitSlot } from "./git-content-budget.js";
 import { startGitOperationTiming } from "./git-operation-timing.js";
 import { restoreGitWorkerFailure, serializeGitWorkerFailure } from "./git-worker-context.js";
@@ -75,6 +76,8 @@ const SPAWN_OPERATIONS = {
   "workspace.inventory.staged-directories": "workspace.inventory",
   "workspace.manifest.capture": "workspace.manifest",
   "workspace.manifest.snapshot": "workspace.manifest",
+  "workspace.manifest.document": "workspace.manifest",
+  "workspace.manifest.reference": "workspace.manifest",
   "workspace.manifest.parse": "workspace.manifest",
   "workspace.manifest.serialize": "workspace.manifest",
   "workspace.manifest.overlay": "workspace.manifest",
@@ -163,6 +166,7 @@ function poolFor(
 }
 
 export type GitWorkerOperationOptions = {
+  diffTiming?: DiffReadTiming;
   inputBytes?: number;
   /** Move task-owned inputs at admission and again when the worker receives them. */
   transferList?: (command: GitWorkerCommand) => readonly Transferable[];
@@ -297,6 +301,7 @@ async function executeOperation(
         }))
       : undefined;
   let firstHostRequest = true;
+  const measure = timing || options.diffTiming;
   let outcome: "returned" | "threw" = "threw";
   const hostWork = new Set<Promise<WorkerTaskResponse>>();
   const temporaryDirectories = new Set<string>();
@@ -305,9 +310,6 @@ async function executeOperation(
   const request = async (value: unknown, signal: AbortSignal): Promise<WorkerTaskResponse> => {
     try {
       signal.throwIfAborted();
-      if (!isRecord(value) || typeof value.type !== "string" || !isRecord(value.input)) {
-        throw new Error("Invalid Git worker host request");
-      }
       // SAFETY: Only the registered typed operation worker can send requests on this live channel.
       const effect = value as GitWorkerHostRequest;
       let result: unknown;
@@ -318,9 +320,9 @@ async function executeOperation(
             ? (options.git?.text ?? runGitBytes)
             : (options.git?.buffered ?? runGitBuffered);
         // The parent owns the operation identity; worker batches cannot relabel their launches.
-        const queuedAt = timing ? performance.now() : 0;
+        const queuedAt = measure ? performance.now() : 0;
         const execute = async () => {
-          const startedAt = timing ? performance.now() : 0;
+          const startedAt = measure ? performance.now() : 0;
           let termination = "threw";
           if (timing) {
             gitCommandCount++;
@@ -346,6 +348,10 @@ async function executeOperation(
             }
             return output;
           } finally {
+            if (options.diffTiming) {
+              const durations = options.diffTiming.durations;
+              durations["git-wall"] = (durations["git-wall"] ?? 0) + performance.now() - startedAt;
+            }
             if (timing) {
               const durationMs = Math.round(performance.now() - startedAt);
               summedGitWallMs += durationMs;
@@ -421,10 +427,14 @@ async function executeOperation(
     }
   };
   try {
-    const enqueuedAt = timing ? performance.now() : 0;
-    const input = timing
+    const enqueuedAt = measure ? performance.now() : 0;
+    const input = measure
       ? () => {
-          workerQueueWaitMs = Math.round(performance.now() - enqueuedAt);
+          const elapsedMs = performance.now() - enqueuedAt;
+          workerQueueWaitMs = Math.round(elapsedMs);
+          if (options.diffTiming) {
+            options.diffTiming.durations["worker-queue"] = elapsedMs;
+          }
           return command;
         }
       : command;
@@ -469,6 +479,9 @@ async function executeOperation(
     }
     options.signal?.throwIfAborted();
     options.assertCurrent?.();
+    if (options.diffTiming) {
+      options.diffTiming.revisionUnavailableReason = reply.revisionUnavailableReason;
+    }
     outcome = "returned";
     return reply.value;
   } finally {

@@ -3,7 +3,6 @@ import type { BrowserContextOptions, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { activateChatHeaderPanelAction } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "session discussion toggle" });
@@ -49,8 +48,24 @@ async function withDiscussionPage(
   );
 }
 
+async function openDiscussionPanel(page: Page): Promise<void> {
+  await page
+    .locator(".sidebar-region__panels-toggle")
+    .getByRole("button", { name: "Panels", exact: true })
+    .click();
+  const launcher = page.locator(".side-panel-launcher");
+  await launcher
+    .getByRole("button")
+    .filter({
+      has: page
+        .getByText("Discussion", { exact: true })
+        .and(page.locator(".side-panel-type-option__label")),
+    })
+    .click();
+}
+
 suite.define(() => {
-  it("keeps an existing discussion closed until the header action opens it", async () => {
+  it("keeps an existing discussion closed until the operator opens its panel", async () => {
     await withDiscussionPage(async (page, capture) => {
       const open = { openUrl: "https://discussion.example/session", state: "open" };
       const gateway = await openDiscussion(page, "agent:main:discussion-proof", {
@@ -62,7 +77,7 @@ suite.define(() => {
       await expect.poll(() => discussionPanel.count()).toBe(0);
       await capture("discussion-initial-closed");
 
-      await activateChatHeaderPanelAction(page, "Show discussion");
+      await openDiscussionPanel(page);
 
       await expect.poll(() => discussionPanel.count()).toBe(1);
       await expect.poll(() => closeDiscussion.isVisible()).toBe(true);
@@ -75,7 +90,7 @@ suite.define(() => {
       expect(await gateway.getRequests("session.discussion.open")).toHaveLength(0);
       await capture("discussion-open");
 
-      await activateChatHeaderPanelAction(page, "Hide discussion");
+      await closeDiscussion.click();
 
       await expect.poll(() => closeDiscussion.isVisible()).toBe(false);
       await expect.poll(() => discussionPanel.count()).toBe(0);
@@ -124,7 +139,7 @@ suite.define(() => {
             state: "open",
           },
         });
-        await activateChatHeaderPanelAction(page, "Show discussion");
+        await openDiscussionPanel(page);
 
         const frameElement = page.locator("iframe.session-discussion__frame");
         await expect.poll(() => frameElement.count()).toBe(1);

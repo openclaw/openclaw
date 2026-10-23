@@ -3,6 +3,27 @@ export {
   extractErrorCodeOrErrno,
 } from "@openclaw/normalization-core/error-coercion";
 
+/** Await owned work and cleanup, retaining both failures without changing their identity. */
+export async function settleWithCleanup<T>(
+  operation: Promise<T>,
+  cleanup: () => void | Promise<void>,
+  message: string,
+): Promise<T> {
+  const [outcome] = await Promise.allSettled([operation]);
+  try {
+    await cleanup();
+  } catch (error) {
+    if (outcome.status === "rejected") {
+      throw new AggregateError([outcome.reason, error], message, { cause: error });
+    }
+    throw error;
+  }
+  if (outcome.status === "rejected") {
+    throw outcome.reason;
+  }
+  return outcome.value;
+}
+
 export function throwIfSettledRejected(
   results: readonly PromiseSettledResult<unknown>[],
   message: string,
@@ -11,6 +32,19 @@ export function throwIfSettledRejected(
     result.status === "rejected" ? [result.reason] : [],
   );
   throwCollectedErrors(failures, message);
+}
+
+/** Keep an aggregate envelope even when only one joined operation failed. */
+export function throwSettledAggregate(
+  results: readonly PromiseSettledResult<unknown>[],
+  message: string,
+): void {
+  const failures = results.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+  if (failures.length) {
+    throw new AggregateError(failures, message);
+  }
 }
 
 /** Preserve a sole failure; aggregate independent failures in their original order. */

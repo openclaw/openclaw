@@ -15,7 +15,7 @@ import {
   isProviderVoiceTranscript,
   resolveAssistantReplyPhase,
 } from "../chat-assistant-reply.ts";
-import { readPendingSendStatus } from "../chat-thread.ts";
+import { readPendingSendStatus } from "../chat-thread-items.ts";
 import { hasForwardedSource } from "../chat-turn-boundary.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 import type { RenderMessageGroupOptions } from "./chat-message-group-options.ts";
@@ -56,10 +56,9 @@ export function prepareGroupMessage(
     canFetchFullMessage: Boolean(opts.loadFullAssistantMessage && opts.sessionKey),
     senderLabel: resolveMessageGroupSenderLabel(group, opts),
   });
-  const messageId = details?.fullMessage?.messageId;
-  if (messageId) {
-    // Projected rows can share a source ID; a preceding row may have started its load.
-    const expansion = opts.getAssistantMessageExpansion?.(messageId);
+  const fullMessage = details?.fullMessage;
+  if (fullMessage) {
+    const { messageId, state: expansion } = fullMessage;
     // Retry transient failures on later renders, bounded so a dead loader cannot hot-loop.
     if (
       !expansion ||

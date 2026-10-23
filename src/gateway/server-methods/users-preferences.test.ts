@@ -77,7 +77,7 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
-test("users.prefs returns updated preferences when a write commits before read delivery", async () => {
+test("users.prefs returns its captured snapshot when a write commits before read delivery", async () => {
   const state = await createOpenClawTestState({
     layout: "state-only",
     prefix: "prefs-publication-",
@@ -97,7 +97,7 @@ test("users.prefs returns updated preferences when a write commits before read d
       await invokePreferenceMethod("users.prefs.get", { keys: ["ui.accent"] }, profileId),
     ).toEqual({
       ok: true,
-      payload: { status: "ok", entries: { "ui.accent": "#aabbcc" } },
+      payload: { status: "ok", entries: { "ui.accent": "#112233" } },
       error: undefined,
     });
   } finally {
@@ -118,12 +118,17 @@ test("users.prefs reads merged-profile accents while an unrelated writer reply i
     });
     mergeProfiles(source, target);
     const context = captureOpenClawStateWorkerContext();
-    const readWriterObservation = () =>
+    const recordUnrelatedProvenance = () =>
       executeOpenClawStateWorker(context, {
-        type: "deviceAuth.read",
-        input: { deviceId: "preference-reader-test", role: "operator", readOnly: false },
+        type: "agentProvenance.record",
+        input: {
+          agentId: "preference-reader-test",
+          createdVia: "operator",
+          creatorAgentId: null,
+          createdAtMs: 1,
+        },
       });
-    await readWriterObservation();
+    await recordUnrelatedProvenance();
     const replyReady = createDeferredCore();
     let publish: (() => void) | undefined;
     let selected: { worker: Worker; id: number } | undefined;
@@ -140,9 +145,9 @@ test("users.prefs reads merged-profile accents while an unrelated writer reply i
         const command: unknown = deserialize(request.input);
         if (
           isRecord(command) &&
-          command.type === "deviceAuth.read" &&
+          command.type === "agentProvenance.record" &&
           isRecord(command.input) &&
-          command.input.deviceId === "preference-reader-test"
+          command.input.agentId === "preference-reader-test"
         ) {
           selected = { worker: this, id: request.id };
         }
@@ -161,7 +166,7 @@ test("users.prefs reads merged-profile accents while an unrelated writer reply i
       }
       return originalEmit.call(this, event, reply);
     });
-    const pendingWriter = readWriterObservation();
+    const pendingWriter = recordUnrelatedProvenance();
     try {
       await withinTest(replyReady.promise, signal);
       expect(

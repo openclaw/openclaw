@@ -15,22 +15,19 @@ export class MarkdownBlocks {
 
   private readonly pendingBlocks = new Set<HTMLElement>();
   private readonly observedNodes = new Set<HTMLElement>();
-  private readonly resizeObserver =
-    typeof ResizeObserver === "undefined"
-      ? null
-      : new ResizeObserver((entries) => {
-          if (!this.active || this.disposed) {
-            return;
-          }
-          const wrappers = new Set(
-            entries.map(({ target }) => target.closest<HTMLElement>(".code-block-wrapper")),
-          );
-          for (const wrapper of wrappers) {
-            if (wrapper) {
-              updateCodeBlockWidthOverflow(wrapper);
-            }
-          }
-        });
+  private readonly resizeObserver = new ResizeObserver((entries) => {
+    if (!this.active || this.disposed) {
+      return;
+    }
+    const wrappers = new Set(
+      entries.map(({ target }) => target.closest<HTMLElement>(".code-block-wrapper")),
+    );
+    for (const wrapper of wrappers) {
+      if (wrapper) {
+        updateCodeBlockWidthOverflow(wrapper);
+      }
+    }
+  });
   private readonly mutationObserver = new MutationObserver((records) => {
     this.collectMutations(records);
     if (this.pendingBlocks.size) {
@@ -57,7 +54,7 @@ export class MarkdownBlocks {
         const removed = [node, ...node.querySelectorAll<HTMLElement>(".code-block-viewport, code")];
         for (const observed of removed) {
           if (this.observedNodes.delete(observed)) {
-            this.resizeObserver?.unobserve(observed);
+            this.resizeObserver.unobserve(observed);
           }
         }
       }
@@ -83,7 +80,7 @@ export class MarkdownBlocks {
     this.mutationObserver.disconnect();
     this.observing = false;
     this.pendingBlocks.clear();
-    this.resizeObserver?.disconnect();
+    this.resizeObserver.disconnect();
     this.observedNodes.clear();
     releaseMarkdownTables(this.root);
   }
@@ -112,7 +109,6 @@ export class MarkdownBlocks {
       this.mutationObserver.observe(root, {
         childList: true,
         subtree: true,
-        characterData: !this.resizeObserver,
       });
       this.observing = true;
     }
@@ -165,11 +161,8 @@ export class MarkdownBlocks {
       for (const node of [viewport, code]) {
         if (!this.observedNodes.has(node)) {
           this.observedNodes.add(node);
-          this.resizeObserver?.observe(node);
+          this.resizeObserver.observe(node);
         }
-      }
-      if (!this.resizeObserver) {
-        updateCodeBlockWidthOverflow(wrapper);
       }
     }
   }

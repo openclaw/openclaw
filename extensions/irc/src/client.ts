@@ -502,7 +502,6 @@ export async function connectIrcClient(options: IrcClientOptions) {
       return currentNick;
     },
     isReady: () => ready && !closed,
-    sendRaw,
     join,
     sendPrivmsg,
     quit,

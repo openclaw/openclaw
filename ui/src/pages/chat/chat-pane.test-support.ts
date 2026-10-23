@@ -29,7 +29,6 @@ import {
 } from "../../app/question-prompt.ts";
 import { loadSettings } from "../../app/settings.ts";
 import type { SidebarSessionMutationResult } from "../../components/app-sidebar-session-types.ts";
-import type { MarkdownRenderOptions } from "../../components/markdown-render-options.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
 import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
@@ -59,7 +58,7 @@ import { createSessionCapabilityFixture } from "./chat-session-capability.test-s
 import type { createChatState } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
-import type { ChatTypingActorState, ChatTypingActorView } from "./chat-typing-presence.ts";
+import type { ChatTypingActorState } from "./chat-typing-presence.ts";
 import type { ChatProps } from "./chat-view.tsx";
 import type { HeaderMenuAction } from "./components/chat-header-session-menu.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
@@ -124,6 +123,7 @@ export function mountBoardPanel(
 export interface TestChatPane extends HTMLElement, PaneTestLifecycle {
   readonly updateComplete: Promise<boolean>;
   readonly element: HTMLElement;
+  readonly headerElement: HTMLElement | null;
   render: ChatPaneRuntime["render"];
   readonly transcript: ChatTranscript;
   readonly history: ChatPaneRuntime["history"];
@@ -146,6 +146,8 @@ export interface TestChatPane extends HTMLElement, PaneTestLifecycle {
   context: ApplicationContext;
   state: ChatPageHost;
   connectedClient: GatewayBrowserClient | null;
+  routeResolutionPending: boolean;
+  synchronizeInputs: ChatPaneRuntime["synchronizeInputs"];
   applyGatewaySnapshot: (snapshot: ApplicationContext["gateway"]["snapshot"]) => void;
   connectedCallback: () => void;
   connectionGeneration: number;
@@ -181,7 +183,6 @@ export interface TestChatPane extends HTMLElement, PaneTestLifecycle {
   refreshSessionPullRequests: (options?: { refresh?: boolean; automatic?: boolean }) => boolean;
   sessionPullRequests: ControlUiSessionPullRequest[];
   sessionPullRequestsBranch: ControlUiSessionBranch | undefined;
-  githubRepo: MarkdownRenderOptions["githubRepo"];
   suggestionChatProps: (
     connected: boolean,
     archived: boolean,
@@ -199,7 +200,6 @@ export interface TestChatPane extends HTMLElement, PaneTestLifecycle {
   pruneTypingActors: () => void;
   typingActors: Map<string, ChatTypingActorState>;
   clearTypingActors: () => void;
-  typingActorViews: () => ChatTypingActorView[];
   sendTypingState: (typing: boolean, preview?: string, cursor?: number) => void;
   refreshSessionSuggestions: () => Promise<void>;
   resolveCurrentSessionSuggestion: (
@@ -243,7 +243,6 @@ export interface TestChatPane extends HTMLElement, PaneTestLifecycle {
     row: GatewaySessionRow,
     workspaceRoot: string | null,
     branch: string | null,
-    copy?: (value: string) => Promise<boolean>,
   ) => void;
   loadHeaderMenuData: (
     row: GatewaySessionRow,
@@ -363,7 +362,6 @@ export function createInitializationContext(client?: GatewayBrowserClient): Appl
           agentId: null,
           name: "Assistant",
           avatar: null,
-          avatarSource: null,
           avatarStatus: null,
           avatarReason: null,
         },
@@ -475,6 +473,11 @@ export function createSessionContext(
         terminalEnabled: false,
       },
     },
+    runtimeConfig: {
+      state: { configNeedsApply: false, configSnapshot: null },
+      ensureLoaded: async () => undefined,
+      subscribe: () => () => {},
+    },
     chatSubmissions: createChatSubmissions(),
     nativeChatDrafts: { subscribe: () => () => undefined },
     placementStartup: {
@@ -551,7 +554,6 @@ export function createTestChatPane(params: {
       connected: true,
       connectionEpoch: 4,
       hello: sessionMutationGatewayHello(),
-      sidebarFocusPanelId: "",
       sidebarLayout: { columns: [] },
       // Minimal scroll host so scheduleChatScroll is a no-op instead of throwing.
       handleChatScroll: vi.fn(),
@@ -561,10 +563,7 @@ export function createTestChatPane(params: {
   state.updateSidebarLayout = (layout) => {
     state.sidebarLayout = layout;
   };
-  state.updateSidebarActivePanel = (panelId) => {
-    state.sidebarFocusPanelId = panelId;
-    state.sidebarFocusVersion += 1;
-  };
+  state.updateSidebarActivePanel = () => {};
   pane.state = state;
   pane.chatState.attach(state);
   pane.connectedClient = params.client;

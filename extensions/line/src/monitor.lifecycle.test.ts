@@ -6,6 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { ChannelInboundTurnPlan } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { createMockIncomingRequest, withServer } from "openclaw/plugin-sdk/test-env";
 import { WEBHOOK_IN_FLIGHT_DEFAULTS } from "openclaw/plugin-sdk/webhook-request-guards";
@@ -152,6 +153,7 @@ async function expectWebhookResponse(
     marker: response.headers.get("x-openclaw-delivery-accepted"),
     body: await response.json(),
   }).toEqual({ status, marker, body });
+  expect(response.headers.get("content-type")).toBe("application/json");
 }
 
 describe("monitorLineProvider lifecycle", () => {
@@ -352,6 +354,57 @@ describe("monitorLineProvider lifecycle", () => {
           expect(line).toBeUndefined();
           expect(prepared?.text).toBe("Approve this run? Approve / Deny");
         }
+      } finally {
+        await monitor.stop();
+      }
+    },
+  );
+
+  it.each<[string, ReplyPayload, "final" | "block", string | undefined, boolean, boolean]>([
+    ["push-only text", { text: "hello" }, "final", undefined, false, true],
+    ["unused token", { text: "hello" }, "final", "reply-token", false, false],
+    ["consumed token", { text: "hello" }, "final", "reply-token", true, true],
+    [
+      "rich content",
+      { text: "hello", channelData: { line: { quickReplies: ["One"] } } },
+      "final",
+      undefined,
+      true,
+      false,
+    ],
+    [
+      "media",
+      { text: "photo", mediaUrl: "https://example.com/image.png" },
+      "final",
+      undefined,
+      true,
+      false,
+    ],
+    ["non-final", { text: "hello" }, "block", undefined, true, false],
+  ])(
+    "selects durable delivery for %s",
+    async (_name, payload, kind, replyToken, consumeToken, durable) => {
+      const resolvedTurn = await captureTurn();
+      const monitor = await startMonitor();
+      try {
+        await dispatchInbound({ from: "U123", replyToken });
+        const delivery = expectDefined(resolvedTurn(), "LINE inbound turn").delivery;
+        if (consumeToken) {
+          const { deliverLineAutoReply } = await import("./auto-reply-delivery.js");
+          vi.mocked(deliverLineAutoReply).mockResolvedValueOnce({
+            status: "delivered",
+            replyTokenUsed: true,
+            visibleReplySent: true,
+          });
+          await expectDefined(delivery.deliver, "LINE direct delivery")(
+            { text: "first block" },
+            { kind: "block" },
+          );
+        }
+        if (typeof delivery.durable !== "function") {
+          throw new Error("LINE turn must select durable delivery per reply");
+        }
+        expect(await delivery.durable(payload, { kind })).toEqual(durable ? { to: "U123" } : false);
       } finally {
         await monitor.stop();
       }

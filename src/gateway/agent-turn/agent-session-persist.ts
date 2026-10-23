@@ -515,7 +515,6 @@ export async function persistAgentSessionPhase(params: {
       });
     }
     emitGatewaySessionStartPluginHook({
-      cfg: params.cfg,
       sessionKey: params.canonicalSessionKey,
       sessionId: resolvedSessionId,
       resumedFrom: previousSessionId,

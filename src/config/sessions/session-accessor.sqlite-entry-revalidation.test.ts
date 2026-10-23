@@ -313,6 +313,7 @@ it.each(["fresh", "sibling", "same-connection"] as const)(
     const connection = fresh ?? requireNativeSqliteDatabase(database.db);
     const original = {
       sessionId: "session-1",
+      executionPolicy: {},
       lifecycleRevision: undefined,
       lifecycleRunId: undefined,
       activeWriterRunId: undefined,
@@ -371,6 +372,7 @@ it("preserves parser values and last duplicate owner fields through native admis
   const entry = currentFacts(database);
   const expected = {
     sessionId: "session-1",
+    executionPolicy: {},
     lifecycleRevision: 42,
     deviceFolder: { deviceId: "paired-host", path: "/home/example/project" },
     lifecycleRunId: null,

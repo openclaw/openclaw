@@ -209,10 +209,12 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   }
 
   async function loadFixtureMessages(): Promise<Array<{ message?: unknown }>> {
-    return (await loadTranscriptEvents(transcriptScope())) as Array<{
-      message?: unknown;
-    }>;
+    return (await loadTranscriptEvents(transcriptScope())) as Array<{ message?: unknown }>;
   }
+  async function storedMessages() {
+    return (await loadFixtureMessages()).flatMap(({ message }) => (message ? [message] : []));
+  }
+  const latestText = () => readLatestAssistantTextFromSessionTranscript(transcriptScope());
 
   it("appends replayable, redacted command exchanges exactly once without changing prior rows", async () => {
     await writeTranscriptStore();
@@ -240,12 +242,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     const messages = after.slice(before.length).map((event) => event.message);
     expect(messages).toEqual([
       textMessage("user", "/login openai"),
-      expect.objectContaining({
-        role: "assistant",
-        content: [
-          { type: "text", text: "Sign in at [login URL redacted]\nCode: [login code redacted]" },
-        ],
-      }),
+      textMessage("assistant", "Sign in at [login URL redacted]\nCode: [login code redacted]"),
       textMessage("assistant", "Login complete."),
     ]);
     expect(messages.some(isTranscriptOnlyOpenClawAssistantMessage)).toBe(false);
@@ -520,26 +517,20 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
   it("idempotently appends identified channel finals while preserving repeated replies", async () => {
     await writeTranscriptStore();
-    const first = await appendMirror("Repeated command reply", {
-      idempotencyKey: "channel-final:message-1:0",
-      deliveryMirror: { kind: "channel-final", sourceMessageId: "message-1" },
-    });
-    const replay = await appendMirror("Repeated command reply", {
-      idempotencyKey: "channel-final:message-1:0",
-      deliveryMirror: { kind: "channel-final", sourceMessageId: "message-1" },
-    });
-    const nextTurn = await appendMirror("Repeated command reply", {
-      idempotencyKey: "channel-final:message-2:0",
-      deliveryMirror: { kind: "channel-final", sourceMessageId: "message-2" },
-    });
+    const appendFinal = (sourceMessageId: string) =>
+      appendMirror("Repeated command reply", {
+        idempotencyKey: `channel-final:${sourceMessageId}:0`,
+        deliveryMirror: { kind: "channel-final", sourceMessageId },
+      });
+    const first = await appendFinal("message-1");
+    const replay = await appendFinal("message-1");
+    const nextTurn = await appendFinal("message-2");
     assertOk(first);
     assertOk(replay);
     assertOk(nextTurn);
     expect(replay.messageId).toBe(first.messageId);
     expect(nextTurn.messageId).not.toBe(first.messageId);
-    const messages = (await loadFixtureMessages()).flatMap((entry) =>
-      entry.message ? [entry.message] : [],
-    ) as Array<{ openclawDeliveryMirror?: unknown }>;
+    const messages = (await storedMessages()) as Array<{ openclawDeliveryMirror?: unknown }>;
     expect(messages).toHaveLength(2);
     expect(messages[0]?.openclawDeliveryMirror).toEqual({
       kind: "channel-final",
@@ -552,8 +543,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     const exactResult = await appendText("Hello before the large user entry");
     assertOk(exactResult);
     await persistMessages([{ message: { role: "user", content: "x".repeat(128 * 1024) } }]);
-    const latestAssistantText =
-      await readLatestAssistantTextFromSessionTranscript(transcriptScope());
+    const latestAssistantText = await latestText();
     expect(latestAssistantText).toMatchObject({
       id: exactResult.messageId,
       text: "Hello before the large user entry",
@@ -561,10 +551,10 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     const mirrorResult = await appendMirror("Hello before the large user entry");
     assertOk(mirrorResult);
     expect(mirrorResult.messageId).not.toBe(exactResult.messageId);
-    const records = await loadFixtureMessages();
-    const messages = records.flatMap((record) =>
-      record.message ? [record.message] : [],
-    ) as Array<{ model?: string; content?: Array<{ text?: string }> }>;
+    const messages = (await storedMessages()) as Array<{
+      model?: string;
+      content?: Array<{ text?: string }>;
+    }>;
     expect(messages).toHaveLength(3);
     expect(messages[2]).toMatchObject({
       model: "delivery-mirror",
@@ -730,8 +720,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       display: false,
     };
     await appendExact({ message: hiddenAssistant });
-    const latestAssistantText =
-      await readLatestAssistantTextFromSessionTranscript(transcriptScope());
+    const latestAssistantText = await latestText();
     expect(latestAssistantText).toMatchObject({
       id: finalResult.messageId,
       text: "Complete final answer",
@@ -742,18 +731,13 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     await writeTranscriptStore();
     const mirrorResult = await appendMirror("Only delivery mirror");
     assertOk(mirrorResult);
-    const latestAssistantText =
-      await readLatestAssistantTextFromSessionTranscript(transcriptScope());
+    const latestAssistantText = await latestText();
     expect(latestAssistantText).toBeUndefined();
   });
 
   it("scans past trailing assistant entries without visible text", async () => {
     await writeTranscriptStore();
-    const assistantResult = await appendExact({
-      message: createExactAssistantMessage({
-        text: "Visible answer before tool call",
-      }),
-    });
+    const assistantResult = await appendText("Visible answer before tool call");
     assertOk(assistantResult);
     const toolOnlyResult = await appendExact({
       message: {
@@ -850,9 +834,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     const mirrorResult = await appendMirror("Maniple List Workers");
     assertOk(mirrorResult);
     expect(mirrorResult.messageId).not.toBe(toolCallResult?.messageId);
-    const messagesAfterMirror = (await loadFixtureMessages()).flatMap((entry) =>
-      entry.message ? [entry.message] : [],
-    ) as Array<{ api?: string; model?: string }>;
+    const messagesAfterMirror = (await storedMessages()) as Array<{ api?: string; model?: string }>;
     expect(messagesAfterMirror).toHaveLength(2);
     expect(messagesAfterMirror[1]).toMatchObject({
       api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
@@ -869,9 +851,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         },
       },
     ]);
-    const messages = (await loadFixtureMessages()).flatMap((entry) =>
-      entry.message ? [entry.message as TranscriptRepairMessage] : [],
-    );
+    const messages = (await storedMessages()) as TranscriptRepairMessage[];
     expect(messages.map((message) => message.role)).toEqual([
       "assistant",
       "assistant",
@@ -903,9 +883,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     assertOk(await append());
     assertOk(await append());
     expect(beforeMessageWrite).toHaveBeenCalledTimes(keyed ? 1 : 2);
-    const messages = (await loadFixtureMessages()).flatMap((entry) =>
-      entry.message ? [entry.message] : [],
-    );
+    const messages = await storedMessages();
     expect(messages).toEqual([
       expect.objectContaining({
         role: "assistant",

@@ -81,6 +81,8 @@ it.each([
 ] as const)(
   "binds prepared hosted search to current native authority for transition %s",
   async (scenario) => {
+    const tempDir = fixture.tempDir;
+    const localPath = (name: string) => path.join(tempDir, name);
     const coreDispatch = scenario.startsWith("core-btw-");
     const nativeOnly = scenario === "core-btw-native-only";
     const nativeAuth = nativeOnly || scenario.startsWith("core-btw-native-");
@@ -90,51 +92,46 @@ it.each([
     const sideQuestion = coreDispatch || scenario.startsWith("btw-");
     const modelLess = scenario === "model-less";
     const transition = scenario.replace(/^btw-/, "");
-    const params = fixture.createParams(
-      path.join(fixture.tempDir, "session.jsonl"),
-      fixture.tempDir,
-      {
-        sessionKey: `agent:main:dashboard:native-search-${scenario}`,
-        sessionId: `native-search-${scenario}`,
-        provider: "openai",
-        prompt: "Synthetic native search policy proof.",
-      },
-    );
+    const params = fixture.createParams(localPath("session.jsonl"), tempDir, {
+      sessionKey: `agent:main:dashboard:native-search-${scenario}`,
+      sessionId: `native-search-${scenario}`,
+      provider: "openai",
+      prompt: "Synthetic native search policy proof.",
+    });
     params.config = {
-      ...(coreDispatch
-        ? {
-            agents: { defaults: { workspace: fixture.tempDir } },
-            models: {
-              providers: {
-                openai: {
-                  api: "openai-responses" as const,
-                  baseUrl: "https://api.openai.com/v1",
-                  apiKey: "synthetic-native-dispatch-key",
-                  models: ["search-outer", "search-allowed", "search-changed"].map(
-                    (id): ModelDefinitionConfig => ({
-                      id,
-                      name: id,
-                      reasoning: true,
-                      input: ["text", "image"],
-                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                      contextWindow: 32_000,
-                      maxTokens: 4_096,
-                    }),
-                  ),
-                },
-              },
-            },
-          }
-        : {}),
       tools: {
         web: { search: { enabled: true } },
         byProvider: { "openai/search-denied": { deny: ["web_search"] } },
       },
     };
+    if (coreDispatch) {
+      const models = ["search-outer", "search-allowed", "search-changed"].map(
+        (id): ModelDefinitionConfig => ({
+          id,
+          name: id,
+          reasoning: true,
+          input: ["text", "image"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 32_000,
+          maxTokens: 4_096,
+        }),
+      );
+      params.config.agents = { defaults: { workspace: tempDir } };
+      params.config.models = {
+        providers: {
+          openai: {
+            api: "openai-responses",
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: "synthetic-native-dispatch-key",
+            models,
+          },
+        },
+      };
+    }
     fixture.setCodexTestModelSupportsTools(params, true);
     fixture.setCodexTestToolFactory(params, () => []);
-    params.agentDir = path.join(fixture.tempDir, "agent");
-    const codexHome = path.join(fixture.tempDir, "native-codex-home");
+    params.agentDir = localPath("agent");
+    const codexHome = localPath("native-codex-home");
     vi.stubEnv("CODEX_HOME", codexHome);
     const scope = {
       agentId: "main",
@@ -152,23 +149,34 @@ it.each([
         bindingStore: fixture.testCodexAppServerBindingStore,
         pluginConfig,
       });
+      const bindingScope = {
+        kind: "session" as const,
+        agentId: "main",
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+      };
+      const requesterPolicy = {
+        spawnedBy: "agent:main:parent",
+        spawnDepth: 1,
+        inheritedToolPolicyVersion: 1 as const,
+        inheritedToolDeny: ["web_search"],
+      };
       const revokeRequester = () =>
         patchSessionEntry({
           ...scope,
           update: () => ({
+            ...requesterPolicy,
             spawnedBy:
               transition === "requester-reassigned"
                 ? "agent:main:other-parent"
-                : "agent:main:parent",
-            spawnDepth: 1,
-            inheritedToolPolicyVersion: 1,
+                : requesterPolicy.spawnedBy,
             inheritedToolAllow: [],
             inheritedToolDeny: transition === "requester-reassigned" ? [] : ["web_search"],
           }),
         });
       const binding = {
         threadId: "thread-native-search",
-        cwd: fixture.tempDir,
+        cwd: tempDir,
         historyCoveredThrough: "2026-01-01T00:00:00.000Z",
         ...(coreDispatch && !nativeAuth
           ? {}
@@ -191,15 +199,7 @@ it.each([
       await fixture.writeNativeCatalogFixture(binding.rolloutPath, binding.threadId, []);
       await fixture.writeCodexAppServerBinding(params.sessionFile, binding);
       if (sideQuestion) {
-        await fixture.testCodexAppServerBindingStore.mutate(
-          {
-            kind: "session",
-            agentId: "main",
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-          },
-          { kind: "set", binding },
-        );
+        await fixture.testCodexAppServerBindingStore.mutate(bindingScope, { kind: "set", binding });
       }
       let preparationReply = false;
       let mutation: Promise<void> | undefined;
@@ -224,12 +224,10 @@ it.each([
           preparationReply = true;
           // Delay only delivery of a real worker result while the native owner changes models.
           mutation = (async () => {
-            if (transition === "changed") {
-              await fixture.writeCodexAppServerBinding(params.sessionFile, {
-                ...binding,
-                model: "search-denied",
-              });
-            }
+            await fixture.writeCodexAppServerBinding(params.sessionFile, {
+              ...binding,
+              model: "search-denied",
+            });
             emit.call(this, event, ...args);
           })();
           return true;
@@ -261,9 +259,9 @@ it.each([
           beginAgentDeletionJournal({
             agentId: "native-search-retiring",
             operationId: "native-search-preparation",
-            agentDir: path.join(fixture.tempDir, "retiring-agent"),
-            sessionsDir: path.join(fixture.tempDir, "retiring-sessions"),
-            workspaceDir: path.join(fixture.tempDir, "retiring-workspace"),
+            agentDir: localPath("retiring-agent"),
+            sessionsDir: localPath("retiring-sessions"),
+            workspaceDir: localPath("retiring-workspace"),
             deleteFiles: false,
             phase: "draining",
           });
@@ -299,6 +297,12 @@ it.each([
       const missingRequesterId = `native-search-requester-${transition}`;
       const requesterScope = { ...scope, sessionKey: "agent:main:dashboard:id-requester" };
       const lateIdChange = transition.startsWith("late-requester-id-");
+      const requesterChangesAtDispatch =
+        !sideQuestion &&
+        (transition === "requester-revoked" ||
+          transition === "requester-reassigned" ||
+          transition === "missing-requester-id-created" ||
+          lateIdChange);
       if (
         transition === "late-requester-id-removed" ||
         transition === "late-requester-id-reassigned"
@@ -344,66 +348,65 @@ it.each([
         };
       }
       const resolvePolicy = vi.spyOn(webSearchPolicy, "resolveWebSearchToolPolicy");
+      const threadResult = (
+        threadId: string,
+        model: string = nativeModel,
+        modelProvider: string = nativeProvider,
+      ) => ({
+        ...fixture.threadStartResult(threadId, { cwd: tempDir }),
+        model,
+        modelProvider,
+      });
+      const staticReplies = new Map<string, unknown>([
+        ["modelProvider/capabilities/read", { imageGeneration: false, webSearch: true }],
+        ["config/read", { config: {}, origins: {}, layers: [] }],
+        ["configRequirements/read", { requirements: null }],
+        ...["skills/list", "thread/backgroundTerminals/list"].map((method): [string, unknown] => [
+          method,
+          { data: [], nextCursor: null },
+        ]),
+      ]);
       const wire = await fixture.createLeasedCodexLifecycleHarness({
-        agentDir: path.join(fixture.tempDir, "wire-agent"),
+        agentDir: localPath("wire-agent"),
         codexHome,
-        persistedThreads: [
-          {
-            ...fixture.threadStartResult(binding.threadId, { cwd: fixture.tempDir }),
-            model: nativeModel,
-            modelProvider: nativeProvider,
-          },
-        ],
+        persistedThreads: [threadResult(binding.threadId)],
         respond(method) {
           if (method === "thread/resume") {
-            return {
-              ...fixture.threadStartResult(binding.threadId, { cwd: fixture.tempDir }),
-              model: transition === "changed" ? "search-denied" : "search-allowed",
-              modelProvider: "openai",
-            };
+            return threadResult(
+              binding.threadId,
+              transition === "changed" ? "search-denied" : "search-allowed",
+              "openai",
+            );
           }
           if (method === "thread/fork") {
-            const response = {
-              ...fixture.threadStartResult("side-thread", { cwd: fixture.tempDir }),
-              model: nativeModel,
-              modelProvider: nativeProvider,
-            };
+            const response = threadResult("side-thread");
             wire.seed(response, { loaded: true, subscribed: true });
             return response;
           }
           if (method === "turn/start") {
             if (sideQuestion) {
-              queueMicrotask(() => {
-                wire.notify({
-                  method: "turn/completed",
-                  params: {
-                    threadId: "side-thread",
-                    turn: {
-                      id: "turn-1",
-                      status: "completed",
-                      items: [{ id: "answer", type: "agentMessage", text: "Synthetic answer." }],
-                    },
-                  },
-                });
-              });
+              queueMicrotask(() => completeTurn("side-thread", true));
             }
             return fixture.turnStartResult();
           }
-          if (method === "modelProvider/capabilities/read") {
-            return { imageGeneration: false, webSearch: true };
-          }
-          if (method === "config/read") {
-            return { config: {}, origins: {}, layers: [] };
-          }
-          if (method === "configRequirements/read") {
-            return { requirements: null };
-          }
-          if (method === "skills/list" || method === "thread/backgroundTerminals/list") {
-            return { data: [], nextCursor: null };
-          }
-          return {};
+          return staticReplies.get(method) ?? {};
         },
       });
+      function completeTurn(threadId: string, answer = false) {
+        return wire.notify({
+          method: "turn/completed",
+          params: {
+            threadId,
+            turn: {
+              id: "turn-1",
+              status: "completed",
+              items: answer
+                ? [{ id: "answer", type: "agentMessage", text: "Synthetic answer." }]
+                : [],
+            },
+          },
+        });
+      }
       vi.spyOn(fixture.CodexAppServerClient, "start").mockResolvedValue(wire.client);
       fixture.setCodexAppServerClientFactoryForTest(async (_start, _auth, _dir, _config, options) =>
         fixture.getLeasedSharedCodexAppServerClient({
@@ -414,13 +417,7 @@ it.each([
         }),
       );
       let requesterChanged = false;
-      if (
-        !sideQuestion &&
-        (transition === "requester-revoked" ||
-          transition === "requester-reassigned" ||
-          transition === "missing-requester-id-created" ||
-          lateIdChange)
-      ) {
+      if (requesterChangesAtDispatch) {
         const dispatch = fixture.CodexAppServerClient.prototype.request.bind(wire.client);
         wire.request.mockImplementation((method, body, options) =>
           method !== "thread/resume"
@@ -452,18 +449,8 @@ it.each([
                   if (!requesterChanged) {
                     if (transition === "missing-requester-id-created") {
                       await upsertSessionEntryCore(
-                        {
-                          ...scope,
-                          sessionKey: "agent:main:dashboard:new-requester",
-                        },
-                        {
-                          sessionId: missingRequesterId,
-                          updatedAt: 2,
-                          spawnedBy: "agent:main:parent",
-                          spawnDepth: 1,
-                          inheritedToolPolicyVersion: 1,
-                          inheritedToolDeny: ["web_search"],
-                        },
+                        { ...scope, sessionKey: "agent:main:dashboard:new-requester" },
+                        { ...requesterPolicy, sessionId: missingRequesterId, updatedAt: 2 },
                       );
                     } else {
                       await revokeRequester();
@@ -480,22 +467,25 @@ it.each([
               }),
         );
       }
-      const sideParams = {
+      const sideContext = {
         cfg: params.config!,
         agentDir: params.agentDir!,
         agentId: "main",
         provider: "openai",
+        sessionKey: params.sessionKey,
+        storePath: scope.storePath,
+        isNewSession: false,
+        resolvedReasoningLevel: "off" as const,
+      };
+      const sideParams = {
+        ...sideContext,
         model: "search-allowed",
         runtimeModel: params.model,
         question: "Synthetic side question.",
         sessionEntry: { sessionId: params.sessionId, updatedAt: 1 },
         sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
         sessionFile: params.sessionFile,
-        storePath: scope.storePath,
-        workspaceDir: fixture.tempDir,
-        isNewSession: false,
-        resolvedReasoningLevel: "off" as const,
+        workspaceDir: tempDir,
         hostCapabilities: params.hostCapabilities,
         preparedWebSearchPolicy: prepared.preparedWebSearchPolicy,
         preparedRuntimeAuth: {
@@ -515,7 +505,7 @@ it.each([
       if (coreDispatch) {
         const generation = createModelGenerationFixture({
           agentDir: params.agentDir!,
-          workspaceDir: fixture.tempDir,
+          workspaceDir: tempDir,
           config: params.config!,
           label: "native-btw-host",
           provider: "openai",
@@ -551,34 +541,21 @@ it.each([
           async (input: Parameters<NonNullable<typeof harness.runSideQuestion>>[0]) => {
             coreInput = input;
             if (scenario === "core-btw-host-changed") {
-              await fixture.testCodexAppServerBindingStore.mutate(
-                {
-                  kind: "session",
-                  agentId: "main",
-                  sessionId: params.sessionId,
-                  sessionKey: params.sessionKey,
-                },
-                { kind: "set", binding: { ...binding, model: "search-changed" } },
-              );
+              await fixture.testCodexAppServerBindingStore.mutate(bindingScope, {
+                kind: "set",
+                binding: { ...binding, model: "search-changed" },
+              });
             }
             if (ownershipChanged) {
               expect(
-                await fixture.testCodexAppServerBindingStore.mutate(
-                  {
-                    kind: "session",
-                    agentId: "main",
-                    sessionId: params.sessionId,
-                    sessionKey: params.sessionKey,
+                await fixture.testCodexAppServerBindingStore.mutate(bindingScope, {
+                  kind: "patch",
+                  threadId: binding.threadId,
+                  patch: {
+                    connectionScope: nativeAuth ? undefined : "supervision",
+                    supervisionSourceThreadId: nativeAuth ? undefined : binding.threadId,
                   },
-                  {
-                    kind: "patch",
-                    threadId: binding.threadId,
-                    patch: {
-                      connectionScope: nativeAuth ? undefined : "supervision",
-                      supervisionSourceThreadId: nativeAuth ? undefined : binding.threadId,
-                    },
-                  },
-                ),
+                }),
               ).toBe(true);
             }
             return await harness.runSideQuestion!(input);
@@ -586,10 +563,7 @@ it.each([
         );
         registerAgentHarness({ ...harness, runSideQuestion: dispatch });
         coreRun = runBtwSideQuestion({
-          cfg: params.config!,
-          agentDir: params.agentDir!,
-          agentId: "main",
-          provider: "openai",
+          ...sideContext,
           model: "search-outer",
           question: "Synthetic core side question.",
           sessionEntry: {
@@ -599,10 +573,6 @@ it.each([
             agentHarnessId: "codex",
             modelSelectionLocked: true,
           },
-          sessionKey: params.sessionKey,
-          storePath: scope.storePath,
-          resolvedReasoningLevel: "off",
-          isNewSession: false,
           authorityRunId: "native-btw-core",
         });
       }
@@ -618,14 +588,7 @@ it.each([
       const complete =
         "waitForTurnAccepted" in run
           ? run.waitForTurnAccepted().then(
-              () =>
-                wire.notify({
-                  method: "turn/completed",
-                  params: {
-                    threadId: binding.threadId,
-                    turn: { id: "turn-1", status: "completed", items: [] },
-                  },
-                }),
+              () => completeTurn(binding.threadId),
               () => {},
             )
           : Promise.resolve();
@@ -637,12 +600,8 @@ it.each([
       const requests = wire.writes.map(
         (line) => JSON.parse(line) as { method: string; params?: unknown },
       );
-      const nativeWrites = requests.filter(
-        ({ method }) =>
-          method === "thread/resume" ||
-          method === "thread/start" ||
-          method === "thread/fork" ||
-          method === "turn/start",
+      const nativeWrites = requests.filter(({ method }) =>
+        ["thread/resume", "thread/start", "thread/fork", "turn/start"].includes(method),
       );
       const nativeSearch = nativeWrites
         .filter(({ method }) => method !== "turn/start")
@@ -651,19 +610,7 @@ it.each([
             ? requestParams.config.web_search
             : undefined,
         );
-      console.log(
-        `[native-search] transition=${scenario} thread-or-turn-writes=${nativeWrites.length} thread-search=${JSON.stringify(nativeSearch)} outcome=${"error" in outcome ? "rejected" : "completed"}`,
-      );
-      if (coreDispatch && "error" in outcome) {
-        console.log(`[native-search] core-error=${String(outcome.error)}`);
-      }
-      if (ownershipChanged) {
-        expect(outcome).toHaveProperty("error");
-        expect("error" in outcome && outcome.error).toMatchObject({
-          message: expect.stringContaining("Codex native session ownership is missing or changed"),
-        });
-        expect(nativeWrites).toEqual([]);
-      } else if (modelLess) {
+      if (modelLess) {
         // A supervised cached-search thread may refuse a disabled policy replacement.
         expect(nativeSearch.every((mode) => mode === "disabled")).toBe(true);
         if ("error" in outcome) {
@@ -676,29 +623,25 @@ it.each([
           expect(nativeWrites.filter(({ method }) => method === "turn/start")).toHaveLength(1);
         }
       } else if (
-        transition !== "unchanged" &&
-        scenario !== "core-btw-host-unchanged" &&
-        scenario !== "core-btw-native-unchanged" &&
-        !nativeOnly
+        ownershipChanged ||
+        (transition !== "unchanged" &&
+          scenario !== "core-btw-host-unchanged" &&
+          scenario !== "core-btw-native-unchanged" &&
+          !nativeOnly)
       ) {
-        expect(outcome).toHaveProperty("error");
-        expect("error" in outcome && outcome.error).toMatchObject({
-          message: expect.stringMatching(
-            scenario === "core-btw-host-changed"
-              ? /Codex native session ownership is missing or changed/
-              : transition === "changed"
-                ? /Native model changed after web search policy preparation/
-                : /policy changed|superseded|no longer active/,
-          ),
+        expect(outcome).toMatchObject({
+          error: {
+            message: expect.stringMatching(
+              ownershipChanged || scenario === "core-btw-host-changed"
+                ? /Codex native session ownership is missing or changed/
+                : transition === "changed"
+                  ? /Native model changed after web search policy preparation/
+                  : /policy changed|superseded|no longer active/,
+            ),
+          },
         });
         expect(nativeWrites).toEqual([]);
-        if (
-          !sideQuestion &&
-          (transition === "requester-revoked" ||
-            transition === "requester-reassigned" ||
-            transition === "missing-requester-id-created" ||
-            lateIdChange)
-        ) {
+        if (requesterChangesAtDispatch) {
           expect(requesterChanged).toBe(true);
         }
       } else {
@@ -720,32 +663,30 @@ it.each([
             modelContextWindowTokens: 32_000,
           });
         }
-        expect(coreInput?.runtimeModel).toMatchObject({
+        const modelRoute = {
           provider: nativeProvider,
-          id: nativeModel,
-        });
-        expect(coreInput?.preparedRuntimeAuth.plan).toMatchObject({
-          providerForAuth: nativeProvider,
           modelId: nativeModel,
-          ...(nativeAuth
-            ? { harnessAuthProvider: "openai" }
-            : {
-                modelRoute: {
-                  provider: nativeProvider,
-                  modelId: nativeModel,
-                  authRequirement: "api-key",
-                },
-              }),
+          authRequirement: "api-key",
+        };
+        expect(coreInput).toMatchObject({
+          runtimeModel: { provider: nativeProvider, id: nativeModel },
+          preparedRuntimeAuth: {
+            plan: {
+              providerForAuth: nativeProvider,
+              modelId: nativeModel,
+              ...(nativeAuth ? { harnessAuthProvider: "openai" } : { modelRoute }),
+            },
+          },
+          preparedWebSearchPolicy: {
+            allowed: true,
+            modelRef: { provider: nativeProvider, model: nativeModel },
+          },
         });
         if (nativeAuth) {
           expect(coreInput?.preparedRuntimeAuth.resolvedApiKey).toBeUndefined();
           expect(coreInput?.preparedRuntimeAuth.authProfileStore.profiles).toEqual({});
           expect(coreInput?.preparedRuntimeAuth.plan.modelRoute).toBeUndefined();
         }
-        expect(coreInput?.preparedWebSearchPolicy).toMatchObject({
-          allowed: true,
-          modelRef: { provider: nativeProvider, model: nativeModel },
-        });
       }
     } finally {
       close();

@@ -51,11 +51,8 @@ function expectTemplate(
 }
 
 describe("vLLM streaming", () => {
-  it("patches configured Qwen models unless reasoning is explicitly disabled", () => {
-    expectTemplate(
-      { format: "chat-template", model: { reasoning: undefined } },
-      { enable_thinking: true, preserve_thinking: true },
-    );
+  it("patches configured Qwen reasoning models and skips non-reasoning models", () => {
+    expectTemplate({ format: "chat-template" }, { enable_thinking: true, preserve_thinking: true });
     expect(
       capturePayload({
         format: "chat-template",
@@ -165,6 +162,16 @@ describe("vLLM streaming", () => {
   it("disables thinking for an underscore-prefixed Nemotron alias", () => {
     expectTemplate(
       { thinkingLevel: "off", model: { id: "yk_nemotron-3-super" } },
+      { enable_thinking: false, force_nonempty_content: true },
+    );
+  });
+
+  it.each([
+    { kind: "array", template: ["invalid"] },
+    { kind: "scalar", template: false },
+  ])("replaces $kind template kwargs with model defaults", ({ template }) => {
+    expectTemplate(
+      { thinkingLevel: "off", initialPayload: { chat_template_kwargs: template } },
       { enable_thinking: false, force_nonempty_content: true },
     );
   });

@@ -50,33 +50,14 @@ describe("sub-cli descriptors", () => {
     expect(metadataNames).not.toContain("qa");
   });
 
-  it("keeps all sub-cli filter surfaces aligned when private QA is disabled (#83926)", async () => {
-    delete process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
-
-    const {
-      getSubCliEntriesCore,
-      getSubCliCommandsWithSubcommands,
-      getSubCliParentDefaultHelpCommands,
-    } = await importSubCliDescriptors();
-    expect(descriptorNames(getSubCliEntriesCore())).not.toContain("qa");
-    expect(getSubCliCommandsWithSubcommands()).not.toContain("qa");
-    expect(getSubCliParentDefaultHelpCommands()).not.toContain("qa");
-  });
-
   it("includes qa in parsing metadata and registrations when private QA is enabled", async () => {
     process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = "1";
 
-    const {
-      getSubCliCommandsWithSubcommands,
-      getSubCliEntriesCore,
-      getSubCliParentDefaultHelpCommands,
-    } = await importSubCliDescriptors();
+    const { getSubCliEntriesCore } = await importSubCliDescriptors();
     const { SUB_CLI_COMMAND_METADATA } = await import("./subcli-command-metadata.js");
     const metadataNames = descriptorNames(SUB_CLI_COMMAND_METADATA);
 
     expect(metadataNames).toEqual(descriptorNames(getSubCliEntriesCore()));
     expect(metadataNames).toContain("qa");
-    expect(getSubCliCommandsWithSubcommands()).toContain("qa");
-    expect(getSubCliParentDefaultHelpCommands()).not.toContain("qa");
   });
 });

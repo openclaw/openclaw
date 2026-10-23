@@ -264,9 +264,7 @@ export async function activateSetupInference(
 async function activateCandidate(
   params: ActivateSetupInferenceParams,
 ): Promise<ActivateSetupInferenceResult> {
-  const deps = params.deps ?? {};
-  const readSnapshot =
-    deps.readConfigFileSnapshot ?? (await import("../config/config.js")).readConfigFileSnapshot;
+  const { readConfigFileSnapshot: readSnapshot } = await import("../config/config.js");
   const snapshot = await readSnapshot();
   if (snapshot.exists && !snapshot.valid) {
     throw new Error(invalidSetupConfigError(snapshot));
@@ -275,7 +273,6 @@ async function activateCandidate(
   const routeAgentId = resolveAmbientOwnerAgentId(cfg, params.agentId);
   const ctx: StageContext = {
     params,
-    deps,
     snapshot,
     cfg,
     routeAgentId,
@@ -331,10 +328,9 @@ async function verifyAndActivateCandidate(
   preparedGeneration: SetupInferencePluginGeneration | undefined,
   runtimeCredential?: SetupRuntimeCredential,
 ): Promise<ActivateSetupInferenceResult> {
-  const { params, deps, snapshot, cfg, routeAgentId } = ctx;
+  const { params, snapshot, cfg, routeAgentId } = ctx;
   const source = snapshot.sourceConfig;
-  const readSnapshot =
-    deps.readConfigFileSnapshot ?? (await import("../config/config.js")).readConfigFileSnapshot;
+  const { readConfigFileSnapshot: readSnapshot } = await import("../config/config.js");
   const catalogPreference = params.automaticSetup
     ? false
     : resolveSetupNativeSessionCatalogPreference({

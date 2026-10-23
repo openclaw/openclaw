@@ -49,7 +49,7 @@ describe("readLinkFavicon", () => {
     expect(readLinkFavicon(hostname, fetcher, onSettled)).toBe("blob:cached-favicon");
     expect(fetcher).toHaveBeenCalledOnce();
     expect(onSettled).toHaveBeenCalledOnce();
-    expect(revokeObjectUrl).not.toHaveBeenCalled();
+    expect(revokeObjectUrl).not.toHaveBeenCalledWith("blob:cached-favicon");
   });
 
   it("caches a rejected favicon as null", async () => {

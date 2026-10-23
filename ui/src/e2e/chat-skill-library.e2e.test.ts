@@ -61,7 +61,7 @@ async function openSkills(page: Page) {
     await menu.getByRole("menuitem", { name: "Back", exact: true }).click();
   }
   const root = menu.getByRole("menuitem", { name: "Skills", exact: true });
-  if (await root.isVisible()) {
+  if ((await menu.getAttribute("data-view")) === "root") {
     await root.click();
   }
   await menu.getByText("Selected for this session", { exact: true }).waitFor();
@@ -242,7 +242,7 @@ suite.define(() => {
 
       menu = await openSkills(page);
       await item("Back").click();
-      await item(/^Connectors/u, false).click();
+      await item(/^Plugins/u, false).click();
       await item("Add MCP server…").waitFor();
       expect(await menu.getByText("Selected for this session", { exact: true }).count()).toBe(0);
       expect(await menu.getByText("Add from your libraries", { exact: true }).count()).toBe(0);

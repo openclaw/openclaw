@@ -88,10 +88,7 @@ export function timeoutSecondsFromMs(timeoutMs?: number): string | undefined {
 }
 
 export function buildLocalQueuedPrompt(queue: NonNullable<LocalRunState["pendingQueue"]>): string {
-  const summary = previewQueueSummaryPrompt({
-    state: queue,
-    noun: "message",
-  });
+  const summary = previewQueueSummaryPrompt(queue);
   const prompt =
     queue.mode === "collect" && queue.messages.length > 1
       ? buildCollectPrompt({

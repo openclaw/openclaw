@@ -85,9 +85,8 @@ publication.subscribeFacts((change) => {
 export const pluginStatePublication = {
   stagePostimage: stagePluginStatePostimage,
   stageDeletions: stagePluginStateDeletions,
-  /** Install/invalidate prepared facts only; storage mutations belong in postcommit observers. */
+  /** Install/invalidate prepared facts only. */
   subscribeFacts: publication.subscribeFacts,
-  subscribe: publication.subscribe,
 };
 
 /** Record the actual keyed store read without opening or inspecting another database. */

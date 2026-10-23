@@ -1,6 +1,5 @@
 import { onSettled, Show } from "solid-js";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
-import { i18n } from "../../i18n/lib/translate.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { createPresenceActivityLifecycle } from "../../lib/presence-activity-lifecycle.ts";
 import {
@@ -11,7 +10,7 @@ import {
 import { profileAvatarUrl, profileDirectory } from "../../lib/profile-directory.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
-import { projectI18n, t } from "../../lib/reactive/i18n.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import {
   prepareSessionNavigationHandoff,
@@ -24,19 +23,13 @@ import {
   resolveUiDefaultAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
-import { updatePersonActivityCard } from "../person-activity-card.tsx";
+import { updatePersonActivityCard, type PersonCardInput } from "../person-activity-card.tsx";
 import { observePersonActivityData } from "../person-activity-data.ts";
 import { personActivityRouting } from "../person-activity-link.ts";
 import { createPortaledHovercard, createPortaledHovercardOwner } from "../portaled-hovercard.ts";
 import { IdentityAvatarImage, createIdentityAvatarPresentation } from "./identity-avatar-image.tsx";
 import { useIdentityAvatarView } from "./identity-avatar-view.ts";
 import "../../styles/chat/person-reference.css";
-
-type PersonReferenceProps = {
-  host: HTMLElement;
-  profileId?: string;
-  label?: string;
-};
 
 type ActivePersonCard = {
   host: HTMLElement;
@@ -48,9 +41,9 @@ const active = new WeakMap<Document, ActivePersonCard>();
 let nextCardId = 0;
 
 /** Explicit transcript selections only. The directory remains Gateway-owned, not a UI name index. */
-function PersonReferenceContent(props: PersonReferenceProps) {
+function PersonReferenceContent(props: PersonReferenceProperties, host: HTMLElement) {
+  host.style.display = "contents";
   const context = useOptionalApplication();
-  const translations = projectI18n(i18n);
   const profileId = () => props.profileId ?? "";
   const label = () => props.label ?? "";
   const connection = createGatewayConnectionLifecycle({ client: null, phase: "stopped" });
@@ -58,19 +51,21 @@ function PersonReferenceContent(props: PersonReferenceProps) {
   let trigger: HTMLButtonElement | undefined;
   let stopRoute: (() => void) | undefined;
   let stopEvents: (() => void)[] = [];
-  let person: PresenceViewer | null | undefined;
+  let personRead: Promise<PresenceViewer | null> | null = null;
   let activity: ReturnType<typeof observePersonActivityData> | undefined;
   const activityExpiry = createPresenceActivityLifecycle(
-    () =>
-      projectPresencePayload(activity?.data?.presencePayload).users.filter((user) =>
-        presenceMatchesProfile(user, person?.identity),
-      ),
+    () => {
+      const profile = context ? profileDirectory(context.gateway).get(profileId()) : undefined;
+      return projectPresencePayload(activity?.data?.presencePayload).users.filter((user) =>
+        presenceMatchesProfile(user, profile && { type: "profile", id: profile.id }),
+      );
+    },
     () => renderCard(),
   );
 
   function close() {
-    if (active.get(props.host.ownerDocument)?.close === close) {
-      active.delete(props.host.ownerDocument);
+    if (active.get(host.ownerDocument)?.close === close) {
+      active.delete(host.ownerDocument);
     }
     activity?.dispose();
     activity = undefined;
@@ -80,13 +75,13 @@ function PersonReferenceContent(props: PersonReferenceProps) {
     stopEvents.forEach((stop) => stop());
     stopEvents = [];
     portal.reset();
-    person = undefined;
+    personRead = null;
     trigger?.setAttribute("aria-expanded", "false");
     trigger?.setAttribute("aria-haspopup", "dialog");
   }
 
   function outside(event: Event) {
-    if (!event.composedPath().some((target) => target === props.host || target === portal.card)) {
+    if (!event.composedPath().some((target) => target === host || target === portal.card)) {
       close();
     }
   }
@@ -113,6 +108,7 @@ function PersonReferenceContent(props: PersonReferenceProps) {
     }
   };
   onSettled(() => {
+    // Retire connection-bound cards while their transcript trigger remains mounted.
     const stopGateway = gateway?.subscribe(syncConnection);
     syncConnection();
     activityExpiry.connect();
@@ -129,7 +125,7 @@ function PersonReferenceContent(props: PersonReferenceProps) {
       return;
     }
     active.get(trigger.ownerDocument)?.close();
-    active.set(trigger.ownerDocument, { host: props.host, close, refresh: renderCard });
+    active.set(trigger.ownerDocument, { host, close, refresh: renderCard });
     const card = createPortaledHovercard(
       "openclaw-person-reference-" + ++nextCardId,
       "session-progress-hovercard person-activity-hovercard",
@@ -141,22 +137,21 @@ function PersonReferenceContent(props: PersonReferenceProps) {
       listen(document, "pointerdown", outside, true),
       listen(document, "focusin", outside, true),
       listen(document, "keydown", escape, true),
-      translations.subscribe(renderCard),
     ];
+    // Navigation ends the portaled card before its retained transcript can render again.
     stopRoute = context?.router.subscribe(close);
     if (context) {
       activity = observePersonActivityData(context, () => renderCard());
     }
-    person = connection.capture() ? undefined : null;
+    personRead = connection.capture() ? loadPerson(card) : null;
     renderCard();
-    void loadPerson(card);
   }
 
   async function loadPerson(card: HTMLDivElement) {
     const scope = connection.capture();
     const requestedId = profileId();
     if (!scope || !context) {
-      return;
+      return null;
     }
     let resolved: PresenceViewer | null = null;
     try {
@@ -179,10 +174,10 @@ function PersonReferenceContent(props: PersonReferenceProps) {
       // An unavailable or unauthorized profile remains an explicit, unresolved reference.
     }
     if (portal.card !== card || profileId() !== requestedId || !connection.isCurrent(scope)) {
-      return;
+      return null;
     }
-    person = resolved;
-    renderCard();
+    activityExpiry.sync();
+    return resolved;
   }
 
   function renderCard() {
@@ -191,69 +186,82 @@ function PersonReferenceContent(props: PersonReferenceProps) {
     if (!card) {
       return;
     }
-    card.setAttribute(
-      "aria-label",
-      t("presence.card.ariaLabel", { name: person?.name ?? label() }),
-    );
     const data = activity?.data;
-    const presence = projectPresencePayload(data?.presencePayload).users.find((user) =>
-      presenceMatchesProfile(user, person?.identity),
-    );
-    const user = person && {
-      ...person,
-      name: presence?.name ?? person.name,
-      avatarUrl: presence?.avatarUrl ?? person.avatarUrl,
-      watchedSessions: presence?.watchedSessions ?? [],
-      entries: presence?.entries ?? (data?.presencePayload ? [] : undefined),
-    };
     const defaults = {
       agentsList: context?.agents.state.agentsList,
       hello: context?.gateway.snapshot.hello,
     };
     const scope = connection.capture();
     const route = context?.router.getState().location;
+    const name = label();
     portal.renderContents(card, () =>
       updatePersonActivityCard(
         card,
-        user && context
+        personRead && context
           ? {
-              user,
-              sessionData: data,
-              watchAgentId: resolveUiDefaultAgentId(defaults),
-              mainKey: resolveUiConfiguredMainKey(defaults),
-              globalScope: isUiGlobalScopeConfigured(defaults),
-              routing: personActivityRouting(context, close),
-              openSession: (row, agentId, options) => {
-                const face = resolveSessionPreferredFace(row);
-                close();
-                runSessionNavigationIntent(props.host, {
-                  agentId,
-                  face,
-                  sessionKey: row.key,
-                  commit: () => {
-                    if (
-                      !scope ||
-                      context.router.getState().location !== route ||
-                      !connection.isCurrent(scope)
-                    ) {
-                      return false;
-                    }
-                    prepareSessionNavigationHandoff(context.gateway, options.pathname, row.key);
-                    context.navigate(face, options);
-                    selectApplicationSession({
-                      selection: context.agentSelection,
-                      gateway: context.gateway,
-                      sessionKey: row.key,
-                      agentId,
-                    });
-                    return true;
-                  },
-                });
-              },
+              name,
+              read: personRead.then<PersonCardInput | { status: "unavailable"; name: string }>(
+                (person) => {
+                  if (!person) {
+                    return { status: "unavailable", name };
+                  }
+                  const presence = projectPresencePayload(data?.presencePayload).users.find(
+                    (user) => presenceMatchesProfile(user, person.identity),
+                  );
+                  return {
+                    user: {
+                      ...person,
+                      name: presence?.name ?? person.name,
+                      avatarUrl: presence?.avatarUrl ?? person.avatarUrl,
+                      watchedSessions: presence?.watchedSessions ?? [],
+                      entries: presence?.entries ?? (data?.presencePayload ? [] : undefined),
+                    },
+                    ariaName: person.name,
+                    sessionData: data,
+                    watchAgentId: resolveUiDefaultAgentId(defaults),
+                    mainKey: resolveUiConfiguredMainKey(defaults),
+                    globalScope: isUiGlobalScopeConfigured(defaults),
+                    routing: personActivityRouting(context, close),
+                    openSession: (row, agentId, options) => {
+                      const face = resolveSessionPreferredFace(row);
+                      close();
+                      runSessionNavigationIntent(host, {
+                        agentId,
+                        face,
+                        sessionKey: row.key,
+                        commit: () => {
+                          if (
+                            !scope ||
+                            context.router.getState().location !== route ||
+                            !connection.isCurrent(scope)
+                          ) {
+                            return false;
+                          }
+                          prepareSessionNavigationHandoff(
+                            context.gateway,
+                            options.pathname,
+                            row.key,
+                          );
+                          context.navigate(face, options);
+                          selectApplicationSession({
+                            selection: context.agentSelection,
+                            gateway: context.gateway,
+                            sessionKey: row.key,
+                            agentId,
+                          });
+                          return true;
+                        },
+                      });
+                    },
+                  };
+                },
+              ),
             }
-          : person === undefined
-            ? t("common.loading")
-            : t("chat.mentions.unavailable"),
+          : {
+              status: "unavailable",
+              name,
+            },
+        () => portal.position(),
       ),
     );
     portal.position();
@@ -346,30 +354,23 @@ function PersonReferenceContent(props: PersonReferenceProps) {
 
 type PersonReferenceProperties = { profileId: string; label: string };
 type PersonReferenceElement = SolidBridgeElement<PersonReferenceProperties>;
-defineSolidBridge<PersonReferenceProperties>(
-  "openclaw-person-reference",
-  (props, host) => {
-    host.style.display = "contents";
-    return <PersonReferenceContent {...props} host={host} />;
+defineSolidBridge<PersonReferenceProperties>("openclaw-person-reference", PersonReferenceContent, {
+  properties: {
+    profileId: { default: "", attribute: "profile-id" },
+    label: { default: "" },
   },
-  {
-    properties: {
-      profileId: { default: "", attribute: "profile-id" },
-      label: { default: "" },
-    },
-    propertyChanged(host, key) {
-      const current = active.get(host.ownerDocument);
-      if (current?.host !== host) {
-        return;
-      }
-      if (key === "profileId") {
-        current.close();
-      } else if (key === "label") {
-        current.refresh();
-      }
-    },
+  propertyChanged(host, key) {
+    const current = active.get(host.ownerDocument);
+    if (current?.host !== host) {
+      return;
+    }
+    if (key === "profileId") {
+      current.close();
+    } else if (key === "label") {
+      current.refresh();
+    }
   },
-);
+});
 
 declare global {
   interface HTMLElementTagNameMap {

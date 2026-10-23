@@ -166,6 +166,7 @@ suite.define(() => {
                 .locator(".usage-presets")
                 .getByRole("button", { name: label, exact: true })
                 .click();
+              await page.clock.fastForward(400);
               const request = await gateway.waitForRequest("sessions.usage", {
                 after: requestsBefore,
               });
@@ -183,8 +184,8 @@ suite.define(() => {
                 .toBe("1.2K");
               if (label === "7d") {
                 expect(
-                  (await page.locator(".cost-window-card__label").allTextContents()).map(
-                    (windowLabel) => windowLabel.trim(),
+                  (await page.locator(".cost-window__label").allTextContents()).map((windowLabel) =>
+                    windowLabel.trim(),
                   ),
                 ).toContain("Today");
               }

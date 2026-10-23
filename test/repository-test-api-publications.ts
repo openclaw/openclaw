@@ -16,13 +16,7 @@ const publications: Record<string, string | symbol> = {
   ),
   "src/agents/auth-profiles/usage.ts": Symbol.for("openclaw.authProfileUsageTestApi"),
   "src/agents/bash-process-registry.ts": Symbol.for("openclaw.bashProcessRegistryTestApi"),
-  "src/agents/embedded-agent-runner/context-engine-maintenance.ts": Symbol.for(
-    "openclaw.contextEngineMaintenanceTestApi",
-  ),
   "src/agents/mcp-ui-resource.ts": Symbol.for("openclaw.mcpUiResourceTestApi"),
-  "src/agents/media-generation-task-status-shared.ts": Symbol.for(
-    "openclaw.mediaGenerationDuplicateGuardTestApi",
-  ),
   "src/agents/prepared-model-runtime.ts": Symbol.for("openclaw.preparedModelRuntimeTestApi"),
   "src/agents/session-suspension.ts": Symbol.for("openclaw.sessionSuspensionTestApi"),
   "src/agents/subagents/announce/subagent-announce-delivery.ts": Symbol.for(
@@ -35,8 +29,6 @@ const publications: Record<string, string | symbol> = {
     "openclaw.subagentRegistryTestApi",
   ),
   "src/agents/subagents/swarm/swarm-scheduler.ts": Symbol.for("openclaw.swarmSchedulerTestApi"),
-  "src/agents/tools/ask-user-tool.ts": Symbol.for("openclaw.askUserToolTestApi"),
-  "src/agents/tools/image-tool.ts": Symbol.for("openclaw.imageToolTestApi"),
   "src/agents/workspace-legacy-state.ts": Symbol.for("openclaw.workspaceLegacyStateTestApi"),
   "src/agents/worktrees/run-lease.ts": Symbol.for("openclaw.worktreeRunLeaseTestApi"),
   "src/auto-reply/reply/queue/enqueue.ts": Symbol.for("openclaw.queueEnqueueTestApi"),
@@ -61,7 +53,6 @@ const publications: Record<string, string | symbol> = {
   "src/infra/exec-approvals-store.ts": Symbol.for("openclaw.execApprovalsStoreTestApi"),
   "src/logging/diagnostic-run-activity.ts": Symbol.for("openclaw.diagnosticRunActivityTestApi"),
   "src/logging/secret-redaction-registry.ts": Symbol.for("openclaw.secretRedactionRegistryTestApi"),
-  "src/media/playback-transcode.ts": Symbol.for("openclaw.playbackTranscodeTestApi"),
   "src/node-host/plugin-node-host.ts": Symbol.for("openclaw.nodeHostPluginTestApi"),
   "src/plugins/memory-runtime.ts": Symbol.for("openclaw.memoryRuntimeTestApi"),
   "src/sessions/session-controller.stop.ts": Symbol.for("openclaw.sessionControllerTestApi"),

@@ -28,11 +28,12 @@ import {
   resolveDefaultGoogleChatAccountId,
   type ResolvedGoogleChatAccount,
 } from "./accounts.js";
-import { startGoogleChatGatewayAccount } from "./gateway.js";
+import { googlechatPlugin } from "./channel.js";
 import { googlechatSetupAdapter } from "./setup-core.js";
 import { googlechatSetupWizard } from "./setup-surface.js";
 
 const hoisted = vi.hoisted(() => ({ startGoogleChatMonitor: vi.fn() }));
+const startGoogleChatGatewayAccount = googlechatPlugin.gateway!.startAccount!;
 
 // Keep real webhook URL resolution; stub only the monitor.
 vi.mock("./channel.runtime.js", async () => {

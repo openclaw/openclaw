@@ -13,7 +13,11 @@ import {
   modelProviderErrorMessage,
   modelProviderMutationWarnings,
 } from "./config-mutation.ts";
-import type { ModelProviderLogoutTarget, ModelProviderPendingLogout } from "./data.ts";
+import type {
+  ModelProviderLogoutTarget,
+  ModelProviderPendingLogout,
+  ModelProviderRemovalTarget,
+} from "./data.ts";
 import type { ModelProvidersData } from "./load.ts";
 import { showProfileActionError, showProfileLogoutSuccess } from "./profiles-view.tsx";
 import { updateRecordEntry } from "./record-state.ts";
@@ -33,6 +37,7 @@ type ProfileActionsOptions = {
   setData: (data: ModelProvidersData) => void;
   setOrders: (orders: Record<string, string[]>) => void;
   canMutate: () => boolean;
+  hasMutationAccess: () => boolean;
   isBusy: (key: string) => boolean;
   setBusy: (key: string, value: boolean) => void;
   setProbeResult: (cardId: string, result: ModelsProbeResult | null) => void;
@@ -42,6 +47,7 @@ type ProfileActionsOptions = {
   refresh: () => Promise<void>;
   getConfig: () => RuntimeConfigCapability;
   isCurrentClient: (client: GatewayBrowserClient, epoch: number) => boolean;
+  onLogoutStarted: (receipt: { cardId: string; completion: Promise<void> }) => void;
 };
 
 export function createModelProviderProfileActions(options: ProfileActionsOptions) {
@@ -135,39 +141,80 @@ export function createModelProviderProfileActions(options: ProfileActionsOptions
     // authorize a logout under a different scope.
     const controller = new AbortController();
     logoutConfirmation = controller;
+    const removing = "removeTargets" in pending;
     const confirmed = await showConfirmDialog({
-      title: t("modelProviders.logout.actionFor", { account: pending.label }),
-      message: t("modelProviders.logout.confirm", { provider: pending.label }),
-      confirmLabel: t("modelProviders.logout.action"),
+      title: removing
+        ? t("modelProviders.remove.title", { provider: pending.label })
+        : t("modelProviders.logout.actionFor", { account: pending.label }),
+      message: removing
+        ? [
+            pending.removeTargets.some((target) => !target.credentialType)
+              ? t("modelProviders.remove.accounts", { provider: pending.label })
+              : "",
+            pending.configKey ? t("modelProviders.remove.keys", { key: pending.configKey }) : "",
+            pending.keptSource
+              ? t("modelProviders.remove.kept", { source: pending.keptSource })
+              : "",
+          ]
+            .filter(Boolean)
+            .join(" ")
+        : t("modelProviders.logout.confirm", { provider: pending.label }),
+      confirmLabel: t(removing ? "modelProviders.remove.action" : "modelProviders.logout.action"),
       danger: true,
       signal: controller.signal,
     }).finally(() => {
       logoutConfirmation = null;
     });
     if (confirmed && !controller.signal.aborted && options.canMutate()) {
-      await logout(pending.cardId, pending.target);
+      await logout(pending.cardId, removing ? pending.removeTargets : [pending.target]);
     }
   }
 
-  async function logout(cardId: string, target: ModelProviderLogoutTarget): Promise<void> {
+  /** Account targets sign out their profiles; removal targets clear a provider or its API key. */
+  async function logout(
+    cardId: string,
+    targets: Array<ModelProviderLogoutTarget | ModelProviderRemovalTarget>,
+  ): Promise<void> {
     const client = options.getClient();
     const key = `logout:${cardId}`;
     if (!client || !options.canMutate() || options.isBusy(key)) {
       return;
     }
-    const { agentId, isCurrent } = captureScope(client);
+    const scope = captureScope(client);
     clearProbe(cardId);
     options.setBusy(key, true);
     options.clearMessage(cardId);
+    const completion = settleLogout(key, targets, scope);
+    options.onLogoutStarted({ cardId, completion });
+    return completion;
+  }
+
+  async function settleLogout(
+    key: string,
+    targets: Array<ModelProviderLogoutTarget | ModelProviderRemovalTarget>,
+    { agentId, isCurrent }: ReturnType<typeof captureScope>,
+  ): Promise<void> {
+    const receipts: ModelAuthLogoutResult[] = [];
     try {
       const result = await options.getConfig().runExternalMutation(
         async (activeClient) => {
-          const receipt = await activeClient.request<ModelAuthLogoutResult>("models.authLogout", {
-            ...target,
-            agentId,
-          });
-          invalidateModelAuthStatusRequests(activeClient);
-          return receipt;
+          try {
+            for (const target of targets) {
+              if (!isCurrent() || !options.hasMutationAccess()) {
+                throw new Error(t("modelProviders.remove.accessChanged"));
+              }
+              receipts.push(
+                await activeClient.request<ModelAuthLogoutResult>("models.authLogout", {
+                  ...target,
+                  agentId,
+                }),
+              );
+            }
+          } finally {
+            invalidateModelAuthStatusRequests(activeClient);
+          }
+          const warning = receipts.flatMap((receipt) => receipt.warning ?? []).join(" ");
+          return { ...receipts.at(-1)!, ...(warning ? { warning } : {}) };
         },
         { canDispatch: () => isCurrent() && options.canMutate() },
       );
@@ -175,9 +222,27 @@ export function createModelProviderProfileActions(options: ProfileActionsOptions
         return;
       }
       if (!result.ok) {
-        await options.refresh();
+        let refreshError: string | undefined;
+        try {
+          await options.refresh();
+          refreshError = options.getData()?.error ?? undefined;
+        } catch (error) {
+          refreshError = modelProviderErrorMessage(error);
+        }
         if (isCurrent()) {
-          showProfileActionError(result.error);
+          const completed = new Set(receipts.flatMap((receipt) => receipt.removedProfiles ?? []));
+          showProfileActionError(
+            [
+              receipts.length
+                ? t("modelProviders.remove.partial", { count: String(completed.size) })
+                : "",
+              ...receipts.flatMap((receipt) => receipt.warning ?? []),
+              result.error,
+              refreshError,
+            ]
+              .filter(Boolean)
+              .join(" "),
+          );
         }
         return;
       }

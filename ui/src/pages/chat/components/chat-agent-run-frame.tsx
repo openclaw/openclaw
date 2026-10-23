@@ -7,7 +7,6 @@ import {
   For,
   getOwner,
   Match,
-  onCleanup,
   onSettled,
   runWithOwner,
   Show,
@@ -69,12 +68,14 @@ function FrameBody(props: {
   options: AgentRunFrameOptions;
   children: (input: Accessor<PartInput>) => JSX.Element;
 }): JSX.Element {
+  // Canvas widgets move between these foreign-DOM ranges without disconnecting.
+  // Mount new ranges under the frame's owner, not the transient reconciliation effect.
   const owner = getOwner();
   const anchor = document.createComment("frame-body");
   const [readParent, setParent] = createSignal<HTMLElement | null>(null, { ownedWrite: true });
   const ranges = new Map<string, PartRange>();
   const retire = (range: PartRange) => {
-    // Lit descendants must park their widgets while the range is still connected.
+    // Native descendants must park their widgets while the range is still connected.
     range.dispose();
     const after = range.end.nextSibling;
     for (let node: Node | null = range.start; node && node !== after;) {
@@ -83,18 +84,18 @@ function FrameBody(props: {
       node = following;
     }
   };
-  onCleanup(() => {
-    for (const range of ranges.values()) {
-      retire(range);
-    }
-    ranges.clear();
-  });
   onSettled(() => {
     const committedParent = anchor.parentElement;
     if (!committedParent) {
       throw new Error("Run frame body anchor was not committed");
     }
     setParent(committedParent);
+    return () => {
+      for (const range of ranges.values()) {
+        retire(range);
+      }
+      ranges.clear();
+    };
   });
   createEffect(
     () => ({

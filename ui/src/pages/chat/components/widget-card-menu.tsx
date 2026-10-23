@@ -55,7 +55,6 @@ export function WidgetCardMenu(props: {
       }),
     { lazy: true },
   );
-  const items = createMemo(() => entries()(), { lazy: true });
   return (
     <Menu
       lazy="while-open"
@@ -67,7 +66,7 @@ export function WidgetCardMenu(props: {
       triggerClass="btn btn--ghost btn--icon chat-tool-card__widget-actions-trigger"
       triggerAttributes={{ title: t("chat.toolCards.widgetActions") }}
       trigger={<Icon name="moreHorizontal" />}
-      items={items()}
+      items={entries()()}
       onSelect={(item) => {
         if (item.id === "copy" || item.id === "download" || item.id === "raw-details") {
           const caption = props.onAction(item.id);

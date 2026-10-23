@@ -7,7 +7,6 @@ import { hasNonEmptyString, uniqueStrings } from "openclaw/plugin-sdk/string-coe
 import { registerDiscordComponentEntries } from "./components-registry.js";
 import {
   buildDiscordComponentMessage,
-  buildDiscordComponentMessageFlags,
   resolveDiscordComponentAttachmentName,
   type DiscordComponentBuildResult,
   type DiscordComponentMessageSpec,
@@ -94,15 +93,6 @@ export function registerBuiltDiscordComponentMessage(params: {
   });
 }
 
-function resolveDiscordComponentRegistryTtlMs(
-  accountConfig: { agentComponents?: { ttlMs?: number } } | undefined,
-): number | undefined {
-  const ttlMs = accountConfig?.agentComponents?.ttlMs;
-  return typeof ttlMs === "number" && Number.isFinite(ttlMs) && ttlMs > 0
-    ? Math.floor(ttlMs)
-    : undefined;
-}
-
 async function buildDiscordComponentPayload(params: {
   spec: DiscordComponentMessageSpec;
   opts: DiscordComponentSendOpts;
@@ -165,13 +155,10 @@ async function buildDiscordComponentPayload(params: {
     agentId: params.opts.agentId,
     accountId: params.accountId,
   });
-  const flags = buildDiscordComponentMessageFlags(buildResult.components);
-  const finalFlags = params.opts.silent ? (flags ?? 0) | SUPPRESS_NOTIFICATIONS_FLAG : flags;
-
   const payload: MessagePayloadObject = {
     components: buildResult.components,
     allowed_mentions: params.opts.allowedMentions,
-    ...(finalFlags ? { flags: finalFlags } : {}),
+    ...(params.opts.silent ? { flags: SUPPRESS_NOTIFICATIONS_FLAG } : {}),
     ...(files ? { files } : {}),
   };
   const body = {
@@ -279,7 +266,7 @@ async function writeDiscordComponentMessage(
   await registerBuiltDiscordComponentMessage({
     buildResult,
     messageId: result.id ?? messageId,
-    ttlMs: resolveDiscordComponentRegistryTtlMs(accountInfo.config),
+    ttlMs: accountInfo.config.agentComponents?.ttlMs,
   });
   recordChannelActivity({
     channel: "discord",

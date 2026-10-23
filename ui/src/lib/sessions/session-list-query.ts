@@ -4,14 +4,6 @@ import { SESSIONS_LIST_OWNER_LIMIT } from "../../../../src/shared/session-list-l
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { createSessionEventRefreshCoordinator } from "./event-refresh-coordinator.ts";
 import { compareSessionRowsByUpdatedAt, sessionMatchesArchivedFilter } from "./navigation.ts";
-import type {
-  SessionGateway,
-  SessionListOptions,
-  SessionListScope,
-  SessionListSnapshot,
-  SessionRefreshOptions,
-  SessionRefreshOutcome,
-} from "./session-capability.ts";
 import {
   normalizeAgentId,
   areUiSessionKeysEquivalent,
@@ -30,6 +22,14 @@ import {
   reconcileParsedSessionChangedRow,
   sessionChangedSnapshots,
 } from "./session-row-reconcile.ts";
+import type {
+  SessionGateway,
+  SessionListOptions,
+  SessionListScope,
+  SessionListSnapshot,
+  SessionRefreshOptions,
+  SessionRefreshOutcome,
+} from "./session-types.ts";
 
 type SessionListRowLookup = (key: string, agentId?: string | null) => GatewaySessionRow | undefined;
 

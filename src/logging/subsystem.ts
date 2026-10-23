@@ -367,6 +367,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
   const emitLog = (level: LogLevel, message: string, meta?: Record<string, unknown>) => {
     const consoleSettings = getConsoleSettings();
     const consoleEnabled =
+      meta?.consoleMessage !== false &&
       isLogLevelEnabled(level, consoleSettings.level) &&
       shouldLogSubsystemToConsole(resolvedSubsystem);
     const fileEnabled = isFileLogLevelEnabled(level);
@@ -377,9 +378,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     let fileMeta = meta;
     let consoleFields = meta;
     if (meta && Object.keys(meta).length > 0) {
-      const { consoleMessage, ...rest } = meta as Record<string, unknown> & {
-        consoleMessage?: unknown;
-      };
+      const { consoleMessage, ...rest } = meta;
       if (typeof consoleMessage === "string") {
         consoleMessageOverride = consoleMessage;
       }

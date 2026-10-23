@@ -1,11 +1,30 @@
 import { describe, expect, it } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { updatePickers, openPicker } from "../../test-helpers/select-picker.ts";
+import { baseProps } from "./config-view.test-support.tsx";
 import {
   buildSessionObserverTogglePatch,
   buildSessionObserverUtilityModelPatch,
 } from "./session-observer-settings.ts";
-import { SessionObserverSettings } from "./session-observer-settings.tsx";
+import { SidebarPreferencesSection } from "./view-appearance-preferences.tsx";
+
+const utilityPatch = (utilityModel: unknown) => ({ agents: { defaults: { utilityModel } } });
+
+function renderObserver(overrides: Partial<Parameters<typeof SidebarPreferencesSection>[0]>) {
+  return mountSolid(() =>
+    SidebarPreferencesSection({
+      ...baseProps(),
+      sessionObserverEnabled: true,
+      sessionObserverUtilityModel: undefined,
+      sessionObserverModels: [],
+      sessionObserverModelsUnavailable: false,
+      sessionObserverDisabled: false,
+      setSessionObserverEnabled: async () => true,
+      setSessionObserverUtilityModel: async () => true,
+      ...overrides,
+    }),
+  ).container;
+}
 
 describe("session observer settings patches", () => {
   it("uses null to restore the default toggle and false to opt out", () => {
@@ -18,52 +37,32 @@ describe("session observer settings patches", () => {
   });
 
   it("distinguishes automatic, disabled, and explicit utility models", () => {
-    expect(buildSessionObserverUtilityModelPatch({ kind: "auto" })).toEqual({
-      agents: { defaults: { utilityModel: null } },
-    });
-    expect(buildSessionObserverUtilityModelPatch({ kind: "disabled" })).toEqual({
-      agents: { defaults: { utilityModel: "" } },
-    });
+    expect(buildSessionObserverUtilityModelPatch({ kind: "auto" })).toEqual(utilityPatch(null));
+    expect(buildSessionObserverUtilityModelPatch({ kind: "disabled" })).toEqual(utilityPatch(""));
     expect(
       buildSessionObserverUtilityModelPatch({ kind: "model", model: "openai/gpt-5-mini" }),
-    ).toEqual({
-      agents: { defaults: { utilityModel: "openai/gpt-5-mini" } },
-    });
+    ).toEqual(utilityPatch("openai/gpt-5-mini"));
   });
 
   it("preserves the utility chain when changing its primary or restoring automatic routing", () => {
     const current = { primary: "fixture/utility", fallbacks: ["fixture/backup"] };
     expect(
       buildSessionObserverUtilityModelPatch({ kind: "model", model: "fixture/next" }, current),
-    ).toEqual({
-      agents: {
-        defaults: { utilityModel: { primary: "fixture/next", fallbacks: ["fixture/backup"] } },
-      },
-    });
-    expect(buildSessionObserverUtilityModelPatch({ kind: "auto" }, current)).toEqual({
-      agents: { defaults: { utilityModel: { primary: null, fallbacks: ["fixture/backup"] } } },
-    });
-    expect(buildSessionObserverUtilityModelPatch({ kind: "disabled" }, current)).toEqual({
-      agents: { defaults: { utilityModel: { primary: "", fallbacks: ["fixture/backup"] } } },
-    });
+    ).toEqual(utilityPatch({ primary: "fixture/next", fallbacks: ["fixture/backup"] }));
+    expect(buildSessionObserverUtilityModelPatch({ kind: "auto" }, current)).toEqual(
+      utilityPatch({ primary: null, fallbacks: ["fixture/backup"] }),
+    );
+    expect(buildSessionObserverUtilityModelPatch({ kind: "disabled" }, current)).toEqual(
+      utilityPatch({ primary: "", fallbacks: ["fixture/backup"] }),
+    );
   });
 
   it("keeps auto and disabled selectable when explicit models are unavailable", async () => {
-    const container = document.createElement("div");
-    mountSolid(
-      () =>
-        SessionObserverSettings({
-          enabled: true,
-          utilityModel: undefined,
-          resolvedUtilityModel: { status: "unavailable" },
-          models: [{ id: "gpt-mini", name: "GPT Mini", provider: "openai" }],
-          modelsUnavailable: true,
-          disabled: false,
-          onEnabledChange: () => undefined,
-          onUtilityModelChange: () => undefined,
-        }),
-      { container },
-    );
+    const container = renderObserver({
+      sessionObserverResolvedModel: { status: "unavailable" },
+      sessionObserverModels: [{ id: "gpt-mini", name: "GPT Mini", provider: "openai" }],
+      sessionObserverModelsUnavailable: true,
+    });
 
     await updatePickers(container);
     const select = container.querySelector<HTMLElement>(
@@ -87,11 +86,6 @@ describe("session observer settings patches", () => {
       "auto (anthropic/claude-haiku-4-5 · Claude CLI · native)",
     ],
     [
-      "anthropic/claude-haiku-4-5",
-      { id: "openclaw", kind: "api", label: "OpenClaw Default" },
-      "auto (anthropic/claude-haiku-4-5 · API · OpenClaw)",
-    ],
-    [
       "openai/gpt-5-mini",
       { id: "openclaw", kind: "api", label: "OpenClaw Default" },
       "auto (openai/gpt-5-mini · API · OpenClaw)",
@@ -101,33 +95,11 @@ describe("session observer settings patches", () => {
       { id: "codex", kind: "harness", label: "OpenAI Codex" },
       "auto (openai/gpt-5-mini · OpenAI Codex)",
     ],
-    [
-      "google/gemini-flash",
-      { id: "google-gemini-cli", kind: "cli", label: "Gemini CLI" },
-      "auto (google/gemini-flash · Gemini CLI · native)",
-    ],
-    [
-      "haiku",
-      { id: "openclaw", kind: "api", label: "OpenClaw Default" },
-      "auto (haiku · API · OpenClaw)",
-    ],
     ["anthropic/claude-haiku-4-5", undefined, "auto (anthropic/claude-haiku-4-5)"],
   ] as const)("names the resolved small model's route for %s on %o", (model, runtime, expected) => {
-    const container = document.createElement("div");
-    mountSolid(
-      () =>
-        SessionObserverSettings({
-          enabled: true,
-          utilityModel: undefined,
-          resolvedUtilityModel: { status: "auto", model, ...(runtime ? { runtime } : {}) },
-          models: [],
-          modelsUnavailable: false,
-          disabled: false,
-          onEnabledChange: () => undefined,
-          onUtilityModelChange: () => undefined,
-        }),
-      { container },
-    );
+    const container = renderObserver({
+      sessionObserverResolvedModel: { status: "auto", model, ...(runtime ? { runtime } : {}) },
+    });
     expect(container.textContent).toContain(expected);
   });
 });

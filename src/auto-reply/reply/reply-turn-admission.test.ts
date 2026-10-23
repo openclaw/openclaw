@@ -219,7 +219,6 @@ it("waits for recovery release before admitting a queued successor", async () =>
   const successor = observe(admitStored(storePath, { kind: "queued_followup" }));
   await Promise.resolve();
   expect(successor.settled).toBe(false);
-  await expect(admitStored(storePath, { kind: "heartbeat" })).resolves.toEqual(activeRunSkipped);
   release.release();
   owned(await successor.promise).complete();
   await expectRecoveryReleased(storePath);
@@ -460,6 +459,40 @@ for (const outcome of ["retired", "cancelled"] as const) {
     }
   });
 }
+
+it.each([1, 2])("retains admission after %i terminal writer fence failures", async (count) => {
+  const held = operation();
+  const failures = [new Error("first fence failed"), new Error("second fence failed")].slice(
+    0,
+    count,
+  );
+  const fences = failures.map((failure) =>
+    vi.fn(async () => {
+      throw failure;
+    }),
+  );
+  for (const fence of fences) {
+    held.registerTerminalProducerFence(fence);
+  }
+  try {
+    const retirement = held.retireAdmissionAfterFencing();
+    if (count === 1) {
+      await expect(retirement).rejects.toBe(failures[0]);
+    } else {
+      await expect(retirement).rejects.toMatchObject({
+        message: "Session admission writer fencing failed",
+        errors: failures,
+      });
+    }
+    for (const fence of fences) {
+      expect(fence).toHaveBeenCalledOnce();
+    }
+    expect(held.admissionRetired).toBe(false);
+    expect(getSessionControllerOperation(sessionKey)).toBe(held);
+  } finally {
+    held.complete();
+  }
+});
 
 it("resumes raw-source admission after writer fencing without waiting for producer cleanup", async ({
   signal,

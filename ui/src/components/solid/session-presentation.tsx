@@ -42,7 +42,13 @@ function SessionAttentionIcon(props: { attention: SidebarSessionAttention }) {
   const icon = () => sessionAttentionIconName(props.attention);
   return (
     <Show when={props.attention.kind !== "none"}>
-      <openclaw-tooltip prop:content={parts().preview ? "" : parts().status} open-on-click>
+      {/* Sidebar rows sit against the app rail; open inline to the right so the
+          tooltip never clamps over the rail or the row's own title. */}
+      <openclaw-tooltip
+        prop:content={parts().preview ? "" : parts().status}
+        prop:placement="right"
+        open-on-click
+      >
         <span
           class={[
             "sidebar-session-attention__icon",
@@ -575,21 +581,8 @@ export function renderSessionLeadingState(props: SessionLeadingStateProps) {
     </Show>
   );
   return {
-    get running() {
-      return running();
-    },
+    running,
     leadingIndicator,
-    get visible() {
-      return (
-        showGlyph() ||
-        (!props.trailingState &&
-          (session().isChild
-            ? Boolean(resolveSessionIdleBadge(session().status, t))
-            : session().unread))
-      );
-    },
-    get renderedIdentities() {
-      return renderedIdentities();
-    },
+    renderedIdentities,
   };
 }

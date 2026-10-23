@@ -1,5 +1,6 @@
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import {
@@ -18,10 +19,7 @@ import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { removeQueuedMessage, updateQueuedMessage } from "./chat-queue.ts";
 import { resumeStoredChatOutboxes, retryQueuedChatMessage } from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
-import {
-  listStoredChatOutboxes,
-  removeStoredChatComposerQueueItem,
-} from "./composer-persistence.ts";
+import { updateStoredChatComposerQueueItems } from "./composer-queue-persistence.ts";
 import { admitInitialTurnHandoff } from "./initial-turn-handoff-admission.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 
@@ -372,11 +370,10 @@ it.each([
     if (offscreen) {
       const saved = listStoredChatOutboxes(peer)[0]!;
       expect(
-        removeStoredChatComposerQueueItem(
+        updateStoredChatComposerQueueItems(
           peer,
           saved.sessionKey,
-          original.id,
-          saved.queue[0]!,
+          [{ expected: saved.queue[0]!, next: null }],
           saved.agentId,
         ),
       ).toBe(true);

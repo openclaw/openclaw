@@ -221,17 +221,11 @@ function repairProviderlessCodexSessionOverride(
 
   entry.providerOverride = "openai";
   entry.modelOverrideRouteResolution = "resolved";
-  if (entry.model !== undefined || entry.modelProvider !== undefined) {
-    delete entry.model;
-    delete entry.modelProvider;
-  }
-  if (entry.contextTokens !== undefined || entry.contextTokensSource !== undefined) {
-    delete entry.contextTokens;
-    delete entry.contextTokensSource;
-  }
-  if (entry.contextBudgetStatus !== undefined) {
-    delete entry.contextBudgetStatus;
-  }
+  delete entry.model;
+  delete entry.modelProvider;
+  delete entry.contextTokens;
+  delete entry.contextTokensSource;
+  delete entry.contextBudgetStatus;
   return true;
 }
 
@@ -259,7 +253,6 @@ function repairSessionAuthProfileReferences(
 /** Complete account renames or repair legacy session bindings and model routes. */
 function repairCodexSessionStoreRoutes(params: {
   store: Record<string, SessionEntry>;
-  now?: number;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
   authProfileIdMap?: ReadonlyMap<string, string>;
   authProfileOnly?: boolean;
@@ -268,7 +261,7 @@ function repairCodexSessionStoreRoutes(params: {
   providerRenames?: readonly ProviderRename[];
   warnings?: string[];
 }): string[] {
-  const now = params.now ?? Date.now();
+  const now = Date.now();
   const sessionKeys: string[] = [];
   for (const [sessionKey, entry] of Object.entries(params.store)) {
     if (!entry) {

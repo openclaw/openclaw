@@ -41,11 +41,13 @@ function serverConfig(options: Parameters<typeof buildSystemAgentToolsMcpServerC
 
 async function propose(armed: string, configPath: string, value: string) {
   vi.stubEnv(ARMED_ENV, armed);
+  vi.stubEnv(TOOLS_ENV, "openclaw");
+  vi.stubEnv(SURFACE_ENV, "cli");
   vi.stubEnv(
     PROPOSAL_ENV,
     hashSystemAgentOperation({ kind: "config-set", path: configPath, value }),
   );
-  const handlers = await handlersFor({ tools: ["openclaw"], systemAgentSurface: "cli" });
+  const handlers = await handlersFor({});
   return JSON.stringify(
     await handlers.callTool({
       name: "openclaw",
@@ -67,8 +69,8 @@ describe("OpenClaw tools MCP server", () => {
       subagentRole: "leaf",
       subagentControlScope: "none",
     } as SessionEntry);
+    vi.stubEnv(OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV, sessionKey);
     const handlers = await handlersFor({
-      agentSessionKey: sessionKey,
       config: { session: { store: storePath } },
     });
 
@@ -82,37 +84,36 @@ describe("OpenClaw tools MCP server", () => {
     }
   });
 
-  it("gates cron trigger surfaces by the host config", async () => {
-    const jobKeys = async (config: unknown) => {
-      const [tool] = await resolveOpenClawToolsForMcp({
-        agentSessionKey: "agent:worker:main",
-        config: config as never,
-      });
-      if (!tool) {
-        throw new Error("expected the automations tool to be resolved");
-      }
-      const parameters = tool.parameters as unknown as {
-        properties: { job: { properties: Record<string, unknown> } };
-      };
-      return Object.keys(parameters.properties.job.properties);
-    };
-
-    expect(await jobKeys({ cron: { triggers: { enabled: false } } })).not.toContain("trigger");
-    expect(await jobKeys({ cron: {} })).toContain("trigger");
-    expect(await jobKeys({ cron: { triggers: { enabled: true } } })).toContain("trigger");
+  it.each([
+    { cron: { triggers: { enabled: false } }, enabled: false },
+    { cron: {}, enabled: true },
+    { cron: { triggers: { enabled: true } }, enabled: true },
+  ])("gates cron trigger surfaces ($enabled)", async ({ cron, enabled }) => {
+    vi.stubEnv(OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV, "agent:worker:main");
+    const [tool] = await resolveOpenClawToolsForMcp({ config: { cron } });
+    if (!tool) {
+      throw new Error("expected the automations tool to be resolved");
+    }
+    const schema = expect(tool.parameters);
+    if (enabled) {
+      schema.toHaveProperty("properties.job.properties.trigger");
+    } else {
+      schema.not.toHaveProperty("properties.job.properties.trigger");
+    }
   });
 
   it("requires the managed bridge to pass a real agent session key", async () => {
-    await expect(resolveOpenClawToolsForMcp({ agentSessionKey: "" })).rejects.toThrow(
+    vi.stubEnv(OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV, "");
+    await expect(resolveOpenClawToolsForMcp()).rejects.toThrow(
       OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV,
     );
   });
 
   it("keeps the generated helper owner through MCP diagnostic actions", async () => {
     const server = serverConfig({ surface: "gateway", agentId: "work" });
+    vi.stubEnv(TOOLS_ENV, server.env?.[TOOLS_ENV]);
+    vi.stubEnv(SURFACE_ENV, server.env?.[SURFACE_ENV]);
     const handlers = await handlersFor({
-      tools: ["openclaw"],
-      systemAgentSurface: "gateway",
       agentId: resolveToolsMcpAgentId(server.args),
     });
 

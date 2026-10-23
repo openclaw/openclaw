@@ -10,10 +10,10 @@ type LoadedSessionEntry = {
 
 export function createRepositorySessionEntryReader(
   readActual: SessionEntryReader,
-  load: () => LoadedSessionEntry | undefined,
+  load: (sessionKey?: string) => LoadedSessionEntry | undefined,
 ): SessionEntryReader {
   return (database, request, owner) => {
-    const loaded = load();
+    const loaded = load(request.sessionKeys?.[0]);
     if (
       !loaded ||
       database.agentId !== loaded.agentId ||

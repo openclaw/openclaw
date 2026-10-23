@@ -1,5 +1,6 @@
 import {
   bucketRelativeTimeMs,
+  formatByteSize,
   formatCompactTokenCount as formatTokenUnits,
   type RelativeTimeUnit,
 } from "@openclaw/normalization-core";
@@ -10,6 +11,15 @@ import { i18n, t } from "../i18n/index.ts";
 import { formatUiError } from "./format-error.ts";
 
 export { formatByteSize } from "@openclaw/normalization-core";
+
+export function formatResourceBytes(bytes: number): string {
+  return formatByteSize(bytes, {
+    style: "legacy-binary",
+    maxUnit: "tera",
+    separator: " ",
+    fractionDigits: (value, unit) => (unit === "tera" || value < 10 ? 1 : 0),
+  });
+}
 
 export function formatCountdown(deadlineMs: number, nowMs: number, padMinutes = false): string {
   const totalSeconds = Math.max(0, Math.ceil((deadlineMs - nowMs) / 1_000));

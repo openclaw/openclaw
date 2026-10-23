@@ -104,29 +104,6 @@ describe("after_tool_call hook wiring", () => {
     vi.resetAllMocks();
   });
 
-  it("calls runAfterToolCall in handleToolExecutionEnd when hook is registered", async () => {
-    hookMocks.runner.hasHooks.mockReturnValue(true);
-
-    const ctx = createToolHandlerCtx({
-      runId: "test-run-1",
-      agentId: "main",
-      sessionKey: "test-session",
-      sessionId: "test-ephemeral-session",
-    });
-
-    await startTool(ctx, "read", "wired-hook-call-1", { path: "/tmp/file.txt" });
-    await finishTool(ctx, "read", "wired-hook-call-1", textResult("file contents"));
-
-    expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledTimes(1);
-    expect(hookMocks.runner.runBeforeToolCall).not.toHaveBeenCalled();
-    expectAfterToolCallPayload(
-      ctx,
-      "wired-hook-call-1",
-      { path: "/tmp/file.txt" },
-      textResult("file contents"),
-    );
-  });
-
   it("includes error in after_tool_call event on tool failure", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
 
@@ -174,6 +151,7 @@ describe("after_tool_call hook wiring", () => {
     await finishTool(ctxB, "read", sharedToolCallId, textResult("done-b"));
 
     expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledTimes(2);
+    expect(hookMocks.runner.runBeforeToolCall).not.toHaveBeenCalled();
     expectAfterToolCallPayload(
       ctxA,
       sharedToolCallId,

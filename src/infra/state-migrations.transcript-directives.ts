@@ -61,6 +61,7 @@ import {
   repairHistoricalTranscriptEventJson,
 } from "./state-migrations.transcript-directives-transform.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
+import { Utf8InputError } from "./utf8-input.js";
 
 const MIGRATION_META_KEY = "historical-transcript-directives-v1";
 // Version 2 added masked-provider repair. Unversioned cursors were written by version 1.
@@ -270,24 +271,6 @@ function planTranscriptSession(params: {
   });
 }
 
-function assertTranscriptSessionSourceUnchanged(
-  database: DatabaseSync,
-  scope: HistoricalTranscriptRepairScope,
-  sessionId: string,
-  planned: readonly TranscriptRowPlan[],
-): void {
-  const current = readTranscriptSessionRows(database, scope, sessionId);
-  if (
-    current.length !== planned.length ||
-    current.some(
-      (row, index) =>
-        row.seq !== planned[index]?.seq || row.event_json !== planned[index]?.eventJson,
-    )
-  ) {
-    throw new Error(`Transcript source changed before migration commit for ${sessionId}`);
-  }
-}
-
 function transcriptSessionsNeedMigration(
   database: EngineConnection,
   pathname: string,
@@ -383,7 +366,6 @@ async function migrateTranscriptSessions(params: {
       params.database,
       () => {
         assertAgentDatabaseMaintenanceAuthority();
-        assertTranscriptSessionSourceUnchanged(params.database, scope, sessionId, planned);
         if (directivesChanged) {
           params.backupBeforeDirectiveRewrite();
         }
@@ -683,6 +665,7 @@ export async function migrateHistoricalTranscriptDirectives(
         warnings.push(
           `Skipped historical transcript directive migration preflight for ${target.path}: ${String(error)}`,
         );
+        recoverableWarningCount += Number(error instanceof Utf8InputError);
       }
     }
     if (targets.length > 0) {
@@ -721,6 +704,7 @@ export async function migrateHistoricalTranscriptDirectives(
             warnings.push(
               `Skipped historical transcript directive migration for ${target.path}: ${String(error)}`,
             );
+            recoverableWarningCount += Number(error instanceof Utf8InputError);
           }
         }
       });

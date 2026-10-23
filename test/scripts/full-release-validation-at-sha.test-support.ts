@@ -11,7 +11,7 @@ import {
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach } from "vitest";
+import { afterEach, expect } from "vitest";
 import { parse as parseYaml } from "yaml";
 import {
   SCRIPT_PATH,
@@ -27,6 +27,14 @@ export {
 } from "./full-release-validation-at-sha.repository.test-support.js";
 
 type DispatchWorkflow = { on?: { workflow_dispatch?: { inputs?: Record<string, unknown> } } };
+
+export function expectDispatchFailure(
+  result: { status: number | null; stderr: string },
+  error: string,
+) {
+  expect(result.status, result.stderr).toBe(1);
+  expect(result.stderr).toContain(error);
+}
 const dispatchWorkflows = new Map<string, DispatchWorkflow>();
 const fixtureCleanups = new Set<() => void>();
 afterEach(() => {
@@ -93,6 +101,8 @@ export function createDispatchFixture(
     workflowSource?: string;
     targetSource?: Record<string, string>;
     omitPurpose?: boolean;
+    unreachableContributionRecord?: boolean;
+    releaseNotes?: string;
   } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "openclaw-release-dispatch-"));

@@ -26,35 +26,46 @@ function assertUsagePartitionWorker(): void {
 
 export function deleteSessionCostUsagePartitionsInDatabase(
   db: EngineConnection,
-  params: {
+  params: readonly {
     rollupId: string;
     removedDates?: string[];
     replacePartitions?: boolean;
-  },
+  }[],
 ): void {
   assertUsagePartitionWorker();
   const kysely = getNodeSqliteKysely<CacheDatabase>(db);
-  if (params.replacePartitions) {
+  for (const replacements of chunkItems(
+    params.filter((row) => row.replacePartitions),
+    100,
+  )) {
     executeSqliteQuerySync(
       db,
-      kysely
-        .deleteFrom("cache_entries")
-        .where("scope", "=", USAGE_COST_PARTITION_SCOPE)
-        .where("key", ">=", usageCostPartitionKey(params.rollupId, ""))
-        .where("key", "<=", usageCostPartitionKey(params.rollupId, "\uffff")),
+      kysely.deleteFrom("cache_entries").where((eb) =>
+        eb.or(
+          replacements.map((row) =>
+            // Keep scope in each arm so SQLite seeks each composite-key range.
+            eb.and([
+              eb("scope", "=", USAGE_COST_PARTITION_SCOPE),
+              eb("key", ">=", usageCostPartitionKey(row.rollupId, "")),
+              eb("key", "<=", usageCostPartitionKey(row.rollupId, "\uffff")),
+            ]),
+          ),
+        ),
+      ),
     );
   }
-  for (const dates of chunkItems(params.removedDates ?? [], 100)) {
+  const removedKeys = params.flatMap((row) =>
+    row.replacePartitions
+      ? []
+      : (row.removedDates ?? []).map((date) => usageCostPartitionKey(row.rollupId, date)),
+  );
+  for (const keys of chunkItems(removedKeys, 100)) {
     executeSqliteQuerySync(
       db,
       kysely
         .deleteFrom("cache_entries")
         .where("scope", "=", USAGE_COST_PARTITION_SCOPE)
-        .where(
-          "key",
-          "in",
-          dates.map((date) => usageCostPartitionKey(params.rollupId, date)),
-        ),
+        .where("key", "in", keys),
     );
   }
 }

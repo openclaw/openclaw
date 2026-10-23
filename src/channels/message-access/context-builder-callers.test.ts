@@ -24,10 +24,10 @@ const SINKS: ReadonlyArray<readonly [string, string, string, string?]> = [
     injected,
     "getIMessageRuntime().channel.inbound.buildContext",
   ],
-  ["irc/src/inbound", "channelIngress: access", coreBuilder],
+  ["irc/src/monitor", "channelIngress: access", coreBuilder],
   [
     "line/src/bot-message-context",
-    "channelIngress: params.channelIngress",
+    "channelIngress,",
     injected,
     "getLineRuntime().channel.inbound.buildContext",
   ],
@@ -59,7 +59,7 @@ const SINKS: ReadonlyArray<readonly [string, string, string, string?]> = [
     "sessionRuntime.buildChannelInboundEventContext",
   ],
   ["tlon/src/monitor/index", "channelIngress,", coreBuilder],
-  ["twitch/src/monitor", "channelIngress,", "channelRuntime.inbound.buildContext"],
+  ["twitch/src/monitor", "channelIngress: exactAccess", "channelRuntime.inbound.buildContext"],
   [
     "whatsapp/src/auto-reply/monitor/inbound-dispatch",
     "channelIngress,",
@@ -70,7 +70,7 @@ const SINKS: ReadonlyArray<readonly [string, string, string, string?]> = [
   ["zalouser/src/monitor", "channelIngress: accessDecision", coreBuilder],
   [
     "src/channels/direct-dm",
-    "channelIngress: params.channelIngress",
+    "channelIngress: boundParams.channelIngress",
     "const injectedBuilder = params.channelRuntime?.inbound?.buildContext",
   ],
   [
@@ -87,7 +87,7 @@ const CONTEXT_BINDING_PRODUCERS = [
   "feishu/src/policy",
   "googlechat/src/monitor-access",
   "imessage/src/monitor/inbound-processing",
-  "irc/src/inbound",
+  "irc/src/monitor",
   "line/src/bot-handlers",
   "matrix/src/matrix/monitor/access-state",
   "msteams/src/monitor-handler/access",
@@ -100,14 +100,17 @@ const CONTEXT_BINDING_PRODUCERS = [
   "synology-chat/src/security",
   "telegram/src/bot-handlers.inbound-authorization",
   "tlon/src/monitor/utils",
-  "twitch/src/access-control",
+  "twitch/src/monitor",
   "whatsapp/src/inbound-policy",
   "zalo/src/monitor",
   "zalouser/src/monitor",
 ] as const;
 const SCOPED_BUILDER_HANDOFFS = [
   ["buzz/src/gateway", "const buildContext = channelRuntime?.inbound.buildContext"],
-  ["clickclack/src/gateway", "buildContext: params.buildContext"],
+  [
+    "clickclack/src/gateway",
+    'const buildContext = (ctx.channelRuntime as PluginRuntime["channel"]',
+  ],
   ["discord/src/monitor/provider", "buildContext: pluginChannelRuntime?.inbound.buildContext"],
   [
     "imessage/src/monitor/monitor-provider",

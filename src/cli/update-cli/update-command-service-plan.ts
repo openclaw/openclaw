@@ -49,6 +49,7 @@ import {
 } from "../../infra/update-system-package-ownership.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
+import { formatCliCommand } from "../command-format.js";
 import { resolveNodeRunner } from "./shared.js";
 import type {
   ManagedGatewayUpdateVerdict,
@@ -77,7 +78,7 @@ export class GatewayServiceUpdateOwnershipError extends Error {
 function serviceFailureFacts(message: string, code: string): UpdateFailureFact[] {
   return message
     .split("\n")
-    .filter((line, index) => index === 0 || line !== GATEWAY_SERVICE_INSPECTION_WARNING)
+    .filter((line, index) => index === 0 || !line.startsWith(GATEWAY_SERVICE_INSPECTION_WARNING))
     .slice(0, 5)
     .map((line) => createUpdateFailureFact({ check: "managed-service", code, message: line }));
 }
@@ -159,16 +160,34 @@ export function isGatewayServiceManagementAllowedForUpdate(
 }
 
 export const GATEWAY_SERVICE_INSPECTION_WARNING =
-  "Gateway service inspection is unavailable; automatic service restart was skipped. Restart the Gateway you launched manually after the update. Any recorded service definition was left unchanged; inspect it with `openclaw gateway status --deep`.";
+  "Gateway service inspection is unavailable; automatic service restart was skipped. Any recorded service definition was left unchanged; inspect it with `openclaw gateway status --deep`.";
 
-function serviceInspectionWarningMessage(state: GatewayServiceState): string {
-  if (state.inspectionReason) {
-    return `${state.runtime?.inspectionFailure?.detail ?? formatServiceInspectionReason(state.inspectionReason)}\n${GATEWAY_SERVICE_INSPECTION_WARNING}`;
+export async function serviceInspectionWarningMessage(
+  state?: GatewayServiceState,
+  env: NodeJS.ProcessEnv = state?.env ?? process.env,
+): Promise<string> {
+  const owner = await readActiveGatewayLockIdentity({ env, timeoutMs: 1_000 }).catch(
+    () => undefined,
+  );
+  const runtime = state?.runtime;
+  const warning = [
+    GATEWAY_SERVICE_INSPECTION_WARNING,
+    owner
+      ? `A Gateway (pid ${owner.pid}, state owner since ${owner.createdAt}) holds the state.`
+      : "",
+    state?.installed || state?.command?.sourcePath
+      ? "A service definition is present and was left unchanged."
+      : "",
+    `Stop the Gateway through its owner (\`${formatCliCommand("openclaw gateway stop")}\` for the managed service), then run \`${formatCliCommand("openclaw update repair")}\`.`,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  if (state?.inspectionReason) {
+    return `${state.runtime?.inspectionFailure?.detail ?? formatServiceInspectionReason(state.inspectionReason)}\n${warning}`;
   }
   if (process.platform === "freebsd") {
-    return `${GATEWAY_SERVICE_INSPECTION_WARNING} On FreeBSD, use the Gateway's rc.d or foreground process owner for service management.`;
+    return `${warning} On FreeBSD, use the Gateway's rc.d or foreground process owner for service management.`;
   }
-  const runtime = state.runtime;
   const tasksCurrent = runtime?.systemd?.tasksCurrent;
   if (
     process.platform === "linux" &&
@@ -178,12 +197,12 @@ function serviceInspectionWarningMessage(state: GatewayServiceState): string {
     tasksCurrent !== undefined &&
     tasksCurrent > 0
   ) {
-    return `${GATEWAY_SERVICE_INSPECTION_WARNING} Processes remain in the systemd service cgroup (${tasksCurrent} tasks). Have their owner stop them before state maintenance.`;
+    return `${warning} Processes remain in the systemd service cgroup (${tasksCurrent} tasks). Have their owner stop them before state maintenance.`;
   }
   const detail = runtime?.inspectionFailure?.detail;
   return detail && (process.platform !== "linux" || /^(?:systemctl|busctl) --/.test(detail))
-    ? `${detail}\n${GATEWAY_SERVICE_INSPECTION_WARNING}`
-    : GATEWAY_SERVICE_INSPECTION_WARNING;
+    ? `${detail}\n${warning}`
+    : warning;
 }
 
 export function observedSystemdManagerUid(state: GatewayServiceState): number | undefined {
@@ -211,9 +230,9 @@ export async function inspectManagedGatewayServiceBeforeUpdate(params: {
     );
   }
   const { command } = state;
-  const unavailable = (): ManagedGatewayUpdateVerdict => ({
+  const unavailable = async (): Promise<ManagedGatewayUpdateVerdict> => ({
     kind: "unavailable",
-    message: serviceInspectionWarningMessage(state),
+    message: await serviceInspectionWarningMessage(state),
     ...(state.inspectionReason ? { inspectionReason: state.inspectionReason } : {}),
   });
   if (!command) {

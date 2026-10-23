@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import type { CiaoService } from "@homebridge/ciao";
+import { collectErrorGraphCandidates } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import {
   registerUncaughtExceptionHandler,
@@ -8,8 +9,50 @@ import {
 } from "openclaw/plugin-sdk/runtime";
 import { parseBooleanValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
-import { classifyCiaoProcessError } from "./ciao.js";
-import { formatBonjourError } from "./errors.js";
+
+function formatBonjourError(err: unknown): string {
+  if (err instanceof Error) {
+    const trimmedMessage = err.message.trim();
+    const msg = trimmedMessage || err.name || String(err).trim();
+    if (err.name && err.name !== "Error") {
+      return msg === err.name ? err.name : `${err.name}: ${msg}`;
+    }
+    return msg;
+  }
+  return String(err);
+}
+
+const CIAO_NETMASK_ASSERTION_MESSAGE_RE =
+  /IP ADDRESS VERSION MUST MATCH\.\s+NETMASK CANNOT HAVE A VERSION DIFFERENT FROM THE ADDRESS!?/u;
+// Restricted sandboxes (NemoClaw, Docker-in-Docker, k3s with locked-down policy)
+// can refuse os.networkInterfaces(), which ciao calls during NetworkManager init.
+// Node surfaces this as a SystemError mentioning the libuv syscall by name.
+const CIAO_INTERFACE_ENUMERATION_FAILURE_RE = /\bUV_INTERFACE_ADDRESSES\b/u;
+
+type CiaoProcessErrorClassification =
+  | { kind: "netmask-assertion"; formatted: string }
+  | { kind: "interface-enumeration-failure"; formatted: string };
+
+function classifyCiaoProcessError(reason: unknown): CiaoProcessErrorClassification | null {
+  for (const candidate of collectErrorGraphCandidates(reason, (current) => [
+    current.cause,
+    current.reason,
+    current.original,
+    current.error,
+    current.data,
+    ...(Array.isArray(current.errors) ? current.errors : []),
+  ])) {
+    const formatted = formatBonjourError(candidate);
+    const message = formatted.toUpperCase();
+    if (CIAO_NETMASK_ASSERTION_MESSAGE_RE.test(message)) {
+      return { kind: "netmask-assertion", formatted };
+    }
+    if (CIAO_INTERFACE_ENUMERATION_FAILURE_RE.test(message)) {
+      return { kind: "interface-enumeration-failure", formatted };
+    }
+  }
+  return null;
+}
 
 type GatewayBonjourAdvertiser = {
   stop: () => Promise<void>;
@@ -58,16 +101,6 @@ function isContainerEnvironment() {
   }
 }
 
-function isDisabledByEnv() {
-  if (process.env.NODE_ENV === "test") {
-    return true;
-  }
-  if (process.env.VITEST) {
-    return true;
-  }
-  return parseBooleanValue(process.env.OPENCLAW_DISABLE_BONJOUR) ?? isContainerEnvironment();
-}
-
 function resolveSystemMdnsHostname(): string | null {
   let raw: string;
   try {
@@ -93,16 +126,6 @@ function truncateToDnsLabel(name: string, fallback = "OpenClaw"): string {
     return name;
   }
   return truncateUtf8Prefix(name, MAX_DNS_LABEL_BYTES).replace(/-+$/, "").trim() || fallback;
-}
-
-function safeServiceName(name: string) {
-  const trimmed = name.trim();
-  return trimmed.length > 0 ? truncateToDnsLabel(trimmed) : "OpenClaw";
-}
-
-function prettifyInstanceName(name: string) {
-  const normalized = name.trim().replace(/\s+/g, " ");
-  return normalized.replace(/\s+\(OpenClaw\)\s*$/i, "").trim() || normalized;
 }
 
 function serviceSummary(label: string, svc: CiaoService): string {
@@ -149,7 +172,11 @@ export async function startGatewayBonjourAdvertiser(
   opts: GatewayBonjourAdvertiseOpts,
   logger: Pick<PluginLogger, "info" | "warn">,
 ): Promise<GatewayBonjourAdvertiser> {
-  if (isDisabledByEnv()) {
+  if (
+    process.env.NODE_ENV === "test" ||
+    process.env.VITEST ||
+    (parseBooleanValue(process.env.OPENCLAW_DISABLE_BONJOUR) ?? isContainerEnvironment())
+  ) {
     return { stop: async () => {} };
   }
 
@@ -194,34 +221,33 @@ export async function startGatewayBonjourAdvertiser(
     const hostnameLabel = hostnameWithoutLocal.slice(0, labelEnd).trim() || "openclaw";
     const hostname = truncateToDnsLabel(hostnameLabel, "openclaw");
     const instanceName = opts.instanceName?.trim() || `${hostname} (OpenClaw)`;
-    const displayName = prettifyInstanceName(instanceName);
+    const normalizedInstanceName = instanceName.trim().replace(/\s+/g, " ");
+    const displayName =
+      normalizedInstanceName.replace(/\s+\(OpenClaw\)\s*$/i, "").trim() || normalizedInstanceName;
 
-    const txtBase: Record<string, string> = {
+    const gatewayTxt: Record<string, string> = {
       role: "gateway",
       gatewayPort: String(opts.gatewayPort),
       lanHost: `${hostname}.local`,
       displayName,
     };
     if (opts.gatewayTlsEnabled) {
-      txtBase.gatewayTls = "1";
+      gatewayTxt.gatewayTls = "1";
       if (opts.gatewayTlsFingerprintSha256) {
-        txtBase.gatewayTlsSha256 = opts.gatewayTlsFingerprintSha256;
+        gatewayTxt.gatewayTlsSha256 = opts.gatewayTlsFingerprintSha256;
       }
     }
     if (opts.gatewayDirectReachable) {
-      txtBase.gatewayDirectReachable = "1";
+      gatewayTxt.gatewayDirectReachable = "1";
     }
     if (!opts.minimal && opts.tailnetDns?.trim()) {
-      txtBase.tailnetDns = opts.tailnetDns.trim();
+      gatewayTxt.tailnetDns = opts.tailnetDns.trim();
     }
     if (!opts.minimal && opts.cliPath?.trim()) {
-      txtBase.cliPath = opts.cliPath.trim();
+      gatewayTxt.cliPath = opts.cliPath.trim();
     }
 
-    const gatewayTxt: Record<string, string> = {
-      ...txtBase,
-      transport: "gateway",
-    };
+    gatewayTxt.transport = "gateway";
     if (!opts.minimal) {
       gatewayTxt.sshPort = String(opts.sshPort ?? 22);
     }
@@ -250,7 +276,7 @@ export async function startGatewayBonjourAdvertiser(
     }
 
     const gateway = responder.createService({
-      name: safeServiceName(instanceName),
+      name: truncateToDnsLabel(instanceName),
       type: "openclaw-gw",
       port: opts.gatewayPort,
       domain: "local",

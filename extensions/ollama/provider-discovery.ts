@@ -1,3 +1,4 @@
+import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { ProviderCatalogContext } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type {
   ModelProviderConfig,
@@ -9,22 +10,13 @@ import {
   getUnlistedOllamaConfiguredModelIds,
   resolveOllamaDiscoveryResult,
   shouldUseSyntheticOllamaAuth,
-  type OllamaPluginConfig,
 } from "./src/discovery-shared.js";
 import { buildOllamaProvider, capLocalOllamaProviderContext } from "./src/provider-models.js";
-
-function resolveOllamaPluginConfig(ctx: ProviderCatalogContext): OllamaPluginConfig {
-  const entries = (ctx.config.plugins?.entries ?? {}) as Record<
-    string,
-    { config?: OllamaPluginConfig }
-  >;
-  return entries.ollama?.config ?? {};
-}
 
 async function runOllamaDiscovery(ctx: ProviderCatalogContext) {
   return await resolveOllamaDiscoveryResult({
     ctx,
-    pluginConfig: resolveOllamaPluginConfig(ctx),
+    pluginConfig: resolvePluginConfigObject(ctx.config, OLLAMA_PROVIDER_ID) ?? {},
     buildProvider: async (...args) =>
       capLocalOllamaProviderContext(await buildOllamaProvider(...args)),
   });

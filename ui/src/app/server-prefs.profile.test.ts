@@ -1,10 +1,9 @@
 /* @vitest-environment jsdom */
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { UI_APPEARANCE_PREFERENCE_KEYS } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../api/gateway.ts";
 import { createImportedCustomThemeFixture } from "../test-helpers/custom-theme.ts";
-import { createStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import { selectThemeSettings, resetServerUiPref } from "./server-prefs-controls.ts";
 import { changedServerUiPrefs } from "./server-prefs-intent.ts";
@@ -17,6 +16,7 @@ import type { SyncedPrefKey } from "./server-prefs-state.ts";
 import {
   configWithPrefs,
   createServerPrefsWriter,
+  installServerPrefsStorage,
   type RequestMock,
 } from "./server-prefs.test-support.ts";
 import { flushServerUiPrefs, pushServerUiPrefs, resetServerUiPrefsSync } from "./server-prefs.ts";
@@ -64,16 +64,7 @@ async function resetProfile(
   await waitForFast(() => expect(committed).toHaveBeenCalledOnce());
 }
 
-beforeEach(() => {
-  vi.stubGlobal("localStorage", createStorageMock());
-  resetServerUiPrefsSync();
-  patchSettings({ gatewayUrl: scope });
-});
-
-afterEach(() => {
-  resetServerUiPrefsSync();
-  vi.unstubAllGlobals();
-});
+installServerPrefsStorage(scope);
 
 it("publishes empty navigation without importing legacy profile entries or writing defaults", async () => {
   patchSettings({ sidebarEntries: ["route:usage"] });

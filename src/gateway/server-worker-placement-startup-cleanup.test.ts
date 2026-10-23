@@ -3,6 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
+import {
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
+} from "../process/gateway-work-admission.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
@@ -103,6 +108,73 @@ describe("worker placement startup cleanup ownership", () => {
   beforeEach(() => {
     runtimeFactoryMocks.createSessionEvidenceResolver.mockResolvedValue(async () => "current");
     runtimeFactoryMocks.createDiskSpace.mockReturnValue(createIdleDiskSpace());
+  });
+
+  it("pauses both reconciliation schedulers during a reversible suspension", async ({ signal }) => {
+    await seedReadyNodeDesktop("suspended-reconciliation");
+    const time = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler(time.clock);
+    const inspect = vi.fn(async () => ({ status: "active" as const }));
+    const environments = createEnvironments({ inspect }, { scheduler });
+    const placements = createPlacements();
+    const sidecar = await startRuntime(createRuntime({ placements, environments, scheduler }));
+    await time.advanceBy(60_000);
+    await environments.reconcileOnce();
+    inspect.mockClear();
+    const suspended = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspended).not.toBeNull();
+    try {
+      await time.advanceBy(60_000);
+      await environments.reconcileOnce();
+      expect(inspect).not.toHaveBeenCalled();
+      suspended!.rollback();
+      const resumed = createDeferredCore();
+      inspect.mockImplementationOnce(async () => {
+        resumed.resolve();
+        return { status: "active" };
+      });
+      await time.advanceBy(60_000);
+      // Scheduled environment inspection is detached from the scheduler's tick.
+      await withinTest(resumed.promise, signal);
+      expect(inspect).toHaveBeenCalled();
+    } finally {
+      suspended?.rollback();
+      await sidecar.stop();
+      await scheduler.stop();
+    }
+  });
+
+  it("cancels a pre-existing environment inspection when restart drain begins", async () => {
+    await seedReadyNodeDesktop("preexisting-reconciliation");
+    const entered = createDeferredCore();
+    const remote = createDeferredCore<{ status: "active" }>();
+    let holdInspection = false;
+    let inspectionSignal: AbortSignal | undefined;
+    const environments = createEnvironments({
+      inspect: async ({ signal }) => {
+        if (!holdInspection) {
+          return { status: "active" };
+        }
+        inspectionSignal = signal;
+        entered.resolve();
+        return racePromiseWithAbortSignal(remote.promise, signal);
+      },
+    });
+    const placements = createPlacements();
+    const sidecar = await startRuntime(createRuntime({ placements, environments }));
+    holdInspection = true;
+    const sweeping = environments.reconcileOnce();
+    try {
+      await entered.promise;
+      markGatewayRestartDraining();
+      expect(inspectionSignal?.aborted).toBe(true);
+      await sweeping;
+    } finally {
+      remote.resolve({ status: "active" });
+      await sweeping;
+      await sidecar.stop();
+      resetGatewayWorkAdmission();
+    }
   });
 
   it("stops the active sweep before queued retention writes and candidate reads after remote cancellation", async () => {
@@ -432,7 +504,9 @@ describe("worker placement startup cleanup ownership", () => {
     },
   );
 
-  it("becomes ready before failed-placement lease adoption and drains its exact teardown", async () => {
+  it("cancels a stalled allocation lookup on shutdown and preserves its cleanup intent", async ({
+    signal,
+  }) => {
     const environmentId = "worker-startup-indeterminate";
     const operationId = "provision:startup-indeterminate";
     const releaseResolution = createDeferredCore();
@@ -481,12 +555,16 @@ describe("worker placement startup cleanup ownership", () => {
         leaseId: null,
         destroyRequestedAtMs: expect.any(Number),
       });
-
+      const intent = testState.store.get(environmentId);
       const stopped = vi.fn();
       const stopping = sidecar.stop().then(stopped);
-      await Promise.resolve();
-      expect(stopped).not.toHaveBeenCalled();
+      const pending = formatGatewayPendingCloseSteps();
+      await withinTest(stopping, signal);
+      expect(stopped).toHaveBeenCalledOnce();
       expect(destroy).not.toHaveBeenCalled();
+      expect(pending).toContain("environment=worker-startup-indeterminate");
+      expect(pending).toContain("provider=fake");
+      expect(pending).toContain("step=resolve-allocation");
 
       releaseResolution.resolve();
       await stopping;
@@ -494,18 +572,12 @@ describe("worker placement startup cleanup ownership", () => {
       expect(provision).not.toHaveBeenCalled();
       expect(testState.prepareInstallation).not.toHaveBeenCalled();
       expect(testState.bootstrapWorker).not.toHaveBeenCalled();
-      expect(destroy).toHaveBeenCalledExactlyOnceWith({
-        leaseId: "lease-startup-adopted",
-        profile: { region: "test" },
-      });
-      expect(testState.store.get(environmentId)).toMatchObject({
-        state: "destroyed",
-        leaseId: "lease-startup-adopted",
-      });
+      expect(destroy).not.toHaveBeenCalled();
+      expect(testState.store.get(environmentId)).toEqual(intent);
     } finally {
       releaseResolution.resolve();
       await starting.catch(() => undefined);
       await registeredSidecar?.stop();
     }
-  });
+  }, 10_000);
 });

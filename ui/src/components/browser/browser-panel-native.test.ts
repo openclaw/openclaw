@@ -9,6 +9,7 @@ import {
   createInspectedNode,
   createPointer,
   flushBrowserResponses,
+  openBrowserActions,
   type BrowserRequestEnvelope,
 } from "./browser-panel-controller-test-support.ts";
 import { screencastFrame, TestScreencastSocket } from "./browser-screencast-test-support.ts";
@@ -22,6 +23,51 @@ import {
 const { controllerFixture, flushFrames, setHit } = setupNativeBrowserPanelTests();
 
 describe("native Browser panel ownership", () => {
+  it("keeps a typed address when Go takes focus before a native state publication", async () => {
+    const sessionKey = "agent:main:go";
+    const tab = nativeTab("mac-go", "https://example.test/current", sessionKey);
+    const native = fakeNativeBrowser([tab]);
+    const panel = await mountSessionPanel(sessionKey);
+    const address = panel.querySelector<HTMLInputElement>(".bp-url")!;
+    address.focus();
+    address.value = "https://example.test/typed";
+    address.dispatchEvent(new Event("input", { bubbles: true }));
+    await panel.updateComplete;
+    const go = panel.querySelector<HTMLButtonElement>('button[aria-label="Go"]')!;
+    expect(go).not.toBeNull();
+    go.focus();
+    native.publish([{ ...tab, title: "Updated native title" }]);
+    await panel.updateComplete;
+    go.click();
+    await flushBrowserResponses();
+    expect(native.messages()).toContainEqual({
+      type: "navigate",
+      tabId: "mac-go",
+      url: "https://example.test/typed",
+    });
+    expect(native.messages().some((message) => message.type === "reload")).toBe(false);
+    native.publish([{ ...tab, url: "https://example.test/typed", canGoBack: true }]);
+    await panel.updateComplete;
+    panel.mobilePresentation = true;
+    await panel.updateComplete;
+    expect(panel.querySelector(".bp-url")).toBe(address);
+    address.focus();
+    address.value = "https://example.test/cancelled";
+    address.dispatchEvent(new Event("input", { bubbles: true }));
+    address.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await panel.updateComplete;
+    expect(address.value).toBe("https://example.test/typed");
+    address.focus();
+    address.value = "https://example.test/abandoned";
+    address.dispatchEvent(new Event("input", { bubbles: true }));
+    const back = panel.querySelector<HTMLButtonElement>('button[aria-label="Back"]')!;
+    back.focus();
+    back.click();
+    native.publish([{ ...tab, url: "https://example.test/current" }]);
+    await panel.updateComplete;
+    expect(address.value).toBe("https://example.test/current");
+  });
+
   it("keeps tabs local when opening Browser in another chat session", async () => {
     fakeNativeBrowser();
     const first = await mountSessionPanel("agent:main:first");
@@ -124,9 +170,12 @@ describe("native Browser panel ownership", () => {
     const panel = await mountSessionPanel("agent:main:first");
     const reply = createDeferred<{ ok: true; cancelled: boolean }>();
     native.postMessage.mockImplementationOnce(() => reply.promise);
-    panel.querySelector<HTMLButtonElement>('[aria-label="Download file"]')?.click();
+    (await openBrowserActions(panel))
+      .querySelector<HTMLElement>('[aria-label="Download file"]')!
+      .click();
     await panel.updateComplete;
-    expect(panel.querySelector('[aria-label="Downloading…"]')?.getAttribute("aria-busy")).toBe(
+    await openBrowserActions(panel);
+    expect(document.querySelector('[aria-label="Downloading…"]')?.getAttribute("aria-busy")).toBe(
       "true",
     );
 
@@ -136,14 +185,17 @@ describe("native Browser panel ownership", () => {
     expect(panel.querySelector<HTMLInputElement>(".bp-url")?.value).toBe(
       "https://example.test/second",
     );
-    expect(panel.querySelector('[aria-label="Download file"]')?.getAttribute("aria-busy")).toBe(
+    await openBrowserActions(panel);
+    expect(document.querySelector('[aria-label="Download file"]')?.getAttribute("aria-busy")).toBe(
       "false",
     );
     reply.reject(new Error("The old session's save failed"));
     await flushBrowserResponses();
     await panel.updateComplete;
     expect(panel.querySelector(".bp-note--error")).toBeNull();
-    panel.querySelector<HTMLButtonElement>('[aria-label="Download file"]')?.click();
+    (await openBrowserActions(panel))
+      .querySelector<HTMLElement>('[aria-label="Download file"]')!
+      .click();
     await flushBrowserResponses();
     expect(native.messages().filter((message) => message.type === "download")).toEqual([
       { type: "download", tabId: "mac-first" },

@@ -15,7 +15,6 @@ import {
 import { readPresenceEntries } from "../../app/user-profile.ts";
 import { BROWSER_ANNOTATION_EVENT } from "../../components/browser/browser-annotation.ts";
 import { hasModalSurface } from "../../components/overlay-registry.ts";
-import { matchesShortcutCombo } from "../../lib/keyboard-shortcut-contract.ts";
 import { modelAuthEventInvalidates } from "../../lib/model-auth-request-state.ts";
 import { isSessionReactionEvent } from "../../lib/protocol-validators.generated/activity.js";
 import { listen } from "../../lib/reactive/listener.ts";
@@ -40,18 +39,16 @@ import {
   receiveBrowserAnnotation as admitBrowserAnnotation,
 } from "./chat-pane-browser-annotation.ts";
 import { createChatPaneMcpApps } from "./chat-pane-mcp-app.ts";
-import { SIDEBAR_PANEL_SHORTCUTS } from "./chat-pane-panel-shortcuts.ts";
+import { resolveSidebarPanelShortcut } from "./chat-pane-panel-shortcuts.ts";
 import { openPreferredSidebarPanel, releaseAttachmentWorkspaceOwner } from "./chat-pane-rails.ts";
 import { ChatPaneSessionObservation } from "./chat-pane-session-observation.ts";
 import { createChatPaneSessionPanelToggles } from "./chat-pane-session-panel-toggle.ts";
 import { focusChatComposerFromPrintableKeydown } from "./chat-pane-shared.ts";
 import { resolveSidebarLayoutForBoard } from "./chat-pane-sidebar-layout.ts";
-import {
-  subscribeChatPaneSnapshotInvalidation,
-  subscribeChatPaneStartup,
-} from "./chat-pane-startup-subscriptions.ts";
+import { subscribeChatPaneSnapshotInvalidation } from "./chat-pane-startup-subscriptions.ts";
 import type { ChatPaneInputChanges } from "./chat-pane-state-owner.ts";
 import { getChatPendingInputs } from "./chat-pending-inputs.ts";
+import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { cancelChatModelRecovery } from "./chat-session.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import { createPageState } from "./chat-state-page.ts";
@@ -63,18 +60,22 @@ import {
   refreshChatMetadata,
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
-import { resetChatViewState } from "./chat-view-state.ts";
+import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { publishChatWorkContext } from "./chat-work-context.ts";
 import { resolveChatAttachmentLimits } from "./components/chat-attachment-admission.ts";
-import { getChatComposerState } from "./components/chat-composer-state.ts";
+import { getChatComposerState, resetChatComposerState } from "./components/chat-composer-state.ts";
 import { dismissConfirmedActionPopovers } from "./components/chat-message-confirmation-view.tsx";
 import { openSessionWorkspaceFile } from "./components/chat-session-workspace.ts";
+import { resetThreadPresentation } from "./components/chat-thread-interactions.ts";
 import { retainCreatedIncognitoComposerScope } from "./composer-persistence-state.ts";
-import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "./composer-persistence.ts";
 import { connectCreatedComposerQueue } from "./creation-composer-recovery.ts";
 import { exportChatMarkdown } from "./export.ts";
 import { admitChatSubmission } from "./history-merge.ts";
-import { admitInitialTurnHandoff } from "./initial-turn-handoff-admission.ts";
+import {
+  admitInitialChatTurn,
+  admitInitialTurnHandoff,
+  readAcknowledgedInitialRun,
+} from "./initial-turn-handoff-admission.ts";
 import { subscribeInitialTurnHandoff } from "./initial-turn-handoff.ts";
 import { applyChatCacheSnapshot, readChatSessionSnapshot } from "./session-message-cache.ts";
 import { closeSlot } from "./sidebar-layout.ts";
@@ -99,6 +100,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       },
       pending: this.pendingPanelToggles,
       updateSidebarLayout: (layout) => this.commitSidebarLayout(layout),
+      onOpenPanel: (slot) => this.navigateMobileHost({ area: "panels", slot }),
     });
 
     const syncLaunch = createChatPaneMcpApps({
@@ -226,21 +228,16 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     ) {
       return;
     }
-    const shortcut = Object.values(SIDEBAR_PANEL_SHORTCUTS).find(
-      (entry) => entry && matchesShortcutCombo(entry.combo, event),
-    );
     const discussionState = this.sessionDiscussion.snapshot.states.get(state.sessionKey.trim());
-    if (
-      shortcut?.available({
-        state,
-        desktopAvailable: isDesktopPanelAvailable(this.context.gateway.snapshot),
-        discussion: state.connected && state.client ? true : null,
-        discussionAvailable: discussionState === "available" || discussionState === "open",
-        dashboardAvailable: () => !this.compact && this.isBoardPanelAvailable(),
-      })
-    ) {
+    const slot = resolveSidebarPanelShortcut(event, () => ({
+      state,
+      desktopAvailable: isDesktopPanelAvailable(this.context.gateway.snapshot),
+      discussion: state.connected && state.client ? true : null,
+      discussionAvailable: discussionState === "available" || discussionState === "open",
+      dashboardAvailable: () => !this.compact && this.isBoardPanelAvailable(),
+    }));
+    if (slot) {
       event.preventDefault();
-      const { slot } = shortcut;
       const visible = this.isSlotShown(state.sidebarLayout, slot);
       if (visible) {
         releaseAttachmentWorkspaceOwner(state, slot);
@@ -250,6 +247,9 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
           ? closeSlot(state.sidebarLayout, slot)
           : openPreferredSidebarPanel(state, state.sidebarLayout, slot),
       );
+      if (!visible) {
+        this.navigateMobileHost({ area: "panels", slot });
+      }
       return;
     }
 
@@ -299,8 +299,9 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       this.presented && document.visibilityState !== "hidden";
     const refreshPresentedReads = () => {
       if (pageState.chatMetadataIsPresented?.()) {
-        void refreshChatMetadata(pageState, { automatic: true });
+        void refreshChatMetadata(pageState);
         this.resumeDeferredSessionHydration();
+        this.markSessionRead(selectedChatSessionRow(pageState));
         void this.refreshTaskSuggestions({ automatic: true });
       }
     };
@@ -312,6 +313,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     }
     pageState.sidebarLayout = this.restorePaneSidebarLayout(pageState.sidebarLayout);
     pageState.getWorkContext = () => this.workContext;
+    pageState.isRouteSessionPending = () => this.routeResolutionPending;
     // Task tabs can precede main chat in DOM order; viewport reads and commands
     // must resolve through the same transcript owner.
     pageState.chatIsProgrammaticScroll = () => this.transcript.isProgrammaticScroll;
@@ -338,6 +340,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         // First-turn handoffs are scoped to their Gateway client and must be
         // claimed before attach starts outbox and transcript hydration.
         pageState.client = this.context.gateway.snapshot.client ?? null;
+        const initialRun = readAcknowledgedInitialRun(pageState);
         const snapshot = readChatSessionSnapshot(pageState.chatMessagesBySession, pageState, {
           sessionKey: initialSessionKey,
         });
@@ -350,21 +353,14 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         } else {
           this.hydrateStoredChatSnapshot(pageState, initialSessionKey);
         }
-        if (admitInitialTurnHandoff(pageState, initialSessionKey)) {
-          pageState.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
-          pageState.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
-        }
-        admitChatSubmission(pageState, getChatPendingInputs(pageState)?.page.items);
+        admitInitialChatTurn(pageState, initialRun);
       }
     }
     chatState.attach(pageState);
     chatState.addCleanup(() => this.retireSessionObservation());
     chatState.addCleanup(
       subscribeInitialTurnHandoff(() => {
-        if (admitInitialTurnHandoff(pageState, pageState.sessionKey)) {
-          pageState.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
-          pageState.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
-        }
+        admitInitialTurnHandoff(pageState, pageState.sessionKey);
       }),
     );
     // Identity publications start scoped loads even when this retained pane is hidden.
@@ -443,7 +439,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         const state = this.state;
         if (state && modelAuthEventInvalidates(event)) {
           state.modelAuthStatusResult = null;
-          state.modelAuthStatusError = null;
           void refreshChatModelAuthStatus(state);
         }
         if (
@@ -508,7 +503,18 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     this.applySessionsState(this.context.sessions.state);
     // Roster receipts also evict deleted history, settle pending aborts, and admit queued sends.
     chatState.addCleanup(this.context.sessions.subscribe(this.applySessionsState.bind(this)));
-    chatState.addCleanup(subscribeChatPaneStartup(this.context, () => this.state));
+    chatState.addCleanup(
+      this.context.placementStartup.subscribe(() => {
+        const state = this.state;
+        if (state) {
+          // Admit each accepted initial turn before waking followers parked behind recovery.
+          admitChatSubmission(state, getChatPendingInputs(state)?.page.items);
+          if (!parseCatalogSessionKey(state.sessionKey)) {
+            void resumeStoredChatOutboxes(state);
+          }
+        }
+      }),
+    );
     chatState.addCleanup(
       subscribeChatPaneSnapshotInvalidation(
         () => this.state,
@@ -565,6 +571,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         // A retained pane owns one conversation for its lifetime. Only its
         // canonical spelling can change after Gateway defaults resolve.
         this.state.sessionKey = nextSessionKey;
+        const initialRun = readAcknowledgedInitialRun(this.state);
         const nextAgentId = parseAgentSessionKey(nextSessionKey)?.agentId;
         if (nextAgentId) {
           applyChatAgentOwnerTransition(this.state, nextAgentId);
@@ -574,12 +581,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         // path, so its one-shot handoffs would expire unclaimed: the rejected turn
         // would vanish instead of offering a retry, and the accepted prompt would
         // stay hidden until the transcript bootstrap resolved.
-        const rejectedTurn = admitInitialTurnHandoff(this.state, nextSessionKey);
-        admitChatSubmission(this.state, getChatPendingInputs(this.state)?.page.items);
-        if (rejectedTurn) {
-          this.state.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
-          this.state.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
-        }
+        admitInitialChatTurn(this.state, initialRun);
       }
       if (nextSessionKey) {
         const handoff = this.takeSessionHandoff(nextSessionKey);
@@ -602,6 +604,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     }
     this.syncSessionReactions();
     this.syncRetainedBoardSession(this.resolveBoardView());
+    this.resumeConfirmedRouteWork(changes.routeResolutionPending);
   }
 
   override afterRender(focusComposerChanged: boolean) {
@@ -697,7 +700,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     this.sessionDiscussionPanels.clear();
     this.taskSuggestionsRequestVersion += 1;
     this.setTaskSuggestions([]);
-    this.tasks.busyIds = new Set();
     this.tasks.operations = new Map();
     this.resetSessionSuggestions();
     this.resetSessionReactions();
@@ -717,7 +719,8 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     this.presence.update(undefined);
     this.announceCommandPaletteTarget(null);
     dismissConfirmedActionPopovers(this.element);
-    resetChatViewState(this.presentationId);
+    resetChatComposerState(this.presentationId);
+    resetThreadPresentation(this.presentationId);
     this.state = undefined;
     this.connectedClient = null;
     disposeQuestionPromptState(this.questionPromptState);

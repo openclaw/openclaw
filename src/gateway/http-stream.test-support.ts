@@ -498,7 +498,6 @@ export function emitResolvedStreamingFailure(
       lifecycleGeneration: getAgentEventLifecycleGeneration,
       startedAt: Date.now(),
       state: {
-        currentTurnUserMessagePersisted: true,
         lifecycleFinishing: false,
         lifecycleEnded: false,
       },

@@ -31,14 +31,23 @@ type OperatorRunCancellationContext = Pick<
 
 /** Retain authority before its execution or queue owner can arm cancellation. */
 export async function retainGatewayOperatorRun(
-  params: Parameters<typeof captureGatewayOperatorRunAuthority>[0] & {
+  params: Omit<
+    Parameters<typeof captureGatewayOperatorRunAuthority>[0],
+    "independentContinuation"
+  > & {
     context: OperatorRunCancellationContext;
     runId: string;
+    /** Canonical child relationship from the admitted session. */
+    spawnedBy?: string;
     entry?: RpcSourceRef;
     abortSession?: Extract<ChatAbortSessionSnapshot, { ok: true }>["value"];
   },
 ) {
-  const captured = await captureGatewayOperatorRunAuthority(params);
+  const captured = await captureGatewayOperatorRunAuthority({
+    ...params,
+    // Every child owns its accepted work beyond the requester's recovery turn.
+    independentContinuation: params.spawnedBy ? true : undefined,
+  });
   const releaseSource =
     captured?.release ?? retainGatewayDeviceRevocation(params.hasCurrentClientAuthority);
   const signal = captured?.authority.signal;

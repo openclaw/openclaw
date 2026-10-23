@@ -1,34 +1,27 @@
 import {
   ErrorCodes,
   errorShape,
-  validateCronAddParams,
   validateCronGetParams,
   validateCronRemoveParams,
   validateCronRunParams,
   validateCronStatusParams,
   validateCronUpdateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { captureCronStreamSandboxTarget } from "../../agents/sandbox/stream-context.js";
 import { bindCronSelfRemovalCommitGuard } from "../../cron/active-jobs.js";
 import { tryResolveCronJobEffectiveAgentId } from "../../cron/agent-id.js";
 import {
   CronJobConfigRevisionConflictError,
   resolveCronJobConfigRevision,
 } from "../../cron/config-revision.js";
-import { assertValidCronCreateDelivery } from "../../cron/delivery-channel-validation.js";
-import {
-  resolveCronDeliveryFailurePreview,
-  resolveCronDeliveryPreview,
-} from "../../cron/delivery-preview.js";
-import { cronAddResultReadView, cronJobReadView } from "../../cron/job-read-view.js";
+import { resolveCronDeliveryFailurePreview } from "../../cron/delivery-preview.js";
+import { cronJobReadView } from "../../cron/job-read-view.js";
+import { resolveCronOperatorExecutionRevision } from "../../cron/service/jobs-tool-policy.js";
 import type { CronUpdateOptions } from "../../cron/service/state.js";
 import { isInvalidCronSessionTargetIdError } from "../../cron/session-target.js";
-import { cronJobUsesToolRuntime } from "../../cron/tools-allow.js";
-import type {
-  CronDeliveryPreview,
-  CronJob,
-  CronJobCreate,
-  CronJobPatch,
-} from "../../cron/types.js";
+import { CronStreamApprovalEndedError } from "../../cron/stream-approval-outcome.js";
+import { cronUpdateRequiresStreamExecAuthority } from "../../cron/stream-exec-authority.js";
+import type { CronDeliveryPreview, CronJobPatch, CronStoredJob } from "../../cron/types.js";
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
@@ -39,18 +32,20 @@ import {
 } from "../cron-creator-authority-grant.js";
 import { getGatewayProcessInstanceId } from "../process-instance.js";
 import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
+import { cronAddHandler } from "./cron-add.js";
 import {
-  applyCronCreateCallerScopeDefault,
+  assertCronModelJobAllowed,
   cronCreateMatchesCallerScope,
-  cronJobMatchesDeclarationScope,
   cronJobMatchesCallerScope,
   cronPatchSessionRefsMatchCaller,
   readCronCallerScope,
   resolveCronCreatorAuthorityCapture,
+  resolveCronStreamExecPolicy,
   resolveCronMutationCommitGuard,
   resolveCronRequesterProvenanceForJob,
   resolveCronScheduledToolPolicyForCaller,
 } from "./cron-caller-scope.js";
+import { prepareCronCreatorSession } from "./cron-creator-session.js";
 import { isCronInvalidRequestError } from "./cron-error-classification.js";
 import { cronHistoryHandler } from "./cron-history.js";
 import {
@@ -58,10 +53,7 @@ import {
   captureCronCreatorSession,
   captureCronUpdatedInferenceBinding,
   cronRunQueuesBehindCaller,
-  requiresExplicitAgentRuntimeToolsAllow,
-  normalizeCronAddRequest,
   normalizeCronUpdateRequest,
-  assertCronDoesNotTargetAgentHarness,
 } from "./cron-input-validation.js";
 import {
   assertCronReadCurrent,
@@ -77,6 +69,7 @@ import { cronListHandler } from "./cron-list.js";
 import { respondCronJobConfigRevisionConflict } from "./cron-revision-error.js";
 import { cronRunsHandler } from "./cron-runs.js";
 import { cronScratchHandlers } from "./cron-scratch.js";
+import { withCronStreamExecApproval } from "./cron-stream-approval.js";
 import { cronWakeHandler } from "./cron-wake.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -102,164 +95,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     },
   ),
   ...cronScratchHandlers,
-  "cron.add": async ({
-    params,
-    respond,
-    context,
-    client,
-    signal,
-    sessionMutationCommitGuard,
-    hasCurrentClientAuthority,
-  }) => {
-    let candidate: unknown;
-    let enabledExplicit: boolean;
-    try {
-      ({ candidate, enabledExplicit } = normalizeCronAddRequest(params));
-    } catch (err) {
-      respondInvalidCronParams(respond, "cron.add", formatErrorMessage(err));
-      return;
-    }
-    if (!assertValidParams(candidate, validateCronAddParams, "cron.add", respond)) {
-      return;
-    }
-    const callerScope = readCronCallerScope(client);
-    const jobCreate = applyCronCreateCallerScopeDefault(candidate as CronJobCreate, callerScope);
-    let capture: ReturnType<typeof resolveCronCreatorAuthorityCapture>;
-    try {
-      capture = resolveCronCreatorAuthorityCapture(callerScope);
-    } catch (err) {
-      respondInvalidCronParams(respond, "cron.add", formatErrorMessage(err));
-      return;
-    }
-    const assertMutationCurrent = resolveCronMutationCommitGuard(client, context, undefined, {
-      sessionMutationCommitGuard,
-      hasCurrentClientAuthority,
-    });
-    const cfg = context.getRuntimeConfig();
-    if (
-      !cronCreateMatchesCallerScope({
-        job: jobCreate,
-        callerScope,
-        defaultAgentId: context.cron.getDefaultAgentId(),
-      })
-    ) {
-      respondInvalidCronParams(respond, "cron.add", "job agentId outside caller scope");
-      return;
-    }
-    if (requiresExplicitAgentRuntimeToolsAllow({ job: jobCreate, callerScope })) {
-      respondInvalidCronParams(
-        respond,
-        "cron.add",
-        "agent-runtime tool jobs require an explicit payload.toolsAllow cap",
-      );
-      return;
-    }
-    const timestampValidation = validateScheduleTimestamp(jobCreate.schedule);
-    if (!timestampValidation.ok) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, timestampValidation.message),
-      );
-      return;
-    }
-    if (
-      respondRefusedCronAgent(
-        tryResolveCronJobEffectiveAgentId(jobCreate, context.cron.getDefaultAgentId()),
-        respond,
-      )
-    ) {
-      return;
-    }
-    let creatorOptions: Awaited<ReturnType<typeof captureCronCreatorSession>> | undefined;
-    const commitGuard = () => {
-      assertMutationCurrent?.();
-      capture?.assertCurrent();
-      creatorOptions?.assertInferenceSelectionCurrent?.();
-      creatorOptions?.assertOperatorSourceCurrent?.();
-    };
-    try {
-      // Consume once, then retain the result and its current-authority guard through commit.
-      const runtimeAuthority = capture?.captureRuntimeAuthority();
-      capture &&= { ...capture, captureRuntimeAuthority: () => runtimeAuthority };
-      creatorOptions = await captureCronCreatorSession(
-        jobCreate,
-        callerScope,
-        { client, context, signal },
-        cfg,
-        runtimeAuthority !== undefined,
-      );
-      await assertCronDoesNotTargetAgentHarness(jobCreate, cfg);
-      await assertValidCronCreateDelivery(cfg, jobCreate);
-    } catch (err) {
-      creatorOptions?.disposeInferenceAuthorization?.();
-      respondInvalidCronParams(respond, "cron.add", formatErrorMessage(err));
-      return;
-    }
-    // Resolve the preview before durable add so a preview failure cannot duplicate a retry.
-    const previewContext = { cfg, defaultAgentId: context.cron.getDefaultAgentId() };
-    let deliveryPreview: CronDeliveryPreview | undefined;
-    let result: Awaited<ReturnType<typeof context.cron.add>>;
-    try {
-      deliveryPreview = await resolveCronDeliveryPreview({
-        ...previewContext,
-        job: { ...jobCreate, sourceConversation: creatorOptions.sourceConversation },
-      });
-      result = await context.cron.add(jobCreate, {
-        enabledExplicit,
-        ...creatorOptions,
-        commitGuard,
-        ...(capture ? { captureRuntimeAuthority: capture.captureRuntimeAuthority } : {}),
-        matchesExisting: (job) =>
-          cronJobMatchesDeclarationScope({
-            job,
-            input: jobCreate,
-            callerScope,
-            defaultAgentId: context.cron.getDefaultAgentId(),
-          }),
-        ...(cronJobUsesToolRuntime(jobCreate)
-          ? {
-              scheduledToolPolicy: resolveCronScheduledToolPolicyForCaller(callerScope),
-              ...(callerScope?.toolsAllowProvenance
-                ? { toolsAllowProvenance: callerScope.toolsAllowProvenance }
-                : {}),
-              ...(callerScope?.toolsAllowExecTarget
-                ? { toolsAllowExecTarget: callerScope.toolsAllowExecTarget }
-                : {}),
-            }
-          : {}),
-      });
-    } catch (err) {
-      if (
-        !(err instanceof TypeError) &&
-        !(err instanceof RangeError) &&
-        !isCronInvalidRequestError(err)
-      ) {
-        throw err;
-      }
-      respondInvalidCronParams(respond, "cron.add", formatErrorMessage(err));
-      return;
-    } finally {
-      creatorOptions.disposeInferenceAuthorization?.();
-    }
-    const job = "job" in result ? result.job : result;
-    context.logGateway.info("cron: job added", {
-      jobId: job.id,
-      declarationKey: job.declarationKey,
-      schedule: jobCreate.schedule,
-    });
-    respond(
-      true,
-      cronAddResultReadView({
-        result,
-        deliveryPreview:
-          "job" in result && !result.created
-            ? await resolveCronDeliveryPreview({ ...previewContext, job })
-            : deliveryPreview,
-      }),
-      undefined,
-    );
-  },
+  "cron.add": cronAddHandler,
   "cron.update": async ({
     params,
     respond,
@@ -269,6 +105,11 @@ export const cronHandlers: GatewayRequestHandlers = {
     sessionMutationCommitGuard,
     hasCurrentClientAuthority,
   }) => {
+    assertActiveAgentRuntimeAuthority(client, context);
+    sessionMutationCommitGuard?.();
+    if (hasCurrentClientAuthority?.() === false) {
+      throw new Error("Automation caller authority is no longer active");
+    }
     let candidate: unknown;
     let normalizedPatch: CronJobPatch | null;
     try {
@@ -319,6 +160,10 @@ export const cronHandlers: GatewayRequestHandlers = {
         : callerScope && { ...callerScope, manageAll: undefined };
     let capture: ReturnType<typeof resolveCronCreatorAuthorityCapture>;
     let inference: Awaited<ReturnType<typeof captureCronUpdatedInferenceBinding>>;
+    let operatorCapture: Awaited<ReturnType<typeof captureCronCreatorSession>> | undefined;
+    let operatorSourceExecutionRevision: string | undefined;
+    let streamExecPolicy: ReturnType<typeof resolveCronStreamExecPolicy>;
+    let creatorSessionId: string | undefined;
     if (callerScope && !callerScope.manageAll && "agentId" in patch) {
       respondInvalidCronParams(respond, "cron.update", "agentId cannot be changed by caller scope");
       return;
@@ -352,7 +197,8 @@ export const cronHandlers: GatewayRequestHandlers = {
     }
     const touchesToolRuntime = patch.payload !== undefined || Object.hasOwn(patch, "trigger");
     let deliveryPreview: CronDeliveryPreview | undefined;
-    const validateUpdate = async (jobToUpdate: CronJob) => {
+    const validateUpdate = async (jobToUpdate: CronStoredJob) => {
+      assertCronModelJobAllowed(client, cfg, jobToUpdate, patch);
       const nextJob = await assertValidCronUpdatePatch({
         cfg,
         defaultAgentId: context.cron.getDefaultAgentId(),
@@ -363,7 +209,8 @@ export const cronHandlers: GatewayRequestHandlers = {
         callerScope?.manageAll &&
         creatorScope &&
         patch.payload?.toolsAllow?.length &&
-        (!capture ||
+        // Without a fresh capture, only a job holding app authority would lose it.
+        ((!capture && jobToUpdate.runtimeAuthority !== undefined) ||
           jobToUpdate.owner?.sessionKey !== creatorScope.sessionKey ||
           !cronJobMatchesCallerScope({ job: jobToUpdate, callerScope: creatorScope }) ||
           !cronCreateMatchesCallerScope({ job: nextJob, callerScope: creatorScope }))
@@ -381,10 +228,25 @@ export const cronHandlers: GatewayRequestHandlers = {
       return nextJob;
     };
     try {
+      streamExecPolicy = resolveCronStreamExecPolicy(
+        client,
+        cronUpdateRequiresStreamExecAuthority(patch, currentJob),
+        context,
+      );
       capture = resolveCronCreatorAuthorityCapture(creatorScope);
       const runtimeAuthority = capture?.captureRuntimeAuthority();
       capture &&= { ...capture, captureRuntimeAuthority: () => runtimeAuthority };
       const nextJob = await validateUpdate(currentJob);
+      if (creatorScope) {
+        operatorSourceExecutionRevision = resolveCronOperatorExecutionRevision(nextJob);
+        operatorCapture = await captureCronCreatorSession(
+          nextJob,
+          creatorScope,
+          { client, context, signal },
+          cfg,
+          true,
+        );
+      }
       inference = runtimeAuthority
         ? undefined
         : await captureCronUpdatedInferenceBinding(nextJob, patch, cfg, {
@@ -401,10 +263,15 @@ export const cronHandlers: GatewayRequestHandlers = {
         sessionMutationCommitGuard?.();
         capture?.assertCurrent();
         inference?.assertInferenceSelectionCurrent();
+        operatorCapture?.assertOperatorSourceCurrent?.();
       },
       hasCurrentClientAuthority,
+      modelJobPolicy: { config: cfg, jobId, patch },
     });
     const updateOptions: CronUpdateOptions = {
+      ...(operatorCapture?.operatorSource
+        ? { operatorSource: operatorCapture.operatorSource, operatorSourceExecutionRevision }
+        : {}),
       ...(touchesToolRuntime
         ? {
             scheduledToolPolicy:
@@ -420,42 +287,118 @@ export const cronHandlers: GatewayRequestHandlers = {
     };
     let job: Awaited<ReturnType<typeof context.cron.update>>;
     try {
-      job = await context.cron.updateWithPrecondition(
-        jobId,
-        patch,
-        async (lockedJob) => {
-          if (
-            !cronJobMatchesCallerScope({
-              job: lockedJob,
-              callerScope,
-              defaultAgentId: context.cron.getDefaultAgentId(),
-            })
-          ) {
-            throw new Error(`unknown cron job id: ${jobId}`);
+      if (currentJob.streamSandbox && streamExecPolicy && !streamExecPolicy.sandboxContext) {
+        assertActiveAgentRuntimeAuthority(client, context);
+        throw new TypeError("Change this sandbox stream from its original sandbox session.");
+      }
+      if (streamExecPolicy) {
+        const creator = await prepareCronCreatorSession({
+          context,
+          client,
+          callerScope,
+          sessionMutationCommitGuard,
+          hasCurrentClientAuthority,
+          retainExecutionPolicy: true,
+        });
+        if (!updateOptions) {
+          throw new TypeError("A stream change requires its current creator authority.");
+        }
+        if (streamExecPolicy.sandboxContext) {
+          if (!creator.session) {
+            throw new TypeError("A sandbox stream requires its current creator session.");
           }
-          if (p.expectedConfigRevision !== undefined) {
-            const actualConfigRevision = resolveCronJobConfigRevision(lockedJob);
-            if (actualConfigRevision !== p.expectedConfigRevision) {
-              throw new CronJobConfigRevisionConflictError(
-                p.expectedConfigRevision,
-                actualConfigRevision,
-              );
-            }
-          }
-          const nextJob = await validateUpdate(lockedJob);
-          deliveryPreview = await resolveCronDeliveryFailurePreview({
-            cfg,
-            defaultAgentId: context.cron.getDefaultAgentId(),
-            job: nextJob,
+          const streamSandbox = captureCronStreamSandboxTarget({
+            sandbox: streamExecPolicy.sandboxContext,
+            ...creator.session,
           });
-          updateOptions.toolsAllowProvenance = resolveCronRequesterProvenanceForJob(
-            lockedJob,
-            readCronCallerScope(client),
+          if (
+            currentJob.streamSandbox &&
+            (currentJob.streamSandbox.scopeKey !== streamSandbox.scopeKey ||
+              currentJob.streamSandbox.sessionId !== streamSandbox.sessionId)
+          ) {
+            assertActiveAgentRuntimeAuthority(client, context);
+            throw new TypeError("Change this sandbox stream from its original sandbox session.");
+          }
+          updateOptions.streamSandbox = streamSandbox;
+        }
+        updateOptions.sessionEntryCurrent = creator.sessionEntryCurrent;
+        creatorSessionId = creator.session?.entry.sessionId;
+        updateOptions.commitGuard = () => {
+          commitGuard?.();
+          creator.assertCurrent();
+          streamExecPolicy?.assertCurrentSource?.();
+        };
+      }
+      job = await withCronStreamExecApproval({
+        context,
+        client,
+        creatorSessionId,
+        sandboxContext: streamExecPolicy?.sandboxContext,
+        assertCurrent: () => updateOptions?.commitGuard?.(),
+        onApprovalCommitted: (receipt) => streamExecPolicy?.onApprovalCommitted?.(receipt),
+        mutate: (streamExecApproval) => {
+          if (updateOptions && streamExecApproval) {
+            updateOptions.streamExecApproval = streamExecApproval;
+          }
+          return context.cron.updateWithPrecondition(
+            jobId,
+            patch,
+            async (lockedJob) => {
+              if (
+                !cronJobMatchesCallerScope({
+                  job: lockedJob,
+                  callerScope,
+                  defaultAgentId: context.cron.getDefaultAgentId(),
+                })
+              ) {
+                throw new Error(`unknown cron job id: ${jobId}`);
+              }
+              if (p.expectedConfigRevision !== undefined) {
+                const actualConfigRevision = resolveCronJobConfigRevision(lockedJob);
+                if (actualConfigRevision !== p.expectedConfigRevision) {
+                  throw new CronJobConfigRevisionConflictError(
+                    p.expectedConfigRevision,
+                    actualConfigRevision,
+                  );
+                }
+              }
+              const requiresStreamExec = cronUpdateRequiresStreamExecAuthority(patch, lockedJob);
+              if (requiresStreamExec && !streamExecPolicy) {
+                streamExecPolicy = resolveCronStreamExecPolicy(client, true, context);
+              }
+              const execPolicy = requiresStreamExec ? streamExecPolicy : undefined;
+              const nextJob = await validateUpdate(lockedJob);
+              deliveryPreview = await resolveCronDeliveryFailurePreview({
+                cfg,
+                defaultAgentId: context.cron.getDefaultAgentId(),
+                job: nextJob,
+              });
+              if (updateOptions) {
+                updateOptions.execPolicy = execPolicy;
+                // Approval resumes in the resolver's async context. Keep the
+                // admitted requester's provenance; commitGuard still checks liveness.
+                updateOptions.toolsAllowProvenance = resolveCronRequesterProvenanceForJob(
+                  lockedJob,
+                  callerScope,
+                );
+              }
+            },
+            updateOptions,
           );
         },
-        updateOptions,
-      );
+      });
     } catch (err) {
+      if (err instanceof CronStreamApprovalEndedError) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.FORBIDDEN, err.message, {
+            details: err.details,
+            retryable: false,
+          }),
+        );
+        return;
+      }
       if (err instanceof CronJobConfigRevisionConflictError) {
         respondCronJobConfigRevisionConflict(respond, err);
         return;
@@ -575,12 +518,18 @@ export const cronHandlers: GatewayRequestHandlers = {
         return;
       }
       let result: Awaited<ReturnType<typeof context.cron.enqueueRun>>;
+      const cfg = context.getRuntimeConfig();
       try {
+        assertCronModelJobAllowed(client, cfg, job);
         const commitGuard = resolveCronMutationCommitGuard(
           client,
           context,
           { callerScope, jobId },
-          { sessionMutationCommitGuard, hasCurrentClientAuthority },
+          {
+            sessionMutationCommitGuard,
+            hasCurrentClientAuthority,
+            modelJobPolicy: { config: cfg, jobId },
+          },
         );
         result = commitGuard
           ? await context.cron.enqueueRun(jobId, p.mode ?? "force", { commitGuard })

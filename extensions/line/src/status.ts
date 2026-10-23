@@ -94,7 +94,7 @@ export const lineStatusAdapter: NonNullable<
   ],
   buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
   probeAccount: async ({ account, timeoutMs }) =>
-    await (await import("./probe.runtime.js")).probeLineBot(account.channelAccessToken, timeoutMs),
+    await (await import("./probe.js")).probeLineBot(account.channelAccessToken, timeoutMs),
   resolveAccountSnapshot: ({ account, probe }) => ({
     accountId: account.accountId,
     name: account.name,

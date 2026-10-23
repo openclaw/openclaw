@@ -99,6 +99,7 @@ export function subscribeWarmBootConnection(
       }
     },
   );
+  // Rejected connection receipts retire warm-boot ownership before recovery consumers run.
   const stopConnection = gateway.subscribe((snapshot) => {
     if (gateway.connectionRevision !== bootConnectionRevision) {
       pendingBootProfileId = undefined;
@@ -190,6 +191,7 @@ export function subscribeBootRecordPersistence(
       });
     }
   };
+  // Persist admitted owner snapshots independently of mounted views.
   const stops = [gateway, agents, sessions].map((capability) =>
     capability.subscribe(persistLiveBootRecord),
   );

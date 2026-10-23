@@ -198,7 +198,7 @@ it(
         expect(await effects(first.home)).toBe("sole\n");
 
         const canvasIdentity = loadOrCreateDeviceIdentity({
-          path: path.join(root, "canvas.sqlite"),
+          path: path.join(root, "canvas", "client", "credentials.sqlite"),
         });
         const startCanvas = () => {
           const client = new GatewayClient({

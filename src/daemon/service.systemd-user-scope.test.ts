@@ -104,8 +104,6 @@ it("keeps strict legacy-user inspection on one admitted unit until its operation
     ActiveState: "active",
     SubState: "running",
     StartLimitBurst: 5,
-    ActiveEnterTimestampMonotonic: 100,
-    InactiveEnterTimestampMonotonic: 0,
     UnitFileState: "enabled",
     RefuseManualStart: false,
     CanStart: true,
@@ -115,8 +113,6 @@ it("keeps strict legacy-user inspection on one admitted unit until its operation
     ExecMainStatus: 0,
     ExecMainCode: 0,
     KillMode: "control-group",
-    TasksCurrent: 1,
-    MemoryCurrent: 1024,
     ControlGroup: `/user.slice/${unitName}`,
   };
   const query = vi.fn(async (args: string[]) => {

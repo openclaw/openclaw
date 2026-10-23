@@ -1,7 +1,14 @@
 import type { OpenClawConfig } from "../runtime-api.js";
-import { findMSTeamsConversationMember } from "./graph-conversation-members.js";
-import { resolveConversationPath, resolveGraphMessageContext } from "./graph-messages.js";
-import { deleteGraphRequest, escapeOData, mutateGraphJson, resolveGraphToken } from "./graph.js";
+import { resolveGraphMessageContext } from "./graph-messages.js";
+import { deleteGraphRequest, escapeOData, fetchAllGraphPages, mutateGraphJson } from "./graph.js";
+
+type MSTeamsConversationMember = {
+  id?: string;
+  userId?: string;
+  email?: string;
+};
+
+const MAX_CONVERSATION_MEMBER_PAGES = 100;
 
 type AddParticipantMSTeamsParams = {
   cfg: OpenClawConfig;
@@ -60,22 +67,27 @@ type RemoveParticipantMSTeamsParams = {
  * Lists members first to resolve the membership ID, then deletes.
  */
 export async function removeParticipantMSTeams(params: RemoveParticipantMSTeamsParams) {
-  const token = await resolveGraphToken(params.cfg, { accountId: params.accountId });
-  const { conversationId, member } = await findMSTeamsConversationMember({
+  const { token, conversationId, basePath } = await resolveGraphMessageContext(params);
+  const userId = params.userId.trim().toLowerCase();
+  const result = await fetchAllGraphPages<MSTeamsConversationMember>({
     token,
-    to: params.to,
-    cfg: params.cfg,
-    accountId: params.accountId,
-    userId: params.userId,
+    path: `${basePath}/members`,
+    maxPages: MAX_CONVERSATION_MEMBER_PAGES,
+    collectItems: false,
+    findOne: (candidate) =>
+      candidate.userId?.trim().toLowerCase() === userId ||
+      candidate.email?.trim().toLowerCase() === userId,
   });
+  if (result.truncated) {
+    throw new Error("MS Teams conversation member pagination limit exceeded");
+  }
+  const member = result.found;
   if (!member?.id) {
     throw new Error(`User ${params.userId} is not a member of this conversation`);
   }
-  const conv = resolveConversationPath(conversationId);
-
   await deleteGraphRequest({
     token,
-    path: `${conv.basePath}/members/${encodeURIComponent(member.id)}`,
+    path: `${basePath}/members/${encodeURIComponent(member.id)}`,
   });
 
   return { removed: { userId: params.userId, chatId: conversationId } };

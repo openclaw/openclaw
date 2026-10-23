@@ -16,6 +16,7 @@ import {
 import { flush } from "../../test-helpers/solid-settle.ts";
 import {
   createPlacementPane,
+  selectPlacementConfiguration,
   deviceFixture,
   type AsyncRequest,
 } from "./chat-pane-placement.test-support.ts";
@@ -89,6 +90,14 @@ function startMove(pane: ReturnType<typeof createTestChatPane>["pane"], row: Gat
 let dialogs: ReturnType<typeof createModalDialogTestFixture>;
 
 beforeEach(() => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
   dialogs = createModalDialogTestFixture();
 });
 
@@ -318,7 +327,7 @@ describe("chat pane placement", () => {
     expect(multiMode?.disabled).toBe(false);
     multiMode?.click();
     flush();
-    selectOption("machine:beast");
+    await selectPlacementConfiguration("Machine", "beast");
     clickButton("Move session");
     await moving;
 
@@ -507,6 +516,11 @@ describe("local session placement actions", () => {
     const session = activePlacementSession();
     const moving = dialogs.track(startMove(pane, session));
     await dialogs.waitFor(() => expect(option("gateway")).not.toBeNull());
+    selectOption("gateway");
+    expect(
+      document.body.querySelector<HTMLButtonElement>('openclaw-modal-dialog button[type="submit"]')!
+        .disabled,
+    ).toBe(false);
     session.placement.generation = 2;
     clickButton("Move session");
     await moving;

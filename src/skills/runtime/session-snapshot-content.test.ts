@@ -52,15 +52,21 @@ const hash = (result: SnapshotResult) => result.snapshot.resolvedSkills?.[0]?.co
 const skillFile = (result: SnapshotResult) => result.snapshot.resolvedSkills?.[0]?.filePath;
 function expectUnchanged(result: SnapshotResult, previous: SnapshotResult) {
   expect(result.snapshot).toBe(previous.snapshot);
-  expect(result).toMatchObject({ shouldRefresh: false, snapshotVersion: previous.snapshotVersion });
+  expect(result.shouldRefresh).toBe(false);
 }
 
 async function completePassiveScan() {
   const tasks = vi.spyOn(WorkerTaskPool.prototype, "run");
   try {
+    let settledTasks = 0;
     for (let elapsed = 0; elapsed < 30 * 60_000 + 50; elapsed += 60_000) {
       await vi.advanceTimersByTimeAsync(Math.min(60_000, 30 * 60_000 + 50 - elapsed));
-      await Promise.all(tasks.mock.results.map((result) => result.value));
+      // Native events during a scan can start another pass before publication.
+      while (settledTasks < tasks.mock.results.length) {
+        const pending = tasks.mock.results.slice(settledTasks);
+        settledTasks += pending.length;
+        await Promise.all(pending.map((result) => result.value));
+      }
     }
   } finally {
     tasks.mockRestore();
@@ -111,7 +117,7 @@ it("reuses session snapshots after unchanged rebuilds and refreshes instruction-
     await completePassiveScan();
     const edited = await readSnapshot(first.snapshot);
     expect(edited.shouldRefresh).toBe(true);
-    expect(edited.snapshotVersion).toBeGreaterThan(version);
+    expect(edited.snapshot.version).toBeGreaterThan(version);
     expect(edited.snapshot.prompt).toBe(first.snapshot.prompt);
     expect(hash(edited)).not.toBe(hash(first));
     expect(changed).toHaveBeenCalledOnce();

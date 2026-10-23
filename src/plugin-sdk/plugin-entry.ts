@@ -267,3 +267,9 @@ export function definePluginEntry({
     register,
   };
 }
+
+export type {
+  PluginHookBeforeChannelIngressContext,
+  PluginHookBeforeChannelIngressEvent,
+  PluginHookBeforeChannelIngressResult,
+} from "../plugins/hook-message.types.js";

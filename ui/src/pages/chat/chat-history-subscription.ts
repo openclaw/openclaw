@@ -24,7 +24,11 @@ import {
   setChatHistoryRetrying,
 } from "./chat-history-state.ts";
 import type { ChatState } from "./chat-state-contract.ts";
-import { projectSessionApprovalReplay } from "./session-approval-projection.ts";
+import {
+  projectSessionApprovalReplay,
+  reconcileSessionApprovalEvent,
+  recordSessionApprovalReplay,
+} from "./session-approval-projection.ts";
 
 type ChatSessionMessageSubscriptionState = ChatState & {
   sessions: Pick<SessionCapability, "subscribeMessages" | "unsubscribeMessages">;
@@ -65,6 +69,7 @@ function isCurrentSelectedSessionMessageSubscriptionSync(
 export function disposeSelectedSessionMessageSubscription(state: ChatState): void {
   const requests = chatHistoryRequests(state);
   requests.subscriptionGeneration += 1;
+  requests.pendingApprovalReplay = undefined;
   requests.subscriptionRetry?.abort();
   delete requests.subscriptionRetry;
   setChatHistoryRetrying(state, "subscription", false);
@@ -73,6 +78,7 @@ export function disposeSelectedSessionMessageSubscription(state: ChatState): voi
   state.chatSessionMessageSubscriptionRequestedKey = null;
   state.chatSessionMessageSubscription = null;
   state.chatSessionApprovalQueue = [];
+  state.chatSessionApprovalReplay = undefined;
   const sessions = state.sessions;
   if (subscription && sessions?.unsubscribeMessages) {
     // The shared capability retains failed releases until connection cleanup.
@@ -243,6 +249,12 @@ async function synchronizeSelectedSessionMessageSubscription(
     }
     return isCurrent() && previousSubscription !== null;
   }
+  const approvalReplayOwner: NonNullable<typeof paneRequests.pendingApprovalReplay> = {
+    generation,
+    events: new Map(),
+  };
+  paneRequests.pendingApprovalReplay = approvalReplayOwner;
+  state.chatSessionApprovalQueue = [];
   try {
     const unsubscribePromise =
       shouldUnsubscribePrevious && previousSubscription
@@ -281,13 +293,23 @@ async function synchronizeSelectedSessionMessageSubscription(
     }
     state.chatSessionMessageSubscriptionRequestedKey = nextKey;
     state.chatSessionMessageSubscription = subscribed;
-    state.chatSessionApprovalQueue = subscribed.includeApprovals
-      ? projectSessionApprovalReplay(
-          subscribed.approvalReplay,
-          subscribed.key,
-          subscribed.agentId ?? undefined,
-        )
-      : [];
+    if (subscribed.includeApprovals) {
+      const agentId = nextSubscriptionAgentId ?? undefined;
+      recordSessionApprovalReplay(state, subscribed.approvalReplay, agentId);
+      let queue = projectSessionApprovalReplay(
+        subscribed.approvalReplay,
+        subscribed.key,
+        subscribed.agentId ?? undefined,
+      );
+      // Ordered live events received during acquisition supersede its pending snapshot.
+      for (const event of approvalReplayOwner.events.values()) {
+        queue = reconcileSessionApprovalEvent(queue, event, state.sessionKey, agentId) ?? queue;
+      }
+      state.chatSessionApprovalQueue = queue;
+    } else {
+      state.chatSessionApprovalQueue = [];
+      state.chatSessionApprovalReplay = undefined;
+    }
     if (unsubscribeResult.status === "rejected") {
       publishError(unsubscribeResult.reason);
     } else {
@@ -299,5 +321,9 @@ async function synchronizeSelectedSessionMessageSubscription(
       publishError(err);
     }
     return false;
+  } finally {
+    if (paneRequests.pendingApprovalReplay === approvalReplayOwner) {
+      paneRequests.pendingApprovalReplay = undefined;
+    }
   }
 }

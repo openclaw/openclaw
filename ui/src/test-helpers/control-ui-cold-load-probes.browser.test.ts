@@ -2,6 +2,82 @@ import { describe, expect, it } from "vitest";
 import { createColdLoadProbeInitScript } from "./control-ui-cold-load-probes.ts";
 
 describe("serialized cold-load probes", () => {
+  it("retires closed-socket requests without losing their RPC count or another socket's work", () => {
+    const iframe = document.createElement("iframe");
+    document.body.append(iframe);
+    try {
+      const target = iframe.contentWindow;
+      const doc = iframe.contentDocument;
+      if (!target || !doc) {
+        throw new Error("Probe realm was not created");
+      }
+      const script = doc.createElement("script");
+      script.textContent = `
+        window.WebSocket = class extends EventTarget { send() {} };
+        ${createColdLoadProbeInitScript({ ownerProbes: false, latencyMs: 0, frameGapMs: 0, events: [] })}
+        const oldSocket = new WebSocket();
+        const currentSocket = new WebSocket();
+        oldSocket.send(JSON.stringify({type: "req", id: "old", method: "sessions.list"}));
+        currentSocket.send(JSON.stringify({type: "req", id: "current", method: "chat.startup"}));
+        oldSocket.dispatchEvent(new Event("close"));
+        const afterFirst = __coldLoad.read();
+        const first = { pending: afterFirst.pendingMethods, rpcs: afterFirst.rpcs.map(rpc => ({ method: rpc.method, abandoned: rpc.abandoned })) };
+        currentSocket.dispatchEvent(new Event("close"));
+        const afterSecond = __coldLoad.read();
+        window.closedSocketProof = { first, pending: afterSecond.pending, rpcs: afterSecond.rpcs.length };
+      `;
+      doc.body.append(script);
+      expect(Reflect.get(target, "closedSocketProof")).toEqual({
+        first: { pending: ["chat.startup"], rpcs: [{ method: "sessions.list", abandoned: true }] },
+        pending: 0,
+        rpcs: 2,
+      });
+    } finally {
+      iframe.remove();
+    }
+  });
+
+  it("holds the challenge until connect can leave without an intercepted send", () => {
+    const iframe = document.createElement("iframe");
+    document.body.append(iframe);
+    try {
+      const target = iframe.contentWindow;
+      const doc = iframe.contentDocument;
+      if (!target || !doc) {
+        throw new Error("Probe realm was not created");
+      }
+      const script = doc.createElement("script");
+      script.textContent = `
+        const timers = [];
+        window.setTimeout = (callback, delay) => { timers.push({callback, delay}); return timers.length; };
+        const sent = [];
+        window.WebSocket = class extends EventTarget { send(data) { sent.push(JSON.parse(data).method); } };
+        ${createColdLoadProbeInitScript({ ownerProbes: false, latencyMs: 0, frameGapMs: 0, connectNotBeforeMs: 1e9, events: [] })}
+        const socket = new WebSocket();
+        let challenges = 0;
+        socket.addEventListener("message", () => {
+          challenges++;
+          socket.send(JSON.stringify({type: "req", id: "connect", method: "connect"}));
+        });
+        socket.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({type: "event", event: "connect.challenge", payload: {nonce: "synthetic"}}) }));
+        const before = { challenges, sent: [...sent] };
+        const timer = timers.shift();
+        timer.callback();
+        window.connectDispatchProof = { before, challenges, sent, delayed: timer.delay > 0, pendingTimers: timers.length };
+      `;
+      doc.body.append(script);
+      expect(Reflect.get(target, "connectDispatchProof")).toEqual({
+        before: { challenges: 0, sent: [] },
+        challenges: 1,
+        sent: ["connect"],
+        delayed: true,
+        pendingTimers: 0,
+      });
+    } finally {
+      iframe.remove();
+    }
+  });
+
   it.each([true, false])("restores instrumentation with owner probes %s", async (ownerProbes) => {
     const iframe = document.createElement("iframe");
     document.body.append(iframe);
@@ -26,8 +102,11 @@ describe("serialized cold-load probes", () => {
         const owner = {
           hostElement: sidebar, isConnected: true,
           sessionData: { requestSessionDataUpdate() { return this; } },
-          invalidate() { return this; }, prepareRender() { return this; }, commitRender() { return this; }
+          shouldPublishSessionData() { return true; },
+          invalidate() { return this; }, prepareRender() { return this; }, commitRender() { return this; },
+          releaseSidebarSnapshot() {}
         };
+        const originalPublicationGate = owner.shouldPublishSessionData;
         if (${ownerProbes}) map.set(sidebar, owner);
         const paneOwner = {
           element: pane, isConnected: true,
@@ -52,6 +131,7 @@ describe("serialized cold-load probes", () => {
               nativeUntouched, restoredAfterCapture, receiverPreserved,
               nativeRestored: WeakMap === NativeWeakMap && NativeWeakMap.prototype.set === nativeSet && requestAnimationFrame === nativeFrame,
               renderRestored: paneOwner.render === originalRender,
+              publicationGateRestored: owner.shouldPublishSessionData === originalPublicationGate,
               storedOwner: ${ownerProbes} ? map.get(sidebar) === owner : !map.has(sidebar),
               ownerProbes: live.ownerProbes,
               sidebarMethods: live.solidSidebar?.passes.map(pass => pass.method) ?? [],
@@ -70,6 +150,7 @@ describe("serialized cold-load probes", () => {
         receiverPreserved: true,
         nativeRestored: true,
         renderRestored: true,
+        publicationGateRestored: true,
         storedOwner: true,
         ownerProbes,
         sidebarMethods: ownerProbes ? ["invalidate", "prepareRender", "commitRender"] : [],

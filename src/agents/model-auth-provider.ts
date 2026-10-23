@@ -40,6 +40,7 @@ import {
   resolveManagedSecretRefRuntimeProviderAuth,
 } from "./model-auth-runtime-config.js";
 import {
+  assertProviderAuthSupportsHttp,
   ProviderAuthError,
   resolveDirectProviderCredentialMode,
   type ResolvedProviderAuth,
@@ -233,6 +234,7 @@ export async function resolveApiKeyForProviderCore(input: {
       preferredProfile: input.preferredProfile,
     });
     input.signal?.throwIfAborted();
+    assertProviderAuthSupportsHttp(auth, input.provider);
     assertAuthModeAllowedForModel({
       provider: input.provider,
       modelApi: input.modelApi,
@@ -655,6 +657,7 @@ export async function resolveApiKeyForProviderCore(input: {
   });
   params.signal?.throwIfAborted();
   if (syntheticLocalAuth) {
+    assertProviderAuthSupportsHttp(syntheticLocalAuth, provider);
     return syntheticLocalAuth;
   }
 

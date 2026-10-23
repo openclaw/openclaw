@@ -7,6 +7,7 @@ import {
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { defaultRuntime } from "../runtime.js";
 import { recordAgentDatabaseAdmissions } from "../state/agent-database-admission.js";
 import {
   listAgentProvenance,
@@ -18,20 +19,12 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { agentsListCommand } from "./agents.commands.list.js";
-import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 let config: OpenClawConfig;
 vi.mock("./config-validation.js", () => ({ requireValidConfig: async () => config }));
-vi.mock("./agents.providers.js", () => ({
-  buildProviderStatusIndex: async () => new Map(),
-  buildProviderSummaryMetadataIndex: () => new Map(),
-  listProvidersForAgent: () => [],
-  summarizeBindings: () => [],
-}));
 
 const runtime = {
-  ...createTestRuntime(),
-  writeStdout: vi.fn<(value: string) => void>(),
+  log: vi.fn<(...args: unknown[]) => void>(),
   writeJson: vi.fn<(value: unknown) => void>(),
 };
 
@@ -45,6 +38,8 @@ it.aroundEach(async (runTest) => {
       state = fixture;
       recordAgentDatabaseAdmissions([], { env: state.env });
       vi.clearAllMocks();
+      vi.spyOn(defaultRuntime, "log").mockImplementation(runtime.log);
+      vi.spyOn(defaultRuntime, "writeJson").mockImplementation(runtime.writeJson);
       try {
         await runTest();
         await closeOpenClawStateDatabaseAsync();
@@ -52,6 +47,7 @@ it.aroundEach(async (runTest) => {
       } finally {
         restore?.();
         sql?.restore();
+        vi.restoreAllMocks();
         sql = undefined;
         restore = undefined;
         await closeOpenClawStateDatabaseAsync();
@@ -94,7 +90,7 @@ function configureRoster(ids: string[]) {
 it("keeps an empty JSON roster free of provenance storage", async () => {
   configureRoster([]);
   const commands = observe();
-  await agentsListCommand({ json: true }, runtime);
+  await agentsListCommand({ json: true });
   expect(runtime.writeJson.mock.calls[0]?.[0]).toEqual([]);
   expect(commands).toEqual([]);
   expect(existsSync(resolveOpenClawStateSqlitePath(state.env))).toBe(false);
@@ -124,7 +120,7 @@ it("serves JSON and tree output from worker provenance through reopen", async ()
   await recordAgentProvenance("retired", { createdVia: "claw" }, at(30));
   await closeOpenClawStateDatabaseAsync();
   const commands = observe(true);
-  await agentsListCommand({ json: true }, runtime);
+  await agentsListCommand({ json: true });
   const output = runtime.writeJson.mock.calls[0]?.[0];
   expect(output).toMatchObject([
     { id: "main", createdVia: "operator", createdAt: 10 },
@@ -134,7 +130,7 @@ it("serves JSON and tree output from worker provenance through reopen", async ()
   expect(output).not.toHaveProperty("2.createdVia");
   await waitForDiagnosticEventsDrained();
   expect(commands).toEqual(["stateRead"]);
-  await agentsListCommand({ tree: true }, runtime);
+  await agentsListCommand({ tree: true });
   expect(runtime.log).toHaveBeenCalledWith("Agents:\n- main\n  - child\n- legacy");
   await closeOpenClawStateDatabaseAsync();
   const storedIds = (await listAgentProvenance({ env: state.env })).map((row) => row.agentId);
@@ -149,7 +145,7 @@ it("enriches growing rosters with bounded requests in configured order", async (
   }
   await closeOpenClawStateDatabaseAsync();
   const commands = observe();
-  await agentsListCommand({ json: true }, runtime);
+  await agentsListCommand({ json: true });
   expect(runtime.writeJson.mock.calls[0]?.[0]).toMatchObject(
     ids.map((id, createdAt) => ({ id, createdVia: "operator", createdAt })),
   );

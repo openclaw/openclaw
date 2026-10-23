@@ -37,14 +37,24 @@ function skillAnchor(event: Event): HTMLAnchorElement | null {
   return anchor && /(?:^|[/\\])SKILL\.md$/i.test(anchor.dataset.filePath ?? "") ? anchor : null;
 }
 
-function SkillSource(props: {
-  file: SkillsFileGetResult;
-  onOpen: () => void;
+function SkillRead(props: {
+  client: GatewayBrowserClient;
+  path: string;
+  agentId?: string;
+  signal: AbortSignal;
+  onOpen: (file: SkillsFileGetResult) => void;
   onClose: () => void;
   onPosition: () => void;
 }) {
+  const file = createMemo(() =>
+    props.client.request<SkillsFileGetResult>(
+      "skills.files.get",
+      { agentId: props.agentId, path: props.path },
+      { signal: props.signal },
+    ),
+  );
   const lines = createMemo(() => {
-    const source = props.file.content.replace(/\r\n/g, "\n").split("\n");
+    const source = file().content.replace(/\r\n/g, "\n").split("\n");
     if (source.at(-1) === "") {
       source.pop();
     }
@@ -65,12 +75,12 @@ function SkillSource(props: {
         <span class="skill-file-hovercard__icon" aria-hidden="true">
           <Icon name="fileText" />
         </span>
-        <strong>{props.file.path.replaceAll("\\", "/").split("/").at(-1)}</strong>
-        <span class="skill-file-hovercard__name">{props.file.name}</span>
+        <strong>{file().path.replaceAll("\\", "/").split("/").at(-1)}</strong>
+        <span class="skill-file-hovercard__name">{file().name}</span>
         <div class="skill-file-hovercard__actions">
           <CopyButton
             ref={createHovercardControlRef()}
-            text={props.file.content}
+            text={file().content}
             idleLabel={t("filePreview.copyFile")}
             bare
           />
@@ -79,7 +89,7 @@ function SkillSource(props: {
             type="button"
             title={t("filePreview.skill.open")}
             aria-label={t("filePreview.skill.open")}
-            onClick={() => props.onOpen()}
+            onClick={() => props.onOpen(file())}
           >
             <Icon name="maximize" />
           </button>
@@ -111,8 +121,8 @@ function SkillSource(props: {
         </For>
       </div>
       <footer class="skill-file-hovercard__footer">
-        <span class="skill-file-hovercard__path" title={props.file.path}>
-          {props.file.path}
+        <span class="skill-file-hovercard__path" title={file().path}>
+          {file().path}
         </span>
         <span>
           {t("filePreview.skill.lines", {
@@ -122,32 +132,6 @@ function SkillSource(props: {
         </span>
       </footer>
     </>
-  );
-}
-
-function SkillRead(props: {
-  client: GatewayBrowserClient;
-  path: string;
-  agentId?: string;
-  signal: AbortSignal;
-  onOpen: (file: SkillsFileGetResult) => void;
-  onClose: () => void;
-  onPosition: () => void;
-}) {
-  const file = createMemo(() =>
-    props.client.request<SkillsFileGetResult>(
-      "skills.files.get",
-      { agentId: props.agentId, path: props.path },
-      { signal: props.signal },
-    ),
-  );
-  return (
-    <SkillSource
-      file={file()}
-      onOpen={() => props.onOpen(file())}
-      onClose={() => props.onClose()}
-      onPosition={() => props.onPosition()}
-    />
   );
 }
 

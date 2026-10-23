@@ -440,6 +440,7 @@ export async function withWorkerTranscriptWriteLock<T>(
                         input: {
                           ...target,
                           idempotencyKeys: params.idempotencyKeys,
+                          activeBranchOnly: params.activeBranchOnly,
                           sourceRunId: params.sourceRunId,
                         },
                       },

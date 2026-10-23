@@ -16,6 +16,7 @@ import { migrateLegacyConfigMachineState } from "../infra/state-migrations.confi
 import { createDeferredCore } from "../shared/deferred.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import * as machineState from "../state/config-machine-state.js";
+import { StateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   withArtifactPreservingStateReads,
   withOpenClawStateDatabaseReadSnapshot,
@@ -49,7 +50,6 @@ import {
   adoptProcessPluginCache,
   createPluginCache,
   getProcessPluginCache,
-  PluginCacheFactInvalidatedError,
   retirePluginCache,
   withPluginCache,
 } from "./plugin-cache.js";
@@ -709,7 +709,7 @@ it("keeps captured async policy and inventory in pinned roots after a concurrent
     // An escaped descendant cannot replace its closed snapshot with live policy.
     writeConfigMachineState("plugins.bundledDiscovery", "compat", { env });
     afterCleanup.resolve();
-    await expect(descendant).rejects.toThrow(PluginCacheFactInvalidatedError);
+    await expect(descendant).rejects.toThrow(StateDatabaseReadAdmissionInvalidatedError);
   } finally {
     resume.resolve();
     afterCleanup.resolve();

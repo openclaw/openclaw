@@ -2,61 +2,42 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { GatewayStartupTrace } from "./server-startup-trace.js";
 
-type StartupExternalAuthHydrationDeps = {
-  listAgentIds: (cfg: OpenClawConfig) => string[];
-  resolveAgentDir: (cfg: OpenClawConfig, agentId: string) => string;
-  collectConfiguredRefs: (cfg: OpenClawConfig, agentId: string) => readonly { value: string }[];
-  hydrate: (
-    cfg: OpenClawConfig,
-    agentDir: string,
-    providers: readonly string[],
-  ) => void | Promise<void>;
-};
-
 export async function hydrateConfiguredExternalCliAuth(params: {
   getConfig: () => OpenClawConfig;
   log: { warn: (msg: string) => void };
-  deps?: StartupExternalAuthHydrationDeps | Promise<StartupExternalAuthHydrationDeps>;
 }): Promise<OpenClawConfig> {
-  const deps: StartupExternalAuthHydrationDeps =
-    (await params.deps) ??
-    (await Promise.all([
-      import("../agents/agent-scope.js"),
-      import("../agents/prepared-model-runtime.configured.js"),
-      import("../agents/auth-profiles/store-runtime.js"),
-      import("../agents/auth-profiles/external-cli-discovery.js"),
-    ]).then(([scope, configured, store, external]) => ({
-      listAgentIds: scope.listAgentIds,
-      resolveAgentDir: scope.resolveAgentDir,
-      collectConfiguredRefs: configured.collectPreparedModelRuntimeConfiguredRefs,
-      hydrate: async (cfg: OpenClawConfig, agentDir: string, providers: readonly string[]) => {
-        const discovery = external.externalCliDiscoveryForProviders({ cfg, providers });
-        if (discovery.mode === "none") {
-          return;
-        }
-        await store.ensureAuthProfileStoreAsync(agentDir, {
-          config: cfg,
-          externalCli: discovery,
-          allowKeychainPrompt: false,
-          readOnly: true,
-          syncExternalCli: false,
-        });
-      },
-    })));
+  const [scope, configured, store, external] = await Promise.all([
+    import("../agents/agent-scope.js"),
+    import("../agents/prepared-model-runtime.configured.js"),
+    import("../agents/auth-profiles/store-runtime.js"),
+    import("../agents/auth-profiles/external-cli-discovery.js"),
+  ]);
   const cfg = params.getConfig();
   const hydratedDirs = new Set<string>();
-  for (const agentId of deps.listAgentIds(cfg)) {
-    const providers = deps.collectConfiguredRefs(cfg, agentId).flatMap(({ value }) => {
-      const separator = value.indexOf("/");
-      return separator > 0 ? [value.slice(0, separator)] : [];
-    });
-    const agentDir = deps.resolveAgentDir(cfg, agentId);
+  for (const agentId of scope.listAgentIds(cfg)) {
+    const providers = configured
+      .collectPreparedModelRuntimeConfiguredRefs(cfg, agentId)
+      .flatMap(({ value }) => {
+        const separator = value.indexOf("/");
+        return separator > 0 ? [value.slice(0, separator)] : [];
+      });
+    const agentDir = scope.resolveAgentDir(cfg, agentId);
     if (providers.length === 0 || hydratedDirs.has(agentDir)) {
       continue;
     }
     hydratedDirs.add(agentDir);
     try {
-      await deps.hydrate(cfg, agentDir, providers);
+      const discovery = external.externalCliDiscoveryForProviders({ cfg, providers });
+      if (discovery.mode === "none") {
+        continue;
+      }
+      await store.ensureAuthProfileStoreAsync(agentDir, {
+        config: cfg,
+        externalCli: discovery,
+        allowKeychainPrompt: false,
+        readOnly: true,
+        syncExternalCli: false,
+      });
     } catch (error) {
       params.log.warn(
         `startup external CLI auth hydration failed for agent ${agentId}: ${String(error)}`,

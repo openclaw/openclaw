@@ -3,15 +3,22 @@
 import { createSignal, Show } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { DashboardPreview } from "./dashboard-preview.tsx";
+
+// mock-isolation: Exercise the lazy error boundary without registering the Board renderer or its providers.
+vi.mock("../../components/board/board-document.tsx", () => ({
+  OpenClawBoardDocument() {
+    throw new Error("Preview unavailable");
+  },
+}));
 
 afterEach(() => {
   cleanupSolid();
   vi.restoreAllMocks();
 });
 
-it("resumes near-viewport rendering after being unmounted and remounted", () => {
+it("resumes near-viewport rendering and its error boundary after being remounted", async () => {
   const frames: FrameRequestCallback[] = [];
   vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
     frames.push(callback);
@@ -24,7 +31,7 @@ it("resumes near-viewport rendering after being unmounted and remounted", () => 
     setVisible = set;
     return (
       <Show when={visible()}>
-        <DashboardPreview error="Preview unavailable" />
+        <DashboardPreview />
       </Show>
     );
   });
@@ -32,7 +39,7 @@ it("resumes near-viewport rendering after being unmounted and remounted", () => 
   flush();
   frames.shift()?.(0);
   flush();
-  expect(container.textContent).toContain("Preview unavailable");
+  await waitForSolid(() => expect(container.textContent).toContain("Preview unavailable"));
 
   setVisible(false);
   flush();
@@ -42,5 +49,5 @@ it("resumes near-viewport rendering after being unmounted and remounted", () => 
   flush();
   frames.shift()?.(0);
   flush();
-  expect(container.textContent).toContain("Preview unavailable");
+  await waitForSolid(() => expect(container.textContent).toContain("Preview unavailable"));
 });

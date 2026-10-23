@@ -615,6 +615,9 @@ it("binds lazy recorder collection to approved sources and reports consumed sour
     const duplicate = createUserTurnTranscriptRecorder({
       target,
       message: message("recorder-source", "Original source"),
+      assertOriginalInputCommit: () => {
+        throw new Error("Consumed input no longer belongs to its original source");
+      },
     });
     expect(
       await duplicate.stageApproved?.({ runId: "recorder-source", assertCurrent: () => {} }),

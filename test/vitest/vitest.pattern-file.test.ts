@@ -24,6 +24,30 @@ function fixturePath(root: string, file: string) {
   return target;
 }
 
+it.each(["ts", "tsx", "cts", "ctsx", "mts", "mtsx", "js", "jsx", "cjs", "cjsx", "mjs", "mjsx"])(
+  "keeps .%s specialized suites opt-in across root and scoped discovery",
+  (extension) => {
+    for (const directory of ["test/example", "extensions/example/src"]) {
+      for (const kind of ["e2e", "live"]) {
+        const file = `${directory}/example.${kind}.test.${extension}`;
+        expect(cli.isSharedVitestExcludedPath(file), file).toBe(true);
+        expect(cli.isSharedVitestExcludedPath(file.replaceAll("/", "\\")), file).toBe(true);
+        expect(cli.isSharedVitestExcludedPath(file, directory), file).toBe(true);
+      }
+      expect(cli.isSharedVitestExcludedPath(`${directory}/example.test.${extension}`)).toBe(false);
+    }
+  },
+);
+
+it.each(["json", "ts.map", "txt"])(
+  "does not classify .%s assets as specialized tests",
+  (extension) => {
+    for (const kind of ["e2e", "live"]) {
+      expect(cli.isSharedVitestExcludedPath(`test/example.${kind}.test.${extension}`)).toBe(false);
+    }
+  },
+);
+
 it("plans Node CI test ownership before dependencies are installed", () => {
   const root = tempDirs.make("openclaw-selection-preflight-");
   for (const relative of [

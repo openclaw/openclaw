@@ -4,8 +4,8 @@ import type {
   WorkboardSessionsBoard,
   WorkboardSessionsBoardRead,
 } from "@openclaw/workboard-contract";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { ControlUiAgentPickerProps, ControlUiHost } from "openclaw/plugin-sdk/control-ui";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { mountPage } from "./workboard-page.test-support.ts";
 

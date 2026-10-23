@@ -1,4 +1,10 @@
+import {
+  getAcpRuntimeBackend,
+  unregisterAcpRuntimeBackend,
+} from "openclaw/plugin-sdk/acp-runtime-backend";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type BackendLifecycle = {
@@ -6,8 +12,7 @@ type BackendLifecycle = {
   retract: (runtime: unknown) => void;
 };
 
-const { runtimeRegistry, realRuntime, startMock, stopMock, createServiceMock } = vi.hoisted(() => {
-  const registry = new Map<string, { runtime: unknown }>();
+const { realRuntime, startMock, stopMock, createServiceMock } = vi.hoisted(() => {
   const runtime = {
     async ensureSession({ sessionKey }: { sessionKey: string }) {
       return { backend: "acpx", runtimeSessionName: sessionKey, sessionKey };
@@ -18,51 +23,40 @@ const { runtimeRegistry, realRuntime, startMock, stopMock, createServiceMock } =
     isHealthy: vi.fn(() => true),
   };
   const start = vi.fn(async (_ctx: unknown, backendLifecycle?: BackendLifecycle) => {
-    if (backendLifecycle) {
-      backendLifecycle.publish({ runtime });
-    } else {
-      registry.set("acpx", { runtime });
-    }
+    backendLifecycle?.publish({ runtime });
   });
   const stop = vi.fn(async (_ctx: unknown, backendLifecycle?: BackendLifecycle) => {
-    if (backendLifecycle) {
-      backendLifecycle.retract(runtime);
-    } else {
-      registry.delete("acpx");
-    }
+    backendLifecycle?.retract(runtime);
   });
   return {
-    runtimeRegistry: registry,
     realRuntime: runtime,
     startMock: start,
     stopMock: stop,
-    createServiceMock: vi.fn((params: { backendLifecycle?: BackendLifecycle } = {}) => ({
-      id: "real-acpx-runtime",
-      start: (ctx: unknown) => start(ctx, params.backendLifecycle),
-      promote: async (_ctx: unknown, assertCurrent?: () => void) => {
-        assertCurrent?.();
-      },
-      stop: (ctx: unknown) => stop(ctx, params.backendLifecycle),
-    })),
+    createServiceMock: vi.fn(
+      (
+        params: {
+          backendLifecycle?: BackendLifecycle;
+          getAllowedAgents?: () => string[] | undefined;
+          openKeyedStore?: OpenClawPluginApi["runtime"]["state"]["openKeyedStoreV2"];
+        } = {},
+      ) => ({
+        id: "real-acpx-runtime",
+        start: (ctx: unknown) => start(ctx, params.backendLifecycle),
+        promote: async (_ctx: unknown, assertCurrent?: () => void) => {
+          assertCurrent?.();
+        },
+        stop: (ctx: unknown) => stop(ctx, params.backendLifecycle),
+      }),
+    ),
   };
 });
-
-vi.mock("openclaw/plugin-sdk/acp-runtime-backend", () => ({
-  getAcpRuntimeBackend: (id: string) => runtimeRegistry.get(id),
-  registerAcpRuntimeBackend: (entry: { id: string; runtime: unknown }) => {
-    runtimeRegistry.set(entry.id, entry);
-  },
-  unregisterAcpRuntimeBackend: (id: string) => {
-    runtimeRegistry.delete(id);
-  },
-}));
 
 // mock-isolation: exercise deferred publication without starting the ACPX process service.
 vi.mock("./src/service.js", () => ({
   createAcpxRuntimeService: createServiceMock,
 }));
 
-import { createAcpxRuntimeService } from "./register.runtime.js";
+import { createRegisteredAcpxService } from "./registration.test-support.js";
 
 function createServiceContext() {
   return {
@@ -95,21 +89,28 @@ describe("acpx register runtime service", () => {
     vi.stubEnv("OPENCLAW_SKIP_ACPX_RUNTIME", undefined);
   });
   afterEach(() => {
-    runtimeRegistry.clear();
+    unregisterAcpRuntimeBackend("acpx");
     startMock.mockClear();
     stopMock.mockClear();
     createServiceMock.mockClear();
     vi.unstubAllEnvs();
   });
 
-  async function start(service = createAcpxRuntimeService()) {
+  async function start(service = createRegisteredAcpxService()) {
     await service.start(ctx);
-    return { service, runtime: runtimeRegistry.get("acpx")?.runtime as DeferredRuntime };
+    return { service, runtime: getAcpRuntimeBackend("acpx")?.runtime as DeferredRuntime };
   }
 
   it("registers the acpx backend at startup and starts the real service on first use", async () => {
+    const openKeyedStore = vi.fn();
     const { service, runtime } = await start(
-      createAcpxRuntimeService({ pluginConfig: { timeoutSeconds: 10 } }),
+      createRegisteredAcpxService({
+        pluginConfig: { timeoutSeconds: 10 },
+        runtime: createPluginRuntimeMock({
+          config: { current: () => ({ acp: { allowedAgents: ["codex"] } }) },
+          state: { openKeyedStoreV2: openKeyedStore },
+        }),
+      }),
     );
     expect(runtime).toBeTruthy();
     expect(createServiceMock).not.toHaveBeenCalled();
@@ -127,13 +128,17 @@ describe("acpx register runtime service", () => {
       }),
     );
     expect(startMock).toHaveBeenCalledWith(ctx, expect.any(Object));
-    expect(runtimeRegistry.get("acpx")?.runtime).toBe(runtime);
+    const params = createServiceMock.mock.calls[0]?.[0];
+    expect(params?.getAllowedAgents?.()).toEqual(["codex"]);
+    params?.openKeyedStore?.({ namespace: "test", maxEntries: 1 });
+    expect(openKeyedStore).toHaveBeenCalledWith({ namespace: "test", maxEntries: 1 });
+    expect(getAcpRuntimeBackend("acpx")?.runtime).toBe(runtime);
     expect(ctx.logger.info).toHaveBeenCalledWith("embedded acpx runtime backend registered lazily");
 
     await service.stop?.(ctx);
 
     expect(stopMock).toHaveBeenCalledWith(ctx, expect.any(Object));
-    expect(runtimeRegistry.get("acpx")).toBeUndefined();
+    expect(getAcpRuntimeBackend("acpx")).toBeNull();
   });
 
   it("rejects stale publication after stop invalidates the deferred backend", async () => {
@@ -158,7 +163,7 @@ describe("acpx register runtime service", () => {
     expect(await activationResult).toEqual(stoppedDuringActivation());
     expect(stopMock).toHaveBeenCalledOnce();
     expect(stopMock).toHaveBeenCalledWith(ctx, expect.any(Object));
-    expect(runtimeRegistry.get("acpx")).toBeUndefined();
+    expect(getAcpRuntimeBackend("acpx")).toBeNull();
     await expect(session(runtime, "stale-proxy")).rejects.toThrow(notStarted);
   });
 
@@ -176,7 +181,7 @@ describe("acpx register runtime service", () => {
     const { service: generationA, runtime: runtimeA } = await start();
     const activationResult = activationError(session(runtimeA, "generation-a"));
     await published.promise;
-    expect(runtimeRegistry.get("acpx")?.runtime).toBe(runtimeA);
+    expect(getAcpRuntimeBackend("acpx")?.runtime).toBe(runtimeA);
 
     let concurrentCallSettled = false;
     const concurrentCallResult = activationError(session(runtimeA, "generation-a-concurrent")).then(
@@ -191,7 +196,7 @@ describe("acpx register runtime service", () => {
     expect(concurrentCallSettled).toBe(false);
 
     const stoppingA = generationA.stop?.(ctx);
-    expect(runtimeRegistry.get("acpx")).toBeUndefined();
+    expect(getAcpRuntimeBackend("acpx")).toBeNull();
 
     const { service: generationB, runtime: runtimeB } = await start();
     expect(runtimeB).toBeTruthy();
@@ -204,11 +209,11 @@ describe("acpx register runtime service", () => {
 
     expect(await activationResult).toEqual(stoppedDuringActivation());
     expect(await concurrentCallResult).toEqual(stoppedDuringActivation());
-    expect(runtimeRegistry.get("acpx")?.runtime).toBe(runtimeB);
+    expect(getAcpRuntimeBackend("acpx")?.runtime).toBe(runtimeB);
     await expect(session(runtimeA, "stale-generation-a")).rejects.toThrow(notStarted);
 
     await generationB.stop?.(ctx);
-    expect(runtimeRegistry.get("acpx")).toBeUndefined();
+    expect(getAcpRuntimeBackend("acpx")).toBeNull();
   });
 
   it("keeps the explicit runtime skip env as the only outer startup skip", async () => {
@@ -216,7 +221,7 @@ describe("acpx register runtime service", () => {
     await start();
 
     expect(createServiceMock).not.toHaveBeenCalled();
-    expect(runtimeRegistry.get("acpx")).toBeUndefined();
+    expect(getAcpRuntimeBackend("acpx")).toBeNull();
     expect(ctx.logger.info).toHaveBeenCalledWith(
       "skipping embedded acpx runtime backend (OPENCLAW_SKIP_ACPX_RUNTIME=1)",
     );

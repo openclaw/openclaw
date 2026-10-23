@@ -264,7 +264,8 @@ function probeLoginShellEnv(
   }
 
   const { request, cacheKey } = prepareLoginShellEnvProbe(params);
-  const cached = loginShellEnvProbeCache.get(cacheKey);
+  const cache = params.purpose === "environment-import" ? loginShellEnvProbeCache : undefined;
+  const cached = cache?.get(cacheKey);
   if (cached) {
     return { ok: true, shellEnv: new Map(cached) };
   }
@@ -274,36 +275,25 @@ function probeLoginShellEnv(
     const stdout = execFileSync(spec.shell, spec.args, spec.options);
     const shellEnv = parseShellEnv(stdout);
     // Failed startup can recover on the next lookup; retain only successful probes.
-    loginShellEnvProbeCache.set(cacheKey, [...shellEnv.entries()]);
+    cache?.set(cacheKey, [...shellEnv.entries()]);
     return { ok: true, shellEnv };
   } catch (err) {
     return { ok: false, error: formatErrorMessage(err) };
   }
 }
 
-type ShellEnvFallbackResult =
-  | { ok: true; applied: string[]; skippedReason?: never }
-  | { ok: true; applied: []; skippedReason: "already-has-keys" | "disabled" }
-  | { ok: false; error: string; applied: [] };
-
 type ShellEnvFallbackOptions = Parameters<typeof getShellPathFromLoginShell>[0] & {
-  enabled: boolean;
   expectedKeys: string[];
   logger?: Pick<typeof console, "warn">;
 };
 
-export function loadShellEnvFallback(opts: ShellEnvFallbackOptions): ShellEnvFallbackResult {
+export function loadShellEnvFallback(opts: ShellEnvFallbackOptions): string[] {
   const logger = opts.logger ?? console;
-
-  if (!opts.enabled) {
-    lastAppliedKeys = [];
-    return { ok: true, applied: [], skippedReason: "disabled" };
-  }
 
   const missingExpectedKeys = opts.expectedKeys.filter((key) => !Object.hasOwn(opts.env, key));
   if (missingExpectedKeys.length === 0) {
     lastAppliedKeys = [];
-    return { ok: true, applied: [], skippedReason: "already-has-keys" };
+    return [];
   }
 
   const probe = probeLoginShellEnv({
@@ -314,7 +304,7 @@ export function loadShellEnvFallback(opts: ShellEnvFallbackOptions): ShellEnvFal
   if (!probe.ok) {
     logger.warn(`[openclaw] shell env fallback failed: ${probe.error}`);
     lastAppliedKeys = [];
-    return { ok: false, error: probe.error, applied: [] };
+    return [];
   }
 
   const applied: string[] = [];
@@ -328,7 +318,7 @@ export function loadShellEnvFallback(opts: ShellEnvFallbackOptions): ShellEnvFal
   }
 
   lastAppliedKeys = applied;
-  return { ok: true, applied };
+  return applied;
 }
 
 export function shouldEnableShellEnvFallback(env: NodeJS.ProcessEnv): boolean {
@@ -393,13 +383,9 @@ export function prepareShellPathFromLoginShell(
   if (pending) {
     return pending;
   }
-  const cached = loginShellEnvProbeCache.peek(cacheKey);
-  const probe = cached
-    ? Promise.resolve(new Map(cached))
-    : execLoginShellEnvZeroAsync(request).then(parseShellEnv);
+  const probe = execLoginShellEnvZeroAsync(request).then(parseShellEnv);
   const result = probe
     .then((shellEnv) => {
-      loginShellEnvProbeCache.set(cacheKey, [...shellEnv.entries()]);
       // A synchronous cold caller may have completed while this probe was in flight.
       if (cachedShellPath === undefined) {
         cachedShellPath = shellEnv.get("PATH")?.trim() || null;

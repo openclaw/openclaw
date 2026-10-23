@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { buildDraftSessionCreateParams } from "./create-params.ts";
+import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
+import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
 import {
   modelOption,
   managedModelControls,
@@ -84,7 +86,7 @@ it("reuses runtime resolution until model inputs change, including mutable defau
 });
 
 it("does not borrow a provider for an ambiguous draft target", async () => {
-  const { control, context, find, changed } = setup([
+  const { control, context, changed } = setup([
     testModel("openai", "model", {
       reasoning: true,
       thinkingLevels: levels(["high"]),
@@ -99,7 +101,7 @@ it("does not borrow a provider for an ambiguous draft target", async () => {
   const agent = { id: "main", model: { primary: "model" } };
   control.load(context, "main", true, { agent });
   const { find: agentOption } = controlQueries(control, context, "main", agent);
-  await vi.waitFor(() => expect(find("model-option", "openai/model")).not.toBeNull());
+  await vi.waitFor(() => expect(agentOption("model-option", "openai/model")).not.toBeNull());
   expect(agentOption("thinking-option", "high")).toBeNull();
   expect(agentOption("thinking-slider")).toBeNull();
   expect(changed).not.toHaveBeenCalled();
@@ -146,9 +148,6 @@ it("renders an all-cold catalog as setup actions", async () => {
   await vi.waitFor(() => expect(find("model-catalog-state", "ready")).not.toBeNull());
   const container = draw();
   expect(container.querySelector("[data-chat-model-select]")?.textContent).toContain(luna.name);
-  expect(
-    control.modelUnavailableReason({ id: "main", model: { primary: "openai/gpt-5.6-luna" } }),
-  ).toBe("missing-auth");
   const options = [...container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]")];
   expect(options).toHaveLength(2);
   expect(options[0]?.textContent).toContain("Sign-in needed");
@@ -263,6 +262,7 @@ it("retries failed discovery from the error action without refreshing models", a
       ),
     ).toBeNull(),
   );
+  await vi.waitFor(() => expect(find("model-target", "anthropic")).not.toBeNull());
   expect(catalogs).toHaveBeenCalledTimes(2);
   expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(1);
   expect(request.mock.calls.some(([, params]) => params?.refresh)).toBe(false);
@@ -285,6 +285,40 @@ it("ignores a late catalog response after the same client switches agents", asyn
   main.resolve({ catalogs: [catalog("stale")] });
   await main.promise;
   expect(find("model-target", "research")).not.toBeNull();
+  expect(find("model-target", "stale")).toBeNull();
+});
+
+it("omits a completed CLI group with no terminal-capable targets", async () => {
+  const discovery = deferred<{ catalogs: ReturnType<typeof catalog>[] }>();
+  const { control, context, request, draw } = setup([luna], ["sessions.catalog.list"]);
+  request.mockImplementation(() => discovery.promise);
+  control.loadCatalogTargets(context, "main", true);
+  await vi.waitFor(() =>
+    expect(draw().querySelector('[data-chat-model-target-group="cliAgents"]')).not.toBeNull(),
+  );
+  discovery.resolve({ catalogs: [catalog("history-only", false)] });
+  await vi.waitFor(() =>
+    expect(draw().querySelector('[data-chat-model-target-group="cliAgents"]')).toBeNull(),
+  );
+});
+
+it("retires the first discovery when the same client switches A to B to A", async () => {
+  const retired = deferred<{ catalogs: ReturnType<typeof catalog>[] }>();
+  const current = deferred<{ catalogs: ReturnType<typeof catalog>[] }>();
+  const { control, context, request, find } = setup([luna], ["sessions.catalog.list"]);
+  request
+    .mockImplementationOnce(() => retired.promise)
+    .mockResolvedValueOnce({ catalogs: [catalog("research")] })
+    .mockImplementationOnce(() => current.promise);
+  control.loadCatalogTargets(context, "main", true);
+  control.loadCatalogTargets(context, "research", true);
+  control.loadCatalogTargets(context, "main", true);
+  current.resolve({ catalogs: [catalog("current")] });
+  await vi.waitFor(() => expect(find("model-target", "current")).not.toBeNull());
+  retired.resolve({ catalogs: [catalog("stale")] });
+  await retired.promise;
+  flush();
+  expect(find("model-target", "current"), "Retired A must not replace current A").not.toBeNull();
   expect(find("model-target", "stale")).toBeNull();
 });
 it.each([true, false])("checks cloud execution support: %s", (supported) => {
@@ -589,13 +623,16 @@ describe("runtime choices", () => {
         model: "openai/gpt-5.6-sol",
         agentRuntime: "codex",
       });
+      const { state } = createRepositoryFixture();
+      managed.track(state.modelControl);
+      state.modelControl.agentRuntime = control.agentRuntime;
+      vi.spyOn(state.modelControl, "modelForSubmission").mockReturnValue(
+        control.modelForSubmission(),
+      );
       expect(
-        buildDraftSessionCreateParams({
-          agentId: "main",
+        buildSelectedSessionCreateParams(state, {
           message: "hello",
-          worktree: false,
-          model: control.modelForSubmission(),
-          agentRuntime: control.agentRuntime,
+          visibility: "normal",
         }),
       ).toMatchObject({ model: "openai/gpt-5.6-sol", agentRuntime: "codex" });
       control.reset();

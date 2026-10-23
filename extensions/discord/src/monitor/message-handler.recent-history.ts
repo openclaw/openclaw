@@ -192,7 +192,7 @@ export async function recoverDiscordChannelHistory(params: {
       entries: entries.toReversed(),
       mode: params.mode,
       isSenderAllowed: params.isSenderAllowed,
-    }).entries.slice(-ctx.historyLimit);
+    }).slice(-ctx.historyLimit);
   } catch (error) {
     ctx.runtime.error(
       danger(`discord: recent history omitted for ${ctx.messageChannelId}: ${String(error)}`),

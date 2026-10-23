@@ -5,16 +5,15 @@ import type {
 } from "./claws-catalog-client.ts";
 
 export type ClawsCatalogViewProps = {
-  entries: ClawCatalogEntry[];
+  /** Read only inside the catalog Loading/Errored slot. */
+  readEntries: () => ClawCatalogEntry[];
+  catalogRequest: Promise<ClawCatalogEntry[]> | undefined;
   basePath: string;
-  query: string;
-  loading: boolean;
-  error: string | null;
   selected: ClawCatalogEntry | null;
-  pageMode: boolean;
   detail: ClawCatalogDetail | null;
-  detailLoading: boolean;
-  detailError: string | null;
+  /** Read only inside the detail contents Loading/Errored slot. */
+  readDetail: () => ClawCatalogDetail | null;
+  detailRequest: Promise<ClawCatalogDetail | null> | undefined;
   installedPluginPackages: ReadonlySet<string>;
   addError: string | null;
   applying: boolean;
@@ -23,16 +22,13 @@ export type ClawsCatalogViewProps = {
   addedAgentId: string | null;
   canAdd: boolean;
   onOpenPreview: (kind: "instruction" | "skill", name: string) => void;
-  onSearch: (query: string) => void;
-  onSelect: (entry: ClawCatalogEntry) => void;
   onBack: () => void;
-  onClose: () => void;
   onRetryCatalog: () => void;
   onRetryDetail: () => void;
-  onConfirm: () => void;
-  onConfirmConsent: () => void;
+  onConfirm: () => void | Promise<void>;
+  onConfirmConsent: () => void | Promise<void>;
   onCancelConsent: () => void;
-  onConfirmReview: () => void;
+  onConfirmReview: () => void | Promise<void>;
   onCancelReview: () => void;
-  onRetryOpenChat: () => void;
+  onRetryOpenChat: () => void | Promise<void>;
 };

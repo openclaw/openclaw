@@ -1,4 +1,4 @@
-import { createMemo, createSignal, onCleanup } from "solid-js";
+import { createMemo, createStore, onCleanup } from "solid-js";
 import { createPendingFocus } from "./reactive/pending-focus.ts";
 
 type TabsActivation = "auto" | "manual";
@@ -72,7 +72,7 @@ export function createTabList(
   read: () => TabsOptions,
   items: () => readonly { value: string; disabled?: boolean }[],
   root: () => HTMLElement,
-  options: { revealActive?: boolean } = {},
+  options: { revealActive?: boolean | ((selected: HTMLElement) => void) } = {},
 ) {
   const nodes = new Map<string, HTMLElement>();
   const active = createMemo(() => read().active);
@@ -82,22 +82,25 @@ export function createTabList(
       .map((item) => item.value),
   );
   // Preserve keyboard focus until selection changes or the focused tab disappears.
-  const [focus, setFocus] = createSignal((previous?: { active: string | null; value?: string }) => {
-    const selected = active();
-    const values = enabled();
-    return {
-      active: selected,
-      value:
-        previous &&
-        previous.active === selected &&
-        previous.value !== undefined &&
-        values.includes(previous.value)
-          ? previous.value
+  const [focus, setFocus] = createStore<{ active: string | null; value?: string }>(
+    (draft) => {
+      const selected = active();
+      const values = enabled();
+      draft.value =
+        draft.active === selected && draft.value !== undefined && values.includes(draft.value)
+          ? draft.value
           : selected != null && values.includes(selected)
             ? selected
-            : values[0],
-    };
-  });
+            : values[0];
+      draft.active = selected;
+    },
+    { active: null, value: undefined },
+  );
+
+  const revealTab = (tab: HTMLElement) =>
+    typeof options.revealActive === "function"
+      ? options.revealActive(tab)
+      : tab.scrollIntoView?.({ block: "nearest", inline: "nearest" });
 
   if (options.revealActive) {
     const layoutKey = createMemo(() =>
@@ -120,7 +123,7 @@ export function createTabList(
             if (!root().isConnected || !selected) {
               return;
             }
-            selected.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+            revealTab(selected);
             // Keyed movement may blur a retained node; newer user focus always wins.
             if (focused === selected && focusNeedsRecovery(selected)) {
               selected.focus({ preventScroll: true });
@@ -136,7 +139,10 @@ export function createTabList(
     if (next === undefined || nodes.get(next) !== tab || !enabled().includes(next)) {
       return;
     }
-    setFocus({ active: active(), value: next });
+    setFocus((draft) => {
+      draft.active = active();
+      draft.value = next;
+    });
     if (direct && read().onActivate?.(next, tab, event) === false) {
       return;
     }
@@ -195,18 +201,21 @@ export function createTabList(
     if (!target) {
       return;
     }
-    setFocus({ active: active(), value });
+    setFocus((draft) => {
+      draft.active = active();
+      draft.value = value;
+    });
     if (read().activation !== "manual") {
       select(target, event, false);
     }
     target.focus({ preventScroll: true });
-    target.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+    revealTab(target);
   }
 
   return {
     active,
     element: (value: string | null) => (value === null ? undefined : nodes.get(value)),
-    tabIndex: (value: string) => (focus().value === value ? 0 : -1),
+    tabIndex: (value: string) => (focus.value === value ? 0 : -1),
     ref(value: string) {
       onCleanup(() => nodes.delete(value));
       return (element: HTMLElement) => {

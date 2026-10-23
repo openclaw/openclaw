@@ -10,6 +10,7 @@ import {
   patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { onAgentEvent } from "../infra/agent-events.js";
+import { heartbeatNotifications } from "../infra/heartbeat-events.js";
 import {
   claimSessionControllerTask,
   releaseSessionControllerClaim,
@@ -335,7 +336,7 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
       await Promise.allSettled([failedClaim?.settlement.promise]);
       unsubscribe();
       await subscriptions?.agentUnsub();
-      subscriptions?.heartbeatUnsub();
+      heartbeatNotifications.onEvent = () => {};
       subscriptions?.transcriptUnsub();
       subscriptions?.lifecycleUnsub();
       await closeSessionSqliteDatabasesForTest();
