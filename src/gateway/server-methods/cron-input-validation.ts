@@ -329,6 +329,10 @@ export async function captureCronCreatorSession(
       )
     : legacyActor;
   const executionSessionKey = resolveCronSessionTargetSessionKey(job.sessionTarget) ?? "";
+  const executionSession =
+    !hasRuntimeAuthority && job.payload.kind === "agentTurn" && executionSessionKey
+      ? await loadGatewaySessionEntryReadOnlyInWorker({ cfg, key: executionSessionKey, agentId })
+      : undefined;
   const inference =
     // A creator runtime grant owns its own inference identity. Never bind an ambient host profile.
     !hasRuntimeAuthority && job.payload.kind === "agentTurn" && job.sessionTarget !== "main"
@@ -343,6 +347,7 @@ export async function captureCronCreatorSession(
                   parseAgentSessionKey(executionSessionKey)?.rest ?? executionSessionKey,
                 )) === "gmail",
             sessionEntry: callerScope ? creatorSession : undefined,
+            executionSessionEntry: executionSession?.entry,
           },
           caller,
         )

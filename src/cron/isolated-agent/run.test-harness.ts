@@ -15,7 +15,10 @@ import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type * as CronHelpers from "./helpers.js";
 // Isolated run test harness builds cron run inputs, mocks, and assertions.
 import { resetCronAutomationMocks } from "./run-automation.test-support.js";
-import { createCronPreparedModelRuntimeFixture } from "./run-prepared-runtime.test-support.js";
+import {
+  createCronModelCatalogOwnerFixture,
+  createCronPreparedModelRuntimeFixture,
+} from "./run-prepared-runtime.test-support.js";
 
 // Central mock harness for isolated cron agent run orchestration tests.
 type CronSessionEntry = {
@@ -567,25 +570,12 @@ function resetRunConfigMocks(): void {
   acquirePreparedModelRuntimeMock.mockImplementation(async (input, options) =>
     createCronPreparedModelRuntimeFixture(input, options, preparedRunPluginRegistryMock()),
   );
-  loadModelCatalogOwnerMock.mockImplementation(
-    async (params: {
-      agentId?: string;
-      agentDir?: string;
-      config: object;
-      workspaceDir?: string;
-    }) => {
-      const agentId = params.agentId ?? "default";
-      return {
-        agentId,
-        agentDir: params.agentDir ?? "/tmp/agent-dir",
-        workspaceDir: params.workspaceDir ?? resolveAgentWorkspaceDirMock(params.config, agentId),
-        config: params.config,
-        modelCatalog: {
-          entries: await loadModelCatalogMock(params),
-          routeVariants: [],
-        },
-      };
-    },
+  loadModelCatalogOwnerMock.mockImplementation(async (params) =>
+    createCronModelCatalogOwnerFixture(params, {
+      resolveAgentDir: (await import("./run.runtime.js")).resolveAgentDir,
+      resolveAgentWorkspaceDir: resolveAgentWorkspaceDirMock,
+      loadModelCatalog: loadModelCatalogMock,
+    }),
   );
   getRemoteSkillEligibilityMock.mockResolvedValue({ remoteSkillsEnabled: false });
 }

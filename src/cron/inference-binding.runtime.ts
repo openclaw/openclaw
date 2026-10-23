@@ -31,6 +31,7 @@ export async function captureCronInferenceBinding(params: {
   model?: string;
   isGmailHook?: boolean;
   sessionEntry?: SessionEntry;
+  executionSessionEntry?: Pick<SessionEntry, "modelOverride" | "providerOverride">;
   authorizeProfile?: (profileId: string, inherited: boolean) => Promise<(() => void) | undefined>;
   retainAuthorization?: (authority: AuthProfileAuthorization) => void;
 }): Promise<CronInferenceBinding | undefined> {
@@ -48,8 +49,8 @@ export async function captureCronInferenceBinding(params: {
     agentDir,
     workspaceDir,
     payloadModel: params.model,
-    // The creator supplies auth inheritance, not the scheduled execution model.
-    sessionEntry: {},
+    // Only a persistent execution target supplies model overrides; creator auth stays separate.
+    sessionEntry: params.executionSessionEntry ?? {},
     isGmailHook: params.isGmailHook === true,
   });
   if (!model.ok) {
