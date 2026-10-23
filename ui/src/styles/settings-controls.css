@@ -177,9 +177,10 @@ select.settings-select:not([multiple]) {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
-:where(.settings-segmented:not(.settings-segmented--primary)) > .settings-segmented__btn:disabled,
-.settings-toggle:has(input:disabled),
-.settings-segmented > .settings-segmented__btn:has(> input:disabled) {
+:where(.settings-segmented:not(.settings-segmented--primary))
+  > .settings-segmented__btn:is(:disabled, [aria-disabled="true"]),
+.settings-toggle:has(input:is(:disabled, [aria-disabled="true"])),
+.settings-segmented > .settings-segmented__btn:has(> input:is(:disabled, [aria-disabled="true"])) {
   opacity: 0.5;
   cursor: not-allowed;
 }

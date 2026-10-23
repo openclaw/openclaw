@@ -202,7 +202,11 @@ when its verified sender has a
 person whose current role grants `operator.admin`. That sender must also pass the
 channel's command authorization. Unlinked, unverified, or demoted senders see
 `undefined`, even when the channel lets them run the command, and every native
-call rechecks the link and role. The host records the channel command text once,
+call rechecks the link and role. Demoting that person, removing their role, or
+unlinking the identity revokes the requester's retained work as it does for a
+Gateway operator: a child still waiting for a Swarm slot fails at once with a
+visible error, and work that missed the change refuses at its next admission
+check. The host records the channel command text once,
 as that message's input: a reply adds only the response, and a continuing agent
 turn reuses the same input. A native slash surface targeting a different
 `CommandTargetSessionKey` than the current dispatch session gets no capability.
@@ -304,8 +308,10 @@ also refuses manual force runs, so a disabled schedule cannot spend attempts.
 Each run restores the original requester and revalidates current operator,
 provider-account, session, plugin, and native tool authority. It reuses the
 command-scoped native-child eligibility producer. Reset, deletion, revocation,
-expired budgets, and unloaded plugins fail closed. Stored source facts are not
-execution authority. No caller can choose a different parent or delivery route.
+expired budgets, and unloaded plugins fail closed. Revoking a channel requester
+also fails a child that an earlier occurrence queued, without waiting for its
+Swarm slot. Stored source facts are not execution authority. No caller can
+choose a different parent or delivery route.
 
 Within one Gateway process, schedules bind the exact managed plugin instance,
 not just its ID, version, or source path. Registry adoption of that same

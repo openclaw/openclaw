@@ -25,7 +25,7 @@ ui/src/components/solid/menu-machine.ts	1
 ui/src/components/solid/menu.tsx	1
 ui/src/components/solid/overlay-control.ts	1
 ui/src/pages/activity/activity-page-state.ts	1
-ui/src/pages/chat/chat-page-state.ts	4
+ui/src/pages/chat/chat-page-state.ts	2
 ui/src/pages/chat/chat-pane-mcp-app.ts	1
 ui/src/pages/chat/chat-pane-runtime-view.tsx	1
 ui/src/pages/chat/chat-pane-session-panel-toggle.ts	1

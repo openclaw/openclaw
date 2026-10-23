@@ -662,8 +662,6 @@ export function createChatPageState(
       state.splitLayout && retainedSessions.unboundPaneIds.has(state.splitLayout.activePaneId)
         ? paneData()
         : undefined;
-    onCleanup(listen(mediaQuery, "change", handleViewportChange));
-    onCleanup(listen(mobileNavMediaQuery, "change", handleViewportChange));
     onCleanup(listen(window, UI_COMMAND_EVENT, handleUiCommand));
     retainedSessions.connect();
     syncRouteToActivePane();
@@ -685,6 +683,13 @@ export function createChatPageState(
   // Direct Solid construction precedes attachment; shell ancestry is available after settlement.
   onSettled(() => {
     state.mounted = host.isConnected;
+    const stopViewport = listen(mediaQuery, "change", handleViewportChange);
+    const stopMobileNavigation = listen(mobileNavMediaQuery, "change", handleViewportChange);
+    handleViewportChange();
+    return () => {
+      stopViewport();
+      stopMobileNavigation();
+    };
   });
   // Compare against the last committed presentation, including superseded queued frames.
   let lastPresented = host.presented;
@@ -713,6 +718,7 @@ export function createChatPageState(
       };
     },
   );
+  // Boot resources must retire even when the page is disposed before its first settlement.
   onCleanup(() => {
     disposed = true;
     closeFocus.clear();

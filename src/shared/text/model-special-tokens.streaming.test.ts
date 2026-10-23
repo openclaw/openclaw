@@ -97,6 +97,21 @@ const sources: Array<[string, string]> = [
 ];
 
 describe("model special token streaming", () => {
+  it.each(["\n", "\r\n", "\r"])(
+    "restores code before an invalidated table delimiter with %j line endings",
+    (newline) => {
+      const prefix = ["`", "[tool:read] {}", "<|x|>", "` |", "---|"].join(newline);
+      for (const filters of [
+        [modelSpecialTokensTextFilter],
+        assistantVisibleTextFilters("final-answer-delivery", true),
+      ]) {
+        const projection = createTextProjection(filters);
+        expect(projection.append(prefix).text).not.toContain("<|x|>");
+        expect(projection.append("x")).toEqual({ text: prefix + "x", delta: null });
+      }
+    },
+  );
+
   it.each([
     ["escaped opener", "[a \\[ `<|assistant|>`]: /url", "[a \\[ ``]: /url"],
     ["link destination", "[a](`<|assistant|>`)", "[a](``)"],

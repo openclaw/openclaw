@@ -101,7 +101,7 @@ describe("Skills mutation presentation", () => {
       );
       const toggle = mounted.page.querySelector<HTMLInputElement>('input[role="switch"]')!;
       toggle.click();
-      await waitForFast(() => expect(toggle.disabled).toBe(true));
+      await waitForFast(() => expect(toggle.getAttribute("aria-disabled")).toBe("true"));
 
       if (change === "connection") {
         mounted.connection.publish({
@@ -139,7 +139,7 @@ describe("Skills mutation presentation", () => {
         await waitForFast(() => {
           const current = mounted.page.querySelector<HTMLInputElement>('input[role="switch"]');
           expect(current?.checked).toBe(true);
-          expect(current?.disabled).toBe(false);
+          expect(current?.getAttribute("aria-disabled")).toBeNull();
         });
         successorDialog = mounted.page.querySelector(".skill-reader-dialog");
       }
@@ -152,7 +152,7 @@ describe("Skills mutation presentation", () => {
           expect(mounted.page.querySelector(".skill-reader-dialog")).toBe(successorDialog);
           const current = mounted.page.querySelector<HTMLInputElement>('input[role="switch"]');
           expect(current?.checked).toBe(true);
-          expect(current?.disabled).toBe(false);
+          expect(current?.getAttribute("aria-disabled")).toBeNull();
           expect(mounted.page.textContent).not.toContain("Skill disabled");
           expect(mounted.page.textContent).toContain("Replacement inventory");
         });
@@ -198,7 +198,7 @@ describe("Skills mutation presentation", () => {
       const toggle = dialog.querySelector<HTMLInputElement>('input[role="switch"]')!;
       toggle.click();
       await waitForFast(() => {
-        expect(toggle.disabled).toBe(true);
+        expect(toggle.getAttribute("aria-disabled")).toBe("true");
         expect(toggle.checked).toBe(false);
         expect(toggle.parentElement!.parentElement!.textContent).toContain("Disabled");
         expect(nativeDialog.open).toBe(true);
@@ -213,7 +213,7 @@ describe("Skills mutation presentation", () => {
         pending.reject(new Error("Synthetic rejected skill update"));
       }
       await waitForFast(() => {
-        expect(toggle.disabled).toBe(false);
+        expect(toggle.getAttribute("aria-disabled")).toBeNull();
         expect(toggle.checked).toBe(outcome === "error");
       });
       expect(page.querySelector(".skill-reader-dialog")).toBe(dialog);

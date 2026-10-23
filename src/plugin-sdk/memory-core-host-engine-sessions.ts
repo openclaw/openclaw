@@ -21,14 +21,39 @@ import type {
   MemorySessionTarget,
 } from "../config/sessions/session-memory-targets.types.js";
 import { resolveMemorySessionTargetsInWorker } from "../config/sessions/session-transcript-inventory-runtime.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { isIncognitoSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 
 export type {
   MemorySessionSelectors,
   MemorySessionTarget,
 } from "../config/sessions/session-memory-targets.types.js";
+
+/** Read only search-hit identities and their aliases through the canonical store owner. */
+export async function loadMemorySearchSessionStore(
+  cfg: OpenClawConfig,
+  options: {
+    agentId?: string;
+    sessionKeys: readonly string[];
+    sessionIds: readonly string[];
+  },
+) {
+  const { agentId, ...transcriptSelection } = options;
+  const { loadCombinedSessionStoreForGatewayCoreAsync } =
+    await import("../config/sessions/combined-store-gateway-read.js");
+  const { store, storePath } = await loadCombinedSessionStoreForGatewayCoreAsync(cfg, {
+    agentId,
+    includeIncognito: false,
+    projection: "list",
+    transcriptSelection,
+  });
+  return {
+    storePath,
+    store: Object.fromEntries(Object.entries(store).filter(([key]) => !isIncognitoSessionKey(key))),
+  };
+}
 
 /** @deprecated Await loadArchivedSessionsAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function loadArchivedSessions(

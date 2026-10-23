@@ -293,6 +293,9 @@ conversations. This is opt-in: set `experimental.sessionMemory: true` and add
 
 Use `corpus: "memory"` to search only memory notes. Results containing no session
 transcripts do not load session history or perform session-visibility lookups.
+For session hits, visibility checks read the matching sessions and their aliases
+instead of loading the full session catalog. Private recall also checks its anchor
+conversation and any shared aliases before returning transcript content.
 
 Session hits obey `tools.sessions.visibility`, which defaults to `"all"`.
 `memory_search` still searches the selected agent's indexed corpus; use

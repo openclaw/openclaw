@@ -40,7 +40,6 @@ import { showToast } from "../../lib/toast.ts";
 import { cacheChatBoardSnapshotAfterHydration } from "./chat-board-snapshot.ts";
 import { ChatPaneHistory } from "./chat-pane-history.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
-import { ensureLazySidebarElement } from "./chat-pane-sidebar-layout.ts";
 import type { ChatBoardPanel } from "./chat-pane-surfaces.tsx";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
@@ -452,16 +451,6 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
         this.showDashboard((row?.boardPresentation ?? "split") === "expanded");
       }
     }
-    if (
-      this.presented &&
-      this.presentation.documentVisible &&
-      board.available &&
-      this.state &&
-      isSidebarSlotVisible(this.state.sidebarLayout, "dashboard") &&
-      !customElements.get("openclaw-board-view")
-    ) {
-      ensureLazySidebarElement("dashboard");
-    }
   }
 
   protected resolveBoardSessionKey(snapshotSessionKey = ""): string {
@@ -662,7 +651,6 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     const connectionGeneration = this.connectionGeneration;
     return {
       error: error || undefined,
-      elementReady: Boolean(customElements.get("openclaw-board-view")),
       surface: {
         onViewRef: (element) => {
           this.boardView = element;

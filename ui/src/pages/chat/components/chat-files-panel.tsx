@@ -59,7 +59,7 @@ const hostedTabNotifiers = new WeakMap<HTMLElement, () => void>();
 const FILE_COLUMN_MIN_WIDTH = 176;
 
 /** The workspace owns tab order and selection; this view retains retiring app DOM. */
-defineSolidBridge<Props, Methods>(
+export const ChatFilesPanel = defineSolidBridge<Props, Methods>(
   "openclaw-chat-files-panel",
   (props, host) => {
     const contentId = `chat-files-content-${++filesPanelSequence}`;

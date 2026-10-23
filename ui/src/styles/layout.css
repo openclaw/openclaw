@@ -1870,7 +1870,7 @@ openclaw-settings-save-indicator:empty {
   align-items: center;
   min-width: 0;
   min-height: var(--sidebar-session-row-min-height);
-  padding-right: calc(2px + var(--sidebar-session-state-reserve, 0px));
+  padding: 0 calc(4px + var(--sidebar-session-state-reserve, 0px)) 0 2px;
   border-radius: var(--radius-md);
   color: var(--muted);
   cursor: var(--cursor-action);
@@ -1978,7 +1978,7 @@ openclaw-settings-save-indicator:empty {
   > .sidebar-recent-session__link
   > .sidebar-session-indicator {
   position: absolute;
-  inset-inline-end: calc(4px + (24px - var(--sidebar-lead)) / 2);
+  inset-inline-end: calc(6px + (24px - var(--sidebar-lead)) / 2);
   top: 50%;
   transform: translateY(-50%);
 
@@ -2210,7 +2210,7 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-recent-session:not(.sidebar-recent-session--child) > .sidebar-recent-session__aside {
   position: absolute;
-  inset: 50% calc(2px + var(--sidebar-session-state-reserve, 0px)) auto auto;
+  inset: 50% calc(4px + var(--sidebar-session-state-reserve, 0px)) auto auto;
   transform: translateY(-50%);
   pointer-events: none;
 }
@@ -2223,7 +2223,7 @@ openclaw-settings-save-indicator:empty {
 .sidebar-recent-session:not(.sidebar-recent-session--child, .sidebar-recent-session--single-line)
   > .sidebar-recent-session__aside {
   inset: calc(1px + max(24px, var(--sidebar-title-line-height)) / 2)
-    calc(2px + var(--sidebar-session-state-reserve, 0px)) auto auto;
+    calc(4px + var(--sidebar-session-state-reserve, 0px)) auto auto;
 }
 
 .sidebar-recent-session--child > .sidebar-recent-session__aside {
@@ -2241,7 +2241,7 @@ openclaw-settings-save-indicator:empty {
 .sidebar-recent-session:not(.sidebar-recent-session--child):has(> .sidebar-child-session-toggle)
   > .sidebar-recent-session__aside {
   right: calc(
-    var(--sidebar-child-session-toggle-width) + 4px + var(--sidebar-session-state-reserve, 0px)
+    var(--sidebar-child-session-toggle-width) + 6px + var(--sidebar-session-state-reserve, 0px)
   );
 }
 
@@ -3046,7 +3046,7 @@ a:is(
 
   position: relative;
   min-height: max(32px, var(--sidebar-session-row-min-height));
-  padding: 0 8px;
+  padding: 0 10px;
   border: 1px solid transparent;
   color: var(--muted);
   transition:
@@ -3077,7 +3077,7 @@ a:is(
 
   .sidebar-recent-session:not(.sidebar-recent-session--child, .sidebar-recent-session--single-line)
     > .sidebar-recent-session__aside {
-    inset: 50% calc(2px + var(--sidebar-session-state-reserve, 0px)) auto auto;
+    inset: 50% calc(4px + var(--sidebar-session-state-reserve, 0px)) auto auto;
   }
 
   .sidebar-recent-session:not(.sidebar-recent-session--child) .sidebar-recent-session__text {

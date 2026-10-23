@@ -16,7 +16,7 @@ import {
   type SqliteWorkerBackend,
   type SqliteWorkerCommand,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
-import { pickKeyframeId } from "./analyze.js";
+import { MAX_FRAMES_PER_CALL, pickKeyframeId } from "./analyze.js";
 import { isLogbookWriteOperation } from "./store-contract.js";
 import type {
   LogbookBatchInput,
@@ -26,7 +26,6 @@ import type {
   LogbookStandup,
   LogbookTimeline,
 } from "./store-contract.js";
-import { createLogbookFrameQueries } from "./store-frame-queries.js";
 import { createLogbookDatabase, LOGBOOK_SQLITE_BUSY_TIMEOUT_MS } from "./store-schema-admission.js";
 import { toBatch, toCard, toFrame, type LogbookDatabase } from "./store-schema.js";
 import type { LogbookBatch, LogbookCard, LogbookFrame, LogbookObservation } from "./types.js";
@@ -58,7 +57,75 @@ class LogbookDatabaseStore {
       this.db = db;
       this.database = database;
       this.query = getNodeSqliteKysely<LogbookDatabase>(db);
-      const { framesQuery, sampledBatchFrames } = createLogbookFrameQueries(db, this.query);
+      // Timestamp ties follow insertion ids, matching existing SQLite reads.
+      const framesQuery = this.query
+        .selectFrom("frames")
+        .select([
+          "id",
+          "captured_at_ms",
+          "day",
+          "path",
+          "screen_index",
+          "width",
+          "height",
+          "byte_size",
+          "idle",
+        ])
+        .orderBy("captured_at_ms", "asc")
+        .orderBy("id", "asc");
+      const sampledBatchFrames = prepareSqliteQuerySync<number, Parameters<typeof toFrame>[0]>(
+        db,
+        (p) => {
+          const sampledIds = this.query
+            .with("ordered_frames", (cte) =>
+              cte
+                .selectFrom("frames")
+                .select("id")
+                .select((eb) => [
+                  eb.fn
+                    .agg<number>("row_number", [])
+                    .over((ob) => ob.orderBy("captured_at_ms", "asc").orderBy("id", "asc"))
+                    .as("ordinal"),
+                  eb.fn.countAll<number>().over().as("total"),
+                ])
+                .where(
+                  "batch_id",
+                  "=",
+                  p((batchId) => batchId),
+                ),
+            )
+            .selectFrom("ordered_frames")
+            .select("id")
+            .where((eb) => {
+              const step = eb(
+                eb.cast<number>(eb("total", "-", eb.val(1)), "real"),
+                "/",
+                eb.val(MAX_FRAMES_PER_CALL - 1),
+              );
+              return eb.or([
+                eb("total", "<=", MAX_FRAMES_PER_CALL),
+                ...Array.from({ length: MAX_FRAMES_PER_CALL }, (_, index) =>
+                  // FLOOR keeps positive Math.round ordinals independent of integer-cast rounding.
+                  eb(
+                    "ordinal",
+                    "=",
+                    eb(
+                      eb.cast<number>(
+                        eb.fn<number>("floor", [
+                          eb(eb(eb.val(index), "*", step), "+", eb.val(0.5)),
+                        ]),
+                        "integer",
+                      ),
+                      "+",
+                      eb.val(1),
+                    ),
+                  ),
+                ),
+              ]);
+            });
+          return framesQuery.where("id", "in", sampledIds);
+        },
+      );
       this.framesQuery = framesQuery;
       // Keep native integer overflow rejection while omitting unused frame strings.
       this.frameMetadataQuery = framesQuery

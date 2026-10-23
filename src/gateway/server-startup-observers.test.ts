@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import type { markStartupOrphanedMainSessionsForRecovery } from "../agents/main-session-recovery/main-session-restart-recovery-marking.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import * as gatewayWorkAdmission from "../process/gateway-work-admission.js";
 import {
@@ -9,13 +11,22 @@ import {
 import { createReplyOperation } from "../sessions/session-controller.operation.js";
 import { captureSessionTarget } from "../sessions/session-controller.target.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
-import { runGatewayStartupObservers } from "./server-startup-observers.js";
+import {
+  markGatewayStartupMainSessionOrphans,
+  runGatewayStartupObservers,
+} from "./server-startup-observers.js";
 import { captureGatewayScopeMatcher } from "./session-runtime-scope.js";
 
 const mocks = vi.hoisted(() => ({
   prewarm: vi.fn(async () => {}),
   delivery: vi.fn(async () => {}),
   exec: vi.fn(async () => {}),
+}));
+const markOrphans = vi.hoisted(() => vi.fn<typeof markStartupOrphanedMainSessionsForRecovery>());
+
+// mock-isolation: Control both storage-owner failure contracts without opening agent databases.
+vi.mock("../agents/main-session-recovery/main-session-restart-recovery-marking.js", () => ({
+  markStartupOrphanedMainSessionsForRecovery: markOrphans,
 }));
 
 // mock-isolation: Hold recovery I/O at the owner boundary without allocating native readers.
@@ -40,11 +51,78 @@ vi.mock("../sessions/session-state-events.js", () => ({
 }));
 
 beforeEach(() => {
+  markOrphans.mockReset();
   for (const mock of Object.values(mocks)) {
     mock.mockReset().mockResolvedValue(undefined);
   }
 });
 afterEach(() => resetGatewayWorkAdmission());
+
+it.each(["rejected", "failed-target"] as const)(
+  "holds orphan admission through a config reload after a %s scan",
+  async (outcome) => {
+    const initial: OpenClawConfig = {};
+    const latest: OpenClawConfig = { agents: { entries: { added: {} } } };
+    let current = initial;
+    const checked = new Set<string>();
+    const retryStarted = createDeferred();
+    const releaseRetry = createDeferred();
+    const controller = new AbortController();
+    const warn = vi.fn();
+    let settled = false;
+    markOrphans
+      .mockImplementationOnce(async ({ assertCommitAllowed, startupCheckedStorePaths }) => {
+        startupCheckedStorePaths?.add("completed-store");
+        current = latest;
+        expect(assertCommitAllowed).toThrow("Gateway restart recovery state changed");
+        if (outcome === "rejected") {
+          assertCommitAllowed?.();
+        }
+        return {
+          marked: 1,
+          skipped: 0,
+          failedTargets: [{ agentId: "added", storePath: "/synthetic/added/sessions.json" }],
+        };
+      })
+      .mockImplementationOnce(async ({ cfg, assertCommitAllowed, startupCheckedStorePaths }) => {
+        expect(cfg).toBe(latest);
+        expect(startupCheckedStorePaths).toBe(checked);
+        expect(checked).toEqual(new Set(["completed-store"]));
+        assertCommitAllowed?.();
+        retryStarted.resolve();
+        await releaseRetry.promise;
+        return { marked: 1, skipped: 0 };
+      });
+    const marking = markGatewayStartupMainSessionOrphans(
+      {
+        getConfig: () => current,
+        isRestartRecoverySuppressed: () => false,
+        scheduler: controller,
+        log: { warn },
+      },
+      checked,
+    ).then(() => {
+      settled = true;
+    });
+    try {
+      expect(
+        await Promise.race([
+          retryStarted.promise.then(() => "retry"),
+          marking.then(() => "admitted"),
+        ]),
+      ).toBe("retry");
+      expect(settled).toBe(false);
+      releaseRetry.resolve();
+      await marking;
+      expect(markOrphans).toHaveBeenCalledTimes(2);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      controller.abort();
+      releaseRetry.resolve();
+      await marking;
+    }
+  },
+);
 
 it.for(["prewarm", "delivery", "exec"] as const)(
   "activates healthy subagents while %s waits for another agent database",
