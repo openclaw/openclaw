@@ -363,6 +363,9 @@ export function createControlUiSessionPrRead(params: {
         });
         targets?.set(current, projectedTarget);
       }
+      if (!projectedTarget) {
+        return undefined;
+      }
       const sessionOnly = !roleScopesAllow({
         role: "operator",
         requestedScopes: [READ_SCOPE],
@@ -371,7 +374,7 @@ export function createControlUiSessionPrRead(params: {
       if (sessionOnly) {
         if (
           !actorProfile ||
-          !projectedTarget?.githubPullRequest?.preparedHeadCommit ||
+          !projectedTarget.githubPullRequest?.preparedHeadCommit ||
           !isSessionCreatorProfile(current.entry.createdActor, actorProfile)
         ) {
           return undefined;
@@ -390,6 +393,7 @@ export function createControlUiSessionPrRead(params: {
             assertCurrent: ownReader.assertCurrent,
           },
           repository,
+          projectedIdentity: projectedTarget.identity,
         };
       }
       const target = withControlUiTaskPrTarget(
@@ -402,7 +406,9 @@ export function createControlUiSessionPrRead(params: {
         },
         actorProfile,
       );
-      return target ? { target, repository } : undefined;
+      return target
+        ? { target, repository, projectedIdentity: projectedTarget.identity }
+        : undefined;
     } catch (error) {
       if (error instanceof SessionRowFactsPending) {
         throw error;
@@ -472,15 +478,32 @@ export function createControlUiSessionPrRead(params: {
                 }
               : {}),
             assertCurrent: () => {
-              target.target.assertCurrent?.();
               const current = captureCurrent();
               const original = target.privateSource;
+              let refreshedRow: MaterializedRow | undefined;
               if (!current) {
                 throw new Error("Session pull-request target changed");
               }
-              if (!original) {
-                if (current.selected !== target.captured) {
+              if (!original && current.selected !== target.captured) {
+                // Enrichment can replace a row without changing its incarnation or PR source.
+                if (current.selected.generation !== target.captured?.generation) {
                   throw new Error("Session pull-request target changed");
+                }
+                const row = projection.describe(current.query, current.selected);
+                if (
+                  !row ||
+                  resolveProjectedControlUiSessionPrTarget(current.cfg, row, {
+                    includeBoundPullRequest: params.allowOwnImportedPullRequest,
+                  })?.identity !== target.projectedIdentity
+                ) {
+                  throw new Error("Session pull-request target changed");
+                }
+                refreshedRow = row;
+              }
+              target.target.assertCurrent?.();
+              if (!original) {
+                if (refreshedRow) {
+                  target.captured = refreshedRow;
                 }
                 return;
               }

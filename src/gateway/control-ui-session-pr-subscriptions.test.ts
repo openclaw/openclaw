@@ -1,4 +1,5 @@
 import { getEventListeners } from "node:events";
+import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createRetainedCache } from "../infra/retained-cache.js";
@@ -82,9 +83,14 @@ function expectSessions(
 }
 
 describe("control UI session PR subscriptions", () => {
-  it.each([false, true])(
-    "does no reader work for category-only notifications (uncertain=%s)",
-    async (uncertain) => {
+  it.each([
+    { facts: "category", invalidated: undefined, refresh: false },
+    { facts: undefined, invalidated: "category", refresh: false },
+    { facts: "category", invalidated: true, refresh: true },
+    { facts: "unchanged", invalidated: true, refresh: true },
+  ] as const)(
+    "refreshes=$refresh for facts=$facts, invalidated=$invalidated",
+    async ({ facts, invalidated, refresh }) => {
       const readSource = createTestSessionPrReadSource();
       const readCurrent = vi.fn(async () => ({
         sessionId: "session-id",
@@ -100,12 +106,14 @@ describe("control UI session PR subscriptions", () => {
       broadcastToConnIds.mockClear();
       sessionChanges.emit({
         sessionKey: "session",
-        ...(uncertain
-          ? { factsInvalidated: "category" as const }
-          : { facts: { kind: "category" as const, sessionId: "session-id", category: "work" } }),
+        facts:
+          facts === "category"
+            ? { kind: facts, sessionId: "session-id", category: "work" }
+            : facts && { kind: facts },
+        factsInvalidated: invalidated,
       });
-      await active.stop();
-      expect(readCurrent).not.toHaveBeenCalled();
+      await nextEventLoopTurn();
+      expect(readCurrent.mock.calls.length > 0).toBe(refresh);
       expect(broadcastToConnIds).not.toHaveBeenCalled();
     },
   );

@@ -477,7 +477,8 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
     if (
       keyStates.size === 0 ||
       (!ownAuthorityChanged && !sessionChangeScopeAffectsStoredRows(change)) ||
-      ("facts" in change &&
+      (!change.factsInvalidated &&
+        "facts" in change &&
         (change.facts?.kind === "unchanged" || change.facts?.kind === "category")) ||
       change.factsInvalidated === "category"
     ) {

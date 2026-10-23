@@ -308,7 +308,7 @@ node --import ./scripts/tsx.mjs scripts/perf/session-pr-subscriptions-measure.ts
 Each tab watches one active and 49 passive session PR targets. The measured
 writer alternates an unrelated session's category through `sessions.patch`;
 `--mutation label` alternates its label instead. Both use the general session
-patch commit path and exercise full entry notifications. These commits
+patch commit path and emit canonical replacement notifications. These commits
 exercise the stored-row notification path even when PR
 snapshots remain unchanged. The child counts eligible row notifications, samples
 all main-isolate allocations (including collected objects), and captures GC and
