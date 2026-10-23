@@ -20,6 +20,7 @@ import {
   withoutSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
+import type { TranscriptWindowUpdate } from "./session-accessor.sqlite-transcript-state.js";
 import {
   readSessionActorTransactionState,
   writableSessionActorMap,
@@ -305,7 +306,7 @@ export function createTranscriptIndexAppenderInTransaction(
 ): {
   append: (params: TranscriptIndexAppend) => boolean;
   flushRows: () => void;
-  flush: () => void;
+  flush: (windowUpdate?: TranscriptWindowUpdate) => void;
 } {
   const actor = readSessionActorTransactionState({ db }, { sessionId });
   const initial = prepared ? prepared.state : readSessionTranscriptProjectionState(db, sessionId);
@@ -408,7 +409,7 @@ export function createTranscriptIndexAppenderInTransaction(
   return {
     append: appendEvent,
     flushRows,
-    flush() {
+    flush(windowUpdate) {
       if (flushPostgres) {
         const next =
           pendingUpdatedAt !== undefined && watermark
@@ -417,6 +418,7 @@ export function createTranscriptIndexAppenderInTransaction(
         flushPostgres(
           { activeRows: pendingActiveRows, ftsRows: pendingFtsRows, watermark: next },
           persisted,
+          windowUpdate,
         );
         pendingActiveRows.length = 0;
         pendingFtsRows.length = 0;
@@ -427,6 +429,9 @@ export function createTranscriptIndexAppenderInTransaction(
         return;
       }
       flushRows();
+      if (windowUpdate) {
+        executeSqliteQuerySync(db, windowUpdate);
+      }
       if (pendingUpdatedAt === undefined || !watermark) {
         return;
       }

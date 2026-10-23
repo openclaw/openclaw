@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { UpdateQueryBuilder, UpdateResult } from "kysely";
 import type { SessionRowTranscriptProjection } from "../../gateway/session-row-transcript-preview.js";
 import {
   createSqliteQueryCache,
@@ -16,6 +17,7 @@ import {
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import { getSqliteReadScopeRevision } from "../../infra/sqlite-schema-facts.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
+import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { SessionTranscriptContextVersion } from "./session-accessor.sqlite-contract.js";
 import {
@@ -27,6 +29,7 @@ import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import {
   selectTranscriptAppendState,
   selectTranscriptSessionRoot,
+  transcriptMutationStateQuery,
   type TranscriptSessionRootRow,
 } from "./session-accessor.sqlite-transcript-state.queries.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
@@ -427,23 +430,6 @@ export function readNextTranscriptSeq(database: OpenClawAgentDatabase, sessionId
 }
 
 // Only compilation is retained; writer transactions must see their latest mutation fences.
-const transcriptMutationStateQuery = createSqliteQueryCache((database: EngineConnection) => {
-  const db = getSessionKysely(database);
-  return prepareSqliteQueryTakeFirstSync<
-    string,
-    { transcript_observed_at: number | null; transcript_updated_at: number | null }
-  >(database, (parameter) =>
-    db
-      .selectFrom("session_windows")
-      .select(["transcript_observed_at", "transcript_updated_at"])
-      .where(
-        "session_id",
-        "=",
-        parameter((sessionId) => sessionId),
-      ),
-  );
-});
-
 export function readTranscriptMutationStateInTransaction(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,
@@ -462,6 +448,13 @@ export function readTranscriptMutationStateInTransaction(
   };
 }
 
+export type TranscriptWindowUpdate = UpdateQueryBuilder<
+  DB,
+  "session_windows",
+  "session_windows",
+  UpdateResult
+>;
+
 export function advanceTranscriptMutationAtInTransaction(
   database: OpenClawAgentDatabase,
   sessionId: string,
@@ -471,6 +464,7 @@ export function advanceTranscriptMutationAtInTransaction(
     windowUpdatedAt?: number;
     rowTranscript?: SessionRowTranscriptProjection;
     persistActorMutation?: boolean;
+    writeActorMutation?: (update: TranscriptWindowUpdate) => void;
   } = {},
 ): void {
   return withSqliteDatabaseWriteScope(database.db, [sqliteSessionIdWriteScope(sessionId)], () => {
@@ -522,7 +516,11 @@ export function advanceTranscriptMutationAtInTransaction(
     }
     if (actor?.window) {
       if (options.persistActorMutation !== false) {
-        executeSqliteQuerySync(database.db, update);
+        if (options.writeActorMutation) {
+          options.writeActorMutation(update);
+        } else {
+          executeSqliteQuerySync(database.db, update);
+        }
       }
       if (options.windowUpdatedAt !== undefined) {
         actor.window.updated_at = options.windowUpdatedAt;
@@ -626,12 +624,14 @@ export function touchTranscriptMutationInTransaction(
   windowUpdatedAt?: number,
   rowTranscript?: SessionRowTranscriptProjection,
   persistActorMutation = true,
+  writeActorMutation?: (update: TranscriptWindowUpdate) => void,
 ): void {
   advanceTranscriptMutationAtInTransaction(database, sessionId, Date.now(), {
     strictly: true,
     windowUpdatedAt,
     rowTranscript,
     persistActorMutation,
+    writeActorMutation,
   });
 }
 
