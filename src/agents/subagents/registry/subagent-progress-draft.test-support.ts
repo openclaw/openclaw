@@ -1,4 +1,5 @@
 import { beforeEach, expect } from "vitest";
+import { loadExactSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import {
   markRequesterTurnYielded,
   registerSubagentRun,
@@ -26,7 +27,13 @@ export function useSubagentProgressCohort(fixture: { readonly stateDir: string }
     ids: readonly string[],
     requesterOrigin?: { channel: string; to: string; accountId: string },
     labels?: Readonly<Record<string, string>>,
+    completionTarget?: "parent",
   ) {
+    const requester = loadExactSessionEntryReadOnly({
+      agentId: "main",
+      sessionKey: requesterKey,
+    })?.entry;
+    expect(requester?.sessionId).toBe("requester-session");
     for (const id of ids) {
       await writeSubagentSessionEntry({
         stateDir: fixture.stateDir,
@@ -45,6 +52,9 @@ export function useSubagentProgressCohort(fixture: { readonly stateDir: string }
         requesterAgentId: "main",
         requesterDisplayKey: requesterKey,
         requesterOrigin,
+        completionTarget,
+        completionRequesterSessionId: requester?.sessionId,
+        completionRequesterLifecycleRevision: requester?.lifecycleRevision,
         requesterTurnRunId,
         task: `Delegated ${id}`,
         ...(labels?.[id] ? { label: labels[id] } : {}),
