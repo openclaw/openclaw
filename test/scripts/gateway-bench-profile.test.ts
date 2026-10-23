@@ -26,9 +26,10 @@ const fixturePath = (name: string) =>
   fileURLToPath(new URL(`./fixtures/${name}.mjs`, import.meta.url));
 const readJson = async <T>(file: string): Promise<T> => JSON.parse(await readFile(file, "utf8"));
 
-function spawnFixture(args: string[], directory?: string, ipc = true) {
+function spawnFixture(args: string[], directory?: string, ipc = true, env?: NodeJS.ProcessEnv) {
   const child = spawn(nodeExecutable, args, {
     stdio: ipc ? ["ignore", "pipe", "pipe", "ipc"] : ["ignore", "pipe", "pipe"],
+    env,
   });
   const closed = once(child, "close");
   let stderr = "";
@@ -104,6 +105,68 @@ function heapBytesUnder(
     )
   );
 }
+
+it("preserves native trace-flag inheritance and explicit worker baseline preload propagation", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "transcript-worker-preload-"));
+  onTestFinished(() => rm(directory, { recursive: true, force: true }));
+  const resultPath = path.join(directory, "result.json");
+  const baselineOwner = new URL(
+    "../../src/config/sessions/session-actor-replica.ts",
+    import.meta.url,
+  ).href;
+  await writeFile(
+    path.join(directory, "worker.mjs"),
+    `import { parentPort } from "node:worker_threads";
+     parentPort.postMessage({
+       resolved: import.meta.resolve(${JSON.stringify(baselineOwner)}),
+       inheritedTrace: process.execArgv.includes("--trace-gc-nvp"),
+       baseline: process.env.OPENCLAW_BENCH_TRANSCRIPT_BASELINE_OWNERS,
+       output: process.env.OPENCLAW_BENCH_WORKER_MEMORY_DIR,
+       sentinel: process.env.BENCH_WORKER_SENTINEL,
+     });`,
+  );
+  const entry = path.join(directory, "entry.mjs");
+  await writeFile(
+    entry,
+    `import { Worker } from "node:worker_threads";
+     import { once } from "node:events";
+     import { writeFileSync } from "node:fs";
+     const results = [];
+     for (const options of [{}, { execArgv: [], env: { BENCH_WORKER_SENTINEL: "explicit" } }]) {
+       const worker = new Worker(new URL("./worker.mjs", import.meta.url), options);
+       const [[result], [code]] = await Promise.all([once(worker, "message"), once(worker, "exit")]);
+       if (code !== 0) throw new Error("Worker exited with code " + code);
+       results.push(result);
+     }
+     writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify(results));`,
+  );
+  const { closed, stderr } = spawnFixture(
+    [
+      "--trace-gc-nvp",
+      "--import",
+      new URL("../../scripts/perf/transcript-worker-memory-preload.ts", import.meta.url).href,
+      entry,
+    ],
+    undefined,
+    false,
+    {
+      ...process.env,
+      OPENCLAW_BENCH_TRANSCRIPT_BASELINE_OWNERS: "1",
+      OPENCLAW_BENCH_WORKER_MEMORY_DIR: directory,
+      BENCH_WORKER_SENTINEL: "inherited",
+    },
+  );
+  expect(await closed, stderr()).toEqual([0, null]);
+  const common = {
+    resolved: baselineOwner.replace(/\.ts$/u, ".baseline.ts"),
+    baseline: "1",
+    output: directory,
+  };
+  expect(await readJson(resultPath)).toEqual([
+    { ...common, inheritedTrace: true, sentinel: "inherited" },
+    { ...common, inheritedTrace: false, sentinel: "explicit" },
+  ]);
+});
 
 it("attributes worker receipts without retaining labels or treating unsized messages as empty", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "gateway-message-attribution-"));

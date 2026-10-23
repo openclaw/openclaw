@@ -56,7 +56,11 @@ workerThreads.Worker = class extends NativeWorker {
   ) {
     super(filename, {
       ...options,
-      execArgv: [...(options.execArgv ?? process.execArgv), "--import", import.meta.url],
+      // Native inheritance includes this preload and permits V8 flags rejected in explicit argv.
+      execArgv:
+        options.execArgv === undefined
+          ? undefined
+          : [...options.execArgv, "--import", import.meta.url],
       env:
         options.env === workerThreads.SHARE_ENV
           ? options.env
