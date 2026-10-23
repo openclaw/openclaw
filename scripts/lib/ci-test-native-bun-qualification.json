@@ -306,7 +306,6 @@
     "src/shared/text/tool-call-shaped-text.test.ts": "0ce85e801647c5ec06516a4c4b3adb3beb52dca26b0928cd8234f8cb83099bf4",
     "src/shared/thread-binding-lifecycle.test.ts": "b5ceaa3e93809a3f239ccf000f4f9fd02d688c144ec3466d730ffc263075945e",
     "src/skills/discovery/skill-index.test.ts": "c01880709fa4d9c76fdce80cae5cd868606c3498b5451015a76824d0cb06d465",
-    "src/skills/lifecycle/gh-config-discovery.test.ts": "889782c1738b129d442e2d49901a8cc9171840e392421b937ad70907e2e789d3",
     "src/skills/lifecycle/install-output.test.ts": "2a55cfedc31aa2470f3c7d2a743def176b37bc2f17ba705c35be740e35409775",
     "src/skills/workshop/config.test.ts": "7ff46a2786f1928f5c53c80cd9951377d0e7373d2f53d73e45d8c54c4f2ad254",
     "src/utils/chunk-items.test.ts": "4b165806a3c07eb758b3b78da6ad7d77427db9781fb7d4c9d2cf725a192f9a88",

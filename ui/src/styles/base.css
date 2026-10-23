@@ -869,7 +869,7 @@ a:where(
     .markdown a,
     .markdown-body a,
     .dreams-diary__para a
-  ):not(:where(.btn, [role="button"])) {
+  ):not(:where(.btn, [role="button"], .chat-assistant-attachment-card__action)) {
   text-decoration: underline;
 }
 
