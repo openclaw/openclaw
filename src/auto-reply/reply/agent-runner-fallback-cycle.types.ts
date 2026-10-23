@@ -50,6 +50,9 @@ export type AgentFallbackCandidateCommonParams = RunEntryCandidateOptions &
     runLane: RunEmbeddedAgentParams["lane"];
     suppressQueuedUserPersistenceForCandidate: boolean;
     userTurnTranscriptRecorder: RunEmbeddedAgentParams["userTurnTranscriptRecorder"];
+    onCompletedSourceReplyDelivered: NonNullable<
+      RunEmbeddedAgentParams["onCompletedSourceReplyDelivered"]
+    >;
     notifyUserMessagePersisted: () => void;
     fastModeStartedAtMs: number;
     fastModeAutoProgressState: FastModeAutoProgressState;
@@ -65,6 +68,8 @@ export type AgentFallbackCandidateCommonParams = RunEntryCandidateOptions &
   };
 
 export type AgentFallbackCycleState = {
+  /** Canonical current-source message-tool delivery completed during this logical turn. */
+  completedSourceReplyDelivered?: boolean;
   maintenanceAuthProfile?: CompletedAgentAuthSelection;
   sessionWriter?: Extract<AgentTurnInternalResult, { kind: "settled" }>["sessionWriter"];
   compactionRequestBudget?: CompactionRequestBudget;

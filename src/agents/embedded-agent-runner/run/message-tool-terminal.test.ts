@@ -250,10 +250,12 @@ describe("message-tool-only source replies", () => {
   it("terminates after a delivered completed source reply", async () => {
     const agent = {} as unknown as Agent;
     const onDeliveredSourceReply = vi.fn();
+    const onCompletedSourceReply = vi.fn();
     installMessageToolTerminalHook({
       agent,
       sourceReplyDeliveryMode: "message_tool_only",
       onDeliveredSourceReply,
+      onCompletedSourceReply,
     });
 
     await expect(
@@ -261,10 +263,22 @@ describe("message-tool-only source replies", () => {
         createAfterToolCallContext({
           toolName: "message",
           args: { action: "send", message: "visible reply" },
+          result: {
+            content: [],
+            details: {
+              messageDelivery: {
+                status: "settled",
+                partialDelivery: false,
+                createdThreadIds: [],
+                sourceReplyDelivered: true,
+              },
+            },
+          },
         }),
       ),
     ).resolves.toEqual({ terminate: true });
     expect(onDeliveredSourceReply).toHaveBeenCalledTimes(1);
+    expect(onCompletedSourceReply).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -278,12 +292,14 @@ describe("message-tool-only source replies", () => {
       // Shape of a cron send: automatic mode, explicit target, confirmed source delivery.
       const agent = {} as unknown as Agent;
       const onDeliveredSourceReply = vi.fn();
+      const onCompletedSourceReply = vi.fn();
       installMessageToolTerminalHook({
         agent,
         currentProvider: "telegram",
         currentChannelId: "-1001234567890",
         ...(finalByDefault === undefined ? {} : { messageToolFinalByDefault: finalByDefault }),
         onDeliveredSourceReply,
+        onCompletedSourceReply,
       });
       const args = {
         action: "send",
@@ -317,14 +333,42 @@ describe("message-tool-only source replies", () => {
       ).resolves.toEqual(terminates ? { terminate: true } : undefined);
       // The send is still recorded as delivered whether or not the turn ends.
       expect(onDeliveredSourceReply).toHaveBeenCalledTimes(1);
+      expect(onCompletedSourceReply).toHaveBeenCalledTimes(terminates ? 1 : 0);
     },
   );
 
-  it("continues after delivered progress", async () => {
+  it("does not report a legacy send without canonical completion as completed", async () => {
     const agent = {} as unknown as Agent;
+    const onDeliveredSourceReply = vi.fn();
+    const onCompletedSourceReply = vi.fn();
     installMessageToolTerminalHook({
       agent,
       sourceReplyDeliveryMode: "message_tool_only",
+      onDeliveredSourceReply,
+      onCompletedSourceReply,
+    });
+
+    await expect(
+      agent.afterToolCall?.(
+        createAfterToolCallContext({
+          toolName: "message",
+          args: { action: "send", message: "legacy success" },
+        }),
+      ),
+    ).resolves.toEqual({ terminate: true });
+    expect(onDeliveredSourceReply).toHaveBeenCalledTimes(1);
+    expect(onCompletedSourceReply).not.toHaveBeenCalled();
+  });
+
+  it("continues after delivered progress", async () => {
+    const agent = {} as unknown as Agent;
+    const onDeliveredSourceReply = vi.fn();
+    const onCompletedSourceReply = vi.fn();
+    installMessageToolTerminalHook({
+      agent,
+      sourceReplyDeliveryMode: "message_tool_only",
+      onDeliveredSourceReply,
+      onCompletedSourceReply,
     });
 
     await expect(
@@ -335,6 +379,43 @@ describe("message-tool-only source replies", () => {
         }),
       ),
     ).resolves.toBeUndefined();
+    expect(onDeliveredSourceReply).toHaveBeenCalledTimes(1);
+    expect(onCompletedSourceReply).not.toHaveBeenCalled();
+  });
+
+  it("does not report partial delivery as a completed source reply", async () => {
+    const agent = {} as unknown as Agent;
+    const onDeliveredSourceReply = vi.fn();
+    const onCompletedSourceReply = vi.fn();
+    installMessageToolTerminalHook({
+      agent,
+      sourceReplyDeliveryMode: "message_tool_only",
+      onDeliveredSourceReply,
+      onCompletedSourceReply,
+    });
+
+    await expect(
+      agent.afterToolCall?.(
+        createAfterToolCallContext({
+          toolName: "message",
+          args: { action: "send", message: "partially delivered" },
+          isError: true,
+          result: {
+            content: [],
+            details: {
+              messageDelivery: {
+                status: "settled",
+                partialDelivery: true,
+                createdThreadIds: [],
+                sourceReplyDelivered: true,
+              },
+            },
+          },
+        }),
+      ),
+    ).resolves.toBeUndefined();
+    expect(onDeliveredSourceReply).not.toHaveBeenCalled();
+    expect(onCompletedSourceReply).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -439,7 +520,12 @@ describe("message-tool-only source replies", () => {
   it("preserves a committed final source reply when later presentation fails", async () => {
     const failure = { details: { error: "presentation failed" }, isError: true };
     const agent = { afterToolCall: async () => failure } as unknown as Agent;
-    installMessageToolTerminalHook({ agent, sourceReplyDeliveryMode: "automatic" });
+    const onCompletedSourceReply = vi.fn();
+    installMessageToolTerminalHook({
+      agent,
+      sourceReplyDeliveryMode: "automatic",
+      onCompletedSourceReply,
+    });
 
     await expect(
       agent.afterToolCall?.(
@@ -460,6 +546,7 @@ describe("message-tool-only source replies", () => {
         }),
       ),
     ).resolves.toEqual({ ...failure, terminate: true });
+    expect(onCompletedSourceReply).toHaveBeenCalledOnce();
   });
 
   it.each([false, true])(

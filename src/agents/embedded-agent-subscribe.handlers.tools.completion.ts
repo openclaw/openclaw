@@ -326,6 +326,12 @@ export async function prepareToolExecutionEnd(
     deliveredMessageToolSourceReply || messageDelivery?.sourceReplyDelivered
       ? resolveMessageToolSourceReplyFinal(startArgs, ctx.params.messageToolFinalByDefault)
       : undefined;
+  const completedSourceReply =
+    sourceReplyFinal === true &&
+    !isToolError &&
+    (readEmbeddedMessageDeliveryFact(readToolResultDetails(result)?.messageDelivery)
+      ?.sourceReplyDelivered === true ||
+      messageDelivery?.sourceReplyDelivered === true);
   ctx.state.sourceReplyDelivered ||= messageDelivery?.sourceReplyDelivered;
   if (
     sourceReplyFinal !== false &&
@@ -361,6 +367,9 @@ export async function prepareToolExecutionEnd(
       }
     }
     ctx.params.onDeliveredMessageToolOnlySourceReply?.();
+    if (completedSourceReply) {
+      ctx.params.onCompletedMessageToolOnlySourceReply?.();
+    }
   }
   if (didDeliverMessagingResult && isMessagingSend) {
     if (committedMediaUrls.length > 0) {
