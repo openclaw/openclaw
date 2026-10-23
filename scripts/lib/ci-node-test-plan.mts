@@ -1585,6 +1585,7 @@ export function createUiTestShardGroups(
 
 export function createUiRealGatewayTestShards(
   e2eGroups: ReturnType<typeof createUiTestShardGroups>["e2e"],
+  env: Readonly<Record<string, string | undefined>> = process.env,
 ) {
   const selected = new Set(
     e2eGroups.flatMap((group) => group.includePatterns ?? uiE2eRealGatewayTestFiles),
@@ -1593,9 +1594,26 @@ export function createUiRealGatewayTestShards(
   const desktop = resolveUiTypeScriptPath("ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts");
   const files = uiE2eRealGatewayTestFiles.filter((file) => selected.has(file) && file !== desktop);
   const timings = readUiE2eFileTimings();
+  // Disabled proofs still collect. An enabled DeepSeek flag retains full pricing
+  // without requiring preflight to receive the test job's credentials.
+  const optInEnabled = new Map([
+    [
+      resolveUiTypeScriptPath("ui/src/e2e/deepseek-search.real-gateway.e2e.test.ts"),
+      env.OPENCLAW_DEEPSEEK_UI_LIVE === "1",
+    ],
+    [
+      resolveUiTypeScriptPath("ui/src/e2e/peer-followup-restart.real-gateway.e2e.test.ts"),
+      env.OPENCLAW_PEER_RESTART_LIVE === "1",
+    ],
+    [
+      resolveUiTypeScriptPath("ui/src/e2e/chat-steer-deferred-custody.real-gateway.e2e.test.ts"),
+      Boolean(env.OPENCLAW_STEER_CUSTODY_PROOF),
+    ],
+  ]);
   // Cold Gateway files use the observed roughly 30s file cost until two CI samples exist.
   const seconds = (file: string) =>
-    (timings.fileSeconds[file] ?? 30) + timings.perFileOverheadSeconds;
+    (optInEnabled.get(file) === false ? 0 : (timings.fileSeconds[file] ?? 30)) +
+    timings.perFileOverheadSeconds;
   const serial = files.filter((file) => !parallelFiles.has(file));
   const serialSeconds =
     serial.reduce((sum, file) => sum + seconds(file), 0) +
