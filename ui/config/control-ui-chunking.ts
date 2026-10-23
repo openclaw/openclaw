@@ -135,16 +135,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     return `locale-namespace-${normalized.slice(resolvedLocaleNamespaceModulePrefix.length).replace("/", "-")}`;
   }
 
-  if (
-    normalized.endsWith("/ui/src/styles/chat/grouped.css") ||
-    normalized.endsWith("/ui/src/styles/chat/message-layout.css") ||
-    normalized.endsWith("/ui/src/styles/chat/composer.css") ||
-    normalized.endsWith("/ui/src/styles/chat/composer-surface.css")
-  ) {
-    // Both routes load the conversation surface; bound the larger shared boot stylesheet.
-    return "chat-transcript-styles";
-  }
-
   // Code highlighting is requested by the first completed code block; it must
   // not share the parser/sanitizer chunk used by ordinary transcript prose.
   if (moduleIdIncludesPackage(id, "highlight.js")) {
@@ -238,16 +228,11 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 controlUiBootModules[route].filter((id) => id.endsWith(".css")),
               );
               return {
-                name:
-                  route === "chat"
-                    ? (id: string) =>
-                        controlUiBootManifestKey(id).startsWith("ui/src/pages/chat/")
-                          ? "control-ui-boot-chat-component-styles"
-                          : "control-ui-boot-chat-styles"
-                    : `control-ui-boot-${route}-styles`,
+                name: `control-ui-boot-${route}-styles`,
                 test: (id: string) =>
                   !/[?&]inline(?:[=&]|$)/u.test(id) && styles.has(controlUiBootManifestKey(id)),
-                // Keep Chat component styles separate to bound the largest stylesheet.
+                // One stylesheet per measured route set, without per-page JS facades.
+                // Keep it separate from core CSS to preserve its existing size ceiling.
                 priority: 9,
               };
             }),

@@ -216,32 +216,37 @@ export class NewSessionPageOwner {
       return;
     }
     this.isConnected = true;
-    // These receipts reconcile the draft and prepared title before the view reads them.
-    const context = this.context;
-    if (context) {
-      this.contextSubscriptions = [
-        context.theme,
-        context.agents,
-        context.agentIdentity,
-        context.sessions,
-        context.placementStartup,
-        context.runtimeConfig,
-        context.config,
-      ].map((source) => source.subscribe(this.changed));
-      let location = context.router.getState().location;
-      this.contextSubscriptions.push(
-        context.router.subscribe((state) => {
-          if (state.location !== location) {
-            location = state.location;
-            this.retireSubmissionPresentation();
-            this.browser.close();
-          }
-        }),
-      );
+    try {
+      // These receipts reconcile the draft and prepared title before the view reads them.
+      const context = this.context;
+      if (context) {
+        this.contextSubscriptions = [
+          context.theme,
+          context.agents,
+          context.agentIdentity,
+          context.sessions,
+          context.placementStartup,
+          context.runtimeConfig,
+          context.config,
+        ].map((source) => source.subscribe(this.changed));
+        let location = context.router.getState().location;
+        this.contextSubscriptions.push(
+          context.router.subscribe((state) => {
+            if (state.location !== location) {
+              location = state.location;
+              this.retireSubmissionPresentation();
+              this.browser.close();
+            }
+          }),
+        );
+      }
+      this.draft.connect();
+      this.submission.draftPersistence.connect();
+      this.changed();
+    } catch (error) {
+      this.disconnect();
+      throw error;
     }
-    this.draft.connect();
-    this.submission.draftPersistence.connect();
-    this.changed();
   }
 
   disconnect() {
@@ -249,6 +254,7 @@ export class NewSessionPageOwner {
     if (!this.isConnected) {
       return;
     }
+    this.isConnected = false;
     this.browser.close();
     for (const stop of this.contextSubscriptions.splice(0)) {
       stop();
@@ -259,13 +265,15 @@ export class NewSessionPageOwner {
     if (!this.retainedForHandoff) {
       this.disposeDraft();
     }
-    this.isConnected = false;
   }
 
   disposeDraft() {
-    forgetInstantThreadPage(this.data, this.host);
-    retainDraft(this.context, this.submission, this.openedFor, this.messageOwnerKey);
-    this.draft.disconnect();
+    try {
+      forgetInstantThreadPage(this.data, this.host);
+      retainDraft(this.context, this.submission, this.openedFor, this.messageOwnerKey);
+    } finally {
+      this.draft.disconnect();
+    }
   }
 
   synchronize() {

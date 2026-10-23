@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 312107,
-  "reason": "Optional browser, sidebar catalog and English page copy deferment: matched d335 comparison 315236 to 312107 B startup; 1333062 B Chat and 816697 B New Session, with seven startup JS requests.",
+  "startupJsGzipBytes": 311544,
+  "reason": "Optional browser, sidebar catalog and English copy after CSS consolidation: matched 0eab build 314546 to 311544 B startup; 1333364 B Chat and 816205 B New Session; seven startup JS requests.",
   "updatedAt": "2026-10-23"
 }
