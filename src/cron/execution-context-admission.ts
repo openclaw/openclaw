@@ -18,7 +18,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCreatorSandbox } from "../gateway/operator-role-policy.js";
 import { decodeGatewayOperatorRecoverySource } from "../gateway/operator-run-recovery-source.codec.js";
 import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
-import { bindScheduledExecutionFacts } from "./execution-context-registry.js";
+import { bindScheduledExecutionContext } from "./execution-context-registry.js";
 import {
   buildScheduledExecutionContext,
   classifyScheduledParent,
@@ -284,13 +284,22 @@ export async function admitScheduledOccurrence(
           if (result.status !== "ready") {
             return;
           }
-          unbind = bindScheduledExecutionFacts(admittedRun, result.facts);
+          // Tools built for the run keep this assertion, so it must also fail once the run settles.
+          let released = false;
           context = {
             ...result.facts,
             assertCurrent: () => {
+              if (released) {
+                throw new Error("Scheduled occurrence has settled");
+              }
               assertAdmitted();
               assertParentCurrent();
             },
+          };
+          const unbindContext = bindScheduledExecutionContext(admittedRun, context);
+          unbind = () => {
+            released = true;
+            unbindContext();
           };
         },
         current: () => context,

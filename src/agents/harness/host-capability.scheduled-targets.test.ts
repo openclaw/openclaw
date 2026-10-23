@@ -5,7 +5,10 @@ import { createAdmittedHostCapabilityTestFixture } from "./host-capability.test-
 
 const mocks = vi.hoisted(() => ({
   gatewayCalls: vi.fn<(method: string, params: Record<string, unknown>) => Promise<unknown>>(),
-  targets: new WeakMap<object, { boardSessionKey: string; mediaSessionKey: string }>(),
+  targets: new WeakMap<
+    object,
+    { boardSessionKey: string; mediaSessionKey: string; assertCurrent: () => void }
+  >(),
 }));
 
 vi.mock("../tools/in-process-gateway.js", async (importOriginal) => ({
@@ -36,6 +39,7 @@ afterEach(() => {
 async function readBoardThroughHost(targets?: {
   boardSessionKey: string;
   mediaSessionKey: string;
+  assertCurrent: () => void;
 }) {
   setRuntimeConfigSnapshot({});
   mocks.gatewayCalls.mockReset();
@@ -76,6 +80,7 @@ it("points a Codex scheduled child's dashboard at its parent's board", async () 
   const params = await readBoardThroughHost({
     boardSessionKey: PARENT_KEY,
     mediaSessionKey: PARENT_KEY,
+    assertCurrent: () => {},
   });
   expect(params).toMatchObject({ sessionKey: PARENT_KEY });
 });

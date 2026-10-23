@@ -95,6 +95,8 @@ const DashboardToolSchema = Type.Object(
 type DashboardToolOptions = {
   agentSessionKey?: string;
   agentId?: string;
+  /** Fails once the board's owner no longer authorizes this run, checked again inside each board write. */
+  assertTargetCurrent?: () => void;
   callGateway?: InProcessGatewayCaller;
   emitCommand?: typeof emitBoardCommand;
 };
@@ -248,10 +250,16 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
       if (!sessionKey) {
         throw new ToolInputError("agent session required");
       }
+      const assertTargetCurrent = opts.assertTargetCurrent;
+      assertTargetCurrent?.();
       const admittedResolver = getGatewayToolCallerIdentity()?.gatewayContextResolver;
-      const gatewayOptions = admittedResolver
-        ? { resolveGatewayContext: admittedResolver }
-        : undefined;
+      const gatewayOptions =
+        admittedResolver || assertTargetCurrent
+          ? {
+              ...(admittedResolver ? { resolveGatewayContext: admittedResolver } : {}),
+              ...(assertTargetCurrent ? { sessionMutationCommitGuard: assertTargetCurrent } : {}),
+            }
+          : undefined;
       const callGateway = <T>(method: string, gatewayParams: Record<string, unknown>) =>
         gatewayCall<T>(method, gatewayParams, gatewayOptions);
       if (action === "read") {
@@ -293,6 +301,7 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
                 kind: "set_chat_dock",
                 dock: readPresentation(params) === "expanded" ? "hidden" : "right",
               };
+        assertTargetCurrent?.();
         const delivered = emitCommand(
           { sessionKey, agentId: opts.agentId, command },
           admittedResolver,

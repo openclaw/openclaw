@@ -189,12 +189,17 @@ describe("admitScheduledOccurrence", () => {
       scheduledExecution: minted,
     });
     const admitted = await admission.preparedRunAdmission.admit("embedded");
-    expect(readScheduledToolTargets(admitted)).toEqual({
-      boardSessionKey: PARENT_KEY,
-      mediaSessionKey: PARENT_KEY,
+    const targets = readScheduledToolTargets(admitted);
+    expect(targets).toMatchObject({ boardSessionKey: PARENT_KEY, mediaSessionKey: PARENT_KEY });
+    expect(() => targets?.assertCurrent()).not.toThrow();
+    generationAssert.mockImplementationOnce(() => {
+      throw new Error("parent reset");
     });
+    expect(() => targets?.assertCurrent()).toThrow("parent reset");
     admission.close();
     expect(readScheduledToolTargets(admitted)).toBeUndefined();
+    // Tools built during the run keep the assertion; it must refuse after the run settles.
+    expect(() => targets?.assertCurrent()).toThrow("settled");
     occurrence.release();
   });
 

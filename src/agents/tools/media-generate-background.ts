@@ -52,6 +52,8 @@ export type MediaGenerateToolOptions = {
   authProfileStore?: AuthProfileStore;
   authProfileStoreSource?: boolean;
   agentSessionKey?: string;
+  /** Fails once the session owning the task no longer authorizes this run; joins task admission. */
+  assertTargetCurrent?: () => void;
   sandboxSessionKey?: string;
   sandboxAgentId?: string;
   /** Durable requester transcript key; task ownership stays on agentSessionKey. */
@@ -222,6 +224,7 @@ export async function prepareMediaGenerationTask<
 }) {
   const { cfg, generationLabel, model, options, signal } = params;
   const assertSourceCurrent = captureAgentToolSourceExecutionGuard(signal);
+  options?.assertTargetCurrent?.();
   const explicitModelConfig = hasToolModelConfig(
     coerceToolModelConfig(cfg.agents?.defaults?.mediaModels?.[generationLabel]),
   );
@@ -307,6 +310,7 @@ export async function prepareMediaGenerationTask<
     resources,
     assertAdmissionCurrent: composeSessionSourceAssertion([assertSourceCurrent], (assertSource) => {
       assertSource();
+      options?.assertTargetCurrent?.();
       resources?.assertOpen();
     }),
   });

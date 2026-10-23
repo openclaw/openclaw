@@ -4,27 +4,32 @@
  * targets it needs. Leaf module: agent tools import it without cron's graph.
  */
 import type { OperationalRunInstanceRef } from "../agents/operational-run-instance.js";
-import type { ScheduledExecutionFacts } from "./execution-context.js";
+import type { ScheduledExecutionContext } from "./scheduled-occurrence.js";
 
-const factsByRun = new WeakMap<OperationalRunInstanceRef, ScheduledExecutionFacts>();
+const contextsByRun = new WeakMap<OperationalRunInstanceRef, ScheduledExecutionContext>();
 
-/** Admission-only: binds an occurrence's facts to its admitted run. */
-export function bindScheduledExecutionFacts(
+/** Admission-only: binds an occurrence's context to its admitted run. */
+export function bindScheduledExecutionContext(
   run: OperationalRunInstanceRef,
-  facts: ScheduledExecutionFacts,
+  context: ScheduledExecutionContext,
 ): () => void {
-  factsByRun.set(run, facts);
+  contextsByRun.set(run, context);
   return () => {
-    if (factsByRun.get(run) === facts) {
-      factsByRun.delete(run);
+    if (contextsByRun.get(run) === context) {
+      contextsByRun.delete(run);
     }
   };
 }
 
-/** Session keys a scheduled run's board, widget and media tools act on. */
+/**
+ * Session keys a scheduled run's board, widget and media tools act on, plus the
+ * occurrence's assertion. Tools call `assertCurrent` before and inside each
+ * effect so a reset or removed parent, or a settled run, refuses the write.
+ */
 export type ScheduledToolTargets = Readonly<{
   boardSessionKey: string;
   mediaSessionKey: string;
+  assertCurrent: () => void;
 }>;
 
 /**
@@ -35,11 +40,28 @@ export function readScheduledToolTargets(
   owner: Readonly<{ operationalRunInstance?: OperationalRunInstanceRef }> | undefined,
 ): ScheduledToolTargets | undefined {
   const run = owner?.operationalRunInstance;
-  const facts = run ? factsByRun.get(run) : undefined;
-  return facts
+  const context = run ? contextsByRun.get(run) : undefined;
+  return context
     ? {
-        boardSessionKey: facts.resources.boardSessionKey,
-        mediaSessionKey: facts.resources.mediaSessionKey,
+        boardSessionKey: context.resources.boardSessionKey,
+        mediaSessionKey: context.resources.mediaSessionKey,
+        assertCurrent: context.assertCurrent,
       }
     : undefined;
+}
+
+/**
+ * Tool-construction options for a scheduled run on a Gateway-resolved surface:
+ * its targets, plus the grant's tool cap as the run's allowance, matching the
+ * embedded attempt. Empty when the run was not admitted with a context.
+ */
+export function readScheduledToolOptions(
+  owner: Readonly<{ operationalRunInstance?: OperationalRunInstanceRef }> | undefined,
+  toolsAllow: readonly string[] | undefined,
+): { scheduledToolTargets?: ScheduledToolTargets; runtimeToolAllowlist?: string[] } {
+  const scheduledToolTargets = readScheduledToolTargets(owner);
+  if (!scheduledToolTargets) {
+    return {};
+  }
+  return { scheduledToolTargets, ...(toolsAllow ? { runtimeToolAllowlist: [...toolsAllow] } : {}) };
 }

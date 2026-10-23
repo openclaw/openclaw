@@ -302,6 +302,7 @@ function* createOpenClawToolsSteps(
     ...options,
     sandboxSessionKey: options?.agentSessionKey,
     agentSessionKey: mediaGenerationAgentSessionKey,
+    assertTargetCurrent: scheduledTargets?.assertCurrent,
     requesterRunSessionKey: trimmedRunSessionKey,
     requesterAgentId: sessionAgentId,
     requesterOrigin: widgetDeliveryContext,
@@ -425,9 +426,12 @@ function* createOpenClawToolsSteps(
   const widgetBoardSessionKey = scheduledTargets?.boardSessionKey ?? sessionKey;
   // Admitted Control UI recovery and explicitly capped scheduled turns can
   // keep authoring their durable board without claiming an inline renderer.
+  // A run admitted with scheduled tool targets is a scheduled turn on every runtime.
+  const scheduledCaller =
+    options?.gatewayCallerScheduled === true || scheduledTargets !== undefined;
   const pinnedWidgetOnly =
     (options?.pinnedWidgetAuthoring === true ||
-      (options?.gatewayCallerScheduled === true && scheduledWidgetExplicitlyAllowed)) &&
+      (scheduledCaller && scheduledWidgetExplicitlyAllowed)) &&
     !inlineWidgetClientAvailable &&
     !currentChannelWidgetPresenter &&
     Boolean(widgetBoardSessionKey) &&
@@ -467,6 +471,7 @@ function* createOpenClawToolsSteps(
     createDashboardTool({
       agentSessionKey:
         scheduledTargets?.boardSessionKey ?? options?.runSessionKey ?? options?.agentSessionKey,
+      assertTargetCurrent: scheduledTargets?.assertCurrent,
       agentId: sessionAgentId,
     }),
     ...(embedded
@@ -539,6 +544,7 @@ function* createOpenClawToolsSteps(
           sessionId: options?.sessionId,
           agentId: sessionAgentId,
           agentSessionKey: widgetBoardSessionKey,
+          assertTargetCurrent: scheduledTargets?.assertCurrent,
           inlineHostEnabled: isCoreCanvasHostEnabled(resolvedConfig),
           inlineClientAvailable: inlineWidgetClientAvailable,
           pinnedOnly: pinnedWidgetOnly,

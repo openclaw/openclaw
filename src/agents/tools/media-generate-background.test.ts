@@ -373,3 +373,54 @@ it.each(["admission", "generation"] as const)(
     expect(scheduleBackgroundWork).not.toHaveBeenCalled();
   },
 );
+
+it.each([
+  ["before preparation", true],
+  ["between preparation and task admission", false],
+])(
+  "refuses a scheduled child's media task when its parent resets %s",
+  async (_label, staleBeforePrepare) => {
+    let parentCurrent = !staleBeforePrepare;
+    const run = vi.fn();
+    const scheduleBackgroundWork = vi.fn();
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { mediaModels: { image: { primary: "openai/gpt-image-1" } } } },
+    };
+    setRuntimeConfigSnapshot(cfg, cfg);
+    await expect(
+      prepareMediaGenerationTask({
+        generationLabel: "image",
+        cfg,
+        args: { prompt: "parent board art" },
+        options: {
+          agentSessionKey: "agent:main:dashboard:parent",
+          assertTargetCurrent: () => {
+            if (!parentCurrent) {
+              throw new Error("parent conversation was reset");
+            }
+          },
+        },
+        acquire: async () => undefined,
+        resolveProviders: () => [],
+        findDuplicate: async () => undefined,
+        prepare: async ({ prompt }) => {
+          parentCurrent = false;
+          return {
+            kind: "task",
+            params: {
+              lifecycle: imageGenerationTaskLifecycle,
+              sessionKey: "agent:main:dashboard:parent",
+              prompt,
+              requestKey: "parent-reset-proof",
+              scheduleBackgroundWork,
+              onFailure: vi.fn(),
+              run,
+            },
+          };
+        },
+      }),
+    ).rejects.toThrow("parent conversation was reset");
+    expect(scheduleBackgroundWork).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
+  },
+);
