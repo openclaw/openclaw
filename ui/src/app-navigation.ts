@@ -43,8 +43,7 @@ export function isSessionsHubRoute(routeId: NavigationRouteId): boolean {
   return routeId === "sessions" || routeId === "worktrees";
 }
 
-export type SidebarNavRoute = (typeof SIDEBAR_NAV_ROUTES)[number];
-export type PersistedSidebarRoute = SidebarNavRoute;
+export type PersistedSidebarRoute = (typeof SIDEBAR_NAV_ROUTES)[number];
 
 function isPersistedSidebarRoute(value: unknown): value is PersistedSidebarRoute {
   return SIDEBAR_NAV_ROUTES.includes(value as PersistedSidebarRoute);
