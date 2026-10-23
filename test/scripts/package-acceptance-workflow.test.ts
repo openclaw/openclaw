@@ -12604,7 +12604,24 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(runStep.run).toContain(
       "printf 'Runtime token-efficiency lane started.\\n' > \"${output_dir}/runtime-lane-started.txt\"",
     );
-    expect(reportStep.if).toBe("steps.run_lane.outcome == 'success'");
+    expect(runStep.run).toContain("--allow-failures");
+    expect(reportStep.if).toBe("${{ !cancelled() && steps.run_lane.outputs.output_dir != '' }}");
+    expect(reportStep["continue-on-error"]).toBe("${{ steps.run_lane.outcome == 'failure' }}");
+  });
+
+  it("sets the runtime-pair admission deadline before checkout from the job budget", () => {
+    const job = workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_runtime_token_efficiency");
+    const step = job.steps![0]!;
+    expect(step.name).toBe("Set runtime-pair admission deadline");
+    expect(step.env?.JOB_MINUTES).toBe(job["timeout-minutes"]);
+    const githubEnv = join(tempDirs.make("runtime-pair-budget-"), "github-env");
+    const run = ["date() { echo 1000000; }", step.run].join("\n");
+    execFileSync("bash", ["--noprofile", "--norc", "-ec", run], {
+      env: { ...process.env, JOB_MINUTES: String(step.env?.JOB_MINUTES), GITHUB_ENV: githubEnv },
+    });
+    expect(readFileSync(githubEnv, "utf8").trim()).toBe(
+      "OPENCLAW_QA_RUNTIME_PAIR_LATEST_START_MS=1002220000",
+    );
   });
 
   it("overlays only trusted Anthropic mock tooling for frozen-target QA parity", () => {

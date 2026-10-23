@@ -2,6 +2,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import {
+  collectQaStartedScenarioInstanceIds,
   projectQaEvidenceScenarioOutcomes,
   type QaEvidenceSummaryV3Json,
 } from "./evidence-summary.js";
@@ -308,6 +309,53 @@ describe("runtime parity suite transport cleanup", () => {
     expect(result.startedScenarioIds).toEqual([]);
     expect(runChild).toHaveBeenCalledTimes(2);
   });
+
+  it.each([
+    { startMs: 1_001, expectedStatus: "blocked", expectedRuntimes: [] },
+    { startMs: 1_000, expectedStatus: "fail", expectedRuntimes: ["openclaw"] },
+    { startMs: 999, expectedStatus: "pass", expectedRuntimes: ["openclaw", "codex"] },
+  ])(
+    "checks admission before each cell starting at $startMs",
+    async ({ startMs, expectedStatus, expectedRuntimes }) => {
+      let now = startMs;
+      vi.stubEnv("OPENCLAW_QA_RUNTIME_PAIR_LATEST_START_MS", "1000");
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+      const lab = createTestLab();
+      const factory = createCleanupTestFactory(lab, () => ({}));
+      const scenario = makeQaSuiteTestScenario("runtime-cleanup");
+      const runChild = vi.fn<QaSuiteRunner>().mockImplementation(async (params) => {
+        now += 1;
+        return childResult(params, [scenario], "/qa-child");
+      });
+
+      const result = await runCleanupTestSuite({ factory, lab, runChild });
+
+      expect(runChild.mock.calls.map(([params]) => params?.forcedRuntime)).toEqual(
+        expectedRuntimes,
+      );
+      expect(result.startedScenarioIds).toEqual(expectedRuntimes.length ? [scenario.id] : []);
+      const evidence = result.evidence;
+      const [outcome] = projectQaEvidenceScenarioOutcomes(evidence);
+      const count = expectedRuntimes.length;
+      expect(outcome?.status).toBe(expectedStatus);
+      expect(collectQaStartedScenarioInstanceIds(evidence).has(outcome!.scenarioInstanceId!)).toBe(
+        count > 0,
+      );
+      if (count < 2) {
+        const withheld = count === 0 ? "openclaw" : "codex";
+        expect(result.scenarios[0]).toMatchObject({
+          status: "fail",
+          details: expect.stringContaining(`${withheld} cell not started; admission deadline`),
+        });
+        expect(result.scenarios[0]?.runtimeParity).toBeUndefined();
+        expect(
+          result.evidence.entries.filter((entry) => entry.result.status === "pass"),
+        ).toHaveLength(expectedRuntimes.length);
+      } else {
+        expect(result.scenarios[0]?.status).toBe("pass");
+      }
+    },
+  );
 
   it.each([true, false])(
     "preserves runtime preparation publication ownership with parity=%s",

@@ -369,13 +369,24 @@ jobs:
     needs: [authorize_actor, validate_selected_ref]
     if: github.event_name == 'schedule'
     runs-on: *linux_runner_large
-    timeout-minutes: 45
+    timeout-minutes: &live_runtime_job_minutes 45
     environment: qa-live-shared
     env:
       QA_PARITY_CONCURRENCY: "1"
       OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "180000"
       OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
     steps:
+      - name: Set runtime-pair admission deadline
+        shell: bash
+        env:
+          JOB_MINUTES: *live_runtime_job_minutes
+        run: |
+          # Count checkout and build against the job budget. Allow six minutes for a
+          # cell observation and two for runner setup, teardown, reporting and upload.
+          # This is a latest start time, not a timeout for a cell already in progress.
+          latest_start=$(( ($(date +%s) + JOB_MINUTES * 60 - 360 - 120) * 1000 ))
+          echo "OPENCLAW_QA_RUNTIME_PAIR_LATEST_START_MS=${latest_start}" >> "$GITHUB_ENV"
+
       - name: Checkout selected ref
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -471,7 +482,8 @@ jobs:
             --output-dir "${{ steps.run_lane.outputs.output_dir }}/gateway-restart-full-access"
 
       - name: Generate live runtime token-efficiency report
-        if: steps.run_lane.outcome == 'success'
+        if: ${{ !cancelled() && steps.run_lane.outputs.output_dir != '' }}
+        continue-on-error: ${{ steps.run_lane.outcome == 'failure' }}
         shell: bash
         run: |
           set -euo pipefail

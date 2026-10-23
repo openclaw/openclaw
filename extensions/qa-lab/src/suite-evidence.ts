@@ -73,6 +73,7 @@ export async function createQaSuiteEvidenceInvocation(
     result: QaSuiteScenarioResult,
     options: {
       diagnostic?: boolean;
+      blockedBeforeStart?: boolean;
       env?: QaSuiteEnvironment;
       selectedId?: string;
       importedEntries?: readonly QaEvidenceSummaryEntry[];
@@ -143,6 +144,11 @@ export async function createQaSuiteEvidenceInvocation(
         ? [{ id: runtimeId, phase: "runtime" as const, identity: runtimeIdentity, artifact }]
         : []),
     ];
+    // The suite presents admission refusal as a failure; evidence must distinguish
+    // that blocked attempt from a scenario that actually ran and failed.
+    const evidenceResult = options.blockedBeforeStart
+      ? { ...result, status: "blocked" as const }
+      : result;
     const rows = buildQaSuiteEvidenceSummary({
       // Stable presentation destinations belong to the row before admission.
       // Generation-specific links remain in the published suite summary.
@@ -162,10 +168,10 @@ export async function createQaSuiteEvidenceInvocation(
       providerMode: context.providerMode,
       repoRoot: context.repoRoot,
       scenarioDefinitions: [scenario],
-      scenarioResults: [result],
+      scenarioResults: [evidenceResult],
     }).entries;
     invocation.complete(id, {
-      status: result.status === "skip" ? "skipped" : result.status,
+      status: evidenceResult.status === "skip" ? "skipped" : evidenceResult.status,
       receipts,
       childEvidence,
       entries: (options.importedEntries ?? rows).map((entry) =>
@@ -208,13 +214,9 @@ export async function createQaSuiteEvidenceInvocation(
     }
     // SAFETY: This owner's immutable result artifact matches its recorded hash; selection is checked below.
     const saved = JSON.parse(bytes.toString()) as { result: QaSuiteScenarioResult };
-    if (
-      saved.result.evidenceOccurrenceId !== selectedId ||
-      saved.result.status !==
-        (selected.occurrence.terminalStatus === "skipped"
-          ? "skip"
-          : selected.occurrence.terminalStatus)
-    ) {
+    const status = selected.occurrence.terminalStatus;
+    const reportStatus = status === "skipped" ? "skip" : status === "blocked" ? "fail" : status;
+    if (saved.result.evidenceOccurrenceId !== selectedId || saved.result.status !== reportStatus) {
       throw new Error("selected flow result artifact disagrees with its observation");
     }
     recordedResults.set(selectedId, saved.result);

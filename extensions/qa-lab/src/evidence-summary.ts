@@ -363,6 +363,28 @@ export function getEffectiveQaEvidenceEntries(
   );
 }
 
+export function collectQaStartedScenarioInstanceIds(
+  evidence: QaEvidenceSummaryV3Json,
+): Set<string> {
+  const instances = new Set(
+    evidence.occurrences
+      .filter((item) => item.scenario?.kind === "instance")
+      .map((item) => item.id),
+  );
+  const started = new Set<string>();
+  for (const { scenario, terminalStatus, childOccurrenceIds } of evidence.occurrences) {
+    if (scenario?.kind === "observation") {
+      // A comparison blocked before dispatch contains scheduled instances, but no observations.
+      // Skip only that attempt; a previous observation of this instance still counts.
+      if (terminalStatus === "blocked" && childOccurrenceIds?.every((id) => instances.has(id))) {
+        continue;
+      }
+      started.add(scenario.instanceOccurrenceId);
+    }
+  }
+  return started;
+}
+
 export function projectQaEvidenceScenarioOutcomes(
   summary: QaEvidenceSummaryJson,
 ): QaEvidenceScenarioOutcome[] {

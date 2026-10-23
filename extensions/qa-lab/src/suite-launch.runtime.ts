@@ -8,6 +8,7 @@ import { resolveQaEvidenceContainment } from "./evidence-summary-schema.js";
 import {
   QA_EVIDENCE_FILENAME,
   buildQaSuiteEvidenceSummary,
+  collectQaStartedScenarioInstanceIds,
   mergeQaEvidenceSummaries,
   type QaEvidenceSummaryJson,
   type QaEvidenceSummaryV3Entry,
@@ -267,15 +268,7 @@ function createQaPartitionEvidenceOwner(params: {
     }
     const remaining = [...results];
     const normalized: QaUnifiedPartitionResult["scenarioResults"] = [];
-    const startedInstances = new Set(
-      invocation
-        .snapshot(options())
-        .occurrences.flatMap((occurrence) =>
-          occurrence.scenario?.kind === "observation"
-            ? [occurrence.scenario.instanceOccurrenceId]
-            : [],
-        ),
-    );
+    const startedInstances = collectQaStartedScenarioInstanceIds(invocation.snapshot(options()));
     for (const [index, scenario] of params.scenarios.entries()) {
       const anchor = invocation.anchors[index]!;
       const selected =
@@ -349,16 +342,7 @@ function createQaPartitionEvidenceOwner(params: {
       return active;
     },
     startedInstanceIds() {
-      return [
-        ...new Set(
-          current.occurrences.flatMap((occurrence) =>
-            occurrence.scenario?.kind === "observation" &&
-            scheduledIds.has(occurrence.scenario.instanceOccurrenceId)
-              ? [occurrence.scenario.instanceOccurrenceId]
-              : [],
-          ),
-        ),
-      ];
+      return [...collectQaStartedScenarioInstanceIds(current)].filter((id) => scheduledIds.has(id));
     },
     failure,
     complete,
@@ -1505,16 +1489,11 @@ export async function runQaSuite(runParams?: QaSuiteRunParams): Promise<QaSuiteR
     }),
   );
   const evidence = result.evidence;
+  const startedInstances = collectQaStartedScenarioInstanceIds(evidence);
   const startedRoots = resolveQaEvidenceContainment(
     evidence.occurrences,
     evidence.entries,
-  ).rootInstances.filter((anchor) =>
-    evidence.occurrences.some(
-      (occurrence) =>
-        occurrence.scenario?.kind === "observation" &&
-        occurrence.scenario.instanceOccurrenceId === anchor.id,
-    ),
-  );
+  ).rootInstances.filter((anchor) => startedInstances.has(anchor.id));
   const observedCells = startedRoots.flatMap((anchor) =>
     anchor.parentCell ? [anchor.parentCell] : [],
   );

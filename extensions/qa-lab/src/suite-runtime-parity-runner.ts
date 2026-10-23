@@ -32,6 +32,8 @@ import {
   writeQaSuiteProgress,
 } from "./suite.js";
 
+class RuntimePairAdmissionClosed extends Error {}
+
 export async function runQaRuntimeParitySuite(
   params: Omit<QaSuiteRunParams, "channelDriver" | "scenarioIds"> &
     Pick<
@@ -54,6 +56,14 @@ export async function runQaRuntimeParitySuite(
       runtimePair: [RuntimeId, RuntimeId];
     },
 ) {
+  // The job sets this once, before setup. Partitions and retries must not renew it.
+  const latestStart = process.env.OPENCLAW_QA_RUNTIME_PAIR_LATEST_START_MS;
+  const latestStartMs = latestStart === undefined ? undefined : Number(latestStart);
+  if (latestStartMs !== undefined && (!Number.isSafeInteger(latestStartMs) || latestStartMs <= 0)) {
+    throw new Error(
+      "Expected OPENCLAW_QA_RUNTIME_PAIR_LATEST_START_MS to be a positive epoch timestamp in milliseconds",
+    );
+  }
   const recording = await createQaSuiteEvidenceInvocation(
     {
       evidenceAnchors: params.evidenceAnchors,
@@ -123,6 +133,7 @@ export async function runQaRuntimeParitySuite(
         );
         const capturedCells = () =>
           rebaseQaSuiteEvidence(cells.snapshot(), comparisonDir, params.outputDir);
+        let dispatchedCell = false;
         let recordingComparison = false;
         try {
           const parity = await runRuntimeParityScenario({
@@ -132,8 +143,13 @@ export async function runQaRuntimeParitySuite(
             runCell: async (runtime) => {
               const cellIndex = params.runtimePair.indexOf(runtime);
               const cellOutputDir = path.join(comparisonDir, runtime);
-              const dispatchId = cells.invocation.begin(cellIndex, null, { diagnostic: true });
               const cellStartedAt = Date.now();
+              if (latestStartMs !== undefined && cellStartedAt > latestStartMs) {
+                throw new RuntimePairAdmissionClosed(
+                  `Runtime pair incomplete: ${runtime} cell not started; admission deadline was ${latestStartMs} (epoch ms).`,
+                );
+              }
+              const dispatchId = cells.invocation.begin(cellIndex, null, { diagnostic: true });
               let childEvidence: QaEvidenceSummaryV3Json | undefined;
               const importChild = () => {
                 if (!childEvidence) {
@@ -150,6 +166,7 @@ export async function runQaRuntimeParitySuite(
               };
               let cellResult: QaSuiteResult;
               try {
+                dispatchedCell = true;
                 cellResult = await params.runQaFlowSuite(
                   markQaSuiteNestedRun<QaSuiteRunParams>({
                     adapterFactories: params.adapterFactories,
@@ -261,8 +278,9 @@ export async function runQaRuntimeParitySuite(
           // captured child observations survive without inventing a child result.
           if (!recordingComparison) {
             const details = formatErrorMessage(error);
+            const admissionClosed = error instanceof RuntimePairAdmissionClosed;
             try {
-              await recording.record(
+              const failed = await recording.record(
                 index,
                 comparisonId,
                 {
@@ -271,8 +289,17 @@ export async function runQaRuntimeParitySuite(
                   details,
                   steps: [{ name: "runtime parity", status: "fail", details }],
                 },
-                { diagnostic: true, childEvidence: capturedCells() },
+                {
+                  diagnostic: true,
+                  blockedBeforeStart: admissionClosed && !dispatchedCell,
+                  childEvidence: capturedCells(),
+                },
               );
+              if (admissionClosed) {
+                // Keep a completed first cell, but never count a pair refused before dispatch.
+                progress.recordScenarioResult(index, failed);
+                return failed;
+              }
             } catch (recordError) {
               throw new AggregateError(
                 [error, recordError],
