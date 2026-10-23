@@ -430,10 +430,15 @@ it("accepts worker-prepared observations without consuming edits or replaying st
       assert(scan.kind === "scan");
       // Count expanded tree records crossing the worker boundary, regardless of field name.
       // Unchanged metadata must remain encoded instead of cloning the whole inventory on host.
-      const expandedRecords = Object.values(scan)
-        .flatMap((value) => (Array.isArray(value) ? value : []))
-        .filter((value) => value && typeof value === "object" && "node" in value);
-      expect(expandedRecords.length).toBeLessThan(unchangedPaths.length);
+      const expandedRecords = Object.values(scan).reduce<number>(
+        (count, value) =>
+          count +
+          (Array.isArray(value)
+            ? value.filter((entry) => entry && typeof entry === "object" && "node" in entry).length
+            : 0),
+        0,
+      );
+      expect(expandedRecords).toBeLessThan(unchangedPaths.length);
       assert(scan.observation);
       expect(scan.resultingRoot).not.toBe(initial.baseline_ref);
       await store.update(store.get()!, pending);
