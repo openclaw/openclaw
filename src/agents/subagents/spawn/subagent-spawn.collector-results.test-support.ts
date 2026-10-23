@@ -1,10 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it, onTestFinished } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import { bindSessionRowProjection } from "../../../gateway/session-row-projection-access.js";
 import { createSessionRowProjection } from "../../../gateway/session-row-projection.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { normalizeAcceptedSessionSpawnResult } from "../../accepted-session-spawn.js";
+import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../../agent-run-terminal-outcome.js";
 import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import type { EmbeddedAgentRunResult } from "../../embedded-agent.js";
 import {
@@ -161,27 +163,38 @@ export function registerCollectorResultSpawnCases(options: NativePluginSpawnTest
     });
     bindSessionRowProjection(context, () => projection);
     await projection.ensureMaterialized();
-    options.runEmbeddedAgent.mockImplementation(async (params) => {
-      // Never finish within the one-second run limit, like the reported 180 s and 480 s children.
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, 1_500);
-        params.abortSignal?.addEventListener(
-          "abort",
-          () => {
-            clearTimeout(timer);
-            resolve();
-          },
-          { once: true },
-        );
-      });
-      return { payloads: [], meta: { durationMs: 1_500, aborted: true } };
+    // A controlled clock that still runs at real pace, so Gateway work is not starved.
+    vi.useFakeTimers({
+      toFake: ["Date", "setTimeout", "clearTimeout"],
+      shouldAdvanceTime: true,
+    });
+    const fakeSetTimeout = globalThis.setTimeout;
+    const graceArmed = createDeferred();
+    const timers = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+      handler: (...args: unknown[]) => void,
+      delay?: number,
+      ...args: unknown[]
+    ) => {
+      // The registry holds a timed-out run for one retry grace before settling it.
+      if (delay === AGENT_RUN_TERMINAL_RETRY_GRACE_MS) {
+        graceArmed.resolve();
+      }
+      return fakeSetTimeout(handler, delay, ...args);
+    }) as typeof setTimeout);
+    options.runEmbeddedAgent.mockImplementation(async () => {
+      // The child outlives its 60-second run budget, like the reported 180 s and 480 s children.
+      vi.setSystemTime(Date.now() + 61_000);
+      return { payloads: [], meta: { durationMs: 61_000, aborted: false } };
     });
     const failures: unknown[] = [];
     let childRunId: string | undefined;
     try {
-      const child = await spawnCollector(bound, "timeout task", 1);
+      const child = await spawnCollector(bound, "timeout task", 60);
       childRunId = child.runId;
-      const collected = await waitForResults(bound, [child.runId]);
+      const settled = waitForResults(bound, [child.runId]);
+      await graceArmed.promise;
+      await vi.advanceTimersByTimeAsync(AGENT_RUN_TERMINAL_RETRY_GRACE_MS);
+      const collected = await settled;
       expect(collected.details).toMatchObject({
         completed: [{ runId: child.runId, status: "timeout" }],
       });
@@ -215,12 +228,15 @@ export function registerCollectorResultSpawnCases(options: NativePluginSpawnTest
         ),
       });
       expect(JSON.stringify(continued.details)).not.toContain("swarmCollector=true");
+      expect(modelCalls).toBe(1);
       expect(options.runEmbeddedAgent).toHaveBeenCalledTimes(modelCalls);
       expect(subagentRuns.get(child.runId)?.collectorCompletion?.status).toBe("timeout");
     } catch (error) {
       failures.push(error);
     } finally {
       failures.push(...(await options.closeBoundGateway(bound, runtime, childRunId)));
+      timers.mockRestore();
+      vi.useRealTimers();
       options.throwBoundFailures(failures);
     }
   });
