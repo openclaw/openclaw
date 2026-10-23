@@ -136,6 +136,12 @@ retries setup when needed. See
 
 ## Manual recovery
 
+If the bundled runtime exits with an illegal instruction (`SIGILL`), the app stops
+automatic restarts immediately and preserves the crash output in the Gateway log.
+Update or reinstall OpenClaw.app and include that log if the failure persists.
+An independently managed [Node Gateway](/install/node) is an alternative; connect
+the app to it. The app does not automatically switch its bundled runtime to Node.
+
 Read the version to install from the app: choose **About OpenClaw** in the
 menu bar, or run `openclaw-mac status --json`, which reports the app version
 and build.

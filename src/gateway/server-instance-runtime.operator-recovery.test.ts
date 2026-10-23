@@ -10,6 +10,7 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
+  loadTranscriptEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import {
@@ -341,6 +342,74 @@ describe("typed restart recovery operator admission", () => {
       }
     }, true);
   });
+
+  it.each(["matching", "missing", "different", "stale requester"] as const)(
+    "settles or resumes an interrupted requester (source: %s)",
+    async (source) => {
+      await withRecovery(async ({ context, target, entry, stateDir, profileId }) => {
+        const requesterOrigin = {
+          sessionKey: target.sessionKey,
+          operatorProfileId: source === "different" ? "another-requester" : profileId,
+        };
+        await replaceSessionEntry(target, {
+          ...entry,
+          restartRecoveryOperatorSource:
+            source === "missing" ? undefined : entry.restartRecoveryOperatorSource,
+          restartRecoveryRequesterSource: createRestartRecoveryRequesterSource({
+            ...target,
+            sourceRunId: source === "stale requester" ? "previous-turn" : target.sourceRunId,
+            entry,
+            requesterOrigin,
+          }),
+        });
+        await appendTranscriptMessage(target, {
+          message: { role: "user", content: "Finish the interrupted request." },
+        });
+        await appendTranscriptMessage(target, {
+          message: { role: "assistant", content: [], stopReason: "aborted" },
+        });
+        await markRecovery(target, context, stateDir, target.sourceRunId);
+        rotateAgentEventLifecycleGeneration();
+        using runtime = createRuntime(() => context);
+        const finish = holdRecoveryTurn(target);
+        const recover = () =>
+          recoverStore({
+            cfg: {},
+            storePath: target.storePath,
+            stateDir,
+            handledSessionKeys: new Set(),
+            expectedTarget: target,
+            gatewayRuntime: runtime.recovery,
+          });
+        try {
+          const authorized = source === "matching";
+          expect(await recover()).toEqual({
+            started: authorized ? 1 : 0,
+            settled: authorized ? 0 : 1,
+            failed: 0,
+            skipped: 0,
+          });
+          expect(startTurn).toHaveBeenCalledTimes(authorized ? 1 : 0);
+          if (!authorized) {
+            const retained = loadSessionEntry(target);
+            expect(retained?.sessionId).toBe(target.sessionId);
+            expect(retained?.status).toBe("interrupted");
+            expect(retained?.mainRestartRecovery).toBeUndefined();
+            expect(retained?.restartRecoveryTerminalRunIds).toContain(target.sourceRunId);
+            const transcript = await loadTranscriptEvents(target);
+            expect(JSON.stringify(transcript)).toContain(
+              "Send a new authenticated message to continue.",
+            );
+            await recover();
+            expect(startTurn).not.toHaveBeenCalled();
+            expect(await loadTranscriptEvents(target)).toEqual(transcript);
+          }
+        } finally {
+          await finish();
+        }
+      }, true);
+    },
+  );
 
   it.each(["agentId", "sessionKey", "expectedExistingSessionId", "idempotencyKey"] as const)(
     "rejects dispatch before authority restoration when %s differs from the original claim",

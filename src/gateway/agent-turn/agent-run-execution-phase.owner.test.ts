@@ -628,7 +628,7 @@ describe("startAgentRunExecution Gateway ownership", () => {
         aborted: ending === "aborted",
         ...(ending === "failed"
           ? {
-              assertContextCurrent: () => {
+              assertGatewayLifetimeCurrent: () => {
                 throw new Error("Gateway owner retired");
               },
             }
@@ -733,7 +733,7 @@ describe("startAgentRunExecution Gateway ownership", () => {
       const fail = () => {
         throw new Error(privateMessage);
       };
-      execution.params.assertContextCurrent = fail;
+      execution.params.assertGatewayLifetimeCurrent = fail;
       execution.params.prepared.userTurn.releaseProcessingAbortObserver = fail;
       Object.assign(execution.params.prepared.userTurn.recorder ?? {}, {
         completeProcessing: fail,

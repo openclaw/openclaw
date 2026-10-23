@@ -253,6 +253,8 @@ Confirming text with an input method does not send the Side chat question. Finis
 
 Editing a Side chat draft does not interrupt loading its earlier answers. On desktop, closing the Side chat tab waits for the Gateway to confirm the reset; a failed reset leaves the tab and its content open. Hiding the panel or switching tabs preserves the thread and draft. When Side chat occupies the main panel, or on mobile, **Clear side chat** remains available. It removes the earlier content after the Gateway confirms it; drafts, images, and questions added after the click remain.
 
+Side chat cancels a question after 60 seconds. Once the canceled model run has finished cleanup, the failed question offers **Retry**. Earlier answers stay intact, and a late answer from the canceled run is not added to the thread.
+
 The Control UI keeps the latest 24 Side chat turns, including failed questions. Sending a follow-up keeps earlier failures in order; **Retry** resends that question in place. Failed questions stay in the current pane through a reconnect, but are not persisted across a page reload.
 
 The question box wraps and grows like the main composer. On desktop, Enter (or your configured send shortcut) asks the question, and Shift+Enter adds a line. On mobile, Return adds a line and the Ask button sends. Its toolbar matches the main composer where the control applies to a read-only question: **+** attaches images, `:shortcode:` suggests emoji, the microphone dictates, and the model and effort pickers choose the model, reasoning level, and speed for Side chat's own answers. **Default** is the agent's utility model with its fallbacks; a chosen model answers alone, must be allowed for the agent and your operator role, and never changes the main session's model. Side chat choices apply to that agent's sessions for as long as the page stays open. Slash commands, permissions, and Talk stay in the main composer. Highlighting text in a chat message offers **Ask in side chat**. Add an optional comment in the selection editor, then save it to stage an editable comment in Side chat. An empty question box starts with a short quote; an existing Side chat draft and the main composer stay unchanged. The full selection and comment accompany that question as bounded, temporary context. After the answer, the restored thread keeps the question text, including its quote, but not the attached context. Reselect the passage for a later question.
@@ -415,6 +417,8 @@ shows an error. Choose a smaller file, trim the video, or try another browser.
 In **Plugins**, administrators can select **Add MCP server…** and choose a scope. **This session** saves the server definition globally but disabled by default, then enables it only for the current session. **Everywhere** saves the definition enabled globally. Transport, authentication, and other server-definition fields are always global. Session policy can override server enablement and deny individual tools through **Tool access**.
 
 **Tool access** lists an MCP server's tools once a run has discovered them. Before that, it explains why the list is empty rather than reporting zero tools: a newly added server has not connected yet, a connected server has not finished listing its tools, or the runtime catalog predates a config change. Sessions that run on the Codex harness keep their MCP connections inside Codex, so their tools do not appear here.
+
+If **Tool access** is already open, it refreshes when the current session's run finishes; you do not need to close and reopen it to see newly discovered tools.
 
 Capability toggles stay disabled until the Gateway, session, and runtime config are loaded, and read-only operators cannot change them. Adding a server requires administrator access. See [Connect MCP servers](/tools/mcp) for the Settings, CLI, and config paths.
 
@@ -976,7 +980,8 @@ The dedicated card recognizes YouTube video URLs independently of
 iframes in `show_widget`. With `gateway.controlUi.embedSandbox: "strict"`, the card
 offers the watch link without loading a player. Other chat surfaces should use a
 regular YouTube link; the card is a Control UI feature, separate from native inline
-widgets.
+widgets. [Public conversation links](/web/urls#public-session-transcripts) show the
+video as a plain link without loading the player or thumbnail.
 
 Thumbnails load from `i.ytimg.com`, which contacts Google before playback. After
 activation, the player loads from `www.youtube-nocookie.com`. Its frame sends only

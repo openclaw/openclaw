@@ -86,7 +86,7 @@ it("does not commit a disabled choice but keeps available choices usable", async
   expect(props.onChange).not.toHaveBeenCalled();
   expect(blocked?.getAttribute("aria-disabled")).toBe("true");
   await pressKey(element, "Enter");
-  expect(props.onChange).toHaveBeenCalledWith(["fixture/ready"]);
+  await waitForSolid(() => expect(props.onChange).toHaveBeenCalledWith(["fixture/ready"]));
 });
 it.each(["content", "trigger"])(
   "keeps the highlighted %s value distinct from listbox structure",
@@ -132,6 +132,11 @@ it("skips disabled choices in both keyboard directions", async () => {
     options: fixtureOptions(["first", "First"], ["blocked", "Blocked", true], ["last", "Last"]),
   });
   await clickField(element);
+  await waitForSolid(() =>
+    expect(element.querySelector('[aria-selected="true"]')?.getAttribute("data-value")).toBe(
+      "fixture/first",
+    ),
+  );
   await pressKey(element, "ArrowDown");
   expect(document.activeElement).toBe(input(element));
   expect(element.querySelector('[aria-selected="true"]')?.getAttribute("data-value")).toBe(

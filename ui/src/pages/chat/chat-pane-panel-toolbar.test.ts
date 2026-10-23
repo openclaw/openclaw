@@ -183,6 +183,11 @@ it("retains focused session menu controls through header refresh and restores fo
   await menu.updateComplete;
   const trigger = menu.querySelector<HTMLButtonElement>(".chat-header-session-menu__trigger")!;
   await openNativeMenu(menu, "submenu:advanced");
+  await waitForSolid(() =>
+    expect(menu.querySelector<HTMLButtonElement>('[data-value="submenu:advanced"]')?.disabled).toBe(
+      false,
+    ),
+  );
   menu.querySelector<HTMLButtonElement>('[data-value="submenu:advanced"]')!.click();
   await waitForSolid(() =>
     expect(menu.querySelector('[data-value="submenu:open-in"]')).not.toBeNull(),

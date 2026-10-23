@@ -60,7 +60,7 @@ export async function servePublicSessionRepresentation(params: {
         if (item.kind !== "message") {
           continue;
         }
-        for (const { docId } of item.widgets) {
+        for (const { docId } of item.embeds.filter((embed) => embed.kind === "widget")) {
           const token = await mintPublicSessionWidgetToken(locator, docId);
           if (token) {
             widgetUrls.set(
