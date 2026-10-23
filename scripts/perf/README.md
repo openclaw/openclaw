@@ -32,6 +32,17 @@ thread's synchronous fsync stacks, elapsed time, and timestamp. It requires a
 generated team-shape fixture. Separate startup records from the measured workload;
 the probe does not observe worker fsyncs or kernel-internal SQLite synchronization.
 
+For attachment attribution, set `OPENCLAW_PERF_MEDIA_IO=1` to emit `MEDIA_IO_PROBE`
+records for inbound media filesystem calls, including async open, write, sync,
+metadata reads, and close. Records contain relative paths, call stacks, and
+elapsed time, never file contents. Set `OPENCLAW_PERF_FSYNC_DELAY_MS=50` to add the
+same synthetic storage delay to inbound file and directory syncs: synchronous
+fsync blocks the main thread, while `FileHandle.sync` waits asynchronously.
+`FSYNC_PROBE` records mark blocking time; `MEDIA_IO_PROBE` records mark async
+elapsed time. Both include the injected delay. Use identical settings on both
+sides of a swapped pair; omit both variables for the original synchronous probe.
+The injection does not cover worker calls or synchronization inside native code.
+
 `fsync-scratch-measure.ts` exercises the real container environment-file and
 playback cache owners, verifying their output bytes. It injects a fixed delay into
 each main-thread `fsyncSync` call to model slow storage without a loop device or
@@ -2989,6 +3000,11 @@ For acknowledgement latency, `chat.send` also accepts `--diagnostics` without
 allocation or CPU profiling. `--runs 8 --rounds 125` records 1,000 measured ACKs
 after one unmeasured warmup cohort:
 
+Generate these fixtures with `--settled-runs` to retain the requested run inventory
+without replaying synthetic interrupted runs or pending deliveries at startup.
+The default recovery workload can exhaust worker capacity before the Gateway is
+ready; that is a failed setup, not an attachment-latency sample.
+
 ```sh
 node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
   --state-dir /path/to/team-shape --entry src/entry.ts --scenario chat.send \
@@ -3007,6 +3023,13 @@ post-ACK startup diagnostics. Per-round tails with eight samples are context onl
 use the pooled observations for p99. Run separate matching fixtures concurrently
 under the shared guard and one quiet-slot lock, then swap interleaved CPU sets.
 Apply the campaign's sample-count and paired absolute/relative-delta rules.
+For `--diagnostics` passes without heap or CPU profiling, `wholeChatDiagnostics`
+records one event-loop histogram across the measured cohorts; use its count and
+p99 rather than averaging per-cohort percentiles. Its `gc` field records pause
+durations. With `--trace-gc`, `wholeChatGc` also records the whole measured window's
+collection counts and promotion, including the intervals between cohorts.
+Profiled passes omit these acceptance metrics because stopping heap sampling
+forces GC and profile serialization adds main-thread stalls.
 Add `--chat-attachment-kib 4` or `--chat-attachment-kib 256` for separate small
 and larger text-attachment runs. Each turn sends a deterministic
 `synthetic-attachment.txt` with MIME type `text/plain` and origin `paste` through
@@ -3718,3 +3741,69 @@ both by atomically writing a future epoch in milliseconds to `<pass>.start`.
 Keep the exclusive measurement slot and production guard around the pair, and
 swap CPU placement in the second pair. Loop measurements cover the operation,
 without idle padding; tails below the campaign's sample minimum are context.
+
+## TTS preference flushes on the Gateway main thread
+
+`fsync-tts-gateway-measure.ts` starts a real isolated Gateway and sends paced
+`tts.enable`/`tts.disable` WebSocket requests. Each reply is checked against the
+persisted preference bytes. The default workload is 120 requests in one minute.
+A synthetic 50 ms delay applies to every `fsyncSync` in both the main isolate and
+worker isolates during the measured interval. The companion
+`fsync-tts-worker-preload.mjs` is benchmark instrumentation only. This preserves
+comparable storage waits when persistence moves to a worker; total flush work is
+reported separately from main-thread blocked time. An unmeasured calibration RPC
+requires both durable flushes to be visible to the probe, including workers
+created by a retained-task supervisor. The first, unmeasured request
+reports cold-write latency separately. While waiting for the common start, both
+sides repeat an unmeasured write every ten seconds so an idle writer does not
+retire before the steady-state interval.
+
+Prepare baseline siblings in the same sandbox source checkout before running:
+
+```sh
+git show <base>:src/gateway/server-methods/tts.ts > src/gateway/server-methods/tts.baseline.ts
+git show <base>:src/tts/tts-settings-writes.ts > src/tts/tts-settings-writes.baseline.ts
+```
+
+The `--baseline` source hook selects both siblings and asserts both were loaded.
+Relative imports retain their normal owners. Do not modify source files while
+any side of a pair is running. Both sides use the same installed dependency
+versions; this workload does not substitute an unpublished fs-safe dependency.
+
+```sh
+node --expose-gc --trace-gc-nvp --import ./scripts/tsx.mjs \
+  scripts/perf/fsync-tts-gateway-measure.ts \
+  --state-dir /path/to/new-synthetic-state --port 41624 \
+  --operations 120 --interval-ms 500 --fsync-delay-ms 50 \
+  --start-at <shared-future-epoch-ms> --gc-log /path/to/captured.log \
+  --baseline > /path/to/captured.log 2>&1
+```
+
+Omit `--baseline` for the candidate and use a different state directory, log, and
+port. `--start-at` must leave time for both Gateways and their first writes to
+finish; a missed deadline rejects the run. `FSYNC_READY` records readiness.
+Preparation/builds use CPUs 0–63, nice 19, CPUWeight=10, IOWeight=10, and an
+explicit MemoryMax. For landing measurements hold exactly one exclusive quiet
+lock around each concurrent pair, run the shared `slot-b-guard.sh wait` before
+launch and `slot-b-guard.sh watch <pair-pid>` during it, and discard interrupted
+pairs. Do not change the guard or apply a stricter threshold. Keep HOME,
+OPENCLAW_HOME, TMPDIR, and state within the task sandbox.
+
+Use interleaved sets: slot A (`.quiet.lock`) is 96,98,…,126 against
+97,99,…,127; slot B (`.quiet-b.lock`) is 64,66,…,94 against 65,67,…,95.
+Prepare the processes in their own named systemd scopes on CPUs 0–63; after both
+are ready, change only those task-owned scopes' AllowedCPUs to their measurement
+sets before the common start time. Swap placement in pair two. Record outside
+CPU load for context and decide on paired deltas, not sequential absolute times.
+
+Acceptance: eliminate main-thread synchronous flush calls and blocked time while
+preserving total flush count and persisted bytes. Process CPU includes the
+Gateway's workers and its in-process WebSocket driver. Main-thread and
+whole-process-isolate GC are both reported, including promotion and maximum
+pauses; native subprocess GC is outside these counters. Apply the shared v5.3
+rules described above: qualify tails by sample count, treat
+opposite-signed deltas or greater-than-5× baseline spread as inconclusive, and
+run a third pair when an inconclusive metric would gate. Every latency and loop
+tail includes its sample count. This simulation establishes persistence-path
+blocking behavior; it does not claim production throughput or macOS browser
+cookie-import latency.

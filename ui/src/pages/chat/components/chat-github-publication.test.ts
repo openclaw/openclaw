@@ -359,7 +359,7 @@ it.each(["pull-requests", "environment"] as const)(
         expect(button.disabled).toBe(false);
         expect(button.textContent).toContain("Check");
       } else {
-        expect(publish()?.textContent).toContain("Retry");
+        expect(publish()?.textContent).toContain("Creating");
         expect(publish()?.disabled).toBe(false);
       }
     });
@@ -425,5 +425,32 @@ it.each(["pull-requests", "environment"] as const)(
     await waitForSolid(() =>
       expect(container.querySelector('button[aria-label="Refresh publication"]')).not.toBeNull(),
     );
+  },
+);
+
+it.each([
+  ["publishing", null, "Creating", false],
+  ["needs_confirmation", null, "Review", false],
+  ["failed", null, "Retry", true],
+  [undefined, null, "Check publication", true],
+  ["publishing", "Could not read publication status.", "Retry", true],
+] as const)(
+  "distinguishes %s with status error %s in Environment",
+  (status, error, label, warning) => {
+    const result =
+      status === "failed"
+        ? {
+            status,
+            requestId: "request-one",
+            code: "unavailable" as const,
+            message: "Publication failed.",
+            nextAction: "Review and retry.",
+          }
+        : status
+          ? { status, requestId: "request-one", message: "Publication status." }
+          : null;
+    paint({ locked: status !== "failed", result, error }, "environment");
+    expect(publish()?.textContent).toContain(label);
+    expect(publish()?.querySelector(".chat-pr__publication-warning") !== null).toBe(warning);
   },
 );

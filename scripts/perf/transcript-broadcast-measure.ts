@@ -557,6 +557,13 @@ const promptContent = createCipheriv(
   Buffer.alloc(16),
 );
 const root = path.resolve(values["state-dir"]);
+if (
+  (process.env.OPENCLAW_PERF_MEDIA_IO === "1" ||
+    process.env.OPENCLAW_PERF_FSYNC_DELAY_MS !== undefined) &&
+  path.resolve(values.entry) !== path.resolve("scripts/perf/fsync-gateway-entry.ts")
+) {
+  throw new Error("Filesystem probe settings require --entry scripts/perf/fsync-gateway-entry.ts");
+}
 const fixture: unknown = JSON.parse(
   readFileSync(path.join(root, "team-shape-summary.json"), "utf8"),
 );
@@ -1857,6 +1864,10 @@ const env = {
   ...(values["broadcast-timing"] ? { OPENCLAW_BENCH_BROADCAST_TIMING: "1" } : {}),
   ...(process.env.OPENCLAW_BENCH_WORKER_ATTRIBUTION === "1"
     ? { OPENCLAW_BENCH_WORKER_ATTRIBUTION: "1" }
+    : {}),
+  ...(process.env.OPENCLAW_PERF_MEDIA_IO === "1" ? { OPENCLAW_PERF_MEDIA_IO: "1" } : {}),
+  ...(process.env.OPENCLAW_PERF_FSYNC_DELAY_MS !== undefined
+    ? { OPENCLAW_PERF_FSYNC_DELAY_MS: process.env.OPENCLAW_PERF_FSYNC_DELAY_MS }
     : {}),
   ...(values["session-projection-counts"] ? { OPENCLAW_BENCH_SESSION_PROJECTION_COUNTS: "1" } : {}),
   ...(sessionProjectionSource
@@ -3959,10 +3970,20 @@ try {
   }
   const measurementStartedAt = Date.now();
   const measuredGateway = gateway;
+  const wholeChatDiagnosticsEnabled =
+    scenario === "chat.send" &&
+    values.diagnostics &&
+    !values.allocations &&
+    !values["cpu-profile"] &&
+    !values["workload-cpu-profile"] &&
+    !values["stream-start-allocations"];
   const finishWholeWorkloadDiagnostics =
-    (soakScenario || scenario === "plugins.reload") &&
+    (soakScenario || scenario === "plugins.reload" || wholeChatDiagnosticsEnabled) &&
     (values.diagnostics || values.allocations || values["trace-gc"])
-      ? await startGatewayDiagnostics(gateway, soakScenario ? "whole-soak" : "whole-reload")
+      ? await startGatewayDiagnostics(
+          gateway,
+          soakScenario ? "whole-soak" : scenario === "chat.send" ? "whole-chat" : "whole-reload",
+        )
       : undefined;
   const samples = [];
   const memorySamples: Array<{
@@ -4920,6 +4941,10 @@ try {
   }
   // Process exit plus drained log streams makes promotion accounting independent of pipe buffering.
   await cleanup();
+  const wholeChatGc =
+    wholeChatDiagnosticsEnabled && wholeWorkloadDiagnostics && values["trace-gc"]
+      ? readGatewayGcTrace(path.join(output, "gateway.stdout.log"), "whole-chat", "diagnostics")
+      : undefined;
   let wholeSoakGc;
   if (soakScenario && wholeWorkloadDiagnostics && (values.allocations || values["trace-gc"])) {
     const trace = readGatewayGcTrace(
@@ -5057,7 +5082,18 @@ try {
     streamStartAllocations: values["stream-start-allocations"],
     activeWorkDiagnostics: values["active-work-diagnostics"],
     measurementStartedAt,
+    ...(env.OPENCLAW_PERF_MEDIA_IO || env.OPENCLAW_PERF_FSYNC_DELAY_MS
+      ? {
+          fsyncProbe: {
+            mediaIo: env.OPENCLAW_PERF_MEDIA_IO === "1",
+            delayMs: Number(env.OPENCLAW_PERF_FSYNC_DELAY_MS ?? 0),
+          },
+        }
+      : {}),
     ...(scenario === "plugins.reload" ? { wholeReloadDiagnostics: wholeWorkloadDiagnostics } : {}),
+    ...(wholeChatDiagnosticsEnabled
+      ? { wholeChatDiagnostics: wholeWorkloadDiagnostics, wholeChatGc }
+      : {}),
     initialFullFrame,
     clientCount,
     exactClients,

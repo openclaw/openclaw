@@ -2260,8 +2260,7 @@ button.chat-pr__diff {
   transform: rotate(180deg);
 }
 
-.chat-pr__checks-dot,
-.chat-pr__checks-row-dot {
+.chat-pr__checks-dot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
@@ -2317,22 +2316,6 @@ button.chat-pr__diff {
   align-items: center;
   gap: 5px;
   white-space: nowrap;
-}
-
-.chat-pr__checks-row--passed .chat-pr__checks-row-dot {
-  background: var(--ok);
-}
-
-.chat-pr__checks-row--failed .chat-pr__checks-row-dot {
-  background: var(--danger);
-}
-
-.chat-pr__checks-row--running .chat-pr__checks-row-dot {
-  background: var(--warn);
-}
-
-.chat-pr__checks-row--skipped .chat-pr__checks-row-dot {
-  background: var(--muted);
 }
 
 .chat-pr__checks-row-label {
