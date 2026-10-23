@@ -5,6 +5,7 @@ import * as agentEn from "./en-agents.ts";
 
 export const en: TranslationMap & {
   agentChip: TranslationMap;
+  agentsHome: TranslationMap;
   logbook: TranslationMap;
   gatewayLogs: TranslationMap;
   standingGrants: TranslationMap;
@@ -361,7 +362,9 @@ export const en: TranslationMap & {
     unavailable: "Slot utilization unavailable",
     execHost: "Codex exec",
   },
-  agentsHome: {},
+  agentsHome: {
+    loadFailed: "Could not load agents. Try again.",
+  },
   outputs: {
     viewAll: "View all",
     dashboard: "Dashboard",

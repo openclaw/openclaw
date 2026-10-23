@@ -59,10 +59,10 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Defer sidebar Pages/Roster: 1,273,758 B Chat / 771,248 B New.
+  // Defer sidebar Pages/Roster: 1,274,043 B Chat / 771,311 B New.
   // Preserve main's relative headroom against the matched df3c47e1 libdeflate11 build.
-  chatBootJsGzipBytes: 1_366_097,
-  newBootJsGzipBytes: 807_546,
+  chatBootJsGzipBytes: 1_366_403,
+  newBootJsGzipBytes: 807_612,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   startupJsGzipBytes: 325_081,
