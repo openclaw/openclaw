@@ -218,7 +218,11 @@ function TabGroupView<T extends SolidPanelTabStripTab>(
             const labelRef = (id: string) =>
               elementRef<HTMLElement>((element) => {
                 labels.set(id, element);
-                return () => labels.delete(id);
+                return () => {
+                  if (labels.get(id) === element) {
+                    labels.delete(id);
+                  }
+                };
               });
             const selected = () => tab().id === props.activeId;
             const reorderId = () => tab().reorderId ?? tab().id;

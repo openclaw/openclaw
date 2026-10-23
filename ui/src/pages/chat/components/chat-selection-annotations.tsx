@@ -34,7 +34,11 @@ export function ChatSelectionAnnotations(props: ChatAttachmentControlsProps) {
   const deleteRef = (id: string) =>
     elementRef((element: HTMLButtonElement) => {
       deleteButtons.set(id, element);
-      return () => deleteButtons.delete(id);
+      return () => {
+        if (deleteButtons.get(id) === element) {
+          deleteButtons.delete(id);
+        }
+      };
     });
   const focusDelete = (id: string) => {
     if (preview?.isConnected && preview.hasAttribute("open")) {
