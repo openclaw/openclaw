@@ -8,6 +8,7 @@ import {
   type MockGatewayControls,
   type MockGatewayRequest,
 } from "../test-helpers/control-ui-e2e.ts";
+import { applyAppearanceTheme } from "./appearance-prefs.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -61,7 +62,7 @@ function installPrefsGateway(page: Page, initial: ReturnType<typeof configRespon
 }
 
 const systemPrefs = { theme: "claw", themeMode: "system" };
-const themePatch = { theme: "knot", accent: "theme" };
+const themePatch = { theme: "knot" };
 const knotPrefs = { ...themePatch, themeMode: "system" };
 
 async function openAppearance(
@@ -197,8 +198,8 @@ function themeCard(page: Page, theme: "claw" | "knot" | "dash") {
 
 async function expectThemeActive(page: Page, theme: "claw" | "knot" | "dash"): Promise<void> {
   await expect
-    .poll(() => themeCard(page, theme).getAttribute("class"), { timeout: 10_000 })
-    .toContain("settings-theme-card--active");
+    .poll(() => themeCard(page, theme).locator("input").isChecked(), { timeout: 10_000 })
+    .toBe(true);
 }
 
 function themeModeOption(page: Page, mode: "system" | "light" | "dark") {
@@ -321,7 +322,7 @@ suite.define(() => {
     await gateway.deferNext("config.patch");
 
     await proxyReconnect(page, gateway, async () => {
-      await themeCard(page, "knot").click();
+      await applyAppearanceTheme(page, "knot");
       await expectThemeActive(page, "knot");
       expect(await readPendingPrefStorage(page)).toEqual(
         expect.arrayContaining([expect.objectContaining(themePatch)]),
@@ -354,7 +355,7 @@ suite.define(() => {
     await visitAppearance(page, gateway, true);
 
     await proxyReconnect(page, gateway, async () => {
-      await themeCard(page, "knot").click();
+      await applyAppearanceTheme(page, "knot");
       await expectThemeActive(page, "knot");
       await gateway.setOperatorScopes(["operator.read"]);
     });
@@ -392,13 +393,11 @@ suite.define(() => {
     // Interacted tabs need foreground animation frames for click actionability.
     await pageA.bringToFront();
     await proxyReconnect(pageA, gatewayA, async () => {
-      await themeCard(pageA, "knot").click();
+      await applyAppearanceTheme(pageA, "knot");
       await expectThemeActive(pageA, "knot");
-      expect(await readPendingPrefStorage(pageA)).toEqual([
-        { theme: "knot", accent: "theme", fontUi: null, fontChat: null },
-      ]);
+      expect(await readPendingPrefStorage(pageA)).toEqual([{ theme: "knot" }]);
       await pageB.bringToFront();
-      await themeCard(pageB, "dash").click();
+      await applyAppearanceTheme(pageB, "dash");
       await expectThemeActive(pageB, "dash");
       expect(await readPendingPrefStorage(pageB)).toEqual([]);
     });
@@ -420,7 +419,7 @@ suite.define(() => {
     });
     await Promise.all([gatewayA.deferNext("config.patch"), gatewayB.deferNext("config.patch")]);
 
-    await themeCard(pageA, "knot").click();
+    await applyAppearanceTheme(pageA, "knot");
     const patchA = await gatewayA.waitForRequest("config.patch");
     const prefsA = patchPrefs(patchA);
     expect(prefsA).toEqual(themePatch);
@@ -454,7 +453,7 @@ suite.define(() => {
     const initialConfigGets = (await gateway.getRequests("config.get")).length;
     await gateway.deferNext("config.patch");
 
-    await themeCard(page, "knot").click();
+    await applyAppearanceTheme(page, "knot");
     const patch = await gateway.waitForRequest("config.patch");
     expect(patchPrefs(patch)).toEqual(themePatch);
 

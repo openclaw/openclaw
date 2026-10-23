@@ -33,6 +33,16 @@ not delete the browser's collection or saved favicon preference.
 
 ## Select a theme
 
+In **Settings → Appearance**, theme tiles show their names, palette swatches,
+and the applied-theme checkmark. Hover or keyboard focus reveals a row-expanding miniature
+without changing the window. Clicking or tapping a tile chooses a candidate;
+arrow keys browse the choices.
+
+Choose **Preview theme** to try the candidate in the current window, then
+**Apply theme** to save it. **Cancel**, **Escape**, or leaving Appearance restores
+the saved theme. Inspection and preview do not write preferences or change other
+windows. The picker preserves color mode, font overrides, and your saved accent.
+
 Ask the agent to list available themes or choose one for you. `list` includes
 the current selection, so selecting a theme usually takes two calls:
 

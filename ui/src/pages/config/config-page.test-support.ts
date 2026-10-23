@@ -1,5 +1,6 @@
 import { createRouter } from "@openclaw/uirouter";
 import { createComponent, createSignal } from "solid-js";
+import { expect } from "vitest";
 import { resolveThemeBranding } from "../../../../packages/gateway-protocol/src/theme.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadSettings } from "../../app/settings.ts";
@@ -151,6 +152,18 @@ export function completeConfigContext(context: ApplicationContext): ApplicationC
   if (!context.theme.branding) {
     Object.assign(context.theme, { branding: resolveThemeBranding(undefined) });
   }
+  if (!context.theme.setPreview) {
+    Object.assign(context.theme, {
+      previewTheme: null,
+      setPreview: (theme: ApplicationContext["theme"]["previewTheme"]) => {
+        if (context.theme.previewTheme === theme) {
+          return;
+        }
+        Object.assign(context.theme, { previewTheme: theme });
+        publishConfigSource(context.theme);
+      },
+    });
+  }
   if (!context.theme.settings) {
     Object.defineProperty(context.theme, "settings", { configurable: true, get: loadSettings });
   }
@@ -251,4 +264,20 @@ export function mountConfigPageState(
     },
     dispose: view.unmount,
   };
+}
+
+/** Drive the real view's theme-only selection, preview, and apply sequence. */
+export function applyRenderedTheme(section: HTMLElement, theme: string) {
+  const choice = section.querySelector<HTMLInputElement>(`input[value="${theme}"]`);
+  expect(choice).toBeInstanceOf(HTMLInputElement);
+  choice?.click();
+  flush();
+  for (const name of ["Preview theme", "Apply theme"]) {
+    const button = [...section.querySelectorAll("button")].find(
+      (entry) => entry.textContent?.trim() === name,
+    );
+    expect(button).toBeInstanceOf(HTMLButtonElement);
+    button?.click();
+    flush();
+  }
 }

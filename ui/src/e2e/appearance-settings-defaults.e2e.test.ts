@@ -15,6 +15,7 @@ import {
 import { createTweakcnThemePayload } from "../test-helpers/custom-theme.ts";
 import { pickerValue, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
 import {
+  applyAppearanceTheme,
   configResponse,
   patchPrefs,
   resetSyncedPreference,
@@ -97,11 +98,19 @@ function expectAttribute(locator: Locator, name: string, value: string) {
 }
 
 function expectPressed(locator: Locator, value = "true") {
-  return expectAttribute(locator, "aria-pressed", value);
+  return expect
+    .poll(() =>
+      locator.evaluate((element) =>
+        element instanceof HTMLInputElement
+          ? String(element.checked)
+          : element.getAttribute("aria-pressed"),
+      ),
+    )
+    .toBe(value);
 }
 
 function themeCard(page: Page, theme: string) {
-  return page.locator(`#settings-appearance-theme .settings-theme-card--${theme}`);
+  return page.locator(`#settings-appearance-theme .settings-theme-card--${theme} input`);
 }
 
 async function expectDefaults(page: Page) {
@@ -207,7 +216,7 @@ async function readThemeImportRaceState(page: Page) {
     titleColor: await page
       .locator(".page-title")
       .evaluate((element) => getComputedStyle(element).color),
-    clawSelected: (await themeCard(page, "claw").getAttribute("aria-pressed")) === "true",
+    clawSelected: await themeCard(page, "claw").isChecked(),
     customThemeMetadataCount: await importer.locator(".settings-theme-import__meta").count(),
     importUrl: await importer.locator("input").inputValue(),
     message: (await message.count()) > 0 ? ((await message.textContent())?.trim() ?? "") : "",
@@ -261,11 +270,11 @@ suite.define(() => {
           () => selectPickerValue(languageSelect, "system"),
           { theme: "knot", themeMode: "dark" },
         ],
-        ["theme", () => themeCard(page, "claw").click(), { themeMode: "dark", accent: "theme" }],
+        ["theme", () => applyAppearanceTheme(page, "claw"), { themeMode: "dark" }],
         [
           "themeMode",
           () => colorModeRow.getByRole("radio", { name: "System", exact: true }).click(),
-          { accent: "theme" },
+          {},
         ],
       ] satisfies Array<[string, () => Promise<void>, Record<string, unknown>]>;
       for (const [index, [expectedKey, click, remainingPrefs]] of resets.entries()) {
@@ -275,7 +284,7 @@ suite.define(() => {
           gateway,
           remainingPrefs,
           hash: `appearance-defaults-${index + 2}`,
-          ...(expectedKey === "theme" ? { expectedPrefs: { theme: null, accent: "theme" } } : {}),
+          ...(expectedKey === "theme" ? { expectedPrefs: { theme: null } } : {}),
         });
       }
 
@@ -357,17 +366,17 @@ suite.define(() => {
       await captureViewport(page, "09-accent-mint-selected.png");
 
       await resetSyncedPreference({
-        click: () => themeCard(page, "claw").click(),
+        click: () => applyAppearanceTheme(page, "claw"),
         expectedKey: "theme",
-        expectedPrefs: { theme: null, accent: "theme" },
+        expectedPrefs: { theme: null },
         gateway,
         hash: "appearance-accent-3",
-        remainingPrefs: { accent: "theme" },
+        remainingPrefs: { accent: mintAccent },
       });
       await expectAttribute(page.locator("html"), "data-theme", "dark");
-      await expect.poll(() => readAccentPresentation(page)).toMatchObject({ accent: "#ff5c5c" });
-      await expect.poll(() => readPersistedSettings(page)).toMatchObject({ accent: "theme" });
-      await expectPressed(mintPreset, "false");
+      await expect.poll(() => readAccentPresentation(page)).toMatchObject({ accent: mintAccent });
+      await expect.poll(() => readPersistedSettings(page)).toMatchObject({ accent: mintAccent });
+      await expectPressed(mintPreset);
 
       await gateway.setMethodResponse(
         "config.get",
@@ -414,9 +423,8 @@ suite.define(() => {
       await expectPressed(themeCard(page, "claw"));
       await expect.poll(() => followUpSelect.inputValue()).toBe("queue");
 
-      await rejectPreference(gateway, () => themeCard(page, "knot").click(), 1, {
+      await rejectPreference(gateway, () => applyAppearanceTheme(page, "knot"), 1, {
         theme: "knot",
-        accent: "theme",
       });
       await expectPressed(themeCard(page, "knot"));
       await expectText(themeDescription, "Default: Claw");
@@ -435,7 +443,7 @@ suite.define(() => {
       await expect.poll(() => followUpSelect.inputValue()).toBe("steer");
       await expectText(followUpRow, "Stocké uniquement dans ce navigateur");
 
-      await themeSection.locator(".settings-theme-card--claw").click();
+      await applyAppearanceTheme(page, "claw");
       await selectPickerValue(languageSelect, "system");
       await followUpRow.locator("button.btn--sm").click();
       await expectPressed(themeCard(page, "claw"));
@@ -458,7 +466,7 @@ suite.define(() => {
       await openAppearance(page, gateway);
       const themeSection = page.locator("#settings-appearance-theme");
       const themeDescription = themeSection.locator(":scope > .settings-section__desc");
-      await themeSection.locator(".settings-theme-card--claw").click();
+      await applyAppearanceTheme(page, "claw");
       await expectPressed(themeCard(page, "claw"));
       await expectText(themeDescription, "Stored in this browser only");
       await expect.poll(() => readPersistedSettings(page)).toMatchObject({ theme: "claw" });
@@ -472,7 +480,7 @@ suite.define(() => {
       await expect.poll(() => readPersistedSettings(page)).toMatchObject({ theme: "claw" });
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
 
-      await themeSection.locator(".settings-theme-card--knot").click();
+      await applyAppearanceTheme(page, "knot");
       await expectPressed(themeCard(page, "knot"));
       await expectText(themeDescription, "Default: Claw");
       await expectText(themeDescription, "Stored in this browser only", true);
@@ -543,7 +551,7 @@ suite.define(() => {
         await route.fulfill({ json: createTweakcnThemePayload() });
       });
       await openAppearance(page, gateway);
-      await page.locator(".settings-theme-card--custom").click();
+      await page.getByRole("button", { name: "Import", exact: true }).click();
       const importer = page.locator(".settings-theme-import");
       await importer.locator("input").fill("https://tweakcn.com/themes/network-failure");
       await importer.locator("button.primary").click();
@@ -671,7 +679,7 @@ suite.define(() => {
       const releaseImport = await delayedThemeRoute(page);
       try {
         await openAppearance(page, gateway);
-        await themeCard(page, "custom").click();
+        await page.getByRole("button", { name: "Import", exact: true }).click();
         const importer = page.locator(".settings-theme-import");
         await importer.locator("input").fill("replacement");
         await importer.locator("button.primary").click();

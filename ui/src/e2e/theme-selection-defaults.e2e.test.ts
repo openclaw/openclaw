@@ -5,13 +5,14 @@ import {
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
 import { selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
+import { applyAppearanceTheme } from "./appearance-prefs.test-support.ts";
 import { configSnapshot } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI theme selection defaults" });
 
 suite.define(() => {
-  it("resets design overrides only on explicit theme selection and persists the result through profile reads", async () => {
+  it("preserves design overrides through explicit preview, apply, and profile reads", async () => {
     await suite.withPage(
       {
         colorScheme: "dark",
@@ -59,12 +60,12 @@ suite.define(() => {
           ui: expect.stringContaining(ui),
           chat: expect.stringContaining(chat),
         });
-        const defaults = {
+        const preservedDesign = {
           theme: "absolutely",
-          accent: "#d97757",
-          ...fonts("Space Grotesk", "Lora"),
+          accent: "#5b9cf6",
+          ...fonts("JetBrains Mono"),
         };
-        const customized = { theme: "absolutely", accent: "#5b9cf6", ...fonts("Geist") };
+        const customized = { theme: "absolutely", accent: "#52c99a", ...fonts("Geist") };
         await page.goto(suite.server.baseUrl + "settings/appearance");
         await respondProfile(initialEntries);
         await waitForControlUiSettingsTakeover(page);
@@ -72,34 +73,29 @@ suite.define(() => {
         await expect
           .poll(read)
           .toMatchObject({ theme: "dash", accent: "#5b9cf6", ...fonts("JetBrains Mono") });
-        await page.locator(".settings-theme-card--absolutely").click();
-        await expect.poll(read).toMatchObject(defaults);
+        await applyAppearanceTheme(page, "absolutely");
+        await expect.poll(read).toMatchObject(preservedDesign);
         await expect
           .poll(async () => (await gateway.getRequests("themes.set")).map((r) => r.params))
           .toContainEqual({
             id: "absolutely",
-            appearance: { accent: "theme", fontUi: null, fontChat: null },
           });
         expect(await gateway.getRequests("config.patch")).toEqual([]);
         await expect.poll(mirror).toMatchObject({
           theme: "absolutely",
           themeMode: "dark",
-          accent: "theme",
+          accent: "#5b9cf6",
+          fontUi: "jetbrains-mono",
+          fontChat: "jetbrains-mono",
           locale: "en",
           chatShowThinking: false,
         });
-        expect(await mirror()).not.toHaveProperty("fontUi");
-        expect(await mirror()).not.toHaveProperty("fontChat");
-        expect(
-          await page.locator(".settings-accent-swatch--custom").getAttribute("class"),
-        ).not.toContain("--active");
-        expect(await page.locator("#settings-accent-status").textContent()).toContain(
-          "Using theme accent",
-        );
+        expect(await mirror()).toHaveProperty("fontUi", "jetbrains-mono");
+        expect(await mirror()).toHaveProperty("fontChat", "jetbrains-mono");
         expect(await page.locator("[data-accent-custom]").inputValue()).toMatch(/^#[0-9a-f]{6}$/u);
 
-        const selected = { "ui.theme": "absolutely", "ui.themeMode": "dark", "ui.accent": "theme" };
-        // Reconcile a fresh authoritative snapshot after the outgoing atomic reset.
+        const selected = { ...initialEntries, "ui.theme": "absolutely" };
+        // Reconcile a fresh authoritative snapshot after applying the theme alone.
         let reads = await gateway.deferNext("users.prefs.get");
         await gateway.emitGatewayEvent("users.prefs.changed", {
           profileId,
@@ -107,13 +103,13 @@ suite.define(() => {
         });
         await respondProfile(selected, reads);
         await page.reload();
-        // The mirror already paints defaults while the profile read is held.
-        await expect.poll(read).toMatchObject({ theme: "absolutely", accent: "#d97757" });
+        // The mirror retains customization while the profile read is held.
+        await expect.poll(read).toMatchObject({ theme: "absolutely", accent: "#5b9cf6" });
         await respondProfile(selected);
         await waitForControlUiSettingsTakeover(page);
-        await expect.poll(read).toMatchObject(defaults);
+        await expect.poll(read).toMatchObject(preservedDesign);
         await page.getByRole("radio", { name: "Light", exact: true }).click();
-        await expect.poll(read).toMatchObject({ theme: "absolutely-light", accent: "#a8452a" });
+        await expect.poll(read).toMatchObject({ theme: "absolutely-light", accent: "#5b9cf6" });
 
         for (const field of ["ui", "chat"]) {
           await selectPickerValue(
@@ -121,19 +117,19 @@ suite.define(() => {
             "geist",
           );
         }
-        await page.locator('[data-accent-preset="blue"]').click();
-        await page.locator(".settings-theme-card--absolutely").click();
+        await page.locator('[data-accent-preset="mint"]').click();
+        await applyAppearanceTheme(page, "absolutely");
         await page.getByRole("radio", { name: "Dark", exact: true }).click();
         await expect.poll(read).toMatchObject(customized);
         const custom = {
           ...selected,
           "ui.fontUi": "geist",
           "ui.fontChat": "geist",
-          "ui.accent": "#5b9cf6",
+          "ui.accent": "#52c99a",
         };
         await expect
           .poll(async () => (await gateway.getRequests("users.prefs.set")).map((r) => r.params))
-          .toContainEqual({ entries: { "ui.accent": "#5b9cf6" } });
+          .toContainEqual({ entries: { "ui.accent": "#52c99a" } });
         reads = await gateway.deferNext("users.prefs.get");
         await gateway.closeLatest();
         await respondProfile(custom, reads);

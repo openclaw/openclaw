@@ -394,7 +394,14 @@ export class ShellChromeOwner {
       !this.shouldIgnoreSettingsEscape(event)
     ) {
       event.preventDefault();
-      host.shellNavigation.exitSettings();
+      const theme = host.context?.theme;
+      // A disabled preview trigger can drop focus to the document. Cancel the
+      // active transient action before Escape leaves the Settings takeover.
+      if (host.routeState.routeId === "appearance" && theme?.previewTheme) {
+        theme.setPreview(null);
+      } else {
+        host.shellNavigation.exitSettings();
+      }
     }
   };
 

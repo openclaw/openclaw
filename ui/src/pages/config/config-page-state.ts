@@ -193,6 +193,7 @@ export function createConfigPage(
     routeInitialized = true;
     retireCommands();
     if (pageId === "appearance" && nextPageId !== "appearance") {
+      context.theme.setPreview(null);
       customThemeImportOwner.retireImport();
       mediaDeviceOwner.retire();
     }
@@ -437,6 +438,7 @@ export function createConfigPage(
       onRawDiscard: () => runtimeConfig.discardDraft(),
       onOpenFile: () => runtimeConfig.openFile(),
       themeCatalog: pageId === "appearance" ? context.theme.catalog : undefined,
+      themePaletteRevision: context.theme.appliedPalette?.revision,
       onRetryThemeCatalog: () => context.theme.retryCatalog?.(),
       hasCustomTheme: Boolean(settings().customTheme),
       customThemeLabel: settings().customTheme?.label ?? null,
@@ -634,6 +636,7 @@ export function createConfigPage(
     synchronize();
     return () => {
       commandLifetime.resolve();
+      context.theme.setPreview(null);
       subscriptions.forEach((stop) => stop());
       connected = false;
       customThemeImportOwner.retireImport();

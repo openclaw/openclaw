@@ -97,6 +97,7 @@ const webkitTestFiles = [
   "src/components/app-sidebar-rail-menus.browser.test.ts",
   "src/components/agent-emoji-picker.browser.test.ts",
   "src/components/appearance-picker.browser.test.ts",
+  "src/pages/config/view-appearance.browser.test.tsx",
   "src/components/confirm-dialog.browser.test.ts",
   "src/pages/channels/view.detail.browser.test.tsx",
   "src/pages/plugins/settings-lifecycle.browser.test.tsx",

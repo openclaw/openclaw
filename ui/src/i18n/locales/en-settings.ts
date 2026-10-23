@@ -1715,7 +1715,21 @@ const enSettings = {
     appearance: {
       intro: "Theme, chat, and sidebar preferences for this Control UI client.",
       theme: "Theme",
-      chooseTheme: "Choosing a different theme resets its fonts and accent colors.",
+      chooseTheme:
+        "Inspect a theme, then preview it before applying. Other appearance preferences stay unchanged.",
+      themePicker: "Theme choices",
+      selectedTheme: "Selected: {name}",
+      previewingTheme: "Previewing: {name}",
+      previewTheme: "Preview theme",
+      applyTheme: "Apply theme",
+      appliedTheme: "Applied: {name}",
+      enhancedPreviewUnavailable:
+        "Enhanced contrast is unavailable for this theme. Preview uses its authored colors; your contrast preference stays saved.",
+      previewPaletteHint: "Choose Preview theme to load this palette.",
+      inspectingTheme: "Inspecting: {name}",
+      closeThemeInspection: "Close inspection",
+      themeInspectionHint:
+        "Hover or focus to expand a row. Arrow keys choose a theme; Preview theme tries it in this window. Escape closes inspection or cancels preview.",
       themeUnavailable: "{id} is unavailable. Using Claw until the theme becomes available again.",
       background: {
         title: "Background",

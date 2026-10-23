@@ -1,3 +1,4 @@
+import type { Page } from "playwright";
 import { expect } from "vitest";
 import type { MockGatewayControls, MockGatewayRequest } from "../test-helpers/control-ui-e2e.ts";
 
@@ -64,4 +65,11 @@ export async function resetSyncedPreference(options: {
     },
   );
   await waitForRequestCount(options.gateway, "config.get", configGetCount + 1);
+}
+
+/** Exercise the chooser's candidate, window preview, and commit as separate user actions. */
+export async function applyAppearanceTheme(page: Page, theme: string): Promise<void> {
+  await page.locator(".settings-theme-card--" + theme + " input").check();
+  await page.getByRole("button", { name: "Preview theme", exact: true }).click();
+  await page.getByRole("button", { name: "Apply theme", exact: true }).click();
 }

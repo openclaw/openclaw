@@ -49,12 +49,13 @@ export function createConfigPagePreferences(context: ApplicationContext, invalid
     }
   }
 
-  function reset(key: ResettableServerUiPrefKey) {
+  function reset(key: ResettableServerUiPrefKey, preserveDesign = false) {
     const resetSettings = resetServerUiPref(
       key,
       current(key),
       context.gateway.connection.gatewayUrl,
       context.gateway.snapshot?.selfUser?.id,
+      { preserveDesign },
     );
     if (key === "locale") {
       if (isSupportedLocale(resetSettings.locale)) {
@@ -79,6 +80,8 @@ export function createConfigPagePreferences(context: ApplicationContext, invalid
       return {
         onAppearanceChange: apply,
         theme: settings().theme,
+        themePreview: context.theme.previewTheme,
+        setThemePreview: (theme: ThemeName | null) => context.theme.setPreview(theme),
         themeOverridden: themePref.overridden,
         themeProvenance: themePref.provenance,
         themeResetValue: themePref.resetValue ?? UI_APPEARANCE_DEFAULTS.theme,
@@ -114,9 +117,10 @@ export function createConfigPagePreferences(context: ApplicationContext, invalid
         setTheme: (theme: ThemeName) => {
           const preference = current("theme");
           if (preference.overridden && theme === preference.resetValue) {
-            reset("theme");
+            reset("theme", true);
           } else {
-            apply({}, theme);
+            selectThemeSettings(theme, {}, { preserveDesign: true });
+            invalidate();
           }
         },
         setThemeMode: (mode: ThemeMode) => {

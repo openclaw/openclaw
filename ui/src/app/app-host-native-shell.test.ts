@@ -48,6 +48,7 @@ function navigationShell(context: Partial<ApplicationContext> = {}) {
 function settingsShell() {
   const shell = navigationShell({
     overlays: { snapshot: { devicePairSetupOpen: false } },
+    theme: { previewTheme: null, setPreview: vi.fn() },
   } as unknown as ApplicationContext);
   shell.lastWorkspaceLocation = { routeId: "usage", pathname: "/usage", search: "", hash: "" };
   shell.navDrawerOpen = false;
@@ -199,6 +200,18 @@ it.each(["none", "keyboardShortcuts", "approvalOverlay"] as const)(
     });
   },
 );
+
+it("cancels a theme preview before Escape leaves Settings after its trigger loses focus", () => {
+  const shell = settingsShell();
+  const setPreview = vi.fn();
+  Object.assign(shell.context!.theme, { previewTheme: "tide", setPreview });
+  document.dispatchEvent(keydown({ key: "Escape" }));
+  expect(setPreview).toHaveBeenCalledExactlyOnceWith(null);
+  expect(navigate).not.toHaveBeenCalled();
+  Object.assign(shell.context!.theme, { previewTheme: null });
+  document.dispatchEvent(keydown({ key: "Escape" }));
+  expect(navigate).toHaveBeenCalledWith("usage", { pathname: "/usage", search: "", hash: "" });
+});
 
 it("keeps the raw config editor unchanged when Escape is pressed", () => {
   settingsShell();

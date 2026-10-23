@@ -12,7 +12,7 @@ import {
   waitForControlUiSettingsTakeover,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
-import { configResponse } from "./appearance-prefs.test-support.ts";
+import { applyAppearanceTheme, configResponse } from "./appearance-prefs.test-support.ts";
 import { chatMessage } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -339,7 +339,7 @@ suite.define(() => {
 
           await page.setViewportSize(largeDesktop);
           await change(() => source(section, "none").click(), { source: { kind: "none" } });
-          await page.locator(".settings-theme-card--tide").click();
+          await applyAppearanceTheme(page, "tide");
           await gateway.waitForRequest("themes.set");
           await expectSelected(section, "none");
           await page

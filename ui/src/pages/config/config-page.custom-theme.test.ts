@@ -80,7 +80,7 @@ function importState(props: ReturnType<typeof createCustomThemePage>["props"]) {
 function mountCustomThemeImporter() {
   patchSettings({ theme: "claw", customTheme: undefined });
   const { container } = mountConfigPage(customThemeContext(), { pageId: "appearance" });
-  container.querySelector<HTMLButtonElement>('[data-theme-id="custom"]')!.click();
+  container.querySelector<HTMLButtonElement>(".settings-theme-preview__actions button")!.click();
   flush();
   const input = container.querySelector<HTMLInputElement>("[data-custom-theme-import-input]")!;
   const submit = container.querySelector<HTMLButtonElement>(

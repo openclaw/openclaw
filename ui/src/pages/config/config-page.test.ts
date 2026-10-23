@@ -36,6 +36,7 @@ import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import * as realtimeTalk from "../chat/talk/session.ts";
 import {
+  applyRenderedTheme,
   completeConfigContext,
   mountConfigPage,
   mountConfigPageState,
@@ -251,19 +252,19 @@ it.each([
   expect(canSyncAppearancePreference(context)).toBe(locale);
 });
 
-it("restores the gateway appearance default while queuing deletion of the profile override", async () => {
+it("restores the gateway theme default without clearing profile customization", async () => {
   const configObject = { ui: { prefs: { theme: "dash" } } };
-  const { context, props, previous } = await loadProfile(configObject, { "ui.theme": "knot" });
+  const { context, props, previous } = await loadProfile(configObject, {
+    "ui.theme": "knot",
+    "ui.fontUi": "geist",
+    "ui.accent": "#123456",
+  });
   props().setTheme("dash");
 
   expect(loadSettings().theme).toBe("dash");
   expect(context.theme.settings.theme).toBe("dash");
-  expect(changedServerUiPrefs(previous, loadSettings())).toEqual({
-    theme: null,
-    accent: "theme",
-    fontUi: null,
-    fontChat: null,
-  });
+  expect(changedServerUiPrefs(previous, loadSettings())).toEqual({ theme: null });
+  expect(loadSettings()).toMatchObject({ fontUi: "geist", accent: "#123456" });
 });
 
 it.each([
@@ -337,13 +338,12 @@ it("resets the fontUi profile override when its picker sentinel is selected", as
 
 it("uses the committed snapshot for both display and reset while the form draft differs", async () => {
   const committedConfig = { ui: { prefs: { theme: "claw" } } };
-  const draftConfig = { ui: { prefs: { theme: "knot" } } };
   const runtimeConfig = {
     state: {
       connected: true,
       configSnapshot: { config: committedConfig },
       configSchema: { type: "object", properties: {} },
-      configForm: draftConfig,
+      configForm: { ui: { prefs: { theme: "knot" } } },
       configFormOriginal: committedConfig,
       configFormDirty: true,
     },
@@ -372,7 +372,7 @@ it("uses the committed snapshot for both display and reset while the form draft 
   expect(themeSection?.textContent).not.toContain("Default: Knot");
   expect(themeSection?.textContent).not.toContain("Stored in this browser only");
 
-  themeSection?.querySelector<HTMLButtonElement>(".settings-theme-card--claw")?.click();
+  applyRenderedTheme(themeSection, "claw");
 
   expect(changedServerUiPrefs(beforeReset, loadSettings())).toEqual({ theme: null });
 });

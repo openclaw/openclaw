@@ -42,6 +42,7 @@ type ConfigViewOptions = Partial<
     | "localeOverride"
     | "localeResetValue"
     | "themeCatalog"
+    | "themePaletteRevision"
     | "onRetryThemeCatalog"
     | "customThemeImportExpanded"
     | "onOpenCustomThemeImport"

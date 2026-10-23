@@ -11,6 +11,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { resolveRenderedColors, type RenderedColor } from "../test-helpers/rendered-colors.ts";
 import { openPicker, pickerValue } from "../test-helpers/select-picker-e2e.ts";
+import { applyAppearanceTheme } from "./appearance-prefs.test-support.ts";
 import { configSnapshot, settingsPageOptions } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -218,7 +219,7 @@ suite.define(() => {
               await evaluateControlUiContext(page, (context) => context.navigate("appearance"));
               await waitForControlUiRoute(page, { routeId: "appearance" });
               await page
-                .locator(`.settings-theme-card--${initialFamily}.settings-theme-card--active`)
+                .locator(`.settings-theme-card--${initialFamily}.settings-segmented__btn--active`)
                 .waitFor({ state: "visible" });
               const response = await page.request.get(`${suite.server.baseUrl}settings/appearance`);
               expect(response.status()).toBe(200);
@@ -228,21 +229,21 @@ suite.define(() => {
               await selectedCard.waitFor({ state: "visible" });
               await gateway.waitForRequest("config.get", { after: configGetsBeforeReset });
               const initialConfigGets = (await gateway.getRequests("config.get")).length;
-              const committed = themeConfigResponse(family, mode, "theme");
+              const committed = themeConfigResponse(family, mode, accent);
               const patchAfter = await gateway.deferNext("config.patch");
-              await selectedCard.click();
+              await applyAppearanceTheme(page, family);
               const patch = await gateway.waitForRequest("config.patch", { after: patchAfter });
               const raw = (patch.params as { raw?: unknown } | undefined)?.raw;
               expect(typeof raw).toBe("string");
               expect(JSON.parse(String(raw))).toMatchObject({
-                ui: { prefs: { theme: family === "claw" ? null : family, accent: "theme" } },
+                ui: { prefs: { theme: family === "claw" ? null : family } },
               });
 
               const selection = async () => ({
                 theme: await root.getAttribute("data-theme"),
                 mode: await root.getAttribute("data-theme-mode"),
                 active: (await selectedCard.getAttribute("class"))?.includes(
-                  "settings-theme-card--active",
+                  "settings-segmented__btn--active",
                 ),
               });
               // Both optimistic paint and the acknowledgement must retain the selection.
@@ -254,22 +255,7 @@ suite.define(() => {
 
               await expect.poll(selection).toEqual({ theme: resolved, mode, active: true });
 
-              // Reapply the custom accent cleared by the theme selection.
               if (accent) {
-                const accentCommitted = themeConfigResponse(family, mode, accent);
-                await gateway.setMethodResponse("config.get", accentCommitted);
-                const accentAfter = await gateway.deferNext("config.patch");
-                await page.locator("[data-accent-custom]").fill(accent);
-                const accentPatch = await gateway.waitForRequest("config.patch", {
-                  after: accentAfter,
-                });
-                // SAFETY: This is the config.patch request emitted by the exercised picker;
-                // the parsed payload below is checked against its complete prefs contract.
-                expect(JSON.parse((accentPatch.params as { raw: string }).raw)).toEqual({
-                  ui: { prefs: { accent } },
-                });
-                await gateway.resolveDeferred("config.patch", accentCommitted);
-                await expectCommittedConfig(page, accentCommitted);
                 await expect
                   .poll(() =>
                     page.evaluate(() =>
@@ -347,6 +333,26 @@ suite.define(() => {
                 descriptionBackground,
                 `${resolved}: rendered Appearance description`,
               );
+
+              await selectedCard.locator(".settings-theme-card__selected").waitFor();
+              await selectedCard.locator("input").focus();
+              const tilePaint = await selectedCard.evaluate((element) => ({
+                background: getComputedStyle(element).backgroundColor,
+                group: getComputedStyle(element.closest(".settings-group")!).backgroundColor,
+                mark: getComputedStyle(element.querySelector(".settings-theme-card__selected")!)
+                  .color,
+                focus: getComputedStyle(element).outlineColor,
+              }));
+              const tileColors = await page.evaluate(resolveRenderedColors, tilePaint);
+              const groupColor = compositeColor(tileColors.group!, colors["--bg"]!);
+              const tileBackground = compositeColor(tileColors.background!, groupColor);
+              expectContrast(
+                tileColors.mark!,
+                tileBackground,
+                resolved + " applied-theme marker",
+                3,
+              );
+              expectContrast(tileColors.focus!, groupColor, resolved + " theme focus outline", 3);
 
               const picker = page.locator("openclaw-select-picker:has(#settings-font-chat)");
               await openPicker(picker);

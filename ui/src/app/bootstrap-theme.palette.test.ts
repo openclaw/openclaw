@@ -111,3 +111,35 @@ it.each(["superseded", "disposed"])("ignores a %s palette completion", (state) =
   expect(snapshots).not.toHaveBeenCalled();
   expect(document.documentElement.dataset.themeMode).toBe("light");
 });
+
+it("previews without writing preferences and restores current customization after cancellation", () => {
+  patchSettings({ themeMode: "dark", fontUi: "geist", fontChat: "lora", accent: "#123456" });
+  const saved = loadSettings();
+  theme.setPreview("tide");
+  expect(theme.settings.theme).toBe("claw");
+  expect(loadSettings()).toEqual(saved);
+  pendingPalette().dispatchEvent(new Event("load"));
+  expect(document.documentElement.dataset.themeId).toBe("tide");
+  expect(document.documentElement.style.getPropertyValue("--primary")).toBe("#123456");
+  patchSettings({ accent: "#654321" });
+  theme.setPreview(null);
+  expect(document.documentElement.dataset.themeId).toBe("claw");
+  expect(document.documentElement.style.getPropertyValue("--primary")).toBe("#654321");
+  expect(loadSettings()).toMatchObject({ fontUi: "geist", fontChat: "lora", accent: "#654321" });
+  theme.setPreview("dash");
+  const late = document.getElementById("openclaw-theme-palette-dash")!;
+  theme.setPreview(null);
+  late.dispatchEvent(new Event("load"));
+  expect(document.documentElement.dataset.themeId).toBe("claw");
+});
+
+it("retires preview when the canonical selection changes", () => {
+  theme.setPreview("tide");
+  patchSettings({ theme: "claw", themeMode: "dark" });
+  expect(theme.previewTheme).toBe("tide");
+  patchSettings({ theme: "dash" });
+  expect(theme.previewTheme).toBeNull();
+  document.getElementById("openclaw-theme-palette-dash")!.dispatchEvent(new Event("load"));
+  pendingPalette().dispatchEvent(new Event("load"));
+  expect(document.documentElement.dataset.themeId).toBe("dash");
+});

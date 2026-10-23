@@ -174,16 +174,19 @@ export function retryServerUiPrefWrite(
   return true;
 }
 
+type ThemeSelectionOptions = { preserveDesign?: boolean };
+
 export function resetServerUiPref<K extends ResettableServerUiPrefKey>(
   key: K,
   state?: ServerUiPrefState<SyncedPrefValue<K>>,
   scope = outbox.pendingScope,
   profileId?: string | null,
+  options: ThemeSelectionOptions = {},
 ): UiSettings {
   const specification = SYNCED_PREFS[key];
   const applyReset = (patch: Partial<UiSettings>) =>
     key === "theme" && patch.theme !== undefined
-      ? selectThemeSettings(patch.theme)
+      ? selectThemeSettings(patch.theme, {}, options)
       : patchSettings(patch);
   // Disconnected clients retain their last known profile for local cancellation.
   const activeProfile = isAppearancePref(key)
@@ -200,7 +203,7 @@ export function resetServerUiPref<K extends ResettableServerUiPrefKey>(
   if (state?.provenance === "device-local") {
     const patch = write(state.resetValue);
     const keys: SyncedPrefKey[] =
-      key === "theme" && patch.theme !== loadSettings().theme
+      key === "theme" && !options.preserveDesign && patch.theme !== loadSettings().theme
         ? [key, "accent", "fontUi", "fontChat"]
         : [key];
     outbox.cancelPendingKeys(effectiveScope, keys);
@@ -224,8 +227,9 @@ export function resetServerUiPref<K extends ResettableServerUiPrefKey>(
 export function selectThemeSettings(
   theme: ThemeName,
   patch: Pick<Partial<UiSettings>, "customTheme"> = {},
+  options: ThemeSelectionOptions = {},
 ): UiSettings {
-  if (theme === loadSettings().theme) {
+  if (options.preserveDesign || theme === loadSettings().theme) {
     return patchSettings({ ...patch, theme });
   }
   // Clear even unresolved profile values: a missing boot mirror is not evidence
