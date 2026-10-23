@@ -363,8 +363,8 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
         schema: {
           ...agentEngineSchema,
           version: 27,
-          postgres: migration.fromSchema.postgres,
-          postgresMigrations: [],
+          ...migration.fromSchema,
+          postgresVectorDecoderVersion: migration.fromSchema.postgresVectorDecoderVersion,
         },
         input: { connection: connection!, schemaPrefix: prefix },
         inspectSqlite: () => ({ hasExistingData: false, hasEngineAnchor: false }),

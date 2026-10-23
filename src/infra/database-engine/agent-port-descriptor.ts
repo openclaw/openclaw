@@ -7,7 +7,11 @@ import {
 } from "../../../packages/memory-host-sdk/src/host/memory-search-schema.js";
 import { readTranscriptPayload } from "../../config/sessions/transcript-payload.js";
 import { deriveTranscriptPredicateFields } from "../../config/sessions/transcript-predicate-fields.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
+import {
+  AGENT_MEMORY_REVISION_SCHEMA_VERSION,
+  AGENT_VECTOR_DECODER_SCHEMA_VERSION,
+  OPENCLAW_AGENT_SCHEMA_VERSION,
+} from "../../state/openclaw-agent-db-contract.js";
 import { agentEngineSchema, openAgentEngineStore } from "../../state/openclaw-agent-db-engine.js";
 import { runWithAgentDatabaseMaintenanceAuthority } from "../../state/openclaw-agent-db-lease.js";
 import { AGENT_SCHEMA_COMPATIBILITY } from "../../state/openclaw-agent-db-schema-compatibility.js";
@@ -59,7 +63,7 @@ const agentSourceSearchPostData: NonNullable<PortDescriptor["postgresSourcePostD
   source,
 ) => {
   const row = (
-    await source.db.query<{ metadata: { search_extensions?: string | null } }>(
+    await source.db.query<{ metadata: { version: number; search_extensions?: string | null } }>(
       `SELECT to_jsonb(meta) AS metadata
        FROM ${pgSearchName(source.namespace)}.openclaw_schema_meta AS meta WHERE store = 'agent'`,
     )
@@ -110,7 +114,12 @@ const agentSourceSearchPostData: NonNullable<PortDescriptor["postgresSourcePostD
     const shared = { text: true, vector: false };
     return schemas
       .map((schema) => {
-        const sql = postgresSearchSql(schema, namespace, shared);
+        const sql = postgresSearchSql(
+          schema,
+          namespace,
+          shared,
+          row!.metadata.version >= AGENT_VECTOR_DECODER_SCHEMA_VERSION ? 2 : 1,
+        );
         shared.vector ||= Object.keys(schema.vector ?? {}).length > 0;
         return sql;
       })
@@ -128,12 +137,12 @@ export async function loadAgentPortDescriptor(
     if (backup?.version === sourceVersion && backup.id === "agent") {
       return backup;
     }
-    // Schema 30 appends trajectory columns; schema 31 removes revision triggers.
+    // Schema 30 appends trajectory columns; 31 removes revision triggers; 32 changes the decoder.
     // Pin the remaining shared layout so future DDL gets its own descriptor.
     if (
       backup ||
-      OPENCLAW_AGENT_SCHEMA_VERSION !== 31 ||
-      ![27, 28, 29, 30].includes(sourceVersion)
+      OPENCLAW_AGENT_SCHEMA_VERSION !== 32 ||
+      ![27, 28, 29, 30, 31].includes(sourceVersion)
     ) {
       throw new DatabasePortDataError(
         `Missing agent PostgreSQL backup descriptor for version ${sourceVersion}`,
@@ -368,7 +377,10 @@ export async function loadAgentPortDescriptor(
   if (!historical) {
     return descriptor;
   }
-  let postData = withLegacyAgentPostgresMemoryRevisionTriggers(descriptor.postData);
+  const legacyRevision = sourceVersion < AGENT_MEMORY_REVISION_SCHEMA_VERSION;
+  let postData = legacyRevision
+    ? withLegacyAgentPostgresMemoryRevisionTriggers(descriptor.postData)
+    : descriptor.postData;
   if (legacyTrajectory) {
     postData = withLegacyAgentPostgresTrajectoryStorage(postData);
   }
@@ -387,11 +399,13 @@ export async function loadAgentPortDescriptor(
     ),
     triggers: [
       ...(descriptor.triggers ?? []),
-      ...LEGACY_MEMORY_REVISION_SQLITE_TRIGGERS.map((trigger) => ({
-        name: trigger.name,
-        table: trigger.table,
-        sql: trigger.sql.replace("IF NOT EXISTS ", "").replace(/;$/, ""),
-      })),
+      ...(legacyRevision
+        ? LEGACY_MEMORY_REVISION_SQLITE_TRIGGERS.map((trigger) => ({
+            name: trigger.name,
+            table: trigger.table,
+            sql: trigger.sql.replace("IF NOT EXISTS ", "").replace(/;$/, ""),
+          }))
+        : []),
     ],
     preData: legacyTrajectory
       ? withLegacyAgentPostgresTrajectoryStorage(descriptor.preData)

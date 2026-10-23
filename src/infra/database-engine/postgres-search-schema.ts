@@ -98,11 +98,79 @@ export function assertPostgresSearchAdmitted(
   }
 }
 
+/** Canonical bytes remain binary64; the derived vector rounds once to float32. */
+export function postgresVectorDecoderSql(
+  extensionSchema: string,
+  version: 1 | 2 = 1,
+  replace = false,
+): string {
+  const ext = pgSearchName(extensionSchema);
+  if (version === 1) {
+    return `CREATE ${replace ? "OR REPLACE " : ""}FUNCTION openclaw_vector(bytes bytea, dimensions integer) RETURNS ${ext}.vector
+LANGUAGE plpgsql IMMUTABLE STRICT AS $$
+DECLARE vals real[] := '{}'; bits bigint; exponent integer; fraction double precision; value double precision;
+BEGIN
+  IF octet_length(bytes) <> dimensions * 8 THEN RAISE EXCEPTION 'embedding dimension mismatch; rebuild the derived vector index'; END IF;
+  FOR i IN 0..dimensions-1 LOOP
+    bits := 0;
+    FOR j IN 0..7 LOOP bits := bits | (get_byte(bytes, i*8+j)::bigint << (j*8)); END LOOP;
+    exponent := ((bits >> 52) & 2047)::integer;
+    IF exponent = 2047 THEN RAISE EXCEPTION 'embedding must be finite'; END IF;
+    fraction := (bits & 4503599627370495)::double precision / 4503599627370496;
+    IF exponent < 873 OR (exponent = 873 AND fraction = 0) THEN value := 0;
+    ELSE value := (1 + fraction) * power(2::double precision, exponent - 1023); END IF;
+    IF bits < 0 THEN value := -value; END IF;
+    vals := array_append(vals, value::real);
+  END LOOP;
+  RETURN vals::${ext}.vector;
+END $$;`;
+  }
+  return `CREATE ${replace ? "OR REPLACE " : ""}FUNCTION openclaw_vector(bytes bytea, dimensions integer) RETURNS ${ext}.vector
+LANGUAGE plpgsql IMMUTABLE STRICT AS $$
+DECLARE vals double precision[]; first_nonfinite integer;
+BEGIN
+  IF octet_length(bytes) <> dimensions * 8 THEN RAISE EXCEPTION 'embedding dimension mismatch; rebuild the derived vector index'; END IF;
+  -- Flatten TOAST once: repeated get_byte calls otherwise detoast the entire embedding.
+  bytes := bytes || '\\x'::bytea;
+  WITH bits AS MATERIALIZED (
+    SELECT i,
+      get_byte(bytes, i*8)::bigint |
+      (get_byte(bytes, i*8+1)::bigint << 8) |
+      (get_byte(bytes, i*8+2)::bigint << 16) |
+      (get_byte(bytes, i*8+3)::bigint << 24) |
+      (get_byte(bytes, i*8+4)::bigint << 32) |
+      (get_byte(bytes, i*8+5)::bigint << 40) |
+      (get_byte(bytes, i*8+6)::bigint << 48) |
+      (get_byte(bytes, i*8+7)::bigint << 56) AS b
+    FROM generate_series(0, dimensions-1) AS i
+  ), parts AS (
+    SELECT i, b, ((b >> 52) & 2047)::integer AS exponent,
+      (b & 4503599627370495)::double precision / 4503599627370496 AS fraction
+    FROM bits
+  )
+  SELECT coalesce(array_agg(
+    CASE WHEN b < 0 THEN -1::double precision ELSE 1::double precision END *
+    CASE WHEN exponent = 2047 OR exponent < 873 OR (exponent = 873 AND fraction = 0)
+      THEN 0::double precision
+      ELSE (1 + fraction) * power(2::double precision, exponent - 1023)
+    END ORDER BY i
+  ), ARRAY[]::double precision[]), min(i) FILTER (WHERE exponent = 2047)
+  INTO vals, first_nonfinite FROM parts;
+  IF first_nonfinite IS NOT NULL THEN
+    -- Preserve the old left-to-right overflow versus nonfinite error precedence.
+    PERFORM vals[1:first_nonfinite]::real[];
+    RAISE EXCEPTION 'embedding must be finite';
+  END IF;
+  RETURN vals::real[]::${ext}.vector;
+END $$;`;
+}
+
 /** Deterministic derived DDL joins the store's generated DDL hash and exact catalog seal. */
 export function postgresSearchSql(
   schema: SearchSchema,
   namespace: string,
   shared: { text?: boolean; vector?: boolean } = {},
+  decoderVersion: 1 | 2 = 1,
 ): string {
   const ext = pgSearchName(schema.extensionSchema ?? "public");
   const config = `${pgSearchName(namespace)}.${pgSearchName(searchConfig)}`;
@@ -130,25 +198,7 @@ CREATE INDEX ${pgSearchName(`${index.table}_search_gin`)} ON ${table} USING gin(
     return statements.join("\n");
   }
   if (Object.keys(schema.vector ?? {}).length && !shared.vector) {
-    // Canonical bytes are IEEE754 little-endian binary64. Only this derived value rounds to float32.
-    statements.push(`CREATE FUNCTION openclaw_vector(bytes bytea, dimensions integer) RETURNS ${ext}.vector
-LANGUAGE plpgsql IMMUTABLE STRICT AS $$
-DECLARE vals real[] := '{}'; bits bigint; exponent integer; fraction double precision; value double precision;
-BEGIN
-  IF octet_length(bytes) <> dimensions * 8 THEN RAISE EXCEPTION 'embedding dimension mismatch; rebuild the derived vector index'; END IF;
-  FOR i IN 0..dimensions-1 LOOP
-    bits := 0;
-    FOR j IN 0..7 LOOP bits := bits | (get_byte(bytes, i*8+j)::bigint << (j*8)); END LOOP;
-    exponent := ((bits >> 52) & 2047)::integer;
-    IF exponent = 2047 THEN RAISE EXCEPTION 'embedding must be finite'; END IF;
-    fraction := (bits & 4503599627370495)::double precision / 4503599627370496;
-    IF exponent < 873 OR (exponent = 873 AND fraction = 0) THEN value := 0;
-    ELSE value := (1 + fraction) * power(2::double precision, exponent - 1023); END IF;
-    IF bits < 0 THEN value := -value; END IF;
-    vals := array_append(vals, value::real);
-  END LOOP;
-  RETURN vals::${ext}.vector;
-END $$;`);
+    statements.push(postgresVectorDecoderSql(schema.extensionSchema ?? "public", decoderVersion));
   }
   for (const index of Object.values(schema.vector ?? {})) {
     const source = index.postgres;

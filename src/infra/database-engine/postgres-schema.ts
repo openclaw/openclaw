@@ -146,7 +146,12 @@ export function postgresSchemaSql(
   );
   const shared = { text: false, vector: false };
   const searchSql = search.map((definition) => {
-    const ddl = postgresSearchSql(definition, namespace, shared);
+    const ddl = postgresSearchSql(
+      definition,
+      namespace,
+      shared,
+      schema.postgresVectorDecoderVersion,
+    );
     shared.text ||= Object.keys(definition.text ?? {}).length > 0;
     shared.vector ||=
       definition.mode !== "keyword-only" && Object.keys(definition.vector ?? {}).length > 0;

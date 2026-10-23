@@ -187,6 +187,12 @@ writer's transaction. SQLite and PostgreSQL drop the triggers without changing
 retained rows or revision values. Older writers require the verified pre-upgrade
 backup because they rely on those triggers to invalidate readers.
 
+Agent [schema 32](/reference/database-schemas/agent-schema-history#agent-schema-32)
+replaces the PostgreSQL vector decoder without rewriting embeddings or indexes.
+SQLite advances metadata only. PostgreSQL stores that have not admitted vector
+search remain unchanged until first use. Older binaries require the verified
+pre-upgrade backup with its matching build for catalog compatibility.
+
 Shared-state [schema 31](/reference/database-schemas/state-schema-history#state-schema-31)
 stores local workspace baselines by path and checkpoints as recoverable deltas.
 The schema migration preserves legacy manifest documents and pending receipts;

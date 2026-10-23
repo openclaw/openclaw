@@ -2,6 +2,7 @@ import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { assertOpenClawMigrationWitnessPreserved as assertWitnessPreserved } from "./openclaw-migration-witness.js";
 import {
   agentWitness as captureWitness,
@@ -12,7 +13,7 @@ import {
 } from "./schema-migration.test-support.js";
 
 const predecessor = 30;
-const target = 31;
+const target = OPENCLAW_AGENT_SCHEMA_VERSION;
 const scope = ["memory_index_chunks", "memory_index_sources", "schema_meta"];
 
 const withFixture = migrationFixture({ seed, predecessor, target, scope, admission: true });

@@ -227,7 +227,12 @@ export function openEngineStore(ref: {
                 if (!source) {
                   throw new Error("Missing PostgreSQL source schema for inspection");
                 }
-                schema = { ...schema, ...source, version: Number(meta.version) };
+                schema = {
+                  ...schema,
+                  ...source,
+                  postgresVectorDecoderVersion: source.postgresVectorDecoderVersion,
+                  version: Number(meta.version),
+                };
               } else {
                 assertMigrationCurrent = ref.assertMigrationCurrent;
                 assertMigrationCurrent?.();
