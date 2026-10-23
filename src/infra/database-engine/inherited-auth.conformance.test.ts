@@ -39,6 +39,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { assertOpenClawDatabasesReady } from "../../state/openclaw-database-preflight.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { acquireStateDatabaseSchemaLease } from "../gateway-state-owner.js";
@@ -207,14 +208,22 @@ describe.skipIf(!connection)("PostgreSQL inherited auth startup", () => {
         `LOCK TABLE "${namespace}".openclaw_schema_meta IN ACCESS EXCLUSIVE MODE`,
       );
       await withAgentDatabaseStartupAdmission(async (admission) => {
+        await assertOpenClawDatabasesReady({
+          env: state.env,
+          operation: "gateway-startup",
+          config: cfg,
+        });
         gateway = await startModelsGateway(state, cfg, "inheritauth-token");
         await gateway.server.startupSettled;
         await admission.waitForAgentPreparation("main", { env: state.env, signal });
         expect(readAgentDatabaseAdmissionRefusal("owner", { env: state.env })).toMatchObject({
           code: "agent-database-inspection-pending",
         });
-        const readiness = await fetch(`http://127.0.0.1:${gateway.port}/readyz`);
-        expect(readiness.status).toBe(200);
+        await expect
+          .poll(async () => (await fetch(`http://127.0.0.1:${gateway!.port}/readyz`)).status, {
+            timeout: 10_000,
+          })
+          .toBe(200);
         const initial = currentMainSnapshot();
         expect(initial).toBeDefined();
         expect(initial!.inheritedAuthDir).toBe(state.agentDir("owner"));
