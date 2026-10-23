@@ -694,7 +694,7 @@ describe("Gateway state ownership", () => {
             for (const role of ["sqlite-maintenance", "skill-workshop-apply"] as const) {
               fs.writeFileSync(pathname, JSON.stringify({ ...record, role }));
               expect(() => assertStateDatabaseAccessAllowed(databasePath)).toThrow(
-                "offline maintenance",
+                `offline maintenance by ${role} process ${record.pid}; retry when it finishes. For update progress, run \`openclaw update status --json\``,
               );
             }
             for (const raw of ["{", JSON.stringify({ ...record, role: "unknown" })]) {
