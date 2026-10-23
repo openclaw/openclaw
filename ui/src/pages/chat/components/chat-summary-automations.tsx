@@ -9,7 +9,6 @@ import {
   isPending,
   latest,
   onSettled,
-  untrack,
 } from "solid-js";
 import type { CronCompactJob } from "../../../api/types.ts";
 import { pathForRoute } from "../../../app-route-paths.ts";
@@ -338,8 +337,6 @@ export function SessionAutomationRead(props: {
 export type ChatSummaryAutomationsProps = SessionAutomationInventoryProps & {
   /** Supplied only by the native desktop Details composition. */
   desktop?: { expanded: boolean; onExpandedChange: (expanded: boolean) => void };
-  /** Stable session-owned instance shared with mobile, when supplied by the parent. */
-  inventory?: SessionAutomationInventory;
   onNavigate?: (jobId: string) => void;
 };
 
@@ -355,8 +352,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
       }
     };
   };
-  const initialInventory = untrack(() => props.inventory);
-  const inventory = initialInventory ?? createSessionAutomationInventory(props, () => host);
+  const inventory = createSessionAutomationInventory(props, () => host);
   const presented = createMemo(() => props.presented);
   const sessionKey = createMemo(() => props.sessionKey);
   // Reopening or replacing the session resets only the local reveal count.
@@ -574,7 +570,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
   );
   return (
     <openclaw-chat-summary-automations ref={(element) => (host = element)}>
-      {initialInventory ? null : inventory.lifecycle}
+      {inventory.lifecycle}
       <Loading>
         <Show when={inventory.readable()}>
           <Show when={inventory.jobs().length > 0}>

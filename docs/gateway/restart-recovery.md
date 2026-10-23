@@ -1600,6 +1600,11 @@ Use the session transcript and recorded delivery outcome to verify completion.
 
 ## Automatic peer results
 
+Saved `sessions_send` inputs retain their original operator scopes during recovery.
+Session-only write access can resume updates to authorized sessions without broader
+Gateway write access. If current permissions block delivery, the recovery notice
+explains that restriction and asks the user to resend; the input remains saved.
+
 Automatic results returned by `sessions_send` use the same communication owner
 and pending-input recovery as peer requests. An accepted request also authorizes
 its requested result: returning that result does not require new reverse-direction

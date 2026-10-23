@@ -238,7 +238,7 @@ function resolveReplyMessageInjectionRejection(params: {
             terminalReplyExpectation:
               backend?.terminalReplyExpectation === "result-required"
                 ? "result-required"
-                : "required",
+                : (params.options.terminalReplyExpectation ?? "required"),
           }
         : params.options,
     sessionId: operation.sessionId,
@@ -572,6 +572,8 @@ async function beginPreparedReplyMessageInjectionTarget(
   };
   const runtimeQueueOptions: ReplyBackendQueueMessageOptions = {
     ...queueOptions,
+    // Preserve the admitted human reply even when it cannot answer the incumbent's question.
+    isInboundUserReply: queueOptions?.isInboundUserMessage === true,
     // Current bundled sinks keep human custody separate from question permission.
     // Released external sinks used the category itself to gate question answers.
     ...(allowPendingUserInputAnswer === false

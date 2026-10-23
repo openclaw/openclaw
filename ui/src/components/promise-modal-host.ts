@@ -11,7 +11,7 @@ type PromiseModalHost<T> = {
 /** Owns one imperative modal host; dismissal and reentrancy stay with its dialog. */
 export function withPromiseModalHost<T>(
   abort: { signal?: AbortSignal; value: T } | undefined,
-  initialize: (modal: PromiseModalHost<T>) => void,
+  initialize: (modal: PromiseModalHost<T>) => void | Promise<void>,
 ): Promise<T> {
   if (abort?.signal?.aborted) {
     return Promise.resolve(abort.value);
@@ -62,7 +62,7 @@ export function withPromiseModalHost<T>(
     };
     // Initializers publish caller-owned reentrancy state before any asynchronous work.
     try {
-      initialize(modal);
+      void Promise.resolve(initialize(modal)).catch(fail);
     } catch (error) {
       fail(error);
     }

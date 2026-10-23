@@ -12,7 +12,7 @@ import {
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
   pollProviderOperation,
-  postJsonRequest,
+  postJsonResponse,
   readProviderJsonObjectResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderApiKeyHttpRequestConfig,
@@ -258,8 +258,12 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
       // the request is replayed. Polls intentionally reuse `headers` without it.
       const submitHeaders = new Headers(headers);
       submitHeaders.set("x-idempotency-key", crypto.randomUUID());
-      const { response, release } = await postJsonRequest({
+      const submitted = await postJsonResponse({
         url: `${baseUrl}${endpoint}`,
+        errorLabel: "xAI video generation failed",
+        responseLabel: "xAI video generation response",
+        objectResponse: true,
+        readOptions: { malformedResponseError: XAI_VIDEO_MALFORMED_RESPONSE },
         headers: submitHeaders,
         body,
         timeoutMs: resolveProviderOperationTimeoutMs({
@@ -270,120 +274,109 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
         allowPrivateNetwork,
         dispatcherPolicy,
       });
-      try {
-        await assertOkOrThrowHttpError(response, "xAI video generation failed");
-        const submitted = await readProviderJsonObjectResponse(
-          response,
-          "xAI video generation response",
-          {
-            malformedResponseError: XAI_VIDEO_MALFORMED_RESPONSE,
-          },
-        );
-        const submitError = xaiErrorMessage(submitted);
-        const requestId = normalizeOptionalString(submitted.request_id);
-        if (!requestId) {
-          throw new Error(submitError ?? "xAI video generation response missing request_id");
-        }
-        const pollDeadline = createProviderOperationDeadline({
-          timeoutMs: resolveProviderOperationTimeoutMs({
-            deadline,
-            defaultTimeoutMs: XAI_VIDEO_DEFAULT_TIMEOUT_MS,
-          }),
-          label: `xAI video generation request ${requestId}`,
-        });
-        const completed = await pollProviderOperation<XaiVideoStatusResponse>({
-          maxAttempts: MAX_POLL_ATTEMPTS,
-          timeoutMessage: `xAI video generation task ${requestId} did not finish in time`,
-          wait: () =>
-            waitProviderOperationPollInterval({
-              deadline: pollDeadline,
-              pollIntervalMs: POLL_INTERVAL_MS,
-            }),
-          read: async () => {
-            const { response: pollResponse, release: releasePoll } = await fetchXaiVideoResponse({
-              url: `${baseUrl}/videos/${requestId}`,
-              stage: "poll",
-              requestFailedMessage: "xAI video status request failed",
-              auditContext: "xai-video-status",
-              init: {
-                method: "GET",
-                headers,
-              },
-              timeoutMs: createProviderOperationTimeoutResolver({
-                deadline: pollDeadline,
-                defaultTimeoutMs: XAI_VIDEO_DEFAULT_TIMEOUT_MS,
-              }),
-            });
-            try {
-              const payload = await readProviderJsonObjectResponse(
-                pollResponse,
-                "xAI video generation response",
-                {
-                  malformedResponseError: XAI_VIDEO_MALFORMED_RESPONSE,
-                },
-              );
-              const video = payload.video;
-              if (video !== undefined && video !== null && !isRecord(video)) {
-                throw new Error(XAI_VIDEO_MALFORMED_RESPONSE);
-              }
-              return {
-                status: normalizeOptionalString(payload.status) ?? "",
-                videoUrl: isRecord(video) ? normalizeOptionalString(video.url) : undefined,
-                errorMessage: xaiErrorMessage(payload),
-              };
-            } finally {
-              await releasePoll();
-            }
-          },
-          isComplete: (payload) => payload.status.toLowerCase() === "done",
-          getFailureMessage: (payload) => {
-            const status = payload.status.toLowerCase();
-            return XAI_VIDEO_TERMINAL_FAILURE_STATUSES.has(status)
-              ? (payload.errorMessage ?? `xAI video generation ${status}`)
-              : undefined;
-          },
-        });
-        const videoUrl = completed.videoUrl;
-        if (!videoUrl) {
-          throw new Error(XAI_VIDEO_MALFORMED_RESPONSE);
-        }
-        const video = await downloadGeneratedVideoAsset({
-          url: videoUrl,
-          timeoutMs: createProviderOperationTimeoutResolver({
-            deadline,
-            defaultTimeoutMs: XAI_VIDEO_DEFAULT_TIMEOUT_MS,
-          }),
-          defaultTimeoutMs: XAI_VIDEO_DEFAULT_TIMEOUT_MS,
-          fetchFn: fetch,
-          provider: "xai",
-          label: "xAI generated video download",
-          requestFailedMessage: "xAI generated video download failed",
-          maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "video"),
-          validateBinaryResponse: true,
-          chunkTimeoutMs: 0,
-          fetchResponse: async ({ timeoutMs }) =>
-            await fetchXaiVideoResponse({
-              url: videoUrl,
-              stage: "download",
-              requestFailedMessage: "xAI generated video download failed",
-              auditContext: "xai-video-download",
-              init: { method: "GET" },
-              timeoutMs,
-            }),
-        });
-        return {
-          videos: [video],
-          model: normalizeOptionalString(req.model) ?? DEFAULT_XAI_VIDEO_MODEL,
-          metadata: {
-            requestId,
-            status: completed.status,
-            videoUrl,
-            mode,
-          },
-        };
-      } finally {
-        await release();
+
+      const submitError = xaiErrorMessage(submitted);
+      const requestId = normalizeOptionalString(submitted.request_id);
+      if (!requestId) {
+        throw new Error(submitError ?? "xAI video generation response missing request_id");
       }
+      const pollDeadline = createProviderOperationDeadline({
+        timeoutMs: resolveProviderOperationTimeoutMs({
+          deadline,
+          defaultTimeoutMs: XAI_VIDEO_DEFAULT_TIMEOUT_MS,
+        }),
+        label: `xAI video generation request ${requestId}`,
+      });
+      const completed = await pollProviderOperation<XaiVideoStatusResponse>({
+        maxAttempts: MAX_POLL_ATTEMPTS,
+        timeoutMessage: `xAI video generation task ${requestId} did not finish in time`,
+        wait: () =>
+          waitProviderOperationPollInterval({
+            deadline: pollDeadline,
+            pollIntervalMs: POLL_INTERVAL_MS,
+          }),
+        read: async () => {
+          const { response: pollResponse, release: releasePoll } = await fetchXaiVideoResponse({
+            url: `${baseUrl}/videos/${requestId}`,
+            stage: "poll",
+            requestFailedMessage: "xAI video status request failed",
+            auditContext: "xai-video-status",
+            init: {
+              method: "GET",
+              headers,
+            },
+            timeoutMs: createProviderOperationTimeoutResolver({
+              deadline: pollDeadline,
+              defaultTimeoutMs: XAI_VIDEO_DEFAULT_TIMEOUT_MS,
+            }),
+          });
+          try {
+            const payload = await readProviderJsonObjectResponse(
+              pollResponse,
+              "xAI video generation response",
+              {
+                malformedResponseError: XAI_VIDEO_MALFORMED_RESPONSE,
+              },
+            );
+            const video = payload.video;
+            if (video !== undefined && video !== null && !isRecord(video)) {
+              throw new Error(XAI_VIDEO_MALFORMED_RESPONSE);
+            }
+            return {
+              status: normalizeOptionalString(payload.status) ?? "",
+              videoUrl: isRecord(video) ? normalizeOptionalString(video.url) : undefined,
+              errorMessage: xaiErrorMessage(payload),
+            };
+          } finally {
+            await releasePoll();
+          }
+        },
+        isComplete: (payload) => payload.status.toLowerCase() === "done",
+        getFailureMessage: (payload) => {
+          const status = payload.status.toLowerCase();
+          return XAI_VIDEO_TERMINAL_FAILURE_STATUSES.has(status)
+            ? (payload.errorMessage ?? `xAI video generation ${status}`)
+            : undefined;
+        },
+      });
+      const videoUrl = completed.videoUrl;
+      if (!videoUrl) {
+        throw new Error(XAI_VIDEO_MALFORMED_RESPONSE);
+      }
+      const video = await downloadGeneratedVideoAsset({
+        url: videoUrl,
+        timeoutMs: createProviderOperationTimeoutResolver({
+          deadline,
+          defaultTimeoutMs: XAI_VIDEO_DEFAULT_TIMEOUT_MS,
+        }),
+        defaultTimeoutMs: XAI_VIDEO_DEFAULT_TIMEOUT_MS,
+        fetchFn: fetch,
+        provider: "xai",
+        label: "xAI generated video download",
+        requestFailedMessage: "xAI generated video download failed",
+        maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "video"),
+        validateBinaryResponse: true,
+        chunkTimeoutMs: 0,
+        fetchResponse: async ({ timeoutMs }) =>
+          await fetchXaiVideoResponse({
+            url: videoUrl,
+            stage: "download",
+            requestFailedMessage: "xAI generated video download failed",
+            auditContext: "xai-video-download",
+            init: { method: "GET" },
+            timeoutMs,
+          }),
+      });
+      return {
+        videos: [video],
+        model: normalizeOptionalString(req.model) ?? DEFAULT_XAI_VIDEO_MODEL,
+        metadata: {
+          requestId,
+          status: completed.status,
+          videoUrl,
+          mode,
+        },
+      };
     },
   };
 }
