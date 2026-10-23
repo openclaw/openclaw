@@ -510,7 +510,7 @@ struct CLIInstallerTests {
             to: executable,
             atomically: true,
             encoding: .utf8)
-        try "#!/bin/sh\necho 'v24.16.0'\n".write(
+        try "#!/bin/sh\necho 'v24.22.1'\n".write(
             to: node,
             atomically: true,
             encoding: .utf8)

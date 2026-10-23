@@ -29,6 +29,79 @@ const model: Model = {
 };
 afterEach(() => vi.restoreAllMocks());
 
+it.each(["cron", "event"] as const)(
+  "keeps configured direct credentials on the correct %s auth boundary",
+  async (trigger) => {
+    await withOpenClawTestState(
+      { label: "immediate-event-auth", env: { OPENAI_API_KEY: undefined } },
+      async (state) => {
+        await state.writeAuthProfiles({ version: 1, profiles: {} });
+        const stores = modelRuntime.createEmptyAgentDiscoveryStores();
+        const materialize = vi.spyOn(modelRuntime, "resolveModelAsync").mockResolvedValue({
+          ...stores,
+          model,
+          logicalRef: { provider: model.provider, model: model.id },
+        });
+        const prepare = () =>
+          withPluginRuntimeGenerationScope(
+            { metadataSnapshot: createPluginMetadataSnapshotFixture() },
+            () =>
+              prepareEmbeddedRunAuthPlan({
+                assertCurrent() {},
+                runParams: {
+                  sessionId: "immediate-event",
+                  runId: "immediate-event",
+                  workspaceDir: state.workspaceDir,
+                  prompt: "Synthetic immediate event",
+                  timeoutMs: 1_000,
+                  trigger,
+                  config: {
+                    models: {
+                      providers: {
+                        openai: {
+                          api: "openai-responses",
+                          apiKey: "synthetic-configured-event-key",
+                          baseUrl: model.baseUrl,
+                          models: [],
+                        },
+                      },
+                    },
+                  },
+                },
+                provider: model.provider,
+                modelId: model.id,
+                model,
+                agentDir: state.agentDir(),
+                workspaceDir: state.workspaceDir,
+                nativeModelOwned: false,
+                ...stores,
+                getAgentHarness: () => harness,
+                setAgentHarness() {},
+                getRuntimeModel: () => model,
+                getEffectiveModel: () => model,
+                applyResolvedRuntimeModel() {},
+                selectHarnessForPreparedAttempts: () => harness,
+              }),
+          );
+
+        if (trigger === "cron") {
+          await expect(prepare()).rejects.toThrow("Automation has no recorded inference account");
+          expect(materialize).not.toHaveBeenCalled();
+        } else {
+          const prepared = await prepare();
+          expect(prepared.preparedAuthAttempts).toMatchObject([
+            {
+              kind: "direct",
+              plan: { credentialSource: { kind: "direct", evidence: "provider-config" } },
+            },
+          ]);
+          expect(prepared.lockedProfileId).toBeUndefined();
+        }
+      },
+    );
+  },
+);
+
 it.each(["profile", "environment"] as const)(
   "refuses legacy adoption from current %s credentials at the auth boundary",
   async (source) => {

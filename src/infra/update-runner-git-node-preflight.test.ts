@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as runtimes from "../daemon/runtime-paths.js";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { execNodeEvalSync, resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import * as executables from "./executable-path.js";
 import { prepareGitCandidateNodeRuntime } from "./update-runner-git-node-preflight.js";
 
@@ -15,7 +15,7 @@ const nodePath = path.resolve("fixture", "managed-node", "node");
 const oldNodePath = path.resolve("fixture", "old-node", "node");
 const supported = {
   status: "supported" as const,
-  version: "26.7.0",
+  version: "26.12.1",
   sqliteVersion: "3.53.0",
   nodeSharedSqlite: false,
   sqliteProbe: { available: true, version: "3.53.0", text: true, blob: true, json: true },
@@ -26,7 +26,7 @@ beforeEach(async () => {
   root = tempDirs.make("candidate-node-");
   await fs.writeFile(
     path.join(root, "package.json"),
-    JSON.stringify({ engines: { node: ">=26.1.0" } }),
+    JSON.stringify({ engines: { node: ">=26.12.1" } }),
   );
   Object.defineProperty(process, "versions", { value: { ...originalVersions, bun: "1.4.3" } });
   vi.spyOn(runtimes, "resolveSystemNodeInfo").mockResolvedValue(null);
@@ -72,7 +72,7 @@ it.each([
     const realNode = resolveTestNodeExecPath();
     await fs.writeFile(
       path.join(root, "package.json"),
-      JSON.stringify({ engines: { node: ">=24.16.0 <25 || >=26.1.0" } }),
+      JSON.stringify({ engines: { node: ">=24.22.1 <25 || >=26.12.1" } }),
     );
     const selectedBin = path.join(root, "selected-bin");
     const shadowBin = path.join(root, "shadow-bin");
@@ -100,7 +100,11 @@ it.each([
     );
     if (runtime === "node") {
       Object.defineProperty(process, "versions", {
-        value: { ...originalVersions, bun: undefined },
+        value: {
+          ...originalVersions,
+          node: execNodeEvalSync("process.stdout.write(process.versions.node)", { timeout: 5000 }),
+          bun: undefined,
+        },
       });
       Object.defineProperty(process, "execPath", { value: path.join(selectedBin, executable) });
     }
@@ -122,12 +126,12 @@ it.each([
 
 it("qualifies the actual package-tooling Node when the Node host has a custom executable name", async () => {
   Object.defineProperty(process, "versions", {
-    value: { ...originalVersions, node: "26.7.0", bun: undefined },
+    value: { ...originalVersions, node: "26.12.1", bun: undefined },
   });
   Object.defineProperty(process, "execPath", { value: path.resolve("fixture", "node26") });
   await fs.writeFile(
     path.join(root, "package.json"),
-    JSON.stringify({ engines: { node: ">=24.16.0 <25 || >=26.1.0" } }),
+    JSON.stringify({ engines: { node: ">=24.22.1 <25 || >=26.12.1" } }),
   );
   const result = await prepareGitCandidateNodeRuntime(root, { PATH: path.dirname(nodePath) });
   expect(runtimes.resolveNodeRuntimeInfo).toHaveBeenCalledWith(nodePath, expect.any(Object));

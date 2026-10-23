@@ -571,6 +571,7 @@ export function buildGatewayCronService(params: {
         deps: params.deps,
         agentId,
         sessionKey,
+        trigger: "cron",
         lane: "cron",
       });
     },

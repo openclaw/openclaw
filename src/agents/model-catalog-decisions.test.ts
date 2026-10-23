@@ -129,78 +129,101 @@ describe("captured model decisions", () => {
   });
   afterEach(() => vi.unstubAllEnvs());
 
-  it("prepares only the selected account through the existing catalog hook", async () => {
-    const pluginRegistry = harnessRegistry("codex");
-    const catalog = vi.fn(
-      async (ctx: import("../plugins/provider-catalog.types.js").ProviderCatalogContext) => {
-        const auth = ctx.resolveProviderAuth("openai");
-        expect(auth.profileId).toBe("openai:selected");
-        return {
-          provider: { baseUrl: subscriptionRoute.baseUrl, models: [] },
-          outcomes: [
-            {
-              provider: "openai",
-              profileId: auth.profileId,
-              status: "ready" as const,
-              modelServiceTiers: [
-                {
-                  modelId: entry.id,
-                  runtimeId: "codex",
-                  api: subscriptionRoute.api,
-                  baseUrl: subscriptionRoute.baseUrl,
-                  serviceTiers: ["ultrafast"],
-                },
-              ],
+  it.each(["session", "configured", "automatic"])(
+    "prepares %s account discovery",
+    async (selection) => {
+      const pluginRegistry = harnessRegistry("codex");
+      const catalog = vi.fn(
+        async (ctx: import("../plugins/provider-catalog.types.js").ProviderCatalogContext) => {
+          const auth = ctx.resolveProviderAuth("openai");
+          expect([
+            "openai:selected",
+            ...(selection === "automatic" ? ["openai:auto"] : []),
+          ]).toContain(auth.profileId);
+          return {
+            provider: { baseUrl: subscriptionRoute.baseUrl, models: [] },
+            outcomes: [
+              {
+                provider: "openai",
+                profileId: auth.profileId,
+                status: "ready" as const,
+                modelServiceTiers: [
+                  {
+                    modelId: entry.id,
+                    runtimeId: "codex",
+                    api: subscriptionRoute.api,
+                    baseUrl: subscriptionRoute.baseUrl,
+                    serviceTiers: ["ultrafast"],
+                  },
+                ],
+              },
+            ],
+          };
+        },
+      );
+      pluginRegistry.providers.push({
+        pluginId: "openai",
+        source: "fixture",
+        provider: { id: "openai", label: "OpenAI", auth: [], catalog: { run: catalog } },
+      });
+      const sharedSnapshot = { entries: [entry], routeVariants: [entry] };
+      const cfg: OpenClawConfig = {
+        ...config,
+        agents: {
+          defaults: {
+            ...config.agents?.defaults,
+            model: {
+              primary: `openai/${entry.id}@openai:${selection === "session" ? "shared" : "selected"}`,
             },
-          ],
-        };
-      },
-    );
-    pluginRegistry.providers.push({
-      pluginId: "openai",
-      source: "fixture",
-      provider: { id: "openai", label: "OpenAI", auth: [], catalog: { run: catalog } },
-    });
-    const sharedSnapshot = { entries: [entry], routeVariants: [entry] };
-    const prepared = createModelCatalogDecisions({
-      cfg: config,
-      agentId: "main",
-      agentDir: "/tmp/selected-tier-agent",
-      workspaceDir: "/tmp/selected-tier-workspace",
-      snapshot: sharedSnapshot,
-      accountCatalog: createPreparedAccountCatalogAccess(() => true),
-      metadataSnapshot: metadata,
-      pluginRegistry,
-      preparedAuthStore: {
-        version: 1,
-        profiles: {
-          "openai:shared": { provider: "openai", type: "token", token: "synthetic-shared-token" },
-          "openai:selected": {
-            provider: "openai",
-            type: "token",
-            token: "synthetic-selected-token",
           },
         },
-      },
-      preferredProfileId: "openai:selected",
-      pinnedProfileId: "openai:selected",
-      routeResolverFactory: routeResolverFactory(dualRoutes),
-      isCurrent: () => true,
-    });
-    const assertCurrent = vi.fn();
-    await prepared.prepareSelectedAccountCatalog(assertCurrent, { refresh: true });
-    await prepared.prepareSelectedAccountCatalog(assertCurrent, {});
-    expect(catalog).toHaveBeenCalledOnce();
-    expect(assertCurrent).toHaveBeenCalled();
-    expect(sharedSnapshot).not.toHaveProperty("providerOutcomes");
-    expect(prepared.snapshot.providerOutcomes?.[0]?.modelServiceTiers?.[0]?.serviceTiers).toEqual([
-      "ultrafast",
-    ]);
-    expect(prepared.evaluateEntry(entry, undefined, "codex")).toMatchObject({
-      selectedProfileId: "openai:selected",
-      availability: true,
-    });
-  });
+      };
+      const prepared = createModelCatalogDecisions({
+        cfg,
+        agentId: "main",
+        agentDir: "/tmp/selected-tier-agent",
+        workspaceDir: "/tmp/selected-tier-workspace",
+        snapshot: sharedSnapshot,
+        accountCatalog: createPreparedAccountCatalogAccess(() => true),
+        metadataSnapshot: metadata,
+        pluginRegistry,
+        preparedAuthStore: {
+          version: 1,
+          profiles: {
+            "openai:shared": { provider: "openai", type: "token", token: "synthetic-shared-token" },
+            "openai:auto": { provider: "openai", type: "token", token: "synthetic-auto-token" },
+            "openai:selected": {
+              provider: "openai",
+              type: "token",
+              token: "synthetic-selected-token",
+            },
+          },
+        },
+        preferredProfileId:
+          selection === "automatic"
+            ? "openai:auto"
+            : selection === "session"
+              ? "openai:selected"
+              : undefined,
+        pinnedProfileId: selection === "session" ? "openai:selected" : undefined,
+        routeResolverFactory: routeResolverFactory(dualRoutes),
+        isCurrent: () => true,
+      });
+      const assertCurrent = vi.fn();
+      await prepared.prepareSelectedAccountCatalog(assertCurrent, { refresh: true });
+      await prepared.prepareSelectedAccountCatalog(assertCurrent, {});
+      expect(catalog).toHaveBeenCalledTimes(selection === "automatic" ? 2 : 1);
+      expect(assertCurrent).toHaveBeenCalled();
+      expect(sharedSnapshot).not.toHaveProperty("providerOutcomes");
+      expect(prepared.snapshot.providerOutcomes?.[0]?.modelServiceTiers?.[0]?.serviceTiers).toEqual(
+        ["ultrafast"],
+      );
+      expect(prepared.evaluateEntry(entry, undefined, "codex")).toMatchObject({
+        selectedProfileId: "openai:selected",
+        availability: true,
+      });
+    },
+  );
 
   it("does not publish a selected-account result after its generation expires", async () => {
     let current = true;

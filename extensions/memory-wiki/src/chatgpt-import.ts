@@ -32,6 +32,8 @@ import {
 } from "./import-runs-state.js";
 import { appendMemoryWikiLog } from "./log.js";
 import {
+  HUMAN_START_MARKER,
+  HUMAN_END_MARKER,
   parseWikiMarkdown,
   renderWikiMarkdown,
   WIKI_RELATED_END_MARKER,
@@ -44,8 +46,6 @@ import { initializeMemoryWikiVault } from "./vault.js";
 
 const CHATGPT_PREFERENCE_SIGNAL_RE =
   /\b(prefer|prefers|preference|want|wants|need|needs|avoid|avoids|hate|hates|love|loves|default to|should default to|always use|don't want|does not want|likes|dislikes)\b/i;
-const HUMAN_START_MARKER = "<!-- openclaw:human:start -->";
-const HUMAN_END_MARKER = "<!-- openclaw:human:end -->";
 const MAX_ROLLBACK_RECREATE_ATTEMPTS = 32;
 
 const CHATGPT_RISK_RULES: Array<{ label: string; pattern: RegExp }> = [

@@ -11,7 +11,12 @@ import { isPairedDeviceTokenIdentityCurrent } from "../infra/device-pairing-iden
 import { loadPairedDevicePairingStoreRecordReadOnly } from "../infra/device-pairing-store-readonly.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
-import { prepareUserProfileIdentity } from "../state/user-profile-list.js";
+import { profileCatalogPath } from "../state/user-profile-identity.read.js";
+import {
+  prepareUserProfileIdentity,
+  projectUserProfileDisplay,
+  readResidentUserProfileRevision,
+} from "../state/user-profile-list.js";
 import { isGatewayAuthGrantCurrent } from "./auth-policy.js";
 import {
   captureGatewayDeviceRevocation,
@@ -32,6 +37,7 @@ import {
   type OperatorRunRecoverySnapshot,
 } from "./operator-run-recovery-source.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
+import type { GatewayAuthenticatedUserProfile } from "./server/client-identity-types.js";
 
 export type OperatorRecoveryTarget = {
   agentId: string;
@@ -41,163 +47,6 @@ export type OperatorRecoveryTarget = {
   sourceRunId: string;
   recoveryRunId: string;
 };
-
-/** Re-admit a captured source under current identity, role, auth, and session policy. */
-export async function restoreGatewayOperatorSource(params: {
-  snapshot: OperatorRunRecoverySnapshot;
-  target: Pick<OperatorRecoveryTarget, "agentId" | "sessionKey" | "sessionId">;
-  context: GatewayRequestContext;
-  assertCurrent: () => void;
-  prepareCurrent?: () => Promise<void>;
-}) {
-  const snapshot = params.snapshot;
-  const gatewayOwner = params.context.resolveGatewayContext?.() ?? params.context;
-  const getConfig = params.context.getCommittedRuntimeConfig ?? params.context.getRuntimeConfig;
-  const signal = new AbortController();
-  let references = 1;
-  let identity: Awaited<ReturnType<typeof prepareUserProfileIdentity>> | undefined;
-  const subscriptions: Array<() => void> = [];
-  const revoke = (cause?: unknown) =>
-    signal.abort(
-      new Error("Operator continuation authority changed; start a new user turn.", { cause }),
-    );
-  const assertOwner = () => {
-    if (references === 0) {
-      throw new Error("Operator continuation authority is no longer active.");
-    }
-    signal.signal.throwIfAborted();
-    params.assertCurrent();
-  };
-  const releaseHold = () => {
-    let released = false;
-    return () => {
-      if (released) {
-        return;
-      }
-      released = true;
-      if (--references === 0) {
-        subscriptions.splice(0).forEach((dispose) => dispose());
-        identity?.release();
-      }
-    };
-  };
-  const release = releaseHold();
-  try {
-    subscriptions.push(
-      onSessionIdentityMutation((mutation) => {
-        if (
-          mutation.agentId === params.target.agentId &&
-          (mutation.previous.sessionId === params.target.sessionId ||
-            mutation.previous.sessionKeys.includes(params.target.sessionKey))
-        ) {
-          revoke();
-        }
-      }),
-    );
-    await params.prepareCurrent?.();
-    assertOwner();
-    identity = await prepareUserProfileIdentity(snapshot.profileId);
-    let githubAccountIds: readonly number[] | undefined;
-    let accessAuthority: ReturnType<typeof resumeGatewayOperatorAccessGrant>;
-    const assertPolicy = () => {
-      assertOwner();
-      const cfg = getConfig();
-      const profile = identity!.readCurrentFacts(snapshot.aliasBindingIds).profile;
-      const role = resolveOperatorRolePolicyForAssignment(
-        snapshot.profileId,
-        snapshot.assignedRole,
-        cfg,
-        snapshot.githubLogin,
-      );
-      if (
-        profile.profileId !== snapshot.profileId ||
-        profile.assignedRole !== snapshot.assignedRole ||
-        (profile.githubLogin ?? null) !== snapshot.githubLogin ||
-        githubAccountIds?.some((id) => !profile.githubAccountIds?.includes(id)) ||
-        !isDeepStrictEqual(sourceRolePolicy(role), snapshot.rolePolicy) ||
-        !isGatewayAuthGrantCurrent(snapshot.authPolicy, cfg)
-      ) {
-        throw new Error("Operator continuation source policy changed.");
-      }
-      githubAccountIds ??= profile.githubAccountIds ?? [];
-      accessAuthority = resumeGatewayOperatorAccessGrant(
-        profile,
-        cfg,
-        snapshot.grant,
-        accessAuthority,
-      );
-      accessAuthority?.signal.throwIfAborted();
-      return cfg;
-    };
-    const recheck = () => {
-      try {
-        assertPolicy();
-      } catch (error) {
-        revoke(error);
-      }
-    };
-    subscriptions.push(
-      onOperatorRolePolicyChanged((change) => {
-        if (change.kind === "assignment" && change.profileId === snapshot.profileId) {
-          revoke();
-        } else if (change.kind === "config" && change.context === gatewayOwner) {
-          recheck();
-        }
-      }),
-      onUserProfilesChanged(recheck),
-    );
-    const device = captureGatewayDeviceRevocation(
-      gatewayOwner,
-      { deviceId: snapshot.device?.deviceId, role: "operator" },
-      () => !signal.signal.aborted,
-    );
-    subscriptions.push(device.release);
-    const releaseDeviceNotification = onGatewayDeviceSourceRevoked(device.isCurrent, revoke);
-    if (releaseDeviceNotification) {
-      subscriptions.push(releaseDeviceNotification);
-    }
-    if (snapshot.device) {
-      const paired = await loadPairedDevicePairingStoreRecordReadOnly(snapshot.device.deviceId);
-      if (
-        !isPairedDeviceTokenIdentityCurrent(paired, "operator", snapshot.device, snapshot.scopes)
-      ) {
-        revoke();
-      }
-    }
-    assertPolicy();
-    const live = captureChannelOperatorRunAuthority({
-      profileId: snapshot.profileId,
-      assignedRole: snapshot.assignedRole,
-      githubLogin: snapshot.githubLogin,
-      scopes: snapshot.scopes,
-      gatewayAccessGrant: snapshot.grant,
-      getRuntimeConfig: getConfig,
-      assertCurrent: assertPolicy,
-      signal: signal.signal,
-    });
-    const originalModels = snapshot.modelPolicy
-      ? restoreOperatorModelPolicySnapshot(snapshot.modelPolicy)
-      : undefined;
-    const authority = createAdmittedRunOperatorAuthority({
-      ...live,
-      signal: signal.signal,
-      recoverySnapshot: snapshot,
-      retain: () => {
-        assertPolicy();
-        references += 1;
-        return releaseHold();
-      },
-      get modelPolicy() {
-        return intersectOperatorRunModelPolicy(originalModels, live.modelPolicy);
-      },
-    });
-    authority.assertCurrent();
-    return { authority, controlUiAdmin: snapshot.controlUiAdmin, release };
-  } catch (error) {
-    release();
-    throw error;
-  }
-}
 
 type RecoverySource = Readonly<{ controlUiAdmin: boolean; localOperator: boolean }>;
 const recoverySources = new WeakMap<
@@ -237,6 +86,88 @@ export async function restoreGatewayOperatorRecovery(params: {
   | undefined
 > {
   const target = { ...params.target };
+  const read = () => readSessionEntryReadOnlyInWorker(target, params.assertCurrent);
+  // The source is not available yet; fence session replacement until policy admission owns it.
+  const initialRead = new AbortController();
+  const stopInitialRead = onSessionIdentityMutation((mutation) => {
+    if (
+      mutation.agentId === target.agentId &&
+      (mutation.previous.sessionId === target.sessionId ||
+        mutation.previous.sessionKeys.includes(target.sessionKey))
+    ) {
+      initialRead.abort(new Error("Restart recovery operator source no longer owns this input."));
+    }
+  });
+  let entry: InternalSessionEntry | undefined;
+  try {
+    entry = await read();
+    initialRead.signal.throwIfAborted();
+  } finally {
+    stopInitialRead();
+  }
+  if (!entry?.restartRecoveryOperatorSource) {
+    return undefined;
+  }
+  const source = decodeGatewayOperatorRecoverySource(entry.restartRecoveryOperatorSource);
+  const assertClaim = (current: InternalSessionEntry | undefined) => {
+    const reservation = current?.mainRestartRecovery?.reservation;
+    if (
+      !current ||
+      current.sessionId !== target.sessionId ||
+      current.lifecycleRevision !== source.lifecycleRevision ||
+      current.restartRecoveryDeliveryRunId !== target.recoveryRunId ||
+      current.restartRecoveryDeliverySourceRunId !== target.sourceRunId ||
+      (reservation &&
+        (reservation.runId !== target.recoveryRunId ||
+          reservation.lifecycleGeneration !== getAgentEventLifecycleGeneration())) ||
+      source.agentId !== target.agentId ||
+      source.sessionKey !== target.sessionKey ||
+      source.sessionId !== target.sessionId ||
+      source.sourceRunId !== target.sourceRunId ||
+      !isDeepStrictEqual(current.restartRecoveryOperatorSource, source)
+    ) {
+      throw new Error("Restart recovery operator source no longer owns this input.");
+    }
+  };
+  assertClaim(entry);
+  const restored = await restoreGatewayOperatorSource({
+    snapshot: source.snapshot,
+    target,
+    context: params.context,
+    assertCurrent: params.assertCurrent,
+    prepareCurrent: async () => assertClaim(await read()),
+  });
+  try {
+    restored.authority.assertCurrent();
+    recoverySources.set(restored.authority, {
+      target,
+      source: Object.freeze({
+        controlUiAdmin: source.snapshot.controlUiAdmin,
+        localOperator: source.snapshot.localOperator,
+      }),
+    });
+    return restored;
+  } catch (error) {
+    restored.release();
+    throw error;
+  }
+}
+
+/** Restore current policy for owner-held source evidence; the caller owns the exact work claim. */
+export async function restoreGatewayOperatorSource(params: {
+  snapshot: OperatorRunRecoverySnapshot;
+  target: Pick<OperatorRecoveryTarget, "agentId" | "sessionKey" | "sessionId">;
+  context: GatewayRequestContext;
+  assertCurrent: () => void;
+  prepareCurrent?: () => Promise<void>;
+}): Promise<{
+  authority: AdmittedRunOperatorAuthority;
+  authenticatedUserProfile: GatewayAuthenticatedUserProfile;
+  controlUiAdmin: boolean;
+  release: () => void;
+}> {
+  const target = { ...params.target };
+  const snapshot = params.snapshot;
   const { context, assertCurrent } = params;
   const getConfig = context.getCommittedRuntimeConfig ?? context.getRuntimeConfig;
   const gatewayOwner = context.resolveGatewayContext?.() ?? context;
@@ -280,35 +211,6 @@ export async function restoreGatewayOperatorRecovery(params: {
   };
   const release = releaseHold();
   try {
-    const read = () => readSessionEntryReadOnlyInWorker(target, assertOwner);
-    const entry = await read();
-    if (!entry?.restartRecoveryOperatorSource) {
-      release();
-      return undefined;
-    }
-    const source = decodeGatewayOperatorRecoverySource(entry.restartRecoveryOperatorSource);
-    const assertClaim = (current: InternalSessionEntry | undefined) => {
-      const reservation = current?.mainRestartRecovery?.reservation;
-      if (
-        !current ||
-        current.sessionId !== target.sessionId ||
-        current.lifecycleRevision !== source.lifecycleRevision ||
-        current.restartRecoveryDeliveryRunId !== target.recoveryRunId ||
-        current.restartRecoveryDeliverySourceRunId !== target.sourceRunId ||
-        (reservation &&
-          (reservation.runId !== target.recoveryRunId ||
-            reservation.lifecycleGeneration !== getAgentEventLifecycleGeneration())) ||
-        source.agentId !== target.agentId ||
-        source.sessionKey !== target.sessionKey ||
-        source.sessionId !== target.sessionId ||
-        source.sourceRunId !== target.sourceRunId ||
-        !isDeepStrictEqual(current.restartRecoveryOperatorSource, source)
-      ) {
-        throw new Error("Restart recovery operator source no longer owns this input.");
-      }
-    };
-    assertClaim(entry);
-    const snapshot = source.snapshot;
     const generationOwner = context.sharedGatewaySessionGenerationState;
     if (snapshot.sharedGeneration !== undefined) {
       if (!generationOwner || generationOwner.requiredGeneration !== snapshot.sharedGeneration) {
@@ -424,7 +326,7 @@ export async function restoreGatewayOperatorRecovery(params: {
       assertPolicy();
     }
     assertPolicy();
-    assertClaim(await read());
+    await params.prepareCurrent?.();
     assertPolicy();
     const live = captureChannelOperatorRunAuthority({
       profileId: snapshot.profileId,
@@ -453,14 +355,17 @@ export async function restoreGatewayOperatorRecovery(params: {
       },
     });
     authority.assertCurrent();
-    recoverySources.set(authority, {
-      target,
-      source: Object.freeze({
-        controlUiAdmin: snapshot.controlUiAdmin,
-        localOperator: snapshot.localOperator,
-      }),
-    });
-    return { authority, controlUiAdmin: snapshot.controlUiAdmin, release };
+    const profile = readResidentUserProfileRevision(snapshot.profileId, profileCatalogPath({}));
+    if (!profile) {
+      throw new Error("Restart recovery operator profile is unavailable.");
+    }
+    const { id, ...display } = projectUserProfileDisplay(profile);
+    return {
+      authority,
+      authenticatedUserProfile: { profileId: id, ...display, updatedAt: profile.updated_at },
+      controlUiAdmin: snapshot.controlUiAdmin,
+      release,
+    };
   } catch (error) {
     release();
     throw error;

@@ -102,7 +102,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.x"
+  NODE_VERSION: "24.22.1"
   OPENCLAW_BUILD_PRIVATE_QA: "1"
   # Package-candidate builds run after shard concurrency starts and need the same explicit
   # heap authority as the initial private-QA build on Blacksmith runners.
@@ -174,7 +174,7 @@ jobs:
       - name: Setup supported Node runtime
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           package-manager-cache: false
 
       # github.workflow_sha identifies the caller during workflow_call. Resolve the called

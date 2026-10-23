@@ -177,7 +177,7 @@ describe("cloud Node toolchain preparation", () => {
     fs.mkdirSync(home);
     fs.writeFileSync(path.join(workspace, ".nvmrc"), "22\n");
     const fetchUrls: string[] = [];
-    const setupPath = await prepareRepositoryNode(f, ["24.21.0", "22.20.0", "22.21.1"], fetchUrls)(
+    const setupPath = await prepareRepositoryNode(f, ["24.22.1", "22.20.0", "22.21.1"], fetchUrls)(
       workspace,
       home,
       f.root,
@@ -199,7 +199,7 @@ describe("cloud Node toolchain preparation", () => {
 
   it.each([
     ["16.8.0", "worker"],
-    ["26.1.0", "repository"],
+    ["26.12.1", "repository"],
   ])(
     "runs worker Corepack for repository Node %s under a Node its engines accept",
     async (version, runner) => {

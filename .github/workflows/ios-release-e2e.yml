@@ -117,7 +117,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           install-bun: "false"
           cache-mode: "off"
 

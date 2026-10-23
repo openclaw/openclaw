@@ -331,10 +331,19 @@ export async function captureCronCreatorSession(
           caller,
         )
       : undefined;
+  const assertCreatorCurrent =
+    inference || operatorSource
+      ? () => {
+          inference?.assertInferenceSelectionCurrent?.();
+          if (operatorSource) {
+            operatorAuthority?.assertCurrent();
+          }
+        }
+      : undefined;
   return {
     ...inference,
     ...(operatorSource ? { operatorSource } : {}),
-    assertOperatorSourceCurrent: operatorSource ? operatorAuthority?.assertCurrent : undefined,
+    assertCreatorCurrent,
     ...(sourceConversation ? { sourceConversation } : {}),
     ...(createdActor ? { createdActor } : {}),
     ...(callerScope && creatorSession?.skillLibrarySelections
