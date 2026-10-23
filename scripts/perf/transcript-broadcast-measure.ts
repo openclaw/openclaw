@@ -793,13 +793,15 @@ if (scenario === "plugins.reload" || scenario === "plugin.scope") {
     reloadPluginId = plugin.pluginIds[0];
   } else {
     scopePluginId = plugin.pluginIds[0];
+    const pluginSource = path.join(plugin.pluginsDir, scopePluginId!, "index.cjs");
     writeFileSync(
-      path.join(plugin.pluginsDir, scopePluginId!, "index.cjs"),
+      pluginSource,
       `const { getPluginRuntimeGatewayRequestScope } = require("openclaw/plugin-sdk/plugin-runtime");
 const id = ${JSON.stringify(scopePluginId)};
+const source = ${JSON.stringify(pluginSource)};
 function currentScope() {
   const scope = getPluginRuntimeGatewayRequestScope();
-  if (scope?.pluginId !== id || scope.pluginSource !== __filename || !scope.pluginOrigin ||
+  if (scope?.pluginId !== id || scope.pluginSource !== source || !scope.pluginOrigin ||
       !scope.pluginRegistry || !scope.client) throw new Error("Synthetic plugin scope is missing");
   return scope;
 }
