@@ -272,6 +272,46 @@ function resolveLogTraceContext(
     : { trustedTraceContext: false };
 }
 
+function prepareFileLogRecord(logObj: TsLogRecord): {
+  fields: Record<string, string> & { hostname: string };
+  messageParts: FileLogMessagePart[];
+} {
+  const entries = getSortedNumericLogEntries(logObj);
+  const { bindings, args } = extractLogBindingPrefix(entries.map(([, value]) => value));
+  // Capture context and display roles before native conversion can invoke caller code.
+  const { trace } = resolveLogTraceContext(bindings, args);
+  const structuredArg = isPlainLogRecordObject(args[0]) ? args[0] : undefined;
+  const sources = [structuredArg, bindings, logObj];
+  const metadataCount = structuredArg && typeof structuredArg.message !== "string" ? 1 : 0;
+  const messageParts = entries
+    .slice(entries.length - args.length + metadataCount)
+    .map(([key, value]) => {
+      const json =
+        value != null &&
+        !["string", "number", "boolean", "bigint"].includes(typeof value) &&
+        !(value instanceof Error) &&
+        !(isPlainLogRecordObject(value) && typeof value.message === "string");
+      const part: FileLogMessagePart = { key, json };
+      if (typeof value === "number" && !Number.isFinite(value)) {
+        part.primitiveText = String(value);
+      }
+      return part;
+    });
+  const agentId = readFirstContextString(sources, ["agent_id", "agentId"]);
+  const sessionId = readFirstContextString(sources, ["session_id", "sessionId", "sessionKey"]);
+  const channel = readFirstContextString(sources, ["channel", "messageProvider"]);
+  return {
+    fields: {
+      hostname: resolveLogHostname(),
+      ...(agentId ? { agent_id: agentId } : {}),
+      ...(sessionId ? { session_id: sessionId } : {}),
+      ...(channel ? { channel } : {}),
+      ...trace,
+    },
+    messageParts,
+  };
+}
+
 function buildDiagnosticLogRecord(logObj: TsLogRecord) {
   const meta = logObj["_meta"] as
     | {
@@ -476,19 +516,7 @@ class RuntimeLogger extends TsLogger<LogObj> {
   }
 }
 
-function resolveMaxLogFileBytes(raw: unknown): number {
-  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
-    return Math.floor(raw);
-  }
-  return DEFAULT_MAX_LOG_FILE_BYTES;
-}
-
-export function getLogger(): TsLogger<LogObj> {
-  const cachedLogger = loggingState.cachedLogger as TsLogger<LogObj> | null;
-  if (cachedLogger) {
-    return cachedLogger;
-  }
-  getRuntimeSettings();
+function buildLogger(): TsLogger<LogObj> {
   const logger = new RuntimeLogger({
     name: "openclaw",
     mask: { keys: [] },
@@ -520,41 +548,7 @@ export function getLogger(): TsLogger<LogObj> {
           }
         }
         const time = formatTimestamp(logObj.date ?? new Date(), { style: "long" });
-        const entries = getSortedNumericLogEntries(logObj);
-        const { bindings, args } = extractLogBindingPrefix(entries.map(([, value]) => value));
-        // Capture context and display roles before native conversion can invoke caller code.
-        const { trace } = resolveLogTraceContext(bindings, args);
-        const structuredArg = isPlainLogRecordObject(args[0]) ? args[0] : undefined;
-        const sources = [structuredArg, bindings, logObj];
-        const metadataCount = structuredArg && typeof structuredArg.message !== "string" ? 1 : 0;
-        const messageParts = entries
-          .slice(entries.length - args.length + metadataCount)
-          .map(([key, value]) => {
-            const json =
-              value != null &&
-              !["string", "number", "boolean", "bigint"].includes(typeof value) &&
-              !(value instanceof Error) &&
-              !(isPlainLogRecordObject(value) && typeof value.message === "string");
-            const part: FileLogMessagePart = { key, json };
-            if (typeof value === "number" && !Number.isFinite(value)) {
-              part.primitiveText = String(value);
-            }
-            return part;
-          });
-        const agentId = readFirstContextString(sources, ["agent_id", "agentId"]);
-        const sessionId = readFirstContextString(sources, [
-          "session_id",
-          "sessionId",
-          "sessionKey",
-        ]);
-        const channel = readFirstContextString(sources, ["channel", "messageProvider"]);
-        const fields: Record<string, string> & { hostname: string } = {
-          hostname: resolveLogHostname(),
-          ...(agentId ? { agent_id: agentId } : {}),
-          ...(sessionId ? { session_id: sessionId } : {}),
-          ...(channel ? { channel } : {}),
-          ...trace,
-        };
+        const { fields, messageParts } = prepareFileLogRecord(logObj as TsLogRecord);
         const line = serializeFileLogRecord(
           {
             ...logObj,
@@ -576,6 +570,24 @@ export function getLogger(): TsLogger<LogObj> {
     },
   });
   attachDiagnosticEventTransport(logger);
+
+  return logger;
+}
+
+function resolveMaxLogFileBytes(raw: unknown): number {
+  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
+    return Math.floor(raw);
+  }
+  return DEFAULT_MAX_LOG_FILE_BYTES;
+}
+
+export function getLogger(): TsLogger<LogObj> {
+  const cachedLogger = loggingState.cachedLogger as TsLogger<LogObj> | null;
+  if (cachedLogger) {
+    return cachedLogger;
+  }
+  getRuntimeSettings();
+  const logger = buildLogger();
   loggingState.cachedLogger = logger;
   return logger;
 }

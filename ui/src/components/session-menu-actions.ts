@@ -7,10 +7,8 @@ import { projectGateway } from "../lib/reactive/application.ts";
 import { useOptionalApplication } from "../lib/reactive/context.ts";
 import type { SessionCreatedActor, SessionOwnerOption } from "../lib/session-owner.ts";
 import { customSnoozeStorageKey, readCustomSnooze } from "../lib/sessions/custom-snooze.ts";
-import {
-  createSessionMenuSettings,
-  type SessionCommunicationMenuAction,
-} from "./session-menu-settings.ts";
+import type { SessionCommunicationMenuAction } from "./session-communication-options.ts";
+import { createSessionMenuSettings } from "./session-menu-settings.ts";
 import { createSessionOwnerMenu } from "./session-owner-menu.ts";
 import "../styles/sidebar-menus.css";
 

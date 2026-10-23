@@ -2017,7 +2017,7 @@ src/logging/diagnostic-stability.ts	2
 src/logging/diagnostic-support-redaction.ts	1
 src/logging/json-console-line.ts	2
 src/logging/levels.ts	2
-src/logging/logger.ts	6
+src/logging/logger.ts	7
 src/logging/redact.ts	2
 src/logging/secret-redaction-registry.ts	1
 src/logging/state.ts	6

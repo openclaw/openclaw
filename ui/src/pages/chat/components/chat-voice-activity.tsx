@@ -27,11 +27,13 @@ export function voiceStatusLabel(
   );
 }
 
-// Levels stay with the talk owner; its subscription updates only decorative bars.
-export function MicrophoneActivity(props: {
+type MicrophoneActivityProps = {
   status?: RealtimeTalkStatus;
   inputLevel?: RealtimeTalkLevelSignal;
-}) {
+};
+
+// Levels stay with the talk owner; its subscription updates only decorative bars.
+export function MicrophoneActivity(props: MicrophoneActivityProps) {
   const inputLevel = createMemo(() => {
     const source = props.inputLevel;
     return source && projectOwner(source, (owner) => owner.value, Object.is);
@@ -62,12 +64,14 @@ export function MicrophoneActivity(props: {
   );
 }
 
-export function ChatVoiceStatus(props: {
+type ChatVoiceStatusProps = {
   status?: RealtimeTalkStatus;
   detail?: string | null;
   onDismissError?: () => void;
   onUseSystemDefaultMicrophone?: () => Promise<void>;
-}) {
+};
+
+export function ChatVoiceStatus(props: ChatVoiceStatusProps) {
   return (
     <Show
       when={props.status === "connecting"}

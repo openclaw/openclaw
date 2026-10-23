@@ -6,7 +6,9 @@ import { dashboardSessionListQuery } from "../../lib/sessions/session-requests.t
 import { dashboardsRouteData } from "./route.ts";
 import { DashboardsView, type DashboardGalleryFilters, type DashboardsRouteData } from "./view.tsx";
 
-export function DashboardsPage(props: { routeData?: DashboardsRouteData }) {
+type DashboardsPageProps = { routeData?: DashboardsRouteData };
+
+export function DashboardsPage(props: DashboardsPageProps) {
   const context = useApplication();
   const [filters, setFilters] = createStore<DashboardGalleryFilters>({
     query: "",

@@ -23,7 +23,7 @@ const LinkReaderPanel = lazy(() => import("../components/link-reader-panel.tsx")
   export: "LinkReaderPanel",
 });
 
-export function ShellDocks(props: {
+type ShellDocksProps = {
   host: ShellComponentHost;
   elements: Pick<ShellOwnedElements, "browserPanel" | "desktopPanel" | "linkReaderPanel">;
   context: ApplicationContext;
@@ -32,7 +32,9 @@ export function ShellDocks(props: {
   suppressed: boolean;
   selectedAgentId: string;
   activeRoute: RouteId;
-}): SolidJSX.Element {
+};
+
+export function ShellDocks(props: ShellDocksProps): SolidJSX.Element {
   const gateway = () => {
     void props.revision;
     return props.context.gateway.snapshot;

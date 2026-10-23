@@ -4,12 +4,14 @@ import { createTranscriptMemo } from "./chat-transcript-memo.ts";
 
 const persistedMessageIds = createTranscriptMemo<Set<string | null>>();
 
-export function projectRealtimeTalkConversation(props: {
+type ChatRealtimeTalkConversationProps = {
   assistantName: string;
   userName?: string | null;
   messages: readonly unknown[];
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
-}) {
+};
+
+export function projectRealtimeTalkConversation(props: ChatRealtimeTalkConversationProps) {
   // Voice captions reconcile against unfiltered immutable history, not the
   // current search or streaming projection.
   const entries = (props.realtimeTalkConversation ?? []).filter((entry) => {

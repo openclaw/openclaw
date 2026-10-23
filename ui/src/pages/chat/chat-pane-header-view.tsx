@@ -2,6 +2,11 @@ import { Icon } from "../../components/solid/icon.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import "./chat-pane-header-presence.css";
 
+type PresenceProps = Pick<
+  HTMLElementTagNameMap["openclaw-viewer-facepile"],
+  "staticUsers" | "personActivity"
+>;
+
 export function PaneSubagentStop(props: { onAbort: () => void; notice?: boolean }) {
   return (
     <button
@@ -17,9 +22,7 @@ export function PaneSubagentStop(props: { onAbort: () => void; notice?: boolean 
     </button>
   );
 }
-export function PaneHeaderPresence(
-  props: Pick<HTMLElementTagNameMap["openclaw-viewer-facepile"], "staticUsers" | "personActivity">,
-) {
+export function PaneHeaderPresence(props: PresenceProps) {
   return (
     <openclaw-viewer-facepile
       class="chat-pane__presence chat-pane__presence--desktop"

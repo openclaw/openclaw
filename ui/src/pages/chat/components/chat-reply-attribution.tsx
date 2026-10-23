@@ -5,16 +5,20 @@ import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import type { ReplyLine } from "./chat-reply-attribution.ts";
 import { ReplyConnector, type ReplyConnectorElements } from "./chat-reply-connector.tsx";
 
-/** Inline lines live inside the bubble; other lines sit beside its avatar. */
-export function ReplyLineView(props: {
+type ReplyLineActions = {
+  onOpenReply?: (id: string) => void;
+  replyNavigationId?: string | null;
+};
+
+type ReplyLineProps = {
   line: ReplyLine;
-  actions: {
-    onOpenReply?: (id: string) => void;
-    replyNavigationId?: string | null;
-  };
+  actions: ReplyLineActions;
   inline?: boolean;
   elements?: ReplyConnectorElements;
-}) {
+};
+
+/** Inline lines live inside the bubble; other lines sit beside its avatar. */
+export function ReplyLineView(props: ReplyLineProps) {
   const named = () => props.line.state === "named";
   const name = () => props.line.name ?? "";
   const loading = () =>

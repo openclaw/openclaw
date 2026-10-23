@@ -6,6 +6,11 @@ type UsageQueryTerm = {
   raw: string;
 };
 
+type UsageQueryResult<TSession> = {
+  sessions: TSession[];
+  warnings: string[];
+};
+
 // Minimal shape required for query filtering. The usage view's real session type contains more fields.
 type UsageSessionQueryTarget = {
   key: string;
@@ -248,10 +253,7 @@ const prepareUsageQuery = (
 export const filterSessionsByQuery = <TSession extends UsageSessionQueryTarget>(
   sessions: TSession[],
   query: string,
-): {
-  sessions: TSession[];
-  warnings: string[];
-} => {
+): UsageQueryResult<TSession> => {
   const terms = extractQueryTerms(query);
   if (terms.length === 0) {
     return { sessions, warnings: [] };
