@@ -4660,8 +4660,9 @@ try {
   }
   let cronRuns;
   if (stressCronJobId) {
-    await rpc(sender, "cron.update", { id: stressCronJobId, patch: { enabled: false } });
+    // Snapshot completed runs before disabling can cancel an in-flight scheduled turn.
     const history = await rpc(sender, "cron.runs", { id: stressCronJobId, limit: 200 });
+    await rpc(sender, "cron.update", { id: stressCronJobId, patch: { enabled: false } });
     if (
       !isRecord(history) ||
       !Array.isArray(history.entries) ||
