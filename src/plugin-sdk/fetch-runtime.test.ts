@@ -11,6 +11,35 @@ function settlement(promise: Promise<unknown>) {
   return Promise.race([promise.then(() => "settled"), setImmediate("pending")]);
 }
 
+it.for(["throw", "reject"] as const)(
+  "reports null-body response release failures (%s) without an unhandled rejection",
+  async (failureMode, { onTestFinished }) => {
+    const failure = new Error("request ownership release failed");
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    onTestFinished(() => warning.mockRestore());
+    const unhandled: unknown[] = [];
+    const onUnhandledRejection = (error: unknown) => unhandled.push(error);
+    process.on("unhandledRejection", onUnhandledRejection);
+    onTestFinished(() => {
+      process.off("unhandledRejection", onUnhandledRejection);
+    });
+    const release = vi.fn(() => {
+      if (failureMode === "throw") {
+        throw failure;
+      }
+      return Promise.reject(failure);
+    });
+    const response = new Response(null, { status: 204 });
+
+    expect(responseWithRelease(response, release)).toBe(response);
+    await setImmediate();
+
+    expect(release).toHaveBeenCalledOnce();
+    expect(warning).toHaveBeenCalledExactlyOnceWith(failure);
+    expect(unhandled).toEqual([]);
+  },
+);
+
 it("closes downstream EOF before awaiting release", async () => {
   const releaseGate = createDeferred();
   const releaseFinished = createDeferred();
