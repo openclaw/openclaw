@@ -811,7 +811,12 @@ it.each(dispatchCases)(
           });
           expect(params.workspaceDir).toBe(workspaceDir);
         } else if (skillCatalog === "sandbox") {
-          const sandboxSkillPath = "/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md";
+          const sandboxSkillPath = dispatched?.skillsSnapshot?.resolvedSkills?.find(
+            (skill) => skill.name === "demo",
+          )?.filePath;
+          expect(sandboxSkillPath).toMatch(
+            /^\/workspace\/\.openclaw\/sandbox-skills\/skills\/\.openclaw-catalogs\/run-[^/]+\/skills\/demo\/SKILL\.md$/u,
+          );
           expect(dispatched?.skillsSnapshot?.prompt).toContain(
             `<location>${sandboxSkillPath}</location>`,
           );

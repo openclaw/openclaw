@@ -6,6 +6,8 @@ import path from "node:path";
 import { isPathRelativeEscape } from "@openclaw/fs-safe/path";
 import { indexFirstByKey } from "../../shared/dedupe-by-key.js";
 import { resolveExplicitSkillSelectionFileHost } from "../../skills/discovery/skill-command-provenance.js";
+import { escapeSkillXml } from "../../skills/loading/skill-contract.js";
+import { compactPromptSkills } from "../../skills/loading/skill-paths.js";
 import { formatSkillsForPromptBounded } from "../../skills/loading/skill-prompt-limits.js";
 import { clearSkillFileHost } from "../../skills/skill-file-host.js";
 import type {
@@ -16,6 +18,7 @@ import type {
   SkillEntry,
 } from "../../skills/types.js";
 import { resolveSkillReadPath } from "../../skills/workspace-skill-read-path.js";
+import { readSandboxSkillCatalog } from "../sandbox/skill-catalog.js";
 import type { SandboxContext } from "../sandbox/types.js";
 import { resolveSessionSkillResourceCatalog } from "../session-placement-skill-resources.js";
 
@@ -132,6 +135,7 @@ export function resolveSandboxSkillRuntimeInputs(params: {
         workspaceOnly: true,
       };
     }
+    const published = readSandboxSkillCatalog(params.sandbox);
     const snapshot = params.skillsSnapshot;
     const sourceReadPathBySkillName = indexFirstByKey(
       snapshot?.resolvedSkills ?? [],
@@ -158,6 +162,59 @@ export function resolveSandboxSkillRuntimeInputs(params: {
         ...(sourceReadPath && sourceReadPath !== entry.skillFile ? { sourceReadPath } : {}),
       };
     });
+    if (published) {
+      const mapSkill = (skill: NonNullable<SkillSnapshot["resolvedSkills"]>[number]) => {
+        if (skill.filePath.startsWith("node://")) {
+          return skill;
+        }
+        const mapPath = (filePath: string | undefined) =>
+          mapPathFromWorkspaceToContainer({
+            filePath,
+            sourceWorkspaceDir: skillsWorkspaceDir,
+            targetWorkspaceDir: skillsPromptWorkspaceDir,
+          });
+        return clearSkillFileHost({
+          ...skill,
+          filePath: mapPath(skill.filePath) ?? skill.filePath,
+          baseDir: mapPath(skill.baseDir) ?? skill.baseDir,
+          sourceInfo: {
+            ...skill.sourceInfo,
+            path: mapPath(skill.sourceInfo.path) ?? skill.sourceInfo.path,
+            ...(skill.sourceInfo.baseDir === undefined
+              ? {}
+              : { baseDir: mapPath(skill.sourceInfo.baseDir) }),
+          },
+        });
+      };
+      const resolvedSkills = published.resolvedSkills?.map(mapSkill);
+      let prompt = published.prompt;
+      const sourceSkills = published.resolvedSkills ?? [];
+      const locations = new Map(
+        resolvedSkills?.map((skill) => [skill.name, resolveSkillReadPath(skill)]),
+      );
+      for (const skill of [...sourceSkills, ...compactPromptSkills(sourceSkills)]) {
+        const location = locations.get(skill.name);
+        if (location !== undefined) {
+          prompt = prompt.replaceAll(
+            `<location>${escapeSkillXml(resolveSkillReadPath(skill))}</location>`,
+            `<location>${escapeSkillXml(location)}</location>`,
+          );
+        }
+      }
+      return {
+        skillsEligibility: params.sandbox.skillsEligibility,
+        skillUsagePaths,
+        skillsPromptWorkspaceDir,
+        skillsWorkspaceDir,
+        skillsSnapshot: {
+          ...published,
+          prompt,
+          resolvedSkills,
+          discoverySkills: published.discoverySkills?.map(mapSkill),
+        },
+        workspaceOnly: true,
+      };
+    }
     // An explicit empty snapshot excludes instructions; it has no host paths to remap.
     let selectedSnapshot =
       params.skillsSnapshot &&

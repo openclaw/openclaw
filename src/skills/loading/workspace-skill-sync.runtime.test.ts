@@ -1,13 +1,15 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { createNestedGitEnv } from "../../../test/helpers/temp-repo.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { nodeFilePath } from "../../test-utils/node-file-path.js";
+import { createNodeEvalArgs, resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { getSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { refreshSkillsDiscovery } from "../runtime/refresh.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../runtime/session-snapshot.js";
@@ -15,7 +17,7 @@ import { writePluginWithSkill } from "../test-support/skill-plugin-fixtures.test
 import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import { useLoadingFixture, writeSkillFixture as writeSkill } from "./loading.test-support.js";
 import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
-import { syncWorkspaceSkills } from "./workspace-skill-sync.runtime.js";
+import { acquireWorkspaceSkills, syncWorkspaceSkills } from "./workspace-skill-sync.runtime.js";
 
 const isolatedConfig = { plugins: { enabled: false } } satisfies OpenClawConfig;
 
@@ -258,6 +260,12 @@ describe("syncWorkspaceSkills", () => {
       expect(await git("diff", "--name-only")).toContain("README.md");
     };
 
+    const publication = await acquireWorkspaceSkills(params);
+    try {
+      await expectProjectChanges();
+    } finally {
+      await publication.release();
+    }
     await syncWorkspaceSkills(params);
     await expectProjectChanges();
     await git("add", "--force", generatedSkill);
@@ -698,5 +706,140 @@ describe("syncWorkspaceSkills for plugin skills", () => {
 
     expect(await exists(skillPath(target, "escaped-skill", "SKILL.md"))).toBe(false);
     expect(await exists(skillPath(target, "allowed-skill", "SKILL.md"))).toBe(true);
+  });
+});
+
+describe("published sandbox skills", () => {
+  it("preserves live catalogs, reclaims a killed process's copies, and releases idempotently", async () => {
+    const { source, target } = await setupSkills(["retained"]);
+    const first = await acquireWorkspaceSkills(syncOptions(source, target));
+    const firstPath = first.skillUsagePaths.find(
+      (entry) => entry.skillName === "retained",
+    )!.readPath;
+    const catalogRoot = path.dirname(path.dirname(path.dirname(firstPath)));
+    const abandoned = path.join(path.dirname(catalogRoot), "run-abandoned");
+    await fs.mkdir(abandoned);
+    await fs.writeFile(path.join(abandoned, "retained-by-dead-owner"), "stale");
+    const child = spawn(
+      resolveTestNodeExecPath(),
+      createNodeEvalArgs(
+        `
+      import { acquireSqliteStagingToken } from ${JSON.stringify(new URL("../../infra/sqlite-staging-token.ts", import.meta.url).href)};
+      const release = acquireSqliteStagingToken(${JSON.stringify(abandoned)}, "create");
+      process.on("exit", () => release());
+      process.stdout.write("READY\\n");
+      process.stdin.resume();
+    `,
+        { imports: [path.resolve("scripts/tsx.mjs")] },
+      ),
+      { stdio: ["pipe", "pipe", "pipe"] },
+    );
+    let stderr = "";
+    child.stderr.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+    const exited = new Promise<void>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("exit", () => resolve());
+    });
+    const ready = new Promise<void>((resolve) => {
+      child.stdout.on("data", (chunk) => {
+        if (String(chunk).includes("READY")) {
+          resolve();
+        }
+      });
+    });
+    let second: Awaited<ReturnType<typeof acquireWorkspaceSkills>> | undefined;
+    let third: Awaited<ReturnType<typeof acquireWorkspaceSkills>> | undefined;
+    try {
+      await awaitGateBeforeSettlement(
+        ready,
+        exited.then(() => {
+          throw new Error(stderr || "Catalog process exited before admission");
+        }),
+        "Catalog owner did not become ready",
+      );
+      second = await acquireWorkspaceSkills(syncOptions(source, target));
+      expect(await exists(abandoned)).toBe(true);
+      expect(await readText(firstPath)).toContain("retained skill");
+      child.kill("SIGKILL");
+      await exited;
+      third = await acquireWorkspaceSkills(syncOptions(source, target));
+      expect(await exists(abandoned)).toBe(false);
+      expect(await readText(firstPath)).toContain("retained skill");
+      expect(second.skillUsagePaths[0]?.readPath).not.toBe(firstPath);
+      await sync(source, target);
+      expect(await readText(firstPath)).toContain("retained skill");
+      await Promise.all([first.release(), first.release()]);
+      expect(await exists(firstPath)).toBe(false);
+      expect(await exists(second.skillUsagePaths[0]!.readPath)).toBe(true);
+    } finally {
+      child.kill("SIGKILL");
+      await exited.catch(() => {});
+      await first.release();
+      await second?.release();
+      await third?.release();
+    }
+  });
+
+  it("keeps prompt locations stable between settled turns without reusing stale bytes", async () => {
+    const { source, target } = await setupSkills(["stable"]);
+    const first = await acquireWorkspaceSkills(syncOptions(source, target), "agent:main:stable");
+    const file = first.skillUsagePaths[0]!.readPath;
+    const prompt = first.skillsSnapshot.prompt;
+    await first.release();
+    const second = await acquireWorkspaceSkills(syncOptions(source, target), "agent:main:stable");
+    try {
+      expect(second.skillUsagePaths[0]!.readPath).toBe(file);
+      expect(second.skillsSnapshot.prompt).toBe(prompt);
+      expect(await readText(file)).toContain("stable skill");
+    } finally {
+      await second.release();
+    }
+  });
+
+  it("omits an ordinary failed copy without advertising its partial instructions", async () => {
+    const { source, target } = await setupSkills(["broken", "good"]);
+    const lstat = fs.lstat.bind(fs);
+    const failure = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+      if (nodeFilePath(args[0]) === skillPath(source, "broken")) {
+        throw new Error("ordinary copy unavailable");
+      }
+      return lstat(...args);
+    });
+    try {
+      const catalog = await acquireWorkspaceSkills(syncOptions(source, target));
+      try {
+        expect(catalog.skillsSnapshot.resolvedSkills?.map((skill) => skill.name)).toEqual(["good"]);
+        expect(catalog.skillsSnapshot.prompt).not.toContain("broken");
+        expect(catalog.skillUsagePaths.map((entry) => entry.skillName)).toEqual(["good"]);
+        expect(await readText(catalog.skillUsagePaths[0]!.readPath)).toContain("good skill");
+      } finally {
+        await catalog.release();
+      }
+    } finally {
+      failure.mockRestore();
+    }
+  });
+
+  it("publishes readable copies without changing private source permissions", async () => {
+    const { source, target } = await setupSkills(["private"]);
+    const sourceDir = skillPath(source, "private");
+    const sourceFile = path.join(sourceDir, "SKILL.md");
+    await chmod(0o700, sourceDir);
+    await chmod(0o600, sourceFile);
+    const catalog = await acquireWorkspaceSkills(syncOptions(source, target));
+    try {
+      const copied = catalog.skillUsagePaths[0]!.readPath;
+      expect(catalog.skillsSnapshot.prompt).toContain(copied);
+      if (process.platform !== "win32") {
+        expect(await modeOf(sourceDir)).toBe(0o700);
+        expect(await modeOf(sourceFile)).toBe(0o600);
+        expect(await modeOf(copied)).toBe(0o444);
+        expect(await modeOf(path.dirname(copied))).toBe(0o755);
+      }
+    } finally {
+      await catalog.release();
+    }
   });
 });

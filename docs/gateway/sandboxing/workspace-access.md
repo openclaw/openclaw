@@ -212,6 +212,12 @@ a copy, staging stops with the same warning while the original remains available
 <Note>
 **Skills**: the `read` tool is sandbox-rooted. With `workspaceAccess: "none"`, OpenClaw mirrors eligible skills into the sandbox workspace (`.../skills`) as read-only instruction roots; other private workspace files remain writable. With `"rw"`, workspace skills are readable from `/workspace/skills`, and eligible managed, bundled, or plugin skills are materialized into the generated read-only path `/workspace/.openclaw/sandbox-skills/skills`.
 
+Each run advertises its own retained catalog below these roots. Concurrent runs
+and skill refreshes cannot replace its instructions or supporting files while its
+tools are still using them. Use the skill location advertised to that run rather
+than assuming a fixed subdirectory. OpenClaw releases the copies after tool cleanup
+settles and reclaims abandoned catalogs on later preparation.
+
 Local container mounts and sandbox file tools enforce these read-only roots.
 Generated skill copies carry their own Git ignore rule, so ordinary Git discovery
 omits them while tracked changes and other project files remain visible.

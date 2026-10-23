@@ -137,8 +137,14 @@ vi.mock("../process/exec.js", async (importOriginal) => ({
   spawnCommand: spawnDockerProcess,
 }));
 
+// mock-isolation: Sandbox policy and custody tests exclude unrelated host skill discovery and catalog I/O.
 vi.mock("../skills/loading/workspace-skill-sync.runtime.js", () => ({
   syncWorkspaceSkills: vi.fn(async () => undefined),
+  acquireWorkspaceSkills: async () => ({
+    skillUsagePaths: [],
+    skillsSnapshot: { prompt: "", skills: [], resolvedSkills: [], discoverySkills: [] },
+    release: async () => {},
+  }),
 }));
 
 let resolveSandboxContext: typeof import("./sandbox/context.js").resolveSandboxContext;

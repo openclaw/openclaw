@@ -36,8 +36,14 @@ vi.mock("./sandbox/registry.js", () => ({
   readRegisteredSandboxRuntimeIds: async () => [],
   updateRegistry: vi.fn(),
 }));
+// mock-isolation: Sandbox policy and custody tests exclude unrelated host skill discovery and catalog I/O.
 vi.mock("../skills/loading/workspace-skill-sync.runtime.js", () => ({
   syncWorkspaceSkills: async () => [],
+  acquireWorkspaceSkills: async () => ({
+    skillUsagePaths: [],
+    skillsSnapshot: { prompt: "", skills: [], resolvedSkills: [], discoverySkills: [] },
+    release: async () => {},
+  }),
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);

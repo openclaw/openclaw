@@ -15,6 +15,7 @@ import { recordAdmittedModelRoutingDecision } from "../../model-routing-decision
 import { captureAgentPluginRuntimeRefresh } from "../../plugin-runtime-refresh.js";
 import { resolveReplyExpectation } from "../../reply-completion.js";
 import { buildAgentRuntimePlan } from "../../runtime-plan/build.js";
+import { withSandboxSkillCatalogs } from "../../sandbox/skill-catalog.js";
 import { resolveSessionPermissionExecMode } from "../../session-permission-exec-mode.js";
 import { resolveLiveToolResultMaxChars } from "../../tool-result-limits.js";
 import { createToolTerminalObserver } from "../../tool-terminal-outcome.js";
@@ -44,6 +45,15 @@ import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types
 
 /** Prepares the selected runtime and dispatches an attempt under its admitted lifecycle. */
 export async function prepareAndDispatchEmbeddedRunAttempt(
+  input: PreparedEmbeddedAttemptDispatchInput,
+  onSettledTurn?: EmbeddedRunAttemptParams["onSettledTurn"],
+) {
+  return withSandboxSkillCatalogs(() =>
+    prepareAndDispatchEmbeddedRunAttemptWithCatalogs(input, onSettledTurn),
+  );
+}
+
+async function prepareAndDispatchEmbeddedRunAttemptWithCatalogs(
   input: PreparedEmbeddedAttemptDispatchInput,
   onSettledTurn?: EmbeddedRunAttemptParams["onSettledTurn"],
 ) {

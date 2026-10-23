@@ -21,6 +21,7 @@ import {
 } from "../../agent-run-terminal-outcome.js";
 import { resolveAgentDir } from "../../agent-scope.js";
 import { recordAgentCleanupFailure, runOwnedAgentCleanup } from "../../run-cleanup-timeout.js";
+import { withSandboxSkillCatalogs } from "../../sandbox/skill-catalog.js";
 import { withRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
 import {
   clearToolSearchCatalog,
@@ -64,6 +65,12 @@ import type {
 } from "./types.js";
 
 export async function runEmbeddedAttempt(
+  input: EmbeddedRunAttemptParams,
+): Promise<EmbeddedRunAttemptResult> {
+  return withSandboxSkillCatalogs(() => runEmbeddedAttemptWithCatalogs(input));
+}
+
+async function runEmbeddedAttemptWithCatalogs(
   input: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
   const modelExecution = bindOperatorModelExecution(readRunOperatorAuthority(input), {
