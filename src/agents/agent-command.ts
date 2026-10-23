@@ -345,7 +345,13 @@ async function agentCommandInternalOwned(
               isCompletionCurrent(current) &&
               (isSessionRollover
                 ? current?.sessionId === initialEntry.sessionId
-                : shouldPersistRestartRecoveryContextClaim(current, sessionId, runId, allowCreate))
+                : shouldPersistRestartRecoveryContextClaim(
+                    current,
+                    sessionId,
+                    runId,
+                    allowCreate,
+                    entry,
+                  ))
             );
           },
         });
