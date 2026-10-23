@@ -108,6 +108,74 @@ openclaw-terminal-panel {
     position: relative;
     min-height: 0;
   }
+  .tp-find {
+    position: absolute;
+    inset-block-start: 6px;
+    inset-inline-end: 8px;
+    z-index: 2;
+    max-width: calc(100% - 16px);
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg-elevated);
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .tp-find--open {
+    width: min(420px, calc(100% - 16px));
+  }
+  .tp-find__open,
+  .tp-find__controls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .tp-find__open {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+  }
+  .tp-find__open svg,
+  .tp-find__button svg {
+    width: 14px;
+    height: 14px;
+  }
+  .tp-find__button {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 24px;
+    height: 24px;
+    padding: 3px;
+    border: 0;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: inherit;
+  }
+  .tp-find__button:hover:not(:disabled) {
+    background: var(--bg-hover);
+  }
+  .tp-find__controls input {
+    flex: 1;
+    min-width: 0;
+    font: inherit;
+  }
+  .tp-find__count {
+    white-space: nowrap;
+  }
+  .tp-find__preview {
+    margin-top: 4px;
+    overflow: hidden;
+    white-space: pre;
+    text-overflow: ellipsis;
+    font-family: var(--mono);
+  }
+  .tp-find__preview mark {
+    background: var(--accent);
+    color: var(--bg);
+  }
   .tp-session-menu--inline {
     position: absolute;
     inset: 0;
