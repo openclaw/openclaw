@@ -2535,6 +2535,74 @@ the subagent maintenance capture stack; do not use unrelated RPC allocation as
 proof. Run concurrent, swapped-core pairs with the campaign guard and shared
 `--start-at`, then apply its sample-count, GC-pause, and paired-baseline rules.
 
+For this maintenance workload, generate each fixture with the same recent fixed
+`--now` value. Before starting its Gateway, normalize the synthetic retained runs
+with the following owner-API transform (`FIXTURE` is that new fixture directory).
+It retains 6,000 terminal runs: 60 pending deliveries scheduled one day after the
+fixture timestamp, and 5,940 delivered runs. This avoids measuring startup
+recovery of the generator's interrupted runs or a due-delivery backlog. The
+transform asserts the persisted counts and records them in the fixture summary.
+Do not use it against live state.
+
+```sh
+node --import ./scripts/tsx.mjs --input-type=module - "$FIXTURE" <<'JS'
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+
+const root = path.resolve(process.argv[2]);
+const summaryPath = path.join(root, "team-shape-summary.json");
+const summary = JSON.parse(fs.readFileSync(summaryPath, "utf8"));
+assert.equal(summary.format, "openclaw-team-shape-v1");
+assert.equal(summary.retainedRuns, 6000);
+const { createGatewayBenchEnv } = await import("./scripts/lib/gateway-bench-runtime.ts");
+process.env = {
+  ...createGatewayBenchEnv(path.join(root, "home"), path.join(root, "openclaw.json"), {}),
+  OPENCLAW_STATE_DIR: root,
+  TMPDIR: path.join(root, "tmp"),
+};
+const state = await import("./src/state/openclaw-state-db.ts");
+const { loadSubagentRunsByIdsInDatabase } = await import("./src/agents/subagents/registry/subagent-registry.store.sqlite.ts");
+const { bindSubagentRunRecord } = await import("./src/agents/subagents/registry/subagent-registry.store.codec.ts");
+const { writeSubagentRunValuesInDatabase } = await import("./src/agents/subagents/registry/subagent-registry.store.kernel.ts");
+try {
+  const database = state.openOpenClawStateDatabase();
+  const ids = Array.from({ length: 6000 }, (_, index) => `team-shape-run-${index}`);
+  const runs = [...loadSubagentRunsByIdsInDatabase(database, ids).values()];
+  assert.equal(runs.length, 6000);
+  const pendingIds = new Set(runs.filter((run) => run.delivery.status === "pending").slice(0, 60).map((run) => run.runId));
+  assert.equal(pendingIds.size, 60);
+  const nextAttemptAt = summary.now + 86_400_000;
+  assert.ok(nextAttemptAt > Date.now(), "Generate the fixture with a current fixed --now");
+  for (const run of runs) {
+    const { startedAt, endedAt } = run.execution;
+    assert.equal(typeof endedAt, "number");
+    run.execution = { status: "terminal", startedAt, endedAt, outcome: run.execution.outcome ?? { status: "error", error: "Synthetic interruption retained" } };
+    run.expectsCompletionMessage = true;
+    run.completion = { ...run.completion, required: true };
+    if (pendingIds.has(run.runId)) {
+      run.delivery = { ...run.delivery, nextAttemptAt };
+      delete run.cleanupHandled;
+      delete run.cleanupCompletedAt;
+    } else {
+      run.delivery = { status: "delivered", deliveredAt: endedAt + 500 };
+      run.cleanupHandled = true;
+      run.cleanupCompletedAt = endedAt + 1000;
+    }
+  }
+  state.runOpenClawStateWriteTransaction((db) => writeSubagentRunValuesInDatabase(db, runs.map(bindSubagentRunRecord), []));
+  const verified = [...loadSubagentRunsByIdsInDatabase(database, ids).values()];
+  const counts = { terminal: verified.filter((run) => run.execution.status === "terminal").length, pending: verified.filter((run) => run.delivery.status === "pending").length, delivered: verified.filter((run) => run.delivery.status === "delivered").length };
+  assert.deepEqual(counts, { terminal: 6000, pending: 60, delivered: 5940 });
+  summary.maintenanceFixture = { ...counts, nextAttemptAt };
+  fs.writeFileSync(summaryPath, `${JSON.stringify(summary, null, 2)}\n`);
+  console.log(JSON.stringify(summary.maintenanceFixture));
+} finally {
+  await state.closeOpenClawStateDatabaseAsync();
+}
+JS
+```
+
 The report includes allocation and promotion per completed patch, worker message
 counts and known payload bytes, and RPC p50/p95/p99 with sample counts. Worker
 payload bytes include transferred buffers; they are not an exact count of bytes
