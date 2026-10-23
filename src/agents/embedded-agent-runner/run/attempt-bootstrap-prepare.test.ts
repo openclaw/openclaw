@@ -1,15 +1,21 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { performance } from "node:perf_hooks";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE } from "../../bootstrap-files.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../../workspace-bootstrap-read.js";
+import { log } from "../logger.js";
 import { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
 import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 const addedTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const contextFile = (filePath: string, content: unknown) =>
@@ -269,5 +275,77 @@ describe("prepareEmbeddedAttemptBootstrap", () => {
     });
 
     expect(explicit).toEqual(omitted);
+  });
+
+  describe("bootstrap-context substage timing", () => {
+    const prefix = "[trace:embedded-run] bootstrap-context substages: sessionId=session-1 ";
+
+    // Every performance.now() read advances a synthetic clock by stepMs, so the
+    // measured bootstrap duration is deterministic without real slow I/O.
+    async function prepareWithClock(stepMs: number) {
+      const workspace = await makeWorkspace("timing-workspace", {
+        "AGENTS.md": "Timing instructions",
+      });
+      const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+      const trace = vi.spyOn(log, "trace").mockImplementation(() => {});
+      vi.spyOn(log, "isEnabled").mockReturnValue(true);
+      let clock = 0;
+      const now = vi.spyOn(performance, "now").mockImplementation(() => (clock += stepMs));
+      await prepare(workspace);
+      now.mockRestore();
+      const pick = (spy: typeof warn) =>
+        spy.mock.calls.map(([message]) => message).filter((m) => m.startsWith(prefix));
+      return { warnings: pick(warn), traces: pick(trace) };
+    }
+
+    function parseStages(message: string | undefined) {
+      const [, totalMs = "", stages = ""] =
+        /totalMs=(\d+) stages=(\S+)$/u.exec(message ?? "") ?? [];
+      expect(stages).not.toBe("");
+      return {
+        totalMs: Number(totalMs),
+        stages: stages.split(",").map((entry) => {
+          const [, name, durationMs, elapsedMs] = /^(.+):(\d+)ms@(\d+)ms$/u.exec(entry)!;
+          return { name, durationMs: Number(durationMs), elapsedMs: Number(elapsedMs) };
+        }),
+      };
+    }
+
+    it("warns with the substage breakdown and a parent stage when bootstrap takes >=5s", async () => {
+      const { warnings, traces } = await prepareWithClock(1_000);
+
+      expect(traces).toEqual([]);
+      expect(warnings).toHaveLength(1);
+      const { totalMs, stages } = parseStages(warnings[0]);
+      expect(totalMs).toBeGreaterThanOrEqual(5_000);
+      expect(stages.at(-1)).toEqual({
+        name: "bootstrap-context",
+        durationMs: totalMs,
+        elapsedMs: totalMs,
+      });
+      const substages = stages.slice(0, -1);
+      expect(substages.map((stage) => stage.name)).toEqual(
+        expect.arrayContaining(["workspace-file-load", "bootstrap-routing", "context-build"]),
+      );
+      for (const [index, stage] of substages.entries()) {
+        expect(stage.elapsedMs).toBeGreaterThanOrEqual(stage.durationMs);
+        expect(stage.elapsedMs).toBeLessThanOrEqual(totalMs);
+        expect(stage.elapsedMs).toBeGreaterThan(substages[index - 1]?.elapsedMs ?? 0);
+      }
+    });
+
+    it("keeps a fast bootstrap breakdown at trace level", async () => {
+      const { warnings, traces } = await prepareWithClock(1);
+
+      expect(warnings).toEqual([]);
+      expect(traces).toHaveLength(1);
+      const { totalMs, stages } = parseStages(traces[0]);
+      expect(totalMs).toBeLessThan(5_000);
+      expect(stages.at(-1)).toEqual({
+        name: "bootstrap-context",
+        durationMs: totalMs,
+        elapsedMs: totalMs,
+      });
+    });
   });
 });
