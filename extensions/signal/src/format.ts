@@ -54,7 +54,7 @@ const SIGNAL_FORMAT_PROFILE = FormatCapabilityProfile.define({
   chunk: { limit: 4_000, unit: "chars" },
 });
 
-function stripEquivalentSignalLinks(ir: MarkdownIR): MarkdownIR {
+function renderSignalText(ir: MarkdownIR): SignalFormattedText {
   const normalize = (value: string, preserveSuffixCase: boolean) => {
     const normalized = value
       .trim()
@@ -65,24 +65,20 @@ function stripEquivalentSignalLinks(ir: MarkdownIR): MarkdownIR {
       ? normalized.replace(/^[^/?#]+/, (host) => host.toLowerCase())
       : normalizeLowercaseStringOrEmpty(normalized);
   };
-  // Core owns link suffixes; Signal retains its established normalized-URL de-duplication.
-  return {
-    ...ir,
-    links: ir.links.filter((link) => {
-      const label = ir.text.slice(link.start, link.end);
-      const href = link.href.trim();
-      const preserveSuffixCase = /^https?:\/\//i.test(href);
-      return (
-        normalize(label, preserveSuffixCase) !==
-        normalize(href.replace(/^mailto:/, ""), preserveSuffixCase)
-      );
-    }),
-  };
-}
-
-function renderSignalText(ir: MarkdownIR): SignalFormattedText {
   const rendered = renderMarkdownWithAttributedRanges(
-    stripEquivalentSignalLinks(ir),
+    // Core owns link suffixes; Signal retains its established normalized-URL de-duplication.
+    {
+      ...ir,
+      links: ir.links.filter((link) => {
+        const label = ir.text.slice(link.start, link.end);
+        const href = link.href.trim();
+        const preserveSuffixCase = /^https?:\/\//i.test(href);
+        return (
+          normalize(label, preserveSuffixCase) !==
+          normalize(href.replace(/^mailto:/, ""), preserveSuffixCase)
+        );
+      }),
+    },
     {
       styleMap: SIGNAL_STYLE_MAP,
       annotationStyleMap: { assistant_transcript_role: "MONOSPACE" },

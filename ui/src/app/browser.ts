@@ -14,7 +14,7 @@ type WindowWithControlUiBasePath = Window &
     [key: string]: unknown;
   };
 
-function readControlUiResourceBasePath(): string | null {
+export function resolveControlUiPaths(pathname: string) {
   const windowValue =
     typeof window === "undefined"
       ? undefined
@@ -25,11 +25,7 @@ function readControlUiResourceBasePath(): string | null {
       : typeof document === "undefined"
         ? null
         : document.documentElement.getAttribute(CONTROL_UI_BASE_PATH_ATTRIBUTE);
-  return value === null ? null : normalizeBasePath(value);
-}
-
-export function resolveControlUiPaths(pathname: string) {
-  const resourceBasePath = readControlUiResourceBasePath();
+  const resourceBasePath = value === null ? null : normalizeBasePath(value);
   // Cold slug links use the declared root; known route namespaces can still use root resources.
   const basePath =
     resourceBasePath === "" && pluginSlugCandidate(pathname)
