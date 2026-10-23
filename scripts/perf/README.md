@@ -781,6 +781,14 @@ Actual state counts are included in the summary. Twenty percent of sessions are
 roots, with children distributed across them and repeated runs in time order. Supporting state uses the existing
 storage owners and schema; the generator changes no product schema.
 
+Use `--settled-runs` for steady-state measurements that need the retained run
+inventory without a subagent restart-recovery backlog. All requested runs remain
+present with terminal execution, delivered completion, and completed cleanup;
+failed-terminal outcomes, timestamps, and parent/child generations remain intact.
+The default mixed lifecycle shape is unchanged. The summary records `settledRuns`
+and the resulting state counts. This flag does not change pending approvals;
+use `--approvals 0` when that recovery work is also outside the workload.
+
 ```sh
 node --import ./scripts/tsx.mjs scripts/perf/team-shape-fixture.ts \
   --state-dir /tmp/openclaw-team-shape-large \

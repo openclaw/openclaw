@@ -216,3 +216,25 @@ it("creates canonical sessions, retained lifecycle states and isolated supportin
     cron: { enabled: false },
   });
 });
+
+it("retains completed run history without a subagent recovery backlog", async () => {
+  const stateDir = path.join(temporary.make("team-shape-settled-"), "state");
+  const { summary } = await generateTeamShapeFixture(
+    options(
+      stateDir,
+      "--sessions 20 --runs 60 --settled-runs --approvals 0 --cron 0 --projects 0 --transcript-mib 0",
+    ),
+  );
+  await flushLogger();
+  expect(summary).toMatchObject({
+    sessionCount: 20,
+    retainedRuns: 60,
+    settledRuns: true,
+    retainedRunStates: { successful: 51, failed: 9, pending: 0, interrupted: 0 },
+  });
+  using state = openDb(path.join(stateDir, "state/openclaw.sqlite"));
+  expectCounts(state, {
+    subagent_runs: 60,
+    "subagent_runs WHERE json_extract(payload_json, '$.execution.status') = 'terminal' AND json_extract(payload_json, '$.delivery.status') = 'delivered' AND json_extract(payload_json, '$.cleanupHandled') = 1": 60,
+  });
+});
