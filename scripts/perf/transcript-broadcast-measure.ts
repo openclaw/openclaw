@@ -72,6 +72,7 @@ const { values } = parseArgs({
     "capture-responses": { type: "boolean", default: false },
     "trace-gc": { type: "boolean", default: false },
     "worker-memory": { type: "boolean", default: false },
+    "worker-snapshots": { type: "boolean", default: false },
     "baseline-owners": { type: "boolean", default: false },
     "stress-tools": { type: "boolean", default: false },
     "stress-session-store": { type: "boolean", default: false },
@@ -558,6 +559,9 @@ const recordListRequests =
 let startAt = values["start-at"] ? integer(values["start-at"], "--start-at") : undefined;
 if (startAt !== undefined && values["start-file"]) {
   throw new Error("Use only one of --start-at and --start-file");
+}
+if (values["worker-snapshots"] && !values["worker-memory"]) {
+  throw new Error("--worker-snapshots requires --worker-memory; use a separate diagnostic pass");
 }
 if (values["session-envelope-refs"] && !values["session-row-deltas"]) {
   throw new Error("--session-envelope-refs requires --session-row-deltas");
@@ -1888,6 +1892,7 @@ const env = {
     ? { OPENCLAW_BENCH_SESSION_PROJECTION_SOURCE: sessionProjectionSource }
     : {}),
   ...(values["worker-memory"] ? { OPENCLAW_BENCH_WORKER_MEMORY_DIR: output } : {}),
+  ...(values["worker-snapshots"] ? { OPENCLAW_BENCH_WORKER_SNAPSHOTS: "1" } : {}),
   ...(values["baseline-owners"] ? { OPENCLAW_BENCH_TRANSCRIPT_BASELINE_OWNERS: "1" } : {}),
   ...(values["github-observation-owner"]
     ? { OPENCLAW_BENCH_GITHUB_OBSERVATION_OWNER: path.resolve(values["github-observation-owner"]) }

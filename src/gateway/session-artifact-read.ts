@@ -30,15 +30,15 @@ import {
   prepareArtifactDownload,
   prepareArtifactDownloadResponse,
 } from "./artifact-download-projection.js";
-import { parseManagedOutgoingArtifactId } from "./managed-outgoing-artifact-id.js";
-import { MAX_PAYLOAD_BYTES } from "./payload-limits.js";
 import {
   type ArtifactRecord,
   mediaUrlValue,
   resolveBlockDownload,
   resolveMessageRunId,
   toArtifactSummary,
-} from "./server-methods/artifacts-content.js";
+} from "./artifacts-content.js";
+import { parseManagedOutgoingArtifactId } from "./managed-outgoing-artifact-id.js";
+import { MAX_PAYLOAD_BYTES } from "./payload-limits.js";
 import type {
   SessionTranscriptPageReader,
   SessionTranscriptVisitor,
