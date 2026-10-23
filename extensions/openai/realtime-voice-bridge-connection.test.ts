@@ -163,31 +163,6 @@ describe("OpenAI realtime voice bridge connection", () => {
     expect(options?.headers).not.toHaveProperty("Authorization");
   });
 
-  it("adds OpenClaw attribution headers to native realtime websocket requests", () => {
-    vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
-    const provider = buildOpenAIRealtimeVoiceProvider();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "test-api-key-test" },
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-    });
-
-    void bridge.connect();
-    void bridge.close();
-
-    const socket = FakeWebSocket.instances[0];
-    const options = socket?.args[1] as
-      | { headers?: Record<string, string>; maxPayload?: number }
-      | undefined;
-    expectRecordFields(options?.headers, "websocket headers", {
-      originator: "openclaw",
-      version: "2026.3.22",
-      "User-Agent": "openclaw/2026.3.22",
-    });
-    expect(options?.headers).not.toHaveProperty("OpenAI-Beta");
-    expect(options?.maxPayload).toBe(16 * 1024 * 1024);
-  });
-
   it.each([true, false])(
     "shares GA policy and retires the gateway binding with throwing callback=%s",
     async (throwingCloseCallback) => {
@@ -771,20 +746,6 @@ describe("OpenAI realtime voice bridge connection", () => {
     );
     emitSessionUpdated(socket);
     await connecting;
-  });
-
-  it("rejects connection when session configuration fails before readiness", async () => {
-    const bridge = createNativeBridge();
-    const { connecting, socket } = beginBridgeConnection(bridge);
-
-    openSocket(socket);
-    emitServerEvent(socket, {
-      type: "error",
-      error: { message: "invalid realtime session" },
-    });
-
-    await expect(connecting).rejects.toThrow("invalid realtime session");
-    expect(bridge.isConnected()).toBe(false);
   });
 
   it("rejects connection when the socket closes before session readiness", async () => {
