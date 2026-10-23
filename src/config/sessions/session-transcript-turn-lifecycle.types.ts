@@ -27,6 +27,7 @@ export type SessionTranscriptTurnExpectedState = {
   restartRecoveryRequesterSource?: SessionEntry["restartRecoveryRequesterSource"];
   restartRecoverySourceIngress: SessionRestartRecoveryState["restartRecoverySourceIngress"];
   restartRecoverySourceReplyDeliveryMode: SessionRestartRecoveryState["restartRecoverySourceReplyDeliveryMode"];
+  restartRecoveryReplyExpectation: SessionRestartRecoveryState["restartRecoveryReplyExpectation"];
   restartRecoveryTerminalRunIds: SessionRestartRecoveryState["restartRecoveryTerminalRunIds"];
   status: PersistedSessionRunStatus | undefined;
 };
@@ -55,6 +56,7 @@ export type SessionTranscriptTurnLifecyclePatch = {
   restartRecoveryRequesterSource?: SessionEntry["restartRecoveryRequesterSource"];
   restartRecoverySourceIngress?: SessionRestartRecoveryState["restartRecoverySourceIngress"];
   restartRecoverySourceReplyDeliveryMode?: SessionRestartRecoveryState["restartRecoverySourceReplyDeliveryMode"];
+  restartRecoveryReplyExpectation?: SessionRestartRecoveryState["restartRecoveryReplyExpectation"];
   restartRecoveryForceSafeTools?: SessionEntry["restartRecoveryForceSafeTools"];
   restartRecoveryRuns?: SessionEntry["restartRecoveryRuns"];
   /** Durable tombstones merged with the fresh row inside the SQLite write transaction. */

@@ -16,10 +16,7 @@ import {
 import { patchSessionEntryTarget } from "../../config/sessions/session-accessor.js";
 import { applySessionEntryTargetOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { SessionEntryTargetPatchScope } from "../../config/sessions/session-accessor.types.js";
-import type {
-  SessionActor,
-  SessionActorAuthority,
-} from "../../config/sessions/session-actor-contract.js";
+import type { SessionActor } from "../../config/sessions/session-actor-contract.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { bindUserTurnInputActor } from "../../config/sessions/session-input-actor.js";
 import type { SessionTranscriptTurnLifecyclePatch } from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
@@ -114,7 +111,7 @@ export function createReplyRestartRecoveryClaimController(
     }
   };
 
-  const readAuthority: SessionActorAuthority = {
+  const readAuthority = {
     assertCurrent: assertReadCurrent,
     authorize: assertReadCurrent,
   };
@@ -366,6 +363,8 @@ export function createReplyRestartRecoveryClaimController(
               restartRecoveryDeliveryRequestFingerprint: undefined,
             }),
         restartRecoverySourceIngress: entry.restartRecoverySourceIngress ?? "control-ui",
+        restartRecoveryReplyExpectation:
+          entry.restartRecoveryReplyExpectation ?? params.replyExpectation,
         // Input acceptance already records activity; adoption only changes custody.
         updatedAt: entry.updatedAt,
       };
@@ -530,6 +529,7 @@ export function createReplyRestartRecoveryClaimController(
           : operatorSource && params.inputProvenance?.kind === "inter_session"
             ? "internal"
             : operatorSource?.snapshot.sourceIngress,
+      restartRecoveryReplyExpectation: params.replyExpectation,
       restartRecoverySourceReplyDeliveryMode: transfersControlUiClaim
         ? undefined
         : params.sourceReplyDeliveryMode,

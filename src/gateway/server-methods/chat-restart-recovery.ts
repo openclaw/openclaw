@@ -501,6 +501,7 @@ export function buildRestartSafeChatTranscriptState(params: {
         ? params.admission.retryExpectedState.restartRecoveryRequesterSource
         : params.requesterSource,
       restartRecoverySourceReplyDeliveryMode: undefined,
+      restartRecoveryReplyExpectation: undefined,
       ...(params.admission.priorTerminalSourceRunId
         ? { restartRecoveryTerminalRunIds: [params.admission.priorTerminalSourceRunId] }
         : {}),

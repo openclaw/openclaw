@@ -1,4 +1,5 @@
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import type { ReplyExpectation } from "../../agents/reply-completion.types.js";
 import type { RequesterOrigin } from "../../agents/requester-origin.js";
 import type { RestartRecoveryBeforeAgentReplyState } from "../../config/sessions/restart-recovery-types.js";
 import type { SessionEntryTargetPatchScope } from "../../config/sessions/session-accessor.types.js";
@@ -68,6 +69,7 @@ export type ReplyRestartRecoveryClaimControllerParams = {
   sourceTurnId?: unknown;
   strandedReplyRetry?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  replyExpectation?: ReplyExpectation;
   storePath?: string;
 };
 

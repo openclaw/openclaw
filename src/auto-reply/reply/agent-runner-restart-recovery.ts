@@ -71,6 +71,7 @@ export function createReplyAgentRestartRecoveryController(
     operatorAuthority: followupRun.operatorAuthority,
     requesterOrigin: followupRun.run.requesterOrigin,
     inputProvenance: followupRun.run.inputProvenance,
+    replyExpectation: followupRun.run.terminalReplyExpectation,
     lifecycleGeneration: replyOperation.lifecycleGeneration,
     admissionRunId,
     executionRunId: opts?.runId,

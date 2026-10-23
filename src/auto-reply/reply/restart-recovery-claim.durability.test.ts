@@ -433,3 +433,36 @@ it.each([
     }
   });
 });
+
+it.each(["required", "optional", "result-required"] as const)(
+  "persists the original %s reply expectation across restart",
+  (replyExpectation) =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const scope = recoveryScope(state.sessionsDir(), "reply-expectation");
+      const entry: InternalSessionEntry = { sessionId: "reply-session", updatedAt: 1 };
+      {
+        await using actor = await createRecoveryControllerFixture(scope, entry);
+        const controller = actor.controller({
+          admissionRunId: "source-run",
+          sourceTurnId: "source-run",
+          replyExpectation,
+          resolveDeliveryContext: () => ({ channel: "slack", to: "channel:C_SYNTHETIC" }),
+        });
+        const recorder = createUserTurnTranscriptRecorder({
+          message: {
+            role: "user",
+            content: "Return the requested answer",
+            timestamp: 3,
+            idempotencyKey: "source-run",
+          },
+          target: { ...scope, sessionId: entry.sessionId, sessionEntry: entry },
+          updateMode: "none",
+        });
+        await expect(controller.admitUserTurn(recorder)).resolves.toBe("admitted");
+      }
+      expect(await reopen(scope, state.root)).toMatchObject({
+        restartRecoveryDeliverySourceRunId: "source-run",
+        restartRecoveryReplyExpectation: replyExpectation,
+      });
+    }),
+);

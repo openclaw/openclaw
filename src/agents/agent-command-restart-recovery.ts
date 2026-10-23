@@ -289,6 +289,7 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
   sourceIngress?: SessionEntry["restartRecoverySourceIngress"];
   sourceRunId?: string;
   sourceReplyDeliveryMode?: SessionEntry["restartRecoverySourceReplyDeliveryMode"];
+  replyExpectation?: SessionEntry["restartRecoveryReplyExpectation"];
 }): Pick<
   SessionEntry,
   | "restartRecoveryDeliveryContext"
@@ -302,6 +303,7 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
   | "restartRecoveryRequesterSource"
   | "restartRecoverySourceIngress"
   | "restartRecoverySourceReplyDeliveryMode"
+  | "restartRecoveryReplyExpectation"
   | "restartRecoverySuppressTextDelivery"
 > {
   // Recovery can preclaim a run by id. Preserve its original source semantics
@@ -327,6 +329,7 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
       restartRecoveryRequesterSource: entry.restartRecoveryRequesterSource,
       restartRecoverySourceIngress: entry.restartRecoverySourceIngress,
       restartRecoverySourceReplyDeliveryMode: entry.restartRecoverySourceReplyDeliveryMode,
+      restartRecoveryReplyExpectation: entry.restartRecoveryReplyExpectation,
       restartRecoveryForceSafeTools: entry.restartRecoveryForceSafeTools,
     };
   }
@@ -352,6 +355,9 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
     restartRecoverySourceIngress: createsScopedDeliveryClaim ? params.sourceIngress : undefined,
     restartRecoverySourceReplyDeliveryMode: params.sourceRunId
       ? params.sourceReplyDeliveryMode
+      : undefined,
+    restartRecoveryReplyExpectation: createsScopedDeliveryClaim
+      ? params.replyExpectation
       : undefined,
     restartRecoveryForceSafeTools:
       createsScopedDeliveryClaim && params.forceRestartSafeTools === true ? true : undefined,

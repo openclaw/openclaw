@@ -1,3 +1,4 @@
+import type { ReplyExpectation } from "../../agents/reply-completion.types.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/source-reply-delivery-mode.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 
@@ -103,6 +104,7 @@ export type SessionRestartRecoveryState = {
   restartRecoverySameChannelThreadRequired?: true;
   restartRecoverySourceIngress?: "channel" | "control-ui" | "internal";
   restartRecoverySourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  restartRecoveryReplyExpectation?: ReplyExpectation;
   restartRecoveryTerminalDeliveryEvidence?: RestartRecoveryTerminalDeliveryEvidence[];
   restartRecoveryTerminalRunIds?: string[];
 };

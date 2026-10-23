@@ -117,6 +117,7 @@ export function clearRotatedSessionMetadata(entry: InternalSessionEntry): Intern
     restartRecoverySameChannelThreadRequired: undefined,
     restartRecoverySourceIngress: undefined,
     restartRecoverySourceReplyDeliveryMode: undefined,
+    restartRecoveryReplyExpectation: undefined,
     restartRecoveryTerminalDeliveryEvidence: undefined,
     restartRecoveryTerminalRunIds: undefined,
     sessionStartedAt: undefined,

@@ -1756,11 +1756,12 @@ describe("runCliAgent reliability", () => {
   it.each([
     { text: "   ", expectation: "optional", disposition: "empty" },
     { text: SILENT_REPLY_TOKEN, expectation: "optional", disposition: "silent" },
+    { text: SILENT_REPLY_TOKEN, expectation: "required", disposition: "silent" },
     { text: "   ", expectation: "required", disposition: undefined },
     { text: "   ", expectation: "result-required", disposition: undefined },
     { text: SILENT_REPLY_TOKEN, expectation: "result-required", disposition: undefined },
   ] as const)(
-    "settles $expectation CLI output $text according to its reply obligation",
+    "settles $expectation recovery CLI output $text according to its reply obligation",
     async ({ text, expectation, disposition }) => {
       const hookRunner = createLifecycleHooks(["llm_output"]);
       supervisorSpawnMock.mockResolvedValueOnce(makeManagedRun({ stdout: text }));
@@ -1770,6 +1771,10 @@ describe("runCliAgent reliability", () => {
       });
       context.params.messageChannel = "telegram";
       context.params.terminalReplyExpectation = expectation;
+      context.params.inputProvenance = {
+        kind: "internal_system",
+        sourceTool: "main_session_restart_recovery",
+      };
       const operation = runPreparedCliAgent(context);
       if (disposition) {
         const result = await operation;

@@ -41,7 +41,11 @@ import {
 } from "../agent-command-restart-recovery.js";
 import { resolveAgentWorkspaceDir } from "../agent-scope-config.js";
 import { createRestartRecoveryOperatorSource } from "../operator-run-recovery-source.js";
-import { isSyntheticSourceReplyTurn } from "../reply-completion.js";
+import {
+  isSyntheticSourceReplyTurn,
+  resolveCommandReplyExpectation,
+  resolveReplyExpectation,
+} from "../reply-completion.js";
 import { createRestartRecoveryRequesterSource } from "../requester-run-recovery-source.js";
 import { loadExecDefaultsRuntime, loadSkillsRuntime } from "./runtime-loaders.js";
 import type { AgentCommandOpts, AgentRunContext } from "./types.js";
@@ -53,6 +57,7 @@ export function prepareCommandSessionRecoveryEntry(
     Parameters<typeof prepareCommandHarnessCompletionRecovery>[0],
     "hasDeliveryContext"
   > & {
+    cfg: OpenClawConfig;
     deliveryContext?: DeliveryContext;
     now: number;
     lifecycleGeneration: string;
@@ -106,6 +111,24 @@ export function prepareCommandSessionRecoveryEntry(
         !isInternalMessageChannel(requesterSource.requesterOrigin.messageProvider)
           ? ("channel" as const)
           : ("internal" as const))));
+  const messageChannel = resolveMessageChannel(
+    opts.runContext?.messageChannel ?? opts.messageChannel,
+    opts.replyChannel ?? opts.channel,
+  );
+  const replyExpectation = resolveReplyExpectation({
+    terminalReplyExpectation: resolveCommandReplyExpectation({
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+      sessionEntry: entry,
+      messageChannel,
+      opts,
+    }),
+    runId,
+    lifecycleGeneration: params.lifecycleGeneration,
+    messageChannel,
+    inputProvenance: opts.inputProvenance,
+    trigger: "user",
+  });
   return {
     guardedHarnessCompletion,
     isCompletionCurrent,
@@ -130,6 +153,7 @@ export function prepareCommandSessionRecoveryEntry(
         disableMessageTool: opts.disableMessageTool,
         entry,
         forceRestartSafeTools: opts.forceRestartSafeTools,
+        replyExpectation,
         runId,
         harnessCompletion,
         ...sourceOptions,
