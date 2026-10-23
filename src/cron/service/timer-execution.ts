@@ -253,6 +253,43 @@ export async function executeJobCore(
     assertCurrent();
     let effectiveJob = job;
     let triggerEval: CronTriggerEvalOutcome | undefined;
+    if (job.precheck) {
+      if (state.deps.cronConfig?.triggers?.enabled === false) {
+        return {
+          status: "error",
+          error:
+            "cron shell prechecks are disabled because the operator set cron.triggers.enabled: false; remove it or set it to true",
+        };
+      }
+      const runJobPrecheck = state.deps.runJobPrecheck;
+      if (!runJobPrecheck) {
+        return { status: "error", error: "cron shell precheck runner is unavailable" };
+      }
+      await options?.assertRunCurrent?.();
+      if (abortSignal?.aborted) {
+        return resolveAbortError();
+      }
+      const precheck = await runJobPrecheck({
+        job,
+        abortSignal,
+        assertRunCurrent: options?.assertRunCurrent,
+      });
+      if (abortSignal?.aborted) {
+        return resolveAbortError();
+      }
+      if (precheck.kind === "no-work") {
+        return {
+          status: "skipped",
+          summary: "precheck-no-work",
+          executionStarted: false,
+          delivered: false,
+          deliveryAttempted: false,
+        };
+      }
+      if (precheck.kind !== "work") {
+        return { status: "error", error: precheck.error };
+      }
+    }
     if (job.trigger) {
       const evaluator = state.deps.evaluateCronTrigger;
       if (!evaluator) {

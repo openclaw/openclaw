@@ -367,6 +367,7 @@ export type CronJobState = Omit<
 };
 
 type CronTrigger = SchemaContract<NonNullable<CronJobWire["trigger"]>>;
+type CronPrecheck = SchemaContract<NonNullable<CronJobWire["precheck"]>>;
 
 /**
  * Closed failure taxonomy for trigger-script evaluation. Mirrors the code-mode
@@ -418,6 +419,8 @@ export type CronJob = CronJobBase<
   /** Server-authored provenance for requester-scoped scheduled tool authority. */
   scheduledToolPolicy?: CronScheduledToolPolicy;
   trigger?: CronTrigger;
+  /** Host shell probe. Exit codes decide whether the scheduled payload runs. */
+  precheck?: CronPrecheck;
   state: CronJobState;
 };
 
@@ -534,6 +537,7 @@ export type CronJobPatch = Partial<
     | "activeHours"
     | "idleOnly"
     | "trigger"
+    | "precheck"
   >
 > & {
   displayName?: string | null;
@@ -541,6 +545,7 @@ export type CronJobPatch = Partial<
   activeHours?: CronActiveHours | null;
   idleOnly?: boolean | null;
   trigger?: CronTrigger | null;
+  precheck?: CronPrecheck | null;
   payload?: CronPayloadPatch;
   delivery?: CronDeliveryPatch;
   failureAlert?: CronFailureAlertPatch | false | null;

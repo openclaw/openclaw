@@ -6,6 +6,7 @@ import {
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { compileSafeRegex } from "../security/safe-regex.js";
 import { assertCronActiveHours } from "./active-hours.js";
+import { isCronPrecheckScheduleKind, parseCronJobPrecheck } from "./job-precheck.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
 import { decodePluginCommandSchedule } from "./plugin-command-schedule.js";
 import { PLUGIN_COMMAND_SCHEDULE_MESSAGE } from "./plugin-command-schedule.types.js";
@@ -75,6 +76,7 @@ type InvalidPersistedCronJobReason =
   | "invalid-execution-policy"
   | "unsatisfiable-schedule"
   | "invalid-trigger"
+  | "invalid-precheck"
   | "missing-payload"
   | "invalid-payload";
 
@@ -225,6 +227,14 @@ export function getInvalidPersistedCronJobReason(
     ) {
       return "invalid-trigger";
     }
+  }
+  if ("precheck" in candidate && candidate.precheck != null) {
+    const parsed = parseCronJobPrecheck(candidate.precheck);
+    if (!parsed.ok || !isCronPrecheckScheduleKind(scheduleKind)) {
+      return "invalid-precheck";
+    }
+  } else if ("precheck" in candidate) {
+    return "invalid-precheck";
   }
   const payload = candidate.payload;
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {

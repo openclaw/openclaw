@@ -127,6 +127,8 @@ export async function launchCronRun(
   }
   if (isImmediateCronRunMode(options.mode)) {
     executionJob.state.nextRunAtMs = options.scheduleOwnershipAtMs;
+    // Manual runs skip condition scripts. A shell precheck stays on the job:
+    // force must not bypass the host exec-policy gate.
     executionJob.trigger = options.evaluateTrigger ? executionJob.trigger : undefined;
   }
   const activeJobMarker = manual

@@ -118,6 +118,12 @@ const tempDirs = createTrackedTempDirs();
 const APNS_DEVICE_FIELD = "token";
 
 type ConfigHealthDatabase = Pick<OpenClawStateKyselyDatabase, "config_health_entries">;
+type ConfigHealthRow = {
+  config_path: string;
+  last_known_good_json: string | null;
+  last_promoted_good_json: string | null;
+  last_observed_suspicious_signature: string | null;
+};
 
 legacyChannelStateMigrationEntries.entries = [
   {
@@ -156,12 +162,7 @@ legacyChannelStateMigrationEntries.entries = [
 
 const createTempDir = () => tempDirs.make("openclaw-state-migrations-test-");
 
-function readConfigHealthRows(env: NodeJS.ProcessEnv): Array<{
-  config_path: string;
-  last_known_good_json: string | null;
-  last_promoted_good_json: string | null;
-  last_observed_suspicious_signature: string | null;
-}> {
+function readConfigHealthRows(env: NodeJS.ProcessEnv): ConfigHealthRow[] {
   const { db } = native.openOpenClawStateDatabase({ env });
   const stateDb = native.getNodeSqliteKysely<ConfigHealthDatabase>(db);
   return native.executeSqliteQuerySync(
@@ -178,15 +179,7 @@ function readConfigHealthRows(env: NodeJS.ProcessEnv): Array<{
   ).rows;
 }
 
-function insertConfigHealthRow(
-  env: NodeJS.ProcessEnv,
-  row: {
-    config_path: string;
-    last_known_good_json: string | null;
-    last_promoted_good_json: string | null;
-    last_observed_suspicious_signature: string | null;
-  },
-): void {
+function insertConfigHealthRow(env: NodeJS.ProcessEnv, row: ConfigHealthRow): void {
   const { db } = native.openOpenClawStateDatabase({ env });
   const stateDb = native.getNodeSqliteKysely<ConfigHealthDatabase>(db);
   native.executeSqliteQuerySync(
@@ -2336,6 +2329,8 @@ describe("state migrations", () => {
       "- Shared SQLite schema: replay, skill usage, and lease writes → smaller index maintenance",
       "- Shared SQLite schema: GitHub publication requests → durable draft choice",
       "- Shared SQLite schema: client credentials and native socket material → local owner",
+      "- Shared SQLite schema: Heartbeat monitors → ordinary automation timing and delivery policy fence",
+      "- Shared SQLite schema: local workspace baselines → per-path manifests and recoverable checkpoint deltas",
       "- Shared SQLite schema: audit event ledger → versioned message lifecycle schema",
       "- Shared SQLite schema: tables → SQLite STRICT typing",
     ]);

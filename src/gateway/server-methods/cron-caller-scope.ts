@@ -4,6 +4,7 @@ import {
   tryResolveCronJobEffectiveAgentId,
 } from "../../cron/agent-id.js";
 import { resolveCronJobConfigRevision } from "../../cron/config-revision.js";
+import { CRON_PRECHECK_AGENT_AUTHORING_ERROR } from "../../cron/job-precheck.js";
 import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
 import {
   createAccountCronScheduledToolPolicy,
@@ -46,11 +47,22 @@ import type {
 export function assertCronModelJobAllowed(
   client: GatewayClient | null,
   config: OpenClawConfig,
-  job: Pick<CronJobCreate, "payload" | "schedule">,
+  job: Pick<CronJobCreate, "payload" | "schedule" | "precheck">,
   patch?: CronJobPatch,
+  opts?: { create?: boolean },
 ): void {
+  if (!client?.internal?.agentRuntimeIdentity) {
+    return;
+  }
+  // Stored jobs passed to cron.run already have a precheck; only a create or a
+  // patch that sets one is an agent trying to plant a host command.
+  const authorsPrecheck = patch
+    ? Object.hasOwn(patch, "precheck") && patch.precheck != null
+    : opts?.create === true && job.precheck != null;
+  if (authorsPrecheck) {
+    throw new TypeError(CRON_PRECHECK_AGENT_AUTHORING_ERROR);
+  }
   if (
-    client?.internal?.agentRuntimeIdentity &&
     config.tools?.gatewayPolicy?.automations?.allowCommandJobs === false &&
     (job.payload.kind === "command" ||
       job.schedule.kind === "on-exit" ||

@@ -14,6 +14,7 @@ import { listCronJobsFromGateway } from "./list-jobs.js";
 import { createCronOutputCommand } from "./output-mode.js";
 import {
   parseCronDeliveryPolicyOptions,
+  readCronPrecheckCliOptions,
   registerCronMutationOptions,
   resolveCronExecutionPolicyOptions,
 } from "./register.cron-options.js";
@@ -351,6 +352,18 @@ export function registerCronAddCommand(cron: Command) {
               script: await readCronTriggerScript(triggerScriptPath),
               ...(opts.triggerOnce ? { once: true } : {}),
             };
+            const precheckCli = readCronPrecheckCliOptions(opts);
+            if (precheckCli.timeoutSeconds !== undefined && precheckCli.command === undefined) {
+              throw new CronCliError("--precheck-timeout-seconds requires --precheck");
+            }
+            const precheck = precheckCli.command
+              ? {
+                  command: precheckCli.command,
+                  ...(precheckCli.timeoutSeconds !== undefined
+                    ? { timeoutSeconds: precheckCli.timeoutSeconds }
+                    : {}),
+                }
+              : undefined;
 
             if (
               (resolvedPayload.kind === "agentTurn" || resolvedPayload.kind === "script") &&
@@ -386,6 +399,7 @@ export function registerCronAddCommand(cron: Command) {
                   }
                 : {}),
               trigger,
+              ...(precheck ? { precheck } : {}),
               sessionTarget,
               wakeMode,
               payload: resolvedPayload,
