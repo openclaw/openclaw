@@ -56,10 +56,10 @@ const controlUiPerformanceBudgets = {
   startupJsRequests: 9,
   chatBootJsRequests: 25,
   newBootJsRequests: 19,
-  // Deferred menu navigation: 1,383,333 B Chat and 883,638 B New Session.
+  // Deferred menu navigation: 1,371,377 B Chat and 883,672 B New Session.
   // Preserve each route's relative headroom against its measured merge base.
-  chatBootJsGzipBytes: 1_435_831,
-  newBootJsGzipBytes: 896_021,
+  chatBootJsGzipBytes: 1_423_380,
+  newBootJsGzipBytes: 896_030,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   startupJsGzipBytes: 325_081,
