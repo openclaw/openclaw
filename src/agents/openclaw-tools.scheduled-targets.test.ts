@@ -13,7 +13,6 @@ const PARENT_KEY = "agent:main:dashboard:parent";
 
 function scheduledChildTools(scheduledToolTargets?: {
   boardSessionKey: string;
-  mediaSessionKey: string;
   assertCurrent: () => void;
 }) {
   return createOpenClawTools({
@@ -32,7 +31,6 @@ it("offers pinned widget authoring to a scheduled child of a conversation", () =
   expect(scheduledChildTools().find((tool) => tool.name === "show_widget")).toBeUndefined();
   const widget = scheduledChildTools({
     boardSessionKey: PARENT_KEY,
-    mediaSessionKey: PARENT_KEY,
     assertCurrent: () => {},
   }).find((tool) => tool.name === "show_widget");
   expect(widget?.parameters).toMatchObject({ properties: { pin: { const: true } } });

@@ -22,13 +22,12 @@ export function bindScheduledExecutionContext(
 }
 
 /**
- * Session keys a scheduled run's board, widget and media tools act on, plus the
+ * The session a scheduled run's board and widget tools act on, plus the
  * occurrence's assertion. Tools call `assertCurrent` before and inside each
  * effect so a reset or removed parent, or a settled run, refuses the write.
  */
 export type ScheduledToolTargets = Readonly<{
   boardSessionKey: string;
-  mediaSessionKey: string;
   assertCurrent: () => void;
 }>;
 
@@ -44,7 +43,6 @@ export function readScheduledToolTargets(
   return context
     ? {
         boardSessionKey: context.resources.boardSessionKey,
-        mediaSessionKey: context.resources.mediaSessionKey,
         assertCurrent: context.assertCurrent,
       }
     : undefined;

@@ -190,7 +190,7 @@ describe("admitScheduledOccurrence", () => {
     });
     const admitted = await admission.preparedRunAdmission.admit("embedded");
     const targets = readScheduledToolTargets(admitted);
-    expect(targets).toMatchObject({ boardSessionKey: PARENT_KEY, mediaSessionKey: PARENT_KEY });
+    expect(targets).toMatchObject({ boardSessionKey: PARENT_KEY });
     expect(() => targets?.assertCurrent()).not.toThrow();
     generationAssert.mockImplementationOnce(() => {
       throw new Error("parent reset");

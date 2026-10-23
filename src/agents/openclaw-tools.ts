@@ -274,13 +274,12 @@ function* createOpenClawToolsSteps(
     });
   const trimmedRunSessionKey = options?.runSessionKey?.trim();
   const requesterSessionKey = trimmedRunSessionKey || options?.agentSessionKey;
-  // A scheduled run's execution context names the session its board and media belong to.
+  // A scheduled run's execution context names the session its board belongs to.
   const scheduledTargets = options?.scheduledToolTargets;
   const mediaGenerationAgentSessionKey =
-    scheduledTargets?.mediaSessionKey ??
-    (trimmedRunSessionKey && isCronRunSessionKey(trimmedRunSessionKey)
+    trimmedRunSessionKey && isCronRunSessionKey(trimmedRunSessionKey)
       ? trimmedRunSessionKey
-      : options?.agentSessionKey);
+      : options?.agentSessionKey;
   const imageTool =
     options?.agentDir &&
     resolveImageToolFactoryAvailable({
@@ -302,7 +301,6 @@ function* createOpenClawToolsSteps(
     ...options,
     sandboxSessionKey: options?.agentSessionKey,
     agentSessionKey: mediaGenerationAgentSessionKey,
-    assertTargetCurrent: scheduledTargets?.assertCurrent,
     requesterRunSessionKey: trimmedRunSessionKey,
     requesterAgentId: sessionAgentId,
     requesterOrigin: widgetDeliveryContext,
